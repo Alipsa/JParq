@@ -1,0 +1,5 @@
+- OR support: evaluate the JSQLParser Expression directly in JParqResultSet (instead of materializing into a flat list of AND’d Conditions). That unlocks OR, parentheses, and more complex expressions with minimal extra complexity.
+- ORDER BY: buffer matched rows (for small files) and sort via a comparator from JSQLParser’s OrderByElements.
+- Predicate pushdown: map a subset of =, <, >, <=, >= on primitive columns to Parquet’s FilterPredicate for big speedups.
+- expose an INFORMATION_SCHEMA with tables/columns via in-memory result sets,
+- slim deps with shading/exclusions to get a leaner jar.
