@@ -7,6 +7,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.parquet.avro.AvroParquetReader;
 import org.apache.parquet.hadoop.ParquetReader;
+import se.alipsa.jparq.engine.JParqSqlParser;
 
 /** An implementation of the java.sql.Statement interface. */
 public class JParqStatement extends org.apache.commons.lang3.concurrent.BasicThreadFactory.Builder

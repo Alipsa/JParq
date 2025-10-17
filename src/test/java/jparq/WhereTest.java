@@ -9,12 +9,14 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
+/** Tests for WHERE clause operations. */
 public class WhereTest {
   static JParqSql jparqSql;
 
@@ -152,10 +154,9 @@ public class WhereTest {
         });
   }
 
-  // Not yet implemented
-  @Disabled
   @Test
   void testWhereIn() {
+    List<String> models = new ArrayList<>();
     jparqSql.query(
         "SELECT * FROM mtcars where cyl in (6, 8)",
         rs -> {
@@ -166,12 +167,118 @@ public class WhereTest {
             int rows = 0;
             while (rs.next()) {
               String first = rs.getString(1);
-              // System.out.println(rows + ". " + first + " " + rs.getDouble(2) + " " +
-              // rs.getInt(3));
+              models.add(first + " " + rs.getInt("cyl"));
               rows++;
             }
-            assertEquals(21, rows, "Expected 21 rows, got " + rows);
+            assertEquals(
+                21,
+                rows,
+                "Expected 21 rows, got " + rows + " models: " + String.join(", ", models));
           } catch (SQLException e) {
+            System.err.println(String.join("\n", models));
+            fail(e);
+          }
+        });
+  }
+
+  @Test
+  void testWhereNot() {
+    List<String> models = new ArrayList<>();
+    jparqSql.query(
+        "SELECT * FROM mtcars where not (cyl = 4)",
+        rs -> {
+          try {
+            ResultSetMetaData md = rs.getMetaData();
+            assertEquals(12, md.getColumnCount(), "Expected 12 columns");
+
+            int rows = 0;
+            while (rs.next()) {
+              String first = rs.getString(1);
+              models.add(first + " " + rs.getInt("cyl"));
+              rows++;
+            }
+            assertEquals(
+                21,
+                rows,
+                "Expected 21 rows, got " + rows + " models: " + String.join(", ", models));
+          } catch (SQLException e) {
+            System.err.println(String.join("\n", models));
+            fail(e);
+          }
+        });
+
+    jparqSql.query(
+        "SELECT * FROM mtcars where not cyl = 4",
+        rs -> {
+          try {
+            ResultSetMetaData md = rs.getMetaData();
+            assertEquals(12, md.getColumnCount(), "Expected 12 columns");
+
+            int rows = 0;
+            while (rs.next()) {
+              String first = rs.getString(1);
+              models.add(first + " " + rs.getInt("cyl"));
+              rows++;
+            }
+            assertEquals(
+                21,
+                rows,
+                "Expected 21 rows, got " + rows + " models: " + String.join(", ", models));
+          } catch (SQLException e) {
+            System.err.println(String.join("\n", models));
+            fail(e);
+          }
+        });
+  }
+
+  @Test
+  void testWhereIsNotNull() {
+    List<String> models = new ArrayList<>();
+    jparqSql.query(
+        "SELECT * FROM mtcars where model is not null",
+        rs -> {
+          try {
+            ResultSetMetaData md = rs.getMetaData();
+            assertEquals(12, md.getColumnCount(), "Expected 12 columns");
+
+            int rows = 0;
+            while (rs.next()) {
+              String first = rs.getString(1);
+              models.add(first);
+              rows++;
+            }
+            assertEquals(
+                32,
+                rows,
+                "Expected 32 rows, got " + rows + " models: " + String.join(", ", models));
+          } catch (SQLException e) {
+            System.err.println(String.join("\n", models));
+            fail(e);
+          }
+        });
+  }
+
+  @Test
+  void testWhereBetween() {
+    jparqSql.query(
+        "SELECT model, mpg FROM mtcars WHERE mpg BETWEEN 18 AND 21",
+        rs -> {
+          List<String> models = new ArrayList<>();
+          try {
+            ResultSetMetaData md = rs.getMetaData();
+            assertEquals(2, md.getColumnCount(), "Expected 2 columns");
+
+            int rows = 0;
+
+            while (rs.next()) {
+              String first = rs.getString(1);
+              models.add(first + " " + rs.getDouble(2));
+              rows++;
+            }
+            assertEquals(
+                7, rows, "Expected 7 rows, got " + rows + " models: " + String.join(", ", models));
+          } catch (SQLException e) {
+            System.err.println(String.join("\n", models));
             fail(e);
           }
         });

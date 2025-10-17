@@ -13,6 +13,7 @@ import java.sql.Statement;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+/** Basic tests for JParq functionality. */
 public class JParqTest {
 
   @Test
@@ -41,7 +42,9 @@ public class JParqTest {
       while (rs.next()) {
         // touch a few getters to verify basic mapping works
         Object first = rs.getObject(1);
-        if (first != null) first.toString();
+        if (first != null) {
+          first.toString();
+        }
         rows++;
       }
       Assertions.assertTrue(rows > 0 && rows <= 5, "Expected 1..5 rows, got " + rows);

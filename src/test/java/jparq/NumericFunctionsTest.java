@@ -2,6 +2,7 @@ package jparq;
 
 import org.junit.jupiter.api.Test;
 
+/** Tests for numeric functions. */
 public class NumericFunctionsTest {
 
   @Test

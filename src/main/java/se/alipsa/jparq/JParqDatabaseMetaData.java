@@ -78,7 +78,9 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       for (File f : files) {
         String base = f.getName();
         int dot = base.lastIndexOf('.');
-        if (dot > 0) base = base.substring(0, dot);
+        if (dot > 0) {
+          base = base.substring(0, dot);
+        }
         if (tableNamePattern == null || base.matches(JParqUtil.sqlLikeToRegex(tableNamePattern))) {
           rows.add(new Object[] {null, null, base, "TABLE"});
         }
@@ -103,12 +105,16 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
               .withConf(new Configuration(false))
               .build()) {
         GenericRecord rec = reader.read();
-        if (rec == null) continue;
+        if (rec == null) {
+          continue;
+        }
         int pos = 1;
         for (org.apache.avro.Schema.Field f : rec.getSchema().getFields()) {
           String col = f.name();
           if (columnNamePattern != null
-              && !col.matches(JParqUtil.sqlLikeToRegex(columnNamePattern))) continue;
+              && !col.matches(JParqUtil.sqlLikeToRegex(columnNamePattern))) {
+            continue;
+          }
           rows.add(
               new Object[] {
                 null, null, table, col, java.sql.Types.VARCHAR, "VARCHAR", pos++, 0, null, null
@@ -699,6 +705,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   }
 
   @Override
+  public ResultSet getSchemas(String catalog, String schemaPattern) throws SQLException {
+    return null;
+  }
+
+  @Override
   public ResultSet getCatalogs() throws SQLException {
     return null;
   }
@@ -932,11 +943,6 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public RowIdLifetime getRowIdLifetime() throws SQLException {
-    return null;
-  }
-
-  @Override
-  public ResultSet getSchemas(String catalog, String schemaPattern) throws SQLException {
     return null;
   }
 

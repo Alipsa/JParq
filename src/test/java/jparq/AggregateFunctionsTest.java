@@ -2,6 +2,7 @@ package jparq;
 
 import org.junit.jupiter.api.Test;
 
+/** Tests for aggregate functions. */
 public class AggregateFunctionsTest {
 
   @Test

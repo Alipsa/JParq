@@ -1,5 +1,5 @@
 // src/main/java/se/alipsa/jparq/JParqSqlParser.java
-package se.alipsa.jparq;
+package se.alipsa.jparq.engine;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;

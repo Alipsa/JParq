@@ -14,6 +14,13 @@ public class JParqResultSetMetaData implements ResultSetMetaData {
   private final List<String> columns;
   private final String tableName;
 
+  /**
+   * Constructor for JParqResultSetMetaData.
+   *
+   * @param schema The avro schema of the result set, may be null if the result set is empty
+   * @param columns list of column names in order
+   * @param tableName the name of the table
+   */
   public JParqResultSetMetaData(Schema schema, List<String> columns, String tableName) {
     this.schema = schema;
     this.columns = columns;
@@ -42,7 +49,9 @@ public class JParqResultSetMetaData implements ResultSetMetaData {
 
   @Override
   public int getColumnType(int column) {
-    if (schema == null) return Types.OTHER;
+    if (schema == null) {
+      return Types.OTHER;
+    }
     Schema.Field f = schema.getField(getColumnLabel(column));
     Schema s =
         f.schema().getType() == Schema.Type.UNION

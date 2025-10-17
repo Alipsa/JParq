@@ -22,25 +22,37 @@ public class JParqConnection implements Connection {
       qprops.putAll(JParqUtil.parseQuery(qs));
       path = path.substring(0, q);
     }
-    if (props != null) qprops.putAll(props);
+    if (props != null) {
+      qprops.putAll(props);
+    }
 
     this.caseSensitive = Boolean.parseBoolean(qprops.getProperty("caseSensitive", "false"));
 
-    if (path.startsWith("file://")) path = path.substring("file://".length());
+    if (path.startsWith("file://")) {
+      path = path.substring("file://".length());
+    }
     this.baseDir = new File(path);
-    if (!baseDir.isDirectory()) throw new SQLException("Not a directory: " + baseDir);
+    if (!baseDir.isDirectory()) {
+      throw new SQLException("Not a directory: " + baseDir);
+    }
   }
 
   File tableFile(String tableName) throws SQLException {
     String name = caseSensitive ? tableName : tableName.toLowerCase(Locale.ROOT);
     File[] files = baseDir.listFiles((dir, n) -> n.toLowerCase(Locale.ROOT).endsWith(".parquet"));
-    if (files == null) throw new SQLException("Failed to list directory: " + baseDir);
+    if (files == null) {
+      throw new SQLException("Failed to list directory: " + baseDir);
+    }
     for (File f : files) {
       String base = f.getName();
       int dot = base.lastIndexOf('.');
-      if (dot > 0) base = base.substring(0, dot);
+      if (dot > 0) {
+        base = base.substring(0, dot);
+      }
       String candidate = caseSensitive ? base : base.toLowerCase(Locale.ROOT);
-      if (candidate.equals(name)) return f;
+      if (candidate.equals(name)) {
+        return f;
+      }
     }
     throw new SQLException("Table not found: " + tableName);
   }
@@ -154,6 +166,13 @@ public class JParqConnection implements Connection {
   }
 
   @Override
+  public PreparedStatement prepareStatement(
+      String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability)
+      throws SQLException {
+    return null;
+  }
+
+  @Override
   public CallableStatement prepareCall(String sql, int resultSetType, int resultSetConcurrency)
       throws SQLException {
     return null;
@@ -194,13 +213,6 @@ public class JParqConnection implements Connection {
   @Override
   public Statement createStatement(
       int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
-    return null;
-  }
-
-  @Override
-  public PreparedStatement prepareStatement(
-      String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability)
-      throws SQLException {
     return null;
   }
 
