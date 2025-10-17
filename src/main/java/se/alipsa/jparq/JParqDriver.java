@@ -5,12 +5,12 @@ import java.util.Properties;
 import java.util.logging.Logger;
 
 /**
- * JDBC URL format:
- *   jdbc:jparq:/abs/path/to/dir
- *   jdbc:jparq:file:///abs/path/to/dir
- *   jdbc:jparq:/abs/path?caseSensitive=false
+ * An implementation of the java.sql.Driver interface for parquet files. JDBC URL format:
+ * jdbc:jparq:/abs/path/to/dir jdbc:jparq:file:///abs/path/to/dir
+ * jdbc:jparq:/abs/path?caseSensitive=false
  *
- * Each .parquet file in the directory is exposed as a table named by its base filename (without extension).
+ * <p>Each .parquet file in the directory is exposed as a table named by its base filename (without
+ * extension).
  */
 public class JParqDriver implements Driver {
 
@@ -38,12 +38,27 @@ public class JParqDriver implements Driver {
   @Override
   public DriverPropertyInfo[] getPropertyInfo(String url, Properties info) {
     return new DriverPropertyInfo[] {
-        new DriverPropertyInfo("caseSensitive", info.getProperty("caseSensitive", "false"))
+      new DriverPropertyInfo("caseSensitive", info.getProperty("caseSensitive", "false"))
     };
   }
 
-  @Override public int getMajorVersion() { return 0; }
-  @Override public int getMinorVersion() { return 1; }
-  @Override public boolean jdbcCompliant() { return false; }
-  @Override public Logger getParentLogger() { return Logger.getLogger("se.alipsa.jparq"); } // optional tidy
+  @Override
+  public int getMajorVersion() {
+    return 0;
+  }
+
+  @Override
+  public int getMinorVersion() {
+    return 1;
+  }
+
+  @Override
+  public boolean jdbcCompliant() {
+    return false;
+  }
+
+  @Override
+  public Logger getParentLogger() {
+    return Logger.getLogger("se.alipsa.jparq");
+  } // optional tidy
 }

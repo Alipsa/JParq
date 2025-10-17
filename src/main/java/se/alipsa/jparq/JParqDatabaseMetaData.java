@@ -1,11 +1,5 @@
 package se.alipsa.jparq;
 
-import org.apache.avro.generic.GenericRecord;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.Path;
-import org.apache.parquet.avro.AvroParquetReader;
-import org.apache.parquet.hadoop.ParquetReader;
-
 import java.io.File;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -15,7 +9,13 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.parquet.avro.AvroParquetReader;
+import org.apache.parquet.hadoop.ParquetReader;
 
+/** An implementation of the java.sql.DatabaseMetaData interface for parquet files. */
 public class JParqDatabaseMetaData implements DatabaseMetaData {
   private final JParqConnection conn;
 
@@ -69,7 +69,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   }
 
   @Override
-  public ResultSet getTables(String catalog, String schemaPattern, String tableNamePattern, String[] types) {
+  public ResultSet getTables(
+      String catalog, String schemaPattern, String tableNamePattern, String[] types) {
     File dir = conn.getBaseDir();
     File[] files = dir.listFiles((d, n) -> n.toLowerCase(Locale.ROOT).endsWith(".parquet"));
     List<Object[]> rows = new ArrayList<>();
@@ -79,34 +80,58 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         int dot = base.lastIndexOf('.');
         if (dot > 0) base = base.substring(0, dot);
         if (tableNamePattern == null || base.matches(JParqUtil.sqlLikeToRegex(tableNamePattern))) {
-          rows.add(new Object[]{null, null, base, "TABLE"});
+          rows.add(new Object[] {null, null, base, "TABLE"});
         }
       }
     }
-    return JParqUtil.listResultSet(new String[]{"TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE"}, rows);
+    return JParqUtil.listResultSet(
+        new String[] {"TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE"}, rows);
   }
 
+  @SuppressWarnings("PMD.CloseResource")
   @Override
-  public ResultSet getColumns(String catalog, String schemaPattern, String tableNamePattern, String columnNamePattern) throws SQLException {
+  public ResultSet getColumns(
+      String catalog, String schemaPattern, String tableNamePattern, String columnNamePattern)
+      throws SQLException {
     List<Object[]> rows = new ArrayList<>();
-    ResultSet tables = getTables(catalog, schemaPattern, tableNamePattern, new String[]{"TABLE"});
+    ResultSet tables = getTables(catalog, schemaPattern, tableNamePattern, new String[] {"TABLE"});
     while (tables.next()) {
       String table = tables.getString("TABLE_NAME");
       File file = conn.tableFile(table);
-      try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new Path(file.toURI())).withConf(new Configuration(false)).build()) {
+      try (ParquetReader<GenericRecord> reader =
+          AvroParquetReader.<GenericRecord>builder(new Path(file.toURI()))
+              .withConf(new Configuration(false))
+              .build()) {
         GenericRecord rec = reader.read();
         if (rec == null) continue;
         int pos = 1;
         for (org.apache.avro.Schema.Field f : rec.getSchema().getFields()) {
           String col = f.name();
-          if (columnNamePattern != null && !col.matches(JParqUtil.sqlLikeToRegex(columnNamePattern))) continue;
-          rows.add(new Object[]{null, null, table, col, java.sql.Types.VARCHAR, "VARCHAR", pos++, 0, null, null});
+          if (columnNamePattern != null
+              && !col.matches(JParqUtil.sqlLikeToRegex(columnNamePattern))) continue;
+          rows.add(
+              new Object[] {
+                null, null, table, col, java.sql.Types.VARCHAR, "VARCHAR", pos++, 0, null, null
+              });
         }
       } catch (Exception e) {
         throw new SQLException(e);
       }
     }
-    return JParqUtil.listResultSet(new String[]{"TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME", "DATA_TYPE", "TYPE_NAME", "ORDINAL_POSITION", "COLUMN_SIZE", "BUFFER_LENGTH", "DECIMAL_DIGITS"}, rows);
+    return JParqUtil.listResultSet(
+        new String[] {
+          "TABLE_CAT",
+          "TABLE_SCHEM",
+          "TABLE_NAME",
+          "COLUMN_NAME",
+          "DATA_TYPE",
+          "TYPE_NAME",
+          "ORDINAL_POSITION",
+          "COLUMN_SIZE",
+          "BUFFER_LENGTH",
+          "DECIMAL_DIGITS"
+        },
+        rows);
   }
 
   // Boilerplate defaults for unimplemented metadata
@@ -656,12 +681,15 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   }
 
   @Override
-  public ResultSet getProcedures(String catalog, String schemaPattern, String procedureNamePattern) throws SQLException {
+  public ResultSet getProcedures(String catalog, String schemaPattern, String procedureNamePattern)
+      throws SQLException {
     return null;
   }
 
   @Override
-  public ResultSet getProcedureColumns(String catalog, String schemaPattern, String procedureNamePattern, String columnNamePattern) throws SQLException {
+  public ResultSet getProcedureColumns(
+      String catalog, String schemaPattern, String procedureNamePattern, String columnNamePattern)
+      throws SQLException {
     return null;
   }
 
@@ -681,22 +709,27 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   }
 
   @Override
-  public ResultSet getColumnPrivileges(String catalog, String schema, String table, String columnNamePattern) throws SQLException {
+  public ResultSet getColumnPrivileges(
+      String catalog, String schema, String table, String columnNamePattern) throws SQLException {
     return null;
   }
 
   @Override
-  public ResultSet getTablePrivileges(String catalog, String schemaPattern, String tableNamePattern) throws SQLException {
+  public ResultSet getTablePrivileges(String catalog, String schemaPattern, String tableNamePattern)
+      throws SQLException {
     return null;
   }
 
   @Override
-  public ResultSet getBestRowIdentifier(String catalog, String schema, String table, int scope, boolean nullable) throws SQLException {
+  public ResultSet getBestRowIdentifier(
+      String catalog, String schema, String table, int scope, boolean nullable)
+      throws SQLException {
     return null;
   }
 
   @Override
-  public ResultSet getVersionColumns(String catalog, String schema, String table) throws SQLException {
+  public ResultSet getVersionColumns(String catalog, String schema, String table)
+      throws SQLException {
     return null;
   }
 
@@ -706,17 +739,26 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   }
 
   @Override
-  public ResultSet getImportedKeys(String catalog, String schema, String table) throws SQLException {
+  public ResultSet getImportedKeys(String catalog, String schema, String table)
+      throws SQLException {
     return null;
   }
 
   @Override
-  public ResultSet getExportedKeys(String catalog, String schema, String table) throws SQLException {
+  public ResultSet getExportedKeys(String catalog, String schema, String table)
+      throws SQLException {
     return null;
   }
 
   @Override
-  public ResultSet getCrossReference(String parentCatalog, String parentSchema, String parentTable, String foreignCatalog, String foreignSchema, String foreignTable) throws SQLException {
+  public ResultSet getCrossReference(
+      String parentCatalog,
+      String parentSchema,
+      String parentTable,
+      String foreignCatalog,
+      String foreignSchema,
+      String foreignTable)
+      throws SQLException {
     return null;
   }
 
@@ -726,7 +768,9 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   }
 
   @Override
-  public ResultSet getIndexInfo(String catalog, String schema, String table, boolean unique, boolean approximate) throws SQLException {
+  public ResultSet getIndexInfo(
+      String catalog, String schema, String table, boolean unique, boolean approximate)
+      throws SQLException {
     return null;
   }
 
@@ -791,7 +835,9 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   }
 
   @Override
-  public ResultSet getUDTs(String catalog, String schemaPattern, String typeNamePattern, int[] types) throws SQLException {
+  public ResultSet getUDTs(
+      String catalog, String schemaPattern, String typeNamePattern, int[] types)
+      throws SQLException {
     return null;
   }
 
@@ -821,17 +867,21 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   }
 
   @Override
-  public ResultSet getSuperTypes(String catalog, String schemaPattern, String typeNamePattern) throws SQLException {
+  public ResultSet getSuperTypes(String catalog, String schemaPattern, String typeNamePattern)
+      throws SQLException {
     return null;
   }
 
   @Override
-  public ResultSet getSuperTables(String catalog, String schemaPattern, String tableNamePattern) throws SQLException {
+  public ResultSet getSuperTables(String catalog, String schemaPattern, String tableNamePattern)
+      throws SQLException {
     return null;
   }
 
   @Override
-  public ResultSet getAttributes(String catalog, String schemaPattern, String typeNamePattern, String attributeNamePattern) throws SQLException {
+  public ResultSet getAttributes(
+      String catalog, String schemaPattern, String typeNamePattern, String attributeNamePattern)
+      throws SQLException {
     return null;
   }
 
@@ -906,17 +956,22 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   }
 
   @Override
-  public ResultSet getFunctions(String catalog, String schemaPattern, String functionNamePattern) throws SQLException {
+  public ResultSet getFunctions(String catalog, String schemaPattern, String functionNamePattern)
+      throws SQLException {
     return null;
   }
 
   @Override
-  public ResultSet getFunctionColumns(String catalog, String schemaPattern, String functionNamePattern, String columnNamePattern) throws SQLException {
+  public ResultSet getFunctionColumns(
+      String catalog, String schemaPattern, String functionNamePattern, String columnNamePattern)
+      throws SQLException {
     return null;
   }
 
   @Override
-  public ResultSet getPseudoColumns(String catalog, String schemaPattern, String tableNamePattern, String columnNamePattern) throws SQLException {
+  public ResultSet getPseudoColumns(
+      String catalog, String schemaPattern, String tableNamePattern, String columnNamePattern)
+      throws SQLException {
     return null;
   }
 

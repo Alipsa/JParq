@@ -1,17 +1,16 @@
 package se.alipsa.jparq;
+
 import java.io.File;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.Executor;
 
-
+/** An implementation of the java.sql.Connection interface for parquet files. */
 public class JParqConnection implements Connection {
-
 
   private final File baseDir;
   private final boolean caseSensitive;
   private boolean closed = false;
-
 
   JParqConnection(String url, Properties props) throws SQLException {
     Objects.requireNonNull(url, "url");
@@ -25,15 +24,12 @@ public class JParqConnection implements Connection {
     }
     if (props != null) qprops.putAll(props);
 
-
     this.caseSensitive = Boolean.parseBoolean(qprops.getProperty("caseSensitive", "false"));
-
 
     if (path.startsWith("file://")) path = path.substring("file://".length());
     this.baseDir = new File(path);
     if (!baseDir.isDirectory()) throw new SQLException("Not a directory: " + baseDir);
   }
-
 
   File tableFile(String tableName) throws SQLException {
     String name = caseSensitive ? tableName : tableName.toLowerCase(Locale.ROOT);
@@ -58,38 +54,108 @@ public class JParqConnection implements Connection {
   }
 
   // --- Connection API ---
-  @Override public Statement createStatement() { return new JParqStatement(this); }
-  @Override public PreparedStatement prepareStatement(String sql) throws SQLException { return new JParqStatement(this).prepare(sql); }
-  @Override public CallableStatement prepareCall(String sql) throws SQLException { throw new SQLFeatureNotSupportedException(); }
-  @Override public String nativeSQL(String sql) { return sql; }
-  @Override public void setAutoCommit(boolean autoCommit) { /* read-only */ }
-  @Override public boolean getAutoCommit() { return true; }
-  @Override public void commit() { /* read-only */ }
-  @Override public void rollback() { /* read-only */ }
-  @Override public void close() { closed = true; }
-  @Override public boolean isClosed() { return closed; }
-  @Override public DatabaseMetaData getMetaData() { return new JParqDatabaseMetaData(this); }
-  @Override public void setReadOnly(boolean readOnly) { }
-  @Override public boolean isReadOnly() { return true; }
-  @Override public void setCatalog(String catalog) { }
-  @Override public String getCatalog() { return baseDir.getName(); }
-  @Override public void setTransactionIsolation(int level) { }
-  @Override public int getTransactionIsolation() { return Connection.TRANSACTION_NONE; }
-  @Override public SQLWarning getWarnings() { return null; }
-  @Override public void clearWarnings() { }
+  @Override
+  public Statement createStatement() {
+    return new JParqStatement(this);
+  }
 
   @Override
-  public Statement createStatement(int resultSetType, int resultSetConcurrency) throws SQLException {
+  public PreparedStatement prepareStatement(String sql) throws SQLException {
+    return new JParqStatement(this).prepare(sql);
+  }
+
+  @Override
+  public CallableStatement prepareCall(String sql) throws SQLException {
+    throw new SQLFeatureNotSupportedException();
+  }
+
+  @Override
+  public String nativeSQL(String sql) {
+    return sql;
+  }
+
+  @Override
+  public void setAutoCommit(boolean autoCommit) {
+    /* read-only */
+  }
+
+  @Override
+  public boolean getAutoCommit() {
+    return true;
+  }
+
+  @Override
+  public void commit() {
+    /* read-only */
+  }
+
+  @Override
+  public void rollback() {
+    /* read-only */
+  }
+
+  @Override
+  public void close() {
+    closed = true;
+  }
+
+  @Override
+  public boolean isClosed() {
+    return closed;
+  }
+
+  @Override
+  public DatabaseMetaData getMetaData() {
+    return new JParqDatabaseMetaData(this);
+  }
+
+  @Override
+  public void setReadOnly(boolean readOnly) {}
+
+  @Override
+  public boolean isReadOnly() {
+    return true;
+  }
+
+  @Override
+  public void setCatalog(String catalog) {}
+
+  @Override
+  public String getCatalog() {
+    return baseDir.getName();
+  }
+
+  @Override
+  public void setTransactionIsolation(int level) {}
+
+  @Override
+  public int getTransactionIsolation() {
+    return Connection.TRANSACTION_NONE;
+  }
+
+  @Override
+  public SQLWarning getWarnings() {
     return null;
   }
 
   @Override
-  public PreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency) throws SQLException {
+  public void clearWarnings() {}
+
+  @Override
+  public Statement createStatement(int resultSetType, int resultSetConcurrency)
+      throws SQLException {
     return null;
   }
 
   @Override
-  public CallableStatement prepareCall(String sql, int resultSetType, int resultSetConcurrency) throws SQLException {
+  public PreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency)
+      throws SQLException {
+    return null;
+  }
+
+  @Override
+  public CallableStatement prepareCall(String sql, int resultSetType, int resultSetConcurrency)
+      throws SQLException {
     return null;
   }
 
@@ -99,14 +165,10 @@ public class JParqConnection implements Connection {
   }
 
   @Override
-  public void setTypeMap(Map<String, Class<?>> map) throws SQLException {
-
-  }
+  public void setTypeMap(Map<String, Class<?>> map) throws SQLException {}
 
   @Override
-  public void setHoldability(int holdability) throws SQLException {
-
-  }
+  public void setHoldability(int holdability) throws SQLException {}
 
   @Override
   public int getHoldability() throws SQLException {
@@ -124,27 +186,28 @@ public class JParqConnection implements Connection {
   }
 
   @Override
-  public void rollback(Savepoint savepoint) throws SQLException {
-
-  }
+  public void rollback(Savepoint savepoint) throws SQLException {}
 
   @Override
-  public void releaseSavepoint(Savepoint savepoint) throws SQLException {
-
-  }
+  public void releaseSavepoint(Savepoint savepoint) throws SQLException {}
 
   @Override
-  public Statement createStatement(int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
+  public Statement createStatement(
+      int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
     return null;
   }
 
   @Override
-  public PreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
+  public PreparedStatement prepareStatement(
+      String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability)
+      throws SQLException {
     return null;
   }
 
   @Override
-  public CallableStatement prepareCall(String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
+  public CallableStatement prepareCall(
+      String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability)
+      throws SQLException {
     return null;
   }
 
@@ -189,14 +252,10 @@ public class JParqConnection implements Connection {
   }
 
   @Override
-  public void setClientInfo(String name, String value) throws SQLClientInfoException {
-
-  }
+  public void setClientInfo(String name, String value) throws SQLClientInfoException {}
 
   @Override
-  public void setClientInfo(Properties properties) throws SQLClientInfoException {
-
-  }
+  public void setClientInfo(Properties properties) throws SQLClientInfoException {}
 
   @Override
   public String getClientInfo(String name) throws SQLException {
@@ -205,7 +264,7 @@ public class JParqConnection implements Connection {
 
   @Override
   public Properties getClientInfo() throws SQLException {
-    return null;
+    return new Properties();
   }
 
   @Override
@@ -219,9 +278,7 @@ public class JParqConnection implements Connection {
   }
 
   @Override
-  public void setSchema(String schema) throws SQLException {
-
-  }
+  public void setSchema(String schema) throws SQLException {}
 
   @Override
   public String getSchema() throws SQLException {
@@ -229,14 +286,10 @@ public class JParqConnection implements Connection {
   }
 
   @Override
-  public void abort(Executor executor) throws SQLException {
-
-  }
+  public void abort(Executor executor) throws SQLException {}
 
   @Override
-  public void setNetworkTimeout(Executor executor, int milliseconds) throws SQLException {
-
-  }
+  public void setNetworkTimeout(Executor executor, int milliseconds) throws SQLException {}
 
   @Override
   public int getNetworkTimeout() throws SQLException {

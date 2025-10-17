@@ -1,34 +1,43 @@
 package se.alipsa.jparq;
+
+import java.io.File;
+import java.sql.*;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.parquet.avro.AvroParquetReader;
 import org.apache.parquet.hadoop.ParquetReader;
 
-
-import java.io.File;
-import java.sql.*;
-
-
-public class JParqStatement extends org.apache.commons.lang3.concurrent.BasicThreadFactory.Builder implements Statement {
-
+/** An implementation of the java.sql.Statement interface. */
+public class JParqStatement extends org.apache.commons.lang3.concurrent.BasicThreadFactory.Builder
+    implements Statement {
 
   private final JParqConnection conn;
   private String currentSql;
   private JParqResultSet currentRs;
 
-
   public JParqStatement(JParqConnection conn) {
     this.conn = conn;
   }
-
 
   PreparedStatement prepare(String sql) throws SQLException {
     this.currentSql = sql;
     return new JParqPreparedStatement(this, sql);
   }
 
+  public JParqConnection getConn() {
+    return conn;
+  }
 
+  public String getCurrentSql() {
+    return currentSql;
+  }
+
+  public JParqResultSet getCurrentRs() {
+    return currentRs;
+  }
+
+  @SuppressWarnings("PMD.CloseResource")
   @Override
   public ResultSet executeQuery(String sql) throws SQLException {
     this.currentSql = sql;
@@ -45,42 +54,117 @@ public class JParqStatement extends org.apache.commons.lang3.concurrent.BasicThr
       throw new SQLException("Failed to open parquet file: " + file, e);
     }
 
-
     this.currentRs = new JParqResultSet(reader, select, file.getName());
     return currentRs;
   }
 
-
   // --- Boilerplate / no-ops for read-only driver ---
-  @Override public int executeUpdate(String sql) throws SQLException { throw new SQLFeatureNotSupportedException(); }
-  @Override public void close() { try { if (currentRs != null) currentRs.close(); } catch (SQLException ignored) {} }
-  @Override public int getMaxFieldSize() { return 0; }
-  @Override public void setMaxFieldSize(int max) { }
-  @Override public int getMaxRows() { return 0; }
-  @Override public void setMaxRows(int max) { }
-  @Override public void setEscapeProcessing(boolean enable) { }
-  @Override public int getQueryTimeout() { return 0; }
-  @Override public void setQueryTimeout(int seconds) { }
-  @Override public void cancel() { }
-  @Override public SQLWarning getWarnings() { return null; }
-  @Override public void clearWarnings() { }
-  @Override public void setCursorName(String name) { }
-  @Override public boolean execute(String sql) throws SQLException { executeQuery(sql); return true; }
-  @Override public ResultSet getResultSet() { return currentRs; }
-  @Override public int getUpdateCount() { return -1; }
-  @Override public boolean getMoreResults() { return false; }
-  @Override public void setFetchDirection(int direction) { }
-  @Override public int getFetchDirection() { return ResultSet.FETCH_FORWARD; }
-  @Override public void setFetchSize(int rows) { }
-  @Override public int getFetchSize() { return 0; }
-  @Override public int getResultSetConcurrency() { return ResultSet.CONCUR_READ_ONLY; }
-  @Override public int getResultSetType() { return ResultSet.TYPE_FORWARD_ONLY; }
-  @Override public void addBatch(String sql) { }
+  @Override
+  public int executeUpdate(String sql) throws SQLException {
+    throw new SQLFeatureNotSupportedException();
+  }
 
   @Override
-  public void clearBatch() throws SQLException {
-
+  public void close() {
+    try {
+      if (currentRs != null) currentRs.close();
+    } catch (SQLException ignored) {
+    }
   }
+
+  @Override
+  public int getMaxFieldSize() {
+    return 0;
+  }
+
+  @Override
+  public void setMaxFieldSize(int max) {}
+
+  @Override
+  public int getMaxRows() {
+    return 0;
+  }
+
+  @Override
+  public void setMaxRows(int max) {}
+
+  @Override
+  public void setEscapeProcessing(boolean enable) {}
+
+  @Override
+  public int getQueryTimeout() {
+    return 0;
+  }
+
+  @Override
+  public void setQueryTimeout(int seconds) {}
+
+  @Override
+  public void cancel() {}
+
+  @Override
+  public SQLWarning getWarnings() {
+    return null;
+  }
+
+  @Override
+  public void clearWarnings() {}
+
+  @Override
+  public void setCursorName(String name) {}
+
+  @Override
+  public boolean execute(String sql) throws SQLException {
+    executeQuery(sql);
+    return true;
+  }
+
+  @Override
+  public ResultSet getResultSet() {
+    return currentRs;
+  }
+
+  @Override
+  public int getUpdateCount() {
+    return -1;
+  }
+
+  @Override
+  public boolean getMoreResults() {
+    return false;
+  }
+
+  @Override
+  public void setFetchDirection(int direction) {}
+
+  @Override
+  public int getFetchDirection() {
+    return ResultSet.FETCH_FORWARD;
+  }
+
+  @Override
+  public void setFetchSize(int rows) {}
+
+  @Override
+  public int getFetchSize() {
+    return 0;
+  }
+
+  @Override
+  public int getResultSetConcurrency() {
+    return ResultSet.CONCUR_READ_ONLY;
+  }
+
+  @Override
+  public int getResultSetType() {
+    return ResultSet.TYPE_FORWARD_ONLY;
+  }
+
+  @Override
+  public void addBatch(String sql) {}
+
+  @Override
+  public void clearBatch() throws SQLException {}
 
   @Override
   public int[] executeBatch() throws SQLException {
@@ -143,9 +227,7 @@ public class JParqStatement extends org.apache.commons.lang3.concurrent.BasicThr
   }
 
   @Override
-  public void setPoolable(boolean poolable) throws SQLException {
-
-  }
+  public void setPoolable(boolean poolable) throws SQLException {}
 
   @Override
   public boolean isPoolable() throws SQLException {
@@ -153,9 +235,7 @@ public class JParqStatement extends org.apache.commons.lang3.concurrent.BasicThr
   }
 
   @Override
-  public void closeOnCompletion() throws SQLException {
-
-  }
+  public void closeOnCompletion() throws SQLException {}
 
   @Override
   public boolean isCloseOnCompletion() throws SQLException {

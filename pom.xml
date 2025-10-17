@@ -7,11 +7,12 @@
   <version>0.1.0-SNAPSHOT</version>
   <name>Parquet JDBC Driver</name>
   <properties>
-    <maven.compiler.source>21</maven.compiler.source>
-    <maven.compiler.target>21</maven.compiler.target>
+    <java.version>21</java.version>
+    <maven.compiler.release>${java.version}</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
     <avro.version>1.12.1</avro.version>
+    <checkstyle.version>10.16.0</checkstyle.version>
     <hadoop.version>3.4.2</hadoop.version>
     <jsqlparser.version>5.3</jsqlparser.version>
     <parquet.version>1.16.0</parquet.version>
@@ -92,6 +93,7 @@
         <executions>
           <execution>
             <id>enforce-releases-maven-java</id>
+            <phase>validate</phase>
             <goals>
               <goal>enforce</goal>
             </goals>
@@ -103,21 +105,22 @@
                   <message>Please use maven version 3.9.9 or higher</message>
                 </requireMavenVersion>
                 <requireJavaVersion>
-                  <version>[21,)</version>
+                  <version>[${java.version},23)</version>
                   <level>ERROR</level>
-                  <message>Please use Java 21 or higher</message>
+                  <message>Please use Java &gt; ${java.version} and &lt; 23</message>
                 </requireJavaVersion>
               </rules>
             </configuration>
           </execution>
           <execution>
             <id>enforce-bytecode</id>
+            <phase>validate</phase>
             <goals><goal>enforce</goal></goals>
             <configuration>
               <rules>
                 <enforceBytecodeVersion>
                   <!-- Cap dependencies at JDK 21 -->
-                  <maxJdkVersion>21</maxJdkVersion>
+                  <maxJdkVersion>${java.version}</maxJdkVersion>
                   <!-- Optional: ignore test scope -->
                   <ignoredScopes>
                     <ignoredScope>test</ignoredScope>
@@ -163,8 +166,120 @@
           </archive>
         </configuration>
       </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+        <version>3.4.0</version>
+        <configuration>
+          <configLocation>google_checks.xml</configLocation>
+          <outputFile>target/checkstyle-results.xml</outputFile>
+          <consoleOutput>true</consoleOutput>
+          <failsOnError>true</failsOnError>
+          <includeTestSourceDirectory>true</includeTestSourceDirectory>
+        </configuration>
+        <executions>
+          <execution>
+            <id>validate</id>
+            <phase>validate</phase>
+            <goals>
+              <goal>check</goal>
+            </goals>
+          </execution>
+        </executions>
+        <dependencies>
+          <dependency>
+            <groupId>com.puppycrawl.tools</groupId>
+            <artifactId>checkstyle</artifactId>
+            <version>${checkstyle.version}</version>
+          </dependency>
+        </dependencies>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-pmd-plugin</artifactId>
+        <version>3.22.0</version>
+        <configuration>
+          <targetJdk>${java.version}</targetJdk>
+          <analysisCache>true</analysisCache>
+          <printFailingErrors>true</printFailingErrors>
+          <rulesets>
+            <ruleset>/category/java/errorprone.xml</ruleset>
+            <ruleset>/category/java/bestpractices.xml</ruleset>
+          </rulesets>
+
+          <inputEncoding>UTF-8</inputEncoding>
+
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>check</goal>
+            </goals>
+            <configuration>
+              <failOnViolation>true</failOnViolation>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>com.diffplug.spotless</groupId>
+        <artifactId>spotless-maven-plugin</artifactId>
+        <version>2.43.0</version>
+        <configuration>
+          <java>
+            <includes>
+              <include>src/main/java/**/*.java</include>
+              <include>src/test/java/**/*.java</include>
+            </includes>
+            <googleJavaFormat/>
+
+            <importOrder/>
+            <removeUnusedImports/>
+
+            <formatAnnotations/>
+          </java>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>check</goal>
+            </goals>
+            <phase>compile</phase>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
   </build>
+
+  <reporting>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+        <version>3.4.0</version>
+        <configuration>
+          <configLocation>checkstyle/google_checks.xml</configLocation>
+          <outputFile>target/checkstyle-results.xml</outputFile>
+          <consoleOutput>true</consoleOutput>
+          <failsOnError>true</failsOnError>
+          <includeTestSourceDirectory>true</includeTestSourceDirectory>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-pmd-plugin</artifactId>
+        <version>3.22.0</version>
+        <configuration>
+          <targetJdk>${java.version}</targetJdk>
+          <inputEncoding>UTF-8</inputEncoding>
+
+          <linkXref>true</linkXref>
+        </configuration>
+      </plugin>
+    </plugins>
+  </reporting>
 
   <profiles>
     <profile>

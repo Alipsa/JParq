@@ -1,5 +1,24 @@
 - OR support: evaluate the JSQLParser Expression directly in JParqResultSet (instead of materializing into a flat list of AND’d Conditions). That unlocks OR, parentheses, and more complex expressions with minimal extra complexity.
+- IN support (e.g. select * from mtcars where cyl in (6,8))
+- LIKE support (e.g. select * from mtcars where model like 'Toyota%'), and NOT LIKE (e.g. select * from mtcars where model not like 'Toyota%').
+- BETWEEN support (e.g. select * from mtcars where mpg between 20 and 30)
+- IS NULL and IS NOT NULL support
 - ORDER BY: buffer matched rows (for small files) and sort via a comparator from JSQLParser’s OrderByElements.
 - Predicate pushdown: map a subset of =, <, >, <=, >= on primitive columns to Parquet’s FilterPredicate for big speedups.
-- expose an INFORMATION_SCHEMA with tables/columns via in-memory result sets,
-- slim deps with shading/exclusions to get a leaner jar.
+- Alias support (e.g select model as type from mtcars)
+- expose an INFORMATION_SCHEMA with tables/columns via in-memory result sets, slim deps with shading/exclusions to get a leaner jar.
+- GROUP BY support
+- HAVING support
+- Aggregation Functions supoprt (min, max, count, avg, sum)
+- CAST support
+- EXISTS support
+- JOIN support (join, inner join, left join, right join, full join)
+- UNION support
+- CASE support
+- COALESCE support
+- ANY support
+- ALL support
+- COMMENTS support
+- string functions support
+- numeric function support
+- date functions support

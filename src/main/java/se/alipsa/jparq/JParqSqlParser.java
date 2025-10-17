@@ -1,24 +1,30 @@
 // src/main/java/se/alipsa/jparq/JParqSqlParser.java
 package se.alipsa.jparq;
 
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 import net.sf.jsqlparser.expression.*;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.*;
 
-import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.List;
-
+/**
+ * Handles parsing the SQL and translates that into something that the parquet reader can
+ * understand.
+ */
 public final class JParqSqlParser {
   private JParqSqlParser() {}
 
   // NOW: carry the raw JSQLParser Expression as `where`
   public record Select(List<String> columns, String table, Expression where, int limit) {
-    public List<String> columns(){ return (columns == null || columns.isEmpty()) ? List.of("*") : columns; }
+    public List<String> columns() {
+      return (columns == null || columns.isEmpty()) ? List.of("*") : columns;
+    }
   }
 
+  @SuppressWarnings("PMD.AvoidLiteralsInIfCondition")
   public static Select parseSelect(String sql) {
     try {
       net.sf.jsqlparser.statement.select.Select stmt =
@@ -56,7 +62,8 @@ public final class JParqSqlParser {
           selectAll = true;
           break;
         } else {
-          throw new IllegalArgumentException("Only simple column projections are supported: " + text);
+          throw new IllegalArgumentException(
+              "Only simple column projections are supported: " + text);
         }
       }
       if (selectAll) columns = List.of("*");
@@ -77,20 +84,24 @@ public final class JParqSqlParser {
     }
   }
 
-  // (Optionally keep these literal helpers if you reuse them elsewhere)
+  @SuppressWarnings({"PMD.AvoidDecimalLiteralsInBigDecimalConstructor", "PMD.EmptyCatchBlock"})
   static Object toLiteral(Expression e) {
-    if (e instanceof NullValue)         return null;
-    if (e instanceof StringValue sv)    return sv.getValue();
-    if (e instanceof LongValue lv)      return lv.getBigIntegerValue().longValue();
-    if (e instanceof DoubleValue dv)    return new BigDecimal(dv.getValue());
+    if (e instanceof NullValue) return null;
+    if (e instanceof StringValue sv) return sv.getValue();
+    if (e instanceof LongValue lv) return lv.getBigIntegerValue().longValue();
+    if (e instanceof DoubleValue dv) return new BigDecimal(dv.getValue());
     if (e instanceof SignedExpression se) return toSignedLiteral(se);
-    if (e instanceof BooleanValue bv)   return bv.getValue();
-    if (e instanceof DateValue dv)      return dv.getValue();        // java.sql.Date
-    if (e instanceof TimestampValue tv) return tv.getValue();        // java.sql.Timestamp
-    try { return new BigDecimal(e.toString()); } catch (Exception ignore) { }
+    if (e instanceof BooleanValue bv) return bv.getValue();
+    if (e instanceof DateValue dv) return dv.getValue(); // java.sql.Date
+    if (e instanceof TimestampValue tv) return tv.getValue(); // java.sql.Timestamp
+    try {
+      return new BigDecimal(e.toString());
+    } catch (Exception ignore) {
+    }
     return e.toString();
   }
 
+  @SuppressWarnings("PMD.EmptyCatchBlock")
   private static Object toSignedLiteral(SignedExpression se) {
     Object inner = toLiteral(se.getExpression());
     if (inner instanceof Number n) {
@@ -101,7 +112,8 @@ public final class JParqSqlParser {
       try {
         var bd = new BigDecimal(s);
         return se.getSign() == '-' ? bd.negate() : bd;
-      } catch (Exception ignore) {}
+      } catch (Exception ignore) {
+      }
     }
     return (se.getSign() == '-') ? ("-" + inner) : inner;
   }

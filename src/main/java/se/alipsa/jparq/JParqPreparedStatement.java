@@ -7,6 +7,7 @@ import java.net.URL;
 import java.sql.*;
 import java.util.Calendar;
 
+/** An implementation of the java.sql.PreparedStatement interface. */
 class JParqPreparedStatement implements PreparedStatement {
   private final JParqStatement stmt;
   private final String sql;
@@ -33,7 +34,7 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   @Override
-  public void close() { }
+  public void close() {}
 
   @Override
   public Connection getConnection() throws SQLException {
@@ -41,252 +42,198 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   // Parameter setters are no-ops since we don't bind values
-  @Override public void setString(int parameterIndex, String x) {}
-  @Override public void setInt(int parameterIndex, int x) {}
-  @Override public void setObject(int parameterIndex, Object x) {}
-  @Override public void clearParameters() {}
+  @Override
+  public void setString(int parameterIndex, String x) {}
+
+  @Override
+  public void setInt(int parameterIndex, int x) {}
+
+  @Override
+  public void setObject(int parameterIndex, Object x) {}
+
+  @Override
+  public void clearParameters() {}
 
   // Many other methods omitted or trivial since it's read-only
-  @Override public ResultSet getResultSet() { return stmt.getResultSet(); }
-  @Override public boolean isClosed() { return false; }
-  @Override public boolean isPoolable() { return false; }
-  @Override public void setPoolable(boolean poolable) {}
-  @Override public void closeOnCompletion() {}
-  @Override public boolean isCloseOnCompletion() { return false; }
+  @Override
+  public ResultSet getResultSet() {
+    return stmt.getResultSet();
+  }
+
+  @Override
+  public boolean isClosed() {
+    return false;
+  }
+
+  @Override
+  public boolean isPoolable() {
+    return false;
+  }
+
+  @Override
+  public void setPoolable(boolean poolable) {}
+
+  @Override
+  public void closeOnCompletion() {}
+
+  @Override
+  public boolean isCloseOnCompletion() {
+    return false;
+  }
 
   // Unused PreparedStatement-specific methods (batch, meta, etc.)
-  @Override public ResultSetMetaData getMetaData() { return null; }
-  @Override public ParameterMetaData getParameterMetaData() { return null; }
-
   @Override
-  public void setNull(int parameterIndex, int sqlType) throws SQLException {
-
+  public ResultSetMetaData getMetaData() {
+    return null;
   }
 
   @Override
-  public void setBoolean(int parameterIndex, boolean x) throws SQLException {
-
+  public ParameterMetaData getParameterMetaData() {
+    return null;
   }
 
   @Override
-  public void setByte(int parameterIndex, byte x) throws SQLException {
-
-  }
+  public void setNull(int parameterIndex, int sqlType) throws SQLException {}
 
   @Override
-  public void setShort(int parameterIndex, short x) throws SQLException {
-
-  }
+  public void setBoolean(int parameterIndex, boolean x) throws SQLException {}
 
   @Override
-  public void setLong(int parameterIndex, long x) throws SQLException {
-
-  }
+  public void setByte(int parameterIndex, byte x) throws SQLException {}
 
   @Override
-  public void setFloat(int parameterIndex, float x) throws SQLException {
-
-  }
+  public void setShort(int parameterIndex, short x) throws SQLException {}
 
   @Override
-  public void setDouble(int parameterIndex, double x) throws SQLException {
-
-  }
+  public void setLong(int parameterIndex, long x) throws SQLException {}
 
   @Override
-  public void setBigDecimal(int parameterIndex, BigDecimal x) throws SQLException {
-
-  }
+  public void setFloat(int parameterIndex, float x) throws SQLException {}
 
   @Override
-  public void setBytes(int parameterIndex, byte[] x) throws SQLException {
-
-  }
+  public void setDouble(int parameterIndex, double x) throws SQLException {}
 
   @Override
-  public void setDate(int parameterIndex, Date x) throws SQLException {
-
-  }
+  public void setBigDecimal(int parameterIndex, BigDecimal x) throws SQLException {}
 
   @Override
-  public void setTime(int parameterIndex, Time x) throws SQLException {
-
-  }
+  public void setBytes(int parameterIndex, byte[] x) throws SQLException {}
 
   @Override
-  public void setTimestamp(int parameterIndex, Timestamp x) throws SQLException {
-
-  }
+  public void setDate(int parameterIndex, Date x) throws SQLException {}
 
   @Override
-  public void setAsciiStream(int parameterIndex, InputStream x, int length) throws SQLException {
-
-  }
+  public void setTime(int parameterIndex, Time x) throws SQLException {}
 
   @Override
-  public void setUnicodeStream(int parameterIndex, InputStream x, int length) throws SQLException {
-
-  }
+  public void setTimestamp(int parameterIndex, Timestamp x) throws SQLException {}
 
   @Override
-  public void setBinaryStream(int parameterIndex, InputStream x, int length) throws SQLException {
-
-  }
+  public void setAsciiStream(int parameterIndex, InputStream x, int length) throws SQLException {}
 
   @Override
-  public void setObject(int parameterIndex, Object x, int targetSqlType) throws SQLException {
-
-  }
+  public void setUnicodeStream(int parameterIndex, InputStream x, int length) throws SQLException {}
 
   @Override
-  public void addBatch() throws SQLException {
-
-  }
+  public void setBinaryStream(int parameterIndex, InputStream x, int length) throws SQLException {}
 
   @Override
-  public void setCharacterStream(int parameterIndex, Reader reader, int length) throws SQLException {
-
-  }
+  public void setObject(int parameterIndex, Object x, int targetSqlType) throws SQLException {}
 
   @Override
-  public void setRef(int parameterIndex, Ref x) throws SQLException {
-
-  }
+  public void addBatch() throws SQLException {}
 
   @Override
-  public void setBlob(int parameterIndex, Blob x) throws SQLException {
-
-  }
-
-  @Override
-  public void setClob(int parameterIndex, Clob x) throws SQLException {
-
-  }
+  public void setCharacterStream(int parameterIndex, Reader reader, int length)
+      throws SQLException {}
 
   @Override
-  public void setArray(int parameterIndex, Array x) throws SQLException {
-
-  }
+  public void setRef(int parameterIndex, Ref x) throws SQLException {}
 
   @Override
-  public void setDate(int parameterIndex, Date x, Calendar cal) throws SQLException {
-
-  }
+  public void setBlob(int parameterIndex, Blob x) throws SQLException {}
 
   @Override
-  public void setTime(int parameterIndex, Time x, Calendar cal) throws SQLException {
-
-  }
+  public void setClob(int parameterIndex, Clob x) throws SQLException {}
 
   @Override
-  public void setTimestamp(int parameterIndex, Timestamp x, Calendar cal) throws SQLException {
-
-  }
+  public void setArray(int parameterIndex, Array x) throws SQLException {}
 
   @Override
-  public void setNull(int parameterIndex, int sqlType, String typeName) throws SQLException {
-
-  }
+  public void setDate(int parameterIndex, Date x, Calendar cal) throws SQLException {}
 
   @Override
-  public void setURL(int parameterIndex, URL x) throws SQLException {
-
-  }
+  public void setTime(int parameterIndex, Time x, Calendar cal) throws SQLException {}
 
   @Override
-  public void setRowId(int parameterIndex, RowId x) throws SQLException {
-
-  }
+  public void setTimestamp(int parameterIndex, Timestamp x, Calendar cal) throws SQLException {}
 
   @Override
-  public void setNString(int parameterIndex, String value) throws SQLException {
-
-  }
+  public void setNull(int parameterIndex, int sqlType, String typeName) throws SQLException {}
 
   @Override
-  public void setNCharacterStream(int parameterIndex, Reader value, long length) throws SQLException {
-
-  }
+  public void setURL(int parameterIndex, URL x) throws SQLException {}
 
   @Override
-  public void setNClob(int parameterIndex, NClob value) throws SQLException {
-
-  }
+  public void setRowId(int parameterIndex, RowId x) throws SQLException {}
 
   @Override
-  public void setClob(int parameterIndex, Reader reader, long length) throws SQLException {
-
-  }
+  public void setNString(int parameterIndex, String value) throws SQLException {}
 
   @Override
-  public void setBlob(int parameterIndex, InputStream inputStream, long length) throws SQLException {
-
-  }
-
-  @Override
-  public void setNClob(int parameterIndex, Reader reader, long length) throws SQLException {
-
-  }
+  public void setNCharacterStream(int parameterIndex, Reader value, long length)
+      throws SQLException {}
 
   @Override
-  public void setSQLXML(int parameterIndex, SQLXML xmlObject) throws SQLException {
-
-  }
+  public void setNClob(int parameterIndex, NClob value) throws SQLException {}
 
   @Override
-  public void setObject(int parameterIndex, Object x, int targetSqlType, int scaleOrLength) throws SQLException {
-
-  }
+  public void setClob(int parameterIndex, Reader reader, long length) throws SQLException {}
 
   @Override
-  public void setAsciiStream(int parameterIndex, InputStream x, long length) throws SQLException {
-
-  }
-
-  @Override
-  public void setBinaryStream(int parameterIndex, InputStream x, long length) throws SQLException {
-
-  }
+  public void setBlob(int parameterIndex, InputStream inputStream, long length)
+      throws SQLException {}
 
   @Override
-  public void setCharacterStream(int parameterIndex, Reader reader, long length) throws SQLException {
-
-  }
+  public void setNClob(int parameterIndex, Reader reader, long length) throws SQLException {}
 
   @Override
-  public void setAsciiStream(int parameterIndex, InputStream x) throws SQLException {
-
-  }
+  public void setSQLXML(int parameterIndex, SQLXML xmlObject) throws SQLException {}
 
   @Override
-  public void setBinaryStream(int parameterIndex, InputStream x) throws SQLException {
-
-  }
-
-  @Override
-  public void setCharacterStream(int parameterIndex, Reader reader) throws SQLException {
-
-  }
+  public void setObject(int parameterIndex, Object x, int targetSqlType, int scaleOrLength)
+      throws SQLException {}
 
   @Override
-  public void setNCharacterStream(int parameterIndex, Reader value) throws SQLException {
-
-  }
+  public void setAsciiStream(int parameterIndex, InputStream x, long length) throws SQLException {}
 
   @Override
-  public void setClob(int parameterIndex, Reader reader) throws SQLException {
-
-  }
+  public void setBinaryStream(int parameterIndex, InputStream x, long length) throws SQLException {}
 
   @Override
-  public void setBlob(int parameterIndex, InputStream inputStream) throws SQLException {
-
-  }
+  public void setCharacterStream(int parameterIndex, Reader reader, long length)
+      throws SQLException {}
 
   @Override
-  public void setNClob(int parameterIndex, Reader reader) throws SQLException {
+  public void setAsciiStream(int parameterIndex, InputStream x) throws SQLException {}
 
-  }
+  @Override
+  public void setBinaryStream(int parameterIndex, InputStream x) throws SQLException {}
+
+  @Override
+  public void setCharacterStream(int parameterIndex, Reader reader) throws SQLException {}
+
+  @Override
+  public void setNCharacterStream(int parameterIndex, Reader value) throws SQLException {}
+
+  @Override
+  public void setClob(int parameterIndex, Reader reader) throws SQLException {}
+
+  @Override
+  public void setBlob(int parameterIndex, InputStream inputStream) throws SQLException {}
+
+  @Override
+  public void setNClob(int parameterIndex, Reader reader) throws SQLException {}
 
   @Override
   public ResultSet executeQuery(String sql) throws SQLException {
@@ -304,9 +251,7 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   @Override
-  public void setMaxFieldSize(int max) throws SQLException {
-
-  }
+  public void setMaxFieldSize(int max) throws SQLException {}
 
   @Override
   public int getMaxRows() throws SQLException {
@@ -314,14 +259,10 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   @Override
-  public void setMaxRows(int max) throws SQLException {
-
-  }
+  public void setMaxRows(int max) throws SQLException {}
 
   @Override
-  public void setEscapeProcessing(boolean enable) throws SQLException {
-
-  }
+  public void setEscapeProcessing(boolean enable) throws SQLException {}
 
   @Override
   public int getQueryTimeout() throws SQLException {
@@ -329,14 +270,10 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   @Override
-  public void setQueryTimeout(int seconds) throws SQLException {
-
-  }
+  public void setQueryTimeout(int seconds) throws SQLException {}
 
   @Override
-  public void cancel() throws SQLException {
-
-  }
+  public void cancel() throws SQLException {}
 
   @Override
   public SQLWarning getWarnings() throws SQLException {
@@ -344,14 +281,10 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   @Override
-  public void clearWarnings() throws SQLException {
-
-  }
+  public void clearWarnings() throws SQLException {}
 
   @Override
-  public void setCursorName(String name) throws SQLException {
-
-  }
+  public void setCursorName(String name) throws SQLException {}
 
   @Override
   public boolean execute(String sql) throws SQLException {
@@ -369,9 +302,7 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   @Override
-  public void setFetchDirection(int direction) throws SQLException {
-
-  }
+  public void setFetchDirection(int direction) throws SQLException {}
 
   @Override
   public int getFetchDirection() throws SQLException {
@@ -379,9 +310,7 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   @Override
-  public void setFetchSize(int rows) throws SQLException {
-
-  }
+  public void setFetchSize(int rows) throws SQLException {}
 
   @Override
   public int getFetchSize() throws SQLException {
@@ -399,14 +328,10 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   @Override
-  public void addBatch(String sql) throws SQLException {
-
-  }
+  public void addBatch(String sql) throws SQLException {}
 
   @Override
-  public void clearBatch() throws SQLException {
-
-  }
+  public void clearBatch() throws SQLException {}
 
   @Override
   public int[] executeBatch() throws SQLException {

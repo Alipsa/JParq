@@ -1,5 +1,18 @@
 package se.alipsa.jparq;
 
+import java.io.InputStream;
+import java.io.Reader;
+import java.math.BigDecimal;
+import java.net.URL;
+import java.nio.ByteBuffer;
+import java.sql.*;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import net.sf.jsqlparser.expression.*;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
@@ -15,20 +28,7 @@ import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.hadoop.ParquetReader;
 
-import java.io.InputStream;
-import java.io.Reader;
-import java.math.BigDecimal;
-import java.net.URL;
-import java.nio.ByteBuffer;
-import java.sql.*;
-import java.time.Instant;
-import java.time.LocalDate;
-import java.util.ArrayList;
-import java.util.Calendar;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-
+/** An implementation of the java.sql.ResultSet interface. */
 public class JParqResultSet implements ResultSet {
 
   private final ParquetReader<GenericRecord> reader;
@@ -40,15 +40,17 @@ public class JParqResultSet implements ResultSet {
   private final List<String> columnOrder = new ArrayList<>();
   private final Schema schema;
 
-  public JParqResultSet(ParquetReader<GenericRecord> reader,
-                        JParqSqlParser.Select select,
-                        String tableName) throws SQLException {
+  @SuppressWarnings("PMD.NullAssignment")
+  public JParqResultSet(
+      ParquetReader<GenericRecord> reader, JParqSqlParser.Select select, String tableName)
+      throws SQLException {
     this.reader = Objects.requireNonNull(reader);
     this.select = Objects.requireNonNull(select);
     this.tableName = tableName;
     try {
-      this.current = readNextMatching();                 // may be null
-      this.schema  = (this.current != null) ? this.current.getSchema() : null;  // <-- assign on all paths
+      this.current = readNextMatching(); // may be null
+      this.schema =
+          (this.current != null) ? this.current.getSchema() : null; // <-- assign on all paths
       if (current != null) {
         if (select.columns().isEmpty() || select.columns().contains("*")) {
           for (Schema.Field f : schema.getFields()) columnOrder.add(f.name());
@@ -81,7 +83,7 @@ public class JParqResultSet implements ResultSet {
   }
 
   private GenericRecord readNextMatching() throws Exception {
-    GenericRecord rec = reader.read();           // always read next
+    GenericRecord rec = reader.read(); // always read next
     while (rec != null) {
       if (matches(rec)) return rec;
       rec = reader.read();
@@ -95,6 +97,7 @@ public class JParqResultSet implements ResultSet {
     return eval(where, rec);
   }
 
+  @SuppressWarnings("PMD.LooseCoupling")
   private boolean eval(Expression expr, GenericRecord rec) {
     if (expr instanceof Parenthesis p) {
       return eval(p.getExpression(), rec);
@@ -105,11 +108,16 @@ public class JParqResultSet implements ResultSet {
     if (expr instanceof OrExpression or) {
       return eval(or.getLeftExpression(), rec) || eval(or.getRightExpression(), rec);
     }
-    if (expr instanceof EqualsTo e)            return compare(e.getLeftExpression(), e.getRightExpression(), rec) == 0;
-    if (expr instanceof GreaterThan gt)        return compare(gt.getLeftExpression(), gt.getRightExpression(), rec) > 0;
-    if (expr instanceof MinorThan lt)          return compare(lt.getLeftExpression(), lt.getRightExpression(), rec) < 0;
-    if (expr instanceof GreaterThanEquals ge)  return compare(ge.getLeftExpression(), ge.getRightExpression(), rec) >= 0;
-    if (expr instanceof MinorThanEquals le)    return compare(le.getLeftExpression(), le.getRightExpression(), rec) <= 0;
+    if (expr instanceof EqualsTo e)
+      return compare(e.getLeftExpression(), e.getRightExpression(), rec) == 0;
+    if (expr instanceof GreaterThan gt)
+      return compare(gt.getLeftExpression(), gt.getRightExpression(), rec) > 0;
+    if (expr instanceof MinorThan lt)
+      return compare(lt.getLeftExpression(), lt.getRightExpression(), rec) < 0;
+    if (expr instanceof GreaterThanEquals ge)
+      return compare(ge.getLeftExpression(), ge.getRightExpression(), rec) >= 0;
+    if (expr instanceof MinorThanEquals le)
+      return compare(le.getLeftExpression(), le.getRightExpression(), rec) <= 0;
 
     throw new IllegalArgumentException("Unsupported WHERE expression: " + expr);
   }
@@ -117,6 +125,7 @@ public class JParqResultSet implements ResultSet {
   private static final class Operand {
     final Object value;
     final Schema schemaOrNull;
+
     Operand(Object value, Schema schemaOrNull) {
       this.value = value;
       this.schemaOrNull = schemaOrNull;
@@ -130,7 +139,8 @@ public class JParqResultSet implements ResultSet {
     Object l = L.value;
     Object r = R.value;
 
-    // If one side is a column (has schema) and the other is a literal, coerce literal to column type
+    // If one side is a column (has schema) and the other is a literal, coerce literal to column
+    // type
     if (L.schemaOrNull != null && R.schemaOrNull == null) {
       r = coerceLiteral(r, L.schemaOrNull);
     } else if (R.schemaOrNull != null && L.schemaOrNull == null) {
@@ -171,11 +181,12 @@ public class JParqResultSet implements ResultSet {
     return new Operand(literal(e), null);
   }
 
+  @SuppressWarnings({"PMD.AvoidDecimalLiteralsInBigDecimalConstructor", "PMD.EmptyCatchBlock"})
   private static Object literal(Expression e) {
-    if (e instanceof NullValue)         return null;
-    if (e instanceof StringValue sv)    return sv.getValue();
-    if (e instanceof LongValue lv)      return lv.getBigIntegerValue().longValue();
-    if (e instanceof DoubleValue dv)    return new BigDecimal(dv.getValue());
+    if (e instanceof NullValue) return null;
+    if (e instanceof StringValue sv) return sv.getValue();
+    if (e instanceof LongValue lv) return lv.getBigIntegerValue().longValue();
+    if (e instanceof DoubleValue dv) return new BigDecimal(dv.getValue());
     if (e instanceof SignedExpression se) {
       Object inner = literal(se.getExpression());
       if (inner instanceof Number n) {
@@ -186,17 +197,23 @@ public class JParqResultSet implements ResultSet {
         try {
           var bd = new BigDecimal(s);
           return se.getSign() == '-' ? bd.negate() : bd;
-        } catch (Exception ignore) {}
+        } catch (Exception ignore) {
+          // ignore
+        }
       }
       return (se.getSign() == '-') ? ("-" + inner) : inner;
     }
-    if (e instanceof BooleanValue bv)   return bv.getValue();
-    if (e instanceof DateValue dv)      return dv.getValue();        // java.sql.Date
-    if (e instanceof TimestampValue tv) return tv.getValue();        // java.sql.Timestamp
-    try { return new BigDecimal(e.toString()); } catch (Exception ignore) { }
+    if (e instanceof BooleanValue bv) return bv.getValue();
+    if (e instanceof DateValue dv) return dv.getValue(); // java.sql.Date
+    if (e instanceof TimestampValue tv) return tv.getValue(); // java.sql.Timestamp
+    try {
+      return new BigDecimal(e.toString());
+    } catch (Exception ignore) {
+    }
     return e.toString();
   }
 
+  @SuppressWarnings("PMD.EmptyCatchBlock")
   private Object coerceLiteral(Object lit, Schema s) {
     if (lit == null) return null;
     Schema effective = nonNullSchema(s);
@@ -204,29 +221,55 @@ public class JParqResultSet implements ResultSet {
       case STRING, ENUM:
         return lit.toString();
 
-      case INT: {
-        if (LogicalTypes.date().equals(effective.getLogicalType())) {
-          if (lit instanceof java.sql.Date) return lit;
-          try { return java.sql.Date.valueOf(lit.toString()); } catch (Exception ignore) {}
-          try { return Integer.parseInt(lit.toString()); } catch (Exception ignore) {}
-          return lit.toString();
+      case INT:
+        {
+          if (LogicalTypes.date().equals(effective.getLogicalType())) {
+            if (lit instanceof java.sql.Date) return lit;
+            try {
+              return java.sql.Date.valueOf(lit.toString());
+            } catch (Exception ignore) {
+            }
+            try {
+              return Integer.parseInt(lit.toString());
+            } catch (Exception ignore) {
+            }
+            return lit.toString();
+          }
+          try {
+            return Integer.parseInt(lit.toString());
+          } catch (Exception ignore) {
+            return lit;
+          }
         }
-        try { return Integer.parseInt(lit.toString()); } catch (Exception ignore) { return lit; }
-      }
 
-      case LONG: {
-        if (effective.getLogicalType() instanceof LogicalTypes.TimestampMillis
-            || effective.getLogicalType() instanceof LogicalTypes.TimestampMicros) {
-          if (lit instanceof Timestamp) return lit;
-          try { return Timestamp.valueOf(lit.toString()); } catch (Exception ignore) {}
-          try { return new Timestamp(Long.parseLong(lit.toString())); } catch (Exception ignore) {}
-          return lit.toString();
+      case LONG:
+        {
+          if (effective.getLogicalType() instanceof LogicalTypes.TimestampMillis
+              || effective.getLogicalType() instanceof LogicalTypes.TimestampMicros) {
+            if (lit instanceof Timestamp) return lit;
+            try {
+              return Timestamp.valueOf(lit.toString());
+            } catch (Exception ignore) {
+            }
+            try {
+              return new Timestamp(Long.parseLong(lit.toString()));
+            } catch (Exception ignore) {
+            }
+            return lit.toString();
+          }
+          try {
+            return Long.parseLong(lit.toString());
+          } catch (Exception ignore) {
+            return lit;
+          }
         }
-        try { return Long.parseLong(lit.toString()); } catch (Exception ignore) { return lit; }
-      }
 
       case FLOAT, DOUBLE:
-        try { return new BigDecimal(lit.toString()); } catch (Exception ignore) { return lit; }
+        try {
+          return new BigDecimal(lit.toString());
+        } catch (Exception ignore) {
+          return lit;
+        }
 
       case BOOLEAN:
         if (lit instanceof Boolean) return lit;
@@ -248,7 +291,8 @@ public class JParqResultSet implements ResultSet {
     if (v == null) return null;
     Schema effective = nonNullSchema(s);
     switch (effective.getType()) {
-      case STRING: return v.toString();
+      case STRING:
+        return v.toString();
       case INT:
         if (LogicalTypes.date().equals(effective.getLogicalType())) {
           int days = (Integer) v;
@@ -263,23 +307,31 @@ public class JParqResultSet implements ResultSet {
           return Timestamp.from(Instant.ofEpochMilli(epoch));
         }
         return ((Number) v).longValue();
-      case FLOAT: return ((Number) v).floatValue();
-      case DOUBLE: return ((Number) v).doubleValue();
-      case BOOLEAN: return v;
+      case FLOAT:
+        return ((Number) v).floatValue();
+      case DOUBLE:
+        return ((Number) v).doubleValue();
+      case BOOLEAN:
+        return v;
       case BYTES:
         if (effective.getLogicalType() instanceof LogicalTypes.Decimal dec) {
           ByteBuffer bb = ((ByteBuffer) v).duplicate();
-          byte[] bytes = new byte[bb.remaining()]; bb.get(bytes);
+          byte[] bytes = new byte[bb.remaining()];
+          bb.get(bytes);
           java.math.BigInteger bi = new java.math.BigInteger(bytes);
           return new BigDecimal(bi, dec.getScale());
         }
         if (v instanceof ByteBuffer) {
           ByteBuffer bb = ((ByteBuffer) v).duplicate();
-          byte[] b = new byte[bb.remaining()]; bb.get(b); return b;
+          byte[] b = new byte[bb.remaining()];
+          bb.get(b);
+          return b;
         }
         return v;
-      case RECORD: return v.toString();
-      case ENUM: return v.toString();
+      case RECORD:
+        return v.toString();
+      case ENUM:
+        return v.toString();
       case ARRAY:
         if (v instanceof GenericData.Array) return ((GenericData.Array<?>) v).toArray();
         return v;
@@ -291,12 +343,24 @@ public class JParqResultSet implements ResultSet {
           return new BigDecimal(bi, dec.getScale());
         }
         return ((GenericData.Fixed) v).bytes();
-      default: return v;
+      default:
+        return v;
     }
   }
 
-  @Override public void close() throws SQLException { closed = true; try { reader.close(); } catch (Exception ignored) {} }
-  @Override public boolean wasNull() { return false; }
+  @Override
+  public void close() throws SQLException {
+    closed = true;
+    try {
+      reader.close();
+    } catch (Exception ignored) {
+    }
+  }
+
+  @Override
+  public boolean wasNull() {
+    return false;
+  }
 
   private Object value(int columnIndex) throws SQLException {
     if (current == null) throw new SQLException("Call next() before getting values");
@@ -306,38 +370,215 @@ public class JParqResultSet implements ResultSet {
   }
 
   // --- getters ---
-  @Override public String getString(int columnIndex) throws SQLException { Object v = value(columnIndex); return v == null ? null : v.toString(); }
-  @Override public boolean getBoolean(int columnIndex) throws SQLException { Object v = value(columnIndex); return v != null && ((Boolean) v); }
-  @Override public byte getByte(int columnIndex) throws SQLException { Object v = value(columnIndex); return v == null ? 0 : ((Number) v).byteValue(); }
-  @Override public short getShort(int columnIndex) throws SQLException { Object v = value(columnIndex); return v == null ? 0 : ((Number) v).shortValue(); }
-  @Override public int getInt(int columnIndex) throws SQLException { Object v = value(columnIndex); return v == null ? 0 : ((Number) v).intValue(); }
-  @Override public long getLong(int columnIndex) throws SQLException { Object v = value(columnIndex); return v == null ? 0 : ((Number) v).longValue(); }
-  @Override public float getFloat(int columnIndex) throws SQLException { Object v = value(columnIndex); return v == null ? 0f : ((Number) v).floatValue(); }
-  @Override public double getDouble(int columnIndex) throws SQLException { Object v = value(columnIndex); return v == null ? 0d : ((Number) v).doubleValue(); }
-  @Override public BigDecimal getBigDecimal(int columnIndex) throws SQLException { Object v = value(columnIndex); return (BigDecimal) v; }
-  @Override public byte[] getBytes(int columnIndex) throws SQLException { Object v = value(columnIndex); return (byte[]) v; }
-  @Override public Date getDate(int columnIndex) throws SQLException { Object v = value(columnIndex); return (Date) v; }
-  @Override public Time getTime(int columnIndex) throws SQLException { Object v = value(columnIndex); if (v instanceof Timestamp) return new Time(((Timestamp) v).getTime()); return (Time) v; }
-  @Override public Timestamp getTimestamp(int columnIndex) throws SQLException { Object v = value(columnIndex); return (Timestamp) v; }
-  @Override public Object getObject(int columnIndex) throws SQLException { return value(columnIndex); }
+  @Override
+  public String getString(int columnIndex) throws SQLException {
+    Object v = value(columnIndex);
+    return v == null ? null : v.toString();
+  }
 
-  @Override public ResultSetMetaData getMetaData() { return new JParqResultSetMetaData(schema, columnOrder, tableName); }
+  @Override
+  public boolean getBoolean(int columnIndex) throws SQLException {
+    Object v = value(columnIndex);
+    return v != null && ((Boolean) v);
+  }
+
+  @Override
+  public byte getByte(int columnIndex) throws SQLException {
+    Object v = value(columnIndex);
+    return v == null ? 0 : ((Number) v).byteValue();
+  }
+
+  @Override
+  public short getShort(int columnIndex) throws SQLException {
+    Object v = value(columnIndex);
+    return v == null ? 0 : ((Number) v).shortValue();
+  }
+
+  @Override
+  public int getInt(int columnIndex) throws SQLException {
+    Object v = value(columnIndex);
+    return v == null ? 0 : ((Number) v).intValue();
+  }
+
+  @Override
+  public long getLong(int columnIndex) throws SQLException {
+    Object v = value(columnIndex);
+    return v == null ? 0 : ((Number) v).longValue();
+  }
+
+  @Override
+  public float getFloat(int columnIndex) throws SQLException {
+    Object v = value(columnIndex);
+    return v == null ? 0f : ((Number) v).floatValue();
+  }
+
+  @Override
+  public double getDouble(int columnIndex) throws SQLException {
+    Object v = value(columnIndex);
+    return v == null ? 0d : ((Number) v).doubleValue();
+  }
+
+  @Override
+  public BigDecimal getBigDecimal(int columnIndex) throws SQLException {
+    Object v = value(columnIndex);
+    return (BigDecimal) v;
+  }
+
+  @Override
+  public byte[] getBytes(int columnIndex) throws SQLException {
+    Object v = value(columnIndex);
+    return (byte[]) v;
+  }
+
+  @Override
+  public Date getDate(int columnIndex) throws SQLException {
+    Object v = value(columnIndex);
+    return (Date) v;
+  }
+
+  @Override
+  public Time getTime(int columnIndex) throws SQLException {
+    Object v = value(columnIndex);
+    if (v instanceof Timestamp) return new Time(((Timestamp) v).getTime());
+    return (Time) v;
+  }
+
+  @Override
+  public Timestamp getTimestamp(int columnIndex) throws SQLException {
+    Object v = value(columnIndex);
+    return (Timestamp) v;
+  }
+
+  @Override
+  public Object getObject(int columnIndex) throws SQLException {
+    return value(columnIndex);
+  }
+
+  @Override
+  public ResultSetMetaData getMetaData() {
+    return new JParqResultSetMetaData(schema, columnOrder, tableName);
+  }
 
   // label-based getters
-  @Override public String getString(String columnLabel) throws SQLException { return getString(findColumn(columnLabel)); }
-  @Override public boolean getBoolean(String columnLabel) throws SQLException { return getBoolean(findColumn(columnLabel)); }
-  @Override public int getInt(String columnLabel) throws SQLException { return getInt(findColumn(columnLabel)); }
-  @Override public long getLong(String columnLabel) throws SQLException { return getLong(findColumn(columnLabel)); }
-  @Override public double getDouble(String columnLabel) throws SQLException { return getDouble(findColumn(columnLabel)); }
-  @Override public Object getObject(String columnLabel) throws SQLException { return getObject(findColumn(columnLabel)); }
+  @Override
+  public String getString(String columnLabel) throws SQLException {
+    return getString(findColumn(columnLabel));
+  }
 
-  @Override public int findColumn(String columnLabel) throws SQLException {
-    for (int i = 0; i < columnOrder.size(); i++) if (columnOrder.get(i).equals(columnLabel)) return i + 1;
+  @Override
+  public boolean getBoolean(String columnLabel) throws SQLException {
+    return getBoolean(findColumn(columnLabel));
+  }
+
+  @Override
+  public int getInt(String columnLabel) throws SQLException {
+    return getInt(findColumn(columnLabel));
+  }
+
+  @Override
+  public long getLong(String columnLabel) throws SQLException {
+    return getLong(findColumn(columnLabel));
+  }
+
+  @Override
+  public double getDouble(String columnLabel) throws SQLException {
+    return getDouble(findColumn(columnLabel));
+  }
+
+  @Override
+  public Object getObject(String columnLabel) throws SQLException {
+    return getObject(findColumn(columnLabel));
+  }
+
+  @Override
+  public int findColumn(String columnLabel) throws SQLException {
+    for (int i = 0; i < columnOrder.size(); i++)
+      if (columnOrder.get(i).equals(columnLabel)) return i + 1;
     throw new SQLException("Unknown column: " + columnLabel);
   }
 
   // Lots of other ResultSet methods can be left as defaults or no-op for a minimal driver
-  @Override public boolean isBeforeFirst(){return rowNum==0;} @Override public boolean isAfterLast(){return false;} @Override public boolean isFirst(){return rowNum==1;} @Override public boolean isLast(){return false;} @Override public void beforeFirst(){} @Override public void afterLast(){} @Override public boolean first(){return false;} @Override public boolean last(){return false;} @Override public int getRow(){return rowNum;} @Override public boolean absolute(int row){return false;} @Override public boolean relative(int rows){return false;} @Override public boolean previous(){return false;} @Override public void setFetchDirection(int direction){} @Override public int getFetchDirection(){return FETCH_FORWARD;} @Override public void setFetchSize(int rows){} @Override public int getFetchSize(){return 0;} @Override public int getType(){return TYPE_FORWARD_ONLY;} @Override public int getConcurrency(){return CONCUR_READ_ONLY;}
+  @Override
+  public boolean isBeforeFirst() {
+    return rowNum == 0;
+  }
+
+  @Override
+  public boolean isAfterLast() {
+    return false;
+  }
+
+  @Override
+  public boolean isFirst() {
+    return rowNum == 1;
+  }
+
+  @Override
+  public boolean isLast() {
+    return false;
+  }
+
+  @Override
+  public void beforeFirst() {}
+
+  @Override
+  public void afterLast() {}
+
+  @Override
+  public boolean first() {
+    return false;
+  }
+
+  @Override
+  public boolean last() {
+    return false;
+  }
+
+  @Override
+  public int getRow() {
+    return rowNum;
+  }
+
+  @Override
+  public boolean absolute(int row) {
+    return false;
+  }
+
+  @Override
+  public boolean relative(int rows) {
+    return false;
+  }
+
+  @Override
+  public boolean previous() {
+    return false;
+  }
+
+  @Override
+  public void setFetchDirection(int direction) {}
+
+  @Override
+  public int getFetchDirection() {
+    return FETCH_FORWARD;
+  }
+
+  @Override
+  public void setFetchSize(int rows) {}
+
+  @Override
+  public int getFetchSize() {
+    return 0;
+  }
+
+  @Override
+  public int getType() {
+    return TYPE_FORWARD_ONLY;
+  }
+
+  @Override
+  public int getConcurrency() {
+    return CONCUR_READ_ONLY;
+  }
 
   @Override
   public BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException {
@@ -420,9 +661,7 @@ public class JParqResultSet implements ResultSet {
   }
 
   @Override
-  public void clearWarnings() throws SQLException {
-
-  }
+  public void clearWarnings() throws SQLException {}
 
   @Override
   public String getCursorName() throws SQLException {
@@ -460,229 +699,142 @@ public class JParqResultSet implements ResultSet {
   }
 
   @Override
-  public void updateNull(int columnIndex) throws SQLException {
-
-  }
+  public void updateNull(int columnIndex) throws SQLException {}
 
   @Override
-  public void updateBoolean(int columnIndex, boolean x) throws SQLException {
-
-  }
+  public void updateBoolean(int columnIndex, boolean x) throws SQLException {}
 
   @Override
-  public void updateByte(int columnIndex, byte x) throws SQLException {
-
-  }
+  public void updateByte(int columnIndex, byte x) throws SQLException {}
 
   @Override
-  public void updateShort(int columnIndex, short x) throws SQLException {
-
-  }
+  public void updateShort(int columnIndex, short x) throws SQLException {}
 
   @Override
-  public void updateInt(int columnIndex, int x) throws SQLException {
-
-  }
+  public void updateInt(int columnIndex, int x) throws SQLException {}
 
   @Override
-  public void updateLong(int columnIndex, long x) throws SQLException {
-
-  }
+  public void updateLong(int columnIndex, long x) throws SQLException {}
 
   @Override
-  public void updateFloat(int columnIndex, float x) throws SQLException {
-
-  }
+  public void updateFloat(int columnIndex, float x) throws SQLException {}
 
   @Override
-  public void updateDouble(int columnIndex, double x) throws SQLException {
-
-  }
+  public void updateDouble(int columnIndex, double x) throws SQLException {}
 
   @Override
-  public void updateBigDecimal(int columnIndex, BigDecimal x) throws SQLException {
-
-  }
+  public void updateBigDecimal(int columnIndex, BigDecimal x) throws SQLException {}
 
   @Override
-  public void updateString(int columnIndex, String x) throws SQLException {
-
-  }
+  public void updateString(int columnIndex, String x) throws SQLException {}
 
   @Override
-  public void updateBytes(int columnIndex, byte[] x) throws SQLException {
-
-  }
+  public void updateBytes(int columnIndex, byte[] x) throws SQLException {}
 
   @Override
-  public void updateDate(int columnIndex, Date x) throws SQLException {
-
-  }
+  public void updateDate(int columnIndex, Date x) throws SQLException {}
 
   @Override
-  public void updateTime(int columnIndex, Time x) throws SQLException {
-
-  }
+  public void updateTime(int columnIndex, Time x) throws SQLException {}
 
   @Override
-  public void updateTimestamp(int columnIndex, Timestamp x) throws SQLException {
-
-  }
+  public void updateTimestamp(int columnIndex, Timestamp x) throws SQLException {}
 
   @Override
-  public void updateAsciiStream(int columnIndex, InputStream x, int length) throws SQLException {
-
-  }
+  public void updateAsciiStream(int columnIndex, InputStream x, int length) throws SQLException {}
 
   @Override
-  public void updateBinaryStream(int columnIndex, InputStream x, int length) throws SQLException {
-
-  }
+  public void updateBinaryStream(int columnIndex, InputStream x, int length) throws SQLException {}
 
   @Override
-  public void updateCharacterStream(int columnIndex, Reader x, int length) throws SQLException {
-
-  }
+  public void updateCharacterStream(int columnIndex, Reader x, int length) throws SQLException {}
 
   @Override
-  public void updateObject(int columnIndex, Object x, int scaleOrLength) throws SQLException {
-
-  }
+  public void updateObject(int columnIndex, Object x, int scaleOrLength) throws SQLException {}
 
   @Override
-  public void updateObject(int columnIndex, Object x) throws SQLException {
-
-  }
+  public void updateObject(int columnIndex, Object x) throws SQLException {}
 
   @Override
-  public void updateNull(String columnLabel) throws SQLException {
-
-  }
+  public void updateNull(String columnLabel) throws SQLException {}
 
   @Override
-  public void updateBoolean(String columnLabel, boolean x) throws SQLException {
-
-  }
+  public void updateBoolean(String columnLabel, boolean x) throws SQLException {}
 
   @Override
-  public void updateByte(String columnLabel, byte x) throws SQLException {
-
-  }
+  public void updateByte(String columnLabel, byte x) throws SQLException {}
 
   @Override
-  public void updateShort(String columnLabel, short x) throws SQLException {
-
-  }
+  public void updateShort(String columnLabel, short x) throws SQLException {}
 
   @Override
-  public void updateInt(String columnLabel, int x) throws SQLException {
-
-  }
+  public void updateInt(String columnLabel, int x) throws SQLException {}
 
   @Override
-  public void updateLong(String columnLabel, long x) throws SQLException {
-
-  }
+  public void updateLong(String columnLabel, long x) throws SQLException {}
 
   @Override
-  public void updateFloat(String columnLabel, float x) throws SQLException {
-
-  }
+  public void updateFloat(String columnLabel, float x) throws SQLException {}
 
   @Override
-  public void updateDouble(String columnLabel, double x) throws SQLException {
-
-  }
+  public void updateDouble(String columnLabel, double x) throws SQLException {}
 
   @Override
-  public void updateBigDecimal(String columnLabel, BigDecimal x) throws SQLException {
-
-  }
+  public void updateBigDecimal(String columnLabel, BigDecimal x) throws SQLException {}
 
   @Override
-  public void updateString(String columnLabel, String x) throws SQLException {
-
-  }
+  public void updateString(String columnLabel, String x) throws SQLException {}
 
   @Override
-  public void updateBytes(String columnLabel, byte[] x) throws SQLException {
-
-  }
+  public void updateBytes(String columnLabel, byte[] x) throws SQLException {}
 
   @Override
-  public void updateDate(String columnLabel, Date x) throws SQLException {
-
-  }
+  public void updateDate(String columnLabel, Date x) throws SQLException {}
 
   @Override
-  public void updateTime(String columnLabel, Time x) throws SQLException {
-
-  }
+  public void updateTime(String columnLabel, Time x) throws SQLException {}
 
   @Override
-  public void updateTimestamp(String columnLabel, Timestamp x) throws SQLException {
-
-  }
+  public void updateTimestamp(String columnLabel, Timestamp x) throws SQLException {}
 
   @Override
-  public void updateAsciiStream(String columnLabel, InputStream x, int length) throws SQLException {
-
-  }
-
-  @Override
-  public void updateBinaryStream(String columnLabel, InputStream x, int length) throws SQLException {
-
-  }
+  public void updateAsciiStream(String columnLabel, InputStream x, int length)
+      throws SQLException {}
 
   @Override
-  public void updateCharacterStream(String columnLabel, Reader reader, int length) throws SQLException {
-
-  }
-
-  @Override
-  public void updateObject(String columnLabel, Object x, int scaleOrLength) throws SQLException {
-
-  }
+  public void updateBinaryStream(String columnLabel, InputStream x, int length)
+      throws SQLException {}
 
   @Override
-  public void updateObject(String columnLabel, Object x) throws SQLException {
-
-  }
-
-  @Override
-  public void insertRow() throws SQLException {
-
-  }
+  public void updateCharacterStream(String columnLabel, Reader reader, int length)
+      throws SQLException {}
 
   @Override
-  public void updateRow() throws SQLException {
-
-  }
+  public void updateObject(String columnLabel, Object x, int scaleOrLength) throws SQLException {}
 
   @Override
-  public void deleteRow() throws SQLException {
-
-  }
+  public void updateObject(String columnLabel, Object x) throws SQLException {}
 
   @Override
-  public void refreshRow() throws SQLException {
-
-  }
+  public void insertRow() throws SQLException {}
 
   @Override
-  public void cancelRowUpdates() throws SQLException {
-
-  }
+  public void updateRow() throws SQLException {}
 
   @Override
-  public void moveToInsertRow() throws SQLException {
-
-  }
+  public void deleteRow() throws SQLException {}
 
   @Override
-  public void moveToCurrentRow() throws SQLException {
+  public void refreshRow() throws SQLException {}
 
-  }
+  @Override
+  public void cancelRowUpdates() throws SQLException {}
+
+  @Override
+  public void moveToInsertRow() throws SQLException {}
+
+  @Override
+  public void moveToCurrentRow() throws SQLException {}
 
   @Override
   public Statement getStatement() throws SQLException {
@@ -780,44 +932,28 @@ public class JParqResultSet implements ResultSet {
   }
 
   @Override
-  public void updateRef(int columnIndex, Ref x) throws SQLException {
-
-  }
+  public void updateRef(int columnIndex, Ref x) throws SQLException {}
 
   @Override
-  public void updateRef(String columnLabel, Ref x) throws SQLException {
-
-  }
+  public void updateRef(String columnLabel, Ref x) throws SQLException {}
 
   @Override
-  public void updateBlob(int columnIndex, Blob x) throws SQLException {
-
-  }
+  public void updateBlob(int columnIndex, Blob x) throws SQLException {}
 
   @Override
-  public void updateBlob(String columnLabel, Blob x) throws SQLException {
-
-  }
+  public void updateBlob(String columnLabel, Blob x) throws SQLException {}
 
   @Override
-  public void updateClob(int columnIndex, Clob x) throws SQLException {
-
-  }
+  public void updateClob(int columnIndex, Clob x) throws SQLException {}
 
   @Override
-  public void updateClob(String columnLabel, Clob x) throws SQLException {
-
-  }
+  public void updateClob(String columnLabel, Clob x) throws SQLException {}
 
   @Override
-  public void updateArray(int columnIndex, Array x) throws SQLException {
-
-  }
+  public void updateArray(int columnIndex, Array x) throws SQLException {}
 
   @Override
-  public void updateArray(String columnLabel, Array x) throws SQLException {
-
-  }
+  public void updateArray(String columnLabel, Array x) throws SQLException {}
 
   @Override
   public RowId getRowId(int columnIndex) throws SQLException {
@@ -830,14 +966,10 @@ public class JParqResultSet implements ResultSet {
   }
 
   @Override
-  public void updateRowId(int columnIndex, RowId x) throws SQLException {
-
-  }
+  public void updateRowId(int columnIndex, RowId x) throws SQLException {}
 
   @Override
-  public void updateRowId(String columnLabel, RowId x) throws SQLException {
-
-  }
+  public void updateRowId(String columnLabel, RowId x) throws SQLException {}
 
   @Override
   public int getHoldability() throws SQLException {
@@ -850,24 +982,16 @@ public class JParqResultSet implements ResultSet {
   }
 
   @Override
-  public void updateNString(int columnIndex, String nString) throws SQLException {
-
-  }
+  public void updateNString(int columnIndex, String nString) throws SQLException {}
 
   @Override
-  public void updateNString(String columnLabel, String nString) throws SQLException {
-
-  }
+  public void updateNString(String columnLabel, String nString) throws SQLException {}
 
   @Override
-  public void updateNClob(int columnIndex, NClob nClob) throws SQLException {
-
-  }
+  public void updateNClob(int columnIndex, NClob nClob) throws SQLException {}
 
   @Override
-  public void updateNClob(String columnLabel, NClob nClob) throws SQLException {
-
-  }
+  public void updateNClob(String columnLabel, NClob nClob) throws SQLException {}
 
   @Override
   public NClob getNClob(int columnIndex) throws SQLException {
@@ -890,14 +1014,10 @@ public class JParqResultSet implements ResultSet {
   }
 
   @Override
-  public void updateSQLXML(int columnIndex, SQLXML xmlObject) throws SQLException {
-
-  }
+  public void updateSQLXML(int columnIndex, SQLXML xmlObject) throws SQLException {}
 
   @Override
-  public void updateSQLXML(String columnLabel, SQLXML xmlObject) throws SQLException {
-
-  }
+  public void updateSQLXML(String columnLabel, SQLXML xmlObject) throws SQLException {}
 
   @Override
   public String getNString(int columnIndex) throws SQLException {
@@ -920,144 +1040,94 @@ public class JParqResultSet implements ResultSet {
   }
 
   @Override
-  public void updateNCharacterStream(int columnIndex, Reader x, long length) throws SQLException {
-
-  }
+  public void updateNCharacterStream(int columnIndex, Reader x, long length) throws SQLException {}
 
   @Override
-  public void updateNCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {
-
-  }
-
-  @Override
-  public void updateAsciiStream(int columnIndex, InputStream x, long length) throws SQLException {
-
-  }
+  public void updateNCharacterStream(String columnLabel, Reader reader, long length)
+      throws SQLException {}
 
   @Override
-  public void updateBinaryStream(int columnIndex, InputStream x, long length) throws SQLException {
-
-  }
+  public void updateAsciiStream(int columnIndex, InputStream x, long length) throws SQLException {}
 
   @Override
-  public void updateCharacterStream(int columnIndex, Reader x, long length) throws SQLException {
-
-  }
+  public void updateBinaryStream(int columnIndex, InputStream x, long length) throws SQLException {}
 
   @Override
-  public void updateAsciiStream(String columnLabel, InputStream x, long length) throws SQLException {
-
-  }
+  public void updateCharacterStream(int columnIndex, Reader x, long length) throws SQLException {}
 
   @Override
-  public void updateBinaryStream(String columnLabel, InputStream x, long length) throws SQLException {
-
-  }
-
-  @Override
-  public void updateCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {
-
-  }
+  public void updateAsciiStream(String columnLabel, InputStream x, long length)
+      throws SQLException {}
 
   @Override
-  public void updateBlob(int columnIndex, InputStream inputStream, long length) throws SQLException {
-
-  }
-
-  @Override
-  public void updateBlob(String columnLabel, InputStream inputStream, long length) throws SQLException {
-
-  }
+  public void updateBinaryStream(String columnLabel, InputStream x, long length)
+      throws SQLException {}
 
   @Override
-  public void updateClob(int columnIndex, Reader reader, long length) throws SQLException {
-
-  }
-
-  @Override
-  public void updateClob(String columnLabel, Reader reader, long length) throws SQLException {
-
-  }
+  public void updateCharacterStream(String columnLabel, Reader reader, long length)
+      throws SQLException {}
 
   @Override
-  public void updateNClob(int columnIndex, Reader reader, long length) throws SQLException {
-
-  }
-
-  @Override
-  public void updateNClob(String columnLabel, Reader reader, long length) throws SQLException {
-
-  }
+  public void updateBlob(int columnIndex, InputStream inputStream, long length)
+      throws SQLException {}
 
   @Override
-  public void updateNCharacterStream(int columnIndex, Reader x) throws SQLException {
-
-  }
-
-  @Override
-  public void updateNCharacterStream(String columnLabel, Reader reader) throws SQLException {
-
-  }
+  public void updateBlob(String columnLabel, InputStream inputStream, long length)
+      throws SQLException {}
 
   @Override
-  public void updateAsciiStream(int columnIndex, InputStream x) throws SQLException {
-
-  }
+  public void updateClob(int columnIndex, Reader reader, long length) throws SQLException {}
 
   @Override
-  public void updateBinaryStream(int columnIndex, InputStream x) throws SQLException {
-
-  }
+  public void updateClob(String columnLabel, Reader reader, long length) throws SQLException {}
 
   @Override
-  public void updateCharacterStream(int columnIndex, Reader x) throws SQLException {
-
-  }
+  public void updateNClob(int columnIndex, Reader reader, long length) throws SQLException {}
 
   @Override
-  public void updateAsciiStream(String columnLabel, InputStream x) throws SQLException {
-
-  }
+  public void updateNClob(String columnLabel, Reader reader, long length) throws SQLException {}
 
   @Override
-  public void updateBinaryStream(String columnLabel, InputStream x) throws SQLException {
-
-  }
+  public void updateNCharacterStream(int columnIndex, Reader x) throws SQLException {}
 
   @Override
-  public void updateCharacterStream(String columnLabel, Reader reader) throws SQLException {
-
-  }
+  public void updateNCharacterStream(String columnLabel, Reader reader) throws SQLException {}
 
   @Override
-  public void updateBlob(int columnIndex, InputStream inputStream) throws SQLException {
-
-  }
+  public void updateAsciiStream(int columnIndex, InputStream x) throws SQLException {}
 
   @Override
-  public void updateBlob(String columnLabel, InputStream inputStream) throws SQLException {
-
-  }
+  public void updateBinaryStream(int columnIndex, InputStream x) throws SQLException {}
 
   @Override
-  public void updateClob(int columnIndex, Reader reader) throws SQLException {
-
-  }
+  public void updateCharacterStream(int columnIndex, Reader x) throws SQLException {}
 
   @Override
-  public void updateClob(String columnLabel, Reader reader) throws SQLException {
-
-  }
+  public void updateAsciiStream(String columnLabel, InputStream x) throws SQLException {}
 
   @Override
-  public void updateNClob(int columnIndex, Reader reader) throws SQLException {
-
-  }
+  public void updateBinaryStream(String columnLabel, InputStream x) throws SQLException {}
 
   @Override
-  public void updateNClob(String columnLabel, Reader reader) throws SQLException {
+  public void updateCharacterStream(String columnLabel, Reader reader) throws SQLException {}
 
-  }
+  @Override
+  public void updateBlob(int columnIndex, InputStream inputStream) throws SQLException {}
+
+  @Override
+  public void updateBlob(String columnLabel, InputStream inputStream) throws SQLException {}
+
+  @Override
+  public void updateClob(int columnIndex, Reader reader) throws SQLException {}
+
+  @Override
+  public void updateClob(String columnLabel, Reader reader) throws SQLException {}
+
+  @Override
+  public void updateNClob(int columnIndex, Reader reader) throws SQLException {}
+
+  @Override
+  public void updateNClob(String columnLabel, Reader reader) throws SQLException {}
 
   @Override
   public <T> T getObject(int columnIndex, Class<T> type) throws SQLException {
