@@ -1,16 +1,23 @@
 package se.alipsa.jparq;
 
 import java.math.BigDecimal;
-import java.sql.*;
+import java.sql.Date;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.sql.Time;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
-import se.alipsa.jparq.engine.JParqSqlParser;
 import se.alipsa.jparq.engine.QueryProcessor;
+import se.alipsa.jparq.engine.SqlParser;
+import se.alipsa.jparq.model.ResultSetAdapter;
 
+/** An implementation of the java.sql.ResultSet interface. */
+@SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqResultSet extends ResultSetAdapter {
 
   private final QueryProcessor qp;
@@ -20,8 +27,19 @@ public class JParqResultSet extends ResultSetAdapter {
   private boolean closed = false;
   private int rowNum = 0;
 
-  public JParqResultSet(
-      ParquetReader<GenericRecord> reader, JParqSqlParser.Select select, String tableName)
+  /**
+   * Constructor for JParqResultSet.
+   *
+   * @param reader
+   *          ParquetReader to read from
+   * @param select
+   *          the parsed select statement
+   * @param tableName
+   *          the name of the table
+   * @throws SQLException
+   *           if reading fails
+   */
+  public JParqResultSet(ParquetReader<GenericRecord> reader, SqlParser.Select select, String tableName)
       throws SQLException {
     this.tableName = tableName;
     try {
@@ -40,8 +58,7 @@ public class JParqResultSet extends ResultSetAdapter {
       // If first matched, count it toward LIMIT by starting emitted at 1.
       // If not, start at 0 and let the processor find the first match.
       int initialEmitted = match ? 1 : 0;
-      this.qp =
-          new QueryProcessor(reader, proj, select.where(), select.limit(), schema, initialEmitted);
+      this.qp = new QueryProcessor(reader, proj, select.where(), select.limit(), schema, initialEmitted);
 
       columnOrder.addAll(proj);
       this.current = match ? first : qp.nextMatching();
@@ -52,15 +69,21 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public boolean next() throws SQLException {
-    if (closed) throw new SQLException("ResultSet closed");
+    if (closed) {
+      throw new SQLException("ResultSet closed");
+    }
     try {
       if (rowNum == 0) {
-        if (current == null) return false;
+        if (current == null) {
+          return false;
+        }
         rowNum = 1;
         return true;
       }
       current = qp.nextMatching();
-      if (current == null) return false;
+      if (current == null) {
+        return false;
+      }
       rowNum++;
       return true;
     } catch (Exception e) {
@@ -70,7 +93,9 @@ public class JParqResultSet extends ResultSetAdapter {
 
   // --- getters use AvroCoercions.unwrap like before ---
   private Object value(int idx) throws SQLException {
-    if (current == null) throw new SQLException("Call next() before getting values");
+    if (current == null) {
+      throw new SQLException("Call next() before getting values");
+    }
     String name = columnOrder.get(idx - 1);
     var field = current.getSchema().getField(name);
     return AvroCoercions.unwrap(current.get(name), field.schema());
@@ -78,7 +103,11 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public int findColumn(String label) throws SQLException {
-    for (int i = 0; i < columnOrder.size(); i++) if (columnOrder.get(i).equals(label)) return i + 1;
+    for (int i = 0; i < columnOrder.size(); i++) {
+      if (columnOrder.get(i).equals(label)) {
+        return i + 1;
+      }
+    }
     throw new SQLException("Unknown column: " + label);
   }
 
@@ -94,6 +123,7 @@ public class JParqResultSet extends ResultSetAdapter {
     try {
       qp.close();
     } catch (Exception ignore) {
+      // intentionally ignored:
     }
   }
 
@@ -102,7 +132,6 @@ public class JParqResultSet extends ResultSetAdapter {
     return false;
   }
 
-  // --- getters ---
   @Override
   public String getString(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
@@ -110,9 +139,19 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   @Override
+  public String getString(String columnLabel) throws SQLException {
+    return getString(findColumn(columnLabel));
+  }
+
+  @Override
   public boolean getBoolean(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
     return v != null && ((Boolean) v);
+  }
+
+  @Override
+  public boolean getBoolean(String columnLabel) throws SQLException {
+    return getBoolean(findColumn(columnLabel));
   }
 
   @Override
@@ -134,9 +173,19 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   @Override
+  public int getInt(String columnLabel) throws SQLException {
+    return getInt(findColumn(columnLabel));
+  }
+
+  @Override
   public long getLong(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
     return v == null ? 0 : ((Number) v).longValue();
+  }
+
+  @Override
+  public long getLong(String columnLabel) throws SQLException {
+    return getLong(findColumn(columnLabel));
   }
 
   @Override
@@ -149,6 +198,11 @@ public class JParqResultSet extends ResultSetAdapter {
   public double getDouble(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
     return v == null ? 0d : ((Number) v).doubleValue();
+  }
+
+  @Override
+  public double getDouble(String columnLabel) throws SQLException {
+    return getDouble(findColumn(columnLabel));
   }
 
   @Override
@@ -172,7 +226,9 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public Time getTime(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    if (v instanceof Timestamp) return new Time(((Timestamp) v).getTime());
+    if (v instanceof Timestamp) {
+      return new Time(((Timestamp) v).getTime());
+    }
     return (Time) v;
   }
 
@@ -185,32 +241,6 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public Object getObject(int columnIndex) throws SQLException {
     return value(columnIndex);
-  }
-
-  // label-based getters
-  @Override
-  public String getString(String columnLabel) throws SQLException {
-    return getString(findColumn(columnLabel));
-  }
-
-  @Override
-  public boolean getBoolean(String columnLabel) throws SQLException {
-    return getBoolean(findColumn(columnLabel));
-  }
-
-  @Override
-  public int getInt(String columnLabel) throws SQLException {
-    return getInt(findColumn(columnLabel));
-  }
-
-  @Override
-  public long getLong(String columnLabel) throws SQLException {
-    return getLong(findColumn(columnLabel));
-  }
-
-  @Override
-  public double getDouble(String columnLabel) throws SQLException {
-    return getDouble(findColumn(columnLabel));
   }
 
   @Override
@@ -234,10 +264,12 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   @Override
-  public void beforeFirst() {}
+  public void beforeFirst() {
+  }
 
   @Override
-  public void afterLast() {}
+  public void afterLast() {
+  }
 
   @Override
   public boolean first() {
@@ -270,7 +302,8 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   @Override
-  public void setFetchDirection(int direction) {}
+  public void setFetchDirection(int direction) {
+  }
 
   @Override
   public int getFetchDirection() {
@@ -278,7 +311,8 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   @Override
-  public void setFetchSize(int rows) {}
+  public void setFetchSize(int rows) {
+  }
 
   @Override
   public int getFetchSize() {

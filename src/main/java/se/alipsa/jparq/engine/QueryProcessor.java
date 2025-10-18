@@ -1,5 +1,6 @@
 package se.alipsa.jparq.engine;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -8,6 +9,7 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.hadoop.ParquetReader;
 
+/** Processes a ParquetReader with projection, WHERE clause, and LIMIT. */
 public final class QueryProcessor implements AutoCloseable {
 
   private final ParquetReader<GenericRecord> reader;
@@ -18,13 +20,24 @@ public final class QueryProcessor implements AutoCloseable {
 
   private int emitted;
 
-  public QueryProcessor(
-      ParquetReader<GenericRecord> reader,
-      List<String> projection,
-      Expression where,
-      int limit,
-      Schema schema,
-      int initialEmitted) { // NEW
+  /**
+   * Constructor for QueryProcessor.
+   *
+   * @param reader
+   *          the ParquetReader to read records from
+   * @param projection
+   *          the list of columns to project
+   * @param where
+   *          the WHERE clause expression
+   * @param limit
+   *          the maximum number of records to emit
+   * @param schema
+   *          the Avro schema of the records
+   * @param initialEmitted
+   *          the number of records already emitted (for limit counting)
+   */
+  public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
+      Schema schema, int initialEmitted) { // NEW
     this.reader = Objects.requireNonNull(reader);
     this.projection = List.copyOf(projection);
     this.where = where;
@@ -33,8 +46,18 @@ public final class QueryProcessor implements AutoCloseable {
     this.emitted = Math.max(0, initialEmitted); // NEW
   }
 
-  public GenericRecord nextMatching() throws Exception {
-    if (limit >= 0 && emitted >= limit) return null;
+  /**
+   * Get the next record matching the WHERE clause, or null if no more matches or
+   * limit reached.
+   *
+   * @return the next matching GenericRecord or null
+   * @throws IOException
+   *           if reading fails
+   */
+  public GenericRecord nextMatching() throws IOException {
+    if (limit >= 0 && emitted >= limit) {
+      return null;
+    }
     GenericRecord rec = reader.read();
     while (rec != null) {
       if (where == null || evaluator.eval(where, rec)) {
@@ -51,7 +74,7 @@ public final class QueryProcessor implements AutoCloseable {
   }
 
   @Override
-  public void close() throws Exception {
+  public void close() throws IOException {
     reader.close();
   }
 
@@ -59,7 +82,9 @@ public final class QueryProcessor implements AutoCloseable {
   public static List<String> computeProjection(List<String> requested, Schema schema) {
     if (requested.isEmpty() || requested.contains("*")) {
       List<String> cols = new ArrayList<>();
-      for (Schema.Field f : schema.getFields()) cols.add(f.name());
+      for (Schema.Field f : schema.getFields()) {
+        cols.add(f.name());
+      }
       return cols;
     }
     return requested;

@@ -6,29 +6,38 @@ import org.junit.jupiter.api.Test;
 public class StringFunctionsTest {
 
   @Test
-  void testConcat() {}
+  void testConcat() {
+  }
 
   @Test
-  void testLower() {}
+  void testLower() {
+  }
 
   @Test
-  void testUpper() {}
+  void testUpper() {
+  }
 
   @Test
-  void testTrim() {}
+  void testTrim() {
+  }
 
   @Test
-  void testLength() {}
+  void testLength() {
+  }
 
   @Test
-  void testSubstring() {}
+  void testSubstring() {
+  }
 
   @Test
-  void testLeft() {}
+  void testLeft() {
+  }
 
   @Test
-  void testRight() {}
+  void testRight() {
+  }
 
   @Test
-  void testReplace() {}
+  void testReplace() {
+  }
 }

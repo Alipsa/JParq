@@ -6,29 +6,38 @@ import org.junit.jupiter.api.Test;
 public class NumericFunctionsTest {
 
   @Test
-  void testAbs() {}
+  void testAbs() {
+  }
 
   @Test
-  void testCeil() {}
+  void testCeil() {
+  }
 
   @Test
-  void testFloor() {}
+  void testFloor() {
+  }
 
   @Test
-  void testRound() {}
+  void testRound() {
+  }
 
   @Test
-  void testSqrt() {}
+  void testSqrt() {
+  }
 
   @Test
-  void testLog() {}
+  void testLog() {
+  }
 
   @Test
-  void testLog10() {}
+  void testLog10() {
+  }
 
   @Test
-  void testPow() {}
+  void testPow() {
+  }
 
   @Test
-  void testMod() {}
+  void testMod() {
+  }
 }

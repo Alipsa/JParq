@@ -7,7 +7,8 @@ import java.sql.Statement;
 import java.util.function.Consumer;
 
 /**
- * Utility class to allow for easier querying of parquet files. Example usage: <code><pre>
+ * Utility class to allow for easier querying of parquet files. Example usage:
+ * <code><pre>
  *   URL mtcarsUrl = WhereTest.class.getResource("/mtcars.parquet");
  *   Path dir = Paths.get(mtcarsUrl.toURI()).getParent();
  *   JParqSql jparqSql = new JParqSql("jdbc:jparq:" + dir.toAbsolutePath());
@@ -23,17 +24,29 @@ import java.util.function.Consumer;
  *     });
  * </pre></code>
  */
+@SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqSql {
 
   final String jdbcUrl;
 
   /**
-   * @param url the jdbc url in the form "jdbc:jparq:path/to/dir"
+   * Create a JParqSql instance for the given jdbc url.
+   *
+   * @param url
+   *          the jdbc url in the form "jdbc:jparq:path/to/dir"
    */
   public JParqSql(String url) {
     jdbcUrl = url;
   }
 
+  /**
+   * Execute a query and process the ResultSet with the provided processor.
+   *
+   * @param sql
+   *          the sql query to execute
+   * @param processor
+   *          a Consumer that processes the ResultSet
+   */
   public void query(String sql, Consumer<ResultSet> processor) {
     try (Connection conn = DriverManager.getConnection(jdbcUrl);
         Statement stmt = conn.createStatement();

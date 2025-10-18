@@ -6,17 +6,22 @@ import org.junit.jupiter.api.Test;
 public class AggregateFunctionsTest {
 
   @Test
-  void testMin() {}
+  void testMin() {
+  }
 
   @Test
-  void testMax() {}
+  void testMax() {
+  }
 
   @Test
-  void testSum() {}
+  void testSum() {
+  }
 
   @Test
-  void testAvg() {}
+  void testAvg() {
+  }
 
   @Test
-  void testCount() {}
+  void testCount() {
+  }
 }

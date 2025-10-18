@@ -8,6 +8,7 @@ import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 
 /** An implementation of the java.sql.ResultSetMetaData interface. */
+@SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqResultSetMetaData implements ResultSetMetaData {
 
   private final Schema schema; // may be null if empty file
@@ -17,9 +18,13 @@ public class JParqResultSetMetaData implements ResultSetMetaData {
   /**
    * Constructor for JParqResultSetMetaData.
    *
-   * @param schema The avro schema of the result set, may be null if the result set is empty
-   * @param columns list of column names in order
-   * @param tableName the name of the table
+   * @param schema
+   *          The avro schema of the result set, may be null if the result set is
+   *          empty
+   * @param columns
+   *          list of column names in order
+   * @param tableName
+   *          the name of the table
    */
   public JParqResultSetMetaData(Schema schema, List<String> columns, String tableName) {
     this.schema = schema;
@@ -53,26 +58,18 @@ public class JParqResultSetMetaData implements ResultSetMetaData {
       return Types.OTHER;
     }
     Schema.Field f = schema.getField(getColumnLabel(column));
-    Schema s =
-        f.schema().getType() == Schema.Type.UNION
-            ? f.schema().getTypes().stream()
-                .filter(t -> t.getType() != Schema.Type.NULL)
-                .findFirst()
-                .orElse(f.schema())
-            : f.schema();
+    Schema s = f.schema().getType() == Schema.Type.UNION
+        ? f.schema().getTypes().stream().filter(t -> t.getType() != Schema.Type.NULL).findFirst().orElse(f.schema())
+        : f.schema();
     return switch (s.getType()) {
       case STRING, ENUM -> Types.VARCHAR;
       case INT -> (LogicalTypes.date().equals(s.getLogicalType()) ? Types.DATE : Types.INTEGER);
-      case LONG ->
-          (s.getLogicalType() instanceof LogicalTypes.TimestampMillis
-                  || s.getLogicalType() instanceof LogicalTypes.TimestampMicros
-              ? Types.TIMESTAMP
-              : Types.BIGINT);
+      case LONG -> (s.getLogicalType() instanceof LogicalTypes.TimestampMillis
+          || s.getLogicalType() instanceof LogicalTypes.TimestampMicros ? Types.TIMESTAMP : Types.BIGINT);
       case FLOAT -> Types.REAL;
       case DOUBLE -> Types.DOUBLE;
       case BOOLEAN -> Types.BOOLEAN;
-      case BYTES, FIXED ->
-          (s.getLogicalType() instanceof LogicalTypes.Decimal ? Types.DECIMAL : Types.BINARY);
+      case BYTES, FIXED -> (s.getLogicalType() instanceof LogicalTypes.Decimal ? Types.DECIMAL : Types.BINARY);
       case RECORD -> Types.STRUCT;
       case ARRAY -> Types.ARRAY;
       default -> Types.OTHER;

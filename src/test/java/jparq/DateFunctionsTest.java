@@ -6,32 +6,42 @@ import org.junit.jupiter.api.Test;
 public class DateFunctionsTest {
 
   @Test
-  void testYear() {}
+  void testYear() {
+  }
 
   @Test
-  void testMonth() {}
+  void testMonth() {
+  }
 
   @Test
-  void testDay() {}
+  void testDay() {
+  }
 
   @Test
-  void testHour() {}
+  void testHour() {
+  }
 
   @Test
-  void testMinute() {}
+  void testMinute() {
+  }
 
   @Test
-  void testSecond() {}
+  void testSecond() {
+  }
 
   @Test
-  void testCurrentDate() {}
+  void testCurrentDate() {
+  }
 
   @Test
-  void testCurrentTimestamp() {}
+  void testCurrentTimestamp() {
+  }
 
   @Test
-  void testDateAdd() {}
+  void testDateAdd() {
+  }
 
   @Test
-  void testDateDiff() {}
+  void testDateDiff() {
+  }
 }

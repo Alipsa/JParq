@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 /** Basic tests for JParq functionality. */
+@SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqTest {
 
   @Test
@@ -22,8 +23,7 @@ public class JParqTest {
     // Class.forName("se.alipsa.jparq.JParqDriver");
 
     URL mtcarsUrl = getClass().getResource("/mtcars.parquet");
-    Assertions.assertNotNull(
-        mtcarsUrl, "mtcars.parquet must be on the test classpath (src/test/resources)");
+    Assertions.assertNotNull(mtcarsUrl, "mtcars.parquet must be on the test classpath (src/test/resources)");
 
     Path mtcarsPath = Paths.get(mtcarsUrl.toURI());
     Path dir = mtcarsPath.getParent();

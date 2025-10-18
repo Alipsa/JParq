@@ -3,24 +3,53 @@ package se.alipsa.jparq.engine;
 import static se.alipsa.jparq.engine.AvroCoercions.coerceLiteral;
 
 import java.math.BigDecimal;
-import java.sql.*;
-import net.sf.jsqlparser.expression.*;
+import java.sql.Date;
+import java.sql.Timestamp;
+import net.sf.jsqlparser.expression.BinaryExpression;
+import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.NotExpression;
+import net.sf.jsqlparser.expression.Parenthesis;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
-import net.sf.jsqlparser.expression.operators.relational.*;
+import net.sf.jsqlparser.expression.operators.relational.Between;
+import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
+import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
+import net.sf.jsqlparser.expression.operators.relational.GreaterThan;
+import net.sf.jsqlparser.expression.operators.relational.GreaterThanEquals;
+import net.sf.jsqlparser.expression.operators.relational.InExpression;
+import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
+import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
+import net.sf.jsqlparser.expression.operators.relational.MinorThan;
+import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 
+/** Evaluates SQL expressions against Avro GenericRecords. */
 public final class ExpressionEvaluator {
 
   private final Schema schema;
 
+  /**
+   * Constructor for ExpressionEvaluator.
+   *
+   * @param schema
+   *          the Avro schema of the records to evaluate against
+   */
   public ExpressionEvaluator(Schema schema) {
     this.schema = schema;
   }
 
+  /**
+   * Evaluate the given expression against the provided GenericRecord.
+   *
+   * @param expr
+   *          the expression to evaluate
+   * @param rec
+   *          the GenericRecord to evaluate against
+   * @return true if the expression evaluates to true, false otherwise
+   */
   @SuppressWarnings("PMD.LooseCoupling")
   public boolean eval(Expression expr, GenericRecord rec) {
     // Always strip all layers of (...) first
@@ -53,11 +82,13 @@ public final class ExpressionEvaluator {
       return isNull.isNot() ? !isNullVal : isNullVal;
     }
     if (expr instanceof LikeExpression like) {
-      Operand L = operand(like.getLeftExpression(), rec);
-      Operand R = operand(like.getRightExpression(), rec); // should be a string literal
-      String left = (L.value == null) ? null : L.value.toString();
-      String pat = (R.value == null) ? null : R.value.toString();
-      if (left == null || pat == null) return false;
+      Operand leftOperand = operand(like.getLeftExpression(), rec);
+      Operand rightOperand = operand(like.getRightExpression(), rec); // should be a string literal
+      String left = (leftOperand.value == null) ? null : leftOperand.value.toString();
+      String pat = (rightOperand.value == null) ? null : rightOperand.value.toString();
+      if (left == null || pat == null) {
+        return false;
+      }
       boolean matches = likeMatch(left, pat, like.isCaseInsensitive());
       return like.isNot() ? !matches : matches;
     }
@@ -66,32 +97,35 @@ public final class ExpressionEvaluator {
       Operand lo = operand(between.getBetweenExpressionStart(), rec);
       Operand hi = operand(between.getBetweenExpressionEnd(), rec);
 
-      Object v = val.value, l = lo.value, h = hi.value;
+      Object curVal = val.value;
+      Object lowVal = lo.value;
+      Object highVal = hi.value;
       // coerce to column type if available
       if (val.schemaOrNull != null) {
-        l = coerceLiteral(l, val.schemaOrNull);
-        h = coerceLiteral(h, val.schemaOrNull);
+        lowVal = coerceLiteral(lowVal, val.schemaOrNull);
+        highVal = coerceLiteral(highVal, val.schemaOrNull);
       }
-      if (v == null || l == null || h == null) return false;
-      int cmpLo = typedCompare(v, l);
-      int cmpHi = typedCompare(v, h);
+      if (curVal == null || lowVal == null || highVal == null) {
+        return false;
+      }
+      int cmpLo = typedCompare(curVal, lowVal);
+      int cmpHi = typedCompare(curVal, highVal);
       boolean in = (cmpLo >= 0 && cmpHi <= 0);
       return between.isNot() ? !in : in;
     }
     if (expr instanceof InExpression in) {
       Operand left = operand(in.getLeftExpression(), rec);
       Expression right = in.getRightExpression(); // right side is an Expression
-      if (right
-          instanceof net.sf.jsqlparser.expression.operators.relational.ExpressionList<?> list) {
-        // ExpressionList in 5.x implements List<Expression>; don't call getExpressions()
+      if (right instanceof ExpressionList<?> list) {
         boolean found = false;
         for (Expression e : list) {
-          Operand r = operand(e, rec); // your existing helper
-          Object L = left.value, R = r.value; // left is the evaluated left operand
+          Operand rightOperand = operand(e, rec); // your existing helper
+          Object leftVal = left.value;
+          Object rightVal = rightOperand.value; // left is the evaluated left operand
           if (left.schemaOrNull != null) {
-            R = coerceLiteral(R, left.schemaOrNull);
+            rightVal = coerceLiteral(rightVal, left.schemaOrNull);
           }
-          if (L != null && R != null && typedCompare(L, R) == 0) {
+          if (leftVal != null && rightVal != null && typedCompare(leftVal, rightVal) == 0) {
             found = true;
             break;
           }
@@ -101,16 +135,21 @@ public final class ExpressionEvaluator {
     }
 
     // existing comparisons
-    if (expr instanceof EqualsTo e)
+    if (expr instanceof EqualsTo e) {
       return compare(e.getLeftExpression(), e.getRightExpression(), rec) == 0;
-    if (expr instanceof GreaterThan gt)
+    }
+    if (expr instanceof GreaterThan gt) {
       return compare(gt.getLeftExpression(), gt.getRightExpression(), rec) > 0;
-    if (expr instanceof MinorThan lt)
+    }
+    if (expr instanceof MinorThan lt) {
       return compare(lt.getLeftExpression(), lt.getRightExpression(), rec) < 0;
-    if (expr instanceof GreaterThanEquals ge)
+    }
+    if (expr instanceof GreaterThanEquals ge) {
       return compare(ge.getLeftExpression(), ge.getRightExpression(), rec) >= 0;
-    if (expr instanceof MinorThanEquals le)
+    }
+    if (expr instanceof MinorThanEquals le) {
       return compare(le.getLeftExpression(), le.getRightExpression(), rec) <= 0;
+    }
 
     // Generic fallback for binary comparisons (covers parenthesized variants too)
     if (expr instanceof BinaryExpression be) {
@@ -129,29 +168,36 @@ public final class ExpressionEvaluator {
     throw new IllegalArgumentException("Unsupported WHERE expression: " + expr);
   }
 
-  private record Operand(Object value, Schema schemaOrNull) {}
+  private record Operand(Object value, Schema schemaOrNull) {
+  }
 
   private Operand operand(Expression e, GenericRecord rec) {
     if (e instanceof Column c) {
       String name = c.getColumnName();
       Schema.Field f = rec.getSchema().getField(name);
-      if (f == null) return new Operand(null, null);
+      if (f == null) {
+        return new Operand(null, null);
+      }
       Object v = AvroCoercions.unwrap(rec.get(name), f.schema());
       return new Operand(v, f.schema());
     }
     // literal
-    return new Operand(JParqSqlParser.toLiteral(e), null);
+    return new Operand(SqlParser.toLiteral(e), null);
   }
 
   private static int typedCompare(Object l, Object r) {
-    if (l instanceof Number && r instanceof Number)
+    if (l instanceof Number && r instanceof Number) {
       return new BigDecimal(l.toString()).compareTo(new BigDecimal(r.toString()));
-    if (l instanceof Boolean && r instanceof Boolean)
+    }
+    if (l instanceof Boolean && r instanceof Boolean) {
       return Boolean.compare((Boolean) l, (Boolean) r);
-    if (l instanceof java.sql.Timestamp && r instanceof java.sql.Timestamp)
+    }
+    if (l instanceof java.sql.Timestamp && r instanceof java.sql.Timestamp) {
       return Long.compare(((Timestamp) l).getTime(), ((Timestamp) r).getTime());
-    if (l instanceof java.sql.Date && r instanceof java.sql.Date)
+    }
+    if (l instanceof java.sql.Date && r instanceof java.sql.Date) {
       return Long.compare(((Date) l).getTime(), ((Date) r).getTime());
+    }
     return l.toString().compareTo(r.toString());
   }
 
@@ -169,7 +215,9 @@ public final class ExpressionEvaluator {
           break;
         default:
           // escape regex metacharacters
-          if ("\\.[]{}()*+-?^$|".indexOf(c) >= 0) re.append('\\');
+          if ("\\.[]{}()*+-?^$|".indexOf(c) >= 0) {
+            re.append('\\');
+          }
           re.append(c);
       }
     }
@@ -177,38 +225,41 @@ public final class ExpressionEvaluator {
     return caseInsensitive ? s.toLowerCase().matches(regex.toLowerCase()) : s.matches(regex);
   }
 
-  private int compare(Expression lExpr, Expression rExpr, GenericRecord rec) {
-    Operand L = operand(lExpr, rec);
-    Operand R = operand(rExpr, rec);
+  private int compare(Expression leftExpr, Expression rightExpr, GenericRecord rec) {
+    Operand leftlOperand = operand(leftExpr, rec);
+    Operand rightOperand = operand(rightExpr, rec);
 
-    Object l = L.value;
-    Object r = R.value;
+    Object leftVal = leftlOperand.value;
+    Object rightVal = rightOperand.value;
 
-    // If one side is a column (has schema) and the other is a literal, coerce literal to column
+    // If one side is a column (has schema) and the other is a literal, coerce
+    // literal to column
     // type
-    if (L.schemaOrNull != null && R.schemaOrNull == null) {
-      r = coerceLiteral(r, L.schemaOrNull);
-    } else if (R.schemaOrNull != null && L.schemaOrNull == null) {
-      l = coerceLiteral(l, R.schemaOrNull);
+    if (leftlOperand.schemaOrNull != null && rightOperand.schemaOrNull == null) {
+      rightVal = coerceLiteral(rightVal, leftlOperand.schemaOrNull);
+    } else if (rightOperand.schemaOrNull != null && leftlOperand.schemaOrNull == null) {
+      leftVal = coerceLiteral(leftVal, rightOperand.schemaOrNull);
     }
 
-    if (l == null || r == null) return -1; // nulls don't match in this minimal impl
+    if (leftVal == null || rightVal == null) {
+      return -1; // nulls don't match in this minimal impl
+    }
 
     try {
-      if (l instanceof Number && r instanceof Number) {
-        return new BigDecimal(l.toString()).compareTo(new BigDecimal(r.toString()));
+      if (leftVal instanceof Number && rightVal instanceof Number) {
+        return new BigDecimal(leftVal.toString()).compareTo(new BigDecimal(rightVal.toString()));
       }
-      if (l instanceof Boolean && r instanceof Boolean) {
-        return Boolean.compare((Boolean) l, (Boolean) r);
+      if (leftVal instanceof Boolean && rightVal instanceof Boolean) {
+        return Boolean.compare((Boolean) leftVal, (Boolean) rightVal);
       }
-      if (l instanceof java.sql.Timestamp && r instanceof java.sql.Timestamp) {
-        return Long.compare(((Timestamp) l).getTime(), ((Timestamp) r).getTime());
+      if (leftVal instanceof java.sql.Timestamp && rightVal instanceof java.sql.Timestamp) {
+        return Long.compare(((Timestamp) leftVal).getTime(), ((Timestamp) rightVal).getTime());
       }
-      if (l instanceof java.sql.Date && r instanceof java.sql.Date) {
-        return Long.compare(((Date) l).getTime(), ((Date) r).getTime());
+      if (leftVal instanceof java.sql.Date && rightVal instanceof java.sql.Date) {
+        return Long.compare(((Date) leftVal).getTime(), ((Date) rightVal).getTime());
       }
       // fallback: string compare
-      return l.toString().compareTo(r.toString());
+      return leftVal.toString().compareTo(rightVal.toString());
     } catch (Exception e) {
       return -1;
     }
