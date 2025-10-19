@@ -3,22 +3,11 @@ package se.alipsa.jparq.engine;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
-import net.sf.jsqlparser.expression.BooleanValue;
-import net.sf.jsqlparser.expression.DateValue;
-import net.sf.jsqlparser.expression.DoubleValue;
-import net.sf.jsqlparser.expression.Expression;
-import net.sf.jsqlparser.expression.LongValue;
-import net.sf.jsqlparser.expression.NullValue;
-import net.sf.jsqlparser.expression.SignedExpression;
-import net.sf.jsqlparser.expression.StringValue;
-import net.sf.jsqlparser.expression.TimestampValue;
+import net.sf.jsqlparser.expression.*;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
-import net.sf.jsqlparser.statement.select.AllColumns;
-import net.sf.jsqlparser.statement.select.Limit;
-import net.sf.jsqlparser.statement.select.PlainSelect;
-import net.sf.jsqlparser.statement.select.SelectItem;
+import net.sf.jsqlparser.statement.select.*;
 
 /**
  * Handles parsing the SQL and translates that into something that the parquet
@@ -26,6 +15,17 @@ import net.sf.jsqlparser.statement.select.SelectItem;
  */
 public final class SqlParser {
   private SqlParser() {
+  }
+
+  /**
+   * ORDER BY key (simple: column + direction).
+   *
+   * @param column
+   *          the column name
+   * @param asc
+   *          true if ascending order, false if descending
+   */
+  public record OrderKey(String column, boolean asc) {
   }
 
   /**
@@ -39,26 +39,23 @@ public final class SqlParser {
    *          the where expression
    * @param limit
    *          the limit value (-1 if none)
+   * @param orderBy
+   *          ORDER BY keys (empty if none)
    */
-  public record Select(List<String> columns, String table, Expression where, int limit) {
+  public record Select(List<String> columns, String table, Expression where, int limit, List<OrderKey> orderBy) {
 
-    /**
-     * Get the columns, or * if none specified.
-     *
-     * @return the columns or *
-     */
+    /** Get the columns, or * if none specified. */
     public List<String> columns() {
       return (columns == null || columns.isEmpty()) ? List.of("*") : columns;
     }
+
+    /** ORDER BY keys (never null). */
+    public List<OrderKey> orderBy() {
+      return orderBy == null ? List.of() : orderBy;
+    }
   }
 
-  /**
-   * Parse a simple SELECT SQL statement.
-   *
-   * @param sql
-   *          the SQL string
-   * @return the parsed Select
-   */
+  /** Parse a simple SELECT SQL statement. */
   @SuppressWarnings("PMD.AvoidLiteralsInIfCondition")
   public static Select parseSelect(String sql) {
     try {
@@ -74,25 +71,19 @@ public final class SqlParser {
       // SELECT list (JSQLParser 5.3)
       List<String> columns = new ArrayList<>();
       boolean selectAll = false;
-
       for (SelectItem<?> item : ps.getSelectItems()) {
-        // Quick text check for qualified asterisk like "t.*"
         String text = item.toString().trim();
         if ("*".equals(text)) {
           selectAll = true;
           break;
         }
         if (text.endsWith(".*")) {
-          // Qualified star not supported (yet)
           throw new IllegalArgumentException("Qualified * (table.*) not supported yet: " + text);
         }
-
-        // Otherwise we expect a simple column reference expression
         Expression expr = item.getExpression();
         if (expr instanceof Column col) {
           columns.add(col.getColumnName());
         } else if (expr instanceof AllColumns) {
-          // Some forms may still come as AllColumns
           selectAll = true;
           break;
         } else {
@@ -112,7 +103,23 @@ public final class SqlParser {
       if (lim != null && lim.getRowCount() != null) {
         limit = Integer.parseInt(lim.getRowCount().toString());
       }
-      return new Select(columns, table.getName(), whereExpr, limit);
+
+      // ORDER BY
+      List<OrderKey> orderKeys = new ArrayList<>();
+      List<OrderByElement> ob = ps.getOrderByElements();
+      if (ob != null) {
+        for (OrderByElement e : ob) {
+          Expression ex = e.getExpression();
+          if (!(ex instanceof Column col)) {
+            throw new IllegalArgumentException("ORDER BY supports simple column names only: " + ex);
+          }
+          // JSQLParser 5.3: default ASC if no ASC/DESC specified
+          boolean asc = !e.isAscDescPresent() || e.isAsc();
+          orderKeys.add(new OrderKey(col.getColumnName(), asc));
+        }
+      }
+
+      return new Select(columns, table.getName(), whereExpr, limit, List.copyOf(orderKeys));
     } catch (Exception e) {
       throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
     }

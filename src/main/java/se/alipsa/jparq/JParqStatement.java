@@ -11,9 +11,10 @@ import java.sql.Statement;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.commons.lang3.concurrent.BasicThreadFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.Path;
 import org.apache.parquet.avro.AvroParquetReader;
 import org.apache.parquet.hadoop.ParquetReader;
+import org.apache.parquet.hadoop.util.HadoopInputFile;
+import org.apache.parquet.io.InputFile;
 import se.alipsa.jparq.engine.SqlParser;
 
 /** An implementation of the java.sql.Statement interface. */
@@ -61,11 +62,12 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
     File file = conn.tableFile(select.table());
 
     Configuration conf = new Configuration(false);
-    Path path = new Path(file.toURI());
+    org.apache.hadoop.fs.Path hPath = new org.apache.hadoop.fs.Path(file.toURI());
 
     ParquetReader<GenericRecord> reader;
     try {
-      reader = AvroParquetReader.<GenericRecord>builder(path).withConf(conf).build();
+      InputFile in = HadoopInputFile.fromPath(hPath, conf);
+      reader = AvroParquetReader.<GenericRecord>builder(in).build();
     } catch (Exception e) {
       throw new SQLException("Failed to open parquet file: " + file, e);
     }

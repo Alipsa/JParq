@@ -10,10 +10,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import org.apache.avro.generic.GenericRecord;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.Path;
 import org.apache.parquet.avro.AvroParquetReader;
 import org.apache.parquet.hadoop.ParquetReader;
+import org.apache.parquet.hadoop.util.HadoopInputFile;
 import se.alipsa.jparq.helper.JParqUtil;
 
 /**
@@ -103,37 +102,60 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     }, rows);
   }
 
-  @SuppressWarnings("PMD.CloseResource")
+  @SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
   @Override
   public ResultSet getColumns(String catalog, String schemaPattern, String tableNamePattern, String columnNamePattern)
       throws SQLException {
+
     List<Object[]> rows = new ArrayList<>();
-    ResultSet tables = getTables(catalog, schemaPattern, tableNamePattern, new String[]{
+    // Reuse one Configuration
+    org.apache.hadoop.conf.Configuration conf = new org.apache.hadoop.conf.Configuration(false);
+
+    try (ResultSet tables = getTables(catalog, schemaPattern, tableNamePattern, new String[]{
         "TABLE"
-    });
-    while (tables.next()) {
-      String table = tables.getString("TABLE_NAME");
-      File file = conn.tableFile(table);
-      try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(new Path(file.toURI()))
-          .withConf(new Configuration(false)).build()) {
-        GenericRecord rec = reader.read();
-        if (rec == null) {
-          continue;
-        }
-        int pos = 1;
-        for (org.apache.avro.Schema.Field f : rec.getSchema().getFields()) {
-          String col = f.name();
-          if (columnNamePattern != null && !col.matches(JParqUtil.sqlLikeToRegex(columnNamePattern))) {
-            continue;
+    })) {
+      org.apache.hadoop.fs.Path hPath;
+      while (tables.next()) {
+        String table = tables.getString("TABLE_NAME");
+        File file = conn.tableFile(table);
+
+        hPath = new org.apache.hadoop.fs.Path(file.toURI());
+        try (ParquetReader<GenericRecord> reader = AvroParquetReader
+            .<GenericRecord>builder(HadoopInputFile.fromPath(hPath, conf)).build()) {
+
+          GenericRecord rec = reader.read();
+          if (rec == null) {
+            continue; // empty file
           }
-          rows.add(new Object[]{
-              null, null, table, col, java.sql.Types.VARCHAR, "VARCHAR", pos++, 0, null, null
-          });
+
+          int pos = 1;
+          for (org.apache.avro.Schema.Field f : rec.getSchema().getFields()) {
+            String col = f.name();
+            if (columnNamePattern != null && !col.matches(JParqUtil.sqlLikeToRegex(columnNamePattern))) {
+              continue;
+            }
+            rows.add(new Object[]{
+                null, // TABLE_CAT
+                null, // TABLE_SCHEM
+                table, // TABLE_NAME
+                col, // COLUMN_NAME
+                java.sql.Types.VARCHAR, // DATA_TYPE (simplified for now)
+                "VARCHAR", // TYPE_NAME
+                pos++, // ORDINAL_POSITION
+                0, // COLUMN_SIZE (unknown)
+                null, // BUFFER_LENGTH (unused)
+                null // DECIMAL_DIGITS (unknown)
+            });
+          }
+        } catch (Exception e) {
+          throw new SQLException(e);
         }
-      } catch (Exception e) {
-        throw new SQLException(e);
       }
+    } catch (SQLException e) {
+      // Preserve original behavior surface (wrap/propagate)
+      throw e;
     }
+
     return JParqUtil.listResultSet(new String[]{
         "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME", "DATA_TYPE", "TYPE_NAME", "ORDINAL_POSITION",
         "COLUMN_SIZE", "BUFFER_LENGTH", "DECIMAL_DIGITS"

@@ -11,7 +11,6 @@ import java.util.List;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.AvroCoercions;
-import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.QueryProcessor;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.model.ResultSetAdapter;
@@ -43,25 +42,31 @@ public class JParqResultSet extends ResultSetAdapter {
       throws SQLException {
     this.tableName = tableName;
     try {
-      // prime first matching row to discover schema, then compute projection
       GenericRecord first = reader.read();
       if (first == null) {
         this.qp = new QueryProcessor(reader, List.of(), select.where(), select.limit(), null, 0);
         this.current = null;
+        this.rowNum = 0;
         return;
       }
+
       var schema = first.getSchema();
-      var tempEvaluator = new ExpressionEvaluator(schema);
+      var tempEvaluator = new se.alipsa.jparq.engine.ExpressionEvaluator(schema);
       boolean match = (select.where() == null) || tempEvaluator.eval(select.where(), first);
 
       List<String> proj = QueryProcessor.computeProjection(select.columns(), schema);
-      // If first matched, count it toward LIMIT by starting emitted at 1.
-      // If not, start at 0 and let the processor find the first match.
-      int initialEmitted = match ? 1 : 0;
-      this.qp = new QueryProcessor(reader, proj, select.where(), select.limit(), schema, initialEmitted);
-
       columnOrder.addAll(proj);
-      this.current = match ? first : qp.nextMatching();
+
+      var order = select.orderBy();
+      if (order == null || order.isEmpty()) {
+        int initialEmitted = match ? 1 : 0;
+        this.qp = new QueryProcessor(reader, proj, select.where(), select.limit(), schema, initialEmitted);
+        this.current = match ? first : qp.nextMatching();
+      } else {
+        this.qp = new QueryProcessor(reader, proj, select.where(), select.limit(), schema, 0, order, first);
+        this.current = qp.nextMatching();
+      }
+      this.rowNum = 0;
     } catch (Exception e) {
       throw new SQLException("Failed reading first parquet record", e);
     }
@@ -117,13 +122,14 @@ public class JParqResultSet extends ResultSetAdapter {
     return new JParqResultSetMetaData(schema, columnOrder, tableName);
   }
 
+  @SuppressWarnings("PMD.EmptyCatchBlock")
   @Override
   public void close() throws SQLException {
     closed = true;
     try {
       qp.close();
     } catch (Exception ignore) {
-      // intentionally ignored:
+      // intentionally ignored
     }
   }
 
@@ -259,64 +265,13 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   @Override
-  public boolean isLast() {
-    return false;
-  }
-
-  @Override
-  public void beforeFirst() {
-  }
-
-  @Override
-  public void afterLast() {
-  }
-
-  @Override
-  public boolean first() {
-    return false;
-  }
-
-  @Override
-  public boolean last() {
-    return false;
-  }
-
-  @Override
   public int getRow() {
     return rowNum;
   }
 
   @Override
-  public boolean absolute(int row) {
-    return false;
-  }
-
-  @Override
-  public boolean relative(int rows) {
-    return false;
-  }
-
-  @Override
-  public boolean previous() {
-    return false;
-  }
-
-  @Override
-  public void setFetchDirection(int direction) {
-  }
-
-  @Override
   public int getFetchDirection() {
     return FETCH_FORWARD;
-  }
-
-  @Override
-  public void setFetchSize(int rows) {
-  }
-
-  @Override
-  public int getFetchSize() {
-    return 0;
   }
 
   @Override

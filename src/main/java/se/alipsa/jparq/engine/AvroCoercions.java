@@ -45,7 +45,7 @@ public final class AvroCoercions {
 
       case INT: {
         if (LogicalTypes.date().equals(effective.getLogicalType())) {
-          if (lit instanceof java.sql.Date) {
+          if (lit instanceof Date) {
             return lit;
           }
           try {

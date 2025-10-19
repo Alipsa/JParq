@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import net.sf.jsqlparser.expression.Expression;
@@ -9,7 +10,9 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.hadoop.ParquetReader;
 
-/** Processes a ParquetReader with projection, WHERE clause, and LIMIT. */
+/**
+ * Processes a ParquetReader with projection, WHERE clause, LIMIT, and ORDER BY.
+ */
 public final class QueryProcessor implements AutoCloseable {
 
   private final ParquetReader<GenericRecord> reader;
@@ -18,46 +21,129 @@ public final class QueryProcessor implements AutoCloseable {
   private final int limit;
   private final ExpressionEvaluator evaluator;
 
+  // ORDER BY support
+  private final List<SqlParser.OrderKey> orderBy; // empty => streaming path
+  private List<GenericRecord> sorted; // buffer when ORDER BY is used
+  private int idx = 0;
+
   private int emitted;
 
   /**
-   * Constructor for QueryProcessor.
+   * Streaming constructor (no ORDER BY).
    *
-   * @param reader
-   *          the ParquetReader to read records from
-   * @param projection
-   *          the list of columns to project
-   * @param where
-   *          the WHERE clause expression
-   * @param limit
-   *          the maximum number of records to emit
-   * @param schema
-   *          the Avro schema of the records
    * @param initialEmitted
-   *          the number of records already emitted (for limit counting)
+   *          number of rows already emitted (affects LIMIT)
    */
   public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
-      Schema schema, int initialEmitted) { // NEW
+      Schema schema, int initialEmitted) {
+    this(reader, projection, where, limit, schema, initialEmitted, List.of(), null);
+  }
+
+  /**
+   * Generic constructor that can handle ORDER BY (buffer+sort) or streaming when
+   * {@code orderBy} is empty.
+   *
+   * @param firstAlreadyRead
+   *          a record already pulled by caller (may be null). It will be
+   *          considered for buffering.
+   */
+  public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
+      Schema schema, int initialEmitted, List<SqlParser.OrderKey> orderBy, GenericRecord firstAlreadyRead) {
     this.reader = Objects.requireNonNull(reader);
     this.projection = List.copyOf(projection);
     this.where = where;
     this.limit = limit;
     this.evaluator = new ExpressionEvaluator(schema);
-    this.emitted = Math.max(0, initialEmitted); // NEW
+    this.emitted = Math.max(0, initialEmitted);
+    this.orderBy = (orderBy == null) ? List.of() : List.copyOf(orderBy);
+
+    if (!this.orderBy.isEmpty()) {
+      bufferAndSort(firstAlreadyRead, schema);
+    }
+  }
+
+  private void bufferAndSort(GenericRecord first, Schema schema) {
+    try {
+      List<GenericRecord> buf = new ArrayList<>();
+
+      // include firstAlreadyRead if it matches WHERE
+      if (first != null && (where == null || evaluator.eval(where, first))) {
+        buf.add(first);
+      }
+
+      // read and filter all remaining
+      GenericRecord rec = reader.read();
+      while (rec != null) {
+        if (where == null || evaluator.eval(where, rec)) {
+          buf.add(rec);
+        }
+        rec = reader.read();
+      }
+
+      // sort by ORDER BY keys (ASC default), simple NULL policy: ASC -> NULLS LAST,
+      // DESC -> NULLS FIRST
+      buf.sort(buildComparator(schema, orderBy));
+
+      this.sorted = buf;
+      this.idx = 0;
+    } catch (Exception e) {
+      throw new RuntimeException("ORDER BY buffer/sort failed", e);
+    }
+  }
+
+  private static Comparator<GenericRecord> buildComparator(Schema schema, List<SqlParser.OrderKey> keys) {
+    return (a, b) -> {
+      for (SqlParser.OrderKey k : keys) {
+        Schema.Field f = schema.getField(k.column());
+        if (f == null) {
+          throw new IllegalArgumentException("Unknown ORDER BY column: " + k.column());
+        }
+
+        Object va = AvroCoercions.unwrap(a.get(k.column()), f.schema());
+        Object vb = AvroCoercions.unwrap(b.get(k.column()), f.schema());
+
+        // NULLS LAST for ASC, NULLS FIRST for DESC
+        if (va == null || vb == null) {
+          int nullCmp = (va == null ? 1 : 0) - (vb == null ? 1 : 0); // null > non-null
+          if (!k.asc()) {
+            nullCmp = -nullCmp;
+          }
+          if (nullCmp != 0) {
+            return nullCmp;
+          }
+          continue;
+        }
+
+        int c = ExpressionEvaluator.typedCompare(va, vb);
+        if (c != 0) {
+          return k.asc() ? c : -c;
+        }
+      }
+      return 0;
+    };
   }
 
   /**
-   * Get the next record matching the WHERE clause, or null if no more matches or
-   * limit reached.
+   * Get the next record honoring WHERE/LIMIT (and ORDER BY if present).
    *
-   * @return the next matching GenericRecord or null
-   * @throws IOException
-   *           if reading fails
+   * @return next matching record, or null if exhausted
    */
   public GenericRecord nextMatching() throws IOException {
     if (limit >= 0 && emitted >= limit) {
       return null;
     }
+
+    // ORDER BY path: consume from sorted buffer
+    if (!orderBy.isEmpty()) {
+      if (sorted == null || idx >= sorted.size()) {
+        return null;
+      }
+      GenericRecord r = sorted.get(idx++);
+      emitted++;
+      return r;
+    }
+
+    // Streaming path
     GenericRecord rec = reader.read();
     while (rec != null) {
       if (where == null || evaluator.eval(where, rec)) {

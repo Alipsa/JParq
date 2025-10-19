@@ -170,7 +170,7 @@ public class JParqConnection implements Connection {
 
   @Override
   public int getTransactionIsolation() {
-    return Connection.TRANSACTION_NONE;
+    return TRANSACTION_NONE;
   }
 
   @Override

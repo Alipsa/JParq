@@ -280,6 +280,7 @@ class JParqPreparedStatement implements PreparedStatement {
     // Do nothing
   }
 
+  @SuppressWarnings("deprecation")
   @Override
   public void setUnicodeStream(int parameterIndex, InputStream x, int length) {
     // Do nothing

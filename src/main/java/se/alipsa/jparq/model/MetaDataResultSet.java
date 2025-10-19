@@ -1,5 +1,6 @@
 package se.alipsa.jparq.model;
 
+import java.sql.ResultSetMetaData;
 import java.sql.Types;
 import java.util.List;
 
@@ -53,8 +54,8 @@ public class MetaDataResultSet extends ResultSetAdapter {
   }
 
   @Override
-  public java.sql.ResultSetMetaData getMetaData() {
-    return new java.sql.ResultSetMetaData() {
+  public ResultSetMetaData getMetaData() {
+    return new ResultSetMetaData() {
       @Override
       public int getColumnCount() {
         return headers.length;
@@ -142,7 +143,7 @@ public class MetaDataResultSet extends ResultSetAdapter {
 
       @Override
       public int isNullable(int column) {
-        return java.sql.ResultSetMetaData.columnNullableUnknown;
+        return columnNullableUnknown;
       }
 
       @Override

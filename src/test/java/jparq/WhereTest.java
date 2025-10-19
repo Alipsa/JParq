@@ -1,6 +1,7 @@
 package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.net.URISyntaxException;
@@ -249,4 +250,83 @@ public class WhereTest {
       }
     });
   }
+
+  @Test
+  void testWhereOr() {
+    jparqSql.query("SELECT model, cyl FROM mtcars WHERE cyl = 4 OR cyl = 6", rs -> {
+      List<String> models = new ArrayList<>();
+      try {
+        ResultSetMetaData md = rs.getMetaData();
+        assertEquals(2, md.getColumnCount(), "Expected 2 columns");
+
+        int rows = 0;
+
+        while (rs.next()) {
+          String first = rs.getString(1);
+          models.add(first + " " + rs.getInt(2));
+          int cyl = rs.getInt("cyl");
+          assertTrue(cyl == 4 || cyl == 6, "Only 4 or 6 cylinders expected");
+          rows++;
+        }
+        assertEquals(18, rows, "Expected 18 rows, got " + rows + " models: " + String.join(", ", models));
+      } catch (SQLException e) {
+        System.err.println(String.join("\n", models));
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void testWhereOrWithParentheses() {
+    jparqSql.query("SELECT model, mpg, cyl FROM mtcars WHERE (cyl = 4 AND mpg > 30) OR cyl = 6", rs -> {
+      List<String> models = new ArrayList<>();
+      try {
+        ResultSetMetaData md = rs.getMetaData();
+        assertEquals(3, md.getColumnCount(), "Expected 3 columns");
+
+        int rows = 0;
+        while (rs.next()) {
+          String first = rs.getString(1);
+          double mpg = rs.getDouble(2);
+          int cyl = rs.getInt(3);
+          models.add(first + " " + mpg + " " + cyl);
+          assertTrue(cyl == 6 || (cyl == 4 && mpg > 30.0), "Row must satisfy (cyl=4 & mpg>30) OR cyl=6");
+          rows++;
+        }
+        // mtcars: (4-cyl & mpg>30) = 4 rows, 6-cyl = 7 rows -> 11 total
+        assertEquals(11, rows, "Expected 11 rows, got " + rows + " models: " + String.join(", ", models));
+      } catch (SQLException e) {
+        System.err.println(String.join("\n", models));
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void testWhereOrPrecedenceWithoutParentheses() {
+    // AND binds tighter than OR, so this should return the same rows as the
+    // previous test
+    jparqSql.query("SELECT model, mpg, cyl FROM mtcars WHERE cyl = 4 AND mpg > 30 OR cyl = 6", rs -> {
+      List<String> models = new ArrayList<>();
+      try {
+        ResultSetMetaData md = rs.getMetaData();
+        assertEquals(3, md.getColumnCount(), "Expected 3 columns");
+
+        int rows = 0;
+        while (rs.next()) {
+          String first = rs.getString(1);
+          double mpg = rs.getDouble(2);
+          int cyl = rs.getInt(3);
+          models.add(first + " " + mpg + " " + cyl);
+          rows++;
+        }
+        assertEquals(11, rows,
+            "Expected 11 rows (AND precedence), got " + rows + " models: " + String.join(", ", models));
+      } catch (SQLException e) {
+        System.err.println(String.join("\n", models));
+        fail(e);
+      }
+    });
+  }
+
 }

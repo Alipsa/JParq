@@ -5,6 +5,11 @@ import static se.alipsa.jparq.engine.AvroCoercions.coerceLiteral;
 import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.Timestamp;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
+import net.sf.jsqlparser.JSQLParserException;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.NotExpression;
@@ -29,7 +34,8 @@ import org.apache.avro.generic.GenericRecord;
 /** Evaluates SQL expressions against Avro GenericRecords. */
 public final class ExpressionEvaluator {
 
-  private final Schema schema;
+  private final Map<String, Schema> fieldSchemas; // exact match
+  private final Map<String, String> caseInsensitiveIndex; // lower(name) -> canonical
 
   /**
    * Constructor for ExpressionEvaluator.
@@ -38,31 +44,38 @@ public final class ExpressionEvaluator {
    *          the Avro schema of the records to evaluate against
    */
   public ExpressionEvaluator(Schema schema) {
-    this.schema = schema;
+    Map<String, Schema> fs = new HashMap<>();
+    Map<String, String> ci = new HashMap<>();
+    for (Schema.Field f : schema.getFields()) {
+      fs.put(f.name(), f.schema());
+      ci.put(f.name().toLowerCase(Locale.ROOT), f.name());
+    }
+    this.fieldSchemas = Collections.unmodifiableMap(fs);
+    this.caseInsensitiveIndex = Collections.unmodifiableMap(ci);
   }
 
   /**
    * Evaluate the given expression against the provided GenericRecord.
    *
-   * @param expr
+   * @param expression
    *          the expression to evaluate
    * @param rec
    *          the GenericRecord to evaluate against
    * @return true if the expression evaluates to true, false otherwise
    */
-  @SuppressWarnings("PMD.LooseCoupling")
-  public boolean eval(Expression expr, GenericRecord rec) {
+  @SuppressWarnings({
+      "PMD.LooseCoupling", "PMD.EmptyCatchBlock"
+  })
+  public boolean eval(Expression expression, GenericRecord rec) {
     // Always strip all layers of (...) first
-    while (expr instanceof Parenthesis) {
-      expr = ((Parenthesis) expr).getExpression();
-    }
+    Expression expr = unwrap(expression);
 
     String txt = expr.toString().trim();
     if (txt.length() >= 2 && txt.charAt(0) == '(' && txt.charAt(txt.length() - 1) == ')') {
       try {
         Expression inner = CCJSqlParserUtil.parseCondExpression(txt.substring(1, txt.length() - 1));
         return eval(inner, rec);
-      } catch (Exception ignore) {
+      } catch (JSQLParserException ignore) {
         // If reparse fails, we’ll continue to the standard handlers below
       }
     }
@@ -89,8 +102,16 @@ public final class ExpressionEvaluator {
       if (left == null || pat == null) {
         return false;
       }
-      boolean matches = likeMatch(left, pat, like.isCaseInsensitive());
-      return like.isNot() ? !matches : matches;
+
+      // There is no clean replacement for deprecated methods in 5.3
+      boolean caseInsensitive = "ILIKE".equalsIgnoreCase(like.getStringExpression());
+      if (!caseInsensitive) {
+        // present in 5.3, but deprecated
+        caseInsensitive = like.isCaseInsensitive();
+      }
+
+      boolean matches = likeMatch(left, pat, caseInsensitive);
+      return like.isNot() != matches;
     }
     if (expr instanceof Between between) {
       Operand val = operand(between.getLeftExpression(), rec);
@@ -168,34 +189,48 @@ public final class ExpressionEvaluator {
     throw new IllegalArgumentException("Unsupported WHERE expression: " + expr);
   }
 
+  @SuppressWarnings("removal")
+  private static Expression unwrap(Expression expr) {
+    Expression unwrapped = expr;
+    while (unwrapped instanceof Parenthesis p) {
+      unwrapped = p.getExpression();
+    }
+    return unwrapped;
+  }
+
   private record Operand(Object value, Schema schemaOrNull) {
   }
 
   private Operand operand(Expression e, GenericRecord rec) {
     if (e instanceof Column c) {
       String name = c.getColumnName();
-      Schema.Field f = rec.getSchema().getField(name);
-      if (f == null) {
+      Schema colSchema = fieldSchemas.get(name);
+      if (colSchema == null) {
+        String canon = caseInsensitiveIndex.get(name.toLowerCase(Locale.ROOT));
+        if (canon != null) {
+          colSchema = fieldSchemas.get(canon);
+        }
+      }
+      if (colSchema == null) {
         return new Operand(null, null);
       }
-      Object v = AvroCoercions.unwrap(rec.get(name), f.schema());
-      return new Operand(v, f.schema());
+      Object v = AvroCoercions.unwrap(rec.get(name), colSchema);
+      return new Operand(v, colSchema);
     }
-    // literal
     return new Operand(SqlParser.toLiteral(e), null);
   }
 
-  private static int typedCompare(Object l, Object r) {
+  static int typedCompare(Object l, Object r) {
     if (l instanceof Number && r instanceof Number) {
       return new BigDecimal(l.toString()).compareTo(new BigDecimal(r.toString()));
     }
     if (l instanceof Boolean && r instanceof Boolean) {
       return Boolean.compare((Boolean) l, (Boolean) r);
     }
-    if (l instanceof java.sql.Timestamp && r instanceof java.sql.Timestamp) {
+    if (l instanceof Timestamp && r instanceof Timestamp) {
       return Long.compare(((Timestamp) l).getTime(), ((Timestamp) r).getTime());
     }
-    if (l instanceof java.sql.Date && r instanceof java.sql.Date) {
+    if (l instanceof Date && r instanceof Date) {
       return Long.compare(((Date) l).getTime(), ((Date) r).getTime());
     }
     return l.toString().compareTo(r.toString());
@@ -252,10 +287,10 @@ public final class ExpressionEvaluator {
       if (leftVal instanceof Boolean && rightVal instanceof Boolean) {
         return Boolean.compare((Boolean) leftVal, (Boolean) rightVal);
       }
-      if (leftVal instanceof java.sql.Timestamp && rightVal instanceof java.sql.Timestamp) {
+      if (leftVal instanceof Timestamp && rightVal instanceof Timestamp) {
         return Long.compare(((Timestamp) leftVal).getTime(), ((Timestamp) rightVal).getTime());
       }
-      if (leftVal instanceof java.sql.Date && rightVal instanceof java.sql.Date) {
+      if (leftVal instanceof Date && rightVal instanceof Date) {
         return Long.compare(((Date) leftVal).getTime(), ((Date) rightVal).getTime());
       }
       // fallback: string compare

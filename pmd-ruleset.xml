@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ruleset name="JParq Ruleset"
+         xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0
+                             https://pmd.github.io/pmd-7.0.0/ruleset_2_0_0.xsd"
+         xsi:noNamespaceSchemaLocation="https://pmd.github.io/pmd-7.0.0/ruleset_2_0_0.xsd">
+
+  <description>
+    PMD 7.17 ruleset focused on correctness/maintainability. Formatting/naming handled by
+    Spotless / Checkstyle.
+  </description>
+
+  <!-- === BASIC BEST PRACTICES === -->
+  <rule ref="category/java/bestpractices.xml/AvoidPrintStackTrace"/>
+  <rule ref="category/java/bestpractices.xml/AvoidReassigningParameters"/>
+  <rule ref="category/java/bestpractices.xml/AvoidUsingHardCodedIP"/>
+  <rule ref="category/java/bestpractices.xml/OneDeclarationPerLine"/>
+  <rule ref="category/java/bestpractices.xml/UseTryWithResources"/>
+
+  <!-- === ERROR HANDLING / BUGS === -->
+  <!-- Keep to rules known to exist in 7.17.0 -->
+  <rule ref="category/java/errorprone.xml/AvoidCatchingThrowable"/>
+  <rule ref="category/java/errorprone.xml/BrokenNullCheck"/>
+  <rule ref="category/java/errorprone.xml/EmptyCatchBlock"/>
+  <rule ref="category/java/errorprone.xml/UnconditionalIfStatement"/>
+  <rule ref="category/java/errorprone.xml/ReturnFromFinallyBlock"/>
+  <!--rule ref="category/java/errorprone.xml/AssignmentInOperand"/-->
+  <rule ref="category/java/errorprone.xml/MisplacedNullCheck"/>
+
+  <!-- === CODE STYLE / CLARITY === -->
+  <rule ref="category/java/codestyle.xml/UnnecessaryFullyQualifiedName"/>
+  <rule ref="category/java/codestyle.xml/UnnecessaryConstructor"/>
+  <rule ref="category/java/codestyle.xml/UnnecessaryModifier"/>
+  <rule ref="category/java/codestyle.xml/UnnecessaryReturn"/>
+  <rule ref="category/java/codestyle.xml/UnnecessaryCast"/>
+  <rule ref="category/java/codestyle.xml/UnnecessaryImport"/>
+
+  <!-- === DESIGN === -->
+  <rule ref="category/java/design.xml/ExcessiveParameterList">
+    <properties>
+      <property name="minimum" value="10"/>
+    </properties>
+  </rule>
+  <rule ref="category/java/design.xml/AvoidDeeplyNestedIfStmts">
+    <properties>
+      <property name="problemDepth" value="4"/>
+    </properties>
+  </rule>
+  <!--rule ref="category/java/design.xml/LawOfDemeter"/-->
+  <rule ref="category/java/design.xml/TooManyFields">
+    <properties>
+      <property name="maxfields" value="25"/>
+    </properties>
+  </rule>
+
+  <!-- === PERFORMANCE === -->
+  <rule ref="category/java/performance.xml/AppendCharacterWithChar"/>
+  <rule ref="category/java/performance.xml/AvoidInstantiatingObjectsInLoops"/>
+  <rule ref="category/java/performance.xml/UseStringBufferForStringAppends"/>
+  <rule ref="category/java/performance.xml/ConsecutiveLiteralAppends"/>
+
+  <!-- === LOGGING === -->
+  <rule ref="category/java/bestpractices.xml/SystemPrintln"/>
+
+  <!-- === CLEANUP === -->
+  <rule ref="category/java/bestpractices.xml/UnusedPrivateField"/>
+  <rule ref="category/java/bestpractices.xml/UnusedPrivateMethod"/>
+  <rule ref="category/java/bestpractices.xml/UnusedLocalVariable"/>
+</ruleset>
