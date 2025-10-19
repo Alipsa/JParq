@@ -41,6 +41,28 @@
     <setting id="org.eclipse.jdt.core.formatter.insert_space_before_colon_in_case" value="do not insert"/>
     <setting id="org.eclipse.jdt.core.formatter.insert_space_before_colon_in_labeled_statement" value="do not insert"/>
     <setting id="org.eclipse.jdt.core.formatter.insert_space_before_colon_in_default" value="do not insert"/>
+    <!-- Force braces even for single-line statements -->
+    <setting id="org.eclipse.jdt.core.formatter.insert_new_line_before_else_in_if_statement" value="do not insert"/>
+    <setting id="org.eclipse.jdt.core.formatter.insert_new_line_before_catch_in_try_statement" value="do not insert"/>
+    <setting id="org.eclipse.jdt.core.formatter.insert_new_line_before_finally_in_try_statement" value="do not insert"/>
+    <setting id="org.eclipse.jdt.core.formatter.insert_new_line_before_while_in_do_statement" value="do not insert"/>
+
+    <setting id="org.eclipse.jdt.core.formatter.keep_then_statement_on_same_line" value="false"/>
+    <setting id="org.eclipse.jdt.core.formatter.keep_else_statement_on_same_line" value="false"/>
+    <setting id="org.eclipse.jdt.core.formatter.keep_simple_if_body_on_one_line" value="false"/>
+    <setting id="org.eclipse.jdt.core.formatter.keep_simple_for_body_on_one_line" value="false"/>
+    <setting id="org.eclipse.jdt.core.formatter.keep_simple_while_body_on_one_line" value="false"/>
+    <setting id="org.eclipse.jdt.core.formatter.keep_simple_do_body_on_one_line" value="false"/>
+    <setting id="org.eclipse.jdt.core.formatter.keep_simple_try_body_on_one_line" value="false"/>
+    <setting id="org.eclipse.jdt.core.formatter.keep_simple_catch_body_on_one_line" value="false"/>
+    <setting id="org.eclipse.jdt.core.formatter.keep_simple_finally_body_on_one_line" value="false"/>
+
+    <!-- Always use blocks/braces for control statements -->
+    <setting id="org.eclipse.jdt.core.formatter.use_blocks_in_if_then_statements" value="true"/>
+    <setting id="org.eclipse.jdt.core.formatter.use_blocks_in_else_statements" value="true"/>
+    <setting id="org.eclipse.jdt.core.formatter.use_blocks_in_for_statements" value="true"/>
+    <setting id="org.eclipse.jdt.core.formatter.use_blocks_in_while_statements" value="true"/>
+    <setting id="org.eclipse.jdt.core.formatter.use_blocks_in_do_statements" value="true"/>
 
   </profile>
 </profiles>

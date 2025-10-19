@@ -56,7 +56,7 @@
 
   <!-- === PERFORMANCE === -->
   <rule ref="category/java/performance.xml/AppendCharacterWithChar"/>
-  <rule ref="category/java/performance.xml/AvoidInstantiatingObjectsInLoops"/>
+  <!--rule ref="category/java/performance.xml/AvoidInstantiatingObjectsInLoops"/-->
   <rule ref="category/java/performance.xml/UseStringBufferForStringAppends"/>
   <rule ref="category/java/performance.xml/ConsecutiveLiteralAppends"/>
 

@@ -4,6 +4,8 @@ It works by regarding a directory as a database and each parquet file in that di
 
 JParq relies heavily on Apache Arrow and Apache Parquet libraries for reading the parquet files and on jsqlparser to parse the sql into processable blocks.
 
+Note: A large proportion of the code was created in collaboration with ChatGPT 5. 
+
 ## SQL Support
 The following SQL statements are supported:
 - `SELECT` with support for

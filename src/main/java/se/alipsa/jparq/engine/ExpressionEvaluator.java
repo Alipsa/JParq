@@ -68,7 +68,7 @@ public final class ExpressionEvaluator {
   })
   public boolean eval(Expression expression, GenericRecord rec) {
     // Always strip all layers of (...) first
-    Expression expr = unwrap(expression);
+    Expression expr = unwrapParenthesis(expression);
 
     String txt = expr.toString().trim();
     if (txt.length() >= 2 && txt.charAt(0) == '(' && txt.charAt(txt.length() - 1) == ')') {
@@ -190,7 +190,7 @@ public final class ExpressionEvaluator {
   }
 
   @SuppressWarnings("removal")
-  private static Expression unwrap(Expression expr) {
+  public static Expression unwrapParenthesis(Expression expr) {
     Expression unwrapped = expr;
     while (unwrapped instanceof Parenthesis p) {
       unwrapped = p.getExpression();

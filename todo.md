@@ -1,5 +1,4 @@
 
-- Predicate pushdown: map a subset of =, <, >, <=, >= on primitive columns to Parquet’s FilterPredicate for big speedups.
 - Alias support (e.g select model as type from mtcars)
 - expose an INFORMATION_SCHEMA with tables/columns via in-memory result sets
 - slim deps with shading/exclusions to get a leaner jar.
@@ -10,8 +9,18 @@
 - EXISTS support
 - CASE support
 - COALESCE support
-- ANY support
-- ALL support
+- ANY support e.g. SELECT ProductName
+  FROM Products
+  WHERE ProductID = ANY
+  (SELECT ProductID
+  FROM OrderDetails
+  WHERE Quantity = 10);
+- ALL support e.g. SELECT ProductName
+  FROM Products
+  WHERE ProductID = ALL
+  (SELECT ProductID
+  FROM OrderDetails
+  WHERE Quantity = 10);
 - COMMENTS support
 - string functions support
 - numeric function support
