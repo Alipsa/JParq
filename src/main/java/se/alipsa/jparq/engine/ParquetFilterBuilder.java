@@ -242,7 +242,13 @@ public final class ParquetFilterBuilder {
     };
   }
 
-  /** Collapse nullable unions to their non-null branch, else return input. */
+  /**
+   * Collapse nullable unions to their non-null branch, else return input.
+   *
+   * @param s
+   *          the schema
+   * @return effective schema
+   */
   private static Schema effectiveSchema(Schema s) {
     if (s.getType() == Schema.Type.UNION) {
       for (Schema b : s.getTypes()) {
@@ -253,5 +259,32 @@ public final class ParquetFilterBuilder {
       return s;
     }
     return s;
+  }
+  /**
+   * True if we could build a predicate for the whole WHERE expression tree.
+   *
+   * @param avroSchema
+   *          the Avro schema of the Parquet data
+   * @param where
+   *          the WHERE expression
+   * @return true if the expression can be fully pushed down
+   */
+  public static boolean covers(Schema avroSchema, Expression where) {
+    return build(avroSchema, where).isPresent();
+  }
+
+  /**
+   * Residual expression to evaluate in Java after Parquet filtering. Simple
+   * version: if fully covered, return null (no residual), otherwise return
+   * original WHERE.
+   *
+   * @param avroSchema
+   *          the Avro schema of the Parquet data
+   * @param where
+   *          the WHERE expression
+   * @return residual expression, or null if none
+   */
+  public static Expression residual(Schema avroSchema, Expression where) {
+    return covers(avroSchema, where) ? null : where;
   }
 }

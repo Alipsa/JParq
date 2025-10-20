@@ -9,15 +9,18 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLWarning;
 import java.sql.Statement;
+import net.sf.jsqlparser.expression.Expression;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.commons.lang3.concurrent.BasicThreadFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.parquet.avro.AvroReadSupport;
+import org.apache.parquet.filter2.compat.FilterCompat;
 import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
 import se.alipsa.jparq.engine.ParquetSchemas;
+import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.SqlParser;
 
 /** An implementation of the java.sql.Statement interface. */
@@ -67,26 +70,46 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
     File file = conn.tableFile(select.table());
 
     Configuration conf = new Configuration(false);
+    conf.setBoolean("parquet.filter.statistics.enabled", true);
+    conf.setBoolean("parquet.read.filter.columnindex.enabled", true);
+    conf.setBoolean("parquet.filter.dictionary.enabled", true);
+
     Path path = new Path(file.toURI());
 
-    // Optional: read Avro schema to enable pushdown
+    // Read file Avro schema if present
     Schema avroSchema = null;
     try {
       avroSchema = ParquetSchemas.readAvroSchema(path, conf);
     } catch (IOException ignore) {
-      // no schema available -> proceed without pushdown
+      // no schema -> no pushdown/projection
     }
 
+    // ---- Requested projection (SELECT columns only) ----
+    if (avroSchema != null) {
+      java.util.Set<String> selectCols = ProjectionFields.fromSelect(select); // null for *
+      if (selectCols != null) { // i.e., not SELECT *
+        Schema requested = ParquetSchemas.requestedSubset(avroSchema, selectCols);
+        if (requested != null) {
+          AvroReadSupport.setRequestedProjection(conf, requested);
+        }
+      }
+    }
+
+    // ---- Filter pushdown + residual ----
+    Expression residual = null;
     ParquetReader<GenericRecord> reader;
     try {
-      ParquetReader.Builder<GenericRecord> builder = ParquetReader.builder(new AvroReadSupport<GenericRecord>(), path)
+      ParquetReader.Builder<GenericRecord> builder = ParquetReader.<GenericRecord>builder(new AvroReadSupport<>(), path)
           .withConf(conf);
 
       if (avroSchema != null && select.where() != null) {
         var maybePred = ParquetFilterBuilder.build(avroSchema, select.where());
         if (maybePred.isPresent()) {
-          builder = builder.withFilter(org.apache.parquet.filter2.compat.FilterCompat.get(maybePred.get()));
+          builder = builder.withFilter(FilterCompat.get(maybePred.get()));
         }
+        residual = ParquetFilterBuilder.residual(avroSchema, select.where()); // null if fully pushed
+      } else {
+        residual = select.where(); // nothing pushed
       }
 
       reader = builder.build();
@@ -94,7 +117,7 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
       throw new SQLException("Failed to open parquet file: " + file, e);
     }
 
-    this.currentRs = new JParqResultSet(reader, select, file.getName());
+    this.currentRs = new JParqResultSet(reader, select, file.getName(), residual);
     return currentRs;
   }
 

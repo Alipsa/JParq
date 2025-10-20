@@ -6,6 +6,8 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.avro.generic.GenericRecord;
@@ -25,6 +27,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private final String tableName;
   private boolean closed = false;
   private int rowNum = 0;
+  private boolean lastWasNull = false;
 
   /**
    * Constructor for JParqResultSet.
@@ -38,21 +41,28 @@ public class JParqResultSet extends ResultSetAdapter {
    * @throws SQLException
    *           if reading fails
    */
-  public JParqResultSet(ParquetReader<GenericRecord> reader, SqlParser.Select select, String tableName)
-      throws SQLException {
+  public JParqResultSet(ParquetReader<GenericRecord> reader, SqlParser.Select select, String tableName,
+      net.sf.jsqlparser.expression.Expression residual) throws SQLException {
     this.tableName = tableName;
     try {
       GenericRecord first = reader.read();
       if (first == null) {
-        this.qp = new QueryProcessor(reader, List.of(), select.where(), select.limit(), null, 0);
+        // No rows produced by the reader (after pushdown). Still expose metadata
+        // based on the SELECT list when it is explicit (not "*").
+        List<String> req = select.columns(); // e.g., ["id","value"] or ["*"]
+        if (!req.isEmpty() && !req.contains("*")) {
+          columnOrder.addAll(req);
+        }
+        this.qp = new QueryProcessor(reader, columnOrder, /* where */ residual, select.limit(), null, 0);
         this.current = null;
         this.rowNum = 0;
         return;
       }
 
       var schema = first.getSchema();
-      var tempEvaluator = new se.alipsa.jparq.engine.ExpressionEvaluator(schema);
-      boolean match = (select.where() == null) || tempEvaluator.eval(select.where(), first);
+      var evaluator = new se.alipsa.jparq.engine.ExpressionEvaluator(schema);
+
+      boolean match = (residual == null) || evaluator.eval(residual, first);
 
       List<String> proj = QueryProcessor.computeProjection(select.columns(), schema);
       columnOrder.addAll(proj);
@@ -60,10 +70,10 @@ public class JParqResultSet extends ResultSetAdapter {
       var order = select.orderBy();
       if (order == null || order.isEmpty()) {
         int initialEmitted = match ? 1 : 0;
-        this.qp = new QueryProcessor(reader, proj, select.where(), select.limit(), schema, initialEmitted);
+        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, initialEmitted);
         this.current = match ? first : qp.nextMatching();
       } else {
-        this.qp = new QueryProcessor(reader, proj, select.where(), select.limit(), schema, 0, order, first);
+        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, 0, order, first);
         this.current = qp.nextMatching();
       }
       this.rowNum = 0;
@@ -103,7 +113,12 @@ public class JParqResultSet extends ResultSetAdapter {
     }
     String name = columnOrder.get(idx - 1);
     var field = current.getSchema().getField(name);
-    return AvroCoercions.unwrap(current.get(name), field.schema());
+    if (field == null) {
+      throw new SQLException("Unknown column in current schema: " + name);
+    }
+    Object raw = AvroCoercions.unwrap(current.get(name), field.schema());
+    lastWasNull = (raw == null);
+    return raw;
   }
 
   @Override
@@ -135,7 +150,7 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public boolean wasNull() {
-    return false;
+    return lastWasNull;
   }
 
   @Override
@@ -214,7 +229,16 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public BigDecimal getBigDecimal(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    return (BigDecimal) v;
+    if (v == null) {
+      return null;
+    }
+    if (v instanceof BigDecimal bd) {
+      return bd;
+    }
+    if (v instanceof Number n) {
+      return new BigDecimal(n.toString());
+    }
+    return new BigDecimal(v.toString());
   }
 
   @Override
@@ -226,7 +250,31 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public Date getDate(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    return (Date) v;
+    if (v == null) {
+      return null;
+    }
+    if (v instanceof Date) {
+      return (Date) v;
+    }
+    if (v instanceof Timestamp ts) {
+      return new Date(ts.getTime());
+    }
+    if (v instanceof String s) {
+      return Date.valueOf(s);
+    }
+    if (v instanceof Long l) {
+      return new Date(l);
+    }
+    if (v instanceof Double d) {
+      return new Date(d.longValue());
+    }
+    if (v instanceof LocalDateTime l) {
+      return Date.valueOf(l.toLocalDate());
+    }
+    if (v instanceof LocalDate) {
+      return Date.valueOf((LocalDate) v);
+    }
+    throw new SQLException("Unsupported date type: " + v.getClass().getName());
   }
 
   @Override
@@ -241,7 +289,28 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public Timestamp getTimestamp(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    return (Timestamp) v;
+    if (v == null) {
+      return null;
+    }
+    if (v instanceof Timestamp t) {
+      return t;
+    }
+    if (v instanceof Date d) {
+      return new Timestamp(d.getTime());
+    }
+    if (v instanceof String s) {
+      return Timestamp.valueOf(s);
+    }
+    if (v instanceof Long l) {
+      return new Timestamp(l);
+    }
+    if (v instanceof Double d) {
+      return new Timestamp(d.longValue());
+    }
+    if (v instanceof LocalDateTime l) {
+      return Timestamp.valueOf(l);
+    }
+    throw new SQLException("Unsupported timestamp type: " + v.getClass().getName());
   }
 
   @Override

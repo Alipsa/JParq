@@ -53,7 +53,7 @@ public final class QueryProcessor implements AutoCloseable {
     this.projection = List.copyOf(projection);
     this.where = where;
     this.limit = limit;
-    this.evaluator = new ExpressionEvaluator(schema);
+    this.evaluator = (schema != null) ? new ExpressionEvaluator(schema) : null;
     this.emitted = Math.max(0, initialEmitted);
     this.orderBy = (orderBy == null) ? List.of() : List.copyOf(orderBy);
 
@@ -67,14 +67,14 @@ public final class QueryProcessor implements AutoCloseable {
       List<GenericRecord> buf = new ArrayList<>();
 
       // include firstAlreadyRead if it matches WHERE
-      if (first != null && (where == null || evaluator.eval(where, first))) {
+      if (first != null && matches(first)) {
         buf.add(first);
       }
 
       // read and filter all remaining
       GenericRecord rec = reader.read();
       while (rec != null) {
-        if (where == null || evaluator.eval(where, rec)) {
+        if (matches(rec)) {
           buf.add(rec);
         }
         rec = reader.read();
@@ -123,6 +123,10 @@ public final class QueryProcessor implements AutoCloseable {
     };
   }
 
+  private boolean matches(GenericRecord rec) {
+    return where == null || (evaluator != null && evaluator.eval(where, rec));
+  }
+
   /**
    * Get the next record honoring WHERE/LIMIT (and ORDER BY if present).
    *
@@ -146,7 +150,7 @@ public final class QueryProcessor implements AutoCloseable {
     // Streaming path
     GenericRecord rec = reader.read();
     while (rec != null) {
-      if (where == null || evaluator.eval(where, rec)) {
+      if (matches(rec)) {
         emitted++;
         return rec;
       }

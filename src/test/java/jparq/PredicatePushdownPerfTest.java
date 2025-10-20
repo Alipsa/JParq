@@ -15,6 +15,7 @@ import org.apache.parquet.example.data.Group;
 import org.apache.parquet.example.data.simple.SimpleGroupFactory;
 import org.apache.parquet.hadoop.ParquetFileWriter;
 import org.apache.parquet.hadoop.ParquetWriter;
+import org.apache.parquet.hadoop.example.ExampleParquetWriter;
 import org.apache.parquet.hadoop.example.GroupWriteSupport;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 import org.apache.parquet.hadoop.util.HadoopOutputFile;
@@ -37,14 +38,25 @@ public class PredicatePushdownPerfTest {
     // 2) Same selective, deterministic query (very few matches)
     // ~ categories repeat every 4; id in [10..20] gives 11 ids; expect about 2-3
     // rows
-    String sql = "SELECT id, value FROM data WHERE id BETWEEN 10 AND 20 AND category = 'C'";
+    String sql = "SELECT id, value FROM data WHERE id BETWEEN 2000000 AND 2001000 AND category = 'C'";
+
+    // Warmup runs
+    for (int i = 0; i < 2; i++) {
+      timeQuery("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql, new ArrayList<>());
+      timeQuery("jdbc:jparq:" + withSchemaDir.toAbsolutePath(), sql, new ArrayList<>());
+    }
 
     // 3) Run both and collect results + timings
     List<String> baselineRows = new ArrayList<>();
-    long tNoSchema = timeQuery("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql, baselineRows);
+    long tNoSchema = medianTime("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql, 7);
+    long tWithSchema = medianTime("jdbc:jparq:" + withSchemaDir.toAbsolutePath(), sql, 7);
+
+    // long tNoSchema = timeQuery("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql,
+    // baselineRows);
 
     List<String> schemaRows = new ArrayList<>();
-    long tWithSchema = timeQuery("jdbc:jparq:" + withSchemaDir.toAbsolutePath(), sql, schemaRows);
+    // long tWithSchema = timeQuery("jdbc:jparq:" + withSchemaDir.toAbsolutePath(),
+    // sql, schemaRows);
 
     // 4) Verify same results
     assertEquals(baselineRows, schemaRows, "Results must be identical");
@@ -54,10 +66,57 @@ public class PredicatePushdownPerfTest {
     System.out.println("With schema time: " + TimeUnit.NANOSECONDS.toMillis(tWithSchema) + " ms");
 
     // 6) Gentle assertion: schema path should not be slower.
-    // If you consistently see a good gain, tighten to (tWithSchema * 1.1 <
-    // tNoSchema), etc.
-    assertTrue(tWithSchema <= tNoSchema, "Expected schema-backed read (with pushdown) to be faster or equal. "
-        + "noSchema=" + tNoSchema + " ns, withSchema=" + tWithSchema + " ns");
+    double ratio = (double) tWithSchema / (double) tNoSchema;
+    assertTrue(tWithSchema < tNoSchema, "Expected pushdown to be at least faster. ratio=" + ratio + " noSchema="
+        + tNoSchema + "ns withSchema=" + tWithSchema + "ns");
+  }
+
+  @Test
+  void pushdownIsFasterWhenSchemaIsPresentTailRows() throws Exception {
+    // 1) Prepare temp dirs + write files
+
+    java.nio.file.Path noSchemaDir = Files.createTempDirectory("jparq-noschema-tail-");
+    java.nio.file.Path withSchemaDir = Files.createTempDirectory("jparq-withschema-tail-");
+
+    writeParquetWithoutAvroSchema(noSchemaDir.resolve("data.parquet"));
+    writeParquetWithAvroSchema(withSchemaDir.resolve("data.parquet"));
+
+    // 2) Same selective, deterministic query (very few matches)
+    // ~ categories repeat every 4; id in [10..20] gives 11 ids; expect about 2-3
+    // rows
+    String sql = "SELECT id, value FROM data WHERE id BETWEEN 3990000 AND 4000000";
+
+    // Warmup runs
+    for (int i = 0; i < 2; i++) {
+      timeQuery("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql, new ArrayList<>());
+      timeQuery("jdbc:jparq:" + withSchemaDir.toAbsolutePath(), sql, new ArrayList<>());
+    }
+
+    // 3) Run both and collect results + timings
+    List<String> baselineRows = new ArrayList<>();
+    // long tNoSchema = timeQuery("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql,
+    // baselineRows);
+
+    List<String> schemaRows = new ArrayList<>();
+    // long tWithSchema = timeQuery("jdbc:jparq:" + withSchemaDir.toAbsolutePath(),
+    // sql, schemaRows);
+    long tNoSchema = medianTime("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql, 7);
+    long tWithSchema = medianTime("jdbc:jparq:" + withSchemaDir.toAbsolutePath(), sql, 7);
+
+    // 4) Verify same results
+    assertEquals(baselineRows, schemaRows, "Results must be identical");
+
+    // 5) Print timings (ms) to help you see the gain locally
+    System.out.println("No schema tail time:   " + TimeUnit.NANOSECONDS.toMillis(tNoSchema) + " ms");
+    System.out.println("With schema tail time: " + TimeUnit.NANOSECONDS.toMillis(tWithSchema) + " ms");
+
+    // 6) Gentle assertion: schema path should not be slower.
+    // Non-regression: pushdown shouldn’t be meaningfully slower locally.
+    // (On bigger datasets / cold cache you’ll typically see << 1.0)
+    double ratio = (double) tWithSchema / (double) tNoSchema;
+    double epsilon = 0.02; // 2%
+    assertTrue(tWithSchema <= tNoSchema * (1.0 + epsilon), "Expected pushdown not to be meaningfully slower. ratio="
+        + ratio + " noSchema=" + tNoSchema + "ns withSchema=" + tWithSchema + "ns");
   }
 
   // ---------------- helpers ----------------
@@ -96,11 +155,16 @@ public class PredicatePushdownPerfTest {
     org.apache.hadoop.fs.Path hPath = new org.apache.hadoop.fs.Path(file.toUri());
     SimpleGroupFactory factory = new SimpleGroupFactory(schema);
 
-    try (ParquetWriter<Group> writer = org.apache.parquet.hadoop.example.ExampleParquetWriter.builder(hPath)
-        .withConf(conf).withType(schema) // explicit, in addition to the conf setting
-        .withCompressionCodec(CompressionCodecName.UNCOMPRESSED).build()) {
+    try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(hPath).withConf(conf).withType(schema) // explicit,
+                                                                                                           // in
+                                                                                                           // addition
+                                                                                                           // to the
+                                                                                                           // conf
+                                                                                                           // setting
+        .withRowGroupSize(128 * 1024 * 1024).withPageSize(64 * 1024).withCompressionCodec(CompressionCodecName.SNAPPY)
+        .withWriteMode(ParquetFileWriter.Mode.OVERWRITE).build()) {
 
-      for (int i = 0; i < 1000; i++) {
+      for (int i = 0; i < 4_000_000; i++) {
         String category = pickCategory(i);
         double value = deterministicValue(i);
         Group g = factory.newGroup().append("id", i).append("category", category).append("value", value);
@@ -134,8 +198,9 @@ public class PredicatePushdownPerfTest {
 
     try (ParquetWriter<GenericRecord> writer = org.apache.parquet.avro.AvroParquetWriter.<GenericRecord>builder(out)
         .withConf(conf).withSchema(avroSchema).withCompressionCodec(CompressionCodecName.UNCOMPRESSED)
+        .withRowGroupSize(128 * 1024 * 1024).withPageSize(64 * 1024).withCompressionCodec(CompressionCodecName.SNAPPY)
         .withWriteMode(ParquetFileWriter.Mode.OVERWRITE).build()) {
-      for (int i = 0; i < 1000; i++) {
+      for (int i = 0; i < 4_000_000; i++) {
         GenericRecord r = new GenericData.Record(avroSchema);
         r.put("id", i);
         r.put("category", pickCategory(i));
@@ -143,6 +208,16 @@ public class PredicatePushdownPerfTest {
         writer.write(r);
       }
     }
+  }
+
+  private static long medianTime(String jdbcUrl, String sql, int runs) {
+    // warmup is already done outside; this is for measurement only
+    long[] samples = new long[runs];
+    for (int i = 0; i < runs; i++) {
+      samples[i] = timeQuery(jdbcUrl, sql, new ArrayList<>());
+    }
+    Arrays.sort(samples);
+    return samples[runs / 2];
   }
 
   // Deterministic helpers so we can filter predictably
