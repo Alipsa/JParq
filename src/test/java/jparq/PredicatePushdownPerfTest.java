@@ -4,6 +4,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
 import java.nio.file.*;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.*;
@@ -21,6 +24,7 @@ import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.apache.parquet.schema.*;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.JParqDriver;
 import se.alipsa.jparq.JParqSql;
 
 public class PredicatePushdownPerfTest {
@@ -35,21 +39,18 @@ public class PredicatePushdownPerfTest {
     writeParquetWithoutAvroSchema(noSchemaDir.resolve("data.parquet"));
     writeParquetWithAvroSchema(withSchemaDir.resolve("data.parquet"));
 
-    // 2) Same selective, deterministic query (very few matches)
-    // ~ categories repeat every 4; id in [10..20] gives 11 ids; expect about 2-3
-    // rows
-    String sql = "SELECT id, value FROM data WHERE id BETWEEN 2000000 AND 2001000 AND category = 'C'";
+    String sql = "SELECT id, value, category FROM data WHERE id BETWEEN 2000000 AND 2001000 AND category = 'C'";
 
     // Warmup runs
     for (int i = 0; i < 2; i++) {
-      timeQuery("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql, new ArrayList<>());
-      timeQuery("jdbc:jparq:" + withSchemaDir.toAbsolutePath(), sql, new ArrayList<>());
+      timeQuery("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql, new ArrayList<>(), 3);
+      timeQuery("jdbc:jparq:" + withSchemaDir.toAbsolutePath(), sql, new ArrayList<>(), 3);
     }
 
     // 3) Run both and collect results + timings
     List<String> baselineRows = new ArrayList<>();
-    long tNoSchema = medianTime("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql, 7);
-    long tWithSchema = medianTime("jdbc:jparq:" + withSchemaDir.toAbsolutePath(), sql, 7);
+    long tNoSchema = medianTime("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql, 7, 3);
+    long tWithSchema = medianTime("jdbc:jparq:" + withSchemaDir.toAbsolutePath(), sql, 7, 3);
 
     // long tNoSchema = timeQuery("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql,
     // baselineRows);
@@ -88,8 +89,8 @@ public class PredicatePushdownPerfTest {
 
     // Warmup runs
     for (int i = 0; i < 2; i++) {
-      timeQuery("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql, new ArrayList<>());
-      timeQuery("jdbc:jparq:" + withSchemaDir.toAbsolutePath(), sql, new ArrayList<>());
+      timeQuery("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql, new ArrayList<>(), 2);
+      timeQuery("jdbc:jparq:" + withSchemaDir.toAbsolutePath(), sql, new ArrayList<>(), 2);
     }
 
     // 3) Run both and collect results + timings
@@ -100,8 +101,8 @@ public class PredicatePushdownPerfTest {
     List<String> schemaRows = new ArrayList<>();
     // long tWithSchema = timeQuery("jdbc:jparq:" + withSchemaDir.toAbsolutePath(),
     // sql, schemaRows);
-    long tNoSchema = medianTime("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql, 7);
-    long tWithSchema = medianTime("jdbc:jparq:" + withSchemaDir.toAbsolutePath(), sql, 7);
+    long tNoSchema = medianTimePrepared("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql, 7, 2);
+    long tWithSchema = medianTimePrepared("jdbc:jparq:" + withSchemaDir.toAbsolutePath(), sql, 7, 2);
 
     // 4) Verify same results
     assertEquals(baselineRows, schemaRows, "Results must be identical");
@@ -121,12 +122,12 @@ public class PredicatePushdownPerfTest {
 
   // ---------------- helpers ----------------
 
-  private static long timeQuery(String jdbcUrl, String sql, List<String> outRows) {
+  private static long timeQuery(String jdbcUrl, String sql, List<String> outRows, int ncols) {
     long start = System.nanoTime();
     new JParqSql(jdbcUrl).query(sql, rs -> {
       try {
         ResultSetMetaData md = rs.getMetaData();
-        assertEquals(2, md.getColumnCount(), "Expect 2 columns: id, value");
+        assertEquals(ncols, md.getColumnCount(), "Number of columns is wrong");
         while (rs.next()) {
           outRows.add(rs.getInt(1) + ":" + rs.getDouble(2));
         }
@@ -134,6 +135,16 @@ public class PredicatePushdownPerfTest {
         fail(e);
       }
     });
+    return System.nanoTime() - start;
+  }
+
+  private static long timeQueryPrepared(PreparedStatement pstmt, List<String> outRows, int ncols) throws SQLException {
+    long start = System.nanoTime();
+    try (ResultSet rs = pstmt.executeQuery()) {
+      ResultSetMetaData md = rs.getMetaData();
+      assertEquals(ncols, md.getColumnCount(), "Number of columns is wrong");
+      outRows.add(rs.getInt(1) + ":" + rs.getDouble(2));
+    }
     return System.nanoTime() - start;
   }
 
@@ -155,12 +166,7 @@ public class PredicatePushdownPerfTest {
     org.apache.hadoop.fs.Path hPath = new org.apache.hadoop.fs.Path(file.toUri());
     SimpleGroupFactory factory = new SimpleGroupFactory(schema);
 
-    try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(hPath).withConf(conf).withType(schema) // explicit,
-                                                                                                           // in
-                                                                                                           // addition
-                                                                                                           // to the
-                                                                                                           // conf
-                                                                                                           // setting
+    try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(hPath).withConf(conf).withType(schema)
         .withRowGroupSize(128 * 1024 * 1024).withPageSize(64 * 1024).withCompressionCodec(CompressionCodecName.SNAPPY)
         .withWriteMode(ParquetFileWriter.Mode.OVERWRITE).build()) {
 
@@ -210,14 +216,30 @@ public class PredicatePushdownPerfTest {
     }
   }
 
-  private static long medianTime(String jdbcUrl, String sql, int runs) {
+  private static long medianTime(String jdbcUrl, String sql, int runs, int ncols) {
     // warmup is already done outside; this is for measurement only
     long[] samples = new long[runs];
     for (int i = 0; i < runs; i++) {
-      samples[i] = timeQuery(jdbcUrl, sql, new ArrayList<>());
+      samples[i] = timeQuery(jdbcUrl, sql, new ArrayList<>(), ncols);
     }
     Arrays.sort(samples);
     return samples[runs / 2];
+  }
+
+  private static long medianTimePrepared(String jdbcUrl, String sql, int runs, int ncols) {
+    try (Connection conn = new JParqDriver().connect(jdbcUrl, new Properties());
+        PreparedStatement pstmt = conn.prepareStatement(sql)) { // Query planning happens here ONCE
+
+      long[] samples = new long[runs];
+      for (int i = 0; i < runs; i++) {
+        samples[i] = timeQueryPrepared(pstmt, new ArrayList<>(), ncols); // Measure only I/O/reading
+      }
+      Arrays.sort(samples);
+      return samples[runs / 2];
+    } catch (SQLException e) {
+      fail("Failed to execute prepared statment", e);
+    }
+    return -1;
   }
 
   // Deterministic helpers so we can filter predictably

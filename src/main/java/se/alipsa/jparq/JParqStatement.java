@@ -1,7 +1,5 @@
 package se.alipsa.jparq;
 
-import java.io.File;
-import java.io.IOException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -9,19 +7,7 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLWarning;
 import java.sql.Statement;
-import net.sf.jsqlparser.expression.Expression;
-import org.apache.avro.Schema;
-import org.apache.avro.generic.GenericRecord;
 import org.apache.commons.lang3.concurrent.BasicThreadFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.Path;
-import org.apache.parquet.avro.AvroReadSupport;
-import org.apache.parquet.filter2.compat.FilterCompat;
-import org.apache.parquet.hadoop.ParquetReader;
-import se.alipsa.jparq.engine.ParquetFilterBuilder;
-import se.alipsa.jparq.engine.ParquetSchemas;
-import se.alipsa.jparq.engine.ProjectionFields;
-import se.alipsa.jparq.engine.SqlParser;
 
 /** An implementation of the java.sql.Statement interface. */
 @SuppressWarnings({
@@ -43,6 +29,7 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
     this.conn = conn;
   }
 
+  // Used by JParqConnection
   PreparedStatement prepare(String sql) throws SQLException {
     this.currentSql = sql;
     return new JParqPreparedStatement(this, sql);
@@ -60,65 +47,29 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
     return currentRs;
   }
 
+  // New setter required by JParqPreparedStatement to link its ResultSet
+  public void setCurrentRs(JParqResultSet rs) {
+    this.currentRs = rs;
+  }
+
+  /**
+   * Executes the query by delegating the work to a temporary PreparedStatement.
+   * This ensures the query planning logic is centralized in the prepared
+   * statement class.
+   */
   @SuppressWarnings({
       "PMD.CloseResource", "PMD.AvoidCatchingGenericException", "PMD.EmptyCatchBlock"
   })
   @Override
   public ResultSet executeQuery(String sql) throws SQLException {
     this.currentSql = sql;
-    SqlParser.Select select = SqlParser.parseSelect(sql);
-    File file = conn.tableFile(select.table());
-
-    Configuration conf = new Configuration(false);
-    conf.setBoolean("parquet.filter.statistics.enabled", true);
-    conf.setBoolean("parquet.read.filter.columnindex.enabled", true);
-    conf.setBoolean("parquet.filter.dictionary.enabled", true);
-
-    Path path = new Path(file.toURI());
-
-    // Read file Avro schema if present
-    Schema avroSchema = null;
-    try {
-      avroSchema = ParquetSchemas.readAvroSchema(path, conf);
-    } catch (IOException ignore) {
-      // no schema -> no pushdown/projection
+    // Delegation: Create a temporary prepared statement, execute it, and close it.
+    // The JParqPreparedStatement constructor will perform the expensive planning
+    // phase.
+    try (JParqPreparedStatement pstmt = new JParqPreparedStatement(this, sql)) {
+      this.currentRs = (JParqResultSet) pstmt.executeQuery();
+      return currentRs;
     }
-
-    // ---- Requested projection (SELECT columns only) ----
-    if (avroSchema != null) {
-      java.util.Set<String> selectCols = ProjectionFields.fromSelect(select); // null for *
-      if (selectCols != null) { // i.e., not SELECT *
-        Schema requested = ParquetSchemas.requestedSubset(avroSchema, selectCols);
-        if (requested != null) {
-          AvroReadSupport.setRequestedProjection(conf, requested);
-        }
-      }
-    }
-
-    // ---- Filter pushdown + residual ----
-    Expression residual = null;
-    ParquetReader<GenericRecord> reader;
-    try {
-      ParquetReader.Builder<GenericRecord> builder = ParquetReader.<GenericRecord>builder(new AvroReadSupport<>(), path)
-          .withConf(conf);
-
-      if (avroSchema != null && select.where() != null) {
-        var maybePred = ParquetFilterBuilder.build(avroSchema, select.where());
-        if (maybePred.isPresent()) {
-          builder = builder.withFilter(FilterCompat.get(maybePred.get()));
-        }
-        residual = ParquetFilterBuilder.residual(avroSchema, select.where()); // null if fully pushed
-      } else {
-        residual = select.where(); // nothing pushed
-      }
-
-      reader = builder.build();
-    } catch (Exception e) {
-      throw new SQLException("Failed to open parquet file: " + file, e);
-    }
-
-    this.currentRs = new JParqResultSet(reader, select, file.getName(), residual);
-    return currentRs;
   }
 
   // --- Boilerplate / no-ops for read-only driver ---
@@ -286,7 +237,7 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
 
   @Override
   public Connection getConnection() throws SQLException {
-    return null;
+    return conn;
   }
 
   @Override

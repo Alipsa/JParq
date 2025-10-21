@@ -1,5 +1,7 @@
 package se.alipsa.jparq;
 
+import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
 import java.math.BigDecimal;
@@ -23,28 +25,126 @@ import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.Calendar;
+import java.util.Optional;
+import net.sf.jsqlparser.expression.Expression;
+import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.parquet.avro.AvroReadSupport;
+import org.apache.parquet.filter2.compat.FilterCompat;
+import org.apache.parquet.filter2.predicate.FilterPredicate;
+import org.apache.parquet.hadoop.ParquetReader;
+import se.alipsa.jparq.engine.AvroProjections;
+import se.alipsa.jparq.engine.ColumnsUsed;
+import se.alipsa.jparq.engine.ParquetFilterBuilder;
+import se.alipsa.jparq.engine.ParquetSchemas;
+import se.alipsa.jparq.engine.ProjectionFields;
+import se.alipsa.jparq.engine.SqlParser;
 
 /** An implementation of the java.sql.PreparedStatement interface. */
 @SuppressWarnings({
-    "checkstyle:AbbreviationAsWordInName", "checkstyle:OverloadMethodsDeclarationOrder"
+    "checkstyle:AbbreviationAsWordInName", "checkstyle:OverloadMethodsDeclarationOrder",
+    "PMD.AvoidCatchingGenericException"
 })
 class JParqPreparedStatement implements PreparedStatement {
   private final JParqStatement stmt;
-  private final String sql;
 
-  JParqPreparedStatement(JParqStatement stmt, String sql) {
+  // --- Query Plan Fields (calculated in constructor) ---
+  private final SqlParser.Select parsedSelect;
+  private final Configuration conf;
+  private final Schema fileAvro;
+  private final Optional<FilterPredicate> parquetPredicate;
+  private final Expression residualExpression;
+  private final Path path;
+  private final File file;
+
+  JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
     this.stmt = stmt;
-    this.sql = sql;
+
+    // --- QUERY PLANNING PHASE (Expensive CPU Work) ---
+    try {
+      // 1. Parse SQL
+      this.parsedSelect = SqlParser.parseSelect(sql);
+      this.file = stmt.getConn().tableFile(parsedSelect.table());
+
+      // 2. Setup Configuration
+      this.conf = new Configuration(false);
+      conf.setBoolean("parquet.filter.statistics.enabled", true);
+      conf.setBoolean("parquet.read.filter.columnindex.enabled", true);
+      conf.setBoolean("parquet.filter.dictionary.enabled", true);
+      this.path = new Path(file.toURI());
+
+      // 3. Read Schema and Setup Projection/Filter
+      Schema avro;
+      try {
+        avro = ParquetSchemas.readAvroSchema(path, conf);
+      } catch (IOException ignore) {
+        /* No schema -> no pushdown */
+        avro = null;
+      }
+
+      this.fileAvro = avro;
+
+      // 4. Projection Pushdown (SELECT U WHERE columns)
+      if (fileAvro != null) {
+        java.util.Set<String> needed = new java.util.LinkedHashSet<>();
+        java.util.Set<String> selCols = ProjectionFields.fromSelect(parsedSelect);
+        if (selCols != null) {
+          needed.addAll(selCols);
+        }
+        needed.addAll(ColumnsUsed.inWhere(parsedSelect.where()));
+
+        if (!needed.isEmpty()) {
+          Schema avroProjection = AvroProjections.project(fileAvro, needed);
+          AvroReadSupport.setRequestedProjection(conf, avroProjection);
+          AvroReadSupport.setAvroReadSchema(conf, avroProjection);
+        }
+      }
+
+      // 5. Filter Pushdown & Residual Calculation
+      if (fileAvro != null && parsedSelect.where() != null) {
+        this.parquetPredicate = ParquetFilterBuilder.build(fileAvro, parsedSelect.where());
+        this.residualExpression = ParquetFilterBuilder.residual(fileAvro, parsedSelect.where());
+      } else {
+        this.parquetPredicate = Optional.empty();
+        this.residualExpression = parsedSelect.where();
+      }
+
+    } catch (Exception e) {
+      throw new SQLException("Failed to prepare query: " + sql, e);
+    }
   }
 
+  /**
+   * Executes the query using the pre-calculated plan. This method is now lean,
+   * only focusing on I/O (building and reading the ParquetReader).
+   */
+  @SuppressWarnings("PMD.CloseResource")
   @Override
   public ResultSet executeQuery() throws SQLException {
-    return stmt.executeQuery(sql);
-  }
+    ParquetReader<GenericRecord> reader;
+    try {
+      // Setup the reader builder using the pre-calculated configuration and path
+      ParquetReader.Builder<GenericRecord> builder = ParquetReader.<GenericRecord>builder(new AvroReadSupport<>(), path)
+          .withConf(conf);
 
-  @Override
-  public ResultSet executeQuery(String sql) throws SQLException {
-    return stmt.executeQuery(sql);
+      // Apply the pre-calculated filter predicate for row-group skipping
+      if (parquetPredicate.isPresent()) {
+        builder = builder.withFilter(FilterCompat.get(parquetPredicate.get()));
+      }
+
+      reader = builder.build();
+    } catch (Exception e) {
+      throw new SQLException("Failed to open parquet file: " + file, e);
+    }
+
+    // Create the result set, passing the reader, select plan, and residual filter
+    JParqResultSet rs = new JParqResultSet(reader, parsedSelect, file.getName(), residualExpression);
+
+    // Set the result set on the parent statement
+    stmt.setCurrentRs(rs);
+    return rs;
   }
 
   @Override
@@ -53,58 +153,15 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   @Override
-  public int executeUpdate(String sql) throws SQLException {
-    throw new SQLFeatureNotSupportedException();
-  }
-
-  @Override
-  public int executeUpdate(String sql, int autoGeneratedKeys) throws SQLException {
-    throw new SQLFeatureNotSupportedException();
-  }
-
-  @Override
-  public int executeUpdate(String sql, int[] columnIndexes) throws SQLException {
-    throw new SQLFeatureNotSupportedException();
-  }
-
-  @Override
-  public int executeUpdate(String sql, String[] columnNames) throws SQLException {
-    throw new SQLFeatureNotSupportedException();
-  }
-
-  @Override
   public boolean execute() throws SQLException {
-    stmt.executeQuery(sql);
-    return true;
-  }
-
-  @Override
-  public boolean execute(String sql) throws SQLException {
-    stmt.executeQuery(sql);
-    return true;
-  }
-
-  @Override
-  public boolean execute(String sql, int autoGeneratedKeys) throws SQLException {
-    stmt.executeQuery(sql);
-    return true;
-  }
-
-  @Override
-  public boolean execute(String sql, int[] columnIndexes) throws SQLException {
-    stmt.executeQuery(sql);
-    return true;
-  }
-
-  @Override
-  public boolean execute(String sql, String[] columnNames) throws SQLException {
-    stmt.executeQuery(sql);
+    executeQuery();
     return true;
   }
 
   @Override
   public void close() {
-    // Do nothing
+    // No-op for now, as PreparedStatement cleanup is minimal in this read-only
+    // context.
   }
 
   @Override
@@ -112,38 +169,180 @@ class JParqPreparedStatement implements PreparedStatement {
     return stmt.getConnection();
   }
 
-  // Parameter setters are no-ops since we don't bind values
+  // --- Parameter Setters (No-ops for read-only, non-parameterized driver) ---
   @Override
   public void setString(int parameterIndex, String x) {
-    // Do nothing
   }
-
   @Override
   public void setInt(int parameterIndex, int x) {
-    // Do nothing
   }
-
   @Override
   public void setObject(int parameterIndex, Object x) {
-    // Do nothing
   }
-
   @Override
   public void setObject(int parameterIndex, Object x, int targetSqlType) {
-    // Do nothing
   }
-
   @Override
   public void setObject(int parameterIndex, Object x, int targetSqlType, int scaleOrLength) {
-    // Do nothing
+  }
+  @Override
+  public void clearParameters() {
+  }
+  @Override
+  public void setNull(int parameterIndex, int sqlType) {
+  }
+  @Override
+  public void setNull(int parameterIndex, int sqlType, String typeName) {
+  }
+  @Override
+  public void setBoolean(int parameterIndex, boolean x) {
+  }
+  @Override
+  public void setByte(int parameterIndex, byte x) {
+  }
+  @Override
+  public void setShort(int parameterIndex, short x) {
+  }
+  @Override
+  public void setLong(int parameterIndex, long x) {
+  }
+  @Override
+  public void setFloat(int parameterIndex, float x) {
+  }
+  @Override
+  public void setDouble(int parameterIndex, double x) {
+  }
+  @Override
+  public void setBigDecimal(int parameterIndex, BigDecimal x) {
+  }
+  @Override
+  public void setBytes(int parameterIndex, byte[] x) {
+  }
+  @Override
+  public void setDate(int parameterIndex, Date x) {
+  }
+  @Override
+  public void setDate(int parameterIndex, Date x, Calendar cal) {
+  }
+  @Override
+  public void setTime(int parameterIndex, Time x) {
+  }
+  @Override
+  public void setTime(int parameterIndex, Time x, Calendar cal) {
+  }
+  @Override
+  public void setTimestamp(int parameterIndex, Timestamp x) {
+  }
+  @Override
+  public void setTimestamp(int parameterIndex, Timestamp x, Calendar cal) {
+  }
+  @Override
+  public void setAsciiStream(int parameterIndex, InputStream x, int length) {
+  }
+  @Override
+  public void setAsciiStream(int parameterIndex, InputStream x, long length) {
+  }
+  @Override
+  public void setAsciiStream(int parameterIndex, InputStream x) {
+  }
+  @SuppressWarnings("deprecation")
+  @Override
+  public void setUnicodeStream(int parameterIndex, InputStream x, int length) {
+  }
+  @Override
+  public void setBinaryStream(int parameterIndex, InputStream x, int length) {
+  }
+  @Override
+  public void setBinaryStream(int parameterIndex, InputStream x, long length) {
+  }
+  @Override
+  public void setBinaryStream(int parameterIndex, InputStream x) {
+  }
+  @Override
+  public void setCharacterStream(int parameterIndex, Reader reader, int length) {
+  }
+  @Override
+  public void setCharacterStream(int parameterIndex, Reader reader, long length) {
+  }
+  @Override
+  public void setCharacterStream(int parameterIndex, Reader reader) {
+  }
+  @Override
+  public void setRef(int parameterIndex, Ref x) {
+  }
+  @Override
+  public void setBlob(int parameterIndex, Blob x) {
+  }
+  @Override
+  public void setBlob(int parameterIndex, InputStream inputStream, long length) {
+  }
+  @Override
+  public void setBlob(int parameterIndex, InputStream inputStream) {
+  }
+  @Override
+  public void setClob(int parameterIndex, Clob x) {
+  }
+  @Override
+  public void setClob(int parameterIndex, Reader reader, long length) {
+  }
+  @Override
+  public void setClob(int parameterIndex, Reader reader) {
+  }
+  @Override
+  public void setArray(int parameterIndex, Array x) {
+  }
+  @Override
+  public void setURL(int parameterIndex, URL x) {
+  }
+  @Override
+  public void setRowId(int parameterIndex, RowId x) {
+  }
+  @Override
+  public void setNString(int parameterIndex, String value) {
+  }
+  @Override
+  public void setNCharacterStream(int parameterIndex, Reader value, long length) {
+  }
+  @Override
+  public void setNCharacterStream(int parameterIndex, Reader value) {
+  }
+  @Override
+  public void setNClob(int parameterIndex, NClob value) {
+  }
+  @Override
+  public void setNClob(int parameterIndex, Reader reader, long length) {
+  }
+  @Override
+  public void setNClob(int parameterIndex, Reader reader) {
+  }
+  @Override
+  public void setSQLXML(int parameterIndex, SQLXML xmlObject) {
+  }
+
+  // --- Batching methods (Unsupported) ---
+
+  @Override
+  public void addBatch() throws SQLException {
+    throw new SQLFeatureNotSupportedException("Batch operations are not supported by this read-only driver.");
   }
 
   @Override
-  public void clearParameters() {
-    // Do nothing
+  public void addBatch(String sql) throws SQLException {
+    throw new SQLFeatureNotSupportedException("Batch operations are not supported by this read-only driver.");
   }
 
-  // Many other methods omitted or trivial since it's read-only
+  @Override
+  public void clearBatch() throws SQLException {
+    throw new SQLFeatureNotSupportedException("Batch operations are not supported by this read-only driver.");
+  }
+
+  @Override
+  public int[] executeBatch() throws SQLException {
+    throw new SQLFeatureNotSupportedException("Batch operations are not supported by this read-only driver.");
+  }
+
+  // --- Boilerplate (Standard PreparedStatement methods) ---
+
   @Override
   public ResultSet getResultSet() {
     return stmt.getResultSet();
@@ -174,368 +373,135 @@ class JParqPreparedStatement implements PreparedStatement {
     return false;
   }
 
-  // Unused PreparedStatement-specific methods (batch, meta, etc.)
+  // Unused PreparedStatement-specific methods (meta, etc.)
   @Override
   public ResultSetMetaData getMetaData() {
     return null;
   }
-
   @Override
   public ParameterMetaData getParameterMetaData() {
     return null;
   }
-
   @Override
-  public void setNull(int parameterIndex, int sqlType) {
-    // Do nothing
+  public ResultSet executeQuery(String sql) throws SQLException {
+    throw new SQLFeatureNotSupportedException(
+        "A PreparedStatement cannot execute a new query string. Use the no-arg executeQuery().");
   }
-
   @Override
-  public void setNull(int parameterIndex, int sqlType, String typeName) {
-    // Do nothing
+  public int executeUpdate(String sql) throws SQLException {
+    throw new SQLFeatureNotSupportedException();
   }
-
   @Override
-  public void setBoolean(int parameterIndex, boolean x) {
-    // Do nothing
+  public int executeUpdate(String sql, int autoGeneratedKeys) throws SQLException {
+    throw new SQLFeatureNotSupportedException();
   }
-
   @Override
-  public void setByte(int parameterIndex, byte x) {
-    // Do nothing
+  public int executeUpdate(String sql, int[] columnIndexes) throws SQLException {
+    throw new SQLFeatureNotSupportedException();
   }
-
   @Override
-  public void setShort(int parameterIndex, short x) {
-    // Do nothing
+  public int executeUpdate(String sql, String[] columnNames) throws SQLException {
+    throw new SQLFeatureNotSupportedException();
   }
-
   @Override
-  public void setLong(int parameterIndex, long x) {
-    // Do nothing
+  public boolean execute(String sql) throws SQLException {
+    throw new SQLFeatureNotSupportedException();
   }
-
   @Override
-  public void setFloat(int parameterIndex, float x) {
-    // Do nothing
+  public boolean execute(String sql, int autoGeneratedKeys) throws SQLException {
+    throw new SQLFeatureNotSupportedException();
   }
-
   @Override
-  public void setDouble(int parameterIndex, double x) {
-    // Do nothing
+  public boolean execute(String sql, int[] columnIndexes) throws SQLException {
+    throw new SQLFeatureNotSupportedException();
   }
-
   @Override
-  public void setBigDecimal(int parameterIndex, BigDecimal x) {
-    // Do nothing
+  public boolean execute(String sql, String[] columnNames) throws SQLException {
+    throw new SQLFeatureNotSupportedException();
   }
-
-  @Override
-  public void setBytes(int parameterIndex, byte[] x) {
-    // Do nothing
-  }
-
-  @Override
-  public void setDate(int parameterIndex, Date x) {
-    // Do nothing
-  }
-
-  @Override
-  public void setDate(int parameterIndex, Date x, Calendar cal) {
-    // Do nothing
-  }
-
-  @Override
-  public void setTime(int parameterIndex, Time x) {
-    // Do nothing
-  }
-
-  @Override
-  public void setTime(int parameterIndex, Time x, Calendar cal) {
-    // Do nothing
-  }
-
-  @Override
-  public void setTimestamp(int parameterIndex, Timestamp x) {
-    // Do nothing
-  }
-
-  @Override
-  public void setTimestamp(int parameterIndex, Timestamp x, Calendar cal) {
-    // Do nothing
-  }
-
-  @Override
-  public void setAsciiStream(int parameterIndex, InputStream x, int length) {
-    // Do nothing
-  }
-
-  @Override
-  public void setAsciiStream(int parameterIndex, InputStream x, long length) {
-    // Do nothing
-  }
-
-  @Override
-  public void setAsciiStream(int parameterIndex, InputStream x) {
-    // Do nothing
-  }
-
-  @SuppressWarnings("deprecation")
-  @Override
-  public void setUnicodeStream(int parameterIndex, InputStream x, int length) {
-    // Do nothing
-  }
-
-  @Override
-  public void setBinaryStream(int parameterIndex, InputStream x, int length) {
-    // Do nothing
-  }
-
-  @Override
-  public void setBinaryStream(int parameterIndex, InputStream x, long length) {
-    // Do nothing
-  }
-
-  @Override
-  public void setBinaryStream(int parameterIndex, InputStream x) {
-    // Do nothing
-  }
-
-  @Override
-  public void addBatch() {
-    // Do nothing
-  }
-
-  @Override
-  public void addBatch(String sql) {
-    // Do nothing
-  }
-
-  @Override
-  public void setCharacterStream(int parameterIndex, Reader reader, int length) {
-    // Do nothing
-  }
-
-  @Override
-  public void setCharacterStream(int parameterIndex, Reader reader, long length) {
-    // Do nothing
-  }
-
-  @Override
-  public void setCharacterStream(int parameterIndex, Reader reader) {
-    // Do nothing
-  }
-
-  @Override
-  public void setRef(int parameterIndex, Ref x) {
-    // Do nothing
-  }
-
-  @Override
-  public void setBlob(int parameterIndex, Blob x) {
-    // Do nothing
-  }
-
-  @Override
-  public void setBlob(int parameterIndex, InputStream inputStream, long length) {
-    // Do nothing
-  }
-
-  @Override
-  public void setBlob(int parameterIndex, InputStream inputStream) {
-    // Do nothing
-  }
-
-  @Override
-  public void setClob(int parameterIndex, Clob x) {
-    // Do nothing
-  }
-
-  @Override
-  public void setClob(int parameterIndex, Reader reader, long length) {
-    // Do nothing
-  }
-
-  @Override
-  public void setClob(int parameterIndex, Reader reader) {
-    // Do nothing
-  }
-
-  @Override
-  public void setArray(int parameterIndex, Array x) {
-    // Do nothing
-  }
-
-  @Override
-  public void setURL(int parameterIndex, URL x) {
-    // Do nothing
-  }
-
-  @Override
-  public void setRowId(int parameterIndex, RowId x) {
-    // Do nothing
-  }
-
-  @Override
-  public void setNString(int parameterIndex, String value) {
-    // Do nothing
-  }
-
-  @Override
-  public void setNCharacterStream(int parameterIndex, Reader value, long length) {
-    // Do nothing
-  }
-
-  @Override
-  public void setNCharacterStream(int parameterIndex, Reader value) {
-    // Do nothing
-  }
-
-  @Override
-  public void setNClob(int parameterIndex, NClob value) {
-    // Do nothing
-  }
-
-  @Override
-  public void setNClob(int parameterIndex, Reader reader, long length) {
-    // Do nothing
-  }
-
-  @Override
-  public void setNClob(int parameterIndex, Reader reader) {
-    // Do nothing
-  }
-
-  @Override
-  public void setSQLXML(int parameterIndex, SQLXML xmlObject) {
-    // Do nothing
-  }
-
   @Override
   public int getMaxFieldSize() {
     return 0;
   }
-
   @Override
   public void setMaxFieldSize(int max) {
-    // Do nothing
   }
-
   @Override
   public int getMaxRows() {
     return 0;
   }
-
   @Override
   public void setMaxRows(int max) {
-    // Do nothing
   }
-
   @Override
   public void setEscapeProcessing(boolean enable) {
-    // Do nothing
   }
-
   @Override
   public int getQueryTimeout() {
     return 0;
   }
-
   @Override
   public void setQueryTimeout(int seconds) {
-    // Do nothing
   }
-
   @Override
   public void cancel() {
-    // Do nothing
   }
-
   @Override
   public SQLWarning getWarnings() {
     return null;
   }
-
   @Override
   public void clearWarnings() {
-    // Do nothing
   }
-
   @Override
   public void setCursorName(String name) {
-    // Do nothing
   }
-
   @Override
   public int getUpdateCount() {
     return 0;
   }
-
   @Override
   public boolean getMoreResults() {
     return false;
   }
-
   @Override
   public boolean getMoreResults(int current) {
     return false;
   }
-
   @Override
   public void setFetchDirection(int direction) {
-    // Do nothing
   }
-
   @Override
   public int getFetchDirection() {
     return ResultSet.FETCH_FORWARD;
   }
-
   @Override
   public void setFetchSize(int rows) {
-    // Do nothing
   }
-
   @Override
   public int getFetchSize() {
     return 0;
   }
-
   @Override
   public int getResultSetConcurrency() {
     return ResultSet.CONCUR_READ_ONLY;
   }
-
   @Override
   public int getResultSetType() {
     return ResultSet.TYPE_FORWARD_ONLY;
   }
-
-  @Override
-  public void clearBatch() {
-    // Do nothing
-  }
-
-  @Override
-  public int[] executeBatch() {
-    return new int[0];
-  }
-
   @Override
   public ResultSet getGeneratedKeys() {
     return null;
   }
-
   @Override
   public int getResultSetHoldability() {
     return 0;
   }
-
   @Override
   public <T> T unwrap(Class<T> iface) {
     return null;
   }
-
   @Override
   public boolean isWrapperFor(Class<?> iface) {
     return false;
