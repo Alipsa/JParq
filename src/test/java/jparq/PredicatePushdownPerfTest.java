@@ -52,12 +52,7 @@ public class PredicatePushdownPerfTest {
     long tNoSchema = medianTime("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql, 7, 3);
     long tWithSchema = medianTime("jdbc:jparq:" + withSchemaDir.toAbsolutePath(), sql, 7, 3);
 
-    // long tNoSchema = timeQuery("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql,
-    // baselineRows);
-
     List<String> schemaRows = new ArrayList<>();
-    // long tWithSchema = timeQuery("jdbc:jparq:" + withSchemaDir.toAbsolutePath(),
-    // sql, schemaRows);
 
     // 4) Verify same results
     assertEquals(baselineRows, schemaRows, "Results must be identical");
@@ -95,12 +90,8 @@ public class PredicatePushdownPerfTest {
 
     // 3) Run both and collect results + timings
     List<String> baselineRows = new ArrayList<>();
-    // long tNoSchema = timeQuery("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql,
-    // baselineRows);
 
     List<String> schemaRows = new ArrayList<>();
-    // long tWithSchema = timeQuery("jdbc:jparq:" + withSchemaDir.toAbsolutePath(),
-    // sql, schemaRows);
     long tNoSchema = medianTimePrepared("jdbc:jparq:" + noSchemaDir.toAbsolutePath(), sql, 7, 2);
     long tWithSchema = medianTimePrepared("jdbc:jparq:" + withSchemaDir.toAbsolutePath(), sql, 7, 2);
 
@@ -167,7 +158,7 @@ public class PredicatePushdownPerfTest {
     SimpleGroupFactory factory = new SimpleGroupFactory(schema);
 
     try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(hPath).withConf(conf).withType(schema)
-        .withRowGroupSize(128 * 1024 * 1024).withPageSize(64 * 1024).withCompressionCodec(CompressionCodecName.SNAPPY)
+        .withRowGroupSize(128L * 1024 * 1024).withPageSize(64 * 1024).withCompressionCodec(CompressionCodecName.SNAPPY)
         .withWriteMode(ParquetFileWriter.Mode.OVERWRITE).build()) {
 
       for (int i = 0; i < 4_000_000; i++) {
@@ -204,7 +195,7 @@ public class PredicatePushdownPerfTest {
 
     try (ParquetWriter<GenericRecord> writer = org.apache.parquet.avro.AvroParquetWriter.<GenericRecord>builder(out)
         .withConf(conf).withSchema(avroSchema).withCompressionCodec(CompressionCodecName.UNCOMPRESSED)
-        .withRowGroupSize(128 * 1024 * 1024).withPageSize(64 * 1024).withCompressionCodec(CompressionCodecName.SNAPPY)
+        .withRowGroupSize(128L * 1024 * 1024).withPageSize(64 * 1024).withCompressionCodec(CompressionCodecName.SNAPPY)
         .withWriteMode(ParquetFileWriter.Mode.OVERWRITE).build()) {
       for (int i = 0; i < 4_000_000; i++) {
         GenericRecord r = new GenericData.Record(avroSchema);

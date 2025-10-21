@@ -92,7 +92,7 @@ public final class ExpressionEvaluator {
     if (expr instanceof IsNullExpression isNull) {
       Operand op = operand(isNull.getLeftExpression(), rec);
       boolean isNullVal = (op.value == null);
-      return isNull.isNot() ? !isNullVal : isNullVal;
+      return isNull.isNot() != isNullVal;
     }
     if (expr instanceof LikeExpression like) {
       Operand leftOperand = operand(like.getLeftExpression(), rec);
@@ -103,12 +103,11 @@ public final class ExpressionEvaluator {
         return false;
       }
 
-      // There is no clean replacement for deprecated methods in 5.3
-      boolean caseInsensitive = "ILIKE".equalsIgnoreCase(like.getStringExpression());
-      if (!caseInsensitive) {
-        // present in 5.3, but deprecated
-        caseInsensitive = like.isCaseInsensitive();
-      }
+      // FIX: Use the non-deprecated getLikeKeyWord().toString() to determine
+      // case-insensitivity
+      // for JSQLParser 5.3, replacing the deprecated getStringExpression() and
+      // isCaseInsensitive().
+      boolean caseInsensitive = "ILIKE".equalsIgnoreCase(like.getLikeKeyWord().toString());
 
       boolean matches = likeMatch(left, pat, caseInsensitive);
       return like.isNot() != matches;
@@ -132,7 +131,7 @@ public final class ExpressionEvaluator {
       int cmpLo = typedCompare(curVal, lowVal);
       int cmpHi = typedCompare(curVal, highVal);
       boolean in = (cmpLo >= 0 && cmpHi <= 0);
-      return between.isNot() ? !in : in;
+      return between.isNot() != in;
     }
     if (expr instanceof InExpression in) {
       Operand left = operand(in.getLeftExpression(), rec);
@@ -151,7 +150,7 @@ public final class ExpressionEvaluator {
             break;
           }
         }
-        return in.isNot() ? !found : found;
+        return in.isNot() != found;
       }
     }
 
@@ -281,20 +280,7 @@ public final class ExpressionEvaluator {
     }
 
     try {
-      if (leftVal instanceof Number && rightVal instanceof Number) {
-        return new BigDecimal(leftVal.toString()).compareTo(new BigDecimal(rightVal.toString()));
-      }
-      if (leftVal instanceof Boolean && rightVal instanceof Boolean) {
-        return Boolean.compare((Boolean) leftVal, (Boolean) rightVal);
-      }
-      if (leftVal instanceof Timestamp && rightVal instanceof Timestamp) {
-        return Long.compare(((Timestamp) leftVal).getTime(), ((Timestamp) rightVal).getTime());
-      }
-      if (leftVal instanceof Date && rightVal instanceof Date) {
-        return Long.compare(((Date) leftVal).getTime(), ((Date) rightVal).getTime());
-      }
-      // fallback: string compare
-      return leftVal.toString().compareTo(rightVal.toString());
+      return typedCompare(leftVal, rightVal);
     } catch (Exception e) {
       return -1;
     }

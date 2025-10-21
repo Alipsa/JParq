@@ -148,14 +148,9 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   @Override
-  public int executeUpdate() throws SQLException {
-    throw new SQLFeatureNotSupportedException();
-  }
-
-  @Override
-  public boolean execute() throws SQLException {
-    executeQuery();
-    return true;
+  public ResultSet executeQuery(String sql) throws SQLException {
+    throw new SQLFeatureNotSupportedException(
+        "A PreparedStatement cannot execute a new query string. Use the no-arg executeQuery().");
   }
 
   @Override
@@ -383,9 +378,8 @@ class JParqPreparedStatement implements PreparedStatement {
     return null;
   }
   @Override
-  public ResultSet executeQuery(String sql) throws SQLException {
-    throw new SQLFeatureNotSupportedException(
-        "A PreparedStatement cannot execute a new query string. Use the no-arg executeQuery().");
+  public int executeUpdate() throws SQLException {
+    throw new SQLFeatureNotSupportedException();
   }
   @Override
   public int executeUpdate(String sql) throws SQLException {
@@ -403,6 +397,13 @@ class JParqPreparedStatement implements PreparedStatement {
   public int executeUpdate(String sql, String[] columnNames) throws SQLException {
     throw new SQLFeatureNotSupportedException();
   }
+
+  @Override
+  public boolean execute() throws SQLException {
+    executeQuery();
+    return true;
+  }
+
   @Override
   public boolean execute(String sql) throws SQLException {
     throw new SQLFeatureNotSupportedException();
