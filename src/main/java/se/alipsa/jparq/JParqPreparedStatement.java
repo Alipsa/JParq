@@ -25,6 +25,7 @@ import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.Calendar;
+import java.util.List;
 import java.util.Optional;
 import net.sf.jsqlparser.expression.Expression;
 import org.apache.avro.Schema;
@@ -125,11 +126,9 @@ class JParqPreparedStatement implements PreparedStatement {
   public ResultSet executeQuery() throws SQLException {
     ParquetReader<GenericRecord> reader;
     try {
-      // Setup the reader builder using the pre-calculated configuration and path
       ParquetReader.Builder<GenericRecord> builder = ParquetReader.<GenericRecord>builder(new AvroReadSupport<>(), path)
           .withConf(conf);
 
-      // Apply the pre-calculated filter predicate for row-group skipping
       if (parquetPredicate.isPresent()) {
         builder = builder.withFilter(FilterCompat.get(parquetPredicate.get()));
       }
@@ -139,10 +138,15 @@ class JParqPreparedStatement implements PreparedStatement {
       throw new SQLException("Failed to open parquet file: " + file, e);
     }
 
-    // Create the result set, passing the reader, select plan, and residual filter
-    JParqResultSet rs = new JParqResultSet(reader, parsedSelect, file.getName(), residualExpression);
+    // Derive label/physical lists from the parsed SELECT
+    // Convention from SqlParser: labels() empty => SELECT *
+    final List<String> labels = parsedSelect.labels().isEmpty() ? null : parsedSelect.labels();
+    final List<String> physical = parsedSelect.labels().isEmpty() ? null : parsedSelect.columnNames();
 
-    // Set the result set on the parent statement
+    // Create the result set, passing reader, select plan, residual filter,
+    // plus projection labels and physical names (for metadata & value lookups)
+    JParqResultSet rs = new JParqResultSet(reader, parsedSelect, file.getName(), residualExpression, labels, physical);
+
     stmt.setCurrentRs(rs);
     return rs;
   }

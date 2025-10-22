@@ -1,50 +1,53 @@
 package se.alipsa.jparq;
 
-import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
 import java.sql.Types;
 import java.util.List;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
+import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 
 /** An implementation of the java.sql.ResultSetMetaData interface. */
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
-public class JParqResultSetMetaData implements ResultSetMetaData {
+public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
 
   private final Schema schema; // may be null if empty file
-  private final List<String> columns;
+  private final List<String> labels; // projection labels (aliases if present)
+  private final List<String> physicalNames; // underlying physical column names (null for computed)
   private final String tableName;
 
-  /**
-   * Constructor for JParqResultSetMetaData.
-   *
-   * @param schema
-   *          The avro schema of the result set, may be null if the result set is
-   *          empty
-   * @param columns
-   *          list of column names in order
-   * @param tableName
-   *          the name of the table
-   */
+  /** Back-compat ctor: use labels as both label and "physical" (old behavior). */
   public JParqResultSetMetaData(Schema schema, List<String> columns, String tableName) {
+    this(schema, columns, /* physicalNames = */ null, tableName);
+  }
+
+  /** New ctor: labels (aliases) + physical names (null entries allowed). */
+  public JParqResultSetMetaData(Schema schema, List<String> labels, List<String> physicalNames, String tableName) {
     this.schema = schema;
-    this.columns = columns;
+    this.labels = labels;
+    this.physicalNames = physicalNames;
     this.tableName = tableName;
   }
 
   @Override
   public int getColumnCount() {
-    return columns.size();
+    return labels.size();
   }
 
   @Override
   public String getColumnLabel(int column) {
-    return columns.get(column - 1);
+    return labels.get(column - 1);
   }
 
   @Override
   public String getColumnName(int column) {
-    return getColumnLabel(column);
+    int i = column - 1;
+    if (physicalNames != null && i < physicalNames.size()) {
+      String phys = physicalNames.get(i);
+      if (phys != null && !phys.isBlank()) {
+        return phys; // prefer physical name when known
+      }
+    }
+    return getColumnLabel(column); // fallback
   }
 
   @Override
@@ -57,7 +60,15 @@ public class JParqResultSetMetaData implements ResultSetMetaData {
     if (schema == null) {
       return Types.OTHER;
     }
-    Schema.Field f = schema.getField(getColumnLabel(column));
+    // Prefer physical name for schema lookup; fall back to label if needed
+    String name = getColumnName(column);
+    Schema.Field f = schema.getField(name);
+    if (f == null) {
+      f = schema.getField(getColumnLabel(column));
+    }
+    if (f == null) {
+      return Types.OTHER;
+    }
     Schema s = f.schema().getType() == Schema.Type.UNION
         ? f.schema().getTypes().stream().filter(t -> t.getType() != Schema.Type.NULL).findFirst().orElse(f.schema())
         : f.schema();
@@ -82,88 +93,7 @@ public class JParqResultSetMetaData implements ResultSetMetaData {
   }
 
   @Override
-  public int getPrecision(int column) {
-    return 0;
-  }
-
-  @Override
-  public int getScale(int column) {
-    return 0;
-  }
-
-  @Override
   public int isNullable(int column) {
     return columnNullableUnknown;
-  }
-
-  // Defaults
-  @Override
-  public String getCatalogName(int column) {
-    return "";
-  }
-
-  @Override
-  public String getSchemaName(int column) {
-    return "";
-  }
-
-  @Override
-  public boolean isAutoIncrement(int column) {
-    return false;
-  }
-
-  @Override
-  public boolean isCaseSensitive(int column) {
-    return true;
-  }
-
-  @Override
-  public boolean isSearchable(int column) {
-    return true;
-  }
-
-  @Override
-  public boolean isCurrency(int column) {
-    return false;
-  }
-
-  @Override
-  public boolean isSigned(int column) {
-    return true;
-  }
-
-  @Override
-  public int getColumnDisplaySize(int column) {
-    return 0;
-  }
-
-  @Override
-  public boolean isReadOnly(int column) {
-    return true;
-  }
-
-  @Override
-  public boolean isWritable(int column) {
-    return false;
-  }
-
-  @Override
-  public boolean isDefinitelyWritable(int column) {
-    return false;
-  }
-
-  @Override
-  public String getColumnClassName(int column) {
-    return Object.class.getName();
-  }
-
-  @Override
-  public <T> T unwrap(Class<T> iface) throws SQLException {
-    return null;
-  }
-
-  @Override
-  public boolean isWrapperFor(Class<?> iface) throws SQLException {
-    return false;
   }
 }

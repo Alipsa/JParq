@@ -13,7 +13,6 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
@@ -33,9 +32,8 @@ public class AliasTest {
     jparqSql = new JParqSql("jdbc:jparq:" + dir.toAbsolutePath());
   }
 
-  @Disabled // Not yet implemented
   @Test
-  void testAlias() {
+  void testColumnAlias() {
     jparqSql.query("SELECT model as type, mpg as miles_per_gallon FROM mtcars", rs -> {
       List<String> seen = new ArrayList<>();
       try {
@@ -52,6 +50,56 @@ public class AliasTest {
         }
 
         assertEquals(32, rows, "Expected 32 rows");
+      } catch (SQLException e) {
+        System.err.println(String.join("\n", seen));
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void testColumnAliasInOrderBy() {
+    jparqSql.query("SELECT mpg AS miles_per_gallon, model FROM mtcars ORDER BY miles_per_gallon DESC", rs -> {
+      List<String> seen = new ArrayList<>();
+      try {
+        ResultSetMetaData md = rs.getMetaData();
+        assertEquals(2, md.getColumnCount(), "Expected 2 columns");
+
+        int rows = 0;
+
+        while (rs.next()) {
+          String model = rs.getString("model");
+          double mpg = rs.getDouble("miles_per_gallon");
+          seen.add(model + " " + mpg);
+          rows++;
+        }
+
+        assertEquals(32, rows, "Expected 32 rows");
+      } catch (SQLException e) {
+        System.err.println(String.join("\n", seen));
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void testTableAlias() {
+    jparqSql.query("SELECT t.model, t.mpg FROM mtcars t WHERE t.mpg > 25 ORDER BY t.mpg DESC LIMIT 3", rs -> {
+      List<String> seen = new ArrayList<>();
+      try {
+        ResultSetMetaData md = rs.getMetaData();
+        assertEquals(2, md.getColumnCount(), "Expected 2 columns");
+
+        int rows = 0;
+
+        while (rs.next()) {
+          String model = rs.getString("model");
+          double mpg = rs.getDouble("mpg");
+          seen.add(model + " " + mpg);
+          rows++;
+        }
+
+        assertEquals(3, rows, "Expected 3 rows");
       } catch (SQLException e) {
         System.err.println(String.join("\n", seen));
         fail(e);

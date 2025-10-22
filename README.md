@@ -73,6 +73,7 @@ Connection conn = DriverManager.getConnection(jdbcUrl)
 The following SQL statements are supported:
 - `SELECT` with support for
   - `*` to select all columns
+  - alias support for columns and tables
 - `SELECT` statements with `WHERE` supporting:
   - `BETWEEN`, `IN`, `LIKE` operators 
   - `AND`, `OR`, `NOT` logical operators 
@@ -82,7 +83,6 @@ The following SQL statements are supported:
 
 ### To be implemented in the near future
 - `DISTINCT` support in `SELECT` clause
-- `ALIAS` support for columns and tables
 - Functions support
   - Date functions
   - Numeric functions

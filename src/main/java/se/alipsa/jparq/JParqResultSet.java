@@ -10,20 +10,21 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import net.sf.jsqlparser.expression.Expression;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.QueryProcessor;
-import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.model.ResultSetAdapter;
 
 /** An implementation of the java.sql.ResultSet interface. */
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqResultSet extends ResultSetAdapter {
 
+  private final List<String> physicalColumnOrder; // may be null
   private final QueryProcessor qp;
   private GenericRecord current;
-  private final List<String> columnOrder = new ArrayList<>();
+  private final List<String> columnOrder;
   private final String tableName;
   private boolean closed = false;
   private int rowNum = 0;
@@ -41,19 +42,25 @@ public class JParqResultSet extends ResultSetAdapter {
    * @throws SQLException
    *           if reading fails
    */
-  public JParqResultSet(ParquetReader<GenericRecord> reader, SqlParser.Select select, String tableName,
-      net.sf.jsqlparser.expression.Expression residual) throws SQLException {
+  public JParqResultSet(ParquetReader<GenericRecord> reader, se.alipsa.jparq.engine.SqlParser.Select select,
+      String tableName, Expression residual, List<String> columnOrder, // projection labels (aliases) or null
+      List<String> physicalColumnOrder) // physical names (may be null)
+      throws SQLException {
     this.tableName = tableName;
+    // Always use a mutable list to avoid UOE from List.of(...)
+    this.columnOrder = (columnOrder != null ? new ArrayList<>(columnOrder) : new ArrayList<>());
+    // physical names aren’t mutated; store as-is (null allowed)
+    this.physicalColumnOrder = physicalColumnOrder;
+
     try {
       GenericRecord first = reader.read();
       if (first == null) {
-        // No rows produced by the reader (after pushdown). Still expose metadata
-        // based on the SELECT list when it is explicit (not "*").
+        // No rows emitted after pushdown; still build metadata if explicit projection
         List<String> req = select.columns(); // e.g., ["id","value"] or ["*"]
         if (!req.isEmpty() && !req.contains("*")) {
-          columnOrder.addAll(req);
+          this.columnOrder.addAll(req); // mutable, safe
         }
-        this.qp = new QueryProcessor(reader, columnOrder, /* where */ residual, select.limit(), null, 0);
+        this.qp = new QueryProcessor(reader, this.columnOrder, /* where */ residual, select.limit(), null, 0);
         this.current = null;
         this.rowNum = 0;
         return;
@@ -61,11 +68,14 @@ public class JParqResultSet extends ResultSetAdapter {
 
       var schema = first.getSchema();
       var evaluator = new se.alipsa.jparq.engine.ExpressionEvaluator(schema);
-
       boolean match = (residual == null) || evaluator.eval(residual, first);
 
+      // Compute physical projection from schema; only add if we don’t already have
+      // labels
       List<String> proj = QueryProcessor.computeProjection(select.columns(), schema);
-      columnOrder.addAll(proj);
+      if (this.columnOrder.isEmpty()) {
+        this.columnOrder.addAll(proj); // keep mutable
+      }
 
       var order = select.orderBy();
       if (order == null || order.isEmpty()) {
@@ -106,17 +116,35 @@ public class JParqResultSet extends ResultSetAdapter {
     }
   }
 
-  // --- getters use AvroCoercions.unwrap like before ---
   private Object value(int idx) throws SQLException {
     if (current == null) {
       throw new SQLException("Call next() before getting values");
     }
-    String name = columnOrder.get(idx - 1);
-    var field = current.getSchema().getField(name);
+
+    // projection name (may be an alias/label)
+    String projectedName = columnOrder.get(idx - 1);
+
+    // Try alias (label) directly first (covers engines that rewrap records by
+    // label)
+    String lookupName = projectedName;
+    var field = current.getSchema().getField(lookupName);
+
+    // If not found, fall back to the physical column name from metadata
     if (field == null) {
-      throw new SQLException("Unknown column in current schema: " + name);
+      // Contract: ResultSetMetaData#getColumnName(idx) should return the *physical*
+      // name.
+      String physical = getMetaData().getColumnName(idx);
+      if (physical != null && !physical.equals(lookupName)) {
+        lookupName = physical;
+        field = current.getSchema().getField(lookupName);
+      }
     }
-    Object raw = AvroCoercions.unwrap(current.get(name), field.schema());
+
+    if (field == null) {
+      throw new SQLException("Unknown column in current schema: " + projectedName);
+    }
+
+    Object raw = AvroCoercions.unwrap(current.get(lookupName), field.schema());
     lastWasNull = (raw == null);
     return raw;
   }
@@ -134,6 +162,13 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public ResultSetMetaData getMetaData() {
     var schema = (current == null) ? null : current.getSchema();
+    // columnOrder = projection labels (aliases if present)
+    // physicalColumnOrder = underlying physical column names (null for computed
+    // exprs or when unknown)
+    if (physicalColumnOrder != null) {
+      return new JParqResultSetMetaData(schema, columnOrder, physicalColumnOrder, tableName);
+    }
+    // Backward-compatible fallback (pre-alias support)
     return new JParqResultSetMetaData(schema, columnOrder, tableName);
   }
 
