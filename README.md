@@ -15,6 +15,7 @@ Note: A large proportion of the code was created in collaboration with ChatGPT 5
 </dependency>
 ```
 
+
 ```java
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -59,25 +60,41 @@ public class JParqExample {
   }
 }
 ```
+The driver is automatically registered using the service interface but if your client needs the driver,
+the Driver class name is `se.alipsa.jparq.JparqDriver`.
+e.g:
+```groovy
+Class.forName("se.alipsa.jparq.JparqDriver")
+Connection conn = DriverManager.getConnection(jdbcUrl)
+// etc...
+```
 
 ## SQL Support
 The following SQL statements are supported:
 - `SELECT` with support for
-  - `DISTINCT` support in `SELECT` clause
-  - `ALIAS` support for columns 
   - `*` to select all columns
+- `SELECT` statements with `WHERE` supporting:
+  - `BETWEEN`, `IN`, `LIKE` operators 
+  - `AND`, `OR`, `NOT` logical operators 
+  - Comparison operators: `=`, `!=`, `<`, `>`, `<=`, `>=` 
+  - Null checks: `IS NULL`, `IS NOT NULL` 
+- `ORDER BY` clause with multiple columns and `ASC`/`DESC` options
+
+### To be implemented in the near future
+- `DISTINCT` support in `SELECT` clause
+- `ALIAS` support for columns and tables
+- Functions support
   - Date functions
   - Numeric functions
   - String functions
-- `SELECT` statements with `WHERE` supporting:
-  - `BETWEEN`, `IN`, `LIKE` operators 
-  - `AND`, `OR`, `NOT` logical operators in `WHERE` clause
-  - Comparison operators: `=`, `!=`, `<`, `>`, `<=`, `>=` in `WHERE` clause
-  - Null checks: `IS NULL`, `IS NOT NULL` in `WHERE` clause
-  - `LIMIT` clauses
 - `GROUP BY` with simple grouping
   - `COUNT(*)` aggregation
   - `HAVING` clause with simple conditions
   - `SUM`, `AVG`, `MIN`, `MAX` aggregation functions in `SELECT` clause
-- `ORDER BY` clause with multiple columns and `ASC`/`DESC` options
+- `OFFSET` support
+- Subquery support
 
+### Might be implemented in the future
+- Join support
+- CTE
+- Windowing

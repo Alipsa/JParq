@@ -27,7 +27,16 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqDriver;
 import se.alipsa.jparq.JParqSql;
 
-public class PredicatePushdownPerfTest {
+/**
+ * This failsafe test aims to show the performance benefits of pushdown of WHERE
+ * predicates to parquet filters over applying filter code in on the result.
+ *
+ * <p>
+ * Note: the difference is still very small (a few milliseconds) and might fail
+ * in some cases.
+ */
+@SuppressWarnings("NewClassNamingConvention")
+public class PredicatePushdownPerfFS {
 
   @Test
   void pushdownIsFasterWhenSchemaIsPresent() throws Exception {

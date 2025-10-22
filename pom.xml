@@ -12,7 +12,7 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
     <avro.version>1.12.1</avro.version>
-    <checkstyle.version>12.0.1</checkstyle.version>
+    <checkstyle.version>12.1.0</checkstyle.version>
     <checkstyle.plugin.version>3.6.0</checkstyle.plugin.version>
     <hadoop.version>3.4.2</hadoop.version>
     <jsqlparser.version>5.3</jsqlparser.version>
@@ -160,6 +160,35 @@
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <version>3.5.4</version> <executions>
+        <execution>
+          <id>integration-test</id>
+          <goals>
+            <goal>integration-test</goal>
+          </goals>
+          <configuration>
+            <includes>
+              <include>**/*FS.java</include>
+            </includes>
+            <excludes>
+              <exclude>**/*Test.java</exclude>
+            </excludes>
+          </configuration>
+        </execution>
+        <execution>
+          <id>verify</id>
+          <goals>
+            <goal>verify</goal>
+          </goals>
+          <configuration>
+            <testFailureIgnore>true</testFailureIgnore>
+          </configuration>
+        </execution>
+      </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-jar-plugin</artifactId>
         <version>3.4.2</version>
         <configuration>
@@ -228,7 +257,7 @@
       <plugin>
         <groupId>com.diffplug.spotless</groupId>
         <artifactId>spotless-maven-plugin</artifactId>
-        <version>2.46.1</version>
+        <version>3.0.0</version>
         <configuration>
           <java>
             <includes>

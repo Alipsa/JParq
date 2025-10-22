@@ -17,8 +17,8 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
-/** Tests for distinct operations. */
-public class DistinctTest {
+/** Tests for alias operations. */
+public class SubQueryTest {
 
   static JParqSql jparqSql;
 
@@ -35,8 +35,8 @@ public class DistinctTest {
 
   @Disabled // Not yet implemented
   @Test
-  void testDistinct() {
-    jparqSql.query("select distinct mpg from mtcars", rs -> {
+  void testAlias() {
+    jparqSql.query("SELECT model FROM mtcars where mpg in (select distinct mpg from mtcars)", rs -> {
       List<String> seen = new ArrayList<>();
       try {
         ResultSetMetaData md = rs.getMetaData();
@@ -45,17 +45,17 @@ public class DistinctTest {
         int rows = 0;
 
         while (rs.next()) {
-          String model = rs.getString("mpg");
+          String model = rs.getString("model");
           seen.add(model);
           rows++;
         }
 
-        // se.alipsa.matrix.datasets.Dataset.mtcars()['mpg'].unique().size()
-        assertEquals(25, rows, "Expected 25 rows");
+        assertEquals(32, rows, "Expected 32 rows");
       } catch (SQLException e) {
         System.err.println(String.join("\n", seen));
         fail(e);
       }
     });
   }
+
 }
