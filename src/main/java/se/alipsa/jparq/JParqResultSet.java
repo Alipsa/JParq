@@ -8,87 +8,65 @@ import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import net.sf.jsqlparser.expression.Expression;
+import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.hadoop.ParquetReader;
-import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.QueryProcessor;
+import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.model.ResultSetAdapter;
 
-/** An implementation of the java.sql.ResultSet interface. */
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqResultSet extends ResultSetAdapter {
 
   private final List<String> physicalColumnOrder; // may be null
   private final QueryProcessor qp;
-  private GenericRecord current;
-  private final List<String> columnOrder;
+  private final List<String> columnOrder; // output labels
   private final String tableName;
   private boolean closed = false;
   private int rowNum = 0;
   private boolean lastWasNull = false;
 
-  /**
-   * Constructor for JParqResultSet.
-   *
-   * @param reader
-   *          ParquetReader to read from
-   * @param select
-   *          the parsed select statement
-   * @param tableName
-   *          the name of the table
-   * @throws SQLException
-   *           if reading fails
-   */
-  public JParqResultSet(ParquetReader<GenericRecord> reader, se.alipsa.jparq.engine.SqlParser.Select select,
-      String tableName, Expression residual, List<String> columnOrder, // projection labels (aliases) or null
-      List<String> physicalColumnOrder) // physical names (may be null)
-      throws SQLException {
+  // Result metadata schema (may be null)
+  private final Schema schema;
+
+  // Current projected row
+  private Object[] currentRow;
+
+  public JParqResultSet(ParquetReader<GenericRecord> reader, SqlParser.Select select, String tableName,
+      Expression residualWhere, List<String> selectLabels, // kept for signature compatibility; not used
+      List<String> physicalColumnOrder) throws SQLException {
     this.tableName = tableName;
-    // Always use a mutable list to avoid UOE from List.of(...)
-    this.columnOrder = (columnOrder != null ? new ArrayList<>(columnOrder) : new ArrayList<>());
-    // physical names aren’t mutated; store as-is (null allowed)
     this.physicalColumnOrder = physicalColumnOrder;
 
     try {
+      // Prefetch one record to detect schema and avoid losing it
       GenericRecord first = reader.read();
-      if (first == null) {
-        // No rows emitted after pushdown; still build metadata if explicit projection
-        List<String> req = select.columns(); // e.g., ["id","value"] or ["*"]
-        if (!req.isEmpty() && !req.contains("*")) {
-          this.columnOrder.addAll(req); // mutable, safe
-        }
-        this.qp = new QueryProcessor(reader, this.columnOrder, /* where */ residual, select.limit(), null, 0);
-        this.current = null;
-        this.rowNum = 0;
-        return;
+      Schema detectedSchema = (first != null) ? first.getSchema() : null;
+
+      // Source columns from the parsed select (e.g., ["model", "mpg"] or ["*"])
+      List<String> sourceColumns = select.columns();
+
+      // Effective output labels (aliases visible to JDBC); fall back to source names
+      // if no aliases
+      List<String> labels = select.labels();
+      if (labels == null || labels.isEmpty()) {
+        labels = sourceColumns;
       }
 
-      var schema = first.getSchema();
-      var evaluator = new se.alipsa.jparq.engine.ExpressionEvaluator(schema);
-      boolean match = (residual == null) || evaluator.eval(residual, first);
+      // Prefer residual pushdown, but fall back to select WHERE when residual is null
+      Expression whereExpr = (residualWhere != null) ? residualWhere : select.where();
 
-      // Compute physical projection from schema; only add if we don’t already have
-      // labels
-      List<String> proj = QueryProcessor.computeProjection(select.columns(), schema);
-      if (this.columnOrder.isEmpty()) {
-        this.columnOrder.addAll(proj); // keep mutable
-      }
+      // Build processor; it will expand '\*' as soon as schema is known
+      this.qp = new QueryProcessor(reader, sourceColumns, labels, // pass effective output labels
+          whereExpr, select.limit(), detectedSchema, 0, select.orderBy(), select.distinct(), first);
 
-      var order = select.orderBy();
-      if (order == null || order.isEmpty()) {
-        int initialEmitted = match ? 1 : 0;
-        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, initialEmitted);
-        this.current = match ? first : qp.nextMatching();
-      } else {
-        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, 0, order, first);
-        this.current = qp.nextMatching();
-      }
-      this.rowNum = 0;
+      // Expose the processor's final projection (handles aliases and '\*' expansion)
+      this.columnOrder = qp.projection();
+      this.schema = (detectedSchema != null) ? detectedSchema : (first != null ? first.getSchema() : null);
     } catch (Exception e) {
-      throw new SQLException("Failed reading first parquet record", e);
+      throw new SQLException("Failed initializing result set", e);
     }
   }
 
@@ -98,55 +76,27 @@ public class JParqResultSet extends ResultSetAdapter {
       throw new SQLException("ResultSet closed");
     }
     try {
-      if (rowNum == 0) {
-        if (current == null) {
-          return false;
-        }
-        rowNum = 1;
-        return true;
-      }
-      current = qp.nextMatching();
-      if (current == null) {
+      currentRow = qp.nextRow();
+      if (currentRow == null) {
         return false;
       }
       rowNum++;
       return true;
     } catch (Exception e) {
-      throw new SQLException(e);
+      throw new SQLException("Failed reading next row", e);
     }
   }
 
   private Object value(int idx) throws SQLException {
-    if (current == null) {
+    if (currentRow == null) {
       throw new SQLException("Call next() before getting values");
     }
-
-    // projection name (may be an alias/label)
-    String projectedName = columnOrder.get(idx - 1);
-
-    // Try alias (label) directly first (covers engines that rewrap records by
-    // label)
-    String lookupName = projectedName;
-    var field = current.getSchema().getField(lookupName);
-
-    // If not found, fall back to the physical column name from metadata
-    if (field == null) {
-      // Contract: ResultSetMetaData#getColumnName(idx) should return the *physical*
-      // name.
-      String physical = getMetaData().getColumnName(idx);
-      if (physical != null && !physical.equals(lookupName)) {
-        lookupName = physical;
-        field = current.getSchema().getField(lookupName);
-      }
+    if (idx < 1 || idx > currentRow.length) {
+      throw new SQLException("Column index out of range: " + idx);
     }
-
-    if (field == null) {
-      throw new SQLException("Unknown column in current schema: " + projectedName);
-    }
-
-    Object raw = AvroCoercions.unwrap(current.get(lookupName), field.schema());
-    lastWasNull = (raw == null);
-    return raw;
+    Object v = currentRow[idx - 1];
+    lastWasNull = (v == null);
+    return v;
   }
 
   @Override
@@ -161,25 +111,19 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public ResultSetMetaData getMetaData() {
-    var schema = (current == null) ? null : current.getSchema();
-    // columnOrder = projection labels (aliases if present)
-    // physicalColumnOrder = underlying physical column names (null for computed
-    // exprs or when unknown)
     if (physicalColumnOrder != null) {
       return new JParqResultSetMetaData(schema, columnOrder, physicalColumnOrder, tableName);
     }
-    // Backward-compatible fallback (pre-alias support)
     return new JParqResultSetMetaData(schema, columnOrder, tableName);
   }
 
-  @SuppressWarnings("PMD.EmptyCatchBlock")
   @Override
   public void close() throws SQLException {
     closed = true;
     try {
       qp.close();
     } catch (Exception ignore) {
-      // intentionally ignored
+      // ignore
     }
   }
 
@@ -213,13 +157,13 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public byte getByte(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    return v == null ? 0 : ((Number) v).byteValue();
+    return v == null ? (byte) 0 : ((Number) v).byteValue();
   }
 
   @Override
   public short getShort(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    return v == null ? 0 : ((Number) v).shortValue();
+    return v == null ? (short) 0 : ((Number) v).shortValue();
   }
 
   @Override
@@ -236,7 +180,7 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public long getLong(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    return v == null ? 0 : ((Number) v).longValue();
+    return v == null ? 0L : ((Number) v).longValue();
   }
 
   @Override
@@ -288,8 +232,8 @@ public class JParqResultSet extends ResultSetAdapter {
     if (v == null) {
       return null;
     }
-    if (v instanceof Date) {
-      return (Date) v;
+    if (v instanceof Date d) {
+      return d;
     }
     if (v instanceof Timestamp ts) {
       return new Date(ts.getTime());
@@ -303,11 +247,11 @@ public class JParqResultSet extends ResultSetAdapter {
     if (v instanceof Double d) {
       return new Date(d.longValue());
     }
-    if (v instanceof LocalDateTime l) {
-      return Date.valueOf(l.toLocalDate());
+    if (v instanceof LocalDateTime ldt) {
+      return Date.valueOf(ldt.toLocalDate());
     }
-    if (v instanceof LocalDate) {
-      return Date.valueOf((LocalDate) v);
+    if (v instanceof LocalDate ld) {
+      return Date.valueOf(ld);
     }
     throw new SQLException("Unsupported date type: " + v.getClass().getName());
   }
@@ -315,8 +259,8 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public Time getTime(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    if (v instanceof Timestamp) {
-      return new Time(((Timestamp) v).getTime());
+    if (v instanceof Timestamp ts) {
+      return new Time(ts.getTime());
     }
     return (Time) v;
   }
@@ -342,8 +286,8 @@ public class JParqResultSet extends ResultSetAdapter {
     if (v instanceof Double d) {
       return new Timestamp(d.longValue());
     }
-    if (v instanceof LocalDateTime l) {
-      return Timestamp.valueOf(l);
+    if (v instanceof LocalDateTime ldt) {
+      return Timestamp.valueOf(ldt);
     }
     throw new SQLException("Unsupported timestamp type: " + v.getClass().getName());
   }

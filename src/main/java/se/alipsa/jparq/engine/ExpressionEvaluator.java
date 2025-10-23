@@ -1,19 +1,21 @@
+// java
 package se.alipsa.jparq.engine;
 
-import static se.alipsa.jparq.engine.AvroCoercions.coerceLiteral;
-
+import java.lang.reflect.Method;
 import java.math.BigDecimal;
-import java.sql.Date;
-import java.sql.Timestamp;
+import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
-import java.util.Locale;
-import java.util.Map;
-import net.sf.jsqlparser.JSQLParserException;
-import net.sf.jsqlparser.expression.BinaryExpression;
+import java.util.List;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
+import net.sf.jsqlparser.expression.DoubleValue;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.Function;
+import net.sf.jsqlparser.expression.LongValue;
 import net.sf.jsqlparser.expression.NotExpression;
-import net.sf.jsqlparser.expression.Parenthesis;
+import net.sf.jsqlparser.expression.NullValue;
+import net.sf.jsqlparser.expression.SignedExpression;
+import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
 import net.sf.jsqlparser.expression.operators.relational.Between;
@@ -26,258 +28,459 @@ import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
 import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.expression.operators.relational.MinorThan;
 import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import net.sf.jsqlparser.expression.operators.relational.NotEqualsTo;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
-import se.alipsa.jparq.helper.LiteralConverter;
 
-/** Evaluates SQL expressions against Avro GenericRecords. */
-public final class ExpressionEvaluator {
+@SuppressWarnings("checkstyle:AbbreviationAsWordInName")
+public class ExpressionEvaluator {
 
-  private final Map<String, Schema> fieldSchemas; // exact match
-  private final Map<String, String> caseInsensitiveIndex; // lower(name) -> canonical
+  private final Schema schema;
 
-  /**
-   * Constructor for ExpressionEvaluator.
-   *
-   * @param schema
-   *          the Avro schema of the records to evaluate against
-   */
   public ExpressionEvaluator(Schema schema) {
-    Map<String, Schema> fs = new HashMap<>();
-    Map<String, String> ci = new HashMap<>();
-    for (Schema.Field f : schema.getFields()) {
-      fs.put(f.name(), f.schema());
-      ci.put(f.name().toLowerCase(Locale.ROOT), f.name());
-    }
-    this.fieldSchemas = Collections.unmodifiableMap(fs);
-    this.caseInsensitiveIndex = Collections.unmodifiableMap(ci);
+    this.schema = schema;
   }
 
-  /**
-   * Evaluate the given expression against the provided GenericRecord.
-   *
-   * @param expression
-   *          the expression to evaluate
-   * @param rec
-   *          the GenericRecord to evaluate against
-   * @return true if the expression evaluates to true, false otherwise
-   */
-  @SuppressWarnings({
-      "PMD.LooseCoupling", "PMD.EmptyCatchBlock"
-  })
-  public boolean eval(Expression expression, GenericRecord rec) {
-    // Always strip all layers of (...) first
-    Expression expr = unwrapParenthesis(expression);
-
-    String txt = expr.toString().trim();
-    if (txt.length() >= 2 && txt.charAt(0) == '(' && txt.charAt(txt.length() - 1) == ')') {
-      try {
-        Expression inner = CCJSqlParserUtil.parseCondExpression(txt.substring(1, txt.length() - 1));
-        return eval(inner, rec);
-      } catch (JSQLParserException ignore) {
-        // If reparse fails, we’ll continue to the standard handlers below
-      }
-    }
-
-    if (expr instanceof AndExpression and) {
-      return eval(and.getLeftExpression(), rec) && eval(and.getRightExpression(), rec);
-    }
-    if (expr instanceof OrExpression or) {
-      return eval(or.getLeftExpression(), rec) || eval(or.getRightExpression(), rec);
-    }
-    if (expr instanceof NotExpression not) {
-      return !eval(not.getExpression(), rec); // this will also be unwrapped on next call
-    }
-    if (expr instanceof IsNullExpression isNull) {
-      Operand op = operand(isNull.getLeftExpression(), rec);
-      boolean isNullVal = (op.value == null);
-      return isNull.isNot() != isNullVal;
-    }
-    if (expr instanceof LikeExpression like) {
-      Operand leftOperand = operand(like.getLeftExpression(), rec);
-      Operand rightOperand = operand(like.getRightExpression(), rec);
-      String left = (leftOperand.value == null) ? null : leftOperand.value.toString();
-      String pat = (rightOperand.value == null) ? null : rightOperand.value.toString();
-      if (left == null || pat == null) {
-        return false;
-      }
-
-      boolean caseInsensitive = "ILIKE".equalsIgnoreCase(like.getLikeKeyWord().toString());
-
-      boolean matches = likeMatch(left, pat, caseInsensitive);
-      return like.isNot() != matches;
-    }
-    if (expr instanceof Between between) {
-      Operand val = operand(between.getLeftExpression(), rec);
-      Operand lo = operand(between.getBetweenExpressionStart(), rec);
-      Operand hi = operand(between.getBetweenExpressionEnd(), rec);
-
-      Object curVal = val.value;
-      Object lowVal = lo.value;
-      Object highVal = hi.value;
-      // coerce to column type if available
-      if (val.schemaOrNull != null) {
-        lowVal = coerceLiteral(lowVal, val.schemaOrNull);
-        highVal = coerceLiteral(highVal, val.schemaOrNull);
-      }
-      if (curVal == null || lowVal == null || highVal == null) {
-        return false;
-      }
-      int cmpLo = typedCompare(curVal, lowVal);
-      int cmpHi = typedCompare(curVal, highVal);
-      boolean in = (cmpLo >= 0 && cmpHi <= 0);
-      return between.isNot() != in;
-    }
-    if (expr instanceof InExpression in) {
-      Operand left = operand(in.getLeftExpression(), rec);
-      Expression right = in.getRightExpression(); // right side is an Expression
-      if (right instanceof ExpressionList<?> list) {
-        boolean found = false;
-        for (Expression e : list) {
-          Operand rightOperand = operand(e, rec);
-          Object leftVal = left.value;
-          Object rightVal = rightOperand.value; // left is the evaluated left operand
-          if (left.schemaOrNull != null) {
-            rightVal = coerceLiteral(rightVal, left.schemaOrNull);
-          }
-          if (leftVal != null && rightVal != null && typedCompare(leftVal, rightVal) == 0) {
-            found = true;
-            break;
-          }
-        }
-        return in.isNot() != found;
-      }
-    }
-
-    if (expr instanceof EqualsTo e) {
-      return compare(e.getLeftExpression(), e.getRightExpression(), rec) == 0;
-    }
-    if (expr instanceof GreaterThan gt) {
-      return compare(gt.getLeftExpression(), gt.getRightExpression(), rec) > 0;
-    }
-    if (expr instanceof MinorThan lt) {
-      return compare(lt.getLeftExpression(), lt.getRightExpression(), rec) < 0;
-    }
-    if (expr instanceof GreaterThanEquals ge) {
-      return compare(ge.getLeftExpression(), ge.getRightExpression(), rec) >= 0;
-    }
-    if (expr instanceof MinorThanEquals le) {
-      return compare(le.getLeftExpression(), le.getRightExpression(), rec) <= 0;
-    }
-
-    // Generic fallback for binary comparisons (covers parenthesized variants too)
-    if (expr instanceof BinaryExpression be) {
-      int cmp = compare(be.getLeftExpression(), be.getRightExpression(), rec);
-      String op = be.getStringExpression(); // e.g. "=", "<", ">", "<=", ">=", "<>", "!="
-      return switch (op) {
-        case "=" -> cmp == 0;
-        case "<" -> cmp < 0;
-        case ">" -> cmp > 0;
-        case "<=" -> cmp <= 0;
-        case ">=" -> cmp >= 0;
-        case "<>", "!=" -> cmp != 0;
-        default -> throw new IllegalArgumentException("Unsupported operator: " + op);
-      };
-    }
-    throw new IllegalArgumentException("Unsupported WHERE expression: " + expr);
-  }
-
-  @SuppressWarnings("removal")
+  // Unwrap Parenthesis / EnclosedExpression reflectively (JSqlParser 5.x
+  // compatible).
   public static Expression unwrapParenthesis(Expression expr) {
-    Expression unwrapped = expr;
-    while (unwrapped instanceof Parenthesis p) {
-      unwrapped = p.getExpression();
+    Expression e = expr;
+    while (true) {
+      Expression before = e;
+
+      e = reflectUnwrap(e, "Parenthesis", "getExpression");
+      if (e != before) {
+        continue;
+      }
+
+      e = reflectUnwrap(e, "EnclosedExpression", "getExpression");
+      if (e != before) {
+        continue;
+      }
+
+      break;
     }
-    return unwrapped;
+    return e;
   }
 
-  private record Operand(Object value, Schema schemaOrNull) {
-  }
-
-  private Operand operand(Expression e, GenericRecord rec) {
-    if (e instanceof Column c) {
-      String name = c.getColumnName();
-      Schema colSchema = fieldSchemas.get(name);
-      if (colSchema == null) {
-        String canon = caseInsensitiveIndex.get(name.toLowerCase(Locale.ROOT));
-        if (canon != null) {
-          colSchema = fieldSchemas.get(canon);
+  private static Expression reflectUnwrap(Expression e, String simpleClassName, String getter) {
+    if (e == null) {
+      return null;
+    }
+    try {
+      if (e.getClass().getName().endsWith("." + simpleClassName)) {
+        Method m = e.getClass().getMethod(getter);
+        Object inner = m.invoke(e);
+        if (inner instanceof Expression) {
+          return (Expression) inner;
         }
       }
-      if (colSchema == null) {
-        return new Operand(null, null);
-      }
-      Object v = AvroCoercions.unwrap(rec.get(name), colSchema);
-      return new Operand(v, colSchema);
+    } catch (ReflectiveOperationException ignore) {
+      // ignore
     }
-    return new Operand(LiteralConverter.toLiteral(e), null);
+    return e;
   }
 
-  static int typedCompare(Object l, Object r) {
-    if (l instanceof Number && r instanceof Number) {
-      return new BigDecimal(l.toString()).compareTo(new BigDecimal(r.toString()));
+  private static Object reflectInvoke(Object obj, String simpleClassName, String getter) {
+    if (obj == null) {
+      return null;
     }
-    if (l instanceof Boolean && r instanceof Boolean) {
-      return Boolean.compare((Boolean) l, (Boolean) r);
-    }
-    if (l instanceof Timestamp && r instanceof Timestamp) {
-      return Long.compare(((Timestamp) l).getTime(), ((Timestamp) r).getTime());
-    }
-    if (l instanceof Date && r instanceof Date) {
-      return Long.compare(((Date) l).getTime(), ((Date) r).getTime());
-    }
-    return l.toString().compareTo(r.toString());
-  }
-
-  // LIKE with % and _ (naive regex conversion)
-  private static boolean likeMatch(String s, String pattern, boolean caseInsensitive) {
-    StringBuilder re = new StringBuilder();
-    for (int i = 0; i < pattern.length(); i++) {
-      char c = pattern.charAt(i);
-      switch (c) {
-        case '%':
-          re.append(".*");
-          break;
-        case '_':
-          re.append('.');
-          break;
-        default:
-          // escape regex metacharacters
-          if ("\\.[]{}()*+-?^$|".indexOf(c) >= 0) {
-            re.append('\\');
-          }
-          re.append(c);
-      }
-    }
-    String regex = re.toString();
-    return caseInsensitive ? s.toLowerCase().matches(regex.toLowerCase()) : s.matches(regex);
-  }
-
-  private int compare(Expression leftExpr, Expression rightExpr, GenericRecord rec) {
-    Operand leftlOperand = operand(leftExpr, rec);
-    Operand rightOperand = operand(rightExpr, rec);
-
-    Object leftVal = leftlOperand.value;
-    Object rightVal = rightOperand.value;
-
-    // If one side is a column (has schema) and the other is a literal,
-    // then coerce literal to column type
-    if (leftlOperand.schemaOrNull != null && rightOperand.schemaOrNull == null) {
-      rightVal = coerceLiteral(rightVal, leftlOperand.schemaOrNull);
-    } else if (rightOperand.schemaOrNull != null && leftlOperand.schemaOrNull == null) {
-      leftVal = coerceLiteral(leftVal, rightOperand.schemaOrNull);
-    }
-
-    if (leftVal == null || rightVal == null) {
-      return -1; // nulls don't match in this minimal impl
-    }
-
     try {
-      return typedCompare(leftVal, rightVal);
-    } catch (Exception e) {
+      if (obj.getClass().getName().endsWith("." + simpleClassName)) {
+        Method m = obj.getClass().getMethod(getter);
+        return m.invoke(obj);
+      }
+    } catch (ReflectiveOperationException ignore) {
+      // ignore
+    }
+    return null;
+  }
+
+  // WHERE evaluation: NULL in any operand -> predicate is false (simplified 3VL).
+  public boolean eval(Expression expr, GenericRecord rec) {
+    Expression e = unwrapParenthesis(expr);
+
+    if (e instanceof AndExpression) {
+      AndExpression ae = (AndExpression) e;
+      return eval(ae.getLeftExpression(), rec) && eval(ae.getRightExpression(), rec);
+    }
+    if (e instanceof OrExpression) {
+      OrExpression oe = (OrExpression) e;
+      return eval(oe.getLeftExpression(), rec) || eval(oe.getRightExpression(), rec);
+    }
+    if (e instanceof NotExpression) {
+      NotExpression ne = (NotExpression) e;
+      return !eval(ne.getExpression(), rec);
+    }
+    if (e instanceof IsNullExpression) {
+      IsNullExpression isn = (IsNullExpression) e;
+      Object v = value(isn.getLeftExpression(), rec);
+      boolean isNull = (v == null);
+      if (isn.isNot()) {
+        return !isNull;
+      } else {
+        return isNull;
+      }
+    }
+    if (e instanceof Between) {
+      Between bt = (Between) e;
+      Object v = value(bt.getLeftExpression(), rec);
+      Object begin = value(bt.getBetweenExpressionStart(), rec);
+      Object end = value(bt.getBetweenExpressionEnd(), rec);
+      if (v == null || begin == null || end == null) {
+        return false;
+      }
+      boolean in = typedCompare(v, begin) >= 0 && typedCompare(v, end) <= 0;
+      if (bt.isNot()) {
+        return !in;
+      } else {
+        return in;
+      }
+    }
+    if (e instanceof InExpression) {
+      InExpression in = (InExpression) e;
+      Object left = value(in.getLeftExpression(), rec);
+      if (left == null) {
+        return false;
+      }
+      List<Expression> rightExprs = getInRightExpressions(in);
+      boolean any = false;
+      for (Expression re : rightExprs) {
+        Object rv = value(re, rec);
+        if (rv != null && typedCompare(left, rv) == 0) {
+          any = true;
+          break;
+        }
+      }
+      if (in.isNot()) {
+        return !any;
+      } else {
+        return any;
+      }
+    }
+    if (e instanceof EqualsTo) {
+      EqualsTo eq = (EqualsTo) e;
+      Object l = value(eq.getLeftExpression(), rec);
+      Object r = value(eq.getRightExpression(), rec);
+      return l != null && r != null && typedCompare(l, r) == 0;
+    }
+    if (e instanceof NotEqualsTo) {
+      NotEqualsTo ne = (NotEqualsTo) e;
+      Object l = value(ne.getLeftExpression(), rec);
+      Object r = value(ne.getRightExpression(), rec);
+      return l != null && r != null && typedCompare(l, r) != 0;
+    }
+    if (e instanceof GreaterThan) {
+      GreaterThan gt = (GreaterThan) e;
+      Object l = value(gt.getLeftExpression(), rec);
+      Object r = value(gt.getRightExpression(), rec);
+      return l != null && r != null && typedCompare(l, r) > 0;
+    }
+    if (e instanceof GreaterThanEquals) {
+      GreaterThanEquals ge = (GreaterThanEquals) e;
+      Object l = value(ge.getLeftExpression(), rec);
+      Object r = value(ge.getRightExpression(), rec);
+      return l != null && r != null && typedCompare(l, r) >= 0;
+    }
+    if (e instanceof MinorThan) {
+      MinorThan lt = (MinorThan) e;
+      Object l = value(lt.getLeftExpression(), rec);
+      Object r = value(lt.getRightExpression(), rec);
+      return l != null && r != null && typedCompare(l, r) < 0;
+    }
+    if (e instanceof MinorThanEquals) {
+      MinorThanEquals le = (MinorThanEquals) e;
+      Object l = value(le.getLeftExpression(), rec);
+      Object r = value(le.getRightExpression(), rec);
+      return l != null && r != null && typedCompare(l, r) <= 0;
+    }
+    if (e instanceof LikeExpression) {
+      return evalLike((LikeExpression) e, rec);
+    }
+
+    throw new UnsupportedOperationException("Unhandled expression in WHERE: " + e.getClass().getName());
+  }
+
+  private List<Expression> getInRightExpressions(InExpression in) {
+    Object right = null;
+
+    // Prefer getRightItemsList() (newer JSqlParser), fallback to
+    // getRightExpression()
+    try {
+      Method m = in.getClass().getMethod("getRightItemsList");
+      right = m.invoke(in);
+    } catch (ReflectiveOperationException ignore) {
+      try {
+        Method m2 = in.getClass().getMethod("getRightExpression");
+        right = m2.invoke(in);
+      } catch (ReflectiveOperationException ignore2) {
+        right = null;
+      }
+    }
+
+    if (right instanceof ExpressionList) {
+      ExpressionList el = (ExpressionList) right;
+      List<Expression> exprs = el.getExpressions();
+      if (exprs == null) {
+        return Collections.emptyList();
+      } else {
+        return exprs;
+      }
+    }
+
+    // Handle ParenthesedExpressionList reflectively without compiling against it
+    if (right != null && right.getClass().getName().endsWith(".ParenthesedExpressionList")) {
+      Object maybeEl = reflectInvoke(right, "ParenthesedExpressionList", "getExpressionList");
+      if (maybeEl instanceof ExpressionList) {
+        ExpressionList el = (ExpressionList) maybeEl;
+        List<Expression> exprs = el.getExpressions();
+        if (exprs == null) {
+          return Collections.emptyList();
+        } else {
+          return exprs;
+        }
+      }
+      Object single = reflectInvoke(right, "ParenthesedExpressionList", "getExpression");
+      if (single instanceof Expression) {
+        List<Expression> list = new ArrayList<>();
+        list.add((Expression) single);
+        return list;
+      }
+    }
+
+    return Collections.emptyList();
+  }
+
+  private boolean evalLike(LikeExpression like, GenericRecord rec) {
+    // Unwrap possible parentheses around the right expression (e.g., LIKE('Merc%'))
+    Expression right = unwrapParenthesis(like.getRightExpression());
+    Object leftVal = value(like.getLeftExpression(), rec);
+    Object rightVal = value(right, rec);
+    if (leftVal == null || rightVal == null) {
+      return false;
+    }
+
+    String text = leftVal.toString();
+    String pattern = rightVal.toString();
+
+    Character escape = null;
+    if (like.getEscape() != null) {
+      Object escVal = value(like.getEscape(), rec);
+      if (escVal != null) {
+        String s = escVal.toString();
+        if (!s.isEmpty()) {
+          escape = s.charAt(0);
+        }
+      }
+    }
+
+    boolean matched = likeMatch(text, pattern, escape);
+    if (like.isNot()) {
+      return !matched;
+    } else {
+      return matched;
+    }
+  }
+
+  private static boolean likeMatch(String text, String sqlPattern, Character escape) {
+    String regex = toRegexFromLike(sqlPattern, escape);
+    try {
+      return Pattern.compile(regex, Pattern.DOTALL).matcher(text).matches();
+    } catch (PatternSyntaxException e) {
+      return false;
+    }
+  }
+
+  private static String toRegexFromLike(String like, Character escape) {
+    StringBuilder out = new StringBuilder();
+    boolean escaping = false;
+
+    for (int i = 0; i < like.length(); i++) {
+      char c = like.charAt(i);
+
+      if (escape != null) {
+        if (escaping) {
+          out.append(escapeRegexChar(c));
+          escaping = false;
+          continue;
+        }
+        if (c == escape.charValue()) {
+          escaping = true;
+          continue;
+        }
+      }
+
+      if (c == '%') {
+        out.append(".*");
+      } else if (c == '_') {
+        out.append('.');
+      } else {
+        out.append(escapeRegexChar(c));
+      }
+    }
+
+    if (escaping) {
+      out.append(escapeRegexChar(escape == null ? '\\' : escape.charValue()));
+    }
+
+    return "^" + out + "$";
+  }
+
+  private static String escapeRegexChar(char c) {
+    switch (c) {
+      case '\\':
+      case '.':
+      case '^':
+      case '$':
+      case '|':
+      case '?':
+      case '*':
+      case '+':
+      case '(':
+      case ')':
+      case '[':
+      case ']':
+      case '{':
+      case '}':
+        return "\\" + c;
+      default:
+        return Character.toString(c);
+    }
+  }
+
+  // Resolve an expression to a Java value from the current record.
+  public Object value(Expression expr, GenericRecord rec) {
+    Expression e = unwrapParenthesis(expr);
+
+    if (e instanceof NullValue) {
+      return null;
+    }
+    if (e instanceof StringValue) {
+      StringValue sv = (StringValue) e;
+      return sv.getValue();
+    }
+    if (e instanceof LongValue) {
+      LongValue lv = (LongValue) e;
+      return lv.getValue();
+    }
+    if (e instanceof DoubleValue) {
+      DoubleValue dv = (DoubleValue) e;
+      return dv.getValue();
+    }
+    if (e instanceof SignedExpression) {
+      SignedExpression se = (SignedExpression) e;
+      Object inner = value(se.getExpression(), rec);
+      if (inner == null) {
+        return null;
+      }
+      if (se.getSign() == '-') {
+        if (inner instanceof Number) {
+          return negateNumber((Number) inner);
+        }
+        try {
+          return -Double.parseDouble(inner.toString());
+        } catch (NumberFormatException nfe) {
+          return null;
+        }
+      }
+      return inner;
+    }
+    if (e instanceof Column) {
+      Column col = (Column) e;
+      String name = col.getColumnName();
+      try {
+        return rec.get(name);
+      } catch (Throwable t) {
+        return null;
+      }
+    }
+    if (e instanceof Function) {
+      Function fn = (Function) e;
+      String fname = fn.getName() == null ? "" : fn.getName().toUpperCase();
+      List<Expression> args = new ArrayList<>();
+      if (fn.getParameters() != null && fn.getParameters().getExpressions() != null) {
+        for (Expression ex : fn.getParameters().getExpressions()) {
+          args.add(ex);
+        }
+      }
+      if ("LOWER".equals(fname) && args.size() == 1) {
+        Object v = value(args.get(0), rec);
+        if (v == null) {
+          return null;
+        }
+        return v.toString().toLowerCase();
+      }
+      if ("UPPER".equals(fname) && args.size() == 1) {
+        Object v = value(args.get(0), rec);
+        if (v == null) {
+          return null;
+        }
+        return v.toString().toUpperCase();
+      }
+      return null;
+    }
+
+    return null;
+  }
+
+  private static Number negateNumber(Number n) {
+    if (n instanceof Integer) {
+      Integer i = (Integer) n;
+      return -i;
+    }
+    if (n instanceof Long) {
+      Long l = (Long) n;
+      return -l;
+    }
+    if (n instanceof Short) {
+      Short s = (Short) n;
+      return (short) -s;
+    }
+    if (n instanceof Byte) {
+      Byte b = (Byte) n;
+      return (byte) -b;
+    }
+    if (n instanceof Float) {
+      Float f = (Float) n;
+      return -f;
+    }
+    if (n instanceof Double) {
+      Double d = (Double) n;
+      return -d;
+    }
+    if (n instanceof BigDecimal) {
+      BigDecimal bd = (BigDecimal) n;
+      return bd.negate();
+    }
+    return -n.doubleValue();
+  }
+
+  public static int typedCompare(Object a, Object b) {
+    if (a == b) {
+      return 0;
+    }
+    if (a == null) {
       return -1;
     }
+    if (b == null) {
+      return 1;
+    }
+    if (a instanceof Number && b instanceof Number) {
+      double da = ((Number) a).doubleValue();
+      double db = ((Number) b).doubleValue();
+      return Double.compare(da, db);
+    }
+    if (a instanceof CharSequence || b instanceof CharSequence) {
+      String sa = a.toString();
+      String sb = b.toString();
+      return sa.compareTo(sb);
+    }
+    if (a instanceof Comparable && a.getClass().isInstance(b)) {
+      @SuppressWarnings("unchecked")
+      Comparable<Object> c = (Comparable<Object>) a;
+      return c.compareTo(b);
+    }
+    return a.toString().compareTo(b.toString());
   }
 }

@@ -24,7 +24,7 @@ public class OrderByTest {
 
   @BeforeAll
   static void setup() throws URISyntaxException {
-    URL mtcarsUrl = WhereTest.class.getResource("/mtcars.parquet");
+    URL mtcarsUrl = OrderByTest.class.getResource("/mtcars.parquet");
     assertNotNull(mtcarsUrl, "mtcars.parquet must be on the test classpath (src/test/resources)");
 
     Path mtcarsPath = Paths.get(mtcarsUrl.toURI());
