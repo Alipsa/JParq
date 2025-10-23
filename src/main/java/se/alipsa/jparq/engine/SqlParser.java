@@ -1,8 +1,7 @@
 package se.alipsa.jparq.engine;
 
-import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import net.sf.jsqlparser.expression.*;
@@ -58,10 +57,17 @@ public final class SqlParser {
     public List<String> columns() {
       return (columnNames == null || columnNames.isEmpty()) ? List.of("*") : columnNames;
     }
+
     /** ORDER BY keys (never null). */
     public List<OrderKey> orderBy() {
-      return orderBy == null ? List.of() : orderBy;
+      // NOTE: Removed the redundant 'orderBy == null ? List.of() : orderBy' check
+      // as parseSelect already ensures List.copyOf() which prevents null.
+      return orderBy;
     }
+  }
+
+  /** Internal record to hold table name and alias. */
+  private record FromInfo(String tableName, String tableAlias) {
   }
 
   /** Parse a simple SELECT SQL statement (single-table). */
@@ -72,131 +78,215 @@ public final class SqlParser {
           .parse(sql);
       PlainSelect ps = stmt.getPlainSelect();
 
-      // FROM: single table only
-      if (!(ps.getFromItem() instanceof Table t)) {
-        throw new IllegalArgumentException("Only single-table SELECT is supported");
-      }
-      final String tableName = t.getName();
-      final String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
+      // 1. FROM: Get the table name and alias
+      FromInfo fromInfo = parseFromItem(ps.getFromItem());
 
-      // SELECT list: support column aliases and *
-      List<String> labels = new ArrayList<>();
-      List<String> physicalCols = new ArrayList<>();
+      // 2. SELECT list: Get labels and physical columns
+      Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo);
 
-      // For ORDER BY alias support: alias -> expression (track what user aliased)
-      Map<String, Expression> selectAliasToExpr = new LinkedHashMap<>();
-
-      boolean selectAll = false;
-      for (SelectItem<?> item : ps.getSelectItems()) {
-        final String text = item.toString().trim();
-
-        // Handle SELECT * and reject table.*
-        if ("*".equals(text)) {
-          selectAll = true;
-          break;
-        }
-        if (text.endsWith(".*")) {
-          throw new IllegalArgumentException("Qualified * (table.*) not supported yet: " + text);
-        }
-
-        final Expression expr = item.getExpression(); // JSqlParser 5.x
-        // Normalize qualifiers for single-table: t.col -> col
-        stripQualifier(expr, tableName, tableAlias);
-
-        final Alias aliasObj = item.getAlias();
-        final String alias = aliasObj == null ? null : aliasObj.getName();
-
-        String label;
-        String underlying = null;
-
-        if (expr instanceof Column col) {
-          underlying = col.getColumnName();
-          if (alias != null && !alias.isEmpty()) {
-            label = alias;
-            selectAliasToExpr.put(alias, col);
-          } else {
-            label = underlying;
-          }
-        } else {
-          // Keep label stable; allow alias for projection labeling.
-          if (alias != null && !alias.isEmpty()) {
-            label = alias;
-            selectAliasToExpr.put(alias, expr);
-          } else {
-            label = expr.toString();
-          }
-        }
-
-        labels.add(label);
-        physicalCols.add(underlying);
-      }
-
-      if (selectAll) {
-        // Defer to engine to expand to actual columns; keep old contract: columns() ==
-        // ["*"]
-        labels = List.of(); // empty list => columns() returns ["*"]
-        physicalCols = List.of(); // keep in sync
-      }
-
-      // WHERE: keep raw Expression but strip qualifiers (single-table)
+      // 3. WHERE: Strip qualifiers for single-table queries
       Expression whereExpr = ps.getWhere();
-      stripQualifier(whereExpr, tableName, tableAlias);
+      stripQualifier(whereExpr, fromInfo.tableName(), fromInfo.tableAlias());
 
-      // LIMIT
-      int limit = -1;
-      Limit lim = ps.getLimit();
-      if (lim != null && lim.getRowCount() != null) {
-        limit = Integer.parseInt(lim.getRowCount().toString());
-      }
+      // 4. LIMIT
+      int limit = computeLimit(ps);
 
-      // ORDER BY (resolve alias -> physical column name so QueryProcessor sees
-      // physical keys)
-      List<OrderKey> orderKeys = new ArrayList<>();
-      List<OrderByElement> ob = ps.getOrderByElements();
-      if (ob != null) {
-        // Build alias->physical map from the current projection lists we just built
-        // - labels.get(i) = projection label (alias if present, else column name)
-        // - physicalCols.get(i) = underlying physical column name (null if not a simple
-        // column)
-        Map<String, String> aliasToPhysical = new java.util.HashMap<>();
-        for (int i = 0; i < labels.size(); i++) {
-          String lab = labels.get(i);
-          String phys = (i < physicalCols.size()) ? physicalCols.get(i) : null;
-          if (lab != null && phys != null && !lab.isBlank() && !phys.isBlank()) {
-            aliasToPhysical.put(lab, phys);
-          }
-        }
+      // 5. ORDER BY: Compute and resolve to physical columns
+      List<OrderKey> orderKeys = computeOrderKeys(ps, projection.labels(), projection.physicalCols(),
+          fromInfo.tableName(), fromInfo.tableAlias());
 
-        for (OrderByElement e : ob) {
-          Expression ex = e.getExpression();
-
-          // normalize qualifiers (t.col -> col) for single-table
-          stripQualifier(ex, tableName, tableAlias);
-
-          // Extract the ORDER BY token as text
-          String keyText;
-          if (ex instanceof Column c) {
-            keyText = c.getColumnName();
-          } else if (ex instanceof StringValue sv) {
-            keyText = sv.getValue();
-          } else {
-            keyText = ex.toString();
-          }
-
-          // If it's an alias used in SELECT, map to the physical column name
-          String physicalKey = aliasToPhysical.getOrDefault(keyText, keyText);
-
-          boolean asc = !e.isAscDescPresent() || e.isAsc(); // default ASC
-          orderKeys.add(new OrderKey(physicalKey, asc));
-        }
-      }
-
-      return new Select(List.copyOf(labels), List.copyOf(physicalCols), tableName, tableAlias, whereExpr, limit,
-          List.copyOf(orderKeys));
+      return new Select(List.copyOf(projection.labels()), List.copyOf(projection.physicalCols()), fromInfo.tableName(),
+          fromInfo.tableAlias(), whereExpr, limit, List.copyOf(orderKeys));
     } catch (Exception e) {
       throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
     }
   }
+
+  // === Parsing Helper Methods =================================================
+
+  /**
+   * Internal record to hold the projection (SELECT list) results.
+   */
+  private record Projection(List<String> labels, List<String> physicalCols) {
+  }
+
+  /**
+   * Parses the FROM clause, ensuring it's a single table and extracts its
+   * name/alias.
+   */
+  private static FromInfo parseFromItem(FromItem fromItem) {
+    if (!(fromItem instanceof Table t)) {
+      throw new IllegalArgumentException("Only single-table SELECT is supported");
+    }
+    final String tableName = t.getName();
+    final String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
+    return new FromInfo(tableName, tableAlias);
+  }
+
+  /**
+   * Parses the SELECT list, resolving aliases and determining physical column
+   * names.
+   */
+  private static Projection parseProjectionList(List<SelectItem<?>> selectItems, FromInfo fromInfo) {
+    List<String> labels = new ArrayList<>();
+    List<String> physicalCols = new ArrayList<>();
+
+    boolean selectAll = false;
+    for (SelectItem<?> item : selectItems) {
+      final String text = item.toString().trim();
+
+      // Handle SELECT * and reject table.*
+      if ("*".equals(text)) {
+        selectAll = true;
+        break;
+      }
+      if (text.endsWith(".*")) {
+        throw new IllegalArgumentException("Qualified * (table.*) not supported yet: " + text);
+      }
+
+      final Expression expr = item.getExpression(); // JSqlParser 5.x
+      // Normalize qualifiers for single-table: t.col -> col
+      stripQualifier(expr, fromInfo.tableName(), fromInfo.tableAlias());
+
+      final Alias aliasObj = item.getAlias();
+      final String alias = aliasObj == null ? null : aliasObj.getName();
+
+      String label;
+      String underlying = null;
+
+      if (expr instanceof Column col) {
+        underlying = col.getColumnName();
+        if (alias != null && !alias.isEmpty()) {
+          label = alias;
+        } else {
+          label = underlying;
+        }
+      } else {
+        // Keep label stable; allow alias for projection labeling.
+        if (alias != null && !alias.isEmpty()) {
+          label = alias;
+        } else {
+          label = expr.toString();
+        }
+      }
+
+      labels.add(label);
+      physicalCols.add(underlying);
+    }
+
+    if (selectAll) {
+      // Defer to engine to expand to actual columns; keep old contract: columns() ==
+      // ["*"]
+      labels = List.of(); // empty list => columns() returns ["*"]
+      physicalCols = List.of(); // keep in sync
+    }
+
+    return new Projection(labels, physicalCols);
+  }
+
+  // LIMIT
+  private static int computeLimit(PlainSelect ps) {
+    Limit lim = ps.getLimit();
+    if (lim != null && lim.getRowCount() != null) {
+      // NOTE: Using LongValue instead of String.toString() for robustness
+      Expression rowCountExpr = lim.getRowCount();
+      if (rowCountExpr instanceof LongValue lv) {
+        return lv.getBigIntegerValue().intValue();
+      }
+      // Fallback for non-LongValue expressions, though rare for LIMIT
+      return Integer.parseInt(rowCountExpr.toString());
+    }
+    return -1;
+  }
+
+  /**
+   * Compute the {@link OrderKey}s (ORDER BY columns and sort directions) for a
+   * parsed {@link PlainSelect} statement.
+   *
+   * <p>
+   * This method normalizes and resolves ORDER BY expressions to their
+   * corresponding physical column names, ensuring that sorting is performed on
+   * actual data fields rather than aliases or qualified names. For example, in a
+   * query like:
+   * </p>
+   *
+   * <pre>{@code
+   * SELECT mpg AS miles_per_gallon, model
+   * FROM mtcars
+   * ORDER BY miles_per_gallon DESC
+   * }</pre>
+   *
+   * <p>
+   * The ORDER BY expression {@code miles_per_gallon} is resolved to the
+   * underlying physical column {@code mpg}, so that downstream components (such
+   * as {@code QueryProcessor}) can correctly sort records using the actual field
+   * name.
+   * </p>
+   *
+   * <p>
+   * The method also strips any table qualifiers (e.g. {@code t.col -> col}) for
+   * single-table queries.
+   * </p>
+   *
+   * @param ps
+   *          the {@link PlainSelect} representing the parsed SQL statement
+   * @param labels
+   *          the projection labels (aliases or column names as exposed in the
+   *          SELECT list)
+   * @param physicalCols
+   *          the underlying physical column names corresponding to {@code labels}
+   * @param tableName
+   *          the table name in the FROM clause
+   * @param tableAlias
+   *          the alias of the table, if any (may be {@code null})
+   * @return a list of {@link OrderKey} objects representing the resolved ORDER BY
+   *         keys; an empty list if the query has no ORDER BY clause
+   */
+  private static List<OrderKey> computeOrderKeys(PlainSelect ps, List<String> labels, List<String> physicalCols,
+      String tableName, String tableAlias) {
+    List<OrderKey> orderKeys = new ArrayList<>();
+    List<OrderByElement> ob = ps.getOrderByElements();
+    if (ob != null) {
+      // Build alias->physical map from the current projection lists we just built
+      // - labels.get(i) = projection label (alias if present, else column name)
+      // - physicalCols.get(i) = underlying physical column name (null if not a simple
+      // column)
+      Map<String, String> aliasToPhysical = new HashMap<>();
+      for (int i = 0; i < labels.size(); i++) {
+        String lab = labels.get(i);
+        String phys = (i < physicalCols.size()) ? physicalCols.get(i) : null;
+        if (lab != null && phys != null && !lab.isBlank() && !phys.isBlank()) {
+          aliasToPhysical.put(lab, phys);
+        }
+      }
+
+      for (OrderByElement e : ob) {
+        Expression ex = e.getExpression();
+
+        // normalize qualifiers (t.col -> col) for single-table
+        stripQualifier(ex, tableName, tableAlias);
+
+        // Extract the ORDER BY token as text
+        String keyText;
+        if (ex instanceof Column c) {
+          keyText = c.getColumnName();
+        } else if (ex instanceof StringValue sv) {
+          keyText = sv.getValue();
+        } else {
+          keyText = ex.toString();
+        }
+
+        // If it's an alias used in SELECT, map to the physical column name
+        String physicalKey = aliasToPhysical.getOrDefault(keyText, keyText);
+
+        boolean asc = !e.isAscDescPresent() || e.isAsc(); // default ASC
+        orderKeys.add(new OrderKey(physicalKey, asc));
+      }
+    }
+    return orderKeys;
+  }
+
+  // === Qualifier Stripping =================================================
 
   /**
    * Strip the table qualifier for a single-table query when the qualifier matches
@@ -236,55 +326,4 @@ public final class SqlParser {
     });
   }
 
-  @SuppressWarnings({
-      "PMD.AvoidDecimalLiteralsInBigDecimalConstructor", "PMD.EmptyCatchBlock", "checkstyle:NeedBraces"
-  })
-  static Object toLiteral(Expression e) {
-    if (e instanceof NullValue) {
-      return null;
-    }
-    if (e instanceof StringValue sv) {
-      return sv.getValue();
-    }
-    if (e instanceof LongValue lv) {
-      return lv.getBigIntegerValue().longValue();
-    }
-    if (e instanceof DoubleValue dv) {
-      return new BigDecimal(dv.getValue());
-    }
-    if (e instanceof SignedExpression se) {
-      return toSignedLiteral(se);
-    }
-    if (e instanceof BooleanValue bv) {
-      return bv.getValue();
-    }
-    if (e instanceof DateValue dv) {
-      return dv.getValue(); // java.sql.Date
-    }
-    if (e instanceof TimestampValue tv) {
-      return tv.getValue(); // java.sql.Timestamp
-    }
-    try {
-      return new BigDecimal(e.toString());
-    } catch (Exception ignore) {
-    }
-    return e.toString();
-  }
-
-  @SuppressWarnings("PMD.EmptyCatchBlock")
-  private static Object toSignedLiteral(SignedExpression se) {
-    Object inner = toLiteral(se.getExpression());
-    if (inner instanceof Number n) {
-      var bd = new BigDecimal(n.toString());
-      return se.getSign() == '-' ? bd.negate() : bd;
-    }
-    if (inner instanceof String s) {
-      try {
-        var bd = new BigDecimal(s);
-        return se.getSign() == '-' ? bd.negate() : bd;
-      } catch (Exception ignore) {
-      }
-    }
-    return (se.getSign() == '-') ? ("-" + inner) : inner;
-  }
 }

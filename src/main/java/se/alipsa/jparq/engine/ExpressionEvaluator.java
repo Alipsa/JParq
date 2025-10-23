@@ -30,6 +30,7 @@ import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.helper.LiteralConverter;
 
 /** Evaluates SQL expressions against Avro GenericRecords. */
 public final class ExpressionEvaluator {
@@ -96,17 +97,13 @@ public final class ExpressionEvaluator {
     }
     if (expr instanceof LikeExpression like) {
       Operand leftOperand = operand(like.getLeftExpression(), rec);
-      Operand rightOperand = operand(like.getRightExpression(), rec); // should be a string literal
+      Operand rightOperand = operand(like.getRightExpression(), rec);
       String left = (leftOperand.value == null) ? null : leftOperand.value.toString();
       String pat = (rightOperand.value == null) ? null : rightOperand.value.toString();
       if (left == null || pat == null) {
         return false;
       }
 
-      // FIX: Use the non-deprecated getLikeKeyWord().toString() to determine
-      // case-insensitivity
-      // for JSQLParser 5.3, replacing the deprecated getStringExpression() and
-      // isCaseInsensitive().
       boolean caseInsensitive = "ILIKE".equalsIgnoreCase(like.getLikeKeyWord().toString());
 
       boolean matches = likeMatch(left, pat, caseInsensitive);
@@ -139,7 +136,7 @@ public final class ExpressionEvaluator {
       if (right instanceof ExpressionList<?> list) {
         boolean found = false;
         for (Expression e : list) {
-          Operand rightOperand = operand(e, rec); // your existing helper
+          Operand rightOperand = operand(e, rec);
           Object leftVal = left.value;
           Object rightVal = rightOperand.value; // left is the evaluated left operand
           if (left.schemaOrNull != null) {
@@ -154,7 +151,6 @@ public final class ExpressionEvaluator {
       }
     }
 
-    // existing comparisons
     if (expr instanceof EqualsTo e) {
       return compare(e.getLeftExpression(), e.getRightExpression(), rec) == 0;
     }
@@ -216,7 +212,7 @@ public final class ExpressionEvaluator {
       Object v = AvroCoercions.unwrap(rec.get(name), colSchema);
       return new Operand(v, colSchema);
     }
-    return new Operand(SqlParser.toLiteral(e), null);
+    return new Operand(LiteralConverter.toLiteral(e), null);
   }
 
   static int typedCompare(Object l, Object r) {
@@ -266,9 +262,8 @@ public final class ExpressionEvaluator {
     Object leftVal = leftlOperand.value;
     Object rightVal = rightOperand.value;
 
-    // If one side is a column (has schema) and the other is a literal, coerce
-    // literal to column
-    // type
+    // If one side is a column (has schema) and the other is a literal,
+    // then coerce literal to column type
     if (leftlOperand.schemaOrNull != null && rightOperand.schemaOrNull == null) {
       rightVal = coerceLiteral(rightVal, leftlOperand.schemaOrNull);
     } else if (rightOperand.schemaOrNull != null && leftlOperand.schemaOrNull == null) {

@@ -25,6 +25,7 @@ import org.apache.avro.Schema;
 import org.apache.parquet.filter2.predicate.FilterApi;
 import org.apache.parquet.filter2.predicate.FilterPredicate;
 import org.apache.parquet.io.api.Binary;
+import se.alipsa.jparq.helper.LiteralConverter;
 
 /**
  * Best-effort translator from JSQLParser Expression -> Parquet FilterPredicate.
@@ -147,7 +148,7 @@ public final class ParquetFilterBuilder {
     }
 
     Schema effective = effectiveSchema(f.schema());
-    Object lit = SqlParser.toLiteral(litExpr);
+    Object lit = LiteralConverter.toLiteral(litExpr);
     Object coerced = AvroCoercions.coerceLiteral(lit, effective);
     if (coerced == null) {
       return Optional.empty(); // don’t push null semantics

@@ -83,6 +83,7 @@ The following SQL statements are supported:
 
 ### To be implemented in the near future
 - `DISTINCT` support in `SELECT` clause
+- Support computed expressions with aliases (e.g. SELECT mpg*2 AS double_mpg)
 - Functions support
   - Date functions
   - Numeric functions

@@ -118,8 +118,8 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Executes the query using the pre-calculated plan. This method is now lean,
-   * only focusing on I/O (building and reading the ParquetReader).
+   * Executes the query using the pre-calculated plan. This method only focuses on
+   * I/O (building and reading the ParquetReader).
    */
   @SuppressWarnings("PMD.CloseResource")
   @Override

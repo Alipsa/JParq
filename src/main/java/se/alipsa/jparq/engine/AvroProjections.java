@@ -57,7 +57,7 @@ public final class AvroProjections {
 
   private static void copyObjectProps(Schema.Field from, Schema.Field to) {
     // Copy all non-reserved props
-    from.getObjectProps().forEach((k, v) -> to.addProp(k, v));
+    from.getObjectProps().forEach(to::addProp);
     // Copy aliases
     if (from.aliases() != null) {
       for (String a : from.aliases()) {
