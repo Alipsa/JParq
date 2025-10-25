@@ -15,6 +15,9 @@ public final class AvroProjections {
   }
 
   /**
+   * Builds a projected schema keeping only the needed fields in the order of the
+   * file schema.
+   *
    * @param fileSchema
    *          full file schema (record)
    * @param needed

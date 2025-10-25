@@ -8,7 +8,9 @@ import java.util.function.Consumer;
 
 /**
  * Utility class to allow for easier querying of parquet files. Example usage:
- * <code><pre>
+ * 
+ * <pre>
+ * <code>
  *   URL mtcarsUrl = WhereTest.class.getResource("/mtcars.parquet");
  *   Path dir = Paths.get(mtcarsUrl.toURI()).getParent();
  *   JParqSql jparqSql = new JParqSql("jdbc:jparq:" + dir.toAbsolutePath());
@@ -22,7 +24,8 @@ import java.util.function.Consumer;
  *         throw new RuntimeExceptions(e);
  *       }
  *     });
- * </pre></code>
+ * </code>
+ * </pre>
  */
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqSql {

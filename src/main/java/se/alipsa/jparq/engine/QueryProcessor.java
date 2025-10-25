@@ -31,6 +31,16 @@ public final class QueryProcessor implements AutoCloseable {
   /**
    * Streaming constructor (no ORDER BY).
    *
+   * @param reader
+   *          the Parquet reader
+   * @param projection
+   *          list of columns to project
+   * @param where
+   *          the WHERE expression (may be null)
+   * @param limit
+   *          the LIMIT (-1 = no limit)
+   * @param schema
+   *          the Avro schema (needed for expression evaluation)
    * @param initialEmitted
    *          number of rows already emitted (affects LIMIT)
    */
@@ -43,6 +53,20 @@ public final class QueryProcessor implements AutoCloseable {
    * Generic constructor that can handle ORDER BY (buffer+sort) or streaming when
    * {@code orderBy} is empty.
    *
+   * @param reader
+   *          the Parquet reader
+   * @param projection
+   *          list of columns to project
+   * @param where
+   *          the WHERE expression (may be null)
+   * @param limit
+   *          the LIMIT (-1 = no limit)
+   * @param schema
+   *          the Avro schema (needed for expression evaluation and ORDER BY)
+   * @param initialEmitted
+   *          number of rows already emitted (affects LIMIT)
+   * @param orderBy
+   *          list of ORDER BY keys (empty = streaming path)
    * @param firstAlreadyRead
    *          a record already pulled by caller (may be null). It will be
    *          considered for buffering.
@@ -131,6 +155,8 @@ public final class QueryProcessor implements AutoCloseable {
    * Get the next record honoring WHERE/LIMIT (and ORDER BY if present).
    *
    * @return next matching record, or null if exhausted
+   * @throws IOException
+   *           on read error
    */
   public GenericRecord nextMatching() throws IOException {
     if (limit >= 0 && emitted >= limit) {
@@ -168,7 +194,16 @@ public final class QueryProcessor implements AutoCloseable {
     reader.close();
   }
 
-  /** Expand '*' against the first record’s schema if needed. */
+  /**
+   * Expand '*' against the first record’s schema if needed.
+   *
+   * @param requested
+   *          requested columns (may include '*')
+   * @param schema
+   *          The Avro schema
+   *
+   * @return list of columns to project
+   */
   public static List<String> computeProjection(List<String> requested, Schema schema) {
     if (requested.isEmpty() || requested.contains("*")) {
       List<String> cols = new ArrayList<>();

@@ -11,7 +11,23 @@ import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimestampValue;
 
+/** Converts JSqlParser Expression literals to Java Objects. */
 public class LiteralConverter {
+
+  /**
+   * Constructor for LiteralConverter.
+   */
+  public LiteralConverter() {
+    // empty
+  }
+
+  /**
+   * Converts a JSqlParser Expression literal to a Java Object.
+   *
+   * @param e
+   *          the expression
+   * @return the corresponding Java Object
+   */
   @SuppressWarnings({
       "PMD.AvoidDecimalLiteralsInBigDecimalConstructor", "PMD.EmptyCatchBlock", "checkstyle:NeedBraces"
   })

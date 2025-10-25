@@ -3,7 +3,16 @@ package se.alipsa.jparq.model;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 
+/** An adapter class for ResultSetMetaData with default implementations. */
 public class ResultSetMetaDataAdapter implements ResultSetMetaData {
+
+  /**
+   * Constructor for ResultSetMetaDataAdapter.
+   */
+  public ResultSetMetaDataAdapter() {
+    // empty
+  }
+
   @Override
   public int getColumnCount() throws SQLException {
     return 0;

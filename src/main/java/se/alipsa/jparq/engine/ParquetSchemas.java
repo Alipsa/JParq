@@ -9,10 +9,23 @@ import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.util.HadoopInputFile;
 import org.apache.parquet.schema.MessageType;
 
+/** Utility methods for reading Parquet schemas. */
 public final class ParquetSchemas {
+
   private ParquetSchemas() {
   }
 
+  /**
+   * Reads the Avro schema from a Parquet file.
+   *
+   * @param path
+   *          the Parquet file path
+   * @param conf
+   *          the Hadoop configuration
+   * @return the Avro schema
+   * @throws IOException
+   *           if an I/O error occurs
+   */
   public static Schema readAvroSchema(Path path, Configuration conf) throws IOException {
     try (ParquetFileReader reader = ParquetFileReader.open(HadoopInputFile.fromPath(path, conf))) {
 

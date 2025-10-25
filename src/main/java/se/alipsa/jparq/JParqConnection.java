@@ -77,10 +77,20 @@ public class JParqConnection implements Connection {
     throw new SQLException("Table not found: " + tableName);
   }
 
+  /**
+   * Get the base directory for this connection.
+   *
+   * @return the base directory
+   */
   public File getBaseDir() {
     return baseDir;
   }
 
+  /**
+   * Check if the connection is case sensitive.
+   *
+   * @return true if case sensitive, false otherwise
+   */
   public boolean isCaseSensitive() {
     return caseSensitive;
   }

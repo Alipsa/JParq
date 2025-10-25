@@ -76,12 +76,12 @@ public class PredicatePushdownPerfFS {
 
     // 6) Gentle assertion: schema path should not be slower.
     double ratio = (double) tWithSchema / (double) tNoSchema;
-    if (tWithSchema < tNoSchema) {
+    if (tWithSchema > tNoSchema) {
       LOG.warn("Expected pushdown to be at least faster. ratio= {} noSchema= {}" + "ns withSchema= {} ns", ratio,
           tNoSchema, tWithSchema);
     }
     // TODO: this test is too fast for meaningful comparisons ( ratio should be < 1)
-    assertTrue(ratio < 1.5, "Expected pushdown to be at least faster. ratio=" + ratio + " noSchema=" + tNoSchema
+    assertTrue(ratio < 1.2, "Expected pushdown to be at least faster. ratio=" + ratio + " noSchema=" + tNoSchema
         + "ns withSchema=" + tWithSchema + "ns");
   }
 

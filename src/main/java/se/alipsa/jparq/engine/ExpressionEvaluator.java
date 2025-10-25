@@ -184,6 +184,13 @@ public final class ExpressionEvaluator {
     throw new IllegalArgumentException("Unsupported WHERE expression: " + expr);
   }
 
+  /**
+   * Recursively unwrap all Parenthesis layers from an expression.
+   *
+   * @param expr
+   *          the expression to unwrap
+   * @return the unwrapped expression
+   */
   @SuppressWarnings("removal")
   public static Expression unwrapParenthesis(Expression expr) {
     Expression unwrapped = expr;

@@ -35,19 +35,39 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
     return new JParqPreparedStatement(this, sql);
   }
 
+  /**
+   * Gets the associated JParqConnection.
+   *
+   * @return the JParqConnection
+   */
   public JParqConnection getConn() {
     return conn;
   }
 
+  /**
+   * Gets the current SQL query.
+   *
+   * @return the current SQL query
+   */
   public String getCurrentSql() {
     return currentSql;
   }
 
+  /**
+   * Gets the current result set.
+   *
+   * @return the JParqResultSet
+   */
   public JParqResultSet getCurrentRs() {
     return currentRs;
   }
 
-  // New setter required by JParqPreparedStatement to link its ResultSet
+  /**
+   * Sets the current result set.
+   *
+   * @param rs
+   *          the JParqResultSet
+   */
   public void setCurrentRs(JParqResultSet rs) {
     this.currentRs = rs;
   }

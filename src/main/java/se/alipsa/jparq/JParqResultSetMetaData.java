@@ -15,12 +15,18 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   private final List<String> physicalNames; // underlying physical column names (null for computed)
   private final String tableName;
 
-  /** Back-compat ctor: use labels as both label and "physical" (old behavior). */
-  public JParqResultSetMetaData(Schema schema, List<String> columns, String tableName) {
-    this(schema, columns, /* physicalNames = */ null, tableName);
-  }
-
-  /** New ctor: labels (aliases) + physical names (null entries allowed). */
+  /**
+   * Constructor: labels (aliases) + physical names (null entries allowed).
+   *
+   * @param schema
+   *          the Avro schema (may be null if empty file)
+   * @param labels
+   *          the column labels (aliases)
+   * @param physicalNames
+   *          the underlying physical column names (null for computed)
+   * @param tableName
+   *          the table name
+   */
   public JParqResultSetMetaData(Schema schema, List<String> labels, List<String> physicalNames, String tableName) {
     this.schema = schema;
     this.labels = labels;

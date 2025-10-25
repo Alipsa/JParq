@@ -20,7 +20,8 @@ import java.util.logging.Logger;
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqDriver implements Driver {
 
-  public static final String URL_PREFIX = "jdbc:jparq:"; // <-- fix
+  /** The URL prefix for this driver. */
+  public static final String URL_PREFIX = "jdbc:jparq:";
 
   static {
     try {
@@ -28,6 +29,13 @@ public class JParqDriver implements Driver {
     } catch (SQLException e) {
       throw new ExceptionInInitializerError(e);
     }
+  }
+
+  /**
+   * Constructor for JParqDriver.
+   */
+  public JParqDriver() {
+    // empty
   }
 
   @Override

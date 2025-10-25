@@ -39,6 +39,12 @@ public class JParqResultSet extends ResultSetAdapter {
    *          the parsed select statement
    * @param tableName
    *          the name of the table
+   * @param residual
+   *          the residual WHERE expression (may be null)
+   * @param columnOrder
+   *          the projection column labels (aliases) or null
+   * @param physicalColumnOrder
+   *          the physical column names (may be null)
    * @throws SQLException
    *           if reading fails
    */
@@ -165,11 +171,9 @@ public class JParqResultSet extends ResultSetAdapter {
     // columnOrder = projection labels (aliases if present)
     // physicalColumnOrder = underlying physical column names (null for computed
     // exprs or when unknown)
-    if (physicalColumnOrder != null) {
-      return new JParqResultSetMetaData(schema, columnOrder, physicalColumnOrder, tableName);
-    }
-    // Backward-compatible fallback (pre-alias support)
-    return new JParqResultSetMetaData(schema, columnOrder, tableName);
+
+    return new JParqResultSetMetaData(schema, columnOrder, physicalColumnOrder, tableName);
+
   }
 
   @SuppressWarnings("PMD.EmptyCatchBlock")

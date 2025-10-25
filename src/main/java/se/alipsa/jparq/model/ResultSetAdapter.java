@@ -30,6 +30,13 @@ import java.util.Map;
 @SuppressWarnings("checkstyle:OverloadMethodsDeclarationOrder")
 public class ResultSetAdapter implements ResultSet {
 
+  /**
+   * Constructor for ResultSetAdapter.
+   */
+  public ResultSetAdapter() {
+    // empty
+  }
+
   @Override
   public boolean next() throws SQLException {
     return false;

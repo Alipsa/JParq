@@ -53,12 +53,21 @@ public final class SqlParser {
    */
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
       int limit, List<OrderKey> orderBy) {
-    /** returns "*" if no explicit projection. */
+
+    /**
+     * returns "*" if no explicit projection.
+     *
+     * @return list of column names or ["*"]
+     */
     public List<String> columns() {
       return (columnNames == null || columnNames.isEmpty()) ? List.of("*") : columnNames;
     }
 
-    /** ORDER BY keys (never null). */
+    /**
+     * ORDER BY keys (never null).
+     *
+     * @return list of OrderKey objects
+     */
     public List<OrderKey> orderBy() {
       // NOTE: Removed the redundant 'orderBy == null ? List.of() : orderBy' check
       // as parseSelect already ensures List.copyOf() which prevents null.
@@ -66,11 +75,25 @@ public final class SqlParser {
     }
   }
 
-  /** Internal record to hold table name and alias. */
+  /**
+   * Internal record to hold table name and alias.
+   *
+   * @param tableName
+   *          the table name
+   * @param tableAlias
+   *          the table alias (may be null)
+   * @return the FromInfo record
+   */
   private record FromInfo(String tableName, String tableAlias) {
   }
 
-  /** Parse a simple SELECT SQL statement (single-table). */
+  /**
+   * Parse a simple SELECT SQL statement (single-table).
+   *
+   * @param sql
+   *          the SQL string
+   * @return the parsed Select representation
+   */
   @SuppressWarnings("PMD.AvoidLiteralsInIfCondition")
   public static Select parseSelect(String sql) {
     try {

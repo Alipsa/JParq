@@ -38,6 +38,12 @@ public final class ParquetFilterBuilder {
   /**
    * Try to build a Parquet FilterPredicate; return empty if expression isn’t
    * fully pushdownable.
+   *
+   * @param avroSchema
+   *          the Avro schema of the Parquet data
+   * @param where
+   *          the WHERE expression
+   * @return optional FilterPredicate
    */
   public static Optional<FilterPredicate> build(Schema avroSchema, Expression where) {
     if (where == null) {
