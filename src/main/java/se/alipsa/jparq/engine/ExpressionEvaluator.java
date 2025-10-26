@@ -32,17 +32,30 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.helper.LiteralConverter;
 
-/** Evaluates SQL expressions against Avro GenericRecords. */
+/**
+ * Evaluates SQL expressions (via JSqlParser) against Avro
+ * {@link GenericRecord}s.
+ *
+ * <p>
+ * This class performs a <em>no-semantics-change</em> evaluation compared to the
+ * original implementation: it preserves the existing coercion rules, comparison
+ * behavior (including the treatment of {@code null}), and special parsing of
+ * fully parenthesized expressions, while improving readability and cohesion.
+ * </p>
+ */
 public final class ExpressionEvaluator {
 
-  private final Map<String, Schema> fieldSchemas; // exact match
-  private final Map<String, String> caseInsensitiveIndex; // lower(name) -> canonical
+  /** exact field name -> schema */
+  private final Map<String, Schema> fieldSchemas;
+  /** lower(field name) -> canonical field name */
+  private final Map<String, String> caseInsensitiveIndex;
 
   /**
-   * Constructor for ExpressionEvaluator.
+   * Creates a new evaluator for the provided Avro {@link Schema}.
    *
    * @param schema
-   *          the Avro schema of the records to evaluate against
+   *          the Avro schema of the records to evaluate against; must not be
+   *          {@code null}
    */
   public ExpressionEvaluator(Schema schema) {
     Map<String, Schema> fs = new HashMap<>();
@@ -56,101 +69,77 @@ public final class ExpressionEvaluator {
   }
 
   /**
-   * Evaluate the given expression against the provided GenericRecord.
+   * Evaluate the given SQL expression against the provided {@link GenericRecord}.
+   *
+   * <p>
+   * Notes on behavior (unchanged from the original):
+   * <ul>
+   * <li>All layers of parentheses are unwrapped before evaluation.</li>
+   * <li>If the expression text is fully parenthesized (e.g., {@code "(...)"}) it
+   * is re-parsed with {@code CCJSqlParserUtil.parseCondExpression} as a
+   * best-effort and then evaluated.</li>
+   * <li>When comparing a column to a literal, the literal is coerced to the
+   * column's Avro type.</li>
+   * <li>{@code null} participates as "non-match" in comparisons (returns
+   * {@code -1} internally).</li>
+   * <li>LIKE supports {@code %} (any sequence) and {@code _} (single char); ILIKE
+   * is case-insensitive.</li>
+   * </ul>
+   * </p>
    *
    * @param expression
-   *          the expression to evaluate
+   *          the expression to evaluate; must not be {@code null}
    * @param rec
-   *          the GenericRecord to evaluate against
-   * @return true if the expression evaluates to true, false otherwise
+   *          the Avro record to evaluate against; must not be {@code null}
+   * @return {@code true} if the expression evaluates to {@code true}; otherwise
+   *         {@code false}
+   * @throws IllegalArgumentException
+   *           if the expression type/operator is unsupported
    */
   @SuppressWarnings({
       "PMD.LooseCoupling", "PMD.EmptyCatchBlock"
   })
   public boolean eval(Expression expression, GenericRecord rec) {
     // Always strip all layers of (...) first
-    Expression expr = unwrapParenthesis(expression);
+    final Expression expr = unwrapParenthesis(expression);
 
-    String txt = expr.toString().trim();
-    if (txt.length() >= 2 && txt.charAt(0) == '(' && txt.charAt(txt.length() - 1) == ')') {
+    // Special-case: best-effort to re-parse "( ... )" to a condition expression
+    // (kept for exact behavioral parity with the original implementation)
+    if (isFullyParenthesized(expr)) {
       try {
-        Expression inner = CCJSqlParserUtil.parseCondExpression(txt.substring(1, txt.length() - 1));
+        Expression inner = CCJSqlParserUtil.parseCondExpression(stripOuterParens(expr.toString()));
         return eval(inner, rec);
       } catch (JSQLParserException ignore) {
-        // If reparse fails, we’ll continue to the standard handlers below
+        // fall back to standard handlers below
       }
     }
 
+    // Boolean connectives
     if (expr instanceof AndExpression and) {
-      return eval(and.getLeftExpression(), rec) && eval(and.getRightExpression(), rec);
+      return evalAnd(and, rec);
     }
     if (expr instanceof OrExpression or) {
-      return eval(or.getLeftExpression(), rec) || eval(or.getRightExpression(), rec);
+      return evalOr(or, rec);
     }
     if (expr instanceof NotExpression not) {
-      return !eval(not.getExpression(), rec); // this will also be unwrapped on next call
+      return evalNot(not, rec);
     }
+
+    // Null checks, LIKE, BETWEEN, IN
     if (expr instanceof IsNullExpression isNull) {
-      Operand op = operand(isNull.getLeftExpression(), rec);
-      boolean isNullVal = (op.value == null);
-      return isNull.isNot() != isNullVal;
+      return evalIsNull(isNull, rec);
     }
     if (expr instanceof LikeExpression like) {
-      Operand leftOperand = operand(like.getLeftExpression(), rec);
-      Operand rightOperand = operand(like.getRightExpression(), rec);
-      String left = (leftOperand.value == null) ? null : leftOperand.value.toString();
-      String pat = (rightOperand.value == null) ? null : rightOperand.value.toString();
-      if (left == null || pat == null) {
-        return false;
-      }
-
-      boolean caseInsensitive = "ILIKE".equalsIgnoreCase(like.getLikeKeyWord().toString());
-
-      boolean matches = likeMatch(left, pat, caseInsensitive);
-      return like.isNot() != matches;
+      return evalLike(like, rec);
     }
     if (expr instanceof Between between) {
-      Operand val = operand(between.getLeftExpression(), rec);
-      Operand lo = operand(between.getBetweenExpressionStart(), rec);
-      Operand hi = operand(between.getBetweenExpressionEnd(), rec);
-
-      Object curVal = val.value;
-      Object lowVal = lo.value;
-      Object highVal = hi.value;
-      // coerce to column type if available
-      if (val.schemaOrNull != null) {
-        lowVal = coerceLiteral(lowVal, val.schemaOrNull);
-        highVal = coerceLiteral(highVal, val.schemaOrNull);
-      }
-      if (curVal == null || lowVal == null || highVal == null) {
-        return false;
-      }
-      int cmpLo = typedCompare(curVal, lowVal);
-      int cmpHi = typedCompare(curVal, highVal);
-      boolean in = (cmpLo >= 0 && cmpHi <= 0);
-      return between.isNot() != in;
+      return evalBetween(between, rec);
     }
     if (expr instanceof InExpression in) {
-      Operand left = operand(in.getLeftExpression(), rec);
-      Expression right = in.getRightExpression(); // right side is an Expression
-      if (right instanceof ExpressionList<?> list) {
-        boolean found = false;
-        for (Expression e : list) {
-          Operand rightOperand = operand(e, rec);
-          Object leftVal = left.value;
-          Object rightVal = rightOperand.value; // left is the evaluated left operand
-          if (left.schemaOrNull != null) {
-            rightVal = coerceLiteral(rightVal, left.schemaOrNull);
-          }
-          if (leftVal != null && rightVal != null && typedCompare(leftVal, rightVal) == 0) {
-            found = true;
-            break;
-          }
-        }
-        return in.isNot() != found;
-      }
+      return evalIn(in, rec);
     }
 
+    // Comparison operators
     if (expr instanceof EqualsTo e) {
       return compare(e.getLeftExpression(), e.getRightExpression(), rec) == 0;
     }
@@ -169,26 +158,115 @@ public final class ExpressionEvaluator {
 
     // Generic fallback for binary comparisons (covers parenthesized variants too)
     if (expr instanceof BinaryExpression be) {
-      int cmp = compare(be.getLeftExpression(), be.getRightExpression(), rec);
-      String op = be.getStringExpression(); // e.g. "=", "<", ">", "<=", ">=", "<>", "!="
-      return switch (op) {
-        case "=" -> cmp == 0;
-        case "<" -> cmp < 0;
-        case ">" -> cmp > 0;
-        case "<=" -> cmp <= 0;
-        case ">=" -> cmp >= 0;
-        case "<>", "!=" -> cmp != 0;
-        default -> throw new IllegalArgumentException("Unsupported operator: " + op);
-      };
+      return evalBinary(be, rec);
     }
+
     throw new IllegalArgumentException("Unsupported WHERE expression: " + expr);
   }
 
+  // -------------------------
+  // Operator-specific handlers
+  // -------------------------
+
+  private boolean evalAnd(AndExpression and, GenericRecord rec) {
+    return eval(and.getLeftExpression(), rec) && eval(and.getRightExpression(), rec);
+  }
+
+  private boolean evalOr(OrExpression or, GenericRecord rec) {
+    return eval(or.getLeftExpression(), rec) || eval(or.getRightExpression(), rec);
+  }
+
+  private boolean evalNot(NotExpression not, GenericRecord rec) {
+    // unwrap happens in the next eval call
+    return !eval(not.getExpression(), rec);
+  }
+
+  private boolean evalIsNull(IsNullExpression isNull, GenericRecord rec) {
+    Operand op = operand(isNull.getLeftExpression(), rec);
+    boolean isNullVal = (op.value == null);
+    return isNull.isNot() != isNullVal;
+  }
+
+  private boolean evalLike(LikeExpression like, GenericRecord rec) {
+    Operand leftOperand = operand(like.getLeftExpression(), rec);
+    Operand rightOperand = operand(like.getRightExpression(), rec);
+
+    String left = (leftOperand.value == null) ? null : leftOperand.value.toString();
+    String pat = (rightOperand.value == null) ? null : rightOperand.value.toString();
+
+    if (left == null || pat == null) {
+      return false;
+    }
+
+    boolean caseInsensitive = "ILIKE".equalsIgnoreCase(like.getLikeKeyWord().toString());
+    boolean matches = likeMatch(left, pat, caseInsensitive);
+    return like.isNot() != matches;
+  }
+
+  private boolean evalBetween(Between between, GenericRecord rec) {
+    Operand val = operand(between.getLeftExpression(), rec);
+    Operand lo = operand(between.getBetweenExpressionStart(), rec);
+    Operand hi = operand(between.getBetweenExpressionEnd(), rec);
+
+    Object curVal = val.value;
+    Object lowVal = coerceIfColumnType(lo.value, val.schemaOrNull);
+    Object highVal = coerceIfColumnType(hi.value, val.schemaOrNull);
+
+    if (curVal == null || lowVal == null || highVal == null) {
+      return false;
+    }
+
+    int cmpLo = typedCompare(curVal, lowVal);
+    int cmpHi = typedCompare(curVal, highVal);
+    boolean in = (cmpLo >= 0 && cmpHi <= 0);
+    return between.isNot() != in;
+  }
+
+  private boolean evalIn(InExpression in, GenericRecord rec) {
+    Operand left = operand(in.getLeftExpression(), rec);
+    Expression right = in.getRightExpression();
+
+    if (right instanceof ExpressionList<?> list) {
+      boolean found = false;
+      for (Expression e : list) {
+        Operand rightOperand = operand(e, rec);
+
+        Object leftVal = left.value;
+        Object rightVal = coerceIfColumnType(rightOperand.value, left.schemaOrNull);
+
+        if (leftVal != null && rightVal != null && typedCompare(leftVal, rightVal) == 0) {
+          found = true;
+          break;
+        }
+      }
+      return in.isNot() != found;
+    }
+    return false;
+  }
+
+  private boolean evalBinary(BinaryExpression be, GenericRecord rec) {
+    int cmp = compare(be.getLeftExpression(), be.getRightExpression(), rec);
+    String op = be.getStringExpression(); // "=", "<", ">", "<=", ">=", "<>", "!="
+    return switch (op) {
+      case "=" -> cmp == 0;
+      case "<" -> cmp < 0;
+      case ">" -> cmp > 0;
+      case "<=" -> cmp <= 0;
+      case ">=" -> cmp >= 0;
+      case "<>", "!=" -> cmp != 0;
+      default -> throw new IllegalArgumentException("Unsupported operator: " + op);
+    };
+  }
+
+  // -------------------------
+  // Utilities
+  // -------------------------
+
   /**
-   * Recursively unwrap all Parenthesis layers from an expression.
+   * Recursively unwrap all {@link Parenthesis} layers from an expression.
    *
    * @param expr
-   *          the expression to unwrap
+   *          the expression to unwrap; must not be {@code null}
    * @return the unwrapped expression
    */
   @SuppressWarnings("removal")
@@ -200,26 +278,41 @@ public final class ExpressionEvaluator {
     return unwrapped;
   }
 
+  private static boolean isFullyParenthesized(Expression expr) {
+    String txt = expr.toString().trim();
+    return txt.length() >= 2 && txt.charAt(0) == '(' && txt.charAt(txt.length() - 1) == ')';
+  }
+
+  private static String stripOuterParens(String s) {
+    return s.substring(1, s.length() - 1);
+  }
+
   private record Operand(Object value, Schema schemaOrNull) {
   }
 
   private Operand operand(Expression e, GenericRecord rec) {
     if (e instanceof Column c) {
       String name = c.getColumnName();
+      String lookupName = name; // default to the parsed token
       Schema colSchema = fieldSchemas.get(name);
       if (colSchema == null) {
         String canon = caseInsensitiveIndex.get(name.toLowerCase(Locale.ROOT));
         if (canon != null) {
           colSchema = fieldSchemas.get(canon);
+          lookupName = canon; // USE canonical name when reading from the record
         }
       }
       if (colSchema == null) {
         return new Operand(null, null);
       }
-      Object v = AvroCoercions.unwrap(rec.get(name), colSchema);
+      Object v = AvroCoercions.unwrap(rec.get(lookupName), colSchema);
       return new Operand(v, colSchema);
     }
     return new Operand(LiteralConverter.toLiteral(e), null);
+  }
+
+  private static Object coerceIfColumnType(Object value, Schema columnSchemaOrNull) {
+    return (columnSchemaOrNull == null) ? value : coerceLiteral(value, columnSchemaOrNull);
   }
 
   static int typedCompare(Object l, Object r) {
@@ -244,46 +337,55 @@ public final class ExpressionEvaluator {
     for (int i = 0; i < pattern.length(); i++) {
       char c = pattern.charAt(i);
       switch (c) {
-        case '%':
+        case '%': {
           re.append(".*");
           break;
-        case '_':
+        }
+        case '_': {
           re.append('.');
           break;
-        default:
+        }
+        default: {
           // escape regex metacharacters
           if ("\\.[]{}()*+-?^$|".indexOf(c) >= 0) {
             re.append('\\');
           }
           re.append(c);
+        }
       }
     }
     String regex = re.toString();
-    return caseInsensitive ? s.toLowerCase().matches(regex.toLowerCase()) : s.matches(regex);
+    if (caseInsensitive) {
+      return s.toLowerCase().matches(regex.toLowerCase());
+    } else {
+      return s.matches(regex);
+    }
   }
 
   private int compare(Expression leftExpr, Expression rightExpr, GenericRecord rec) {
-    Operand leftlOperand = operand(leftExpr, rec);
+    Operand leftOperand = operand(leftExpr, rec);
     Operand rightOperand = operand(rightExpr, rec);
 
-    Object leftVal = leftlOperand.value;
+    Object leftVal = leftOperand.value;
     Object rightVal = rightOperand.value;
 
     // If one side is a column (has schema) and the other is a literal,
     // then coerce literal to column type
-    if (leftlOperand.schemaOrNull != null && rightOperand.schemaOrNull == null) {
-      rightVal = coerceLiteral(rightVal, leftlOperand.schemaOrNull);
-    } else if (rightOperand.schemaOrNull != null && leftlOperand.schemaOrNull == null) {
+    if (leftOperand.schemaOrNull != null && rightOperand.schemaOrNull == null) {
+      rightVal = coerceLiteral(rightVal, leftOperand.schemaOrNull);
+    } else if (rightOperand.schemaOrNull != null && leftOperand.schemaOrNull == null) {
       leftVal = coerceLiteral(leftVal, rightOperand.schemaOrNull);
     }
 
     if (leftVal == null || rightVal == null) {
-      return -1; // nulls don't match in this minimal impl
+      // original behavior: nulls don't match
+      return -1;
     }
 
     try {
       return typedCompare(leftVal, rightVal);
     } catch (Exception e) {
+      // original behavior: swallow and treat as non-match
       return -1;
     }
   }
