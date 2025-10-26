@@ -44,7 +44,7 @@ public class JParqExample {
     }
   }
 
-  // Using the JparqSql helper
+  // Using the JParqSql helper
   void selectMtcarsToyotas() throws SQLException {
     String jdbcUrl = "jdbc:jparq:/home/user/data";
     JParqSql jparqSql = new JParqSql(jdbcUrl);
@@ -60,11 +60,11 @@ public class JParqExample {
   }
 }
 ```
-The driver is automatically registered using the service interface but if your client needs the driver fo some reason,
-the Driver class name is `se.alipsa.jparq.JparqDriver`.
+The driver is automatically registered using the service interface, but if your client needs the driver for some reason,
+the Driver class name is `se.alipsa.jparq.JParqDriver`.
 e.g:
 ```groovy
-Class.forName("se.alipsa.jparq.JparqDriver")
+Class.forName("se.alipsa.jparq.JParqDriver")
 Connection conn = DriverManager.getConnection(jdbcUrl)
 // etc...
 ```
