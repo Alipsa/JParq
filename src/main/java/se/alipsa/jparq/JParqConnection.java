@@ -103,13 +103,15 @@ public class JParqConnection implements Connection {
 
   @Override
   public Statement createStatement(int resultSetType, int resultSetConcurrency) throws SQLException {
-    return null;
+    throw new SQLFeatureNotSupportedException(
+        "JParq is a read-only driver; configurable ResultSet type/concurrency is not supported.");
   }
 
   @Override
   public Statement createStatement(int resultSetType, int resultSetConcurrency, int resultSetHoldability)
       throws SQLException {
-    return null;
+    throw new SQLFeatureNotSupportedException(
+        "JParq is a read-only driver; configurable ResultSet holdability is not supported.");
   }
 
   @Override
