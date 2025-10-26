@@ -1,5 +1,7 @@
 package se.alipsa.jparq.helper;
 
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.util.List;
 import java.util.Properties;
@@ -20,10 +22,19 @@ public final class JParqUtil {
   @SuppressWarnings("PMD.AvoidLiteralsInIfCondition")
   public static Properties parseUrlQuery(String qs) {
     Properties p = new Properties();
-    for (String kv : qs.split("&")) {
+    if (qs == null || qs.isEmpty()) {
+      return p;
+    }
+    String s = qs.charAt(0) == '?' ? qs.substring(1) : qs;
+    for (String kv : s.split("&")) {
+      if (kv.isEmpty()) {
+        continue;
+      }
       String[] arr = kv.split("=", 2);
-      if (arr.length == 2) {
-        p.setProperty(arr[0], arr[1]);
+      String k = URLDecoder.decode(arr[0], StandardCharsets.UTF_8);
+      String v = arr.length == 2 ? URLDecoder.decode(arr[1], StandardCharsets.UTF_8) : "";
+      if (!k.isEmpty()) {
+        p.setProperty(k, v);
       }
     }
     return p;
@@ -36,8 +47,29 @@ public final class JParqUtil {
    *          the SQL LIKE pattern
    * @return the equivalent Java regex pattern
    */
+
   public static String sqlLikeToRegex(String like) {
-    return like.replace("%", ".*").replace("_", ".");
+    if (like == null) {
+      return "";
+    }
+    StringBuilder re = new StringBuilder();
+    for (int i = 0; i < like.length(); i++) {
+      char c = like.charAt(i);
+      switch (c) {
+        case '%':
+          re.append(".*");
+          break;
+        case '_':
+          re.append('.');
+          break;
+        default:
+          if ("\\.[]{}()*+-?^$|".indexOf(c) >= 0) {
+            re.append('\\');
+          }
+          re.append(c);
+      }
+    }
+    return re.toString();
   }
 
   /**

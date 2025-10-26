@@ -5,6 +5,7 @@ import static se.alipsa.jparq.engine.ExpressionEvaluator.unwrapParenthesis;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.Expression;
@@ -52,6 +53,16 @@ public final class ParquetFilterBuilder {
     return tryBuild(avroSchema, unwrapParenthesis(where));
   }
 
+  /**
+   * Internal recursive builder for Parquet FilterPredicate.
+   *
+   * @param schema
+   *          the Avro schema of the Parquet data
+   * @param expression
+   *          the expression subtree to translate
+   * @return an Optional with the predicate if the subtree is fully supported;
+   *         empty otherwise
+   */
   private static Optional<FilterPredicate> tryBuild(Schema schema, Expression expression) {
     Expression exp = unwrapParenthesis(expression);
 
@@ -111,6 +122,30 @@ public final class ParquetFilterBuilder {
     return comparison(schema, exp);
   }
 
+  private static Schema.Field findFieldCaseInsensitive(Schema schema, String name) {
+    Schema.Field f = schema.getField(name);
+    if (f != null) {
+      return f;
+    }
+    String target = name.toLowerCase(Locale.ROOT);
+    for (Schema.Field sf : schema.getFields()) {
+      if (sf.name().toLowerCase(Locale.ROOT).equals(target)) {
+        return sf;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Build a simple column-operator-literal comparison predicate; returns empty if
+   * the expression is not of supported form.
+   *
+   * @param schema
+   *          the Avro schema of the Parquet data
+   * @param e
+   *          the expression to translate
+   * @return optional FilterPredicate if pushdownable; empty otherwise
+   */
   private static Optional<FilterPredicate> comparison(Schema schema, Expression e) {
     if (!(e instanceof BinaryExpression be)) {
       return Optional.empty();
@@ -131,7 +166,13 @@ public final class ParquetFilterBuilder {
     return Optional.empty();
   }
 
-  /** Convert “LIT OP COL” into “COL OP' LIT”. */
+  /**
+   * Convert \"LIT OP COL\" into \"COL OP' LIT\" by swapping operator direction.
+   *
+   * @param be
+   *          the original binary operator
+   * @return a BinaryExpression representing the swapped operator
+   */
   private static BinaryExpression swap(BinaryExpression be) {
     String op = be.getStringExpression();
     return switch (op) {
@@ -145,15 +186,29 @@ public final class ParquetFilterBuilder {
     };
   }
 
+  /**
+   * Build a predicate for column vs literal using the provided operator.
+   *
+   * @param avroSchema
+   *          the Avro schema of the Parquet data
+   * @param colExpr
+   *          the column expression
+   * @param op
+   *          the operator (already adjusted for operand order)
+   * @param litExpr
+   *          the literal expression
+   * @return optional FilterPredicate; empty if schema/type or operator is
+   *         unsupported
+   */
   private static Optional<FilterPredicate> buildColOpLit(Schema avroSchema, Column colExpr, BinaryExpression op,
       Expression litExpr) {
     String col = colExpr.getColumnName();
-    Schema.Field f = avroSchema.getField(col);
+    Schema.Field f = findFieldCaseInsensitive(avroSchema, col);
     if (f == null) {
       return Optional.empty();
     }
 
-    Schema effective = effectiveSchema(f.schema());
+    Schema effective = AvroCoercions.effectiveSchema(f.schema());
     Object lit = LiteralConverter.toLiteral(litExpr);
     Object coerced = AvroCoercions.coerceLiteral(lit, effective);
     if (coerced == null) {
@@ -174,7 +229,17 @@ public final class ParquetFilterBuilder {
     };
   }
 
-  // Type-specific builders (avoid SupportsLtGt<T> generic):
+  /**
+   * Build an int predicate for the given operator and value.
+   *
+   * @param c
+   *          the Parquet int column
+   * @param op
+   *          the binary operator
+   * @param v
+   *          the literal value
+   * @return FilterPredicate, or null if the operator is unsupported
+   */
   private static FilterPredicate buildInt(org.apache.parquet.filter2.predicate.Operators.IntColumn c,
       BinaryExpression op, int v) {
     return switch (op.getStringExpression()) {
@@ -188,6 +253,17 @@ public final class ParquetFilterBuilder {
     };
   }
 
+  /**
+   * Build a long predicate for the given operator and value.
+   *
+   * @param c
+   *          the Parquet long column
+   * @param op
+   *          the binary operator
+   * @param v
+   *          the literal value
+   * @return FilterPredicate, or null if the operator is unsupported
+   */
   private static FilterPredicate buildLong(org.apache.parquet.filter2.predicate.Operators.LongColumn c,
       BinaryExpression op, long v) {
     return switch (op.getStringExpression()) {
@@ -201,6 +277,17 @@ public final class ParquetFilterBuilder {
     };
   }
 
+  /**
+   * Build a float predicate for the given operator and value.
+   *
+   * @param c
+   *          the Parquet float column
+   * @param op
+   *          the binary operator
+   * @param v
+   *          the literal value
+   * @return FilterPredicate, or null if the operator is unsupported
+   */
   private static FilterPredicate buildFloat(org.apache.parquet.filter2.predicate.Operators.FloatColumn c,
       BinaryExpression op, float v) {
     return switch (op.getStringExpression()) {
@@ -214,6 +301,17 @@ public final class ParquetFilterBuilder {
     };
   }
 
+  /**
+   * Build a double predicate for the given operator and value.
+   *
+   * @param c
+   *          the Parquet double column
+   * @param op
+   *          the binary operator
+   * @param v
+   *          the literal value
+   * @return FilterPredicate, or null if the operator is unsupported
+   */
   private static FilterPredicate buildDouble(org.apache.parquet.filter2.predicate.Operators.DoubleColumn c,
       BinaryExpression op, double v) {
     return switch (op.getStringExpression()) {
@@ -227,6 +325,17 @@ public final class ParquetFilterBuilder {
     };
   }
 
+  /**
+   * Build a boolean predicate for the given operator and value.
+   *
+   * @param c
+   *          the Parquet boolean column
+   * @param op
+   *          the binary operator
+   * @param v
+   *          the literal value
+   * @return FilterPredicate, or null if the operator is unsupported for boolean
+   */
   private static FilterPredicate buildBoolean(org.apache.parquet.filter2.predicate.Operators.BooleanColumn c,
       BinaryExpression op, boolean v) {
     return switch (op.getStringExpression()) {
@@ -236,6 +345,17 @@ public final class ParquetFilterBuilder {
     };
   }
 
+  /**
+   * Build a binary (string-backed) predicate for the given operator and value.
+   *
+   * @param c
+   *          the Parquet binary column
+   * @param op
+   *          the binary operator
+   * @param v
+   *          the literal value as Binary
+   * @return FilterPredicate, or null if the operator is unsupported
+   */
   private static FilterPredicate buildBinary(org.apache.parquet.filter2.predicate.Operators.BinaryColumn c,
       BinaryExpression op, Binary v) {
     return switch (op.getStringExpression()) {
@@ -249,24 +369,6 @@ public final class ParquetFilterBuilder {
     };
   }
 
-  /**
-   * Collapse nullable unions to their non-null branch, else return input.
-   *
-   * @param s
-   *          the schema
-   * @return effective schema
-   */
-  private static Schema effectiveSchema(Schema s) {
-    if (s.getType() == Schema.Type.UNION) {
-      for (Schema b : s.getTypes()) {
-        if (b.getType() != Schema.Type.NULL) {
-          return b;
-        }
-      }
-      return s;
-    }
-    return s;
-  }
   /**
    * True if we could build a predicate for the whole WHERE expression tree.
    *

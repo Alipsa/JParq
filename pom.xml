@@ -6,6 +6,24 @@
   <artifactId>parquet-jdbc</artifactId>
   <version>0.1.0</version>
   <name>JDBC Driver for Parquet files</name>
+
+  <description>JDBC Driver for reading Parquet files</description>
+  <url>https://github.com/Alipsa/JParq</url>
+  <licenses>
+    <license>
+      <name>Apache Licence 2.0</name>
+      <url>https://raw.githubusercontent.com/Alipsa/JParq/refs/heads/main/LICENSE</url>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <name>Per Nyfelt</name>
+      <email>per.nyfelt@alipsa.se</email>
+    </developer>
+  </developers>
+  <scm>
+    <url>scm:git@github.com:Alipsa/JParq.git</url>
+  </scm>
   <properties>
     <java.version>21</java.version>
     <maven.compiler.release>${java.version}</maven.compiler.release>

@@ -22,7 +22,14 @@ public final class AvroCoercions {
   private AvroCoercions() {
   }
 
-  static Schema nonNull(Schema s) {
+  /**
+   * Collapse nullable unions to their non-null branch, else return input.
+   *
+   * @param s
+   *          the schema
+   * @return effective schema
+   */
+  static Schema effectiveSchema(Schema s) {
     if (s.getType() == Schema.Type.UNION) {
       for (Schema t : s.getTypes()) {
         if (t.getType() != Schema.Type.NULL) {
@@ -38,7 +45,7 @@ public final class AvroCoercions {
     if (lit == null) {
       return null;
     }
-    Schema effective = nonNull(s);
+    Schema effective = effectiveSchema(s);
     switch (effective.getType()) {
       case STRING, ENUM:
         return lit.toString();
@@ -119,7 +126,7 @@ public final class AvroCoercions {
     if (v == null) {
       return null;
     }
-    Schema effective = nonNull(s);
+    Schema effective = effectiveSchema(s);
     switch (effective.getType()) {
       case STRING:
         return v.toString();
