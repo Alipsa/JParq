@@ -29,11 +29,8 @@ public class JParqConnectionTest {
   @Test
   void createStatementWithTypeAndConcurrencyIsUnsupported() throws SQLException, URISyntaxException {
     try (Connection connection = newConnection()) {
-      Assertions.assertThrows(
-          SQLFeatureNotSupportedException.class,
-          () ->
-              connection.createStatement(
-                  ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY));
+      Assertions.assertThrows(SQLFeatureNotSupportedException.class,
+          () -> connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY));
     }
   }
 }
