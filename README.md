@@ -60,7 +60,7 @@ public class JParqExample {
   }
 }
 ```
-The driver is automatically registered using the service interface but if your client needs the driver fo some reason,
+The driver is automatically registered using the service interface, but if your client needs the driver for some reason,
 the Driver class name is `se.alipsa.jparq.JParqDriver`.
 e.g:
 ```groovy
