@@ -19,7 +19,9 @@ public final class QueryProcessor implements AutoCloseable {
   private final List<String> projection;
   private final Expression where;
   private final int limit;
-  private final ExpressionEvaluator evaluator;
+
+  // Evaluator is lazily created if schema was not provided
+  private ExpressionEvaluator evaluator;
 
   // ORDER BY support
   private final List<SqlParser.OrderKey> orderBy; // empty => streaming path
@@ -86,17 +88,26 @@ public final class QueryProcessor implements AutoCloseable {
     }
   }
 
-  private void bufferAndSort(GenericRecord first, Schema schema) {
+  private void bufferAndSort(GenericRecord first, Schema schemaHint) {
     try {
       List<GenericRecord> buf = new ArrayList<>();
+      Schema sortSchema = schemaHint;
 
       // include firstAlreadyRead if it matches WHERE
-      if (first != null && matches(first)) {
-        buf.add(first);
+      if (first != null) {
+        if (sortSchema == null) {
+          sortSchema = first.getSchema();
+        }
+        if (matches(first)) {
+          buf.add(first);
+        }
       }
 
-      // read and filter all remaining
+      // read remaining, detect schema if still unknown
       GenericRecord rec = reader.read();
+      if (sortSchema == null && rec != null) {
+        sortSchema = rec.getSchema();
+      }
       while (rec != null) {
         if (matches(rec)) {
           buf.add(rec);
@@ -104,13 +115,17 @@ public final class QueryProcessor implements AutoCloseable {
         rec = reader.read();
       }
 
-      // sort by ORDER BY keys (ASC default), simple NULL policy: ASC -> NULLS LAST,
-      // DESC -> NULLS FIRST
-      buf.sort(buildComparator(schema, orderBy));
+      // ensure evaluator exists if WHERE is used
+      ensureEvaluator(sortSchema);
+
+      // sort by ORDER BY keys if we have schema and >1 row
+      if (buf.size() > 1 && sortSchema != null) {
+        buf.sort(buildComparator(sortSchema, orderBy));
+      }
 
       this.sorted = buf;
       this.idx = 0;
-    } catch (Exception e) {
+    } catch (IOException e) {
       throw new RuntimeException("ORDER BY buffer/sort failed", e);
     }
   }
@@ -147,8 +162,25 @@ public final class QueryProcessor implements AutoCloseable {
     };
   }
 
+  private void ensureEvaluator(GenericRecord rec) {
+    if (where != null && evaluator == null && rec != null) {
+      evaluator = new ExpressionEvaluator(rec.getSchema());
+    }
+  }
+
+  private void ensureEvaluator(Schema schema) {
+    if (where != null && evaluator == null && schema != null) {
+      evaluator = new ExpressionEvaluator(schema);
+    }
+    // If still null, it will be lazily created from the first record seen.
+  }
+
   private boolean matches(GenericRecord rec) {
-    return where == null || (evaluator != null && evaluator.eval(where, rec));
+    if (where == null) {
+      return true;
+    }
+    ensureEvaluator(rec);
+    return evaluator != null && evaluator.eval(where, rec);
   }
 
   /**
@@ -201,7 +233,6 @@ public final class QueryProcessor implements AutoCloseable {
    *          requested columns (may include '*')
    * @param schema
    *          The Avro schema
-   *
    * @return list of columns to project
    */
   public static List<String> computeProjection(List<String> requested, Schema schema) {
