@@ -1,5 +1,7 @@
 package se.alipsa.jparq.helper;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -98,28 +100,28 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
 
     switch (unit) {
       case "year", "years": {
-        long years = new java.math.BigDecimal(amt).longValueExact();
+        long years = new BigDecimal(amt).longValueExact();
         return of(Period.ofYears(Math.toIntExact(years)), Duration.ZERO);
       }
       case "month", "months": {
-        long months = new java.math.BigDecimal(amt).longValueExact();
+        long months = new BigDecimal(amt).longValueExact();
         return of(Period.ofMonths(Math.toIntExact(months)), Duration.ZERO);
       }
       case "day", "days": {
-        long days = new java.math.BigDecimal(amt).longValueExact();
+        long days = new BigDecimal(amt).longValueExact();
         return of(Period.ofDays(Math.toIntExact(days)), Duration.ZERO);
       }
       case "hour", "hours": {
-        long hours = new java.math.BigDecimal(amt).longValueExact();
+        long hours = new BigDecimal(amt).longValueExact();
         return of(Period.ZERO, Duration.ofHours(hours));
       }
       case "minute", "minutes": {
-        long minutes = new java.math.BigDecimal(amt).longValueExact();
+        long minutes = new BigDecimal(amt).longValueExact();
         return of(Period.ZERO, Duration.ofMinutes(minutes));
       }
       case "second", "seconds": {
-        java.math.BigDecimal bd = new java.math.BigDecimal(amt);
-        long nanosTotal = bd.movePointRight(9).setScale(0, java.math.RoundingMode.UNNECESSARY).longValueExact();
+        BigDecimal bd = new BigDecimal(amt);
+        long nanosTotal = bd.movePointRight(9).setScale(0, RoundingMode.UNNECESSARY).longValueExact();
         long seconds = Math.floorDiv(nanosTotal, 1_000_000_000L);
         long nanos = Math.floorMod(nanosTotal, 1_000_000_000L);
         return of(Period.ZERO, Duration.ofSeconds(seconds, nanos));
