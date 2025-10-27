@@ -8,6 +8,7 @@ import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 import net.sf.jsqlparser.expression.Expression;
@@ -351,12 +352,40 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   @Override
+  public Date getDate(String columnLabel) throws SQLException {
+    return getDate(findColumn(columnLabel));
+  }
+
+  @Override
   public Time getTime(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
+    if (v == null) {
+      return null;
+    }
     if (v instanceof Timestamp) {
       return new Time(((Timestamp) v).getTime());
     }
-    return (Time) v;
+    if (v instanceof Time) {
+      return (Time) v;
+    }
+    if (v instanceof LocalTime lt) {
+      return Time.valueOf(lt);
+    }
+    if (v instanceof String s) {
+      return Time.valueOf(s);
+    }
+    if (v instanceof Long l) {
+      return new Time(l);
+    }
+    if (v instanceof Double d) {
+      return new Time(d.longValue());
+    }
+    throw new SQLException("Unsupported time type: " + v.getClass().getName());
+  }
+
+  @Override
+  public Time getTime(String columnLabel) throws SQLException {
+    return getTime(findColumn(columnLabel));
   }
 
   @Override
@@ -384,6 +413,11 @@ public class JParqResultSet extends ResultSetAdapter {
       return Timestamp.valueOf(l);
     }
     throw new SQLException("Unsupported timestamp type: " + v.getClass().getName());
+  }
+
+  @Override
+  public Timestamp getTimestamp(String columnLabel) throws SQLException {
+    return getTimestamp(findColumn(columnLabel));
   }
 
   @Override

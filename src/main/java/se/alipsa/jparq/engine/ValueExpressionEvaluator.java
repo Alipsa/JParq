@@ -2,20 +2,27 @@ package se.alipsa.jparq.engine;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
-import net.sf.jsqlparser.expression.Parenthesis;
+import net.sf.jsqlparser.expression.ExtractExpression;
+import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.SignedExpression;
+import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.operators.arithmetic.Addition;
 import net.sf.jsqlparser.expression.operators.arithmetic.Division;
 import net.sf.jsqlparser.expression.operators.arithmetic.Modulo;
 import net.sf.jsqlparser.expression.operators.arithmetic.Multiplication;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
+import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.helper.DateTimeExpressions;
 import se.alipsa.jparq.helper.LiteralConverter;
 
 /**
@@ -58,8 +65,30 @@ public final class ValueExpressionEvaluator {
   }
 
   private Object evalInternal(Expression expression, GenericRecord record) {
-    if (expression instanceof Parenthesis p) {
-      return evalInternal(p.getExpression(), record);
+    if (expression instanceof ParenthesedExpressionList<?> pel) {
+      int n = pel.size();
+      if (n == 0) {
+        return null;
+      }
+      if (n == 1) {
+        return evalInternal(pel.getFirst(), record);
+      }
+      List<Object> vals = new ArrayList<>(n);
+      for (Expression e : pel) {
+        vals.add(evalInternal(e, record));
+      }
+      return vals;
+    }
+
+    if (expression instanceof TimeKeyExpression tk) {
+      return DateTimeExpressions.evaluateTimeKey(tk);
+    }
+    if (expression instanceof CastExpression cast) {
+      Object inner = evalInternal(cast.getLeftExpression(), record);
+      if (inner == null) {
+        return null;
+      }
+      return DateTimeExpressions.castLiteral(cast, inner);
     }
     if (expression instanceof SignedExpression se) {
       Object inner = evalInternal(se.getExpression(), record);
@@ -90,6 +119,13 @@ public final class ValueExpressionEvaluator {
     if (expression instanceof Column col) {
       return columnValue(col, record);
     }
+    if (expression instanceof ExtractExpression extract) {
+      Object value = evalInternal(extract.getExpression(), record);
+      return DateTimeExpressions.extract(extract.getName(), value);
+    }
+    if (expression instanceof IntervalExpression interval) {
+      return DateTimeExpressions.toInterval(interval);
+    }
     return LiteralConverter.toLiteral(expression);
   }
 
@@ -98,6 +134,18 @@ public final class ValueExpressionEvaluator {
     Object rightVal = evalInternal(right, record);
     if (leftVal == null || rightVal == null) {
       return null;
+    }
+    if (op == Operation.ADD) {
+      Object temporal = DateTimeExpressions.plus(leftVal, rightVal);
+      if (temporal != null) {
+        return temporal;
+      }
+    }
+    if (op == Operation.SUB) {
+      Object temporal = DateTimeExpressions.minus(leftVal, rightVal);
+      if (temporal != null) {
+        return temporal;
+      }
     }
     BigDecimal leftNum = toBigDecimal(leftVal);
     BigDecimal rightNum = toBigDecimal(rightVal);
