@@ -91,12 +91,30 @@ class JParqPreparedStatement implements PreparedStatement {
       if (fileAvro != null) {
         java.util.Set<String> needed = new java.util.LinkedHashSet<>();
         java.util.Set<String> selCols = ProjectionFields.fromSelect(parsedSelect);
-        if (selCols != null) {
-          needed.addAll(selCols);
+        boolean selectAll = selCols == null;
+        if (!selectAll && selCols != null) {
+          for (String col : selCols) {
+            if (col != null) {
+              needed.add(col);
+            }
+          }
         }
-        needed.addAll(ColumnsUsed.inWhere(parsedSelect.where()));
+        if (!selectAll) {
+          java.util.Set<String> whereCols = ColumnsUsed.inWhere(parsedSelect.where());
+          for (String col : whereCols) {
+            if (col != null) {
+              needed.add(col);
+            }
+          }
+          for (SqlParser.OrderKey key : parsedSelect.orderBy()) {
+            String col = key.column();
+            if (col != null) {
+              needed.add(col);
+            }
+          }
+        }
 
-        if (!needed.isEmpty()) {
+        if (!selectAll && !needed.isEmpty()) {
           Schema avroProjection = AvroProjections.project(fileAvro, needed);
           AvroReadSupport.setRequestedProjection(conf, avroProjection);
           AvroReadSupport.setAvroReadSchema(conf, avroProjection);
@@ -104,7 +122,7 @@ class JParqPreparedStatement implements PreparedStatement {
       }
 
       // 5. Filter Pushdown & Residual Calculation
-      if (fileAvro != null && parsedSelect.where() != null) {
+      if (!parsedSelect.distinct() && fileAvro != null && parsedSelect.where() != null) {
         this.parquetPredicate = ParquetFilterBuilder.build(fileAvro, parsedSelect.where());
         this.residualExpression = ParquetFilterBuilder.residual(fileAvro, parsedSelect.where());
       } else {
@@ -142,7 +160,6 @@ class JParqPreparedStatement implements PreparedStatement {
     // Convention from SqlParser: labels() empty => SELECT *
     final List<String> labels = parsedSelect.labels().isEmpty() ? null : parsedSelect.labels();
     final List<String> physical = parsedSelect.labels().isEmpty() ? null : parsedSelect.columnNames();
-
     // Create the result set, passing reader, select plan, residual filter,
     // plus projection labels and physical names (for metadata & value lookups)
     JParqResultSet rs = new JParqResultSet(reader, parsedSelect, file.getName(), residualExpression, labels, physical);

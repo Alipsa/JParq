@@ -3,8 +3,10 @@ package se.alipsa.jparq.engine;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
@@ -19,6 +21,7 @@ public final class QueryProcessor implements AutoCloseable {
   private final List<String> projection;
   private final Expression where;
   private final int limit;
+  private final boolean distinct;
 
   // Evaluator is lazily created if schema was not provided
   private ExpressionEvaluator evaluator;
@@ -29,6 +32,7 @@ public final class QueryProcessor implements AutoCloseable {
   private int idx = 0;
 
   private int emitted;
+  private final Set<List<Object>> distinctSeen;
 
   /**
    * Streaming constructor (no ORDER BY).
@@ -47,8 +51,8 @@ public final class QueryProcessor implements AutoCloseable {
    *          number of rows already emitted (affects LIMIT)
    */
   public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
-      Schema schema, int initialEmitted) {
-    this(reader, projection, where, limit, schema, initialEmitted, List.of(), null);
+      Schema schema, int initialEmitted, boolean distinct, GenericRecord firstAlreadyRead) {
+    this(reader, projection, where, limit, schema, initialEmitted, distinct, List.of(), firstAlreadyRead);
   }
 
   /**
@@ -74,14 +78,20 @@ public final class QueryProcessor implements AutoCloseable {
    *          considered for buffering.
    */
   public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
-      Schema schema, int initialEmitted, List<SqlParser.OrderKey> orderBy, GenericRecord firstAlreadyRead) {
+      Schema schema, int initialEmitted, boolean distinct, List<SqlParser.OrderKey> orderBy, GenericRecord firstAlreadyRead) {
     this.reader = Objects.requireNonNull(reader);
     this.projection = List.copyOf(projection);
     this.where = where;
     this.limit = limit;
+    this.distinct = distinct;
     this.evaluator = (schema != null) ? new ExpressionEvaluator(schema) : null;
     this.emitted = Math.max(0, initialEmitted);
     this.orderBy = (orderBy == null) ? List.of() : List.copyOf(orderBy);
+    this.distinctSeen = distinct ? new LinkedHashSet<>() : null;
+
+    if (distinct && firstAlreadyRead != null && initialEmitted > 0 && this.orderBy.isEmpty()) {
+      registerDistinct(firstAlreadyRead);
+    }
 
     if (!this.orderBy.isEmpty()) {
       bufferAndSort(firstAlreadyRead, schema);
@@ -117,6 +127,10 @@ public final class QueryProcessor implements AutoCloseable {
 
       // ensure evaluator exists if WHERE is used
       ensureEvaluator(sortSchema);
+
+      if (distinct && !buf.isEmpty()) {
+        buf = applyDistinct(buf);
+      }
 
       // sort by ORDER BY keys if we have schema and >1 row
       if (buf.size() > 1 && sortSchema != null) {
@@ -209,6 +223,10 @@ public final class QueryProcessor implements AutoCloseable {
     GenericRecord rec = reader.read();
     while (rec != null) {
       if (matches(rec)) {
+        if (distinct && !registerDistinct(rec)) {
+          rec = reader.read();
+          continue;
+        }
         emitted++;
         return rec;
       }
@@ -244,5 +262,47 @@ public final class QueryProcessor implements AutoCloseable {
       return cols;
     }
     return requested;
+  }
+
+  private boolean registerDistinct(GenericRecord rec) {
+    if (!distinct) {
+      return true;
+    }
+    List<Object> key = distinctKey(rec);
+    return distinctSeen.add(key);
+  }
+
+  private List<GenericRecord> applyDistinct(List<GenericRecord> records) {
+    if (!distinct || records.isEmpty()) {
+      return records;
+    }
+    List<GenericRecord> unique = new ArrayList<>(records.size());
+    Set<List<Object>> seen = new LinkedHashSet<>();
+    for (GenericRecord rec : records) {
+      List<Object> key = distinctKey(rec);
+      if (seen.add(key)) {
+        unique.add(rec);
+      }
+    }
+    if (distinctSeen != null) {
+      distinctSeen.addAll(seen);
+    }
+    return unique;
+  }
+
+  private List<Object> distinctKey(GenericRecord rec) {
+    List<Object> key = new ArrayList<>(projection.size());
+    for (String col : projection) {
+      if (col == null) {
+        throw new IllegalArgumentException("DISTINCT on expressions is not supported");
+      }
+      Schema.Field field = rec.getSchema().getField(col);
+      if (field == null) {
+        throw new IllegalArgumentException("Unknown column for DISTINCT: " + col);
+      }
+      Object value = AvroCoercions.unwrap(rec.get(col), field.schema());
+      key.add(value);
+    }
+    return key;
   }
 }

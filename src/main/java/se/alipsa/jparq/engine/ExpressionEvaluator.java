@@ -291,7 +291,15 @@ public final class ExpressionEvaluator {
   }
 
   private Operand operand(Expression e, GenericRecord rec) {
-    if (e instanceof Column c) {
+    Expression expr = unwrapParenthesis(e);
+    if (expr instanceof net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList<?> pel) {
+      var list = pel.getExpressions();
+      if (list != null && !list.isEmpty()) {
+        return operand(list.get(0), rec);
+      }
+      return new Operand(null, null);
+    }
+    if (expr instanceof Column c) {
       String name = c.getColumnName();
       String lookupName = name; // default to the parsed token
       Schema colSchema = fieldSchemas.get(name);
@@ -308,7 +316,8 @@ public final class ExpressionEvaluator {
       Object v = AvroCoercions.unwrap(rec.get(lookupName), colSchema);
       return new Operand(v, colSchema);
     }
-    return new Operand(LiteralConverter.toLiteral(e), null);
+    Object literal = LiteralConverter.toLiteral(expr);
+    return new Operand(literal, null);
   }
 
   private static Object coerceIfColumnType(Object value, Schema columnSchemaOrNull) {

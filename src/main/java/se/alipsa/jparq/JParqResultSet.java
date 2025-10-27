@@ -63,10 +63,11 @@ public class JParqResultSet extends ResultSetAdapter {
       if (first == null) {
         // No rows emitted after pushdown; still build metadata if explicit projection
         List<String> req = select.columns(); // e.g., ["id","value"] or ["*"]
-        if (!req.isEmpty() && !req.contains("*")) {
+        if (this.columnOrder.isEmpty() && !req.isEmpty() && !req.contains("*")) {
           this.columnOrder.addAll(req); // mutable, safe
         }
-        this.qp = new QueryProcessor(reader, this.columnOrder, /* where */ residual, select.limit(), null, 0);
+        this.qp = new QueryProcessor(reader, this.columnOrder, /* where */ residual, select.limit(), null, 0,
+            select.distinct(), null);
         this.current = null;
         this.rowNum = 0;
         return;
@@ -86,10 +87,12 @@ public class JParqResultSet extends ResultSetAdapter {
       var order = select.orderBy();
       if (order == null || order.isEmpty()) {
         int initialEmitted = match ? 1 : 0;
-        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, initialEmitted);
+        GenericRecord firstForDistinct = match ? first : null;
+        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, initialEmitted,
+            select.distinct(), firstForDistinct);
         this.current = match ? first : qp.nextMatching();
       } else {
-        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, 0, order, first);
+        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, 0, select.distinct(), order, first);
         this.current = qp.nextMatching();
       }
       this.rowNum = 0;
