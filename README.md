@@ -82,10 +82,11 @@ The following SQL statements are supported:
   - Null checks: `IS NULL`, `IS NOT NULL` 
 - `ORDER BY` clause with multiple columns and `ASC`/`DESC` options
 - `DISTINCT` support
+- Functions support
+  - Date functions
 
 ### To be implemented in the near future
 - Functions support
-  - Date functions
   - Numeric functions
   - String functions
 - `GROUP BY` with simple grouping
