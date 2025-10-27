@@ -2,14 +2,15 @@ package se.alipsa.jparq.engine;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExtractExpression;
 import net.sf.jsqlparser.expression.IntervalExpression;
-import net.sf.jsqlparser.expression.Parenthesis;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.operators.arithmetic.Addition;
@@ -17,6 +18,7 @@ import net.sf.jsqlparser.expression.operators.arithmetic.Division;
 import net.sf.jsqlparser.expression.operators.arithmetic.Modulo;
 import net.sf.jsqlparser.expression.operators.arithmetic.Multiplication;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
+import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
@@ -63,9 +65,21 @@ public final class ValueExpressionEvaluator {
   }
 
   private Object evalInternal(Expression expression, GenericRecord record) {
-    if (expression instanceof Parenthesis p) {
-      return evalInternal(p, record);
+    if (expression instanceof ParenthesedExpressionList<?> pel) {
+      int n = pel.size();
+      if (n == 0) {
+        return null;
+      }
+      if (n == 1) {
+        return evalInternal(pel.getFirst(), record);
+      }
+      List<Object> vals = new ArrayList<>(n);
+      for (Expression e : pel) {
+        vals.add(evalInternal(e, record));
+      }
+      return vals;
     }
+
     if (expression instanceof TimeKeyExpression tk) {
       return DateTimeExpressions.evaluateTimeKey(tk);
     }
