@@ -88,11 +88,12 @@ public class JParqResultSet extends ResultSetAdapter {
       if (order == null || order.isEmpty()) {
         int initialEmitted = match ? 1 : 0;
         GenericRecord firstForDistinct = match ? first : null;
-        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, initialEmitted,
-            select.distinct(), firstForDistinct);
+        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, initialEmitted, select.distinct(),
+            firstForDistinct);
         this.current = match ? first : qp.nextMatching();
       } else {
-        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, 0, select.distinct(), order, first);
+        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, 0, select.distinct(), order,
+            first);
         this.current = qp.nextMatching();
       }
       this.rowNum = 0;

@@ -49,6 +49,12 @@ public final class QueryProcessor implements AutoCloseable {
    *          the Avro schema (needed for expression evaluation)
    * @param initialEmitted
    *          number of rows already emitted (affects LIMIT)
+   * @param distinct
+   *          whether to apply DISTINCT
+   * @param firstAlreadyRead
+   *          a record already pulled by caller (may be null) It will NOT be
+   *          considered for filtering.
+   *
    */
   public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
       Schema schema, int initialEmitted, boolean distinct, GenericRecord firstAlreadyRead) {
@@ -71,6 +77,8 @@ public final class QueryProcessor implements AutoCloseable {
    *          the Avro schema (needed for expression evaluation and ORDER BY)
    * @param initialEmitted
    *          number of rows already emitted (affects LIMIT)
+   * @param distinct
+   *          whether to apply DISTINCT
    * @param orderBy
    *          list of ORDER BY keys (empty = streaming path)
    * @param firstAlreadyRead
@@ -78,7 +86,8 @@ public final class QueryProcessor implements AutoCloseable {
    *          considered for buffering.
    */
   public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
-      Schema schema, int initialEmitted, boolean distinct, List<SqlParser.OrderKey> orderBy, GenericRecord firstAlreadyRead) {
+      Schema schema, int initialEmitted, boolean distinct, List<SqlParser.OrderKey> orderBy,
+      GenericRecord firstAlreadyRead) {
     this.reader = Objects.requireNonNull(reader);
     this.projection = List.copyOf(projection);
     this.where = where;

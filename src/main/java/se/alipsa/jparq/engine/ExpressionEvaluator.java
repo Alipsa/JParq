@@ -26,6 +26,7 @@ import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
 import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.expression.operators.relational.MinorThan;
 import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals;
+import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
@@ -85,7 +86,6 @@ public final class ExpressionEvaluator {
    * <li>LIKE supports {@code %} (any sequence) and {@code _} (single char); ILIKE
    * is case-insensitive.</li>
    * </ul>
-   * </p>
    *
    * @param expression
    *          the expression to evaluate; must not be {@code null}
@@ -292,10 +292,9 @@ public final class ExpressionEvaluator {
 
   private Operand operand(Expression e, GenericRecord rec) {
     Expression expr = unwrapParenthesis(e);
-    if (expr instanceof net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList<?> pel) {
-      var list = pel.getExpressions();
-      if (list != null && !list.isEmpty()) {
-        return operand(list.get(0), rec);
+    if (expr instanceof ParenthesedExpressionList<?> pel) {
+      if (!pel.isEmpty()) {
+        return operand(pel.getFirst(), rec);
       }
       return new Operand(null, null);
     }

@@ -50,6 +50,8 @@ public final class SqlParser {
    *          the limit value (-1 if none)
    * @param orderBy
    *          ORDER BY keys (empty if none)
+   * @param distinct
+   *          true if DISTINCT is specified
    */
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
       int limit, List<OrderKey> orderBy, boolean distinct) {
