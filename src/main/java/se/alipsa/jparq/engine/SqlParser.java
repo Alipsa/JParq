@@ -1,6 +1,7 @@
 package se.alipsa.jparq.engine;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -52,9 +53,11 @@ public final class SqlParser {
    *          ORDER BY keys (empty if none)
    * @param distinct
    *          true if DISTINCT is specified
+   * @param expressions
+   *          the normalized SELECT expressions in projection order
    */
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
-      int limit, List<OrderKey> orderBy, boolean distinct) {
+      int limit, List<OrderKey> orderBy, boolean distinct, List<Expression> expressions) {
 
     /**
      * returns "*" if no explicit projection.
@@ -120,8 +123,11 @@ public final class SqlParser {
       List<OrderKey> orderKeys = computeOrderKeys(ps, projection.labels(), projection.physicalCols(),
           fromInfo.tableName(), fromInfo.tableAlias());
 
-      return new Select(List.copyOf(projection.labels()), List.copyOf(projection.physicalCols()), fromInfo.tableName(),
-          fromInfo.tableAlias(), whereExpr, limit, List.copyOf(orderKeys), ps.getDistinct() != null);
+      List<String> labelsCopy = List.copyOf(projection.labels());
+      List<String> physicalCopy = Collections.unmodifiableList(new ArrayList<>(projection.physicalCols()));
+      List<Expression> expressionCopy = List.copyOf(projection.expressions());
+      return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), whereExpr, limit,
+          List.copyOf(orderKeys), ps.getDistinct() != null, expressionCopy);
     } catch (Exception e) {
       throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
     }
@@ -132,7 +138,7 @@ public final class SqlParser {
   /**
    * Internal record to hold the projection (SELECT list) results.
    */
-  private record Projection(List<String> labels, List<String> physicalCols) {
+  private record Projection(List<String> labels, List<String> physicalCols, List<Expression> expressions) {
   }
 
   /**
@@ -155,6 +161,7 @@ public final class SqlParser {
   private static Projection parseProjectionList(List<SelectItem<?>> selectItems, FromInfo fromInfo) {
     List<String> labels = new ArrayList<>();
     List<String> physicalCols = new ArrayList<>();
+    List<Expression> expressions = new ArrayList<>();
 
     boolean selectAll = false;
     for (SelectItem<?> item : selectItems) {
@@ -197,6 +204,7 @@ public final class SqlParser {
 
       labels.add(label);
       physicalCols.add(underlying);
+      expressions.add(expr);
     }
 
     if (selectAll) {
@@ -204,9 +212,10 @@ public final class SqlParser {
       // ["*"]
       labels = List.of(); // empty list => columns() returns ["*"]
       physicalCols = List.of(); // keep in sync
+      expressions = List.of();
     }
 
-    return new Projection(labels, physicalCols);
+    return new Projection(labels, physicalCols, expressions);
   }
 
   // LIMIT
