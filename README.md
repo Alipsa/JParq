@@ -80,9 +80,9 @@ The following SQL statements are supported:
   - Comparison operators: `=`, `!=`, `<`, `>`, `<=`, `>=` 
   - Null checks: `IS NULL`, `IS NOT NULL` 
 - `ORDER BY` clause with multiple columns and `ASC`/`DESC` options
+- `DISTINCT` support
 
 ### To be implemented in the near future
-- `DISTINCT` support in `SELECT` clause
 - Support computed expressions with aliases (e.g. SELECT mpg*2 AS double_mpg)
 - Functions support
   - Date functions
