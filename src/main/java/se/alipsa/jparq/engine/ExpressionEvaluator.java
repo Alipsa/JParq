@@ -31,7 +31,6 @@ import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
-import se.alipsa.jparq.helper.LiteralConverter;
 
 /**
  * Evaluates SQL expressions (via JSqlParser) against Avro
@@ -50,6 +49,7 @@ public final class ExpressionEvaluator {
   private final Map<String, Schema> fieldSchemas;
   /** lower(field name) -> canonical field name */
   private final Map<String, String> caseInsensitiveIndex;
+  private final ValueExpressionEvaluator literalEvaluator;
 
   /**
    * Creates a new evaluator for the provided Avro {@link Schema}.
@@ -67,6 +67,7 @@ public final class ExpressionEvaluator {
     }
     this.fieldSchemas = Collections.unmodifiableMap(fs);
     this.caseInsensitiveIndex = Collections.unmodifiableMap(ci);
+    this.literalEvaluator = new ValueExpressionEvaluator(schema);
   }
 
   /**
@@ -315,7 +316,7 @@ public final class ExpressionEvaluator {
       Object v = AvroCoercions.unwrap(rec.get(lookupName), colSchema);
       return new Operand(v, colSchema);
     }
-    Object literal = LiteralConverter.toLiteral(expr);
+    Object literal = literalEvaluator.eval(expr, rec);
     return new Operand(literal, null);
   }
 
@@ -335,6 +336,10 @@ public final class ExpressionEvaluator {
     }
     if (l instanceof Date && r instanceof Date) {
       return Long.compare(((Date) l).getTime(), ((Date) r).getTime());
+    }
+    if (l instanceof se.alipsa.jparq.helper.TemporalInterval li
+        && r instanceof se.alipsa.jparq.helper.TemporalInterval ri) {
+      return li.compareTo(ri);
     }
     return l.toString().compareTo(r.toString());
   }

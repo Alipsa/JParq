@@ -2,13 +2,16 @@ package se.alipsa.jparq.helper;
 
 import java.math.BigDecimal;
 import net.sf.jsqlparser.expression.BooleanValue;
+import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.DoubleValue;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.LongValue;
+import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.NullValue;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.StringValue;
+import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TimestampValue;
 
 /** Converts JSqlParser Expression literals to Java Objects. */
@@ -47,14 +50,24 @@ public class LiteralConverter {
     if (e instanceof SignedExpression se) {
       return toSignedLiteral(se);
     }
+    if (e instanceof CastExpression cast) {
+      Object value = toLiteral(cast.getLeftExpression());
+      return DateTimeExpressions.castLiteral(cast, value);
+    }
     if (e instanceof BooleanValue bv) {
       return bv.getValue();
+    }
+    if (e instanceof TimeKeyExpression tk) {
+      return DateTimeExpressions.evaluateTimeKey(tk);
     }
     if (e instanceof DateValue dv) {
       return dv.getValue(); // java.sql.Date
     }
     if (e instanceof TimestampValue tv) {
       return tv.getValue(); // java.sql.Timestamp
+    }
+    if (e instanceof IntervalExpression interval) {
+      return DateTimeExpressions.toInterval(interval);
     }
     try {
       return new BigDecimal(e.toString());
@@ -76,6 +89,9 @@ public class LiteralConverter {
         return se.getSign() == '-' ? bd.negate() : bd;
       } catch (Exception ignore) {
       }
+    }
+    if (inner instanceof TemporalInterval interval) {
+      return se.getSign() == '-' ? interval.negate() : interval;
     }
     return (se.getSign() == '-') ? ("-" + inner) : inner;
   }
