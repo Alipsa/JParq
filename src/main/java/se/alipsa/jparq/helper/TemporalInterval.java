@@ -1,21 +1,23 @@
 package se.alipsa.jparq.helper;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.Period;
 import java.time.ZoneId;
-import java.time.Instant;
 import java.util.Locale;
 import java.util.Objects;
 
 /**
- * Represents a SQL style interval with separate {@link Period} and {@link Duration} components.
+ * Represents a SQL style interval with separate {@link Period} and
+ * {@link Duration} components.
  *
  * <p>
- * The implementation keeps the calendar based portion (years/months/days) in the {@link Period}
- * and the time based portion (hours/minutes/seconds/nanos) in the {@link Duration}. Instances are immutable.
+ * The implementation keeps the calendar based portion (years/months/days) in
+ * the {@link Period} and the time based portion (hours/minutes/seconds/nanos)
+ * in the {@link Duration}. Instances are immutable.
  * </p>
  */
 public final class TemporalInterval implements Comparable<TemporalInterval> {
@@ -33,8 +35,10 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
   /**
    * Create a new interval from a {@link Period} and {@link Duration}.
    *
-   * @param period the calendar component, not {@code null}
-   * @param duration the time component, not {@code null}
+   * @param period
+   *          the calendar component, not {@code null}
+   * @param duration
+   *          the time component, not {@code null}
    * @return the new interval instance
    */
   public static TemporalInterval of(Period period, Duration duration) {
@@ -44,8 +48,10 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
   /**
    * Parse an interval literal.
    *
-   * @param literal      the literal text (possibly quoted), may be {@code null}
-   * @param explicitUnit optional explicit unit (e.g. {@code DAY}) or {@code null}
+   * @param literal
+   *          the literal text (possibly quoted), may be {@code null}
+   * @param explicitUnit
+   *          optional explicit unit (e.g. {@code DAY}) or {@code null}
    * @return the parsed interval (never {@code null})
    */
   public static TemporalInterval parse(String literal, String explicitUnit) {
@@ -126,7 +132,8 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
   /**
    * Add another interval.
    *
-   * @param other the interval to add
+   * @param other
+   *          the interval to add
    * @return the combined interval
    */
   public TemporalInterval plus(TemporalInterval other) {
@@ -136,7 +143,8 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
   /**
    * Subtract another interval.
    *
-   * @param other the interval to subtract
+   * @param other
+   *          the interval to subtract
    * @return the resulting interval
    */
   public TemporalInterval minus(TemporalInterval other) {
@@ -153,6 +161,8 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
   }
 
   /**
+   * The calendar component of the interval.
+   *
    * @return the calendar component of the interval.
    */
   public Period period() {
@@ -160,6 +170,8 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
   }
 
   /**
+   * The time component of the interval.
+   *
    * @return the time component of the interval.
    */
   public Duration duration() {
@@ -167,7 +179,8 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
   }
 
   /**
-   * Determine whether the interval has a time component that is not a whole number of days.
+   * Determine whether the interval has a time component that is not a whole
+   * number of days.
    *
    * @return {@code true} if a sub-day component exists
    */
@@ -177,8 +190,9 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
   }
 
   /**
-   * Convert the interval to a {@link Duration} using a fixed calendar anchor (UTC epoch).
-   * This enables comparisons between intervals that include calendar and time portions.
+   * Convert the interval to a {@link Duration} using a fixed calendar anchor (UTC
+   * epoch). This enables comparisons between intervals that include calendar and
+   * time portions.
    *
    * @return the derived duration
    */
@@ -196,8 +210,10 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
   /**
    * Compute an interval representing {@code end - start}.
    *
-   * @param start the starting temporal value
-   * @param end   the ending temporal value
+   * @param start
+   *          the starting temporal value
+   * @param end
+   *          the ending temporal value
    * @return the resulting interval
    */
   public static TemporalInterval between(java.time.temporal.TemporalAccessor start,

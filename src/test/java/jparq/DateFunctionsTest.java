@@ -2,6 +2,7 @@ package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -145,12 +146,9 @@ public class DateFunctionsTest {
 
   @Test
   void testDateAdd() {
-    jparqSql.query(
-        "SELECT DATE '2025-01-01' + INTERVAL '1 month' AS next_month, "
-            + "timestamp '2025-01-01 03:04:05' + INTERVAL '5 days 2 hours' AS ts_plus, "
-            + "timestamp '2025-01-10 12:00:00' - INTERVAL '2 hours' AS ts_minus "
-            + "FROM mtcars LIMIT 1",
-        rs -> {
+    jparqSql.query("SELECT DATE '2025-01-01' + INTERVAL '1 month' AS next_month, "
+        + "timestamp '2025-01-01 03:04:05' + INTERVAL '5 days 2 hours' AS ts_plus, "
+        + "timestamp '2025-01-10 12:00:00' - INTERVAL '2 hours' AS ts_minus " + "FROM mtcars LIMIT 1", rs -> {
           try {
             assertTrue(rs.next(), "Expected a row");
             Date nextMonth = rs.getDate("next_month");
@@ -171,19 +169,17 @@ public class DateFunctionsTest {
 
   @Test
   void testDateDiff() {
-    jparqSql.query(
-        "SELECT timestamp '2025-02-01 00:00:00' - timestamp '2025-01-01 00:00:00' AS ts_diff, "
-            + "date '2025-01-10' - date '2025-01-01' AS date_diff FROM mtcars LIMIT 1",
-        rs -> {
+    jparqSql.query("SELECT timestamp '2025-02-01 00:00:00' - timestamp '2025-01-01 00:00:00' AS ts_diff, "
+        + "date '2025-01-10' - date '2025-01-01' AS date_diff FROM mtcars LIMIT 1", rs -> {
           try {
             assertTrue(rs.next(), "Expected a row");
             Object tsObj = rs.getObject("ts_diff");
-            assertTrue(tsObj instanceof TemporalInterval, "Timestamp subtraction should yield an interval");
+            assertInstanceOf(TemporalInterval.class, tsObj, "Timestamp subtraction should yield an interval");
             TemporalInterval tsInterval = (TemporalInterval) tsObj;
             assertEquals(Duration.ofDays(31), tsInterval.toDuration(), "Expected 31 day interval");
 
             Object dateObj = rs.getObject("date_diff");
-            assertTrue(dateObj instanceof TemporalInterval, "Date subtraction should yield an interval");
+            assertInstanceOf(TemporalInterval.class, dateObj, "Date subtraction should yield an interval");
             TemporalInterval dateInterval = (TemporalInterval) dateObj;
             assertEquals(Duration.ofDays(9), dateInterval.toDuration(), "Expected 9 day interval");
           } catch (SQLException e) {

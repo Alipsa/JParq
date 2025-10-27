@@ -16,7 +16,6 @@ import java.time.format.DateTimeParseException;
 import java.time.temporal.TemporalAccessor;
 import java.util.Locale;
 import java.util.Objects;
-
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
@@ -34,8 +33,10 @@ public final class DateTimeExpressions {
   /**
    * Evaluate a {@link TimeKeyExpression} such as {@code CURRENT_TIMESTAMP}.
    *
-   * @param expr the time key expression
-   * @return the evaluated value (Date/Time/Timestamp) or the literal string if unsupported
+   * @param expr
+   *          the time key expression
+   * @return the evaluated value (Date/Time/Timestamp) or the literal string if
+   *         unsupported
    */
   public static Object evaluateTimeKey(TimeKeyExpression expr) {
     if (expr == null) {
@@ -56,7 +57,8 @@ public final class DateTimeExpressions {
   /**
    * Parse a {@link IntervalExpression}.
    *
-   * @param expr the interval expression
+   * @param expr
+   *          the interval expression
    * @return the parsed interval
    */
   public static TemporalInterval toInterval(IntervalExpression expr) {
@@ -69,8 +71,10 @@ public final class DateTimeExpressions {
   /**
    * Perform EXTRACT(field FROM source).
    *
-   * @param field  the requested field
-   * @param source the value to extract from
+   * @param field
+   *          the requested field
+   * @param source
+   *          the value to extract from
    * @return the extracted component or {@code null}
    */
   public static Object extract(String field, Object source) {
@@ -135,8 +139,10 @@ public final class DateTimeExpressions {
   /**
    * Handle addition between date/time values and intervals.
    *
-   * @param left  the left operand
-   * @param right the right operand
+   * @param left
+   *          the left operand
+   * @param right
+   *          the right operand
    * @return the resulting value or {@code null} if no temporal addition applies
    */
   public static Object plus(Object left, Object right) {
@@ -155,8 +161,10 @@ public final class DateTimeExpressions {
   /**
    * Handle subtraction for temporal values.
    *
-   * @param left  the left operand
-   * @param right the right operand
+   * @param left
+   *          the left operand
+   * @param right
+   *          the right operand
    * @return the resulting value or {@code null} if not a temporal subtraction
    */
   public static Object minus(Object left, Object right) {

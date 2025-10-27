@@ -64,7 +64,7 @@ public final class ValueExpressionEvaluator {
 
   private Object evalInternal(Expression expression, GenericRecord record) {
     if (expression instanceof Parenthesis p) {
-      return evalInternal(p.getExpression(), record);
+      return evalInternal(p, record);
     }
     if (expression instanceof TimeKeyExpression tk) {
       return DateTimeExpressions.evaluateTimeKey(tk);
