@@ -3,8 +3,8 @@ package se.alipsa.jparq.engine;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.schema.Column;
-import net.sf.jsqlparser.util.deparser.ExpressionDeParser;
 
 /** Collects column names referenced by an expression. */
 public final class ColumnsUsed {
@@ -44,10 +44,11 @@ public final class ColumnsUsed {
       return Set.of();
     }
     LinkedHashSet<String> cols = new LinkedHashSet<>();
-    ExpressionDeParser walker = new ExpressionDeParser() {
+    ExpressionVisitorAdapter<Void> walker = new ExpressionVisitorAdapter<Void>() {
       @Override
-      public void visit(Column column) {
+      public <S> Void visit(Column column, S context) {
         cols.add(column.getColumnName());
+        return null;
       }
     };
     where.accept(walker);

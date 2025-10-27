@@ -26,6 +26,7 @@ import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
 import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.expression.operators.relational.MinorThan;
 import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals;
+import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
@@ -85,7 +86,6 @@ public final class ExpressionEvaluator {
    * <li>LIKE supports {@code %} (any sequence) and {@code _} (single char); ILIKE
    * is case-insensitive.</li>
    * </ul>
-   * </p>
    *
    * @param expression
    *          the expression to evaluate; must not be {@code null}
@@ -291,7 +291,14 @@ public final class ExpressionEvaluator {
   }
 
   private Operand operand(Expression e, GenericRecord rec) {
-    if (e instanceof Column c) {
+    Expression expr = unwrapParenthesis(e);
+    if (expr instanceof ParenthesedExpressionList<?> pel) {
+      if (!pel.isEmpty()) {
+        return operand(pel.getFirst(), rec);
+      }
+      return new Operand(null, null);
+    }
+    if (expr instanceof Column c) {
       String name = c.getColumnName();
       String lookupName = name; // default to the parsed token
       Schema colSchema = fieldSchemas.get(name);
@@ -308,7 +315,8 @@ public final class ExpressionEvaluator {
       Object v = AvroCoercions.unwrap(rec.get(lookupName), colSchema);
       return new Operand(v, colSchema);
     }
-    return new Operand(LiteralConverter.toLiteral(e), null);
+    Object literal = LiteralConverter.toLiteral(expr);
+    return new Operand(literal, null);
   }
 
   private static Object coerceIfColumnType(Object value, Schema columnSchemaOrNull) {

@@ -50,9 +50,11 @@ public final class SqlParser {
    *          the limit value (-1 if none)
    * @param orderBy
    *          ORDER BY keys (empty if none)
+   * @param distinct
+   *          true if DISTINCT is specified
    */
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
-      int limit, List<OrderKey> orderBy) {
+      int limit, List<OrderKey> orderBy, boolean distinct) {
 
     /**
      * returns "*" if no explicit projection.
@@ -119,7 +121,7 @@ public final class SqlParser {
           fromInfo.tableName(), fromInfo.tableAlias());
 
       return new Select(List.copyOf(projection.labels()), List.copyOf(projection.physicalCols()), fromInfo.tableName(),
-          fromInfo.tableAlias(), whereExpr, limit, List.copyOf(orderKeys));
+          fromInfo.tableAlias(), whereExpr, limit, List.copyOf(orderKeys), ps.getDistinct() != null);
     } catch (Exception e) {
       throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
     }
