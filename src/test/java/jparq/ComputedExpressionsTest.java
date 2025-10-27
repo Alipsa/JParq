@@ -1,8 +1,8 @@
 package jparq;
 
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
-import se.alipsa.jparq.JParqSql;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -12,10 +12,9 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.fail;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.JParqSql;
 
 public class ComputedExpressionsTest {
 
