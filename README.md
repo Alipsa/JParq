@@ -74,6 +74,7 @@ The following SQL statements are supported:
 - `SELECT` with support for
   - `*` to select all columns
   - alias support for columns and tables
+  - Support computed expressions with aliases (e.g. SELECT mpg*2 AS double_mpg)
 - `SELECT` statements with `WHERE` supporting:
   - `BETWEEN`, `IN`, `LIKE` operators 
   - `AND`, `OR`, `NOT` logical operators 
@@ -83,7 +84,6 @@ The following SQL statements are supported:
 - `DISTINCT` support
 
 ### To be implemented in the near future
-- Support computed expressions with aliases (e.g. SELECT mpg*2 AS double_mpg)
 - Functions support
   - Date functions
   - Numeric functions
