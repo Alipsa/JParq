@@ -34,7 +34,7 @@ public class ComputedExpressionsTest {
 
   @Test
   void testMultiply() {
-    jparqSql.query("select SELECT model, mpg, mpg*2 AS double_mpg from mtcars", rs -> {
+    jparqSql.query("SELECT model, mpg, mpg*2 AS double_mpg FROM mtcars", rs -> {
       List<String> seen = new ArrayList<>();
       try {
         ResultSetMetaData md = rs.getMetaData();
@@ -61,7 +61,7 @@ public class ComputedExpressionsTest {
 
   @Test
   void testPlus() {
-    jparqSql.query("select SELECT model, cyl, cyl+2 AS cyl2 from mtcars", rs -> {
+    jparqSql.query("SELECT model, cyl, cyl+2 AS cyl2 FROM mtcars", rs -> {
       List<String> seen = new ArrayList<>();
       try {
         ResultSetMetaData md = rs.getMetaData();

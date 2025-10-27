@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -89,7 +90,7 @@ public final class QueryProcessor implements AutoCloseable {
       Schema schema, int initialEmitted, boolean distinct, List<SqlParser.OrderKey> orderBy,
       GenericRecord firstAlreadyRead) {
     this.reader = Objects.requireNonNull(reader);
-    this.projection = List.copyOf(projection);
+    this.projection = Collections.unmodifiableList(new ArrayList<>(projection));
     this.where = where;
     this.limit = limit;
     this.distinct = distinct;

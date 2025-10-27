@@ -11,10 +11,12 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.QueryProcessor;
+import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.model.ResultSetAdapter;
 
 /** An implementation of the java.sql.ResultSet interface. */
@@ -26,6 +28,8 @@ public class JParqResultSet extends ResultSetAdapter {
   private GenericRecord current;
   private final List<String> columnOrder;
   private final String tableName;
+  private final List<Expression> selectExpressions;
+  private ValueExpressionEvaluator projectionEvaluator;
   private boolean closed = false;
   private int rowNum = 0;
   private boolean lastWasNull = false;
@@ -53,6 +57,7 @@ public class JParqResultSet extends ResultSetAdapter {
       List<String> physicalColumnOrder) // physical names (may be null)
       throws SQLException {
     this.tableName = tableName;
+    this.selectExpressions = List.copyOf(select.expressions());
     // Always use a mutable list to avoid UOE from List.of(...)
     this.columnOrder = (columnOrder != null ? new ArrayList<>(columnOrder) : new ArrayList<>());
     // physical names aren’t mutated; store as-is (null allowed)
@@ -131,6 +136,14 @@ public class JParqResultSet extends ResultSetAdapter {
       throw new SQLException("Call next() before getting values");
     }
 
+    Expression projectionExpr = projectionExpression(idx);
+    if (projectionExpr != null && !(projectionExpr instanceof Column)) {
+      ensureProjectionEvaluator(current);
+      Object computed = projectionEvaluator == null ? null : projectionEvaluator.eval(projectionExpr, current);
+      lastWasNull = (computed == null);
+      return computed;
+    }
+
     // projection name (may be an alias/label)
     String projectedName = columnOrder.get(idx - 1);
 
@@ -157,6 +170,23 @@ public class JParqResultSet extends ResultSetAdapter {
     Object raw = AvroCoercions.unwrap(current.get(lookupName), field.schema());
     lastWasNull = (raw == null);
     return raw;
+  }
+
+  private Expression projectionExpression(int idx) {
+    if (selectExpressions.isEmpty()) {
+      return null;
+    }
+    int i = idx - 1;
+    if (i >= 0 && i < selectExpressions.size()) {
+      return selectExpressions.get(i);
+    }
+    return null;
+  }
+
+  private void ensureProjectionEvaluator(GenericRecord record) {
+    if (projectionEvaluator == null && record != null && !selectExpressions.isEmpty()) {
+      projectionEvaluator = new ValueExpressionEvaluator(record.getSchema());
+    }
   }
 
   @Override
