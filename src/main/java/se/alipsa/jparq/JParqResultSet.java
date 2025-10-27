@@ -359,6 +359,9 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public Time getTime(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
+    if (v == null) {
+      return null;
+    }
     if (v instanceof Timestamp) {
       return new Time(((Timestamp) v).getTime());
     }
@@ -367,6 +370,15 @@ public class JParqResultSet extends ResultSetAdapter {
     }
     if (v instanceof LocalTime lt) {
       return Time.valueOf(lt);
+    }
+    if (v instanceof String s) {
+      return Time.valueOf(s);
+    }
+    if (v instanceof Long l) {
+      return new Time(l);
+    }
+    if (v instanceof Double d) {
+      return new Time(d.longValue());
     }
     throw new SQLException("Unsupported time type: " + v.getClass().getName());
   }
