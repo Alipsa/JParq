@@ -3,8 +3,10 @@ package se.alipsa.jparq.helper;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.Period;
 import java.time.ZoneId;
+import java.time.Instant;
 import java.util.Locale;
 import java.util.Objects;
 
@@ -48,7 +50,7 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    */
   public static TemporalInterval parse(String literal, String explicitUnit) {
     if ((literal == null || literal.isBlank()) && (explicitUnit == null || explicitUnit.isBlank())) {
-      return TemporalInterval.of(Period.ZERO, Duration.ZERO);
+      return of(Period.ZERO, Duration.ZERO);
     }
 
     String value = literal == null ? "" : literal.trim();
@@ -61,7 +63,7 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
     }
 
     if (value.isBlank()) {
-      return TemporalInterval.of(Period.ZERO, Duration.ZERO);
+      return of(Period.ZERO, Duration.ZERO);
     }
 
     String[] tokens = value.split("\\s+");
@@ -69,7 +71,7 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
       throw new IllegalArgumentException("Interval literal must contain value/unit pairs: " + literal);
     }
 
-    TemporalInterval result = TemporalInterval.of(Period.ZERO, Duration.ZERO);
+    TemporalInterval result = of(Period.ZERO, Duration.ZERO);
     for (int i = 0; i < tokens.length; i += 2) {
       String amount = tokens[i];
       String unit = tokens[i + 1];
@@ -91,30 +93,30 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
     switch (unit) {
       case "year", "years": {
         long years = new java.math.BigDecimal(amt).longValueExact();
-        return TemporalInterval.of(Period.ofYears(Math.toIntExact(years)), Duration.ZERO);
+        return of(Period.ofYears(Math.toIntExact(years)), Duration.ZERO);
       }
       case "month", "months": {
         long months = new java.math.BigDecimal(amt).longValueExact();
-        return TemporalInterval.of(Period.ofMonths(Math.toIntExact(months)), Duration.ZERO);
+        return of(Period.ofMonths(Math.toIntExact(months)), Duration.ZERO);
       }
       case "day", "days": {
         long days = new java.math.BigDecimal(amt).longValueExact();
-        return TemporalInterval.of(Period.ofDays(Math.toIntExact(days)), Duration.ZERO);
+        return of(Period.ofDays(Math.toIntExact(days)), Duration.ZERO);
       }
       case "hour", "hours": {
         long hours = new java.math.BigDecimal(amt).longValueExact();
-        return TemporalInterval.of(Period.ZERO, Duration.ofHours(hours));
+        return of(Period.ZERO, Duration.ofHours(hours));
       }
       case "minute", "minutes": {
         long minutes = new java.math.BigDecimal(amt).longValueExact();
-        return TemporalInterval.of(Period.ZERO, Duration.ofMinutes(minutes));
+        return of(Period.ZERO, Duration.ofMinutes(minutes));
       }
       case "second", "seconds": {
         java.math.BigDecimal bd = new java.math.BigDecimal(amt);
         long nanosTotal = bd.movePointRight(9).setScale(0, java.math.RoundingMode.UNNECESSARY).longValueExact();
         long seconds = Math.floorDiv(nanosTotal, 1_000_000_000L);
         long nanos = Math.floorMod(nanosTotal, 1_000_000_000L);
-        return TemporalInterval.of(Period.ZERO, Duration.ofSeconds(seconds, nanos));
+        return of(Period.ZERO, Duration.ofSeconds(seconds, nanos));
       }
       default:
         throw new IllegalArgumentException("Unsupported interval unit: " + unitRaw);
@@ -128,7 +130,7 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    * @return the combined interval
    */
   public TemporalInterval plus(TemporalInterval other) {
-    return TemporalInterval.of(period.plus(other.period), duration.plus(other.duration));
+    return of(period.plus(other.period), duration.plus(other.duration));
   }
 
   /**
@@ -138,7 +140,7 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    * @return the resulting interval
    */
   public TemporalInterval minus(TemporalInterval other) {
-    return TemporalInterval.of(period.minus(other.period), duration.minus(other.duration));
+    return of(period.minus(other.period), duration.minus(other.duration));
   }
 
   /**
@@ -147,7 +149,7 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    * @return the negated interval
    */
   public TemporalInterval negate() {
-    return TemporalInterval.of(period.negated(), duration.negated());
+    return of(period.negated(), duration.negated());
   }
 
   /**
@@ -207,17 +209,17 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
     LocalDateTime endDt = toDateTime(end);
     if (startDt != null && endDt != null) {
       Duration diff = Duration.between(startDt, endDt);
-      return TemporalInterval.of(Period.ZERO, diff);
+      return of(Period.ZERO, diff);
     }
 
-    if (start instanceof java.time.LocalDate sDate && end instanceof java.time.LocalDate eDate) {
+    if (start instanceof LocalDate sDate && end instanceof LocalDate eDate) {
       Period diff = Period.between(sDate, eDate);
-      return TemporalInterval.of(diff, Duration.ZERO);
+      return of(diff, Duration.ZERO);
     }
 
-    if (start instanceof java.time.LocalTime sTime && end instanceof java.time.LocalTime eTime) {
+    if (start instanceof LocalTime sTime && end instanceof LocalTime eTime) {
       Duration diff = Duration.between(sTime, eTime);
-      return TemporalInterval.of(Period.ZERO, diff);
+      return of(Period.ZERO, diff);
     }
 
     throw new IllegalArgumentException("Unsupported temporal types: " + start.getClass() + " and " + end.getClass());
@@ -227,13 +229,13 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
     if (accessor instanceof LocalDateTime ldt) {
       return ldt;
     }
-    if (accessor instanceof java.time.LocalDate ld) {
+    if (accessor instanceof LocalDate ld) {
       return ld.atStartOfDay();
     }
-    if (accessor instanceof java.time.LocalTime) {
+    if (accessor instanceof LocalTime) {
       return null;
     }
-    if (accessor instanceof java.time.Instant instant) {
+    if (accessor instanceof Instant instant) {
       return LocalDateTime.ofInstant(instant, UTC);
     }
     if (accessor instanceof java.sql.Timestamp ts) {
