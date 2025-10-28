@@ -69,7 +69,6 @@ class JParqPreparedStatement implements PreparedStatement {
       // 1. Parse SQL
       this.parsedSelect = SqlParser.parseSelect(sql);
       this.file = stmt.getConn().tableFile(parsedSelect.table());
-      var aggregatePlan = AggregateFunctions.plan(parsedSelect);
 
       // 2. Setup Configuration
       this.conf = new Configuration(false);
@@ -90,6 +89,7 @@ class JParqPreparedStatement implements PreparedStatement {
       this.fileAvro = avro;
 
       // 4. Projection Pushdown (SELECT U WHERE columns)
+      var aggregatePlan = AggregateFunctions.plan(parsedSelect);
       configureProjectionPushdown(fileAvro, aggregatePlan);
 
       // 5. Filter Pushdown & Residual Calculation

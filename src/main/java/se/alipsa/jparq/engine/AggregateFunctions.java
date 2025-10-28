@@ -2,10 +2,10 @@ package se.alipsa.jparq.engine;
 
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.sql.Types;
 import java.sql.Date;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -55,6 +55,13 @@ public final class AggregateFunctions {
    *          aggregate specifications in projection order
    */
   public record AggregatePlan(List<AggregateSpec> specs) {
+
+    /**
+     * Create an aggregate plan.
+     *
+     * @param specs
+     *          The aggregate specifications
+     */
     public AggregatePlan {
       Objects.requireNonNull(specs, "specs");
     }
@@ -86,6 +93,19 @@ public final class AggregateFunctions {
    *          true when representing COUNT(*)
    */
   public record AggregateSpec(AggregateType type, Expression argument, String label, boolean countStar) {
+
+    /**
+     * Create an aggregate specification.
+     *
+     * @param type
+     *          Type of aggregate
+     * @param argument
+     *          The argument expression (null for COUNT(*))
+     * @param label
+     *          The projection label
+     * @param countStar
+     *          True for COUNT(*)
+     */
     public AggregateSpec {
       Objects.requireNonNull(type, "type");
       Objects.requireNonNull(label, "label");
@@ -108,6 +128,15 @@ public final class AggregateFunctions {
    *          SQL types associated with each aggregate
    */
   public record AggregateResult(List<Object> values, List<Integer> sqlTypes) {
+
+    /**
+     * Create aggregate results.
+     *
+     * @param values
+     *          The computed values
+     * @param sqlTypes
+     *          The SQL types for the values
+     */
     public AggregateResult {
       Objects.requireNonNull(values, "values");
       Objects.requireNonNull(sqlTypes, "sqlTypes");
@@ -118,6 +147,10 @@ public final class AggregateFunctions {
    * Attempt to build an {@link AggregatePlan} for the provided SELECT. Returns
    * {@code null} if the SELECT list does not consist solely of supported
    * aggregate functions.
+   *
+   * @param select
+   *          the SELECT to analyze
+   * @return the aggregate plan, or {@code null} if not an aggregate SELECT
    */
   public static AggregatePlan plan(SqlParser.Select select) {
     List<Expression> expressions = select.expressions();
@@ -158,9 +191,7 @@ public final class AggregateFunctions {
         arg = args.get(0);
       }
 
-      String label = (labels != null && i < labels.size() && labels.get(i) != null)
-          ? labels.get(i)
-          : func.toString();
+      String label = (labels != null && i < labels.size() && labels.get(i) != null) ? labels.get(i) : func.toString();
 
       specs.add(new AggregateSpec(type, arg, label, countStar));
     }
@@ -485,4 +516,3 @@ public final class AggregateFunctions {
     return Types.OTHER;
   }
 }
-

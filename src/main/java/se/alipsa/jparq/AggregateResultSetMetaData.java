@@ -15,6 +15,16 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter {
   private final List<Integer> sqlTypes;
   private final String tableName;
 
+  /**
+   * Create metadata for an aggregate result set.
+   *
+   * @param labels
+   *          The column labels
+   * @param sqlTypes
+   *          The SQL types for the columns
+   * @param tableName
+   *          The table name for all columns
+   */
   public AggregateResultSetMetaData(List<String> labels, List<Integer> sqlTypes, String tableName) {
     this.labels = List.copyOf(labels);
     this.sqlTypes = List.copyOf(sqlTypes);
@@ -64,4 +74,3 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter {
     return columnNullableUnknown;
   }
 }
-
