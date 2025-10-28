@@ -185,13 +185,14 @@ public final class JsonExpressions {
       return node;
     }
     if (value instanceof String str) {
-      try {
-        String trimmed = str.trim();
-        if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+      String trimmed = str.trim();
+      if ((trimmed.startsWith("{") && trimmed.endsWith("}"))
+          || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+        try {
           return MAPPER.readTree(trimmed);
+        } catch (JsonProcessingException e) {
+          return MAPPER.getNodeFactory().textNode(str);
         }
-      } catch (JsonProcessingException ignore) {
-        // treat as plain string
       }
       return MAPPER.getNodeFactory().textNode(str);
     }

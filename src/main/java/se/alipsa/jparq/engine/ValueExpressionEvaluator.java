@@ -447,7 +447,7 @@ public final class ValueExpressionEvaluator {
       return false;
     }
     LikeExpression.KeyWord keyWord = like.getLikeKeyWord();
-    String keyword = keyWord == null ? like.getStringExpression() : keyWord.name();
+    LikeExpression.KeyWord effectiveKeyword = keyWord == null ? LikeExpression.KeyWord.LIKE : keyWord;
     Character escapeChar = null;
     if (like.getEscape() != null) {
       Object escapeVal = evalInternal(like.getEscape(), record);
@@ -459,12 +459,11 @@ public final class ValueExpressionEvaluator {
         escapeChar = escape.charAt(0);
       }
     }
-    if ("SIMILAR_TO".equalsIgnoreCase(keyword)) {
+    if (effectiveKeyword == LikeExpression.KeyWord.SIMILAR_TO) {
       boolean matches = StringExpressions.similarTo(input, pattern, escapeChar);
       return like.isNot() ? !matches : matches;
     }
-    boolean caseInsensitive = keyWord == LikeExpression.KeyWord.ILIKE
-        || (keyWord == null && "ILIKE".equalsIgnoreCase(keyword));
+    boolean caseInsensitive = effectiveKeyword == LikeExpression.KeyWord.ILIKE;
     boolean matches = StringExpressions.like(input, pattern, caseInsensitive, escapeChar);
     return like.isNot() ? !matches : matches;
   }
