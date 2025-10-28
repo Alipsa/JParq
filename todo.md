@@ -8,7 +8,6 @@
 - CAST support
 - EXISTS support
 - CASE support
-- COALESCE support
 - ANY support e.g. SELECT ProductName
   FROM Products
   WHERE ProductID = ANY

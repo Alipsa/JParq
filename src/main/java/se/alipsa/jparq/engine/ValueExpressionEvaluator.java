@@ -10,6 +10,7 @@ import java.util.Map;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExtractExpression;
+import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
@@ -18,6 +19,7 @@ import net.sf.jsqlparser.expression.operators.arithmetic.Division;
 import net.sf.jsqlparser.expression.operators.arithmetic.Modulo;
 import net.sf.jsqlparser.expression.operators.arithmetic.Multiplication;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
+import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
@@ -26,8 +28,8 @@ import se.alipsa.jparq.helper.DateTimeExpressions;
 import se.alipsa.jparq.helper.LiteralConverter;
 
 /**
- * Evaluates SELECT-list expressions (e.g. computed columns) against a
- * {@link GenericRecord}.
+ * Evaluates SELECT-list expressions (e.g. computed columns and supported SQL
+ * functions such as {@code COALESCE}) against a {@link GenericRecord}.
  */
 public final class ValueExpressionEvaluator {
 
@@ -126,7 +128,52 @@ public final class ValueExpressionEvaluator {
     if (expression instanceof IntervalExpression interval) {
       return DateTimeExpressions.toInterval(interval);
     }
+    if (expression instanceof Function func) {
+      return evaluateFunction(func, record);
+    }
     return LiteralConverter.toLiteral(expression);
+  }
+
+  /**
+   * Evaluate a SQL function call. Currently supports COALESCE.
+   *
+   * @param func
+   *          the function expression to evaluate
+   * @param record
+   *          the current record
+   * @return the computed function result (may be {@code null})
+   */
+  private Object evaluateFunction(Function func, GenericRecord record) {
+    String name = func.getName();
+    if (name == null) {
+      return null;
+    }
+    if ("COALESCE".equalsIgnoreCase(name)) {
+      return evaluateCoalesce(func, record);
+    }
+    return LiteralConverter.toLiteral(func);
+  }
+
+  /**
+   * Implementation of the COALESCE(expr1, expr2, ...) function.
+   *
+   * @param func
+   *          the COALESCE function expression
+   * @param record
+   *          the current record
+   * @return the first non-null argument value, or {@code null} if all are null
+   */
+  private Object evaluateCoalesce(Function func, GenericRecord record) {
+    if (!(func.getParameters() instanceof ExpressionList<?> params) || params.isEmpty()) {
+      return null;
+    }
+    for (Expression expr : params) {
+      Object value = evalInternal(expr, record);
+      if (value != null) {
+        return value;
+      }
+    }
+    return null;
   }
 
   private Object arithmetic(Expression left, Expression right, GenericRecord record, Operation op) {
