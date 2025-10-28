@@ -54,6 +54,11 @@ public final class AggregateFunctions {
    *          aggregate specifications in projection order
    */
   public record AggregatePlan(List<AggregateSpec> specs) {
+    /**
+     * Canonical constructor validating provided specification list.
+     *
+     * @param specs aggregate specifications in projection order
+     */
     public AggregatePlan {
       Objects.requireNonNull(specs, "specs");
     }
@@ -85,6 +90,14 @@ public final class AggregateFunctions {
    *          true when representing COUNT(*)
    */
   public record AggregateSpec(AggregateType type, Expression argument, String label, boolean countStar) {
+    /**
+     * Canonical constructor enforcing invariant constraints for an aggregate specification.
+     *
+     * @param type aggregate function type
+     * @param argument function argument expression (null for COUNT(*))
+     * @param label projection label exposed to JDBC
+     * @param countStar true when representing COUNT(*)
+     */
     public AggregateSpec {
       Objects.requireNonNull(type, "type");
       Objects.requireNonNull(label, "label");
@@ -107,6 +120,12 @@ public final class AggregateFunctions {
    *          SQL types associated with each aggregate
    */
   public record AggregateResult(List<Object> values, List<Integer> sqlTypes) {
+    /**
+     * Canonical constructor ensuring result collections are present.
+     *
+     * @param values computed aggregate values
+     * @param sqlTypes SQL types associated with each aggregate
+     */
     public AggregateResult {
       Objects.requireNonNull(values, "values");
       Objects.requireNonNull(sqlTypes, "sqlTypes");
@@ -117,6 +136,9 @@ public final class AggregateFunctions {
    * Attempt to build an {@link AggregatePlan} for the provided SELECT. Returns
    * {@code null} if the SELECT list does not consist solely of supported
    * aggregate functions.
+   *
+   * @param select parsed SELECT statement
+   * @return aggregate plan for the select list, or {@code null} when not purely aggregate
    */
   public static AggregatePlan plan(SqlParser.Select select) {
     List<Expression> expressions = select.expressions();

@@ -69,7 +69,7 @@ class JParqPreparedStatement implements PreparedStatement {
       // 1. Parse SQL
       this.parsedSelect = SqlParser.parseSelect(sql);
       this.file = stmt.getConn().tableFile(parsedSelect.table());
-      var aggregatePlan = AggregateFunctions.plan(parsedSelect);
+      final var aggregatePlan = AggregateFunctions.plan(parsedSelect);
 
       // 2. Setup Configuration
       this.conf = new Configuration(false);
