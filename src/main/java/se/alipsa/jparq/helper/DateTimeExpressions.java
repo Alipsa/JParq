@@ -373,7 +373,10 @@ public final class DateTimeExpressions {
       return bool;
     }
     if (value instanceof Number num) {
-      return num.intValue() != 0;
+      if (value instanceof BigDecimal bd) {
+        return bd.compareTo(BigDecimal.ZERO) != 0;
+      }
+      return num.doubleValue() != 0d;
     }
     String text = value.toString().trim();
     if (text.isEmpty()) {
