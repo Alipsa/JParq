@@ -435,7 +435,7 @@ public final class ValueExpressionEvaluator {
       }
     }
     Pattern compiled = Pattern.compile(pattern, flags);
-    return compiled.matcher(input).matches();
+    return compiled.matcher(input).find();
   }
 
   private Object evaluateLike(LikeExpression like, GenericRecord record) {

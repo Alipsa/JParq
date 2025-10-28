@@ -67,6 +67,25 @@ class CollationAndComparisonTest {
     assertFalse(regexpFalse.get(), "Regex should not match");
   }
 
+  @Test
+  void testRegexpLikeFindsSubstrings() {
+    AtomicBoolean substringMatch = new AtomicBoolean();
+
+    sql.query("SELECT REGEXP_LIKE('abc', 'b') AS regexp_substring FROM mtcars LIMIT 1", rs -> {
+      try {
+        if (!rs.next()) {
+          fail("Expected a result row");
+          return;
+        }
+        substringMatch.set(asBoolean(rs.getObject("regexp_substring")));
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    assertTrue(substringMatch.get(), "REGEXP_LIKE should match unanchored substrings");
+  }
+
   private boolean asBoolean(Object value) {
     if (value == null) {
       return false;
