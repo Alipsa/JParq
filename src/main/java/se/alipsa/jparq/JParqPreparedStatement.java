@@ -171,7 +171,9 @@ class JParqPreparedStatement implements PreparedStatement {
     if (aggregatePlan != null) {
       for (AggregateFunctions.AggregateSpec spec : aggregatePlan.specs()) {
         if (!spec.countStar()) {
-          addColumns(needed, ColumnsUsed.inWhere(spec.argument()));
+          for (Expression arg : spec.arguments()) {
+            addColumns(needed, ColumnsUsed.inWhere(arg));
+          }
         }
       }
     }
