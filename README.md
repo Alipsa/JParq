@@ -87,16 +87,23 @@ The following SQL statements are supported:
 
 ### To be implemented in the near future
 - Functions support
-  - Numeric functions
+  - Aggregate functions (count, sum, avg, max, min)
+  - coalesce
   - String functions
+  - Numeric functions (abs, ceil, floor, round, sqrt, truncate, mod, power, exp, log, rand, sign, sin, cos, tan, asin, acos, atan, atan2, degrees, radians)
+- comments -- and /* */
+- `CASE` support
+- exists support
+- any and all support
 - `GROUP BY` with simple grouping
   - `COUNT(*)` aggregation
   - `HAVING` clause with simple conditions
-  - `SUM`, `AVG`, `MIN`, `MAX` aggregation functions in `SELECT` clause
+  - support aggregation functions in `SELECT` clause
 - `OFFSET` support
 - Subquery support
 
 ### Might be implemented in the future
 - Join support
+- union support
 - CTE
 - Windowing
