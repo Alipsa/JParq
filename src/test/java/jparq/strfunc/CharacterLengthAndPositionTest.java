@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeAll;
@@ -28,10 +27,8 @@ class CharacterLengthAndPositionTest {
     AtomicReference<Integer> octetLength = new AtomicReference<>();
     AtomicReference<Integer> position = new AtomicReference<>();
 
-    sql.query(
-        "SELECT CHAR_LENGTH('héllo') AS char_len, CHARACTER_LENGTH('héllo') AS char_len2, "
-            + "OCTET_LENGTH('Å') AS oct_len, POSITION('c' IN 'abca') AS pos FROM mtcars LIMIT 1",
-        rs -> {
+    sql.query("SELECT CHAR_LENGTH('héllo') AS char_len, CHARACTER_LENGTH('héllo') AS char_len2, "
+        + "OCTET_LENGTH('Å') AS oct_len, POSITION('c' IN 'abca') AS pos FROM mtcars LIMIT 1", rs -> {
           try {
             assertTrue(rs.next(), "Expected a result row");
             charLength.set(rs.getInt("char_len"));

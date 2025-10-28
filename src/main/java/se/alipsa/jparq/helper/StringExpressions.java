@@ -19,7 +19,8 @@ public final class StringExpressions {
    *
    * @param value
    *          value to inspect
-   * @return number of characters or {@code null} when {@code value} is {@code null}
+   * @return number of characters or {@code null} when {@code value} is
+   *         {@code null}
    */
   public static Integer charLength(Object value) {
     if (value == null) {
@@ -44,13 +45,15 @@ public final class StringExpressions {
   }
 
   /**
-   * Locate the given {@code substring} inside {@code input} using one-based indexing.
+   * Locate the given {@code substring} inside {@code input} using one-based
+   * indexing.
    *
    * @param substring
    *          value to search for
    * @param input
    *          value to search within
-   * @return one-based position, {@code 0} when not found or {@code null} for null inputs
+   * @return one-based position, {@code 0} when not found or {@code null} for null
+   *         inputs
    */
   public static Integer position(Object substring, Object input) {
     if (substring == null || input == null) {
@@ -81,7 +84,8 @@ public final class StringExpressions {
    *          one-based start position
    * @param length
    *          optional length in characters (may be {@code null})
-   * @return extracted substring or {@code null} when {@code input} or {@code start} is {@code null}
+   * @return extracted substring or {@code null} when {@code input} or
+   *         {@code start} is {@code null}
    */
   public static String substring(String input, Number start, Number length) {
     if (input == null || start == null) {
@@ -108,7 +112,8 @@ public final class StringExpressions {
    *          source string
    * @param count
    *          number of characters to keep from the left
-   * @return resulting substring or {@code null} when {@code input} or {@code count} is {@code null}
+   * @return resulting substring or {@code null} when {@code input} or
+   *         {@code count} is {@code null}
    */
   public static String left(String input, Number count) {
     if (input == null || count == null) {
@@ -127,7 +132,8 @@ public final class StringExpressions {
    *          source string
    * @param count
    *          number of characters to keep from the right
-   * @return resulting substring or {@code null} when {@code input} or {@code count} is {@code null}
+   * @return resulting substring or {@code null} when {@code input} or
+   *         {@code count} is {@code null}
    */
   public static String right(String input, Number count) {
     if (input == null || count == null) {
@@ -142,7 +148,8 @@ public final class StringExpressions {
   }
 
   /**
-   * Concatenate arguments following SQL semantics that ignore {@code NULL} values.
+   * Concatenate arguments following SQL semantics that ignore {@code NULL}
+   * values.
    *
    * @param values
    *          values to concatenate
@@ -241,7 +248,8 @@ public final class StringExpressions {
    *          desired total length
    * @param fill
    *          optional padding string (defaults to space)
-   * @return padded string or {@code null} when {@code input} or {@code length} is {@code null}
+   * @return padded string or {@code null} when {@code input} or {@code length} is
+   *         {@code null}
    */
   public static String lpad(String input, Number length, String fill) {
     if (input == null || length == null) {
@@ -269,7 +277,8 @@ public final class StringExpressions {
    *          desired total length
    * @param fill
    *          optional padding string (defaults to space)
-   * @return padded string or {@code null} when {@code input} or {@code length} is {@code null}
+   * @return padded string or {@code null} when {@code input} or {@code length} is
+   *         {@code null}
    */
   public static String rpad(String input, Number length, String fill) {
     if (input == null || length == null) {
@@ -314,7 +323,8 @@ public final class StringExpressions {
   }
 
   /**
-   * Implementation of {@code OVERLAY(string PLACING replacement FROM start FOR length)}.
+   * Implementation of
+   * {@code OVERLAY(string PLACING replacement FROM start FOR length)}.
    *
    * @param input
    *          source string
@@ -324,7 +334,8 @@ public final class StringExpressions {
    *          one-based start position
    * @param length
    *          optional length of the region to replace
-   * @return resulting string or {@code null} when required inputs are {@code null}
+   * @return resulting string or {@code null} when required inputs are
+   *         {@code null}
    */
   public static String overlay(String input, String replacement, Number start, Number length) {
     if (input == null || replacement == null || start == null) {
@@ -345,7 +356,8 @@ public final class StringExpressions {
   }
 
   /**
-   * Replace all occurrences of {@code search} with {@code replacement} following SQL semantics.
+   * Replace all occurrences of {@code search} with {@code replacement} following
+   * SQL semantics.
    *
    * @param input
    *          source string
@@ -353,7 +365,8 @@ public final class StringExpressions {
    *          substring to replace
    * @param replacement
    *          replacement value
-   * @return string with replacements applied or {@code null} when any parameter is {@code null}
+   * @return string with replacements applied or {@code null} when any parameter
+   *         is {@code null}
    */
   public static String replace(String input, String search, String replacement) {
     if (input == null || search == null || replacement == null) {
@@ -423,8 +436,8 @@ public final class StringExpressions {
   }
 
   /**
-   * Evaluate SQL {@code SIMILAR TO} semantics by translating the pattern into a Java regular
-   * expression.
+   * Evaluate SQL {@code SIMILAR TO} semantics by translating the pattern into a
+   * Java regular expression.
    *
    * @param input
    *          the value to test
@@ -432,7 +445,8 @@ public final class StringExpressions {
    *          the SIMILAR TO pattern
    * @param escape
    *          optional escape character (may be {@code null})
-   * @return {@code true} if {@code input} matches the pattern; otherwise {@code false}
+   * @return {@code true} if {@code input} matches the pattern; otherwise
+   *         {@code false}
    */
   public static boolean similarTo(String input, String pattern, Character escape) {
     if (input == null || pattern == null) {
@@ -476,7 +490,16 @@ public final class StringExpressions {
           inCharClass = false;
           break;
         }
-        case '(': case ')': case '|': case '*': case '+': case '?': case '{': case '}': case '^': case '$': {
+        case '(':
+        case ')':
+        case '|':
+        case '*':
+        case '+':
+        case '?':
+        case '{':
+        case '}':
+        case '^':
+        case '$': {
           regex.append(ch);
           break;
         }
@@ -508,7 +531,8 @@ public final class StringExpressions {
    *
    * @param codes
    *          code points to convert
-   * @return constructed string or {@code null} when {@code codes} is {@code null} or empty
+   * @return constructed string or {@code null} when {@code codes} is {@code null}
+   *         or empty
    */
   public static String charFromCodes(List<Object> codes) {
     if (codes == null || codes.isEmpty()) {
@@ -549,7 +573,8 @@ public final class StringExpressions {
    * @param value
    *          value to normalize
    * @param formName
-   *          normalization form ({@code NFC}, {@code NFD}, {@code NFKC}, {@code NFKD})
+   *          normalization form ({@code NFC}, {@code NFD}, {@code NFKC},
+   *          {@code NFKD})
    * @return normalized string or {@code null} when {@code value} is {@code null}
    */
   public static String normalize(Object value, Object formName) {

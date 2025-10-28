@@ -25,10 +25,8 @@ class SearchingAndReplacingTest {
     AtomicReference<String> overlay = new AtomicReference<>();
     AtomicReference<String> replace = new AtomicReference<>();
 
-    sql.query(
-        "SELECT OVERLAY('abcdef' PLACING 'xyz' FROM 3 FOR 2) AS overlay_val, "
-            + "REPLACE('banana', 'na', 'xy') AS replace_val FROM mtcars LIMIT 1",
-        rs -> {
+    sql.query("SELECT OVERLAY('abcdef' PLACING 'xyz' FROM 3 FOR 2) AS overlay_val, "
+        + "REPLACE('banana', 'na', 'xy') AS replace_val FROM mtcars LIMIT 1", rs -> {
           try {
             assertTrue(rs.next(), "Expected a row");
             overlay.set(rs.getString("overlay_val"));

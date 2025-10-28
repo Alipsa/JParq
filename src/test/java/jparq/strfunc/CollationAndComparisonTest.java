@@ -33,16 +33,12 @@ class CollationAndComparisonTest {
     AtomicBoolean regexpCase = new AtomicBoolean();
     AtomicBoolean regexpFalse = new AtomicBoolean();
 
-    sql.query(
-        "SELECT 'abc' COLLATE latin1_general_ci AS collated, "
-            + "'cat' SIMILAR TO '(cat|dog)' AS similar_true, "
-            + "'cab' SIMILAR TO 'c(a|o)c' AS similar_false, "
-            + "'caterpillar' SIMILAR TO 'c(ater|a|at)pillar' AS similar_nested, "
-            + "'under_score' SIMILAR TO 'under\\_score' ESCAPE '\\' AS similar_escaped, "
-            + "REGEXP_LIKE('abc123', '^[a-z]+[0-9]+$') AS regexp_true, "
-            + "REGEXP_LIKE('AbC', 'abc', 'i') AS regexp_case, "
-            + "REGEXP_LIKE('cat', 'dog') AS regexp_false FROM mtcars LIMIT 1",
-        rs -> {
+    sql.query("SELECT 'abc' COLLATE latin1_general_ci AS collated, " + "'cat' SIMILAR TO '(cat|dog)' AS similar_true, "
+        + "'cab' SIMILAR TO 'c(a|o)c' AS similar_false, "
+        + "'caterpillar' SIMILAR TO 'c(ater|a|at)pillar' AS similar_nested, "
+        + "'under_score' SIMILAR TO 'under\\_score' ESCAPE '\\' AS similar_escaped, "
+        + "REGEXP_LIKE('abc123', '^[a-z]+[0-9]+$') AS regexp_true, " + "REGEXP_LIKE('AbC', 'abc', 'i') AS regexp_case, "
+        + "REGEXP_LIKE('cat', 'dog') AS regexp_false FROM mtcars LIMIT 1", rs -> {
           try {
             if (!rs.next()) {
               fail("Expected a result row");

@@ -27,11 +27,9 @@ class SubstringsAndExtractionTest {
     AtomicReference<String> leftVal = new AtomicReference<>();
     AtomicReference<String> rightVal = new AtomicReference<>();
 
-    sql.query(
-        "SELECT SUBSTRING('abcdef' FROM 2 FOR 3) AS sub_named, "
-            + "SUBSTRING('abcdef', 3, 2) AS sub_pos, LEFT('abcdef', 3) AS left_val, "
-            + "RIGHT('abcdef', 2) AS right_val FROM mtcars LIMIT 1",
-        rs -> {
+    sql.query("SELECT SUBSTRING('abcdef' FROM 2 FOR 3) AS sub_named, "
+        + "SUBSTRING('abcdef', 3, 2) AS sub_pos, LEFT('abcdef', 3) AS left_val, "
+        + "RIGHT('abcdef', 2) AS right_val FROM mtcars LIMIT 1", rs -> {
           try {
             assertTrue(rs.next(), "Expected a row");
             substringNamed.set(rs.getString("sub_named"));

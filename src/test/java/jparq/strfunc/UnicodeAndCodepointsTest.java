@@ -27,10 +27,8 @@ class UnicodeAndCodepointsTest {
     AtomicInteger unicodeSnowman = new AtomicInteger();
     AtomicInteger unicodeA = new AtomicInteger();
 
-    sql.query(
-        "SELECT CONCAT(CHAR(65), CHAR(9731)) AS char_val, UNICODE('☃') AS unicode_snowman, "
-            + "UNICODE('A') AS unicode_a FROM mtcars LIMIT 1",
-        rs -> {
+    sql.query("SELECT CONCAT(CHAR(65), CHAR(9731)) AS char_val, UNICODE('☃') AS unicode_snowman, "
+        + "UNICODE('A') AS unicode_a FROM mtcars LIMIT 1", rs -> {
           try {
             assertTrue(rs.next(), "Expected a row");
             charValue.set(rs.getString("char_val"));

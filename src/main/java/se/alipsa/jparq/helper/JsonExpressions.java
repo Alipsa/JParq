@@ -25,7 +25,8 @@ public final class JsonExpressions {
    *          JSON document (string or {@link JsonNode})
    * @param path
    *          JSON path expression beginning with {@code $}
-   * @return extracted scalar value or {@code null} when the path cannot be resolved
+   * @return extracted scalar value or {@code null} when the path cannot be
+   *         resolved
    */
   public static Object jsonValue(Object document, Object path) {
     JsonNode node = resolve(document, path);
@@ -186,8 +187,7 @@ public final class JsonExpressions {
     }
     if (value instanceof String str) {
       String trimmed = str.trim();
-      if ((trimmed.startsWith("{") && trimmed.endsWith("}"))
-          || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+      if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
         try {
           return MAPPER.readTree(trimmed);
         } catch (JsonProcessingException e) {

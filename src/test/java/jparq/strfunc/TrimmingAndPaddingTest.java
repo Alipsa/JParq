@@ -29,11 +29,9 @@ class TrimmingAndPaddingTest {
     AtomicReference<String> lpad = new AtomicReference<>();
     AtomicReference<String> rpad = new AtomicReference<>();
 
-    sql.query(
-        "SELECT TRIM('  hi  ') AS trim_default, TRIM(BOTH 'x' FROM 'xabcx') AS trim_custom, "
-            + "LTRIM('  hi') AS ltrim_val, RTRIM('hi  ') AS rtrim_val, LPAD('42', 5, '0') AS lpad_val, "
-            + "RPAD('42', 5, '0') AS rpad_val FROM mtcars LIMIT 1",
-        rs -> {
+    sql.query("SELECT TRIM('  hi  ') AS trim_default, TRIM(BOTH 'x' FROM 'xabcx') AS trim_custom, "
+        + "LTRIM('  hi') AS ltrim_val, RTRIM('hi  ') AS rtrim_val, LPAD('42', 5, '0') AS lpad_val, "
+        + "RPAD('42', 5, '0') AS rpad_val FROM mtcars LIMIT 1", rs -> {
           try {
             assertTrue(rs.next(), "Expected a row");
             trimDefault.set(rs.getString("trim_default"));

@@ -14,7 +14,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
-/** Tests for SQL:2016+ additions like NORMALIZE, STRING_AGG and JSON helpers. */
+/**
+ * Tests for SQL:2016+ additions like NORMALIZE, STRING_AGG and JSON helpers.
+ */
 class Sql2016AdditionsTest {
 
   private static JParqSql sql;
@@ -91,13 +93,11 @@ class Sql2016AdditionsTest {
     AtomicReference<String> jsonObject = new AtomicReference<>();
     AtomicReference<String> jsonArray = new AtomicReference<>();
 
-    sql.query(
-        "SELECT JSON_VALUE('{\"name\":\"Alice\",\"nums\":[1,2,3]}', '$.name') AS json_name, "
-            + "JSON_VALUE('{\"name\":\"Alice\",\"nums\":[1,2,3]}', '$.nums[1]') AS json_second, "
-            + "JSON_QUERY('{\"name\":\"Alice\",\"nums\":[1,2,3]}', '$.nums') AS json_nums, "
-            + "JSON_OBJECT('model', model, 'cyl', cyl) AS json_object, JSON_ARRAY(1, 'two', 3) AS json_array "
-            + "FROM mtcars LIMIT 1",
-        rs -> {
+    sql.query("SELECT JSON_VALUE('{\"name\":\"Alice\",\"nums\":[1,2,3]}', '$.name') AS json_name, "
+        + "JSON_VALUE('{\"name\":\"Alice\",\"nums\":[1,2,3]}', '$.nums[1]') AS json_second, "
+        + "JSON_QUERY('{\"name\":\"Alice\",\"nums\":[1,2,3]}', '$.nums') AS json_nums, "
+        + "JSON_OBJECT('model', model, 'cyl', cyl) AS json_object, JSON_ARRAY(1, 'two', 3) AS json_array "
+        + "FROM mtcars LIMIT 1", rs -> {
           try {
             assertTrue(rs.next(), "Expected a row");
             jsonName.set(rs.getString("json_name"));
