@@ -25,8 +25,8 @@ class CastTest {
 
   @BeforeEach
   void setUp() {
-    schema = SchemaBuilder.record("Sample").fields().name("price").type().doubleType().noDefault()
-        .name("name").type().stringType().noDefault().endRecord();
+    schema = SchemaBuilder.record("Sample").fields().name("price").type().doubleType().noDefault().name("name").type()
+        .stringType().noDefault().endRecord();
     record = new GenericData.Record(schema);
     record.put("price", 25.65d);
     record.put("name", "LongerThanFive");

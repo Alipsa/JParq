@@ -300,8 +300,8 @@ public final class DateTimeExpressions {
     String normalized = normalizeTypeName(dataType);
     return switch (normalized) {
       case "boolean", "bool" -> toBoolean(value);
-      case "char", "character", "nchar", "varchar", "charactervarying", "nvarchar",
-          "string" -> castToString(cast, value);
+      case "char", "character", "nchar", "varchar", "charactervarying", "nvarchar", "string" ->
+        castToString(cast, value);
       case "text", "clob" -> value.toString();
       case "tinyint" -> toBigDecimalValue(value).byteValue();
       case "smallint", "int2" -> toBigDecimalValue(value).shortValue();
@@ -380,12 +380,12 @@ public final class DateTimeExpressions {
       return Boolean.FALSE;
     }
     String normalized = text.toLowerCase(Locale.ROOT);
-    if ("true".equals(normalized) || "t".equals(normalized) || "yes".equals(normalized)
-        || "y".equals(normalized) || "1".equals(normalized)) {
+    if ("true".equals(normalized) || "t".equals(normalized) || "yes".equals(normalized) || "y".equals(normalized)
+        || "1".equals(normalized)) {
       return Boolean.TRUE;
     }
-    if ("false".equals(normalized) || "f".equals(normalized) || "no".equals(normalized)
-        || "n".equals(normalized) || "0".equals(normalized)) {
+    if ("false".equals(normalized) || "f".equals(normalized) || "no".equals(normalized) || "n".equals(normalized)
+        || "0".equals(normalized)) {
       return Boolean.FALSE;
     }
     throw new IllegalArgumentException("Cannot cast value '" + value + "' to BOOLEAN");
