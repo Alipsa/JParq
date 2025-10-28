@@ -27,10 +27,12 @@ import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.expression.operators.relational.MinorThan;
 import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
+import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.helper.StringExpressions;
 
 /**
  * Evaluates SQL expressions (via JSqlParser) against Avro
@@ -133,6 +135,9 @@ public final class ExpressionEvaluator {
     if (expr instanceof LikeExpression like) {
       return evalLike(like, rec);
     }
+    if (expr instanceof SimilarToExpression similar) {
+      return evalSimilar(similar, rec);
+    }
     if (expr instanceof Between between) {
       return evalBetween(between, rec);
     }
@@ -199,9 +204,51 @@ public final class ExpressionEvaluator {
       return false;
     }
 
-    boolean caseInsensitive = "ILIKE".equalsIgnoreCase(like.getLikeKeyWord().toString());
-    boolean matches = likeMatch(left, pat, caseInsensitive);
+    LikeExpression.KeyWord keyWord = like.getLikeKeyWord();
+    LikeExpression.KeyWord effectiveKeyword = keyWord == null ? LikeExpression.KeyWord.LIKE : keyWord;
+    Character escapeChar = null;
+    if (like.getEscape() != null) {
+      Operand escapeOperand = operand(like.getEscape(), rec);
+      String escape = escapeOperand.value == null ? null : escapeOperand.value.toString();
+      if (escape != null && !escape.isEmpty()) {
+        if (escape.length() != 1) {
+          throw new IllegalArgumentException("LIKE escape clause must be a single character");
+        }
+        escapeChar = escape.charAt(0);
+      }
+    }
+    boolean matches;
+    if (effectiveKeyword == LikeExpression.KeyWord.SIMILAR_TO) {
+      matches = StringExpressions.similarTo(left, pat, escapeChar);
+    } else {
+      boolean caseInsensitive = effectiveKeyword == LikeExpression.KeyWord.ILIKE;
+      matches = StringExpressions.like(left, pat, caseInsensitive, escapeChar);
+    }
     return like.isNot() != matches;
+  }
+
+  private boolean evalSimilar(SimilarToExpression similar, GenericRecord rec) {
+    Operand leftOperand = operand(similar.getLeftExpression(), rec);
+    Operand rightOperand = operand(similar.getRightExpression(), rec);
+
+    String left = (leftOperand.value == null) ? null : leftOperand.value.toString();
+    String pattern = (rightOperand.value == null) ? null : rightOperand.value.toString();
+
+    if (left == null || pattern == null) {
+      return false;
+    }
+
+    String escape = similar.getEscape();
+    Character escapeChar = null;
+    if (escape != null && !escape.isEmpty()) {
+      if (escape.length() != 1) {
+        throw new IllegalArgumentException("SIMILAR TO escape clause must be a single character");
+      }
+      escapeChar = escape.charAt(0);
+    }
+
+    boolean matches = StringExpressions.similarTo(left, pattern, escapeChar);
+    return similar.isNot() != matches;
   }
 
   private boolean evalBetween(Between between, GenericRecord rec) {
@@ -342,37 +389,6 @@ public final class ExpressionEvaluator {
       return li.compareTo(ri);
     }
     return l.toString().compareTo(r.toString());
-  }
-
-  // LIKE with % and _ (naive regex conversion)
-  private static boolean likeMatch(String s, String pattern, boolean caseInsensitive) {
-    StringBuilder re = new StringBuilder();
-    for (int i = 0; i < pattern.length(); i++) {
-      char c = pattern.charAt(i);
-      switch (c) {
-        case '%': {
-          re.append(".*");
-          break;
-        }
-        case '_': {
-          re.append('.');
-          break;
-        }
-        default: {
-          // escape regex metacharacters
-          if ("\\.[]{}()*+-?^$|".indexOf(c) >= 0) {
-            re.append('\\');
-          }
-          re.append(c);
-        }
-      }
-    }
-    String regex = re.toString();
-    if (caseInsensitive) {
-      return s.toLowerCase().matches(regex.toLowerCase());
-    } else {
-      return s.matches(regex);
-    }
   }
 
   private int compare(Expression leftExpr, Expression rightExpr, GenericRecord rec) {

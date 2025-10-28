@@ -56,6 +56,11 @@
       <artifactId>avro</artifactId>
       <version>${avro.version}</version>
     </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>2.18.1</version>
+    </dependency>
     <!-- Minimal Hadoop bits needed by parquet-hadoop -->
     <dependency>
       <groupId>org.apache.hadoop</groupId>
