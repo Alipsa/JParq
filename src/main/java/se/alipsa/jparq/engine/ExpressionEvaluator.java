@@ -204,7 +204,8 @@ public final class ExpressionEvaluator {
       return false;
     }
 
-    String keyword = like.getLikeKeyWord() == null ? "LIKE" : like.getLikeKeyWord().name();
+    LikeExpression.KeyWord keyWord = like.getLikeKeyWord();
+    String keyword = keyWord == null ? like.getStringExpression() : keyWord.name();
     Character escapeChar = null;
     if (like.getEscape() != null) {
       Operand escapeOperand = operand(like.getEscape(), rec);
@@ -220,7 +221,8 @@ public final class ExpressionEvaluator {
     if ("SIMILAR_TO".equalsIgnoreCase(keyword)) {
       matches = StringExpressions.similarTo(left, pat, escapeChar);
     } else {
-      boolean caseInsensitive = "ILIKE".equalsIgnoreCase(keyword) || like.isCaseInsensitive();
+      boolean caseInsensitive = keyWord == LikeExpression.KeyWord.ILIKE
+          || (keyWord == null && "ILIKE".equalsIgnoreCase(keyword));
       matches = StringExpressions.like(left, pat, caseInsensitive, escapeChar);
     }
     return like.isNot() != matches;

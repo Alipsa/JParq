@@ -446,7 +446,8 @@ public final class ValueExpressionEvaluator {
     if (input == null || pattern == null) {
       return false;
     }
-    String keyword = like.getLikeKeyWord() == null ? "LIKE" : like.getLikeKeyWord().name();
+    LikeExpression.KeyWord keyWord = like.getLikeKeyWord();
+    String keyword = keyWord == null ? like.getStringExpression() : keyWord.name();
     Character escapeChar = null;
     if (like.getEscape() != null) {
       Object escapeVal = evalInternal(like.getEscape(), record);
@@ -462,7 +463,8 @@ public final class ValueExpressionEvaluator {
       boolean matches = StringExpressions.similarTo(input, pattern, escapeChar);
       return like.isNot() ? !matches : matches;
     }
-    boolean caseInsensitive = "ILIKE".equalsIgnoreCase(keyword) || like.isCaseInsensitive();
+    boolean caseInsensitive = keyWord == LikeExpression.KeyWord.ILIKE
+        || (keyWord == null && "ILIKE".equalsIgnoreCase(keyword));
     boolean matches = StringExpressions.like(input, pattern, caseInsensitive, escapeChar);
     return like.isNot() ? !matches : matches;
   }
@@ -587,7 +589,7 @@ public final class ValueExpressionEvaluator {
     }
     List<String> names = new ArrayList<>(named.getNames());
     List<Object> values = new ArrayList<>(names.size());
-    for (Expression expr : named.getExpressions()) {
+    for (Expression expr : named) {
       values.add(evalInternal(expr, record));
     }
     return new NamedArgResult(Collections.unmodifiableList(names), Collections.unmodifiableList(values));

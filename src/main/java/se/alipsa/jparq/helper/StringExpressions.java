@@ -188,7 +188,12 @@ public final class StringExpressions {
 
   /** Enumeration describing which sides should be trimmed. */
   public enum TrimMode {
-    LEADING, TRAILING, BOTH
+    /** Trim characters from the start of the input only. */
+    LEADING,
+    /** Trim characters from the end of the input only. */
+    TRAILING,
+    /** Trim characters from both the start and end of the input. */
+    BOTH
   }
 
   /**
