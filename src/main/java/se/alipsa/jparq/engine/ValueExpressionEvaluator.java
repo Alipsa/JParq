@@ -29,7 +29,8 @@ import se.alipsa.jparq.helper.LiteralConverter;
 
 /**
  * Evaluates SELECT-list expressions (e.g. computed columns and supported SQL
- * functions such as {@code COALESCE}) against a {@link GenericRecord}.
+ * functions such as {@code COALESCE} and {@code CAST}) against a
+ * {@link GenericRecord}.
  */
 public final class ValueExpressionEvaluator {
 

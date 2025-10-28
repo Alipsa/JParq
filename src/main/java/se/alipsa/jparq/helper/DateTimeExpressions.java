@@ -1,5 +1,7 @@
 package se.alipsa.jparq.helper;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.Date;
 import java.sql.Time;
 import java.sql.Timestamp;
@@ -14,14 +16,18 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.TemporalAccessor;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
+import net.sf.jsqlparser.statement.create.table.ColDataType;
 
 /**
- * Utility methods for evaluating SQL date/time expressions.
+ * Utility methods for evaluating SQL date/time expressions and literal casts.
  */
 public final class DateTimeExpressions {
 
@@ -265,13 +271,13 @@ public final class DateTimeExpressions {
   }
 
   /**
-   * Apply a CAST expression for date/time literals.
+   * Apply a CAST expression for literals.
    *
    * @param cast
    *          the cast expression
    * @param value
    *          the evaluated inner value
-   * @return the cast result
+   * @return the cast result converted to the requested type when possible
    */
   public static Object castLiteral(CastExpression cast, Object value) {
     if (cast == null || value == null) {
@@ -286,7 +292,158 @@ public final class DateTimeExpressions {
     if (cast.isTime()) {
       return toTime(value);
     }
-    return value;
+    ColDataType colType = cast.getColDataType();
+    String dataType = colType == null ? null : colType.getDataType();
+    if (dataType == null) {
+      return value;
+    }
+    String normalized = normalizeTypeName(dataType);
+    return switch (normalized) {
+      case "boolean", "bool" -> toBoolean(value);
+      case "char", "character", "nchar", "varchar", "charactervarying", "nvarchar",
+          "string" -> castToString(cast, value);
+      case "text", "clob" -> value.toString();
+      case "tinyint" -> toBigDecimalValue(value).byteValue();
+      case "smallint", "int2" -> toBigDecimalValue(value).shortValue();
+      case "int", "integer", "signed", "int4" -> toBigDecimalValue(value).intValue();
+      case "bigint", "int8" -> toBigDecimalValue(value).longValue();
+      case "float", "real", "float4" -> toBigDecimalValue(value).floatValue();
+      case "double", "doubleprecision", "float8" -> toBigDecimalValue(value).doubleValue();
+      case "numeric", "decimal", "number" -> castToBigDecimal(cast, value);
+      default -> value;
+    };
+  }
+
+  private static BigDecimal toBigDecimalValue(Object value) {
+    if (value instanceof BigDecimal bd) {
+      return bd;
+    }
+    if (value instanceof Number num) {
+      return new BigDecimal(num.toString());
+    }
+    if (value instanceof Boolean bool) {
+      return bool ? BigDecimal.ONE : BigDecimal.ZERO;
+    }
+    return new BigDecimal(value.toString().trim());
+  }
+
+  private static String castToString(CastExpression cast, Object value) {
+    String text = value == null ? null : value.toString();
+    if (text == null) {
+      return null;
+    }
+    Integer length = firstIntegerArgument(cast);
+    if (length != null && length >= 0 && text.length() > length) {
+      return text.substring(0, length);
+    }
+    return text;
+  }
+
+  private static BigDecimal castToBigDecimal(CastExpression cast, Object value) {
+    BigDecimal decimal = toBigDecimalValue(value);
+    Integer scale = secondIntegerArgument(cast);
+    if (scale != null) {
+      decimal = decimal.setScale(scale, RoundingMode.HALF_UP);
+    }
+    return decimal;
+  }
+
+  private static Integer firstIntegerArgument(CastExpression cast) {
+    return integerArgument(cast, 0);
+  }
+
+  private static Integer secondIntegerArgument(CastExpression cast) {
+    return integerArgument(cast, 1);
+  }
+
+  private static Integer integerArgument(CastExpression cast, int index) {
+    ColDataType colType = cast.getColDataType();
+    if (colType == null) {
+      return null;
+    }
+    List<Integer> args = parseIntegerArguments(colType);
+    if (index >= args.size()) {
+      return null;
+    }
+    return args.get(index);
+  }
+
+  private static Boolean toBoolean(Object value) {
+    if (value instanceof Boolean bool) {
+      return bool;
+    }
+    if (value instanceof Number num) {
+      return num.intValue() != 0;
+    }
+    String text = value.toString().trim();
+    if (text.isEmpty()) {
+      return Boolean.FALSE;
+    }
+    String normalized = text.toLowerCase(Locale.ROOT);
+    if ("true".equals(normalized) || "t".equals(normalized) || "yes".equals(normalized)
+        || "y".equals(normalized) || "1".equals(normalized)) {
+      return Boolean.TRUE;
+    }
+    if ("false".equals(normalized) || "f".equals(normalized) || "no".equals(normalized)
+        || "n".equals(normalized) || "0".equals(normalized)) {
+      return Boolean.FALSE;
+    }
+    throw new IllegalArgumentException("Cannot cast value '" + value + "' to BOOLEAN");
+  }
+
+  private static String normalizeTypeName(String dataType) {
+    String normalized = dataType.toLowerCase(Locale.ROOT).trim().replace("_", "");
+    int paren = normalized.indexOf('(');
+    if (paren >= 0) {
+      normalized = normalized.substring(0, paren);
+    }
+    return normalized.replace(" ", "");
+  }
+
+  private static List<Integer> parseIntegerArguments(ColDataType colType) {
+    if (colType == null) {
+      return Collections.emptyList();
+    }
+    List<String> args = colType.getArgumentsStringList();
+    if (args != null && !args.isEmpty()) {
+      List<Integer> ints = new ArrayList<>(args.size());
+      for (String arg : args) {
+        addIfInteger(ints, arg);
+      }
+      if (!ints.isEmpty()) {
+        return ints;
+      }
+    }
+    String type = colType.getDataType();
+    if (type == null) {
+      return Collections.emptyList();
+    }
+    int start = type.indexOf('(');
+    int end = type.indexOf(')', start + 1);
+    if (start < 0 || end < 0 || end <= start + 1) {
+      return Collections.emptyList();
+    }
+    String slice = type.substring(start + 1, end).replace(" ", "");
+    if (slice.isEmpty()) {
+      return Collections.emptyList();
+    }
+    String[] parts = slice.split(",");
+    List<Integer> ints = new ArrayList<>(parts.length);
+    for (String part : parts) {
+      addIfInteger(ints, part);
+    }
+    return ints;
+  }
+
+  private static void addIfInteger(List<Integer> target, String text) {
+    if (text == null || text.isEmpty()) {
+      return;
+    }
+    try {
+      target.add(Integer.valueOf(text.trim()));
+    } catch (NumberFormatException ignore) {
+      // ignore non-integer values (e.g. MAX)
+    }
   }
 
   private static Timestamp toTimestamp(Object value) {
