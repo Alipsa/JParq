@@ -94,7 +94,6 @@ The following SQL statements are supported:
   - Numeric functions (abs, ceil, floor, round, sqrt, truncate, mod, power, exp, log, rand, sign, sin, cos, tan, asin, acos, atan, atan2, degrees, radians)
 - comments -- and /* */
 - `CASE` support
-- exists support
 - any and all support
 - `GROUP BY` with simple grouping
   - `COUNT(*)` aggregation
@@ -102,9 +101,37 @@ The following SQL statements are supported:
   - support aggregation functions in `SELECT` clause
 - `OFFSET` support
 - Subquery support
-
+  - In the SELECT Clause : Used to return a single value or a set of values. e.g. 
+    SELECT first_name, (
+      SELECT department_name FROM departments WHERE departments.department_id = employees.department_id
+    ) AS department_name
+    FROM employees;
+  - In the FROM Clause : Treated as a derived table or inline view. E.g:
+    SELECT *
+    FROM (SELECT first_name, salary FROM employees WHERE salary > 5000) AS "high_salaried"
+  - In the WHERE Clause : Used to filter the results. e.g
+    SELECT first_name
+    FROM employees
+    WHERE department_id IN (SELECT department_id FROM departments WHERE location_id>1500);
+  - In the HAVING Clause : Used to filter groups. E.g:
+    SELECT department_id, AVG(salary)
+    FROM employees
+    GROUP BY department_id
+    HAVING AVG(salary) > (SELECT AVG(salary) FROM employees);
+- exists support e.g:
+  SELECT column_name(s)
+  FROM table_name
+  WHERE EXISTS
+  (SELECT column_name FROM table_name WHERE condition);
 ### Might be implemented in the future
 - Join support
 - union support
 - CTE
 - Windowing
+
+### Standard prompt
+Please implement support for the SQL standard for 
+Each section (starting with # above) should have its own test class to verify the functionality.
+Remember to also update javadocs where needed.
+All tests must pass after the implementation to ensure that there is no regression.
+Adhere to the coding standard defined in checkstyle.xml.
