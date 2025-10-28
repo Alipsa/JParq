@@ -200,13 +200,12 @@ public final class AggregateFunctions {
       accs.add(AggregateAccumulator.create(spec));
     }
 
-    ExpressionEvaluator whereEval = null;
-    ValueExpressionEvaluator valueEval = null;
-    GenericRecord rec = null;
-    Schema schema = null;
+    try (ParquetReader<GenericRecord> autoClose = reader) {
+      GenericRecord rec = autoClose.read();
+      Schema schema = null;
+      ExpressionEvaluator whereEval = null;
+      ValueExpressionEvaluator valueEval = null;
 
-    try {
-      rec = reader.read();
       while (rec != null) {
         if (schema == null) {
           schema = rec.getSchema();
@@ -223,10 +222,8 @@ public final class AggregateFunctions {
           }
         }
 
-        rec = reader.read();
+        rec = autoClose.read();
       }
-    } finally {
-      reader.close();
     }
 
     List<Object> values = new ArrayList<>(accs.size());

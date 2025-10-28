@@ -90,50 +90,7 @@ class JParqPreparedStatement implements PreparedStatement {
       this.fileAvro = avro;
 
       // 4. Projection Pushdown (SELECT U WHERE columns)
-      if (fileAvro != null) {
-        java.util.Set<String> needed = new java.util.LinkedHashSet<>();
-        java.util.Set<String> selCols = ProjectionFields.fromSelect(parsedSelect);
-        boolean selectAll = selCols == null && aggregatePlan == null;
-        if (!selectAll && selCols != null) {
-          for (String col : selCols) {
-            if (col != null) {
-              needed.add(col);
-            }
-          }
-        }
-        if (!selectAll) {
-          java.util.Set<String> whereCols = ColumnsUsed.inWhere(parsedSelect.where());
-          for (String col : whereCols) {
-            if (col != null) {
-              needed.add(col);
-            }
-          }
-          for (SqlParser.OrderKey key : parsedSelect.orderBy()) {
-            String col = key.column();
-            if (col != null) {
-              needed.add(col);
-            }
-          }
-          if (aggregatePlan != null) {
-            for (AggregateFunctions.AggregateSpec spec : aggregatePlan.specs()) {
-              if (!spec.countStar()) {
-                java.util.Set<String> aggCols = ColumnsUsed.inWhere(spec.argument());
-                for (String col : aggCols) {
-                  if (col != null) {
-                    needed.add(col);
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        if (!selectAll && !needed.isEmpty()) {
-          Schema avroProjection = AvroProjections.project(fileAvro, needed);
-          AvroReadSupport.setRequestedProjection(conf, avroProjection);
-          AvroReadSupport.setAvroReadSchema(conf, avroProjection);
-        }
-      }
+      configureProjectionPushdown(fileAvro, aggregatePlan);
 
       // 5. Filter Pushdown & Residual Calculation
       if (!parsedSelect.distinct() && fileAvro != null && parsedSelect.where() != null) {
@@ -192,6 +149,53 @@ class JParqPreparedStatement implements PreparedStatement {
   public void close() {
     // No-op for now, as PreparedStatement cleanup is minimal in this read-only
     // context.
+  }
+
+  private void configureProjectionPushdown(Schema schema, AggregateFunctions.AggregatePlan aggregatePlan) {
+    if (schema == null) {
+      return;
+    }
+
+    java.util.Set<String> selectColumns = ProjectionFields.fromSelect(parsedSelect);
+    boolean selectAll = selectColumns == null && aggregatePlan == null;
+    if (selectAll) {
+      return;
+    }
+
+    java.util.Set<String> needed = new java.util.LinkedHashSet<>();
+    addColumns(needed, selectColumns);
+    addColumns(needed, ColumnsUsed.inWhere(parsedSelect.where()));
+    for (SqlParser.OrderKey key : parsedSelect.orderBy()) {
+      addColumn(needed, key.column());
+    }
+    if (aggregatePlan != null) {
+      for (AggregateFunctions.AggregateSpec spec : aggregatePlan.specs()) {
+        if (!spec.countStar()) {
+          addColumns(needed, ColumnsUsed.inWhere(spec.argument()));
+        }
+      }
+    }
+
+    if (!needed.isEmpty()) {
+      Schema avroProjection = AvroProjections.project(schema, needed);
+      AvroReadSupport.setRequestedProjection(conf, avroProjection);
+      AvroReadSupport.setAvroReadSchema(conf, avroProjection);
+    }
+  }
+
+  private static void addColumns(java.util.Set<String> target, java.util.Set<String> source) {
+    if (source == null || source.isEmpty()) {
+      return;
+    }
+    for (String column : source) {
+      addColumn(target, column);
+    }
+  }
+
+  private static void addColumn(java.util.Set<String> target, String column) {
+    if (column != null) {
+      target.add(column);
+    }
   }
 
   @Override
