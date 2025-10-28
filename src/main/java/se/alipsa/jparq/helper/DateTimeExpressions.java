@@ -436,14 +436,23 @@ public final class DateTimeExpressions {
   }
 
   private static void addIfInteger(List<Integer> target, String text) {
-    if (text == null || text.isEmpty()) {
+    if (text == null) {
       return;
     }
-    try {
-      target.add(Integer.valueOf(text.trim()));
-    } catch (NumberFormatException ignore) {
-      // ignore non-integer values (e.g. MAX)
+    String trimmed = text.trim();
+    if (trimmed.isEmpty()) {
+      return;
     }
+    int startIdx = (trimmed.charAt(0) == '-' || trimmed.charAt(0) == '+') ? 1 : 0;
+    if (startIdx == trimmed.length()) {
+      return;
+    }
+    for (int i = startIdx; i < trimmed.length(); i++) {
+      if (!Character.isDigit(trimmed.charAt(i))) {
+        return;
+      }
+    }
+    target.add(Integer.valueOf(trimmed));
   }
 
   private static Timestamp toTimestamp(Object value) {
