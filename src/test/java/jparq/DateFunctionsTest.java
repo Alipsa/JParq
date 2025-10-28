@@ -80,7 +80,6 @@ public class DateFunctionsTest {
 
   @Test
   void testCurrentDate() {
-    LocalDate start = LocalDate.now();
     AtomicReference<Date> value = new AtomicReference<>();
 
     jparqSql.query("SELECT CURRENT_DATE AS current_date FROM mtcars LIMIT 1", rs -> {
@@ -91,13 +90,9 @@ public class DateFunctionsTest {
         fail(e);
       }
     });
-
-    LocalDate end = LocalDate.now();
     Date current = value.get();
     assertNotNull(current, "CURRENT_DATE should produce a value");
-    LocalDate actual = current.toLocalDate();
-    assertFalse(actual.isBefore(start.minusDays(1)), "Date should not precede the start window");
-    assertFalse(actual.isAfter(end.plusDays(1)), "Date should not exceed the end window");
+    assertEquals(LocalDate.now(), current.toLocalDate(), "CURRENT_DATE should be today");
   }
 
   @Test
