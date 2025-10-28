@@ -119,7 +119,9 @@ public class AggregateFunctionsTest {
 
   @Test
   void testMin() {
-    final double[] manualMin = {Double.POSITIVE_INFINITY};
+    final double[] manualMin = {
+        Double.POSITIVE_INFINITY
+    };
 
     jparqSql.query("SELECT mpg FROM mtcars WHERE cyl = 8", rs -> {
       try {
@@ -144,7 +146,9 @@ public class AggregateFunctionsTest {
 
   @Test
   void testMax() {
-    final double[] manualMax = {Double.NEGATIVE_INFINITY};
+    final double[] manualMax = {
+        Double.NEGATIVE_INFINITY
+    };
 
     jparqSql.query("SELECT hp FROM mtcars", rs -> {
       try {

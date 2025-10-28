@@ -2,10 +2,10 @@ package se.alipsa.jparq.engine;
 
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.sql.Types;
 import java.sql.Date;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -57,7 +57,8 @@ public final class AggregateFunctions {
     /**
      * Canonical constructor validating provided specification list.
      *
-     * @param specs aggregate specifications in projection order
+     * @param specs
+     *          aggregate specifications in projection order
      */
     public AggregatePlan {
       Objects.requireNonNull(specs, "specs");
@@ -91,12 +92,17 @@ public final class AggregateFunctions {
    */
   public record AggregateSpec(AggregateType type, Expression argument, String label, boolean countStar) {
     /**
-     * Canonical constructor enforcing invariant constraints for an aggregate specification.
+     * Canonical constructor enforcing invariant constraints for an aggregate
+     * specification.
      *
-     * @param type aggregate function type
-     * @param argument function argument expression (null for COUNT(*))
-     * @param label projection label exposed to JDBC
-     * @param countStar true when representing COUNT(*)
+     * @param type
+     *          aggregate function type
+     * @param argument
+     *          function argument expression (null for COUNT(*))
+     * @param label
+     *          projection label exposed to JDBC
+     * @param countStar
+     *          true when representing COUNT(*)
      */
     public AggregateSpec {
       Objects.requireNonNull(type, "type");
@@ -123,8 +129,10 @@ public final class AggregateFunctions {
     /**
      * Canonical constructor ensuring result collections are present.
      *
-     * @param values computed aggregate values
-     * @param sqlTypes SQL types associated with each aggregate
+     * @param values
+     *          computed aggregate values
+     * @param sqlTypes
+     *          SQL types associated with each aggregate
      */
     public AggregateResult {
       Objects.requireNonNull(values, "values");
@@ -137,8 +145,10 @@ public final class AggregateFunctions {
    * {@code null} if the SELECT list does not consist solely of supported
    * aggregate functions.
    *
-   * @param select parsed SELECT statement
-   * @return aggregate plan for the select list, or {@code null} when not purely aggregate
+   * @param select
+   *          parsed SELECT statement
+   * @return aggregate plan for the select list, or {@code null} when not purely
+   *         aggregate
    */
   public static AggregatePlan plan(SqlParser.Select select) {
     List<Expression> expressions = select.expressions();
@@ -179,9 +189,7 @@ public final class AggregateFunctions {
         arg = args.get(0);
       }
 
-      String label = (labels != null && i < labels.size() && labels.get(i) != null)
-          ? labels.get(i)
-          : func.toString();
+      String label = (labels != null && i < labels.size() && labels.get(i) != null) ? labels.get(i) : func.toString();
 
       specs.add(new AggregateSpec(type, arg, label, countStar));
     }
@@ -506,4 +514,3 @@ public final class AggregateFunctions {
     return Types.OTHER;
   }
 }
-
