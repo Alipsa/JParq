@@ -123,6 +123,57 @@ The following SQL statements are supported:
   FROM table_name
   WHERE EXISTS
   (SELECT column_name FROM table_name WHERE condition);
+
+#### String functions support details
+##### Character Length and Position
+- CHAR_LENGTH(string) or CHARACTER_LENGTH(string)	Returns number of characters in a string.	CHAR_LENGTH('hello') → 5
+- OCTET_LENGTH(string)	Returns number of bytes in the string (depends on encoding).	OCTET_LENGTH('Å') → 2 (in UTF-8)
+- POSITION(substring IN string)	Finds the position (1-based) of substring in string.	POSITION('l' IN 'hello') → 3
+
+##### Substrings and Extraction
+- SUBSTRING(string FROM start [FOR length])	Extracts substring starting at start, optionally limited by length.	SUBSTRING('abcdef' FROM 2 FOR 3) → 'bcd'
+- LEFT(string, count) (optional extension)	Leftmost characters.	LEFT('abcdef', 3) → 'abc'
+- RIGHT(string, count) (optional extension)	Rightmost characters.	RIGHT('abcdef', 2) → 'ef'
+
+##### Concatenation
+- CONCAT(string1, string2, …)	Concatenates two or more strings (SQL:2016 added variadic support).	CONCAT('a','b','c') → 'abc'
+
+##### Case Conversion
+- UPPER(string)	Converts to uppercase.	UPPER('sql') → 'SQL'
+- LOWER(string)	Converts to lowercase.	LOWER('SQL') → 'sql'
+
+##### Trimming and Padding
+- TRIM([LEADING	TRAILING	BOTH] [characters] FROM string)
+- LTRIM(string) (extension)	Trims leading spaces.	LTRIM(' hi') → 'hi'
+- RTRIM(string) (extension)	Trims trailing spaces.	RTRIM('hi ') → 'hi'
+- LPAD(string, length [, fill]) (SQL:2008 optional)	Pads string on the left.	LPAD('42', 5, '0') → '00042'
+- RPAD(string, length [, fill]) (SQL:2008 optional)	Pads string on the right.	RPAD('42', 5, '0') → '42000'
+
+##### Searching and Replacing
+- OVERLAY(string PLACING replacement FROM start [FOR length])	Replaces part of string starting at start with replacement.	OVERLAY('abcdef' PLACING 'xyz' FROM 3 FOR 2) → 'abxyze f'
+- REPLACE(string, search, replace) (SQL:2008)	Replaces all occurrences of search with replace.	REPLACE('banana', 'na', 'xy') → 'baxyxy'
+
+##### Collation and Comparison
+- COLLATE(string, collation_name)	Applies a specific collation to a string.	'abc' COLLATE "sv_SE"
+- SIMILAR TO e.g.
+  'cat' SIMILAR TO '(cat|dog)'      → TRUE
+  'cab' SIMILAR TO 'c(a|o)b'        → TRUE
+  'cab' SIMILAR TO 'c(a|e)b'        → FALSE
+  'abc' SIMILAR TO 'a%'             → TRUE
+- REGEXP_LIKE (pattern matching operators) e.g:
+  REGEXP_LIKE('abc123', '^[a-z]+[0-9]+$')   → TRUE
+  REGEXP_LIKE('AbC', 'abc', 'i')            → TRUE  -- 'i' = case-insensitive
+  REGEXP_LIKE('cat', 'dog|cat')             → TRUE
+
+##### Unicode and Codepoints
+- CHAR(code)	Returns the character corresponding to a code point.	CHAR(65) → 'A'
+- UNICODE(string)	Returns Unicode code point of first character.	UNICODE('A') → 65
+
+##### SQL:2016–2023 Additions
+- NORMALIZE(string [USING form])	Normalizes Unicode text (SQL:2016).	NORMALIZE('é') → 'é'
+- STRING_AGG(expression, separator)	Aggregates values into a single string with a separator.	STRING_AGG(name, ', ') → 'Alice, Bob, Carol'
+- JSON_VALUE, JSON_QUERY, JSON_OBJECT, JSON_ARRAY	JSON construction/extraction—technically not core string functions but string-returning functions standardized in SQL:2016–2023.
+
 ### Might be implemented in the future
 - Join support
 - union support
