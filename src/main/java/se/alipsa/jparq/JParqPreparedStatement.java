@@ -36,6 +36,7 @@ import org.apache.parquet.avro.AvroReadSupport;
 import org.apache.parquet.filter2.compat.FilterCompat;
 import org.apache.parquet.filter2.predicate.FilterPredicate;
 import org.apache.parquet.hadoop.ParquetReader;
+import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
@@ -68,6 +69,7 @@ class JParqPreparedStatement implements PreparedStatement {
       // 1. Parse SQL
       this.parsedSelect = SqlParser.parseSelect(sql);
       this.file = stmt.getConn().tableFile(parsedSelect.table());
+      var aggregatePlan = AggregateFunctions.plan(parsedSelect);
 
       // 2. Setup Configuration
       this.conf = new Configuration(false);
@@ -91,7 +93,7 @@ class JParqPreparedStatement implements PreparedStatement {
       if (fileAvro != null) {
         java.util.Set<String> needed = new java.util.LinkedHashSet<>();
         java.util.Set<String> selCols = ProjectionFields.fromSelect(parsedSelect);
-        boolean selectAll = selCols == null;
+        boolean selectAll = selCols == null && aggregatePlan == null;
         if (!selectAll && selCols != null) {
           for (String col : selCols) {
             if (col != null) {
@@ -110,6 +112,18 @@ class JParqPreparedStatement implements PreparedStatement {
             String col = key.column();
             if (col != null) {
               needed.add(col);
+            }
+          }
+          if (aggregatePlan != null) {
+            for (AggregateFunctions.AggregateSpec spec : aggregatePlan.specs()) {
+              if (!spec.countStar()) {
+                java.util.Set<String> aggCols = ColumnsUsed.inWhere(spec.argument());
+                for (String col : aggCols) {
+                  if (col != null) {
+                    needed.add(col);
+                  }
+                }
+              }
             }
           }
         }

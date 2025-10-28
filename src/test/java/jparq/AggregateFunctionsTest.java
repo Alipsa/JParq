@@ -1,27 +1,169 @@
 package jparq;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.JParqSql;
 
 /** Tests for aggregate functions. */
 public class AggregateFunctionsTest {
 
-  @Test
-  void testMin() {
-  }
+  private static JParqSql jparqSql;
 
-  @Test
-  void testMax() {
-  }
+  @BeforeAll
+  static void setup() throws URISyntaxException {
+    URL mtcarsUrl = AggregateFunctionsTest.class.getResource("/mtcars.parquet");
+    assertNotNull(mtcarsUrl, "mtcars.parquet must be on the test classpath (src/test/resources)");
 
-  @Test
-  void testSum() {
-  }
+    Path mtcarsPath = Paths.get(mtcarsUrl.toURI());
+    Path dir = mtcarsPath.getParent();
 
-  @Test
-  void testAvg() {
+    jparqSql = new JParqSql("jdbc:jparq:" + dir.toAbsolutePath());
   }
 
   @Test
   void testCount() {
+    final long[] expectedCount = new long[1];
+
+    jparqSql.query("SELECT mpg FROM mtcars", rs -> {
+      try {
+        while (rs.next()) {
+          expectedCount[0]++;
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    jparqSql.query("SELECT COUNT(*) AS total_rows, COUNT(mpg) AS mpg_count FROM mtcars", rs -> {
+      try {
+        ResultSetMetaData md = rs.getMetaData();
+        assertEquals(2, md.getColumnCount(), "Expected two aggregate columns");
+
+        assertTrue(rs.next(), "Aggregate query should return one row");
+        assertEquals(expectedCount[0], rs.getLong("total_rows"));
+        assertEquals(expectedCount[0], rs.getLong(2));
+        assertFalse(rs.next(), "Only one aggregated row expected");
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void testSum() {
+    final double[] manualSum = new double[1];
+
+    jparqSql.query("SELECT hp FROM mtcars WHERE cyl = 4", rs -> {
+      try {
+        while (rs.next()) {
+          manualSum[0] += rs.getDouble(1);
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    jparqSql.query("SELECT SUM(hp) AS total_hp FROM mtcars WHERE cyl = 4", rs -> {
+      try {
+        assertTrue(rs.next());
+        assertEquals(manualSum[0], rs.getDouble("total_hp"), 1e-8);
+        assertFalse(rs.wasNull());
+        assertFalse(rs.next());
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void testAvg() {
+    final double[] sum = new double[1];
+    final int[] count = new int[1];
+
+    jparqSql.query("SELECT mpg FROM mtcars", rs -> {
+      try {
+        while (rs.next()) {
+          sum[0] += rs.getDouble(1);
+          count[0]++;
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    double expectedAvg = sum[0] / count[0];
+
+    jparqSql.query("SELECT AVG(mpg) AS avg_mpg FROM mtcars", rs -> {
+      try {
+        assertTrue(rs.next());
+        assertEquals(expectedAvg, rs.getDouble(1), 1e-10);
+        assertEquals(expectedAvg, rs.getDouble("avg_mpg"), 1e-10);
+        assertFalse(rs.next());
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void testMin() {
+    final double[] manualMin = {Double.POSITIVE_INFINITY};
+
+    jparqSql.query("SELECT mpg FROM mtcars WHERE cyl = 8", rs -> {
+      try {
+        while (rs.next()) {
+          manualMin[0] = Math.min(manualMin[0], rs.getDouble(1));
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    jparqSql.query("SELECT MIN(mpg) AS min_mpg FROM mtcars WHERE cyl = 8", rs -> {
+      try {
+        assertTrue(rs.next());
+        assertEquals(manualMin[0], rs.getDouble("min_mpg"), 1e-10);
+        assertFalse(rs.next());
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void testMax() {
+    final double[] manualMax = {Double.NEGATIVE_INFINITY};
+
+    jparqSql.query("SELECT hp FROM mtcars", rs -> {
+      try {
+        while (rs.next()) {
+          manualMax[0] = Math.max(manualMax[0], rs.getDouble(1));
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    jparqSql.query("SELECT MAX(hp) FROM mtcars", rs -> {
+      try {
+        assertTrue(rs.next());
+        assertEquals(manualMax[0], rs.getDouble(1), 1e-10);
+        assertFalse(rs.next());
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
   }
 }

@@ -15,6 +15,7 @@ import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.hadoop.ParquetReader;
+import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.QueryProcessor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
@@ -25,12 +26,16 @@ import se.alipsa.jparq.model.ResultSetAdapter;
 public class JParqResultSet extends ResultSetAdapter {
 
   private final List<String> physicalColumnOrder; // may be null
-  private final QueryProcessor qp;
+  private QueryProcessor qp;
   private GenericRecord current;
   private final List<String> columnOrder;
   private final String tableName;
   private final List<Expression> selectExpressions;
   private ValueExpressionEvaluator projectionEvaluator;
+  private final boolean aggregateQuery;
+  private List<Object> aggregateValues;
+  private List<Integer> aggregateSqlTypes;
+  private boolean aggregateDelivered = false;
   private boolean closed = false;
   private int rowNum = 0;
   private boolean lastWasNull = false;
@@ -59,10 +64,35 @@ public class JParqResultSet extends ResultSetAdapter {
       throws SQLException {
     this.tableName = tableName;
     this.selectExpressions = List.copyOf(select.expressions());
-    // Always use a mutable list to avoid UOE from List.of(...)
-    this.columnOrder = (columnOrder != null ? new ArrayList<>(columnOrder) : new ArrayList<>());
-    // physical names aren’t mutated; store as-is (null allowed)
-    this.physicalColumnOrder = physicalColumnOrder;
+    List<String> labels = (columnOrder != null ? new ArrayList<>(columnOrder) : new ArrayList<>());
+    List<String> physical = physicalColumnOrder;
+
+    AggregateFunctions.AggregatePlan aggregatePlan = AggregateFunctions.plan(select);
+    if (aggregatePlan != null) {
+      labels = new ArrayList<>(aggregatePlan.labels());
+      physical = null;
+      try {
+        AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan, residual);
+        this.aggregateValues = new ArrayList<>(result.values());
+        this.aggregateSqlTypes = result.sqlTypes();
+      } catch (Exception e) {
+        throw new SQLException("Failed to compute aggregate query", e);
+      }
+      this.columnOrder = labels;
+      this.physicalColumnOrder = physical;
+      this.aggregateQuery = true;
+      this.aggregateDelivered = false;
+      this.qp = null;
+      this.current = null;
+      this.rowNum = 0;
+      return;
+    }
+
+    this.columnOrder = labels;
+    this.physicalColumnOrder = physical;
+    this.aggregateQuery = false;
+    this.aggregateValues = null;
+    this.aggregateSqlTypes = null;
 
     try {
       GenericRecord first = reader.read();
@@ -113,6 +143,14 @@ public class JParqResultSet extends ResultSetAdapter {
     if (closed) {
       throw new SQLException("ResultSet closed");
     }
+    if (aggregateQuery) {
+      if (aggregateDelivered) {
+        return false;
+      }
+      aggregateDelivered = true;
+      rowNum = 1;
+      return true;
+    }
     try {
       if (rowNum == 0) {
         if (current == null) {
@@ -133,6 +171,14 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   private Object value(int idx) throws SQLException {
+    if (aggregateQuery) {
+      if (aggregateValues == null || idx < 1 || idx > aggregateValues.size()) {
+        throw new SQLException("Unknown column index: " + idx);
+      }
+      Object v = aggregateValues.get(idx - 1);
+      lastWasNull = (v == null);
+      return v;
+    }
     if (current == null) {
       throw new SQLException("Call next() before getting values");
     }
@@ -202,11 +248,11 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public ResultSetMetaData getMetaData() {
+    if (aggregateQuery) {
+      List<Integer> types = aggregateSqlTypes == null ? List.of() : aggregateSqlTypes;
+      return new AggregateResultSetMetaData(columnOrder, types, tableName);
+    }
     var schema = (current == null) ? null : current.getSchema();
-    // columnOrder = projection labels (aliases if present)
-    // physicalColumnOrder = underlying physical column names (null for computed
-    // exprs or when unknown)
-
     return new JParqResultSetMetaData(schema, columnOrder, physicalColumnOrder, tableName);
 
   }
@@ -216,7 +262,9 @@ public class JParqResultSet extends ResultSetAdapter {
   public void close() throws SQLException {
     closed = true;
     try {
-      qp.close();
+      if (qp != null) {
+        qp.close();
+      }
     } catch (Exception ignore) {
       // intentionally ignored
     }
