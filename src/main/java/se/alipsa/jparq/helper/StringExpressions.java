@@ -14,7 +14,13 @@ public final class StringExpressions {
   private StringExpressions() {
   }
 
-  /** Count the number of Unicode characters. */
+  /**
+   * Return the number of Unicode code points in the supplied value.
+   *
+   * @param value
+   *          value to inspect
+   * @return number of characters or {@code null} when {@code value} is {@code null}
+   */
   public static Integer charLength(Object value) {
     if (value == null) {
       return null;
@@ -23,7 +29,13 @@ public final class StringExpressions {
     return str.codePointCount(0, str.length());
   }
 
-  /** Count the number of UTF-8 bytes in the supplied value. */
+  /**
+   * Return the number of UTF-8 encoded bytes required for the supplied value.
+   *
+   * @param value
+   *          value to inspect
+   * @return number of bytes or {@code null} when {@code value} is {@code null}
+   */
   public static Integer octetLength(Object value) {
     if (value == null) {
       return null;
@@ -31,7 +43,15 @@ public final class StringExpressions {
     return value.toString().getBytes(StandardCharsets.UTF_8).length;
   }
 
-  /** Position of {@code substring} within {@code input} (1-based). */
+  /**
+   * Locate the given {@code substring} inside {@code input} using one-based indexing.
+   *
+   * @param substring
+   *          value to search for
+   * @param input
+   *          value to search within
+   * @return one-based position, {@code 0} when not found or {@code null} for null inputs
+   */
   public static Integer position(Object substring, Object input) {
     if (substring == null || input == null) {
       return null;
@@ -52,7 +72,17 @@ public final class StringExpressions {
     return codePoints + 1;
   }
 
-  /** SUBSTRING(string FROM start FOR length). */
+  /**
+   * Implementation of {@code SUBSTRING(string FROM start FOR length)}.
+   *
+   * @param input
+   *          source string
+   * @param start
+   *          one-based start position
+   * @param length
+   *          optional length in characters (may be {@code null})
+   * @return extracted substring or {@code null} when {@code input} or {@code start} is {@code null}
+   */
   public static String substring(String input, Number start, Number length) {
     if (input == null || start == null) {
       return null;
@@ -71,7 +101,15 @@ public final class StringExpressions {
     return new String(cps, from, Math.max(0, toExclusive - from));
   }
 
-  /** LEFT(string, count). */
+  /**
+   * Implementation of {@code LEFT(string, count)}.
+   *
+   * @param input
+   *          source string
+   * @param count
+   *          number of characters to keep from the left
+   * @return resulting substring or {@code null} when {@code input} or {@code count} is {@code null}
+   */
   public static String left(String input, Number count) {
     if (input == null || count == null) {
       return null;
@@ -82,7 +120,15 @@ public final class StringExpressions {
     return new String(cps, 0, end);
   }
 
-  /** RIGHT(string, count). */
+  /**
+   * Implementation of {@code RIGHT(string, count)}.
+   *
+   * @param input
+   *          source string
+   * @param count
+   *          number of characters to keep from the right
+   * @return resulting substring or {@code null} when {@code input} or {@code count} is {@code null}
+   */
   public static String right(String input, Number count) {
     if (input == null || count == null) {
       return null;
@@ -95,7 +141,13 @@ public final class StringExpressions {
     return new String(cps, cps.length - n, n);
   }
 
-  /** Concatenate arguments following SQL semantics (NULL values ignored). */
+  /**
+   * Concatenate arguments following SQL semantics that ignore {@code NULL} values.
+   *
+   * @param values
+   *          values to concatenate
+   * @return concatenated string or {@code null} if all values are {@code null}
+   */
   public static String concat(List<Object> values) {
     if (values == null || values.isEmpty()) {
       return null;
@@ -112,18 +164,44 @@ public final class StringExpressions {
     return any ? sb.toString() : null;
   }
 
+  /**
+   * Convert the supplied value to upper case using the root locale.
+   *
+   * @param value
+   *          value to convert
+   * @return upper-case representation or {@code null}
+   */
   public static String upper(Object value) {
     return value == null ? null : value.toString().toUpperCase(Locale.ROOT);
   }
 
+  /**
+   * Convert the supplied value to lower case using the root locale.
+   *
+   * @param value
+   *          value to convert
+   * @return lower-case representation or {@code null}
+   */
   public static String lower(Object value) {
     return value == null ? null : value.toString().toLowerCase(Locale.ROOT);
   }
 
+  /** Enumeration describing which sides should be trimmed. */
   public enum TrimMode {
     LEADING, TRAILING, BOTH
   }
 
+  /**
+   * Trim characters from the supplied string following {@code TRIM} semantics.
+   *
+   * @param input
+   *          source string
+   * @param characters
+   *          characters to remove (defaults to space)
+   * @param mode
+   *          which side(s) to trim
+   * @return trimmed string or {@code null} when {@code input} is {@code null}
+   */
   public static String trim(String input, String characters, TrimMode mode) {
     if (input == null) {
       return null;
@@ -149,6 +227,17 @@ public final class StringExpressions {
     return new String(cps, start, end - start);
   }
 
+  /**
+   * Pad the left side of {@code input} until reaching {@code length} characters.
+   *
+   * @param input
+   *          source string
+   * @param length
+   *          desired total length
+   * @param fill
+   *          optional padding string (defaults to space)
+   * @return padded string or {@code null} when {@code input} or {@code length} is {@code null}
+   */
   public static String lpad(String input, Number length, String fill) {
     if (input == null || length == null) {
       return null;
@@ -166,6 +255,17 @@ public final class StringExpressions {
     return pad + input;
   }
 
+  /**
+   * Pad the right side of {@code input} until reaching {@code length} characters.
+   *
+   * @param input
+   *          source string
+   * @param length
+   *          desired total length
+   * @param fill
+   *          optional padding string (defaults to space)
+   * @return padded string or {@code null} when {@code input} or {@code length} is {@code null}
+   */
   public static String rpad(String input, Number length, String fill) {
     if (input == null || length == null) {
       return null;
@@ -208,6 +308,19 @@ public final class StringExpressions {
     return false;
   }
 
+  /**
+   * Implementation of {@code OVERLAY(string PLACING replacement FROM start FOR length)}.
+   *
+   * @param input
+   *          source string
+   * @param replacement
+   *          replacement text
+   * @param start
+   *          one-based start position
+   * @param length
+   *          optional length of the region to replace
+   * @return resulting string or {@code null} when required inputs are {@code null}
+   */
   public static String overlay(String input, String replacement, Number start, Number length) {
     if (input == null || replacement == null || start == null) {
       return null;
@@ -226,6 +339,17 @@ public final class StringExpressions {
     return sb.toString();
   }
 
+  /**
+   * Replace all occurrences of {@code search} with {@code replacement} following SQL semantics.
+   *
+   * @param input
+   *          source string
+   * @param search
+   *          substring to replace
+   * @param replacement
+   *          replacement value
+   * @return string with replacements applied or {@code null} when any parameter is {@code null}
+   */
   public static String replace(String input, String search, String replacement) {
     if (input == null || search == null || replacement == null) {
       return null;
@@ -374,6 +498,13 @@ public final class StringExpressions {
     }
   }
 
+  /**
+   * Convert a list of Unicode code points into a string.
+   *
+   * @param codes
+   *          code points to convert
+   * @return constructed string or {@code null} when {@code codes} is {@code null} or empty
+   */
   public static String charFromCodes(List<Object> codes) {
     if (codes == null || codes.isEmpty()) {
       return null;
@@ -389,6 +520,13 @@ public final class StringExpressions {
     return sb.toString();
   }
 
+  /**
+   * Return the Unicode code point of the first character in {@code value}.
+   *
+   * @param value
+   *          value to inspect
+   * @return code point or {@code null} when {@code value} is {@code null}
+   */
   public static Integer unicode(Object value) {
     if (value == null) {
       return null;
@@ -400,6 +538,15 @@ public final class StringExpressions {
     return str.codePointAt(0);
   }
 
+  /**
+   * Normalize Unicode text using the specified normalization form.
+   *
+   * @param value
+   *          value to normalize
+   * @param formName
+   *          normalization form ({@code NFC}, {@code NFD}, {@code NFKC}, {@code NFKD})
+   * @return normalized string or {@code null} when {@code value} is {@code null}
+   */
   public static String normalize(Object value, Object formName) {
     if (value == null) {
       return null;

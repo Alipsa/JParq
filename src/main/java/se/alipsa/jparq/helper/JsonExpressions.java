@@ -18,6 +18,15 @@ public final class JsonExpressions {
   private JsonExpressions() {
   }
 
+  /**
+   * Evaluate {@code JSON_VALUE(document, path)} and return a scalar value.
+   *
+   * @param document
+   *          JSON document (string or {@link JsonNode})
+   * @param path
+   *          JSON path expression beginning with {@code $}
+   * @return extracted scalar value or {@code null} when the path cannot be resolved
+   */
   public static Object jsonValue(Object document, Object path) {
     JsonNode node = resolve(document, path);
     if (node == null || node.isMissingNode()) {
@@ -38,6 +47,15 @@ public final class JsonExpressions {
     return node.toString();
   }
 
+  /**
+   * Evaluate {@code JSON_QUERY(document, path)} and return a JSON fragment.
+   *
+   * @param document
+   *          JSON document (string or {@link JsonNode})
+   * @param path
+   *          JSON path expression beginning with {@code $}
+   * @return JSON string or {@code null} when the path cannot be resolved
+   */
   public static String jsonQuery(Object document, Object path) {
     JsonNode node = resolve(document, path);
     if (node == null || node.isMissingNode() || node.isNull()) {
@@ -46,6 +64,13 @@ public final class JsonExpressions {
     return node.toString();
   }
 
+  /**
+   * Construct a JSON object from an alternating sequence of keys and values.
+   *
+   * @param args
+   *          alternating key/value arguments
+   * @return serialized JSON object
+   */
   public static String jsonObject(List<Object> args) {
     if (args == null || args.isEmpty()) {
       return "{}";
@@ -70,6 +95,13 @@ public final class JsonExpressions {
     return obj.toString();
   }
 
+  /**
+   * Construct a JSON array from the supplied arguments.
+   *
+   * @param args
+   *          values to include in the array
+   * @return serialized JSON array
+   */
   public static String jsonArray(List<Object> args) {
     ArrayNode array = MAPPER.createArrayNode();
     if (args != null) {

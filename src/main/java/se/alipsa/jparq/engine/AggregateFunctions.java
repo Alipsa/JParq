@@ -84,8 +84,8 @@ public final class AggregateFunctions {
    *
    * @param type
    *          aggregate function type
-   * @param argument
-   *          function argument expression (null for COUNT(*))
+   * @param arguments
+   *          function argument expressions (empty for COUNT(*))
    * @param label
    *          projection label exposed to JDBC
    * @param countStar
