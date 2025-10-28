@@ -30,7 +30,7 @@ public final class AggregateFunctions {
 
   /** Supported aggregate function names. */
   private enum AggregateType {
-    COUNT, SUM, AVG, MAX, MIN;
+    COUNT, SUM, AVG, MAX, MIN, STRING_AGG;
 
     static AggregateType from(String name) {
       if (name == null) {
@@ -42,6 +42,7 @@ public final class AggregateFunctions {
         case "AVG", "AVERAGE" -> AVG;
         case "MAX" -> MAX;
         case "MIN" -> MIN;
+        case "STRING_AGG" -> STRING_AGG;
         default -> null;
       };
     }
@@ -90,15 +91,15 @@ public final class AggregateFunctions {
    * @param countStar
    *          true when representing COUNT(*)
    */
-  public record AggregateSpec(AggregateType type, Expression argument, String label, boolean countStar) {
+  public record AggregateSpec(AggregateType type, List<Expression> arguments, String label, boolean countStar) {
     /**
      * Canonical constructor enforcing invariant constraints for an aggregate
      * specification.
      *
      * @param type
      *          aggregate function type
-     * @param argument
-     *          function argument expression (null for COUNT(*))
+     * @param arguments
+     *          function argument expressions (empty for COUNT(*))
      * @param label
      *          projection label exposed to JDBC
      * @param countStar
@@ -107,13 +108,25 @@ public final class AggregateFunctions {
     public AggregateSpec {
       Objects.requireNonNull(type, "type");
       Objects.requireNonNull(label, "label");
+      arguments = arguments == null ? List.of() : List.copyOf(arguments);
       if (type == AggregateType.COUNT && countStar) {
-        if (argument != null) {
-          throw new IllegalArgumentException("COUNT(*) cannot have an argument");
+        if (!arguments.isEmpty()) {
+          throw new IllegalArgumentException("COUNT(*) cannot have arguments");
         }
       } else {
-        Objects.requireNonNull(argument, "argument");
+        if (arguments.isEmpty()) {
+          throw new IllegalArgumentException("Aggregate function " + type + " requires arguments");
+        }
       }
+    }
+
+    /**
+     * Convenience accessor for the first argument.
+     *
+     * @return first argument expression or {@code null}
+     */
+    public Expression argument() {
+      return arguments.isEmpty() ? null : arguments.getFirst();
     }
   }
 
@@ -174,24 +187,27 @@ public final class AggregateFunctions {
       }
 
       boolean countStar = false;
-      Expression arg = null;
+      List<Expression> args = List.of();
 
       if (type == AggregateType.COUNT && func.isAllColumns()) {
         countStar = true;
       } else {
-        List<Expression> args = parameters(func);
+        args = parameters(func);
         if (args.isEmpty()) {
           throw new IllegalArgumentException("Aggregate function " + func + " requires an argument");
         }
-        if (args.size() != 1) {
+        if (type == AggregateType.STRING_AGG) {
+          if (args.size() != 2) {
+            throw new IllegalArgumentException("STRING_AGG requires two arguments (value, separator)");
+          }
+        } else if (args.size() != 1) {
           throw new IllegalArgumentException("Only single-argument aggregate functions are supported");
         }
-        arg = args.get(0);
       }
 
       String label = (labels != null && i < labels.size() && labels.get(i) != null) ? labels.get(i) : func.toString();
 
-      specs.add(new AggregateSpec(type, arg, label, countStar));
+      specs.add(new AggregateSpec(type, args, label, countStar));
     }
 
     return new AggregatePlan(List.copyOf(specs));
@@ -281,6 +297,7 @@ public final class AggregateFunctions {
         case AVG -> new AvgAccumulator(spec);
         case MAX -> new ExtremumAccumulator(spec, true);
         case MIN -> new ExtremumAccumulator(spec, false);
+        case STRING_AGG -> new StringAggAccumulator(spec);
       };
     }
 
@@ -293,10 +310,14 @@ public final class AggregateFunctions {
     }
 
     Object evaluate(ValueExpressionEvaluator eval, GenericRecord record) {
-      if (spec.countStar()) {
+      if (spec.countStar() || spec.arguments().isEmpty()) {
         return null;
       }
-      return eval.eval(spec.argument(), record);
+      return evaluate(eval, record, spec.arguments().getFirst());
+    }
+
+    Object evaluate(ValueExpressionEvaluator eval, GenericRecord record, Expression argument) {
+      return argument == null ? null : eval.eval(argument, record);
     }
 
     void trackType(Object value) {
@@ -461,6 +482,46 @@ public final class AggregateFunctions {
     @Override
     Object result() {
       return extremum;
+    }
+  }
+
+  private static final class StringAggAccumulator extends AggregateAccumulator {
+    private final List<String> parts = new ArrayList<>();
+    private String separator;
+
+    StringAggAccumulator(AggregateSpec spec) {
+      super(spec);
+      observedType = String.class;
+    }
+
+    @Override
+    void add(ValueExpressionEvaluator eval, GenericRecord record) {
+      List<Expression> arguments = spec.arguments();
+      Object value = evaluate(eval, record, arguments.getFirst());
+      if (value == null) {
+        return;
+      }
+      if (arguments.size() > 1) {
+        Object sep = evaluate(eval, record, arguments.get(1));
+        if (sep != null) {
+          separator = sep.toString();
+        }
+      }
+      parts.add(value.toString());
+    }
+
+    @Override
+    Object result() {
+      if (parts.isEmpty()) {
+        return null;
+      }
+      String sep = separator == null ? "" : separator;
+      return String.join(sep, parts);
+    }
+
+    @Override
+    int sqlType() {
+      return Types.VARCHAR;
     }
   }
 
