@@ -84,11 +84,11 @@ The following SQL statements are supported:
 - `DISTINCT` support
 - Functions support
   - Date functions
+  - Aggregate functions (count, sum, avg, max, min)
 
 ### To be implemented in the near future
 - Functions support
-  - Aggregate functions (count, sum, avg, max, min)
-  - coalesce
+  - coalesce (The COALESCE() function returns the first non-null value in a list.)
   - String functions
   - Numeric functions (abs, ceil, floor, round, sqrt, truncate, mod, power, exp, log, rand, sign, sin, cos, tan, asin, acos, atan, atan2, degrees, radians)
 - comments -- and /* */
