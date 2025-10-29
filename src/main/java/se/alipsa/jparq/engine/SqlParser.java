@@ -56,9 +56,11 @@ public final class SqlParser {
    *          true if DISTINCT is specified
    * @param expressions
    *          the normalized SELECT expressions in projection order
+   * @param having
+   *          the HAVING expression (may be {@code null})
    */
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
-      int limit, List<OrderKey> orderBy, boolean distinct, List<Expression> expressions) {
+      int limit, List<OrderKey> orderBy, boolean distinct, List<Expression> expressions, Expression having) {
 
     /**
      * returns "*" if no explicit projection.
@@ -120,9 +122,6 @@ public final class SqlParser {
 
     Expression whereExpr = ps.getWhere();
     stripQualifier(whereExpr, fromInfo.tableName(), fromInfo.tableAlias());
-    Expression combinedWhere = combineExpressions(fromInfo.innerSelect() == null ? null : fromInfo.innerSelect().where(),
-        whereExpr);
-
     int limit = computeLimit(ps);
     if (limit < 0 && fromInfo.innerSelect() != null) {
       limit = fromInfo.innerSelect().limit();
@@ -133,8 +132,6 @@ public final class SqlParser {
     if ((orderKeys == null || orderKeys.isEmpty()) && fromInfo.innerSelect() != null) {
       orderKeys = fromInfo.innerSelect().orderBy();
     }
-
-    boolean distinct = ps.getDistinct() != null || (fromInfo.innerSelect() != null && fromInfo.innerSelect().distinct());
 
     List<String> labels = projection.labels();
     List<String> physicalCols = projection.physicalCols();
@@ -159,12 +156,23 @@ public final class SqlParser {
       orderKeys = List.of();
     }
 
+    boolean distinct = ps.getDistinct() != null
+        || (fromInfo.innerSelect() != null && fromInfo.innerSelect().distinct());
+
+    Expression havingExpr = ps.getHaving();
+    stripQualifier(havingExpr, fromInfo.tableName(), fromInfo.tableAlias());
+
+    Expression combinedWhere = combineExpressions(
+        fromInfo.innerSelect() == null ? null : fromInfo.innerSelect().where(), whereExpr);
+    Expression combinedHaving = combineExpressions(
+        fromInfo.innerSelect() == null ? null : fromInfo.innerSelect().having(), havingExpr);
+
     List<String> labelsCopy = List.copyOf(labels);
     List<String> physicalCopy = Collections.unmodifiableList(new ArrayList<>(physicalCols));
     List<OrderKey> orderCopy = List.copyOf(orderKeys);
     List<Expression> expressionCopy = List.copyOf(expressions);
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
-        orderCopy, distinct, expressionCopy);
+        orderCopy, distinct, expressionCopy, combinedHaving);
   }
 
   // === Parsing Helper Methods =================================================

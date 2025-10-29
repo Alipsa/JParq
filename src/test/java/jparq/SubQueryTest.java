@@ -1,9 +1,10 @@
 package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -123,6 +124,29 @@ public class SubQueryTest {
         fail(e);
       }
     });
+  }
+
+  @Test
+  void havingClauseSupportsSubqueries() {
+    jparqSql.query(
+        "SELECT COUNT(*) AS total FROM mtcars HAVING COUNT(*) >= (SELECT COUNT(*) FROM mtcars)", rs -> {
+          try {
+            assertTrue(rs.next(), "HAVING condition should pass when comparison evaluates to true");
+            assertEquals(32L, rs.getLong("total"));
+            assertFalse(rs.next(), "Only a single aggregate row should be returned");
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
+
+    jparqSql.query(
+        "SELECT COUNT(*) AS total FROM mtcars HAVING COUNT(*) > (SELECT COUNT(*) FROM mtcars)", rs -> {
+          try {
+            assertFalse(rs.next(), "HAVING condition should filter out the aggregate row when false");
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
   }
 
 }

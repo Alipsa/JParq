@@ -39,6 +39,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private List<Integer> aggregateSqlTypes;
   private boolean aggregateDelivered = false;
   private boolean aggregateOnRow = false;
+  private boolean aggregateHasRow = false;
   private boolean closed = false;
   private int rowNum = 0;
   private boolean lastWasNull = false;
@@ -77,9 +78,10 @@ public class JParqResultSet extends ResultSetAdapter {
       physical = null;
       try {
         AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan, residual,
-            subqueryExecutor);
+            select.having(), subqueryExecutor);
         this.aggregateValues = new ArrayList<>(result.values());
         this.aggregateSqlTypes = result.sqlTypes();
+        this.aggregateHasRow = result.hasRow();
       } catch (Exception e) {
         throw new SQLException("Failed to compute aggregate query", e);
       }
@@ -99,6 +101,7 @@ public class JParqResultSet extends ResultSetAdapter {
     this.aggregateQuery = false;
     this.aggregateValues = null;
     this.aggregateSqlTypes = null;
+    this.aggregateHasRow = false;
 
     try {
       GenericRecord first = reader.read();
@@ -150,6 +153,10 @@ public class JParqResultSet extends ResultSetAdapter {
       throw new SQLException("ResultSet closed");
     }
     if (aggregateQuery) {
+      if (!aggregateHasRow) {
+        aggregateOnRow = false;
+        return false;
+      }
       if (aggregateDelivered) {
         aggregateOnRow = false;
         return false;

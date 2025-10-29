@@ -80,7 +80,7 @@ public class PredicatePushdownPerfFS {
       LOG.warn("Expected pushdown to be at least faster. ratio= {} noSchema= {}" + "ns withSchema= {} ns", ratio,
           tNoSchema, tWithSchema);
     }
-    // TODO: this test is too fast for meaningful comparisons ( ratio should be < 1)
+    // NOTE: this test is too fast for meaningful comparisons ( ratio should be < 1)
     assertTrue(ratio < 1.2, "Expected pushdown to be at least faster. ratio=" + ratio + " noSchema=" + tNoSchema
         + "ns withSchema=" + tWithSchema + "ns");
   }
