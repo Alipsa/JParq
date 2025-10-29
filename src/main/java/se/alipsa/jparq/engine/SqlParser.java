@@ -96,14 +96,16 @@ public final class SqlParser {
    * Parse a simple SELECT SQL statement (single-table).
    *
    * @param sql
-   *          the SQL string
+   *          the SQL string, optionally containing {@code --} line comments or
+   *          {@code /* ... *&#47;} block comments
    * @return the parsed Select representation
    */
   @SuppressWarnings("PMD.AvoidLiteralsInIfCondition")
   public static Select parseSelect(String sql) {
     try {
+      String normalizedSql = stripSqlComments(sql);
       net.sf.jsqlparser.statement.select.Select stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
-          .parse(sql);
+          .parse(normalizedSql);
       PlainSelect ps = stmt.getPlainSelect();
 
       // 1. FROM: Get the table name and alias
@@ -321,6 +323,105 @@ public final class SqlParser {
   }
 
   // === Qualifier Stripping =================================================
+
+  /**
+   * Remove SQL comments from the supplied query string while preserving string literals.
+   *
+   * <p>
+   * The parser used by the engine does not retain comments, but unstripped comments can still
+   * interfere with parsing when they appear in leading or inline positions. This helper processes the
+   * SQL text and strips both {@code --} line comments and {@code /* ... *&#47;} block comments so that
+   * {@link CCJSqlParserUtil} receives a clean statement. Content that appears inside single-quoted or
+   * double-quoted literals is preserved verbatim.
+   * </p>
+   *
+   * @param sql
+   *          the raw SQL text that may contain comments
+   * @return the SQL text with comments removed
+   */
+  @SuppressWarnings("PMD.CyclomaticComplexity")
+  private static String stripSqlComments(String sql) {
+    if (sql == null || sql.isEmpty()) {
+      return sql;
+    }
+
+    StringBuilder result = new StringBuilder(sql.length());
+    boolean inSingleQuote = false;
+    boolean inDoubleQuote = false;
+    boolean inLineComment = false;
+    boolean inBlockComment = false;
+
+    for (int i = 0; i < sql.length(); i++) {
+      char c = sql.charAt(i);
+      char next = i + 1 < sql.length() ? sql.charAt(i + 1) : '\0';
+
+      if (inLineComment) {
+        if (c == '\n') {
+          result.append(c);
+          inLineComment = false;
+        } else if (c == '\r') {
+          // Swallow carriage return but keep line comment state until newline
+        }
+        continue;
+      }
+      if (inBlockComment) {
+        if (c == '\n') {
+          result.append(c);
+        }
+        if (c == '*' && next == '/') {
+          inBlockComment = false;
+          i++;
+        }
+        continue;
+      }
+
+      if (inSingleQuote) {
+        result.append(c);
+        if (c == '\'' && next == '\'') {
+          result.append(next);
+          i++;
+        } else if (c == '\'') {
+          inSingleQuote = false;
+        }
+        continue;
+      }
+      if (inDoubleQuote) {
+        result.append(c);
+        if (c == '"' && next == '"') {
+          result.append(next);
+          i++;
+        } else if (c == '"') {
+          inDoubleQuote = false;
+        }
+        continue;
+      }
+
+      if (c == '-' && next == '-') {
+        inLineComment = true;
+        i++;
+        continue;
+      }
+      if (c == '/' && next == '*') {
+        inBlockComment = true;
+        i++;
+        continue;
+      }
+      if (c == '\'') {
+        inSingleQuote = true;
+        result.append(c);
+        continue;
+      }
+      if (c == '"') {
+        inDoubleQuote = true;
+        result.append(c);
+        continue;
+      }
+
+      result.append(c);
+    }
+
+    return result.toString();
+  }
 
   /**
    * Strip the table qualifier for a single-table query when the qualifier matches
