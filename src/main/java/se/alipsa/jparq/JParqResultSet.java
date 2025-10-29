@@ -114,7 +114,7 @@ public class JParqResultSet extends ResultSetAdapter {
           this.columnOrder.addAll(req); // mutable, safe
         }
         this.qp = new QueryProcessor(reader, this.columnOrder, /* where */ residual, select.limit(), null, 0,
-            select.distinct(), null, subqueryExecutor);
+            select.distinct(), null, subqueryExecutor, select.preLimit(), select.preOrderBy());
         this.current = null;
         this.rowNum = 0;
         return;
@@ -136,11 +136,11 @@ public class JParqResultSet extends ResultSetAdapter {
         int initialEmitted = match ? 1 : 0;
         GenericRecord firstForDistinct = match ? first : null;
         this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, initialEmitted, select.distinct(),
-            firstForDistinct, subqueryExecutor);
+            firstForDistinct, subqueryExecutor, select.preLimit(), select.preOrderBy());
         this.current = match ? first : qp.nextMatching();
       } else {
         this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, 0, select.distinct(), order, first,
-            subqueryExecutor);
+            subqueryExecutor, select.preLimit(), select.preOrderBy());
         this.current = qp.nextMatching();
       }
       this.rowNum = 0;

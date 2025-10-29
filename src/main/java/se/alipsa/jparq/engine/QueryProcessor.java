@@ -24,6 +24,9 @@ public final class QueryProcessor implements AutoCloseable {
   private final int limit;
   private final boolean distinct;
   private final SubqueryExecutor subqueryExecutor;
+  private final int preLimit;
+  private final List<SqlParser.OrderKey> preOrderBy;
+  private final boolean hasPreStage;
 
   // Evaluator is lazily created if schema was not provided
   private ExpressionEvaluator evaluator;
@@ -62,9 +65,9 @@ public final class QueryProcessor implements AutoCloseable {
    */
   public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
       Schema schema, int initialEmitted, boolean distinct, GenericRecord firstAlreadyRead,
-      SubqueryExecutor subqueryExecutor) {
+      SubqueryExecutor subqueryExecutor, int preLimit, List<SqlParser.OrderKey> preOrderBy) {
     this(reader, projection, where, limit, schema, initialEmitted, distinct, List.of(), firstAlreadyRead,
-        subqueryExecutor);
+        subqueryExecutor, preLimit, preOrderBy);
   }
 
   /**
@@ -95,13 +98,17 @@ public final class QueryProcessor implements AutoCloseable {
    */
   public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
       Schema schema, int initialEmitted, boolean distinct, List<SqlParser.OrderKey> orderBy,
-      GenericRecord firstAlreadyRead, SubqueryExecutor subqueryExecutor) {
+      GenericRecord firstAlreadyRead, SubqueryExecutor subqueryExecutor, int preLimit,
+      List<SqlParser.OrderKey> preOrderBy) {
     this.reader = Objects.requireNonNull(reader);
     this.projection = Collections.unmodifiableList(new ArrayList<>(projection));
     this.where = where;
     this.limit = limit;
     this.distinct = distinct;
     this.subqueryExecutor = subqueryExecutor;
+    this.preLimit = preLimit;
+    this.preOrderBy = preOrderBy == null ? List.of() : List.copyOf(preOrderBy);
+    this.hasPreStage = (this.preLimit >= 0) || !this.preOrderBy.isEmpty();
     this.evaluator = (schema != null) ? new ExpressionEvaluator(schema, subqueryExecutor) : null;
     this.emitted = Math.max(0, initialEmitted);
     this.orderBy = (orderBy == null) ? List.of() : List.copyOf(orderBy);
@@ -111,7 +118,7 @@ public final class QueryProcessor implements AutoCloseable {
       registerDistinct(firstAlreadyRead);
     }
 
-    if (!this.orderBy.isEmpty()) {
+    if (!this.orderBy.isEmpty() || hasPreStage) {
       bufferAndSort(firstAlreadyRead, schema);
     }
   }
@@ -139,6 +146,9 @@ public final class QueryProcessor implements AutoCloseable {
       while (rec != null) {
         if (matches(rec)) {
           buf.add(rec);
+          if (preLimit >= 0 && preOrderBy.isEmpty() && buf.size() >= preLimit) {
+            break;
+          }
         }
         rec = reader.read();
       }
@@ -146,12 +156,21 @@ public final class QueryProcessor implements AutoCloseable {
       // ensure evaluator exists if WHERE is used
       ensureEvaluator(sortSchema);
 
+      if (hasPreStage) {
+        if (!preOrderBy.isEmpty() && sortSchema != null && buf.size() > 1) {
+          buf.sort(buildComparator(sortSchema, preOrderBy));
+        }
+        if (preLimit >= 0 && buf.size() > preLimit) {
+          buf = new ArrayList<>(buf.subList(0, preLimit));
+        }
+      }
+
       if (distinct && !buf.isEmpty()) {
         buf = applyDistinct(buf);
       }
 
       // sort by ORDER BY keys if we have schema and >1 row
-      if (buf.size() > 1 && sortSchema != null) {
+      if (!orderBy.isEmpty() && buf.size() > 1 && sortSchema != null) {
         buf.sort(buildComparator(sortSchema, orderBy));
       }
 
@@ -228,7 +247,7 @@ public final class QueryProcessor implements AutoCloseable {
     }
 
     // ORDER BY path: consume from sorted buffer
-    if (!orderBy.isEmpty()) {
+    if (!orderBy.isEmpty() || hasPreStage) {
       if (sorted == null || idx >= sorted.size()) {
         return null;
       }

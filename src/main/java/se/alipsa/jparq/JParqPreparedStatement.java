@@ -171,6 +171,9 @@ class JParqPreparedStatement implements PreparedStatement {
     for (SqlParser.OrderKey key : parsedSelect.orderBy()) {
       addColumn(needed, key.column());
     }
+    for (SqlParser.OrderKey key : parsedSelect.preOrderBy()) {
+      addColumn(needed, key.column());
+    }
     if (aggregatePlan != null) {
       for (AggregateFunctions.AggregateSpec spec : aggregatePlan.specs()) {
         if (!spec.countStar()) {

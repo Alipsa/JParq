@@ -58,9 +58,16 @@ public final class SqlParser {
    *          the normalized SELECT expressions in projection order
    * @param having
    *          the HAVING expression (may be {@code null})
+   * @param preLimit
+   *          a limit that must be applied before outer ORDER BY logic (typically
+   *          sourced from an inner SELECT)
+   * @param preOrderBy
+   *          ORDER BY keys that must be applied prior to the outer ORDER BY
+   *          (typically inherited from an inner SELECT)
    */
-  public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
-      int limit, List<OrderKey> orderBy, boolean distinct, List<Expression> expressions, Expression having) {
+  public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias,
+      Expression where, int limit, List<OrderKey> orderBy, boolean distinct, List<Expression> expressions,
+      Expression having, int preLimit, List<OrderKey> preOrderBy) {
 
     /**
      * returns "*" if no explicit projection.
@@ -122,15 +129,36 @@ public final class SqlParser {
 
     Expression whereExpr = ps.getWhere();
     stripQualifier(whereExpr, fromInfo.tableName(), fromInfo.tableAlias());
-    int limit = computeLimit(ps);
-    if (limit < 0 && fromInfo.innerSelect() != null) {
-      limit = fromInfo.innerSelect().limit();
+    int outerLimit = computeLimit(ps);
+    Select inner = fromInfo.innerSelect();
+    int innerLimit = inner == null ? -1 : inner.limit();
+
+    int limit;
+    if (outerLimit >= 0 && innerLimit >= 0) {
+      limit = Math.min(outerLimit, innerLimit);
+    } else if (outerLimit >= 0) {
+      limit = outerLimit;
+    } else {
+      limit = innerLimit;
     }
 
     List<OrderKey> orderKeys = computeOrderKeys(ps, projection.labels(), projection.physicalCols(),
         fromInfo.tableName(), fromInfo.tableAlias());
-    if ((orderKeys == null || orderKeys.isEmpty()) && fromInfo.innerSelect() != null) {
-      orderKeys = fromInfo.innerSelect().orderBy();
+    boolean outerRequestedOrder = orderKeys != null && !orderKeys.isEmpty();
+    if ((orderKeys == null || orderKeys.isEmpty()) && inner != null) {
+      orderKeys = inner.orderBy();
+    }
+    List<OrderKey> preOrderBy = List.of();
+    if (inner != null && outerRequestedOrder) {
+      List<OrderKey> innerOrder = inner.orderBy();
+      if (innerOrder != null && !innerOrder.isEmpty() && orderKeys != innerOrder) {
+        preOrderBy = innerOrder;
+      }
+    }
+
+    int preLimit = -1;
+    if (innerLimit >= 0 && outerRequestedOrder) {
+      preLimit = innerLimit;
     }
 
     List<String> labels = projection.labels();
@@ -170,9 +198,10 @@ public final class SqlParser {
     List<String> labelsCopy = List.copyOf(labels);
     List<String> physicalCopy = Collections.unmodifiableList(new ArrayList<>(physicalCols));
     List<OrderKey> orderCopy = List.copyOf(orderKeys);
+    List<OrderKey> preOrderCopy = List.copyOf(preOrderBy);
     List<Expression> expressionCopy = List.copyOf(expressions);
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
-        orderCopy, distinct, expressionCopy, combinedHaving);
+        orderCopy, distinct, expressionCopy, combinedHaving, preLimit, preOrderCopy);
   }
 
   // === Parsing Helper Methods =================================================
