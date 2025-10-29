@@ -10,8 +10,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.Function;
@@ -137,8 +139,10 @@ public final class AggregateFunctions {
    *          computed aggregate values
    * @param sqlTypes
    *          SQL types associated with each aggregate
+   * @param hasRow
+   *          whether the aggregate result represents a row to emit
    */
-  public record AggregateResult(List<Object> values, List<Integer> sqlTypes) {
+  public record AggregateResult(List<Object> values, List<Integer> sqlTypes, boolean hasRow) {
     /**
      * Canonical constructor ensuring result collections are present.
      *
@@ -146,6 +150,8 @@ public final class AggregateFunctions {
      *          computed aggregate values
      * @param sqlTypes
      *          SQL types associated with each aggregate
+     * @param hasRow
+     *          whether the aggregate result should be exposed as a row
      */
     public AggregateResult {
       Objects.requireNonNull(values, "values");
@@ -239,7 +245,7 @@ public final class AggregateFunctions {
    *           if reading the parquet file fails
    */
   public static AggregateResult evaluate(ParquetReader<GenericRecord> reader, AggregatePlan plan, Expression residual,
-      SubqueryExecutor subqueryExecutor) throws IOException {
+      Expression having, SubqueryExecutor subqueryExecutor) throws IOException {
     List<AggregateAccumulator> accs = new ArrayList<>(plan.specs().size());
     for (AggregateSpec spec : plan.specs()) {
       accs.add(AggregateAccumulator.create(spec));
@@ -279,7 +285,345 @@ public final class AggregateFunctions {
     }
     List<Object> valueView = List.copyOf(values);
     List<Integer> sqlTypeView = List.copyOf(sqlTypes);
-    return new AggregateResult(valueView, sqlTypeView);
+
+    boolean hasRow = true;
+    if (having != null) {
+      HavingEvaluator evaluator = new HavingEvaluator(plan, valueView, subqueryExecutor);
+      hasRow = evaluator.eval(having);
+    }
+
+    return new AggregateResult(valueView, sqlTypeView, hasRow);
+  }
+
+  private static final class HavingEvaluator {
+    private final AggregatePlan plan;
+    private final List<Object> values;
+    private final SubqueryExecutor subqueryExecutor;
+    private final Map<String, Object> labelLookup;
+
+    HavingEvaluator(AggregatePlan plan, List<Object> values, SubqueryExecutor subqueryExecutor) {
+      this.plan = plan;
+      this.values = values;
+      this.subqueryExecutor = subqueryExecutor;
+      this.labelLookup = buildLabelLookup(plan, values);
+    }
+
+    boolean eval(Expression expression) {
+      Expression expr = ExpressionEvaluator.unwrapParenthesis(expression);
+      if (expr == null) {
+        return true;
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.conditional.AndExpression and) {
+        return eval(and.getLeftExpression()) && eval(and.getRightExpression());
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.conditional.OrExpression or) {
+        return eval(or.getLeftExpression()) || eval(or.getRightExpression());
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.NotExpression not) {
+        return !eval(not.getExpression());
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.IsNullExpression isNull) {
+        Object operand = value(isNull.getLeftExpression());
+        boolean isNullVal = operand == null;
+        return isNull.isNot() != isNullVal;
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.Between between) {
+        Object val = value(between.getLeftExpression());
+        Object low = value(between.getBetweenExpressionStart());
+        Object high = value(between.getBetweenExpressionEnd());
+        if (val == null || low == null || high == null) {
+          return false;
+        }
+        int cmpLow = ExpressionEvaluator.typedCompare(val, low);
+        int cmpHigh = ExpressionEvaluator.typedCompare(val, high);
+        boolean in = cmpLow >= 0 && cmpHigh <= 0;
+        return between.isNot() != in;
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.InExpression in) {
+        return evalIn(in);
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.ExistsExpression exists) {
+        return evalExists(exists);
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.EqualsTo eq) {
+        return compare(eq.getLeftExpression(), eq.getRightExpression()) == 0;
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.GreaterThan gt) {
+        return compare(gt.getLeftExpression(), gt.getRightExpression()) > 0;
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.GreaterThanEquals ge) {
+        return compare(ge.getLeftExpression(), ge.getRightExpression()) >= 0;
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.MinorThan lt) {
+        return compare(lt.getLeftExpression(), lt.getRightExpression()) < 0;
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.MinorThanEquals le) {
+        return compare(le.getLeftExpression(), le.getRightExpression()) <= 0;
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.SimilarToExpression) {
+        throw new IllegalArgumentException("SIMILAR TO is not supported in HAVING clauses");
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.LikeExpression like) {
+        return evalLike(like);
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.BinaryExpression be) {
+        return evalBinary(be);
+      }
+      throw new IllegalArgumentException("Unsupported HAVING expression: " + expr);
+    }
+
+    private boolean evalIn(net.sf.jsqlparser.expression.operators.relational.InExpression in) {
+      Object leftVal = value(in.getLeftExpression());
+      if (leftVal == null) {
+        return false;
+      }
+      Expression right = in.getRightExpression();
+      if (right instanceof ExpressionList<?> list) {
+        boolean found = false;
+        for (Expression e : list) {
+          Object candidate = value(e);
+          if (candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
+            found = true;
+            break;
+          }
+        }
+        return in.isNot() != found;
+      }
+      if (right instanceof net.sf.jsqlparser.statement.select.Select subSelect) {
+        if (subqueryExecutor == null) {
+          throw new IllegalStateException("IN subqueries require a subquery executor");
+        }
+        List<Object> subqueryValues = subqueryExecutor.execute(subSelect).firstColumnValues();
+        boolean found = false;
+        for (Object candidate : subqueryValues) {
+          if (candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
+            found = true;
+            break;
+          }
+        }
+        return in.isNot() != found;
+      }
+      throw new IllegalArgumentException("Unsupported IN expression in HAVING clause: " + in);
+    }
+
+    private boolean evalExists(net.sf.jsqlparser.expression.operators.relational.ExistsExpression exists) {
+      if (subqueryExecutor == null) {
+        throw new IllegalStateException("EXISTS subqueries require a subquery executor");
+      }
+      if (!(exists.getRightExpression() instanceof net.sf.jsqlparser.statement.select.Select subSelect)) {
+        throw new IllegalArgumentException("EXISTS requires a subquery");
+      }
+      boolean hasRows = !subqueryExecutor.execute(subSelect).rows().isEmpty();
+      return exists.isNot() != hasRows;
+    }
+
+    private boolean evalLike(net.sf.jsqlparser.expression.operators.relational.LikeExpression like) {
+      Object left = value(like.getLeftExpression());
+      Object right = value(like.getRightExpression());
+      if (left == null || right == null) {
+        return false;
+      }
+      String leftText = left.toString();
+      String pattern = right.toString();
+      net.sf.jsqlparser.expression.operators.relational.LikeExpression.KeyWord keyWord = like.getLikeKeyWord();
+      net.sf.jsqlparser.expression.operators.relational.LikeExpression.KeyWord effective = keyWord == null
+          ? net.sf.jsqlparser.expression.operators.relational.LikeExpression.KeyWord.LIKE
+          : keyWord;
+      Character escapeChar = null;
+      if (like.getEscape() != null) {
+        Object escapeVal = value(like.getEscape());
+        if (escapeVal != null) {
+          String escape = escapeVal.toString();
+          if (!escape.isEmpty()) {
+            if (escape.length() != 1) {
+              throw new IllegalArgumentException("LIKE escape clause must be a single character");
+            }
+            escapeChar = escape.charAt(0);
+          }
+        }
+      }
+      boolean matches;
+      if (effective == net.sf.jsqlparser.expression.operators.relational.LikeExpression.KeyWord.SIMILAR_TO) {
+        matches = se.alipsa.jparq.helper.StringExpressions.similarTo(leftText, pattern, escapeChar);
+      } else {
+        boolean caseInsensitive = effective
+            == net.sf.jsqlparser.expression.operators.relational.LikeExpression.KeyWord.ILIKE;
+        matches = se.alipsa.jparq.helper.StringExpressions.like(leftText, pattern, caseInsensitive, escapeChar);
+      }
+      return like.isNot() != matches;
+    }
+
+    private boolean evalBinary(net.sf.jsqlparser.expression.BinaryExpression be) {
+      String op = be.getStringExpression();
+      int cmp = compare(be.getLeftExpression(), be.getRightExpression());
+      return switch (op) {
+        case "=" -> cmp == 0;
+        case "<" -> cmp < 0;
+        case ">" -> cmp > 0;
+        case "<=" -> cmp <= 0;
+        case ">=" -> cmp >= 0;
+        case "<>", "!=" -> cmp != 0;
+        default -> throw new IllegalArgumentException("Unsupported operator in HAVING clause: " + op);
+      };
+    }
+
+    private int compare(Expression left, Expression right) {
+      Object leftVal = value(left);
+      Object rightVal = value(right);
+      if (leftVal == null || rightVal == null) {
+        return -1;
+      }
+      return ExpressionEvaluator.typedCompare(leftVal, rightVal);
+    }
+
+    private Object value(Expression expression) {
+      Expression expr = ExpressionEvaluator.unwrapParenthesis(expression);
+      if (expr instanceof net.sf.jsqlparser.statement.select.Select subSelect) {
+        return evaluateScalarSubquery(subSelect);
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.SignedExpression signed) {
+        Object inner = value(signed.getExpression());
+        if (inner == null) {
+          return null;
+        }
+        java.math.BigDecimal numeric = toBigDecimal(inner);
+        return signed.getSign() == '-' ? numeric.negate() : numeric;
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.arithmetic.Addition add) {
+        return arithmetic(add.getLeftExpression(), add.getRightExpression(), Operation.ADD);
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.arithmetic.Subtraction sub) {
+        return arithmetic(sub.getLeftExpression(), sub.getRightExpression(), Operation.SUB);
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.arithmetic.Multiplication mul) {
+        return arithmetic(mul.getLeftExpression(), mul.getRightExpression(), Operation.MUL);
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.arithmetic.Division div) {
+        return arithmetic(div.getLeftExpression(), div.getRightExpression(), Operation.DIV);
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.operators.arithmetic.Modulo mod) {
+        return arithmetic(mod.getLeftExpression(), mod.getRightExpression(), Operation.MOD);
+      }
+      if (expr instanceof net.sf.jsqlparser.expression.Function func) {
+        return aggregateValue(func);
+      }
+      if (expr instanceof net.sf.jsqlparser.schema.Column col) {
+        return aliasValue(col.getColumnName());
+      }
+      return se.alipsa.jparq.helper.LiteralConverter.toLiteral(expr);
+    }
+
+    private Object arithmetic(Expression left, Expression right, Operation op) {
+      Object leftVal = value(left);
+      Object rightVal = value(right);
+      if (leftVal == null || rightVal == null) {
+        return null;
+      }
+      java.math.BigDecimal leftNum = toBigDecimal(leftVal);
+      java.math.BigDecimal rightNum = toBigDecimal(rightVal);
+      return switch (op) {
+        case ADD -> leftNum.add(rightNum);
+        case SUB -> leftNum.subtract(rightNum);
+        case MUL -> leftNum.multiply(rightNum);
+        case DIV -> rightNum.compareTo(java.math.BigDecimal.ZERO) == 0 ? null
+            : leftNum.divide(rightNum, java.math.MathContext.DECIMAL64);
+        case MOD -> rightNum.compareTo(java.math.BigDecimal.ZERO) == 0 ? null : leftNum.remainder(rightNum);
+      };
+    }
+
+    private Object evaluateScalarSubquery(net.sf.jsqlparser.statement.select.Select subSelect) {
+      if (subqueryExecutor == null) {
+        throw new IllegalStateException("Scalar subqueries require a subquery executor");
+      }
+      SubqueryExecutor.SubqueryResult result = subqueryExecutor.execute(subSelect);
+      if (result.rows().isEmpty()) {
+        return null;
+      }
+      if (result.rows().size() > 1) {
+        throw new IllegalArgumentException("Scalar subquery returned more than one row");
+      }
+      List<Object> row = result.rows().getFirst();
+      if (row.isEmpty()) {
+        return null;
+      }
+      if (row.size() > 1) {
+        throw new IllegalArgumentException("Scalar subquery returned more than one column");
+      }
+      return row.getFirst();
+    }
+
+    private Object aggregateValue(net.sf.jsqlparser.expression.Function func) {
+      AggregateType type = AggregateType.from(func.getName());
+      if (type == null) {
+        throw new IllegalArgumentException("Unsupported function in HAVING clause: " + func.getName());
+      }
+      for (int i = 0; i < plan.specs().size(); i++) {
+        AggregateSpec spec = plan.specs().get(i);
+        if (spec.type() != type) {
+          continue;
+        }
+        if (spec.countStar() != (type == AggregateType.COUNT && func.isAllColumns())) {
+          continue;
+        }
+        if (!spec.countStar()) {
+          ExpressionList<?> params = func.getParameters();
+          if (params == null || params.size() != spec.arguments().size()) {
+            continue;
+          }
+          boolean matches = true;
+          for (int j = 0; j < spec.arguments().size(); j++) {
+            Expression expected = spec.arguments().get(j);
+            Expression actual = params.get(j);
+            if (!expected.toString().equals(actual.toString())) {
+              matches = false;
+              break;
+            }
+          }
+          if (!matches) {
+            continue;
+          }
+        }
+        return values.get(i);
+      }
+      throw new IllegalArgumentException("HAVING references aggregate not present in SELECT: " + func);
+    }
+
+    private Object aliasValue(String name) {
+      if (name == null) {
+        return null;
+      }
+      return labelLookup.get(name.toLowerCase(Locale.ROOT));
+    }
+
+    private static Map<String, Object> buildLabelLookup(AggregatePlan plan, List<Object> values) {
+      Map<String, Object> map = new HashMap<>();
+      List<AggregateSpec> specs = plan.specs();
+      for (int i = 0; i < specs.size() && i < values.size(); i++) {
+        AggregateSpec spec = specs.get(i);
+        String label = spec.label();
+        if (label != null && !label.isBlank()) {
+          map.put(label.toLowerCase(Locale.ROOT), values.get(i));
+        }
+      }
+      return map;
+    }
+
+    private java.math.BigDecimal toBigDecimal(Object value) {
+      if (value instanceof java.math.BigDecimal bd) {
+        return bd;
+      }
+      if (value instanceof Number num) {
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+          return java.math.BigDecimal.valueOf(num.longValue());
+        }
+        return java.math.BigDecimal.valueOf(num.doubleValue());
+      }
+      return new java.math.BigDecimal(value.toString());
+    }
+
+    private enum Operation {
+      ADD, SUB, MUL, DIV, MOD
+    }
   }
 
   private abstract static class AggregateAccumulator {
