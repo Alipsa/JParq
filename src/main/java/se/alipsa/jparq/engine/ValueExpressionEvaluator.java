@@ -13,6 +13,7 @@ import java.util.Random;
 import java.util.regex.Pattern;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.CollateExpression;
+import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExtractExpression;
 import net.sf.jsqlparser.expression.Function;
@@ -24,6 +25,7 @@ import net.sf.jsqlparser.expression.JsonKeyValuePair;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TrimFunction;
+import net.sf.jsqlparser.expression.WhenClause;
 import net.sf.jsqlparser.expression.operators.arithmetic.Addition;
 import net.sf.jsqlparser.expression.operators.arithmetic.Division;
 import net.sf.jsqlparser.expression.operators.arithmetic.Modulo;
@@ -43,14 +45,16 @@ import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.StringExpressions;
 
 /**
- * Evaluates SELECT-list expressions (e.g. computed columns and supported SQL
- * functions such as {@code COALESCE}, {@code CAST}, and SQL numeric functions)
- * against a {@link GenericRecord}.
+ * Evaluates SELECT-list expressions (e.g. computed columns, {@code CASE}
+ * expressions and supported SQL functions such as {@code COALESCE},
+ * {@code CAST}, and SQL numeric functions) against a {@link GenericRecord}.
  */
 public final class ValueExpressionEvaluator {
 
   private final Map<String, Schema> fieldSchemas;
   private final Map<String, String> caseInsensitiveIndex;
+  private final Schema schema;
+  private ExpressionEvaluator conditionEvaluator;
 
   /**
    * Create an evaluator bound to the supplied Avro {@link Schema}.
@@ -67,6 +71,7 @@ public final class ValueExpressionEvaluator {
     }
     this.fieldSchemas = Map.copyOf(fs);
     this.caseInsensitiveIndex = Map.copyOf(ci);
+    this.schema = schema;
   }
 
   /**
@@ -96,6 +101,10 @@ public final class ValueExpressionEvaluator {
         vals.add(evalInternal(e, record));
       }
       return vals;
+    }
+
+    if (expression instanceof CaseExpression caseExpr) {
+      return evaluateCase(caseExpr, record);
     }
 
     if (expression instanceof TimeKeyExpression tk) {
@@ -163,6 +172,53 @@ public final class ValueExpressionEvaluator {
       return evaluateFunction(func, record);
     }
     return LiteralConverter.toLiteral(expression);
+  }
+
+  private Object evaluateCase(CaseExpression caseExpr, GenericRecord record) {
+    boolean isSimpleCase = caseExpr.getSwitchExpression() != null;
+    Object switchValue = isSimpleCase ? evalInternal(caseExpr.getSwitchExpression(), record) : null;
+
+    List<WhenClause> whenClauses = caseExpr.getWhenClauses();
+    if (whenClauses != null) {
+      for (WhenClause clause : whenClauses) {
+        if (isSimpleCase) {
+          Object whenValue = evalInternal(clause.getWhenExpression(), record);
+          if (valuesEqual(switchValue, whenValue)) {
+            return evalInternal(clause.getThenExpression(), record);
+          }
+        } else if (evaluateCondition(clause.getWhenExpression(), record)) {
+          return evalInternal(clause.getThenExpression(), record);
+        }
+      }
+    }
+
+    Expression elseExpr = caseExpr.getElseExpression();
+    if (elseExpr == null) {
+      return null;
+    }
+    return evalInternal(elseExpr, record);
+  }
+
+  private boolean evaluateCondition(Expression condition, GenericRecord record) {
+    if (condition == null) {
+      return false;
+    }
+    if (conditionEvaluator == null) {
+      Schema schemaToUse = schema != null ? schema : record.getSchema();
+      conditionEvaluator = new ExpressionEvaluator(schemaToUse);
+    }
+    return conditionEvaluator.eval(condition, record);
+  }
+
+  private static boolean valuesEqual(Object left, Object right) {
+    if (left == null || right == null) {
+      return left == null && right == null;
+    }
+    try {
+      return ExpressionEvaluator.typedCompare(left, right) == 0;
+    } catch (Exception e) {
+      return left.equals(right);
+    }
   }
 
   /**
