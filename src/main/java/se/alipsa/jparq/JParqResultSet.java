@@ -18,6 +18,7 @@ import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.QueryProcessor;
+import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.model.ResultSetAdapter;
 
@@ -31,12 +32,14 @@ public class JParqResultSet extends ResultSetAdapter {
   private final List<String> columnOrder;
   private final String tableName;
   private final List<Expression> selectExpressions;
+  private final SubqueryExecutor subqueryExecutor;
   private ValueExpressionEvaluator projectionEvaluator;
   private final boolean aggregateQuery;
   private List<Object> aggregateValues;
   private List<Integer> aggregateSqlTypes;
   private boolean aggregateDelivered = false;
   private boolean aggregateOnRow = false;
+  private boolean aggregateHasRow = false;
   private boolean closed = false;
   private int rowNum = 0;
   private boolean lastWasNull = false;
@@ -56,15 +59,18 @@ public class JParqResultSet extends ResultSetAdapter {
    *          the projection column labels (aliases) or null
    * @param physicalColumnOrder
    *          the physical column names (may be null)
+   * @param subqueryExecutor
+   *          executor used to evaluate subqueries during row materialization
    * @throws SQLException
    *           if reading fails
    */
   public JParqResultSet(ParquetReader<GenericRecord> reader, se.alipsa.jparq.engine.SqlParser.Select select,
       String tableName, Expression residual, List<String> columnOrder, // projection labels (aliases) or null
-      List<String> physicalColumnOrder) // physical names (may be null)
+      List<String> physicalColumnOrder, SubqueryExecutor subqueryExecutor) // physical names (may be null)
       throws SQLException {
     this.tableName = tableName;
     this.selectExpressions = List.copyOf(select.expressions());
+    this.subqueryExecutor = subqueryExecutor;
     List<String> labels = (columnOrder != null ? new ArrayList<>(columnOrder) : new ArrayList<>());
     List<String> physical = physicalColumnOrder;
 
@@ -73,9 +79,11 @@ public class JParqResultSet extends ResultSetAdapter {
       labels = new ArrayList<>(aggregatePlan.labels());
       physical = null;
       try {
-        AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan, residual);
+        AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan, residual,
+            select.having(), subqueryExecutor);
         this.aggregateValues = new ArrayList<>(result.values());
         this.aggregateSqlTypes = result.sqlTypes();
+        this.aggregateHasRow = result.hasRow();
       } catch (Exception e) {
         throw new SQLException("Failed to compute aggregate query", e);
       }
@@ -95,6 +103,7 @@ public class JParqResultSet extends ResultSetAdapter {
     this.aggregateQuery = false;
     this.aggregateValues = null;
     this.aggregateSqlTypes = null;
+    this.aggregateHasRow = false;
 
     try {
       GenericRecord first = reader.read();
@@ -105,14 +114,14 @@ public class JParqResultSet extends ResultSetAdapter {
           this.columnOrder.addAll(req); // mutable, safe
         }
         this.qp = new QueryProcessor(reader, this.columnOrder, /* where */ residual, select.limit(), null, 0,
-            select.distinct(), null);
+            select.distinct(), null, subqueryExecutor);
         this.current = null;
         this.rowNum = 0;
         return;
       }
 
       var schema = first.getSchema();
-      var evaluator = new se.alipsa.jparq.engine.ExpressionEvaluator(schema);
+      var evaluator = new se.alipsa.jparq.engine.ExpressionEvaluator(schema, subqueryExecutor);
       boolean match = (residual == null) || evaluator.eval(residual, first);
 
       // Compute physical projection from schema; only add if we don’t already have
@@ -127,11 +136,11 @@ public class JParqResultSet extends ResultSetAdapter {
         int initialEmitted = match ? 1 : 0;
         GenericRecord firstForDistinct = match ? first : null;
         this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, initialEmitted, select.distinct(),
-            firstForDistinct);
+            firstForDistinct, subqueryExecutor);
         this.current = match ? first : qp.nextMatching();
       } else {
-        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, 0, select.distinct(), order,
-            first);
+        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, 0, select.distinct(), order, first,
+            subqueryExecutor);
         this.current = qp.nextMatching();
       }
       this.rowNum = 0;
@@ -146,6 +155,10 @@ public class JParqResultSet extends ResultSetAdapter {
       throw new SQLException("ResultSet closed");
     }
     if (aggregateQuery) {
+      if (!aggregateHasRow) {
+        aggregateOnRow = false;
+        return false;
+      }
       if (aggregateDelivered) {
         aggregateOnRow = false;
         return false;
@@ -239,7 +252,7 @@ public class JParqResultSet extends ResultSetAdapter {
 
   private void ensureProjectionEvaluator(GenericRecord record) {
     if (projectionEvaluator == null && record != null && !selectExpressions.isEmpty()) {
-      projectionEvaluator = new ValueExpressionEvaluator(record.getSchema());
+      projectionEvaluator = new ValueExpressionEvaluator(record.getSchema(), subqueryExecutor);
     }
   }
 

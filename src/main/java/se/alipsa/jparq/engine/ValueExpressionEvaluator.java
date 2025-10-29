@@ -54,6 +54,7 @@ public final class ValueExpressionEvaluator {
   private final Map<String, Schema> fieldSchemas;
   private final Map<String, String> caseInsensitiveIndex;
   private final Schema schema;
+  private final SubqueryExecutor subqueryExecutor;
   private ExpressionEvaluator conditionEvaluator;
 
   /**
@@ -63,6 +64,19 @@ public final class ValueExpressionEvaluator {
    *          the Avro schema describing the available columns
    */
   public ValueExpressionEvaluator(Schema schema) {
+    this(schema, null);
+  }
+
+  /**
+   * Create an evaluator bound to the supplied Avro {@link Schema} with optional
+   * subquery execution support.
+   *
+   * @param schema
+   *          the Avro schema describing the available columns
+   * @param subqueryExecutor
+   *          executor used for scalar subqueries (may be {@code null})
+   */
+  public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor) {
     Map<String, Schema> fs = new HashMap<>();
     Map<String, String> ci = new HashMap<>();
     for (Schema.Field f : schema.getFields()) {
@@ -72,6 +86,7 @@ public final class ValueExpressionEvaluator {
     this.fieldSchemas = Map.copyOf(fs);
     this.caseInsensitiveIndex = Map.copyOf(ci);
     this.schema = schema;
+    this.subqueryExecutor = subqueryExecutor;
   }
 
   /**
@@ -171,7 +186,31 @@ public final class ValueExpressionEvaluator {
     if (expression instanceof Function func) {
       return evaluateFunction(func, record);
     }
+    if (expression instanceof net.sf.jsqlparser.statement.select.Select subSelect) {
+      return evaluateScalarSubquery(subSelect);
+    }
     return LiteralConverter.toLiteral(expression);
+  }
+
+  private Object evaluateScalarSubquery(net.sf.jsqlparser.statement.select.Select subSelect) {
+    if (subqueryExecutor == null) {
+      throw new IllegalStateException("Scalar subqueries require a subquery executor");
+    }
+    SubqueryExecutor.SubqueryResult result = subqueryExecutor.execute(subSelect);
+    if (result.rows().isEmpty()) {
+      return null;
+    }
+    if (result.rows().size() > 1) {
+      throw new IllegalArgumentException("Scalar subquery returned more than one row");
+    }
+    List<Object> row = result.rows().getFirst();
+    if (row.isEmpty()) {
+      return null;
+    }
+    if (row.size() > 1) {
+      throw new IllegalArgumentException("Scalar subquery returned more than one column");
+    }
+    return row.getFirst();
   }
 
   private Object evaluateCase(CaseExpression caseExpr, GenericRecord record) {
@@ -205,7 +244,7 @@ public final class ValueExpressionEvaluator {
     }
     if (conditionEvaluator == null) {
       Schema schemaToUse = schema != null ? schema : record.getSchema();
-      conditionEvaluator = new ExpressionEvaluator(schemaToUse);
+      conditionEvaluator = new ExpressionEvaluator(schemaToUse, subqueryExecutor);
     }
     return conditionEvaluator.eval(condition, record);
   }

@@ -7,6 +7,7 @@ import java.sql.Date;
 import java.sql.Timestamp;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import net.sf.jsqlparser.JSQLParserException;
@@ -18,6 +19,7 @@ import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
 import net.sf.jsqlparser.expression.operators.relational.Between;
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
+import net.sf.jsqlparser.expression.operators.relational.ExistsExpression;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.GreaterThan;
 import net.sf.jsqlparser.expression.operators.relational.GreaterThanEquals;
@@ -52,6 +54,7 @@ public final class ExpressionEvaluator {
   /** lower(field name) -> canonical field name */
   private final Map<String, String> caseInsensitiveIndex;
   private final ValueExpressionEvaluator literalEvaluator;
+  private final SubqueryExecutor subqueryExecutor;
 
   /**
    * Creates a new evaluator for the provided Avro {@link Schema}.
@@ -61,6 +64,20 @@ public final class ExpressionEvaluator {
    *          {@code null}
    */
   public ExpressionEvaluator(Schema schema) {
+    this(schema, null);
+  }
+
+  /**
+   * Creates a new evaluator for the provided Avro {@link Schema} and optional sub
+   * query executor.
+   *
+   * @param schema
+   *          the Avro schema of the records to evaluate against; must not be
+   *          {@code null}
+   * @param subqueryExecutor
+   *          executor used for sub queries (may be {@code null})
+   */
+  public ExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor) {
     Map<String, Schema> fs = new HashMap<>();
     Map<String, String> ci = new HashMap<>();
     for (Schema.Field f : schema.getFields()) {
@@ -69,7 +86,8 @@ public final class ExpressionEvaluator {
     }
     this.fieldSchemas = Collections.unmodifiableMap(fs);
     this.caseInsensitiveIndex = Collections.unmodifiableMap(ci);
-    this.literalEvaluator = new ValueExpressionEvaluator(schema);
+    this.literalEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor);
+    this.subqueryExecutor = subqueryExecutor;
   }
 
   /**
@@ -143,6 +161,9 @@ public final class ExpressionEvaluator {
     }
     if (expr instanceof InExpression in) {
       return evalIn(in, rec);
+    }
+    if (expr instanceof ExistsExpression exists) {
+      return evalExists(exists, rec);
     }
 
     // Comparison operators
@@ -289,7 +310,35 @@ public final class ExpressionEvaluator {
       }
       return in.isNot() != found;
     }
+    if (right instanceof net.sf.jsqlparser.statement.select.Select subSelect) {
+      if (subqueryExecutor == null) {
+        throw new IllegalStateException("IN subqueries require a subquery executor");
+      }
+      List<Object> values = subqueryExecutor.execute(subSelect).firstColumnValues();
+      boolean found = false;
+      for (Object value : values) {
+        Object rightVal = coerceIfColumnType(value, left.schemaOrNull);
+        Object leftVal = left.value;
+        if (leftVal != null && rightVal != null && typedCompare(leftVal, rightVal) == 0) {
+          found = true;
+          break;
+        }
+      }
+      return in.isNot() != found;
+    }
     return false;
+  }
+
+  private boolean evalExists(ExistsExpression exists, GenericRecord rec) {
+    if (subqueryExecutor == null) {
+      throw new IllegalStateException("EXISTS subqueries require a subquery executor");
+    }
+    if (!(exists.getRightExpression() instanceof net.sf.jsqlparser.statement.select.Select subSelect)) {
+      throw new IllegalArgumentException("EXISTS requires a subquery");
+    }
+    SubqueryExecutor.SubqueryResult result = subqueryExecutor.execute(subSelect);
+    boolean hasRows = !result.rows().isEmpty();
+    return exists.isNot() != hasRows;
   }
 
   private boolean evalBinary(BinaryExpression be, GenericRecord rec) {

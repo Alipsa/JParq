@@ -75,6 +75,7 @@ The following SQL statements are supported:
   - `*` to select all columns
   - alias support for columns and tables
   - Support computed expressions with aliases (e.g. SELECT mpg*2 AS double_mpg)
+  - `CASE` support
 - `SELECT` statements with `WHERE` supporting:
   - `BETWEEN`, `IN`, `LIKE` operators 
   - `AND`, `OR`, `NOT` logical operators 
@@ -93,17 +94,10 @@ The following SQL statements are supported:
 
 ### To be implemented in the near future
 
-- `CASE` support
-- any and all support
-- `GROUP BY` support
-  - `COUNT(*)` aggregation
-  - `HAVING` clause with conditions
-  - support aggregation functions and case statements in the `GROUP BY` and `SELECT` clause
-- `OFFSET` support
 - Subquery support
-  - In the SELECT Clause : Used to return a single value or a set of values. e.g. 
+  - In the SELECT Clause : Used to return a single value or a set of values. e.g.
     SELECT first_name, (
-      SELECT department_name FROM departments WHERE departments.department_id = employees.department_id
+    SELECT department_name FROM departments WHERE departments.department_id = employees.department_id
     ) AS department_name
     FROM employees;
   - In the FROM Clause : Treated as a derived table or inline view. E.g:
@@ -123,6 +117,13 @@ The following SQL statements are supported:
   FROM table_name
   WHERE EXISTS
   (SELECT column_name FROM table_name WHERE condition);
+- any and all support
+- `GROUP BY` support
+  - `COUNT(*)` aggregation
+  - `HAVING` clause with conditions
+  - support aggregation functions and case statements in the `GROUP BY` and `SELECT` clause
+- `OFFSET` support
+
 
 #### String functions support details
 ##### Character Length and Position
