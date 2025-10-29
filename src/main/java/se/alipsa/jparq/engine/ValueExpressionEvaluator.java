@@ -44,8 +44,8 @@ import se.alipsa.jparq.helper.StringExpressions;
 
 /**
  * Evaluates SELECT-list expressions (e.g. computed columns and supported SQL
- * functions such as {@code COALESCE}, {@code CAST}, and SQL numeric
- * functions) against a {@link GenericRecord}.
+ * functions such as {@code COALESCE}, {@code CAST}, and SQL numeric functions)
+ * against a {@link GenericRecord}.
  */
 public final class ValueExpressionEvaluator {
 
@@ -168,8 +168,8 @@ public final class ValueExpressionEvaluator {
   /**
    * Evaluate a SQL function call. Supports COALESCE, numeric functions (ABS,
    * CEIL, FLOOR, ROUND, SQRT, TRUNCATE, MOD, POWER, EXP, LOG, RAND, SIGN,
-   * trigonometric variants, etc.), character functions, trimming/padding
-   * helpers, pattern matching utilities, JSON helpers and Unicode conversions.
+   * trigonometric variants, etc.), character functions, trimming/padding helpers,
+   * pattern matching utilities, JSON helpers and Unicode conversions.
    *
    * @param func
    *          the function expression to evaluate
@@ -208,9 +208,10 @@ public final class ValueExpressionEvaluator {
       case "JSON_QUERY" -> evaluateJsonQuery(func, record);
       case "JSON_OBJECT" -> JsonExpressions.jsonObject(positionalArgs(func, record));
       case "JSON_ARRAY" -> JsonExpressions.jsonArray(positionalArgs(func, record));
-      case "ABS", "CEIL", "CEILING", "FLOOR", "ROUND", "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW",
-          "EXP", "LOG", "LOG10", "RAND", "RANDOM", "SIGN", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN",
-          "ATAN2", "DEGREES", "RADIANS" -> evaluateNumericFunction(upper, func, record);
+      case "ABS", "CEIL", "CEILING", "FLOOR", "ROUND", "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW", "EXP", "LOG",
+          "LOG10", "RAND", "RANDOM", "SIGN", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN", "ATAN2", "DEGREES",
+          "RADIANS" ->
+        evaluateNumericFunction(upper, func, record);
       default -> LiteralConverter.toLiteral(func);
     };
   }

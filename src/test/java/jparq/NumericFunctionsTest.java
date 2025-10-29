@@ -121,8 +121,11 @@ public class NumericFunctionsTest {
 
   @Test
   void testTrigonometricFunctions() {
-    String sql = "SELECT SIN(angle) AS sin_val, COS(angle) AS cos_val, TAN(angle) AS tan_val, "
-        + "ASIN(unit) AS asin_val, ACOS(unit) AS acos_val, ATAN(unit) AS atan_val, ATAN2(y, x) AS atan2_val FROM numbers";
+    String sql = """
+        SELECT SIN(angle) AS sin_val, COS(angle) AS cos_val, TAN(angle) AS tan_val,
+        ASIN(unit) AS asin_val, ACOS(unit) AS acos_val, ATAN(unit) AS atan_val,
+        ATAN2(y, x) AS atan2_val FROM numbers
+        """;
 
     jparqSql.query(sql, rs -> {
       try {
