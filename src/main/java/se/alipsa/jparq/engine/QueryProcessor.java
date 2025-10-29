@@ -56,6 +56,8 @@ public final class QueryProcessor implements AutoCloseable {
    * @param firstAlreadyRead
    *          a record already pulled by caller (may be null) It will NOT be
    *          considered for filtering.
+   * @param subqueryExecutor
+   *          executor used to evaluate subqueries within expressions
    *
    */
   public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
@@ -88,6 +90,8 @@ public final class QueryProcessor implements AutoCloseable {
    * @param firstAlreadyRead
    *          a record already pulled by caller (may be null). It will be
    *          considered for buffering.
+   * @param subqueryExecutor
+   *          executor used to evaluate subqueries within expressions
    */
   public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
       Schema schema, int initialEmitted, boolean distinct, List<SqlParser.OrderKey> orderBy,

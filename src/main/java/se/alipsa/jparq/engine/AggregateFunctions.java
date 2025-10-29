@@ -240,6 +240,11 @@ public final class AggregateFunctions {
    *          aggregate plan
    * @param residual
    *          residual WHERE expression (may be null)
+   * @param having
+   *          HAVING expression to evaluate after aggregation (may be null)
+   * @param subqueryExecutor
+   *          executor used to evaluate subqueries referenced by the aggregate
+   *          expressions
    * @return aggregate results and column metadata
    * @throws IOException
    *           if reading the parquet file fails
@@ -448,7 +453,8 @@ public final class AggregateFunctions {
       } else {
         boolean caseInsensitive = effective
             == net.sf.jsqlparser.expression.operators.relational.LikeExpression.KeyWord.ILIKE;
-        matches = se.alipsa.jparq.helper.StringExpressions.like(leftText, pattern, caseInsensitive, escapeChar);
+        matches = se.alipsa.jparq.helper.StringExpressions.like(leftText, pattern, caseInsensitive,
+            escapeChar);
       }
       return like.isNot() != matches;
     }
