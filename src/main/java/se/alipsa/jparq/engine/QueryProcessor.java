@@ -24,6 +24,9 @@ public final class QueryProcessor implements AutoCloseable {
   private final int limit;
   private final boolean distinct;
   private final SubqueryExecutor subqueryExecutor;
+  private final int preLimit;
+  private final List<SqlParser.OrderKey> preOrderBy;
+  private final boolean hasPreStage;
 
   // Evaluator is lazily created if schema was not provided
   private ExpressionEvaluator evaluator;
@@ -37,39 +40,133 @@ public final class QueryProcessor implements AutoCloseable {
   private final Set<List<Object>> distinctSeen;
 
   /**
-   * Streaming constructor (no ORDER BY).
-   *
-   * @param reader
-   *          the Parquet reader
-   * @param projection
-   *          list of columns to project
-   * @param where
-   *          the WHERE expression (may be null)
-   * @param limit
-   *          the LIMIT (-1 = no limit)
-   * @param schema
-   *          the Avro schema (needed for expression evaluation)
-   * @param initialEmitted
-   *          number of rows already emitted (affects LIMIT)
-   * @param distinct
-   *          whether to apply DISTINCT
-   * @param firstAlreadyRead
-   *          a record already pulled by caller (may be null) It will NOT be
-   *          considered for filtering.
-   * @param subqueryExecutor
-   *          executor used to evaluate subqueries within expressions
-   *
+   * Builder-style options for configuring {@link QueryProcessor} instances.
    */
-  public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
-      Schema schema, int initialEmitted, boolean distinct, GenericRecord firstAlreadyRead,
-      SubqueryExecutor subqueryExecutor) {
-    this(reader, projection, where, limit, schema, initialEmitted, distinct, List.of(), firstAlreadyRead,
-        subqueryExecutor);
+  public static final class Options {
+
+    private Schema schema;
+    private int initialEmitted;
+    private boolean distinct;
+    private List<SqlParser.OrderKey> orderBy = List.of();
+    private GenericRecord firstAlreadyRead;
+    private SubqueryExecutor subqueryExecutor;
+    private int preLimit = -1;
+    private List<SqlParser.OrderKey> preOrderBy = List.of();
+
+    private Options() {
+      // use factory
+    }
+
+    /**
+     * Create a new mutable options instance.
+     *
+     * @return a fresh {@link Options} instance
+     */
+    public static Options builder() {
+      return new Options();
+    }
+
+    /**
+     * Set the Avro schema used when evaluating expressions.
+     *
+     * @param schema
+     *          schema for evaluation (may be {@code null})
+     * @return {@code this} for chaining
+     */
+    public Options schema(Schema schema) {
+      this.schema = schema;
+      return this;
+    }
+
+    /**
+     * Record how many rows were already emitted before the processor was created.
+     *
+     * @param initialEmitted
+     *          number of rows already emitted
+     * @return {@code this} for chaining
+     */
+    public Options initialEmitted(int initialEmitted) {
+      this.initialEmitted = initialEmitted;
+      return this;
+    }
+
+    /**
+     * Enable or disable DISTINCT processing.
+     *
+     * @param distinct
+     *          whether DISTINCT should be applied
+     * @return {@code this} for chaining
+     */
+    public Options distinct(boolean distinct) {
+      this.distinct = distinct;
+      return this;
+    }
+
+    /**
+     * Provide ORDER BY keys for the outer query.
+     *
+     * @param orderBy
+     *          ORDER BY keys; {@code null} means none
+     * @return {@code this} for chaining
+     */
+    public Options orderBy(List<SqlParser.OrderKey> orderBy) {
+      this.orderBy = (orderBy == null || orderBy.isEmpty()) ? List.of() : List.copyOf(orderBy);
+      return this;
+    }
+
+    /**
+     * Provide a record that has already been read prior to constructing the
+     * processor.
+     *
+     * @param firstAlreadyRead
+     *          the pre-fetched record (may be {@code null})
+     * @return {@code this} for chaining
+     */
+    public Options firstAlreadyRead(GenericRecord firstAlreadyRead) {
+      this.firstAlreadyRead = firstAlreadyRead;
+      return this;
+    }
+
+    /**
+     * Set the executor used for correlated subqueries.
+     *
+     * @param subqueryExecutor
+     *          executor implementation (may be {@code null})
+     * @return {@code this} for chaining
+     */
+    public Options subqueryExecutor(SubqueryExecutor subqueryExecutor) {
+      this.subqueryExecutor = subqueryExecutor;
+      return this;
+    }
+
+    /**
+     * Apply a LIMIT that should be enforced before the outer projection.
+     *
+     * @param preLimit
+     *          limit applied during pre-stage execution (-1 for none)
+     * @return {@code this} for chaining
+     */
+    public Options preLimit(int preLimit) {
+      this.preLimit = preLimit;
+      return this;
+    }
+
+    /**
+     * Apply ORDER BY keys that must run before the outer projection.
+     *
+     * @param preOrderBy
+     *          ORDER BY keys for the pre-stage; {@code null} means none
+     * @return {@code this} for chaining
+     */
+    public Options preOrderBy(List<SqlParser.OrderKey> preOrderBy) {
+      this.preOrderBy = (preOrderBy == null || preOrderBy.isEmpty()) ? List.of() : List.copyOf(preOrderBy);
+      return this;
+    }
   }
 
   /**
-   * Generic constructor that can handle ORDER BY (buffer+sort) or streaming when
-   * {@code orderBy} is empty.
+   * Construct a processor that can stream results or buffer+sort depending on the
+   * supplied {@link Options}.
    *
    * @param reader
    *          the Parquet reader
@@ -79,40 +176,34 @@ public final class QueryProcessor implements AutoCloseable {
    *          the WHERE expression (may be null)
    * @param limit
    *          the LIMIT (-1 = no limit)
-   * @param schema
-   *          the Avro schema (needed for expression evaluation and ORDER BY)
-   * @param initialEmitted
-   *          number of rows already emitted (affects LIMIT)
-   * @param distinct
-   *          whether to apply DISTINCT
-   * @param orderBy
-   *          list of ORDER BY keys (empty = streaming path)
-   * @param firstAlreadyRead
-   *          a record already pulled by caller (may be null). It will be
-   *          considered for buffering.
-   * @param subqueryExecutor
-   *          executor used to evaluate subqueries within expressions
+   * @param options
+   *          configuration for DISTINCT, ORDER BY and other behaviour
    */
   public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
-      Schema schema, int initialEmitted, boolean distinct, List<SqlParser.OrderKey> orderBy,
-      GenericRecord firstAlreadyRead, SubqueryExecutor subqueryExecutor) {
+      Options options) {
     this.reader = Objects.requireNonNull(reader);
     this.projection = Collections.unmodifiableList(new ArrayList<>(projection));
     this.where = where;
     this.limit = limit;
-    this.distinct = distinct;
-    this.subqueryExecutor = subqueryExecutor;
-    this.evaluator = (schema != null) ? new ExpressionEvaluator(schema, subqueryExecutor) : null;
-    this.emitted = Math.max(0, initialEmitted);
-    this.orderBy = (orderBy == null) ? List.of() : List.copyOf(orderBy);
+    Options opts = Objects.requireNonNull(options, "options");
+    this.distinct = opts.distinct;
+    this.subqueryExecutor = opts.subqueryExecutor;
+    this.preLimit = opts.preLimit;
+    this.preOrderBy = opts.preOrderBy;
+    this.hasPreStage = (this.preLimit >= 0) || !this.preOrderBy.isEmpty();
+    this.evaluator = (opts.schema != null) ? new ExpressionEvaluator(opts.schema, subqueryExecutor) : null;
+    this.emitted = Math.max(0, opts.initialEmitted);
+    this.orderBy = opts.orderBy;
     this.distinctSeen = distinct ? new LinkedHashSet<>() : null;
 
-    if (distinct && firstAlreadyRead != null && initialEmitted > 0 && this.orderBy.isEmpty()) {
+    GenericRecord firstAlreadyRead = opts.firstAlreadyRead;
+
+    if (distinct && firstAlreadyRead != null && opts.initialEmitted > 0 && this.orderBy.isEmpty() && !hasPreStage) {
       registerDistinct(firstAlreadyRead);
     }
 
-    if (!this.orderBy.isEmpty()) {
-      bufferAndSort(firstAlreadyRead, schema);
+    if (!this.orderBy.isEmpty() || hasPreStage) {
+      bufferAndSort(firstAlreadyRead, opts.schema);
     }
   }
 
@@ -139,6 +230,9 @@ public final class QueryProcessor implements AutoCloseable {
       while (rec != null) {
         if (matches(rec)) {
           buf.add(rec);
+          if (preLimit >= 0 && preOrderBy.isEmpty() && buf.size() >= preLimit) {
+            break;
+          }
         }
         rec = reader.read();
       }
@@ -146,12 +240,21 @@ public final class QueryProcessor implements AutoCloseable {
       // ensure evaluator exists if WHERE is used
       ensureEvaluator(sortSchema);
 
+      if (hasPreStage) {
+        if (!preOrderBy.isEmpty() && sortSchema != null && buf.size() > 1) {
+          buf.sort(buildComparator(sortSchema, preOrderBy));
+        }
+        if (preLimit >= 0 && buf.size() > preLimit) {
+          buf = new ArrayList<>(buf.subList(0, preLimit));
+        }
+      }
+
       if (distinct && !buf.isEmpty()) {
         buf = applyDistinct(buf);
       }
 
       // sort by ORDER BY keys if we have schema and >1 row
-      if (buf.size() > 1 && sortSchema != null) {
+      if (!orderBy.isEmpty() && buf.size() > 1 && sortSchema != null) {
         buf.sort(buildComparator(sortSchema, orderBy));
       }
 
@@ -228,7 +331,7 @@ public final class QueryProcessor implements AutoCloseable {
     }
 
     // ORDER BY path: consume from sorted buffer
-    if (!orderBy.isEmpty()) {
+    if (!orderBy.isEmpty() || hasPreStage) {
       if (sorted == null || idx >= sorted.size()) {
         return null;
       }
