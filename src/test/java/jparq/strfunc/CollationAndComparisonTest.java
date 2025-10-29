@@ -77,7 +77,7 @@ class CollationAndComparisonTest {
           fail("Expected a result row");
           return;
         }
-        //substringMatch.set(asBoolean(rs.getObject("regexp_substring")));
+        // substringMatch.set(asBoolean(rs.getObject("regexp_substring")));
         substringMatch.set(rs.getBoolean("regexp_substring"));
       } catch (SQLException e) {
         fail(e);
