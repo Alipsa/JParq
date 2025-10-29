@@ -23,6 +23,7 @@ public final class QueryProcessor implements AutoCloseable {
   private final Expression where;
   private final int limit;
   private final boolean distinct;
+  private final SubqueryExecutor subqueryExecutor;
 
   // Evaluator is lazily created if schema was not provided
   private ExpressionEvaluator evaluator;
@@ -58,8 +59,10 @@ public final class QueryProcessor implements AutoCloseable {
    *
    */
   public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
-      Schema schema, int initialEmitted, boolean distinct, GenericRecord firstAlreadyRead) {
-    this(reader, projection, where, limit, schema, initialEmitted, distinct, List.of(), firstAlreadyRead);
+      Schema schema, int initialEmitted, boolean distinct, GenericRecord firstAlreadyRead,
+      SubqueryExecutor subqueryExecutor) {
+    this(reader, projection, where, limit, schema, initialEmitted, distinct, List.of(), firstAlreadyRead,
+        subqueryExecutor);
   }
 
   /**
@@ -88,13 +91,14 @@ public final class QueryProcessor implements AutoCloseable {
    */
   public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
       Schema schema, int initialEmitted, boolean distinct, List<SqlParser.OrderKey> orderBy,
-      GenericRecord firstAlreadyRead) {
+      GenericRecord firstAlreadyRead, SubqueryExecutor subqueryExecutor) {
     this.reader = Objects.requireNonNull(reader);
     this.projection = Collections.unmodifiableList(new ArrayList<>(projection));
     this.where = where;
     this.limit = limit;
     this.distinct = distinct;
-    this.evaluator = (schema != null) ? new ExpressionEvaluator(schema) : null;
+    this.subqueryExecutor = subqueryExecutor;
+    this.evaluator = (schema != null) ? new ExpressionEvaluator(schema, subqueryExecutor) : null;
     this.emitted = Math.max(0, initialEmitted);
     this.orderBy = (orderBy == null) ? List.of() : List.copyOf(orderBy);
     this.distinctSeen = distinct ? new LinkedHashSet<>() : null;
@@ -188,13 +192,13 @@ public final class QueryProcessor implements AutoCloseable {
 
   private void ensureEvaluator(GenericRecord rec) {
     if (where != null && evaluator == null && rec != null) {
-      evaluator = new ExpressionEvaluator(rec.getSchema());
+      evaluator = new ExpressionEvaluator(rec.getSchema(), subqueryExecutor);
     }
   }
 
   private void ensureEvaluator(Schema schema) {
     if (where != null && evaluator == null && schema != null) {
-      evaluator = new ExpressionEvaluator(schema);
+      evaluator = new ExpressionEvaluator(schema, subqueryExecutor);
     }
     // If still null, it will be lazily created from the first record seen.
   }

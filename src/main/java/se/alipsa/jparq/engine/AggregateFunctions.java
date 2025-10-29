@@ -238,8 +238,8 @@ public final class AggregateFunctions {
    * @throws IOException
    *           if reading the parquet file fails
    */
-  public static AggregateResult evaluate(ParquetReader<GenericRecord> reader, AggregatePlan plan, Expression residual)
-      throws IOException {
+  public static AggregateResult evaluate(ParquetReader<GenericRecord> reader, AggregatePlan plan, Expression residual,
+      SubqueryExecutor subqueryExecutor) throws IOException {
     List<AggregateAccumulator> accs = new ArrayList<>(plan.specs().size());
     for (AggregateSpec spec : plan.specs()) {
       accs.add(AggregateAccumulator.create(spec));
@@ -255,9 +255,9 @@ public final class AggregateFunctions {
         if (schema == null) {
           schema = rec.getSchema();
           if (residual != null) {
-            whereEval = new ExpressionEvaluator(schema);
+            whereEval = new ExpressionEvaluator(schema, subqueryExecutor);
           }
-          valueEval = new ValueExpressionEvaluator(schema);
+          valueEval = new ValueExpressionEvaluator(schema, subqueryExecutor);
         }
 
         boolean matches = residual == null || (whereEval != null && whereEval.eval(residual, rec));

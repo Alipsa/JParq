@@ -43,6 +43,7 @@ import se.alipsa.jparq.engine.ParquetFilterBuilder;
 import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.SqlParser;
+import se.alipsa.jparq.engine.SubqueryExecutor;
 
 /** An implementation of the java.sql.PreparedStatement interface. */
 @SuppressWarnings({
@@ -133,7 +134,9 @@ class JParqPreparedStatement implements PreparedStatement {
     final List<String> physical = parsedSelect.labels().isEmpty() ? null : parsedSelect.columnNames();
     // Create the result set, passing reader, select plan, residual filter,
     // plus projection labels and physical names (for metadata & value lookups)
-    JParqResultSet rs = new JParqResultSet(reader, parsedSelect, file.getName(), residualExpression, labels, physical);
+    SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn());
+    JParqResultSet rs = new JParqResultSet(reader, parsedSelect, file.getName(), residualExpression, labels, physical,
+        subqueryExecutor);
 
     stmt.setCurrentRs(rs);
     return rs;

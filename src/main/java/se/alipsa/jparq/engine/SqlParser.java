@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import net.sf.jsqlparser.expression.*;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
+import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
@@ -89,7 +90,7 @@ public final class SqlParser {
    *          the table alias (may be null)
    * @return the FromInfo record
    */
-  private record FromInfo(String tableName, String tableAlias) {
+  private record FromInfo(String tableName, String tableAlias, Map<String, String> columnMapping, Select innerSelect) {
   }
 
   /**
@@ -107,32 +108,63 @@ public final class SqlParser {
       net.sf.jsqlparser.statement.select.Select stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
           .parse(normalizedSql);
       PlainSelect ps = stmt.getPlainSelect();
-
-      // 1. FROM: Get the table name and alias
-      FromInfo fromInfo = parseFromItem(ps.getFromItem());
-
-      // 2. SELECT list: Get labels and physical columns
-      Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo);
-
-      // 3. WHERE: Strip qualifiers for single-table queries
-      Expression whereExpr = ps.getWhere();
-      stripQualifier(whereExpr, fromInfo.tableName(), fromInfo.tableAlias());
-
-      // 4. LIMIT
-      int limit = computeLimit(ps);
-
-      // 5. ORDER BY: Compute and resolve to physical columns
-      List<OrderKey> orderKeys = computeOrderKeys(ps, projection.labels(), projection.physicalCols(),
-          fromInfo.tableName(), fromInfo.tableAlias());
-
-      List<String> labelsCopy = List.copyOf(projection.labels());
-      List<String> physicalCopy = Collections.unmodifiableList(new ArrayList<>(projection.physicalCols()));
-      List<Expression> expressionCopy = List.copyOf(projection.expressions());
-      return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), whereExpr, limit,
-          List.copyOf(orderKeys), ps.getDistinct() != null, expressionCopy);
+      return parsePlainSelect(ps);
     } catch (Exception e) {
       throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
     }
+  }
+
+  private static Select parsePlainSelect(PlainSelect ps) {
+    FromInfo fromInfo = parseFromItem(ps.getFromItem());
+    Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo);
+
+    Expression whereExpr = ps.getWhere();
+    stripQualifier(whereExpr, fromInfo.tableName(), fromInfo.tableAlias());
+    Expression combinedWhere = combineExpressions(fromInfo.innerSelect() == null ? null : fromInfo.innerSelect().where(),
+        whereExpr);
+
+    int limit = computeLimit(ps);
+    if (limit < 0 && fromInfo.innerSelect() != null) {
+      limit = fromInfo.innerSelect().limit();
+    }
+
+    List<OrderKey> orderKeys = computeOrderKeys(ps, projection.labels(), projection.physicalCols(),
+        fromInfo.tableName(), fromInfo.tableAlias());
+    if ((orderKeys == null || orderKeys.isEmpty()) && fromInfo.innerSelect() != null) {
+      orderKeys = fromInfo.innerSelect().orderBy();
+    }
+
+    boolean distinct = ps.getDistinct() != null || (fromInfo.innerSelect() != null && fromInfo.innerSelect().distinct());
+
+    List<String> labels = projection.labels();
+    List<String> physicalCols = projection.physicalCols();
+    List<Expression> expressions = projection.expressions();
+
+    if (projection.selectAll()) {
+      if (fromInfo.innerSelect() != null) {
+        labels = fromInfo.innerSelect().labels();
+        physicalCols = fromInfo.innerSelect().columnNames();
+        expressions = fromInfo.innerSelect().expressions();
+      } else {
+        labels = List.of();
+        physicalCols = List.of();
+        expressions = List.of();
+      }
+    }
+
+    if (physicalCols == null) {
+      physicalCols = List.of();
+    }
+    if (orderKeys == null) {
+      orderKeys = List.of();
+    }
+
+    List<String> labelsCopy = List.copyOf(labels);
+    List<String> physicalCopy = Collections.unmodifiableList(new ArrayList<>(physicalCols));
+    List<OrderKey> orderCopy = List.copyOf(orderKeys);
+    List<Expression> expressionCopy = List.copyOf(expressions);
+    return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
+        orderCopy, distinct, expressionCopy);
   }
 
   // === Parsing Helper Methods =================================================
@@ -140,7 +172,8 @@ public final class SqlParser {
   /**
    * Internal record to hold the projection (SELECT list) results.
    */
-  private record Projection(List<String> labels, List<String> physicalCols, List<Expression> expressions) {
+  private record Projection(List<String> labels, List<String> physicalCols, List<Expression> expressions,
+      boolean selectAll) {
   }
 
   /**
@@ -148,12 +181,46 @@ public final class SqlParser {
    * name/alias.
    */
   private static FromInfo parseFromItem(FromItem fromItem) {
-    if (!(fromItem instanceof Table t)) {
-      throw new IllegalArgumentException("Only single-table SELECT is supported");
+    if (fromItem instanceof Table t) {
+      String tableName = t.getName();
+      String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
+      return new FromInfo(tableName, tableAlias, Map.of(), null);
     }
-    final String tableName = t.getName();
-    final String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
-    return new FromInfo(tableName, tableAlias);
+    if (fromItem instanceof net.sf.jsqlparser.statement.select.Select sub) {
+      PlainSelect innerPlain = sub.getPlainSelect();
+      if (innerPlain == null) {
+        throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
+      }
+      Select innerSelect = parsePlainSelect(innerPlain);
+      String alias = sub.getAlias() != null ? sub.getAlias().getName() : innerSelect.tableAlias();
+      if (alias == null) {
+        alias = innerSelect.table();
+      }
+      Map<String, String> mapping = buildColumnMapping(innerSelect);
+      return new FromInfo(innerSelect.table(), alias, mapping, innerSelect);
+    }
+    throw new IllegalArgumentException("Unsupported FROM item: " + fromItem);
+  }
+
+  private static Map<String, String> buildColumnMapping(Select select) {
+    if (select == null) {
+      return Map.of();
+    }
+    List<String> labels = select.labels();
+    List<String> physical = select.columnNames();
+    if (labels == null || physical == null || labels.isEmpty()) {
+      return Map.of();
+    }
+    Map<String, String> mapping = new HashMap<>();
+    int count = Math.min(labels.size(), physical.size());
+    for (int i = 0; i < count; i++) {
+      String label = labels.get(i);
+      String phys = physical.get(i);
+      if (label != null && phys != null) {
+        mapping.put(label, phys);
+      }
+    }
+    return Map.copyOf(mapping);
   }
 
   /**
@@ -169,7 +236,6 @@ public final class SqlParser {
     for (SelectItem<?> item : selectItems) {
       final String text = item.toString().trim();
 
-      // Handle SELECT * and reject table.*
       if ("*".equals(text)) {
         selectAll = true;
         break;
@@ -178,8 +244,7 @@ public final class SqlParser {
         throw new IllegalArgumentException("Qualified * (table.*) not supported yet: " + text);
       }
 
-      final Expression expr = item.getExpression(); // JSqlParser 5.x
-      // Normalize qualifiers for single-table: t.col -> col
+      final Expression expr = item.getExpression();
       stripQualifier(expr, fromInfo.tableName(), fromInfo.tableAlias());
 
       final Alias aliasObj = item.getAlias();
@@ -190,13 +255,16 @@ public final class SqlParser {
 
       if (expr instanceof Column col) {
         underlying = col.getColumnName();
+        String mapped = fromInfo.columnMapping().get(underlying);
+        if (mapped != null) {
+          underlying = mapped;
+        }
         if (alias != null && !alias.isEmpty()) {
           label = alias;
         } else {
-          label = underlying;
+          label = col.getColumnName();
         }
       } else {
-        // Keep label stable; allow alias for projection labeling.
         if (alias != null && !alias.isEmpty()) {
           label = alias;
         } else {
@@ -210,14 +278,22 @@ public final class SqlParser {
     }
 
     if (selectAll) {
-      // Defer to engine to expand to actual columns; keep old contract: columns() ==
-      // ["*"]
-      labels = List.of(); // empty list => columns() returns ["*"]
-      physicalCols = List.of(); // keep in sync
+      labels = List.of();
+      physicalCols = List.of();
       expressions = List.of();
     }
 
-    return new Projection(labels, physicalCols, expressions);
+    return new Projection(labels, physicalCols, expressions, selectAll);
+  }
+
+  private static Expression combineExpressions(Expression left, Expression right) {
+    if (left == null) {
+      return right;
+    }
+    if (right == null) {
+      return left;
+    }
+    return new AndExpression(left, right);
   }
 
   // LIMIT
