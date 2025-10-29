@@ -132,4 +132,25 @@ public class DistinctTest {
       }
     });
   }
+
+  @Test
+  void testInnerDistinctRespectedBeforePreLimit() {
+    jparqSql.query("select model from (select distinct model from mtcars limit 10) t order by model", rs -> {
+      List<String> models = new ArrayList<>();
+      try {
+        ResultSetMetaData md = rs.getMetaData();
+        assertEquals(1, md.getColumnCount(), "Expected 1 column (model)");
+
+        while (rs.next()) {
+          models.add(rs.getString(1));
+        }
+
+        assertEquals(10, models.size(), "Expected 10 distinct models from inner select");
+        long uniqueCount = models.stream().distinct().count();
+        assertEquals(uniqueCount, models.size(), "Models should already be distinct");
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
 }
