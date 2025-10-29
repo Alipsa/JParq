@@ -20,9 +20,8 @@ class ValueExpressionEvaluatorTest {
 
   @BeforeAll
   static void setUp() {
-    schema = SchemaBuilder.record("R").fields()
-        .name("note").type().unionOf().nullType().and().stringType().endUnion().nullDefault()
-        .endRecord();
+    schema = SchemaBuilder.record("R").fields().name("note").type().unionOf().nullType().and().stringType().endUnion()
+        .nullDefault().endRecord();
 
     nullNoteRecord = new GenericData.Record(schema);
     nullNoteRecord.put("note", null);
