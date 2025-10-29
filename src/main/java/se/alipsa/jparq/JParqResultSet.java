@@ -113,8 +113,12 @@ public class JParqResultSet extends ResultSetAdapter {
         if (this.columnOrder.isEmpty() && !req.isEmpty() && !req.contains("*")) {
           this.columnOrder.addAll(req); // mutable, safe
         }
-        this.qp = new QueryProcessor(reader, this.columnOrder, /* where */ residual, select.limit(), null, 0,
-            select.distinct(), null, subqueryExecutor, select.preLimit(), select.preOrderBy());
+        QueryProcessor.Options options = QueryProcessor.Options.builder()
+            .distinct(select.distinct())
+            .subqueryExecutor(subqueryExecutor)
+            .preLimit(select.preLimit())
+            .preOrderBy(select.preOrderBy());
+        this.qp = new QueryProcessor(reader, this.columnOrder, /* where */ residual, select.limit(), options);
         this.current = null;
         this.rowNum = 0;
         return;
@@ -135,12 +139,26 @@ public class JParqResultSet extends ResultSetAdapter {
       if (order == null || order.isEmpty()) {
         int initialEmitted = match ? 1 : 0;
         GenericRecord firstForDistinct = match ? first : null;
-        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, initialEmitted, select.distinct(),
-            firstForDistinct, subqueryExecutor, select.preLimit(), select.preOrderBy());
+        QueryProcessor.Options options = QueryProcessor.Options.builder()
+            .schema(schema)
+            .initialEmitted(initialEmitted)
+            .distinct(select.distinct())
+            .firstAlreadyRead(firstForDistinct)
+            .subqueryExecutor(subqueryExecutor)
+            .preLimit(select.preLimit())
+            .preOrderBy(select.preOrderBy());
+        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), options);
         this.current = match ? first : qp.nextMatching();
       } else {
-        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, 0, select.distinct(), order, first,
-            subqueryExecutor, select.preLimit(), select.preOrderBy());
+        QueryProcessor.Options options = QueryProcessor.Options.builder()
+            .schema(schema)
+            .distinct(select.distinct())
+            .orderBy(order)
+            .firstAlreadyRead(first)
+            .subqueryExecutor(subqueryExecutor)
+            .preLimit(select.preLimit())
+            .preOrderBy(select.preOrderBy());
+        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), options);
         this.current = qp.nextMatching();
       }
       this.rowNum = 0;
