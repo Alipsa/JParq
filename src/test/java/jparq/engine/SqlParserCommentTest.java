@@ -37,8 +37,7 @@ class SqlParserCommentTest {
     SqlParser.Select select = assertDoesNotThrow(() -> SqlParser.parseSelect(sql));
 
     assertEquals("literal_label", select.labels().get(0), "Alias should be preserved");
-    assertEquals("'--value -- text'", select.expressions().get(0).toString(),
-        "String literal should remain untouched");
+    assertEquals("'--value -- text'", select.expressions().get(0).toString(), "String literal should remain untouched");
     assertEquals("model = 'Ferrari /* comment marker */'", select.where().toString(),
         "WHERE clause literal content must be retained");
   }

@@ -325,14 +325,16 @@ public final class SqlParser {
   // === Qualifier Stripping =================================================
 
   /**
-   * Remove SQL comments from the supplied query string while preserving string literals.
+   * Remove SQL comments from the supplied query string while preserving string
+   * literals.
    *
    * <p>
-   * The parser used by the engine does not retain comments, but unstripped comments can still
-   * interfere with parsing when they appear in leading or inline positions. This helper processes the
-   * SQL text and strips both {@code --} line comments and {@code /* ... *&#47;} block comments so that
-   * {@link CCJSqlParserUtil} receives a clean statement. Content that appears inside single-quoted or
-   * double-quoted literals is preserved verbatim.
+   * The parser used by the engine does not retain comments, but unstripped
+   * comments can still interfere with parsing when they appear in leading or
+   * inline positions. This helper processes the SQL text and strips both
+   * {@code --} line comments and {@code /* ... *&#47;} block comments so that
+   * {@link CCJSqlParserUtil} receives a clean statement. Content that appears
+   * inside single-quoted or double-quoted literals is preserved verbatim.
    * </p>
    *
    * @param sql
