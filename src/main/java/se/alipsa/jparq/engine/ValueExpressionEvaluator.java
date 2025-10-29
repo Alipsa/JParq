@@ -212,7 +212,7 @@ public final class ValueExpressionEvaluator {
 
   private static boolean valuesEqual(Object left, Object right) {
     if (left == null || right == null) {
-      return left == null && right == null;
+      return false;
     }
     try {
       return ExpressionEvaluator.typedCompare(left, right) == 0;
