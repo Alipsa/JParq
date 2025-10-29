@@ -89,9 +89,10 @@ The following SQL statements are supported:
   - coalesce (The COALESCE() function returns the first non-null value in a list.)
   - String functions (all SQL standard string function supported)
   - Numeric functions (abs, ceil, floor, round, sqrt, truncate, mod, power, exp, log, rand, sign, sin, cos, tan, asin, acos, atan, atan2, degrees, radians)
+- comments (line --) and block (/* */)
 
 ### To be implemented in the near future
-- comments -- and /* */
+
 - `CASE` support
 - any and all support
 - `GROUP BY` with simple grouping
