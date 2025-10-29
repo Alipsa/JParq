@@ -117,6 +117,23 @@ The following SQL statements are supported:
   WHERE EXISTS
   (SELECT column_name FROM table_name WHERE condition);
 - any and all support
+  SELECT column_name(s)
+  FROM table_name
+  WHERE column_name operator ANY
+  (SELECT column_name
+  FROM table_name
+  WHERE condition);
+
+  SELECT ALL column_name(s)
+  FROM table_name
+  WHERE condition;
+
+  SELECT column_name(s)
+  FROM table_name
+  WHERE column_name operator ALL
+  (SELECT column_name
+  FROM table_name
+  WHERE condition);
 - `GROUP BY` support
   - `COUNT(*)` aggregation
   - `HAVING` clause with conditions
@@ -186,5 +203,5 @@ Please implement support for the SQL standard for
 Each section (starting with # above) should have its own test class to verify the functionality.
 Create test to verify the functionality.
 Remember to also update javadocs where needed.
-All tests must pass after the implementation to ensure that there is no regression.
+All tests must pass after the implementation using `mvn -Dspotless.check.skip=true test` to ensure that there is no regression.
 Adhere to the coding standard defined in checkstyle.xml.
