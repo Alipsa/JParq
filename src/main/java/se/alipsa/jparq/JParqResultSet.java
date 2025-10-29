@@ -59,6 +59,8 @@ public class JParqResultSet extends ResultSetAdapter {
    *          the projection column labels (aliases) or null
    * @param physicalColumnOrder
    *          the physical column names (may be null)
+   * @param subqueryExecutor
+   *          executor used to evaluate subqueries during row materialization
    * @throws SQLException
    *           if reading fails
    */
