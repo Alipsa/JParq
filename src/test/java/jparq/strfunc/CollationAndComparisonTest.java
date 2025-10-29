@@ -45,13 +45,13 @@ class CollationAndComparisonTest {
               return;
             }
             collated.set(rs.getString("collated"));
-            similarTrue.set(asBoolean(rs.getObject("similar_true")));
-            similarFalse.set(asBoolean(rs.getObject("similar_false")));
-            similarNested.set(asBoolean(rs.getObject("similar_nested")));
-            similarEscaped.set(asBoolean(rs.getObject("similar_escaped")));
-            regexpTrue.set(asBoolean(rs.getObject("regexp_true")));
-            regexpCase.set(asBoolean(rs.getObject("regexp_case")));
-            regexpFalse.set(asBoolean(rs.getObject("regexp_false")));
+            similarTrue.set(rs.getBoolean("similar_true"));
+            similarFalse.set(rs.getBoolean("similar_false"));
+            similarNested.set(rs.getBoolean("similar_nested"));
+            similarEscaped.set(rs.getBoolean("similar_escaped"));
+            regexpTrue.set(rs.getBoolean("regexp_true"));
+            regexpCase.set(rs.getBoolean("regexp_case"));
+            regexpFalse.set(rs.getBoolean("regexp_false"));
           } catch (SQLException e) {
             fail(e);
           }
@@ -77,22 +77,13 @@ class CollationAndComparisonTest {
           fail("Expected a result row");
           return;
         }
-        substringMatch.set(asBoolean(rs.getObject("regexp_substring")));
+        //substringMatch.set(asBoolean(rs.getObject("regexp_substring")));
+        substringMatch.set(rs.getBoolean("regexp_substring"));
       } catch (SQLException e) {
         fail(e);
       }
     });
 
     assertTrue(substringMatch.get(), "REGEXP_LIKE should match unanchored substrings");
-  }
-
-  private boolean asBoolean(Object value) {
-    if (value == null) {
-      return false;
-    }
-    if (value instanceof Boolean bool) {
-      return bool;
-    }
-    return Boolean.parseBoolean(value.toString());
   }
 }
