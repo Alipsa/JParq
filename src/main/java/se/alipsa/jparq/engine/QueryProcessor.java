@@ -79,8 +79,7 @@ public final class QueryProcessor implements AutoCloseable {
     }
 
     /**
-     * Record how many rows were already emitted before the processor was
-     * created.
+     * Record how many rows were already emitted before the processor was created.
      *
      * @param initialEmitted
      *          number of rows already emitted
@@ -166,8 +165,8 @@ public final class QueryProcessor implements AutoCloseable {
   }
 
   /**
-   * Construct a processor that can stream results or buffer+sort depending on
-   * the supplied {@link Options}.
+   * Construct a processor that can stream results or buffer+sort depending on the
+   * supplied {@link Options}.
    *
    * @param reader
    *          the Parquet reader

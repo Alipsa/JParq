@@ -65,9 +65,9 @@ public final class SqlParser {
    *          ORDER BY keys that must be applied prior to the outer ORDER BY
    *          (typically inherited from an inner SELECT)
    */
-  public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias,
-      Expression where, int limit, List<OrderKey> orderBy, boolean distinct, List<Expression> expressions,
-      Expression having, int preLimit, List<OrderKey> preOrderBy) {
+  public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
+      int limit, List<OrderKey> orderBy, boolean distinct, List<Expression> expressions, Expression having,
+      int preLimit, List<OrderKey> preOrderBy) {
 
     /**
      * returns "*" if no explicit projection.

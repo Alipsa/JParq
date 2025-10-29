@@ -59,17 +59,16 @@ class SqlParserDerivedTableLimitTest {
         ORDER BY cyl
         LIMIT 5
         """, rs -> {
-          try {
-            while (rs.next()) {
-              actualModels.add(rs.getString("model"));
-            }
-          } catch (SQLException e) {
-            fail(e);
-          }
-        });
+      try {
+        while (rs.next()) {
+          actualModels.add(rs.getString("model"));
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
 
-    assertEquals(expectedModels, actualModels,
-        "Derived table LIMIT should reduce rows before applying outer ORDER BY");
+    assertEquals(expectedModels, actualModels, "Derived table LIMIT should reduce rows before applying outer ORDER BY");
   }
 
   @Test
@@ -99,14 +98,14 @@ class SqlParserDerivedTableLimitTest {
         ORDER BY model
         LIMIT 5
         """, rs -> {
-          try {
-            while (rs.next()) {
-              actualModels.add(rs.getString("model"));
-            }
-          } catch (SQLException e) {
-            fail(e);
-          }
-        });
+      try {
+        while (rs.next()) {
+          actualModels.add(rs.getString("model"));
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
 
     assertEquals(expectedModels, actualModels,
         "Outer ORDER BY should operate on the rows restricted by the inner LIMIT");
