@@ -23,6 +23,7 @@ public final class QueryProcessor implements AutoCloseable {
   private final Expression where;
   private final int limit;
   private final boolean distinct;
+  private final boolean distinctBeforePreLimit;
   private final SubqueryExecutor subqueryExecutor;
   private final int preLimit;
   private final List<SqlParser.OrderKey> preOrderBy;
@@ -47,6 +48,7 @@ public final class QueryProcessor implements AutoCloseable {
     private Schema schema;
     private int initialEmitted;
     private boolean distinct;
+    private boolean distinctBeforePreLimit;
     private List<SqlParser.OrderKey> orderBy = List.of();
     private GenericRecord firstAlreadyRead;
     private SubqueryExecutor subqueryExecutor;
@@ -99,6 +101,19 @@ public final class QueryProcessor implements AutoCloseable {
      */
     public Options distinct(boolean distinct) {
       this.distinct = distinct;
+      return this;
+    }
+
+    /**
+     * Control whether DISTINCT must be applied before pre-stage LIMIT handling.
+     *
+     * @param distinctBeforePreLimit
+     *          {@code true} if DISTINCT originates from an inner SELECT that should
+     *          be enforced prior to any pre-stage LIMIT
+     * @return {@code this} for chaining
+     */
+    public Options distinctBeforePreLimit(boolean distinctBeforePreLimit) {
+      this.distinctBeforePreLimit = distinctBeforePreLimit;
       return this;
     }
 
@@ -187,6 +202,7 @@ public final class QueryProcessor implements AutoCloseable {
     this.limit = limit;
     Options opts = Objects.requireNonNull(options, "options");
     this.distinct = opts.distinct;
+    this.distinctBeforePreLimit = opts.distinctBeforePreLimit;
     this.subqueryExecutor = opts.subqueryExecutor;
     this.preLimit = opts.preLimit;
     this.preOrderBy = opts.preOrderBy;
@@ -210,6 +226,7 @@ public final class QueryProcessor implements AutoCloseable {
   private void bufferAndSort(GenericRecord first, Schema schemaHint) {
     try {
       List<GenericRecord> buf = new ArrayList<>();
+      Set<List<Object>> preStageDistinct = distinctBeforePreLimit ? new LinkedHashSet<>() : null;
       Schema sortSchema = schemaHint;
 
       // include firstAlreadyRead if it matches WHERE
@@ -229,9 +246,19 @@ public final class QueryProcessor implements AutoCloseable {
       }
       while (rec != null) {
         if (matches(rec)) {
-          buf.add(rec);
-          if (preLimit >= 0 && preOrderBy.isEmpty() && buf.size() >= preLimit) {
-            break;
+          if (preStageDistinct != null) {
+            List<Object> key = distinctKey(rec);
+            if (preStageDistinct.add(key)) {
+              buf.add(rec);
+            }
+            if (preLimit >= 0 && preOrderBy.isEmpty() && preStageDistinct.size() >= preLimit) {
+              break;
+            }
+          } else {
+            buf.add(rec);
+            if (preLimit >= 0 && preOrderBy.isEmpty() && buf.size() >= preLimit) {
+              break;
+            }
           }
         }
         rec = reader.read();
@@ -240,7 +267,12 @@ public final class QueryProcessor implements AutoCloseable {
       // ensure evaluator exists if WHERE is used
       ensureEvaluator(sortSchema);
 
+      boolean distinctApplied = false;
       if (hasPreStage) {
+        if (distinctBeforePreLimit && distinct && !buf.isEmpty()) {
+          buf = applyDistinct(buf);
+          distinctApplied = true;
+        }
         if (!preOrderBy.isEmpty() && sortSchema != null && buf.size() > 1) {
           buf.sort(buildComparator(sortSchema, preOrderBy));
         }
@@ -249,7 +281,7 @@ public final class QueryProcessor implements AutoCloseable {
         }
       }
 
-      if (distinct && !buf.isEmpty()) {
+      if (distinct && !buf.isEmpty() && !distinctApplied) {
         buf = applyDistinct(buf);
       }
 

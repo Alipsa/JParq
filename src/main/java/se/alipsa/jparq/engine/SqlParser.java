@@ -53,7 +53,10 @@ public final class SqlParser {
    * @param orderBy
    *          ORDER BY keys (empty if none)
    * @param distinct
-   *          true if DISTINCT is specified
+   *          true if DISTINCT is specified in this SELECT or inherited from an
+   *          inner SELECT
+   * @param innerDistinct
+   *          true if DISTINCT originates from an inner SELECT
    * @param expressions
    *          the normalized SELECT expressions in projection order
    * @param having
@@ -66,8 +69,8 @@ public final class SqlParser {
    *          (typically inherited from an inner SELECT)
    */
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
-      int limit, List<OrderKey> orderBy, boolean distinct, List<Expression> expressions, Expression having,
-      int preLimit, List<OrderKey> preOrderBy) {
+      int limit, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct, List<Expression> expressions,
+      Expression having, int preLimit, List<OrderKey> preOrderBy) {
 
     /**
      * returns "*" if no explicit projection.
@@ -184,8 +187,9 @@ public final class SqlParser {
       orderKeys = List.of();
     }
 
-    boolean distinct = ps.getDistinct() != null
-        || (fromInfo.innerSelect() != null && fromInfo.innerSelect().distinct());
+    boolean outerDistinct = ps.getDistinct() != null;
+    boolean innerDistinct = fromInfo.innerSelect() != null && fromInfo.innerSelect().distinct();
+    boolean distinct = outerDistinct || innerDistinct;
 
     Expression havingExpr = ps.getHaving();
     stripQualifier(havingExpr, fromInfo.tableName(), fromInfo.tableAlias());
@@ -201,7 +205,7 @@ public final class SqlParser {
     List<OrderKey> preOrderCopy = List.copyOf(preOrderBy);
     List<Expression> expressionCopy = List.copyOf(expressions);
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
-        orderCopy, distinct, expressionCopy, combinedHaving, preLimit, preOrderCopy);
+        orderCopy, distinct, innerDistinct, expressionCopy, combinedHaving, preLimit, preOrderCopy);
   }
 
   // === Parsing Helper Methods =================================================
