@@ -95,10 +95,10 @@ The following SQL statements are supported:
 
 - `CASE` support
 - any and all support
-- `GROUP BY` with simple grouping
+- `GROUP BY` support
   - `COUNT(*)` aggregation
-  - `HAVING` clause with simple conditions
-  - support aggregation functions in `SELECT` clause
+  - `HAVING` clause with conditions
+  - support aggregation functions and case statements in the `GROUP BY` and `SELECT` clause
 - `OFFSET` support
 - Subquery support
   - In the SELECT Clause : Used to return a single value or a set of values. e.g. 
