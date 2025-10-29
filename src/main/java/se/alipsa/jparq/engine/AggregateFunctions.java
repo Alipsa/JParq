@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.MathContext;
 import java.sql.Date;
 import java.sql.Time;
 import java.sql.Timestamp;
@@ -15,12 +16,37 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.Function;
+import net.sf.jsqlparser.expression.NotExpression;
+import net.sf.jsqlparser.expression.SignedExpression;
+import net.sf.jsqlparser.expression.operators.arithmetic.Addition;
+import net.sf.jsqlparser.expression.operators.arithmetic.Division;
+import net.sf.jsqlparser.expression.operators.arithmetic.Modulo;
+import net.sf.jsqlparser.expression.operators.arithmetic.Multiplication;
+import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
+import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
+import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
+import net.sf.jsqlparser.expression.operators.relational.Between;
+import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
+import net.sf.jsqlparser.expression.operators.relational.ExistsExpression;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
+import net.sf.jsqlparser.expression.operators.relational.GreaterThan;
+import net.sf.jsqlparser.expression.operators.relational.GreaterThanEquals;
+import net.sf.jsqlparser.expression.operators.relational.InExpression;
+import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
+import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
+import net.sf.jsqlparser.expression.operators.relational.MinorThan;
+import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals;
+import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
+import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.hadoop.ParquetReader;
+import se.alipsa.jparq.helper.LiteralConverter;
+import se.alipsa.jparq.helper.StringExpressions;
 
 /**
  * Utilities for detecting and evaluating aggregate functions in SELECT lists.
@@ -225,9 +251,7 @@ public final class AggregateFunctions {
       return List.of();
     }
     List<Expression> params = new ArrayList<>(list.size());
-    for (Expression expr : list) {
-      params.add(expr);
-    }
+    params.addAll(list);
     return params;
   }
 
@@ -271,7 +295,7 @@ public final class AggregateFunctions {
           valueEval = new ValueExpressionEvaluator(schema, subqueryExecutor);
         }
 
-        boolean matches = residual == null || (whereEval != null && whereEval.eval(residual, rec));
+        boolean matches = residual == null || whereEval.eval(residual, rec);
         if (matches) {
           for (AggregateAccumulator acc : accs) {
             acc.add(valueEval, rec);
@@ -318,21 +342,21 @@ public final class AggregateFunctions {
       if (expr == null) {
         return true;
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.conditional.AndExpression and) {
+      if (expr instanceof AndExpression and) {
         return eval(and.getLeftExpression()) && eval(and.getRightExpression());
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.conditional.OrExpression or) {
+      if (expr instanceof OrExpression or) {
         return eval(or.getLeftExpression()) || eval(or.getRightExpression());
       }
-      if (expr instanceof net.sf.jsqlparser.expression.NotExpression not) {
+      if (expr instanceof NotExpression not) {
         return !eval(not.getExpression());
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.IsNullExpression isNull) {
+      if (expr instanceof IsNullExpression isNull) {
         Object operand = value(isNull.getLeftExpression());
         boolean isNullVal = operand == null;
         return isNull.isNot() != isNullVal;
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.Between between) {
+      if (expr instanceof Between between) {
         Object val = value(between.getLeftExpression());
         Object low = value(between.getBetweenExpressionStart());
         Object high = value(between.getBetweenExpressionEnd());
@@ -344,40 +368,40 @@ public final class AggregateFunctions {
         boolean in = cmpLow >= 0 && cmpHigh <= 0;
         return between.isNot() != in;
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.InExpression in) {
+      if (expr instanceof InExpression in) {
         return evalIn(in);
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.ExistsExpression exists) {
+      if (expr instanceof ExistsExpression exists) {
         return evalExists(exists);
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.EqualsTo eq) {
+      if (expr instanceof EqualsTo eq) {
         return compare(eq.getLeftExpression(), eq.getRightExpression()) == 0;
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.GreaterThan gt) {
+      if (expr instanceof GreaterThan gt) {
         return compare(gt.getLeftExpression(), gt.getRightExpression()) > 0;
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.GreaterThanEquals ge) {
+      if (expr instanceof GreaterThanEquals ge) {
         return compare(ge.getLeftExpression(), ge.getRightExpression()) >= 0;
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.MinorThan lt) {
+      if (expr instanceof MinorThan lt) {
         return compare(lt.getLeftExpression(), lt.getRightExpression()) < 0;
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.MinorThanEquals le) {
+      if (expr instanceof MinorThanEquals le) {
         return compare(le.getLeftExpression(), le.getRightExpression()) <= 0;
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.SimilarToExpression) {
+      if (expr instanceof SimilarToExpression) {
         throw new IllegalArgumentException("SIMILAR TO is not supported in HAVING clauses");
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.relational.LikeExpression like) {
+      if (expr instanceof LikeExpression like) {
         return evalLike(like);
       }
-      if (expr instanceof net.sf.jsqlparser.expression.BinaryExpression be) {
+      if (expr instanceof BinaryExpression be) {
         return evalBinary(be);
       }
       throw new IllegalArgumentException("Unsupported HAVING expression: " + expr);
     }
 
-    private boolean evalIn(net.sf.jsqlparser.expression.operators.relational.InExpression in) {
+    private boolean evalIn(InExpression in) {
       Object leftVal = value(in.getLeftExpression());
       if (leftVal == null) {
         return false;
@@ -394,7 +418,7 @@ public final class AggregateFunctions {
         }
         return in.isNot() != found;
       }
-      if (right instanceof net.sf.jsqlparser.statement.select.Select subSelect) {
+      if (right instanceof Select subSelect) {
         if (subqueryExecutor == null) {
           throw new IllegalStateException("IN subqueries require a subquery executor");
         }
@@ -411,18 +435,18 @@ public final class AggregateFunctions {
       throw new IllegalArgumentException("Unsupported IN expression in HAVING clause: " + in);
     }
 
-    private boolean evalExists(net.sf.jsqlparser.expression.operators.relational.ExistsExpression exists) {
+    private boolean evalExists(ExistsExpression exists) {
       if (subqueryExecutor == null) {
         throw new IllegalStateException("EXISTS subqueries require a subquery executor");
       }
-      if (!(exists.getRightExpression() instanceof net.sf.jsqlparser.statement.select.Select subSelect)) {
+      if (!(exists.getRightExpression() instanceof Select subSelect)) {
         throw new IllegalArgumentException("EXISTS requires a subquery");
       }
       boolean hasRows = !subqueryExecutor.execute(subSelect).rows().isEmpty();
       return exists.isNot() != hasRows;
     }
 
-    private boolean evalLike(net.sf.jsqlparser.expression.operators.relational.LikeExpression like) {
+    private boolean evalLike(LikeExpression like) {
       Object left = value(like.getLeftExpression());
       Object right = value(like.getRightExpression());
       if (left == null || right == null) {
@@ -430,10 +454,8 @@ public final class AggregateFunctions {
       }
       String leftText = left.toString();
       String pattern = right.toString();
-      net.sf.jsqlparser.expression.operators.relational.LikeExpression.KeyWord keyWord = like.getLikeKeyWord();
-      net.sf.jsqlparser.expression.operators.relational.LikeExpression.KeyWord effective = keyWord == null
-          ? net.sf.jsqlparser.expression.operators.relational.LikeExpression.KeyWord.LIKE
-          : keyWord;
+      LikeExpression.KeyWord keyWord = like.getLikeKeyWord();
+      LikeExpression.KeyWord effective = keyWord == null ? LikeExpression.KeyWord.LIKE : keyWord;
       Character escapeChar = null;
       if (like.getEscape() != null) {
         Object escapeVal = value(like.getEscape());
@@ -448,18 +470,16 @@ public final class AggregateFunctions {
         }
       }
       boolean matches;
-      if (effective == net.sf.jsqlparser.expression.operators.relational.LikeExpression.KeyWord.SIMILAR_TO) {
-        matches = se.alipsa.jparq.helper.StringExpressions.similarTo(leftText, pattern, escapeChar);
+      if (effective == LikeExpression.KeyWord.SIMILAR_TO) {
+        matches = StringExpressions.similarTo(leftText, pattern, escapeChar);
       } else {
-        boolean caseInsensitive = effective
-            == net.sf.jsqlparser.expression.operators.relational.LikeExpression.KeyWord.ILIKE;
-        matches = se.alipsa.jparq.helper.StringExpressions.like(leftText, pattern, caseInsensitive,
-            escapeChar);
+        boolean caseInsensitive = effective == LikeExpression.KeyWord.ILIKE;
+        matches = StringExpressions.like(leftText, pattern, caseInsensitive, escapeChar);
       }
       return like.isNot() != matches;
     }
 
-    private boolean evalBinary(net.sf.jsqlparser.expression.BinaryExpression be) {
+    private boolean evalBinary(BinaryExpression be) {
       String op = be.getStringExpression();
       int cmp = compare(be.getLeftExpression(), be.getRightExpression());
       return switch (op) {
@@ -484,39 +504,39 @@ public final class AggregateFunctions {
 
     private Object value(Expression expression) {
       Expression expr = ExpressionEvaluator.unwrapParenthesis(expression);
-      if (expr instanceof net.sf.jsqlparser.statement.select.Select subSelect) {
+      if (expr instanceof Select subSelect) {
         return evaluateScalarSubquery(subSelect);
       }
-      if (expr instanceof net.sf.jsqlparser.expression.SignedExpression signed) {
+      if (expr instanceof SignedExpression signed) {
         Object inner = value(signed.getExpression());
         if (inner == null) {
           return null;
         }
-        java.math.BigDecimal numeric = toBigDecimal(inner);
+        BigDecimal numeric = toBigDecimal(inner);
         return signed.getSign() == '-' ? numeric.negate() : numeric;
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.arithmetic.Addition add) {
+      if (expr instanceof Addition add) {
         return arithmetic(add.getLeftExpression(), add.getRightExpression(), Operation.ADD);
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.arithmetic.Subtraction sub) {
+      if (expr instanceof Subtraction sub) {
         return arithmetic(sub.getLeftExpression(), sub.getRightExpression(), Operation.SUB);
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.arithmetic.Multiplication mul) {
+      if (expr instanceof Multiplication mul) {
         return arithmetic(mul.getLeftExpression(), mul.getRightExpression(), Operation.MUL);
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.arithmetic.Division div) {
+      if (expr instanceof Division div) {
         return arithmetic(div.getLeftExpression(), div.getRightExpression(), Operation.DIV);
       }
-      if (expr instanceof net.sf.jsqlparser.expression.operators.arithmetic.Modulo mod) {
+      if (expr instanceof Modulo mod) {
         return arithmetic(mod.getLeftExpression(), mod.getRightExpression(), Operation.MOD);
       }
-      if (expr instanceof net.sf.jsqlparser.expression.Function func) {
+      if (expr instanceof Function func) {
         return aggregateValue(func);
       }
-      if (expr instanceof net.sf.jsqlparser.schema.Column col) {
+      if (expr instanceof Column col) {
         return aliasValue(col.getColumnName());
       }
-      return se.alipsa.jparq.helper.LiteralConverter.toLiteral(expr);
+      return LiteralConverter.toLiteral(expr);
     }
 
     private Object arithmetic(Expression left, Expression right, Operation op) {
@@ -525,19 +545,18 @@ public final class AggregateFunctions {
       if (leftVal == null || rightVal == null) {
         return null;
       }
-      java.math.BigDecimal leftNum = toBigDecimal(leftVal);
-      java.math.BigDecimal rightNum = toBigDecimal(rightVal);
+      BigDecimal leftNum = toBigDecimal(leftVal);
+      BigDecimal rightNum = toBigDecimal(rightVal);
       return switch (op) {
         case ADD -> leftNum.add(rightNum);
         case SUB -> leftNum.subtract(rightNum);
         case MUL -> leftNum.multiply(rightNum);
-        case DIV -> rightNum.compareTo(java.math.BigDecimal.ZERO) == 0 ? null
-            : leftNum.divide(rightNum, java.math.MathContext.DECIMAL64);
-        case MOD -> rightNum.compareTo(java.math.BigDecimal.ZERO) == 0 ? null : leftNum.remainder(rightNum);
+        case DIV -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.divide(rightNum, MathContext.DECIMAL64);
+        case MOD -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.remainder(rightNum);
       };
     }
 
-    private Object evaluateScalarSubquery(net.sf.jsqlparser.statement.select.Select subSelect) {
+    private Object evaluateScalarSubquery(Select subSelect) {
       if (subqueryExecutor == null) {
         throw new IllegalStateException("Scalar subqueries require a subquery executor");
       }
@@ -558,7 +577,7 @@ public final class AggregateFunctions {
       return row.getFirst();
     }
 
-    private Object aggregateValue(net.sf.jsqlparser.expression.Function func) {
+    private Object aggregateValue(Function func) {
       AggregateType type = AggregateType.from(func.getName());
       if (type == null) {
         throw new IllegalArgumentException("Unsupported function in HAVING clause: " + func.getName());
@@ -614,17 +633,17 @@ public final class AggregateFunctions {
       return map;
     }
 
-    private java.math.BigDecimal toBigDecimal(Object value) {
-      if (value instanceof java.math.BigDecimal bd) {
+    private BigDecimal toBigDecimal(Object value) {
+      if (value instanceof BigDecimal bd) {
         return bd;
       }
       if (value instanceof Number num) {
         if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
-          return java.math.BigDecimal.valueOf(num.longValue());
+          return BigDecimal.valueOf(num.longValue());
         }
-        return java.math.BigDecimal.valueOf(num.doubleValue());
+        return BigDecimal.valueOf(num.doubleValue());
       }
-      return new java.math.BigDecimal(value.toString());
+      return new BigDecimal(value.toString());
     }
 
     private enum Operation {
@@ -794,7 +813,7 @@ public final class AggregateFunctions {
       if (count == 0L) {
         return null;
       }
-      return sum.divide(BigDecimal.valueOf(count), java.math.MathContext.DECIMAL64).doubleValue();
+      return sum.divide(BigDecimal.valueOf(count), MathContext.DECIMAL64).doubleValue();
     }
 
     @Override

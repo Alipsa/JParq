@@ -19,8 +19,8 @@ import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
 import net.sf.jsqlparser.expression.operators.relational.Between;
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
-import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.ExistsExpression;
+import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.GreaterThan;
 import net.sf.jsqlparser.expression.operators.relational.GreaterThanEquals;
 import net.sf.jsqlparser.expression.operators.relational.InExpression;
@@ -68,8 +68,8 @@ public final class ExpressionEvaluator {
   }
 
   /**
-   * Creates a new evaluator for the provided Avro {@link Schema} and optional
-   * sub query executor.
+   * Creates a new evaluator for the provided Avro {@link Schema} and optional sub
+   * query executor.
    *
    * @param schema
    *          the Avro schema of the records to evaluate against; must not be

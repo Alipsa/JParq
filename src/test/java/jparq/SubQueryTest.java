@@ -128,25 +128,23 @@ public class SubQueryTest {
 
   @Test
   void havingClauseSupportsSubqueries() {
-    jparqSql.query(
-        "SELECT COUNT(*) AS total FROM mtcars HAVING COUNT(*) >= (SELECT COUNT(*) FROM mtcars)", rs -> {
-          try {
-            assertTrue(rs.next(), "HAVING condition should pass when comparison evaluates to true");
-            assertEquals(32L, rs.getLong("total"));
-            assertFalse(rs.next(), "Only a single aggregate row should be returned");
-          } catch (SQLException e) {
-            fail(e);
-          }
-        });
+    jparqSql.query("SELECT COUNT(*) AS total FROM mtcars HAVING COUNT(*) >= (SELECT COUNT(*) FROM mtcars)", rs -> {
+      try {
+        assertTrue(rs.next(), "HAVING condition should pass when comparison evaluates to true");
+        assertEquals(32L, rs.getLong("total"));
+        assertFalse(rs.next(), "Only a single aggregate row should be returned");
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
 
-    jparqSql.query(
-        "SELECT COUNT(*) AS total FROM mtcars HAVING COUNT(*) > (SELECT COUNT(*) FROM mtcars)", rs -> {
-          try {
-            assertFalse(rs.next(), "HAVING condition should filter out the aggregate row when false");
-          } catch (SQLException e) {
-            fail(e);
-          }
-        });
+    jparqSql.query("SELECT COUNT(*) AS total FROM mtcars HAVING COUNT(*) > (SELECT COUNT(*) FROM mtcars)", rs -> {
+      try {
+        assertFalse(rs.next(), "HAVING condition should filter out the aggregate row when false");
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
   }
 
 }

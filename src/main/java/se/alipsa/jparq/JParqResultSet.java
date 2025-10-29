@@ -139,8 +139,8 @@ public class JParqResultSet extends ResultSetAdapter {
             firstForDistinct, subqueryExecutor);
         this.current = match ? first : qp.nextMatching();
       } else {
-        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, 0, select.distinct(), order,
-            first, subqueryExecutor);
+        this.qp = new QueryProcessor(reader, proj, residual, select.limit(), schema, 0, select.distinct(), order, first,
+            subqueryExecutor);
         this.current = qp.nextMatching();
       }
       this.rowNum = 0;
