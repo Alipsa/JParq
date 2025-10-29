@@ -21,6 +21,11 @@ import se.alipsa.jparq.helper.JParqUtil;
  */
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqDatabaseMetaData implements DatabaseMetaData {
+  private static final String SUPPORTED_NUMERIC_FUNCTIONS = String.join(",",
+      List.of(
+          "ABS", "CEIL", "CEILING", "FLOOR", "ROUND", "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW",
+          "EXP", "LOG", "LOG10", "RAND", "RANDOM", "SIGN", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN",
+          "ATAN2", "DEGREES", "RADIANS"));
   private final JParqConnection conn;
 
   /**
@@ -255,7 +260,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getNumericFunctions() throws SQLException {
-    return "";
+    return SUPPORTED_NUMERIC_FUNCTIONS;
   }
 
   @Override

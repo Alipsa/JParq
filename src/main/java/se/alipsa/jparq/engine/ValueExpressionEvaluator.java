@@ -2,12 +2,14 @@ package se.alipsa.jparq.engine;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 import java.util.regex.Pattern;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.CollateExpression;
@@ -42,8 +44,8 @@ import se.alipsa.jparq.helper.StringExpressions;
 
 /**
  * Evaluates SELECT-list expressions (e.g. computed columns and supported SQL
- * functions such as {@code COALESCE} and {@code CAST}) against a
- * {@link GenericRecord}.
+ * functions such as {@code COALESCE}, {@code CAST}, and SQL numeric
+ * functions) against a {@link GenericRecord}.
  */
 public final class ValueExpressionEvaluator {
 
@@ -164,9 +166,10 @@ public final class ValueExpressionEvaluator {
   }
 
   /**
-   * Evaluate a SQL function call. Supports COALESCE, character functions,
-   * trimming/padding helpers, pattern matching utilities, JSON helpers and
-   * Unicode conversions.
+   * Evaluate a SQL function call. Supports COALESCE, numeric functions (ABS,
+   * CEIL, FLOOR, ROUND, SQRT, TRUNCATE, MOD, POWER, EXP, LOG, RAND, SIGN,
+   * trigonometric variants, etc.), character functions, trimming/padding
+   * helpers, pattern matching utilities, JSON helpers and Unicode conversions.
    *
    * @param func
    *          the function expression to evaluate
@@ -205,6 +208,9 @@ public final class ValueExpressionEvaluator {
       case "JSON_QUERY" -> evaluateJsonQuery(func, record);
       case "JSON_OBJECT" -> JsonExpressions.jsonObject(positionalArgs(func, record));
       case "JSON_ARRAY" -> JsonExpressions.jsonArray(positionalArgs(func, record));
+      case "ABS", "CEIL", "CEILING", "FLOOR", "ROUND", "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW",
+          "EXP", "LOG", "LOG10", "RAND", "RANDOM", "SIGN", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN",
+          "ATAN2", "DEGREES", "RADIANS" -> evaluateNumericFunction(upper, func, record);
       default -> LiteralConverter.toLiteral(func);
     };
   }
@@ -393,6 +399,235 @@ public final class ValueExpressionEvaluator {
 
   private Object evaluateUnicode(Function func, GenericRecord record) {
     return StringExpressions.unicode(firstArgument(func, record));
+  }
+
+  private Object evaluateNumericFunction(String name, Function func, GenericRecord record) {
+    List<Object> args = positionalArgs(func, record);
+    return switch (name) {
+      case "ABS" -> unaryBigDecimal(args, BigDecimal::abs);
+      case "CEIL", "CEILING" -> unaryBigDecimal(args, v -> v.setScale(0, RoundingMode.CEILING));
+      case "FLOOR" -> unaryBigDecimal(args, v -> v.setScale(0, RoundingMode.FLOOR));
+      case "ROUND" -> roundFunction(args);
+      case "SQRT" -> sqrtFunction(args);
+      case "TRUNC", "TRUNCATE" -> truncateFunction(args);
+      case "MOD" -> modFunction(args);
+      case "POWER", "POW" -> powerFunction(args);
+      case "EXP" -> expFunction(args);
+      case "LOG" -> logFunction(args);
+      case "LOG10" -> log10Function(args);
+      case "RAND", "RANDOM" -> randFunction(args);
+      case "SIGN" -> signFunction(args);
+      case "SIN" -> trigFunction(args, Math::sin);
+      case "COS" -> trigFunction(args, Math::cos);
+      case "TAN" -> trigFunction(args, Math::tan);
+      case "ASIN" -> inverseTrigFunction(args, Math::asin);
+      case "ACOS" -> inverseTrigFunction(args, Math::acos);
+      case "ATAN" -> inverseTrigFunction(args, Math::atan);
+      case "ATAN2" -> atan2Function(args);
+      case "DEGREES" -> trigFunction(args, Math::toDegrees);
+      case "RADIANS" -> trigFunction(args, Math::toRadians);
+      default -> null;
+    };
+  }
+
+  private Object unaryBigDecimal(List<Object> args, java.util.function.Function<BigDecimal, BigDecimal> op) {
+    if (args.isEmpty()) {
+      return null;
+    }
+    Object value = args.getFirst();
+    if (value == null) {
+      return null;
+    }
+    BigDecimal number = toBigDecimal(value);
+    return op.apply(number);
+  }
+
+  private Object roundFunction(List<Object> args) {
+    if (args.isEmpty()) {
+      return null;
+    }
+    Object value = args.getFirst();
+    if (value == null) {
+      return null;
+    }
+    BigDecimal number = toBigDecimal(value);
+    int scale = 0;
+    if (args.size() > 1) {
+      Integer argScale = toInteger(args.get(1));
+      if (argScale == null) {
+        return null;
+      }
+      scale = argScale.intValue();
+    }
+    if (scale >= 0) {
+      return number.setScale(scale, RoundingMode.HALF_UP);
+    }
+    BigDecimal factor = BigDecimal.TEN.pow(-scale);
+    BigDecimal divided = number.divide(factor, 0, RoundingMode.HALF_UP);
+    return divided.multiply(factor);
+  }
+
+  private Object truncateFunction(List<Object> args) {
+    if (args.isEmpty()) {
+      return null;
+    }
+    Object value = args.getFirst();
+    if (value == null) {
+      return null;
+    }
+    BigDecimal number = toBigDecimal(value);
+    int scale = 0;
+    if (args.size() > 1) {
+      Integer argScale = toInteger(args.get(1));
+      if (argScale == null) {
+        return null;
+      }
+      scale = argScale.intValue();
+    }
+    if (scale >= 0) {
+      return number.setScale(scale, RoundingMode.DOWN);
+    }
+    BigDecimal factor = BigDecimal.TEN.pow(-scale);
+    BigDecimal divided = number.divide(factor, 0, RoundingMode.DOWN);
+    return divided.multiply(factor);
+  }
+
+  private Object sqrtFunction(List<Object> args) {
+    if (args.isEmpty()) {
+      return null;
+    }
+    Double value = toDouble(args.getFirst());
+    if (value == null || value < 0d) {
+      return null;
+    }
+    return Math.sqrt(value);
+  }
+
+  private Object modFunction(List<Object> args) {
+    if (args.size() < 2) {
+      return null;
+    }
+    Object left = args.get(0);
+    Object right = args.get(1);
+    if (left == null || right == null) {
+      return null;
+    }
+    BigDecimal dividend = toBigDecimal(left);
+    BigDecimal divisor = toBigDecimal(right);
+    if (divisor.compareTo(BigDecimal.ZERO) == 0) {
+      return null;
+    }
+    return dividend.remainder(divisor);
+  }
+
+  private Object powerFunction(List<Object> args) {
+    if (args.size() < 2) {
+      return null;
+    }
+    Double base = toDouble(args.get(0));
+    Double exponent = toDouble(args.get(1));
+    if (base == null || exponent == null) {
+      return null;
+    }
+    return Math.pow(base, exponent);
+  }
+
+  private Object expFunction(List<Object> args) {
+    if (args.isEmpty()) {
+      return null;
+    }
+    Double value = toDouble(args.getFirst());
+    if (value == null) {
+      return null;
+    }
+    return Math.exp(value);
+  }
+
+  private Object logFunction(List<Object> args) {
+    if (args.isEmpty()) {
+      return null;
+    }
+    Double first = toDouble(args.getFirst());
+    if (first == null || first <= 0d) {
+      return null;
+    }
+    if (args.size() == 1) {
+      return Math.log(first);
+    }
+    Double base = first;
+    Double value = toDouble(args.get(1));
+    if (value == null || value <= 0d || base <= 0d || base.equals(1d)) {
+      return null;
+    }
+    return Math.log(value) / Math.log(base);
+  }
+
+  private Object log10Function(List<Object> args) {
+    if (args.isEmpty()) {
+      return null;
+    }
+    Double value = toDouble(args.getFirst());
+    if (value == null || value <= 0d) {
+      return null;
+    }
+    return Math.log10(value);
+  }
+
+  private Object randFunction(List<Object> args) {
+    if (args.isEmpty()) {
+      return Math.random();
+    }
+    Long seed = toLong(args.getFirst());
+    if (seed == null) {
+      return null;
+    }
+    return new Random(seed).nextDouble();
+  }
+
+  private Object signFunction(List<Object> args) {
+    if (args.isEmpty()) {
+      return null;
+    }
+    Object value = args.getFirst();
+    if (value == null) {
+      return null;
+    }
+    BigDecimal number = toBigDecimal(value);
+    return Integer.valueOf(number.signum());
+  }
+
+  private Object trigFunction(List<Object> args, java.util.function.DoubleUnaryOperator operator) {
+    if (args.isEmpty()) {
+      return null;
+    }
+    Double value = toDouble(args.getFirst());
+    if (value == null) {
+      return null;
+    }
+    return operator.applyAsDouble(value);
+  }
+
+  private Object inverseTrigFunction(List<Object> args, java.util.function.DoubleUnaryOperator operator) {
+    if (args.isEmpty()) {
+      return null;
+    }
+    Double value = toDouble(args.getFirst());
+    if (value == null) {
+      return null;
+    }
+    return operator.applyAsDouble(value);
+  }
+
+  private Object atan2Function(List<Object> args) {
+    if (args.size() < 2) {
+      return null;
+    }
+    Double y = toDouble(args.get(0));
+    Double x = toDouble(args.get(1));
+    if (y == null || x == null) {
+      return null;
+    }
+    return Math.atan2(y, x);
   }
 
   private Object evaluateNormalize(Function func, GenericRecord record) {
@@ -603,6 +838,34 @@ public final class ValueExpressionEvaluator {
     }
     try {
       return new BigDecimal(value.toString()).intValue();
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException("Expected numeric value but got " + value, e);
+    }
+  }
+
+  private Long toLong(Object value) {
+    if (value == null) {
+      return null;
+    }
+    if (value instanceof Number num) {
+      return num.longValue();
+    }
+    try {
+      return new BigDecimal(value.toString()).longValue();
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException("Expected numeric value but got " + value, e);
+    }
+  }
+
+  private Double toDouble(Object value) {
+    if (value == null) {
+      return null;
+    }
+    if (value instanceof Number num) {
+      return num.doubleValue();
+    }
+    try {
+      return new BigDecimal(value.toString()).doubleValue();
     } catch (NumberFormatException e) {
       throw new IllegalArgumentException("Expected numeric value but got " + value, e);
     }
