@@ -174,7 +174,7 @@ The following SQL statements are supported:
 - STRING_AGG(expression, separator)	Aggregates values into a single string with a separator.	STRING_AGG(name, ', ') → 'Alice, Bob, Carol'
 - JSON_VALUE, JSON_QUERY, JSON_OBJECT, JSON_ARRAY	JSON construction/extraction—technically not core string functions but string-returning functions standardized in SQL:2016–2023.
 
-### Might be implemented in the future
+## Roadmap: Might be implemented in the future
 - Join support
 - union support
 - CTE
