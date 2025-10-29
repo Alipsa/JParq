@@ -88,10 +88,9 @@ The following SQL statements are supported:
   - CAST support
   - coalesce (The COALESCE() function returns the first non-null value in a list.)
   - String functions (all SQL standard string function supported)
+  - Numeric functions (abs, ceil, floor, round, sqrt, truncate, mod, power, exp, log, rand, sign, sin, cos, tan, asin, acos, atan, atan2, degrees, radians)
 
 ### To be implemented in the near future
-- Functions support
-  - Numeric functions (abs, ceil, floor, round, sqrt, truncate, mod, power, exp, log, rand, sign, sin, cos, tan, asin, acos, atan, atan2, degrees, radians)
 - comments -- and /* */
 - `CASE` support
 - any and all support
@@ -182,7 +181,9 @@ The following SQL statements are supported:
 
 ### Standard prompt
 Please implement support for the SQL standard for 
+
 Each section (starting with # above) should have its own test class to verify the functionality.
+Create test to verify the functionality.
 Remember to also update javadocs where needed.
 All tests must pass after the implementation to ensure that there is no regression.
 Adhere to the coding standard defined in checkstyle.xml.
