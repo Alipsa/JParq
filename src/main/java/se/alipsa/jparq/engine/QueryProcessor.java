@@ -108,8 +108,8 @@ public final class QueryProcessor implements AutoCloseable {
      * Control whether DISTINCT must be applied before pre-stage LIMIT handling.
      *
      * @param distinctBeforePreLimit
-     *          {@code true} if DISTINCT originates from an inner SELECT that
-     *          should be enforced prior to any pre-stage LIMIT
+     *          {@code true} if DISTINCT originates from an inner SELECT that should
+     *          be enforced prior to any pre-stage LIMIT
      * @return {@code this} for chaining
      */
     public Options distinctBeforePreLimit(boolean distinctBeforePreLimit) {
