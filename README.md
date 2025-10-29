@@ -91,9 +91,6 @@ The following SQL statements are supported:
   - String functions (all SQL standard string function supported)
   - Numeric functions (abs, ceil, floor, round, sqrt, truncate, mod, power, exp, log, rand, sign, sin, cos, tan, asin, acos, atan, atan2, degrees, radians)
 - comments (line --) and block (/* */)
-
-### To be implemented in the near future
-
 - Subquery support
   - In the SELECT Clause : Used to return a single value or a set of values. e.g.
     SELECT first_name, (
@@ -112,6 +109,8 @@ The following SQL statements are supported:
     FROM employees
     GROUP BY department_id
     HAVING AVG(salary) > (SELECT AVG(salary) FROM employees);
+  - 
+### To be implemented in the near future
 - exists support e.g:
   SELECT column_name(s)
   FROM table_name
