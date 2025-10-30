@@ -109,7 +109,11 @@ The following SQL statements are supported:
     FROM employees
     GROUP BY department_id
     HAVING AVG(salary) > (SELECT AVG(salary) FROM employees);
-  - 
+- `GROUP BY` support
+  - `COUNT(*)` aggregation
+  - `HAVING` clause with conditions
+  - support aggregation functions and case statements in the `GROUP BY` and `SELECT` clause
+
 ### To be implemented in the near future
 - exists support e.g:
   SELECT column_name(s)
@@ -134,10 +138,7 @@ The following SQL statements are supported:
   (SELECT column_name
   FROM table_name
   WHERE condition);
-- `GROUP BY` support
-  - `COUNT(*)` aggregation
-  - `HAVING` clause with conditions
-  - support aggregation functions and case statements in the `GROUP BY` and `SELECT` clause
+
 - `OFFSET` support
 
 
