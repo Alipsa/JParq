@@ -12,6 +12,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
@@ -152,5 +153,36 @@ public class DistinctTest {
         fail(e);
       }
     });
+  }
+
+  @Test
+  void testInnerDistinctUsesInnerProjectionForPreLimit() {
+    List<Integer> innerCarbs = new ArrayList<>();
+    jparqSql.query("select distinct model, carb from mtcars limit 5", rs -> {
+      try {
+        while (rs.next()) {
+          innerCarbs.add(rs.getInt("carb"));
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    List<Integer> expected = innerCarbs.stream().distinct().sorted().collect(Collectors.toList());
+
+    jparqSql.query(
+        "select distinct carb from (select distinct model, carb from mtcars limit 5) t order by carb",
+        rs -> {
+          List<Integer> carbs = new ArrayList<>();
+          try {
+            while (rs.next()) {
+              carbs.add(rs.getInt("carb"));
+            }
+            assertEquals(expected, carbs,
+                "Outer DISTINCT should honor the inner projection before applying the LIMIT");
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
   }
 }

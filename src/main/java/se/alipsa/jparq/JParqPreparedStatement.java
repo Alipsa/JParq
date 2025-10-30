@@ -167,6 +167,9 @@ class JParqPreparedStatement implements PreparedStatement {
 
     java.util.Set<String> needed = new java.util.LinkedHashSet<>();
     addColumns(needed, selectColumns);
+    if (!parsedSelect.innerDistinctColumns().isEmpty()) {
+      addColumns(needed, new java.util.LinkedHashSet<>(parsedSelect.innerDistinctColumns()));
+    }
     addColumns(needed, ColumnsUsed.inWhere(parsedSelect.where()));
     for (SqlParser.OrderKey key : parsedSelect.orderBy()) {
       addColumn(needed, key.column());
