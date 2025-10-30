@@ -58,7 +58,8 @@ public final class SqlParser {
    * @param innerDistinct
    *          true if DISTINCT originates from an inner SELECT
    * @param innerDistinctColumns
-   *          physical column names describing the DISTINCT key of the inner SELECT (empty if not applicable)
+   *          physical column names describing the DISTINCT key of the inner
+   *          SELECT (empty if not applicable)
    * @param expressions
    *          the normalized SELECT expressions in projection order
    * @param having

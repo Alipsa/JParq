@@ -196,11 +196,12 @@ public final class QueryProcessor implements AutoCloseable {
     }
 
     /**
-     * Specify the columns that define DISTINCT semantics prior to any pre-stage LIMIT.
+     * Specify the columns that define DISTINCT semantics prior to any pre-stage
+     * LIMIT.
      *
      * @param preStageDistinctColumns
-     *          ordered list of column names that must be considered when DISTINCT originates
-     *          from an inner SELECT
+     *          ordered list of column names that must be considered when DISTINCT
+     *          originates from an inner SELECT
      * @return {@code this} for chaining
      */
     public Options preStageDistinctColumns(List<String> preStageDistinctColumns) {
@@ -477,10 +478,6 @@ public final class QueryProcessor implements AutoCloseable {
       distinctSeen.addAll(seen);
     }
     return unique;
-  }
-
-  private List<Object> distinctKey(GenericRecord rec) {
-    return distinctKey(rec, distinctColumns);
   }
 
   private List<Object> distinctKey(GenericRecord rec, List<String> columns) {

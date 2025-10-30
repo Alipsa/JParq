@@ -170,16 +170,14 @@ public class DistinctTest {
 
     List<Integer> expected = innerCarbs.stream().distinct().sorted().collect(Collectors.toList());
 
-    jparqSql.query(
-        "select distinct carb from (select distinct model, carb from mtcars limit 5) t order by carb",
+    jparqSql.query("select distinct carb from (select distinct model, carb from mtcars limit 5) t order by carb",
         rs -> {
           List<Integer> carbs = new ArrayList<>();
           try {
             while (rs.next()) {
               carbs.add(rs.getInt("carb"));
             }
-            assertEquals(expected, carbs,
-                "Outer DISTINCT should honor the inner projection before applying the LIMIT");
+            assertEquals(expected, carbs, "Outer DISTINCT should honor the inner projection before applying the LIMIT");
           } catch (SQLException e) {
             fail(e);
           }
