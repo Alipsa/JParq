@@ -238,12 +238,11 @@ public final class QueryProcessor implements AutoCloseable {
     this.preLimit = opts.preLimit;
     this.preOrderBy = opts.preOrderBy;
     this.hasPreStage = (this.preLimit >= 0) || !this.preOrderBy.isEmpty();
-    List<String> distinctCols = opts.distinctColumns == null ? this.projection
-        : Collections.unmodifiableList(new ArrayList<>(opts.distinctColumns));
+    List<String> distinctCols = opts.distinctColumns == null ? this.projection : opts.distinctColumns;
     this.distinctColumns = distinctCols;
     List<String> preStageCols = (opts.preStageDistinctColumns == null || opts.preStageDistinctColumns.isEmpty())
         ? distinctCols
-        : Collections.unmodifiableList(new ArrayList<>(opts.preStageDistinctColumns));
+        : opts.preStageDistinctColumns;
     this.preStageDistinctColumns = preStageCols;
     this.evaluator = (opts.schema != null) ? new ExpressionEvaluator(opts.schema, subqueryExecutor) : null;
     this.emitted = Math.max(0, opts.initialEmitted);
