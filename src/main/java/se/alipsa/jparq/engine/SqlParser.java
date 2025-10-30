@@ -599,7 +599,7 @@ public final class SqlParser {
       return List.of();
     }
     List<Expression> expressions = new ArrayList<>(expressionList.size());
-    for (Expression expr : expressionList.getExpressions()) {
+    for (Expression expr : expressionList) {
       stripQualifier(expr, fromInfo.tableName(), fromInfo.tableAlias());
       expressions.add(expr);
     }

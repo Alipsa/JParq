@@ -113,6 +113,18 @@ The following SQL statements are supported:
   - `COUNT(*)` aggregation
   - `HAVING` clause with conditions
   - support aggregation functions and case statements in the `GROUP BY` and `SELECT` clause
+  
+  BUG: in src/main/java/se/alipsa/jparq/engine/AggregateFunctions.java 
+  
+  Allow HAVING aggregates not present in SELECT list
+  
+  Aggregate planning only records functions that appear in the projection, so HavingEvaluator.aggregateValue throws when the HAVING clause references an aggregate that is not also selected. A query like SELECT cyl FROM mtcars GROUP BY cyl HAVING COUNT(*) > 1 is valid SQL but currently fails with HAVING references aggregate not present in SELECT. Aggregates used solely in HAVING (and potentially ORDER BY) should be included in the plan or evaluated separately so filtering on grouped aggregates works even when the value is not projected.
+  
+  Create test to verify the functionality.
+  Remember to also update javadocs (all classes and methods must have a description, all params must be listed and return and throws specified when appropriate) where needed.
+  All tests must pass after the implementation using `mvn -Dspotless.check.skip=true test` to ensure that there is no regression.
+  Adhere to the coding standard defined in checkstyle.xml.
+
 
 ### To be implemented in the near future
 - exists support e.g:
