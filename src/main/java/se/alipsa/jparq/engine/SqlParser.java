@@ -617,11 +617,8 @@ public final class SqlParser {
     if (expr == null || qualifiers == null || qualifiers.isEmpty()) {
       return Set.of();
     }
-    List<String> qualifierList = qualifiers == null ? List.of() : List.copyOf(qualifiers);
-    Set<String> normalized = qualifierList.stream()
-        .map(SqlParser::normalizeQualifier)
-        .filter(s -> s != null && !s.isEmpty())
-        .collect(Collectors.toCollection(LinkedHashSet::new));
+    Set<String> normalized = qualifiers.stream().map(SqlParser::normalizeQualifier)
+        .filter(s -> s != null && !s.isEmpty()).collect(Collectors.toCollection(LinkedHashSet::new));
     if (normalized.isEmpty()) {
       return Set.of();
     }
@@ -631,7 +628,9 @@ public final class SqlParser {
       public <S> Void visit(Column column, S context) {
         Table table = column.getTable();
         if (table != null) {
-          String[] candidates = {table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()};
+          String[] candidates = {
+              table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()
+          };
           for (String candidate : candidates) {
             String normalizedCandidate = normalizeQualifier(candidate);
             if (normalizedCandidate != null && normalized.contains(normalizedCandidate)) {
@@ -645,9 +644,7 @@ public final class SqlParser {
 
       @Override
       public <S> Void visit(ParenthesedSelect select, S context) {
-        CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(
-            select,
-            qualifierList,
+        CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(select, qualifiers,
             name -> null);
         columns.addAll(rewritten.correlatedColumns());
         return super.visit(select, context);
@@ -655,9 +652,7 @@ public final class SqlParser {
 
       @Override
       public <S> Void visit(net.sf.jsqlparser.statement.select.Select select, S context) {
-        CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(
-            select,
-            qualifierList,
+        CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(select, qualifiers,
             name -> null);
         columns.addAll(rewritten.correlatedColumns());
         return super.visit(select, context);

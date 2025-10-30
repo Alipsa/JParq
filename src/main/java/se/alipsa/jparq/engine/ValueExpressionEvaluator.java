@@ -215,7 +215,8 @@ public final class ValueExpressionEvaluator {
     }
     CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
         column -> resolveColumnValue(column, record));
-    SubqueryExecutor.SubqueryResult result = rewritten.correlated() ? subqueryExecutor.executeRaw(rewritten.sql())
+    SubqueryExecutor.SubqueryResult result = rewritten.correlated()
+        ? subqueryExecutor.executeRaw(rewritten.sql())
         : subqueryExecutor.execute(subSelect);
     if (result.rows().isEmpty()) {
       return null;

@@ -356,7 +356,8 @@ public final class ExpressionEvaluator {
     }
     CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
         column -> resolveColumnValue(column, rec));
-    SubqueryExecutor.SubqueryResult result = rewritten.correlated() ? subqueryExecutor.executeRaw(rewritten.sql())
+    SubqueryExecutor.SubqueryResult result = rewritten.correlated()
+        ? subqueryExecutor.executeRaw(rewritten.sql())
         : subqueryExecutor.execute(subSelect);
     boolean hasRows = !result.rows().isEmpty();
     return exists.isNot() != hasRows;

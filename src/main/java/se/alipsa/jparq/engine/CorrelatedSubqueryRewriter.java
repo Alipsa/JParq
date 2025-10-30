@@ -86,7 +86,9 @@ final class CorrelatedSubqueryRewriter {
       public <S> StringBuilder visit(Column column, S context) {
         Table table = column.getTable();
         if (table != null) {
-          String[] candidates = {table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()};
+          String[] candidates = {
+              table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()
+          };
           for (String candidate : candidates) {
             String normalizedCandidate = normalizeQualifier(candidate);
             if (normalizedCandidate != null && normalized.contains(normalizedCandidate)) {
