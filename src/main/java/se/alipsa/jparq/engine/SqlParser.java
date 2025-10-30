@@ -8,6 +8,7 @@ import java.util.Map;
 import net.sf.jsqlparser.expression.*;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
+import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
@@ -62,6 +63,9 @@ public final class SqlParser {
    *          SELECT (empty if not applicable)
    * @param expressions
    *          the normalized SELECT expressions in projection order
+   * @param groupByExpressions
+   *          expressions that participate in the GROUP BY clause (empty if no
+   *          grouping)
    * @param having
    *          the HAVING expression (may be {@code null})
    * @param preLimit
@@ -73,7 +77,8 @@ public final class SqlParser {
    */
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
       int limit, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct, List<String> innerDistinctColumns,
-      List<Expression> expressions, Expression having, int preLimit, List<OrderKey> preOrderBy) {
+      List<Expression> expressions, List<Expression> groupByExpressions, Expression having, int preLimit,
+      List<OrderKey> preOrderBy) {
 
     /**
      * returns "*" if no explicit projection.
@@ -197,6 +202,8 @@ public final class SqlParser {
     Expression havingExpr = ps.getHaving();
     stripQualifier(havingExpr, fromInfo.tableName(), fromInfo.tableAlias());
 
+    List<Expression> groupByExpressions = parseGroupBy(ps.getGroupBy(), fromInfo);
+
     Expression combinedWhere = combineExpressions(
         fromInfo.innerSelect() == null ? null : fromInfo.innerSelect().where(), whereExpr);
     Expression combinedHaving = combineExpressions(
@@ -210,7 +217,8 @@ public final class SqlParser {
     List<String> innerDistinctCols = innerDistinct && inner != null ? List.copyOf(inner.columnNames()) : List.of();
 
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
-        orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, combinedHaving, preLimit, preOrderCopy);
+        orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, groupByExpressions, combinedHaving,
+        preLimit, preOrderCopy);
   }
 
   // === Parsing Helper Methods =================================================
@@ -583,6 +591,19 @@ public final class SqlParser {
         // no need to call super.visit(column)
       }
     });
+  }
+
+  private static List<Expression> parseGroupBy(GroupByElement groupBy, FromInfo fromInfo) {
+    ExpressionList<?> expressionList = groupBy == null ? null : groupBy.getGroupByExpressionList();
+    if (expressionList == null || expressionList.isEmpty()) {
+      return List.of();
+    }
+    List<Expression> expressions = new ArrayList<>(expressionList.size());
+    for (Expression expr : expressionList.getExpressions()) {
+      stripQualifier(expr, fromInfo.tableName(), fromInfo.tableAlias());
+      expressions.add(expr);
+    }
+    return List.copyOf(expressions);
   }
 
 }
