@@ -453,7 +453,7 @@ public final class AggregateFunctions {
           valueEval = new ValueExpressionEvaluator(schema, subqueryExecutor);
         }
 
-        boolean matches = residual == null || (whereEval != null && whereEval.eval(residual, rec));
+        boolean matches = residual == null || whereEval.eval(residual, rec);
         if (matches) {
           List<Object> groupValues = evaluateGroupValues(groupExpressions, valueEval, rec, groupTrackers);
           GroupKey key = new GroupKey(groupValues);
