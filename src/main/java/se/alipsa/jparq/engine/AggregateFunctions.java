@@ -48,8 +48,8 @@ import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.hadoop.ParquetReader;
-import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.engine.SqlParser.OrderKey;
+import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.StringExpressions;
 
 /**
@@ -152,9 +152,9 @@ public final class AggregateFunctions {
      *          index of the aggregate specification backing the column, or
      *          {@code -1} when the column originates from the GROUP BY clause
      * @param groupIndex
-     *          index into the {@link GroupExpression} list describing the
-     *          grouping value used for this column, or {@code -1} when the
-     *          column is an aggregate
+     *          index into the {@link GroupExpression} list describing the grouping
+     *          value used for this column, or {@code -1} when the column is an
+     *          aggregate
      */
     public ResultColumn {
       Objects.requireNonNull(label, "label");
@@ -274,8 +274,7 @@ public final class AggregateFunctions {
 
   /**
    * Attempt to build an {@link AggregatePlan} for the provided SELECT. Returns
-   * {@code null} if the statement contains no aggregates and no GROUP BY
-   * clause.
+   * {@code null} if the statement contains no aggregates and no GROUP BY clause.
    *
    * @param select
    *          parsed SELECT statement
@@ -528,7 +527,8 @@ public final class AggregateFunctions {
       for (OrderKey key : orderBy) {
         Integer idx = indexByColumn.get(key.column().toLowerCase(Locale.ROOT));
         if (idx == null) {
-          throw new IllegalArgumentException("ORDER BY column '" + key.column() + "' is not present in the SELECT list");
+          throw new IllegalArgumentException(
+              "ORDER BY column '" + key.column() + "' is not present in the SELECT list");
         }
         Object lv = left.get(idx);
         Object rv = right.get(idx);
@@ -585,7 +585,8 @@ public final class AggregateFunctions {
     if (spec.arguments().isEmpty()) {
       return spec.type().name();
     }
-    return spec.type().name() + "(" + spec.arguments().stream().map(Object::toString).collect(Collectors.joining(", ")) + ")";
+    return spec.type().name() + "(" + spec.arguments().stream().map(Object::toString).collect(Collectors.joining(", "))
+        + ")";
   }
 
   private static List<Object> evaluateGroupValues(List<GroupExpression> groupExpressions, ValueExpressionEvaluator eval,

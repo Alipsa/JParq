@@ -81,14 +81,12 @@ public class GroupByTest {
       }
     });
 
-    List<Integer> expected = counts.entrySet().stream()
-        .filter(entry -> entry.getValue() > 7 && entry.getKey() >= 6)
+    List<Integer> expected = counts.entrySet().stream().filter(entry -> entry.getValue() > 7 && entry.getKey() >= 6)
         .map(Map.Entry::getKey).sorted().collect(Collectors.toList());
 
     List<Integer> actual = new ArrayList<>();
     jparqSql.query(
-        "SELECT cyl, COUNT(*) AS total FROM mtcars GROUP BY cyl HAVING COUNT(*) > 7 AND cyl >= 6 ORDER BY cyl",
-        rs -> {
+        "SELECT cyl, COUNT(*) AS total FROM mtcars GROUP BY cyl HAVING COUNT(*) > 7 AND cyl >= 6 ORDER BY cyl", rs -> {
           try {
             while (rs.next()) {
               actual.add(rs.getInt("cyl"));
@@ -118,24 +116,22 @@ public class GroupByTest {
     });
 
     Map<String, Double> actual = new HashMap<>();
-    jparqSql.query(
-        "SELECT CASE WHEN cyl = 4 THEN 'four' ELSE 'other' END AS category, SUM(hp) AS total_hp FROM mtcars "
-            + "GROUP BY CASE WHEN cyl = 4 THEN 'four' ELSE 'other' END ORDER BY category",
-        rs -> {
+    jparqSql.query("SELECT CASE WHEN cyl = 4 THEN 'four' ELSE 'other' END AS category, SUM(hp) AS total_hp FROM mtcars "
+        + "GROUP BY CASE WHEN cyl = 4 THEN 'four' ELSE 'other' END ORDER BY category", rs -> {
           try {
             while (rs.next()) {
               String category = rs.getString("category");
               double totalHp = rs.getDouble("total_hp");
               actual.put(category, totalHp);
             }
-      } catch (SQLException e) {
-        fail(e);
-      }
+          } catch (SQLException e) {
+            fail(e);
+          }
         });
 
     assertEquals(expected.keySet(), actual.keySet(), "CASE expression should produce expected groups");
-    expected.forEach((label, value) -> assertTrue(actual.containsKey(label)
-        && Math.abs(actual.get(label) - value) < 1e-9, "Unexpected SUM(hp) for group " + label));
+    expected
+        .forEach((label, value) -> assertTrue(actual.containsKey(label) && Math.abs(actual.get(label) - value) < 1e-9,
+            "Unexpected SUM(hp) for group " + label));
   }
 }
-
