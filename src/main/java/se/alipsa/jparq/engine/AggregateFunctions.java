@@ -21,6 +21,7 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.NotExpression;
 import net.sf.jsqlparser.expression.SignedExpression;
@@ -330,6 +331,16 @@ public final class AggregateFunctions {
       resultColumns.add(new ResultColumn(label, -1, groupIndex));
     }
 
+    Expression having = select.having();
+    if (having != null) {
+      for (Function func : aggregateFunctions(having)) {
+        AggregateSpec spec = aggregateSpec(func, func.toString());
+        if (spec != null && !containsEquivalentAggregate(specs, spec)) {
+          specs.add(spec);
+        }
+      }
+    }
+
     return new AggregatePlan(specs, resultColumns, groupExpressions);
   }
 
@@ -372,6 +383,50 @@ public final class AggregateFunctions {
       }
     }
     return expr == null ? "" : expr.toString();
+  }
+
+  private static List<Function> aggregateFunctions(Expression expression) {
+    if (expression == null) {
+      return List.of();
+    }
+    List<Function> functions = new ArrayList<>();
+    expression.accept(new ExpressionVisitorAdapter<Void>() {
+      @Override
+      public <S> Void visit(Function function, S context) {
+        if (AggregateType.from(function.getName()) != null) {
+          functions.add(function);
+        }
+        return super.visit(function, context);
+      }
+    });
+    return functions;
+  }
+
+  private static boolean containsEquivalentAggregate(List<AggregateSpec> specs, AggregateSpec candidate) {
+    for (AggregateSpec spec : specs) {
+      if (spec.type() != candidate.type()) {
+        continue;
+      }
+      if (spec.countStar() != candidate.countStar()) {
+        continue;
+      }
+      List<Expression> args = spec.arguments();
+      List<Expression> otherArgs = candidate.arguments();
+      if (args.size() != otherArgs.size()) {
+        continue;
+      }
+      boolean matches = true;
+      for (int i = 0; i < args.size(); i++) {
+        if (!Objects.equals(args.get(i).toString(), otherArgs.get(i).toString())) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static List<GroupExpression> buildGroupExpressions(List<Expression> groupByExpressions) {
