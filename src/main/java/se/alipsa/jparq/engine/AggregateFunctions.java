@@ -45,6 +45,7 @@ import net.sf.jsqlparser.expression.operators.relational.MinorThan;
 import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals;
 import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
 import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
@@ -397,6 +398,20 @@ public final class AggregateFunctions {
           functions.add(function);
         }
         return super.visit(function, context);
+      }
+
+      @Override
+      public <S> Void visit(ParenthesedSelect select, S context) {
+        // Aggregates inside subqueries are evaluated independently and should
+        // not be registered in the outer aggregate plan.
+        return null;
+      }
+
+      @Override
+      public <S> Void visit(Select select, S context) {
+        // Aggregates inside subqueries are evaluated independently and should
+        // not be registered in the outer aggregate plan.
+        return null;
       }
     });
     return functions;
