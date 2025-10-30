@@ -28,6 +28,8 @@ public final class QueryProcessor implements AutoCloseable {
   private final int preLimit;
   private final List<SqlParser.OrderKey> preOrderBy;
   private final boolean hasPreStage;
+  private final List<String> distinctColumns;
+  private final List<String> preStageDistinctColumns;
 
   // Evaluator is lazily created if schema was not provided
   private ExpressionEvaluator evaluator;
@@ -54,6 +56,8 @@ public final class QueryProcessor implements AutoCloseable {
     private SubqueryExecutor subqueryExecutor;
     private int preLimit = -1;
     private List<SqlParser.OrderKey> preOrderBy = List.of();
+    private List<String> distinctColumns;
+    private List<String> preStageDistinctColumns = List.of();
 
     private Options() {
       // use factory
@@ -177,6 +181,34 @@ public final class QueryProcessor implements AutoCloseable {
       this.preOrderBy = (preOrderBy == null || preOrderBy.isEmpty()) ? List.of() : List.copyOf(preOrderBy);
       return this;
     }
+
+    /**
+     * Specify the columns that should be used to compute DISTINCT keys.
+     *
+     * @param distinctColumns
+     *          ordered list of column names that define the DISTINCT key
+     * @return {@code this} for chaining
+     */
+    public Options distinctColumns(List<String> distinctColumns) {
+      boolean hasDistinctColumns = distinctColumns != null && !distinctColumns.isEmpty();
+      this.distinctColumns = hasDistinctColumns ? List.copyOf(distinctColumns) : null;
+      return this;
+    }
+
+    /**
+     * Specify the columns that define DISTINCT semantics prior to any pre-stage
+     * LIMIT.
+     *
+     * @param preStageDistinctColumns
+     *          ordered list of column names that must be considered when DISTINCT
+     *          originates from an inner SELECT
+     * @return {@code this} for chaining
+     */
+    public Options preStageDistinctColumns(List<String> preStageDistinctColumns) {
+      boolean hasColumns = preStageDistinctColumns != null && !preStageDistinctColumns.isEmpty();
+      this.preStageDistinctColumns = hasColumns ? List.copyOf(preStageDistinctColumns) : List.of();
+      return this;
+    }
   }
 
   /**
@@ -207,6 +239,11 @@ public final class QueryProcessor implements AutoCloseable {
     this.preLimit = opts.preLimit;
     this.preOrderBy = opts.preOrderBy;
     this.hasPreStage = (this.preLimit >= 0) || !this.preOrderBy.isEmpty();
+    List<String> distinctCols = opts.distinctColumns == null ? this.projection : opts.distinctColumns;
+    this.distinctColumns = distinctCols;
+    this.preStageDistinctColumns = (opts.preStageDistinctColumns == null || opts.preStageDistinctColumns.isEmpty())
+        ? distinctCols
+        : opts.preStageDistinctColumns;
     this.evaluator = (opts.schema != null) ? new ExpressionEvaluator(opts.schema, subqueryExecutor) : null;
     this.emitted = Math.max(0, opts.initialEmitted);
     this.orderBy = opts.orderBy;
@@ -247,7 +284,7 @@ public final class QueryProcessor implements AutoCloseable {
       while (rec != null) {
         if (matches(rec)) {
           if (preStageDistinct != null) {
-            List<Object> key = distinctKey(rec);
+            List<Object> key = distinctKey(rec, preStageDistinctColumns);
             if (preStageDistinct.add(key)) {
               buf.add(rec);
             }
@@ -421,7 +458,7 @@ public final class QueryProcessor implements AutoCloseable {
     if (!distinct) {
       return true;
     }
-    List<Object> key = distinctKey(rec);
+    List<Object> key = distinctKey(rec, distinctColumns);
     return distinctSeen.add(key);
   }
 
@@ -432,7 +469,7 @@ public final class QueryProcessor implements AutoCloseable {
     List<GenericRecord> unique = new ArrayList<>(records.size());
     Set<List<Object>> seen = new LinkedHashSet<>();
     for (GenericRecord rec : records) {
-      List<Object> key = distinctKey(rec);
+      List<Object> key = distinctKey(rec, distinctColumns);
       if (seen.add(key)) {
         unique.add(rec);
       }
@@ -443,9 +480,9 @@ public final class QueryProcessor implements AutoCloseable {
     return unique;
   }
 
-  private List<Object> distinctKey(GenericRecord rec) {
-    List<Object> key = new ArrayList<>(projection.size());
-    for (String col : projection) {
+  private List<Object> distinctKey(GenericRecord rec, List<String> columns) {
+    List<Object> key = new ArrayList<>(columns.size());
+    for (String col : columns) {
       if (col == null) {
         throw new IllegalArgumentException("DISTINCT on expressions is not supported");
       }
