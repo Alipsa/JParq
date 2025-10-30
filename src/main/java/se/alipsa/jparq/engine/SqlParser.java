@@ -57,6 +57,9 @@ public final class SqlParser {
    *          inner SELECT
    * @param innerDistinct
    *          true if DISTINCT originates from an inner SELECT
+   * @param innerDistinctColumns
+   *          physical column names describing the DISTINCT key of the inner
+   *          SELECT (empty if not applicable)
    * @param expressions
    *          the normalized SELECT expressions in projection order
    * @param having
@@ -69,8 +72,8 @@ public final class SqlParser {
    *          (typically inherited from an inner SELECT)
    */
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
-      int limit, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct, List<Expression> expressions,
-      Expression having, int preLimit, List<OrderKey> preOrderBy) {
+      int limit, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct, List<String> innerDistinctColumns,
+      List<Expression> expressions, Expression having, int preLimit, List<OrderKey> preOrderBy) {
 
     /**
      * returns "*" if no explicit projection.
@@ -204,8 +207,10 @@ public final class SqlParser {
     List<OrderKey> orderCopy = List.copyOf(orderKeys);
     List<OrderKey> preOrderCopy = List.copyOf(preOrderBy);
     List<Expression> expressionCopy = List.copyOf(expressions);
+    List<String> innerDistinctCols = innerDistinct && inner != null ? List.copyOf(inner.columnNames()) : List.of();
+
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
-        orderCopy, distinct, innerDistinct, expressionCopy, combinedHaving, preLimit, preOrderCopy);
+        orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, combinedHaving, preLimit, preOrderCopy);
   }
 
   // === Parsing Helper Methods =================================================
