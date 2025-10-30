@@ -113,14 +113,13 @@ The following SQL statements are supported:
   - `COUNT(*)` aggregation
   - `HAVING` clause with conditions
   - support aggregation functions and case statements in the `GROUP BY` and `SELECT` clause
-
-
-### To be implemented in the near future
 - exists support e.g:
   SELECT column_name(s)
   FROM table_name
   WHERE EXISTS
   (SELECT column_name FROM table_name WHERE condition);
+
+### To be implemented in the near future
 - any and all support
   SELECT column_name(s)
   FROM table_name
@@ -142,6 +141,11 @@ The following SQL statements are supported:
 
 - `OFFSET` support
 
+## Roadmap: Might be implemented in the future
+- Join support
+- union support
+- CTE
+- Windowing
 
 #### String functions support details
 ##### Character Length and Position
@@ -192,12 +196,6 @@ The following SQL statements are supported:
 - NORMALIZE(string [USING form])	Normalizes Unicode text (SQL:2016).	NORMALIZE('é') → 'é'
 - STRING_AGG(expression, separator)	Aggregates values into a single string with a separator.	STRING_AGG(name, ', ') → 'Alice, Bob, Carol'
 - JSON_VALUE, JSON_QUERY, JSON_OBJECT, JSON_ARRAY	JSON construction/extraction—technically not core string functions but string-returning functions standardized in SQL:2016–2023.
-
-## Roadmap: Might be implemented in the future
-- Join support
-- union support
-- CTE
-- Windowing
 
 ### Standard prompt
 Please implement support for the SQL standard for 
