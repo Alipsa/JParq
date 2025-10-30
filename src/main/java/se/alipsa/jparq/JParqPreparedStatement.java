@@ -178,6 +178,9 @@ class JParqPreparedStatement implements PreparedStatement {
     if (parsedSelect.tableAlias() != null && !parsedSelect.tableAlias().isBlank()) {
       qualifiers.add(parsedSelect.tableAlias());
     }
+    for (Expression expression : parsedSelect.expressions()) {
+      addColumns(needed, SqlParser.collectQualifiedColumns(expression, qualifiers));
+    }
     addColumns(needed, SqlParser.collectQualifiedColumns(parsedSelect.where(), qualifiers));
     for (SqlParser.OrderKey key : parsedSelect.orderBy()) {
       addColumn(needed, key.column());

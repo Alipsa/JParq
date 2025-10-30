@@ -142,6 +142,9 @@ public class JParqResultSet extends ResultSetAdapter {
       Set<String> requiredColumns = new LinkedHashSet<>(proj);
       requiredColumns.addAll(SqlParser.collectQualifiedColumns(select.where(), queryQualifiers));
       requiredColumns.addAll(SqlParser.collectQualifiedColumns(select.having(), queryQualifiers));
+      for (Expression expression : selectExpressions) {
+        requiredColumns.addAll(SqlParser.collectQualifiedColumns(expression, queryQualifiers));
+      }
       proj = new ArrayList<>(requiredColumns);
       if (this.columnOrder.isEmpty()) {
         this.columnOrder.addAll(proj); // keep mutable
