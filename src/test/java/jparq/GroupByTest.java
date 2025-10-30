@@ -100,6 +100,37 @@ public class GroupByTest {
   }
 
   @Test
+  void testHavingAggregateNotInSelect() {
+    Map<Integer, Integer> counts = new HashMap<>();
+    jparqSql.query("SELECT cyl FROM mtcars", rs -> {
+      try {
+        while (rs.next()) {
+          int cyl = rs.getInt(1);
+          counts.merge(cyl, 1, Integer::sum);
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    List<Integer> expected = counts.entrySet().stream().filter(entry -> entry.getValue() > 1).map(Map.Entry::getKey)
+        .sorted().collect(Collectors.toList());
+
+    List<Integer> actual = new ArrayList<>();
+    jparqSql.query("SELECT cyl FROM mtcars GROUP BY cyl HAVING COUNT(*) > 1 ORDER BY cyl", rs -> {
+      try {
+        while (rs.next()) {
+          actual.add(rs.getInt("cyl"));
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    assertEquals(expected, actual, "HAVING clause should allow aggregates not present in the SELECT list");
+  }
+
+  @Test
   void testGroupByCaseExpression() {
     Map<String, Double> expected = new HashMap<>();
     jparqSql.query("SELECT cyl, hp FROM mtcars", rs -> {
