@@ -185,6 +185,9 @@ class JParqPreparedStatement implements PreparedStatement {
           }
         }
       }
+      for (AggregateFunctions.GroupExpression groupExpr : aggregatePlan.groupExpressions()) {
+        addColumns(needed, ColumnsUsed.inWhere(groupExpr.expression()));
+      }
     }
 
     if (!needed.isEmpty()) {

@@ -35,11 +35,10 @@ public class JParqResultSet extends ResultSetAdapter {
   private final SubqueryExecutor subqueryExecutor;
   private ValueExpressionEvaluator projectionEvaluator;
   private final boolean aggregateQuery;
-  private List<Object> aggregateValues;
+  private List<List<Object>> aggregateRows;
   private List<Integer> aggregateSqlTypes;
-  private boolean aggregateDelivered = false;
+  private int aggregateRowIndex = -1;
   private boolean aggregateOnRow = false;
-  private boolean aggregateHasRow = false;
   private boolean closed = false;
   private int rowNum = 0;
   private boolean lastWasNull = false;
@@ -80,18 +79,17 @@ public class JParqResultSet extends ResultSetAdapter {
       physical = null;
       try {
         AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan, residual,
-            select.having(), subqueryExecutor);
-        this.aggregateValues = new ArrayList<>(result.values());
+            select.having(), select.orderBy(), subqueryExecutor);
+        this.aggregateRows = new ArrayList<>(result.rows());
         this.aggregateSqlTypes = result.sqlTypes();
-        this.aggregateHasRow = result.hasRow();
       } catch (Exception e) {
         throw new SQLException("Failed to compute aggregate query", e);
       }
       this.columnOrder = labels;
       this.physicalColumnOrder = physical;
       this.aggregateQuery = true;
-      this.aggregateDelivered = false;
       this.aggregateOnRow = false;
+      this.aggregateRowIndex = -1;
       this.qp = null;
       this.current = null;
       this.rowNum = 0;
@@ -101,9 +99,8 @@ public class JParqResultSet extends ResultSetAdapter {
     this.columnOrder = labels;
     this.physicalColumnOrder = physical;
     this.aggregateQuery = false;
-    this.aggregateValues = null;
+    this.aggregateRows = null;
     this.aggregateSqlTypes = null;
-    this.aggregateHasRow = false;
 
     try {
       GenericRecord first = reader.read();
@@ -164,17 +161,17 @@ public class JParqResultSet extends ResultSetAdapter {
       throw new SQLException("ResultSet closed");
     }
     if (aggregateQuery) {
-      if (!aggregateHasRow) {
+      if (aggregateRows == null || aggregateRows.isEmpty()) {
         aggregateOnRow = false;
         return false;
       }
-      if (aggregateDelivered) {
+      if (aggregateRowIndex + 1 >= aggregateRows.size()) {
         aggregateOnRow = false;
         return false;
       }
-      aggregateDelivered = true;
+      aggregateRowIndex++;
       aggregateOnRow = true;
-      rowNum = 1;
+      rowNum = aggregateRowIndex + 1;
       return true;
     }
     try {
@@ -198,13 +195,18 @@ public class JParqResultSet extends ResultSetAdapter {
 
   private Object value(int idx) throws SQLException {
     if (aggregateQuery) {
-      if (!aggregateDelivered || !aggregateOnRow) {
+      if (!aggregateOnRow || aggregateRowIndex < 0) {
         throw new SQLException("Call next() before getting values");
       }
-      if (aggregateValues == null || idx < 1 || idx > aggregateValues.size()) {
+      List<List<Object>> rows = aggregateRows == null ? List.of() : aggregateRows;
+      if (rows.isEmpty() || aggregateRowIndex >= rows.size()) {
+        throw new SQLException("No aggregate rows available");
+      }
+      List<Object> row = rows.get(aggregateRowIndex);
+      if (idx < 1 || idx > row.size()) {
         throw new SQLException("Unknown column index: " + idx);
       }
-      Object v = aggregateValues.get(idx - 1);
+      Object v = row.get(idx - 1);
       lastWasNull = (v == null);
       return v;
     }

@@ -11,11 +11,14 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.Function;
@@ -45,6 +48,7 @@ import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.hadoop.ParquetReader;
+import se.alipsa.jparq.engine.SqlParser.OrderKey;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.StringExpressions;
 
@@ -77,33 +81,120 @@ public final class AggregateFunctions {
   }
 
   /**
-   * Plan describing aggregate functions present in a SELECT list.
+   * Plan describing aggregate and grouping behaviour for a SELECT statement.
    *
    * @param specs
-   *          aggregate specifications in projection order
+   *          aggregate specifications in the order aggregates appear in the
+   *          SELECT list
+   * @param resultColumns
+   *          result column definitions in SELECT order describing whether each
+   *          column is a grouping expression or aggregate function
+   * @param groupExpressions
+   *          expressions that participate in the GROUP BY clause
    */
-  public record AggregatePlan(List<AggregateSpec> specs) {
+  public record AggregatePlan(List<AggregateSpec> specs, List<ResultColumn> resultColumns,
+      List<GroupExpression> groupExpressions) {
     /**
-     * Canonical constructor validating provided specification list.
+     * Canonical constructor validating the provided collections.
      *
      * @param specs
-     *          aggregate specifications in projection order
+     *          aggregate specifications in the order aggregates appear in the
+     *          SELECT list
+     * @param resultColumns
+     *          result column definitions in SELECT order describing whether each
+     *          column is a grouping expression or aggregate function
+     * @param groupExpressions
+     *          expressions that participate in the GROUP BY clause
      */
     public AggregatePlan {
       Objects.requireNonNull(specs, "specs");
+      Objects.requireNonNull(resultColumns, "resultColumns");
+      Objects.requireNonNull(groupExpressions, "groupExpressions");
+      specs = List.copyOf(specs);
+      resultColumns = List.copyOf(resultColumns);
+      groupExpressions = List.copyOf(groupExpressions);
     }
 
     /**
-     * Projection labels in the same order as aggregates.
+     * Projection labels in the same order as the SELECT list.
      *
      * @return immutable list of labels
      */
     public List<String> labels() {
-      List<String> labels = new ArrayList<>(specs.size());
-      for (AggregateSpec spec : specs) {
-        labels.add(spec.label());
+      List<String> labels = new ArrayList<>(resultColumns.size());
+      for (ResultColumn column : resultColumns) {
+        labels.add(column.label());
       }
       return List.copyOf(labels);
+    }
+  }
+
+  /**
+   * Metadata describing a column emitted by an aggregate query.
+   *
+   * @param label
+   *          column label exposed to JDBC clients
+   * @param aggregateIndex
+   *          index of the aggregate specification backing the column, or
+   *          {@code -1} when the column originates from the GROUP BY clause
+   * @param groupIndex
+   *          index into the {@link GroupExpression} list describing the grouping
+   *          value used for this column, or {@code -1} when the column is an
+   *          aggregate
+   */
+  public record ResultColumn(String label, int aggregateIndex, int groupIndex) {
+    /**
+     * Canonical constructor normalising the provided column metadata.
+     *
+     * @param label
+     *          column label exposed to JDBC clients
+     * @param aggregateIndex
+     *          index of the aggregate specification backing the column, or
+     *          {@code -1} when the column originates from the GROUP BY clause
+     * @param groupIndex
+     *          index into the {@link GroupExpression} list describing the grouping
+     *          value used for this column, or {@code -1} when the column is an
+     *          aggregate
+     */
+    public ResultColumn {
+      Objects.requireNonNull(label, "label");
+      if (aggregateIndex < 0 && groupIndex < 0) {
+        throw new IllegalArgumentException("Result column must be aggregate or group expression");
+      }
+    }
+
+    /**
+     * Determine if the column represents an aggregate function.
+     *
+     * @return {@code true} when the column is sourced from an aggregate
+     */
+    public boolean isAggregate() {
+      return aggregateIndex >= 0;
+    }
+  }
+
+  /**
+   * Representation of a grouping expression in the GROUP BY clause.
+   *
+   * @param expression
+   *          expression used to compute the grouping key
+   * @param label
+   *          human readable label for the expression (column name or expression
+   *          text)
+   */
+  public record GroupExpression(Expression expression, String label) {
+    /**
+     * Canonical constructor storing the grouping expression metadata.
+     *
+     * @param expression
+     *          expression used to compute the grouping key
+     * @param label
+     *          human readable label for the expression (column name or expression
+     *          text)
+     */
+    public GroupExpression {
+      Objects.requireNonNull(expression, "expression");
+      label = (label == null || label.isBlank()) ? expression.toString() : label;
     }
   }
 
@@ -159,41 +250,36 @@ public final class AggregateFunctions {
   }
 
   /**
-   * Result of evaluating aggregates.
+   * Result of evaluating aggregates and grouping.
    *
-   * @param values
-   *          computed aggregate values
+   * @param rows
+   *          computed rows in SELECT order
    * @param sqlTypes
-   *          SQL types associated with each aggregate
-   * @param hasRow
-   *          whether the aggregate result represents a row to emit
+   *          SQL types associated with each result column
    */
-  public record AggregateResult(List<Object> values, List<Integer> sqlTypes, boolean hasRow) {
+  public record AggregateResult(List<List<Object>> rows, List<Integer> sqlTypes) {
     /**
      * Canonical constructor ensuring result collections are present.
      *
-     * @param values
-     *          computed aggregate values
+     * @param rows
+     *          computed rows in SELECT order
      * @param sqlTypes
-     *          SQL types associated with each aggregate
-     * @param hasRow
-     *          whether the aggregate result should be exposed as a row
+     *          SQL types associated with each result column
      */
     public AggregateResult {
-      Objects.requireNonNull(values, "values");
+      Objects.requireNonNull(rows, "rows");
       Objects.requireNonNull(sqlTypes, "sqlTypes");
     }
   }
 
   /**
    * Attempt to build an {@link AggregatePlan} for the provided SELECT. Returns
-   * {@code null} if the SELECT list does not consist solely of supported
-   * aggregate functions.
+   * {@code null} if the statement contains no aggregates and no GROUP BY clause.
    *
    * @param select
    *          parsed SELECT statement
-   * @return aggregate plan for the select list, or {@code null} when not purely
-   *         aggregate
+   * @return aggregate plan for the SELECT list, or {@code null} when the query
+   *         should be handled by the non-aggregate execution path
    */
   public static AggregatePlan plan(SqlParser.Select select) {
     List<Expression> expressions = select.expressions();
@@ -201,48 +287,108 @@ public final class AggregateFunctions {
       return null;
     }
 
+    List<GroupExpression> groupExpressions = buildGroupExpressions(select.groupByExpressions());
+    Map<String, Integer> groupIndexByText = new HashMap<>();
+    for (int i = 0; i < groupExpressions.size(); i++) {
+      groupIndexByText.put(groupExpressions.get(i).expression().toString(), i);
+    }
+
+    boolean hasGroupBy = !groupExpressions.isEmpty();
+    boolean containsAggregate = expressions.stream()
+        .anyMatch(expr -> expr instanceof Function func && AggregateType.from(func.getName()) != null);
+    if (!hasGroupBy && !containsAggregate) {
+      return null;
+    }
+
     List<String> labels = select.labels();
-    List<AggregateSpec> specs = new ArrayList<>(expressions.size());
+    List<AggregateSpec> specs = new ArrayList<>();
+    List<ResultColumn> resultColumns = new ArrayList<>(expressions.size());
 
     for (int i = 0; i < expressions.size(); i++) {
       Expression expr = expressions.get(i);
-      if (!(expr instanceof Function func)) {
-        return null; // Non-aggregate expression present
-      }
+      String label = labelFor(labels, i, expr);
 
-      AggregateType type = AggregateType.from(func.getName());
-      if (type == null) {
-        return null; // Unsupported function
-      }
-      if (func.isDistinct()) {
-        throw new IllegalArgumentException("DISTINCT aggregates are not supported yet");
-      }
-
-      boolean countStar = false;
-      List<Expression> args = List.of();
-
-      if (type == AggregateType.COUNT && func.isAllColumns()) {
-        countStar = true;
-      } else {
-        args = parameters(func);
-        if (args.isEmpty()) {
-          throw new IllegalArgumentException("Aggregate function " + func + " requires an argument");
-        }
-        if (type == AggregateType.STRING_AGG) {
-          if (args.size() != 2) {
-            throw new IllegalArgumentException("STRING_AGG requires two arguments (value, separator)");
-          }
-        } else if (args.size() != 1) {
-          throw new IllegalArgumentException("Only single-argument aggregate functions are supported");
+      if (expr instanceof Function func) {
+        AggregateSpec spec = aggregateSpec(func, label);
+        if (spec != null) {
+          int aggIndex = specs.size();
+          specs.add(spec);
+          resultColumns.add(new ResultColumn(label, aggIndex, -1));
+          continue;
         }
       }
 
-      String label = (labels != null && i < labels.size() && labels.get(i) != null) ? labels.get(i) : func.toString();
+      if (!hasGroupBy && specs.isEmpty()) {
+        return null; // simple projection without grouping/aggregates
+      }
 
-      specs.add(new AggregateSpec(type, args, label, countStar));
+      Integer groupIndex = groupIndexByText.get(expr.toString());
+      if (groupIndex == null) {
+        throw new IllegalArgumentException(
+            "SELECT expression '" + expr + "' must appear in the GROUP BY clause when aggregates are present");
+      }
+      resultColumns.add(new ResultColumn(label, -1, groupIndex));
     }
 
-    return new AggregatePlan(List.copyOf(specs));
+    return new AggregatePlan(specs, resultColumns, groupExpressions);
+  }
+
+  private static AggregateSpec aggregateSpec(Function func, String label) {
+    AggregateType type = AggregateType.from(func.getName());
+    if (type == null) {
+      return null;
+    }
+    if (func.isDistinct()) {
+      throw new IllegalArgumentException("DISTINCT aggregates are not supported yet");
+    }
+
+    boolean countStar = false;
+    List<Expression> args = List.of();
+
+    if (type == AggregateType.COUNT && func.isAllColumns()) {
+      countStar = true;
+    } else {
+      args = parameters(func);
+      if (args.isEmpty()) {
+        throw new IllegalArgumentException("Aggregate function " + func + " requires an argument");
+      }
+      if (type == AggregateType.STRING_AGG) {
+        if (args.size() != 2) {
+          throw new IllegalArgumentException("STRING_AGG requires two arguments (value, separator)");
+        }
+      } else if (args.size() != 1) {
+        throw new IllegalArgumentException("Only single-argument aggregate functions are supported");
+      }
+    }
+
+    return new AggregateSpec(type, args, label, countStar);
+  }
+
+  private static String labelFor(List<String> labels, int index, Expression expr) {
+    if (labels != null && index < labels.size()) {
+      String label = labels.get(index);
+      if (label != null && !label.isBlank()) {
+        return label;
+      }
+    }
+    return expr == null ? "" : expr.toString();
+  }
+
+  private static List<GroupExpression> buildGroupExpressions(List<Expression> groupByExpressions) {
+    if (groupByExpressions == null || groupByExpressions.isEmpty()) {
+      return List.of();
+    }
+    List<GroupExpression> groups = new ArrayList<>(groupByExpressions.size());
+    for (Expression expr : groupByExpressions) {
+      String label;
+      if (expr instanceof Column column) {
+        label = column.getColumnName();
+      } else {
+        label = expr.toString();
+      }
+      groups.add(new GroupExpression(expr, label));
+    }
+    return groups;
   }
 
   private static List<Expression> parameters(Function func) {
@@ -256,7 +402,7 @@ public final class AggregateFunctions {
   }
 
   /**
-   * Evaluate aggregates by streaming the Parquet reader.
+   * Evaluate aggregates and grouping by streaming the Parquet reader.
    *
    * @param reader
    *          parquet reader
@@ -266,19 +412,30 @@ public final class AggregateFunctions {
    *          residual WHERE expression (may be null)
    * @param having
    *          HAVING expression to evaluate after aggregation (may be null)
+   * @param orderBy
+   *          ORDER BY clauses to apply after aggregation (may be empty)
    * @param subqueryExecutor
    *          executor used to evaluate subqueries referenced by the aggregate
    *          expressions
-   * @return aggregate results and column metadata
+   * @return aggregate rows and associated column metadata
    * @throws IOException
    *           if reading the parquet file fails
    */
   public static AggregateResult evaluate(ParquetReader<GenericRecord> reader, AggregatePlan plan, Expression residual,
-      Expression having, SubqueryExecutor subqueryExecutor) throws IOException {
-    List<AggregateAccumulator> accs = new ArrayList<>(plan.specs().size());
-    for (AggregateSpec spec : plan.specs()) {
-      accs.add(AggregateAccumulator.create(spec));
+      Expression having, List<OrderKey> orderBy, SubqueryExecutor subqueryExecutor) throws IOException {
+    List<GroupExpression> groupExpressions = plan.groupExpressions();
+    List<GroupTypeTracker> groupTrackers = new ArrayList<>(groupExpressions.size());
+    for (int i = 0; i < groupExpressions.size(); i++) {
+      groupTrackers.add(new GroupTypeTracker());
     }
+
+    int aggregateCount = plan.specs().size();
+    int[] aggregateSqlTypes = new int[aggregateCount];
+    for (int i = 0; i < aggregateCount; i++) {
+      aggregateSqlTypes[i] = AggregateAccumulator.create(plan.specs().get(i)).sqlType();
+    }
+
+    Map<GroupKey, GroupState> states = new LinkedHashMap<>();
 
     try (ParquetReader<GenericRecord> autoClose = reader) {
       GenericRecord rec = autoClose.read();
@@ -297,44 +454,277 @@ public final class AggregateFunctions {
 
         boolean matches = residual == null || whereEval.eval(residual, rec);
         if (matches) {
-          for (AggregateAccumulator acc : accs) {
-            acc.add(valueEval, rec);
+          List<Object> groupValues = evaluateGroupValues(groupExpressions, valueEval, rec, groupTrackers);
+          GroupKey key = new GroupKey(groupValues);
+          GroupState state = states.get(key);
+          if (state == null) {
+            state = new GroupState(groupValues, plan.specs());
+            states.put(key, state);
           }
+          state.add(valueEval, rec);
         }
 
         rec = autoClose.read();
       }
     }
 
-    List<Object> values = new ArrayList<>(accs.size());
-    List<Integer> sqlTypes = new ArrayList<>(accs.size());
-    for (AggregateAccumulator acc : accs) {
-      values.add(acc.result());
-      sqlTypes.add(acc.sqlType());
-    }
-    List<Object> valueView = List.copyOf(values);
-    List<Integer> sqlTypeView = List.copyOf(sqlTypes);
-
-    boolean hasRow = true;
-    if (having != null) {
-      HavingEvaluator evaluator = new HavingEvaluator(plan, valueView, subqueryExecutor);
-      hasRow = evaluator.eval(having);
+    if (states.isEmpty() && groupExpressions.isEmpty()) {
+      GroupState state = new GroupState(List.of(), plan.specs());
+      states.put(new GroupKey(List.of()), state);
     }
 
-    return new AggregateResult(valueView, sqlTypeView, hasRow);
+    boolean[] aggregateTypeObserved = new boolean[aggregateCount];
+    for (GroupState state : states.values()) {
+      for (int i = 0; i < aggregateCount; i++) {
+        if (!aggregateTypeObserved[i]) {
+          aggregateSqlTypes[i] = state.accumulator(i).sqlType();
+          aggregateTypeObserved[i] = true;
+        }
+      }
+    }
+
+    List<Integer> groupSqlTypes = new ArrayList<>(groupTrackers.size());
+    for (GroupTypeTracker tracker : groupTrackers) {
+      groupSqlTypes.add(tracker.sqlType());
+    }
+
+    List<List<Object>> rows = new ArrayList<>();
+    Expression normalizedHaving = ExpressionEvaluator.unwrapParenthesis(having);
+
+    for (GroupState state : states.values()) {
+      List<Object> aggregateValues = state.results();
+      List<Object> row = buildRow(plan, state.groupValues(), aggregateValues);
+      Map<String, Object> labelLookup = buildLabelLookup(plan, row, state.groupValues());
+      boolean include = true;
+      if (normalizedHaving != null) {
+        HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues, labelLookup, subqueryExecutor);
+        include = evaluator.eval(normalizedHaving);
+      }
+      if (include) {
+        rows.add(row);
+      }
+    }
+
+    if (orderBy != null && !orderBy.isEmpty()) {
+      sortAggregatedRows(rows, plan, orderBy);
+    }
+
+    List<Integer> columnSqlTypes = new ArrayList<>(plan.resultColumns().size());
+    for (ResultColumn column : plan.resultColumns()) {
+      if (column.isAggregate()) {
+        columnSqlTypes.add(aggregateSqlTypes[column.aggregateIndex()]);
+      } else {
+        columnSqlTypes.add(groupSqlTypes.isEmpty() ? Types.OTHER : groupSqlTypes.get(column.groupIndex()));
+      }
+    }
+
+    return new AggregateResult(List.copyOf(rows), List.copyOf(columnSqlTypes));
+  }
+
+  private static void sortAggregatedRows(List<List<Object>> rows, AggregatePlan plan, List<OrderKey> orderBy) {
+    Map<String, Integer> indexByColumn = buildOrderIndex(plan);
+    Comparator<List<Object>> comparator = (left, right) -> {
+      for (OrderKey key : orderBy) {
+        Integer idx = indexByColumn.get(key.column().toLowerCase(Locale.ROOT));
+        if (idx == null) {
+          throw new IllegalArgumentException(
+              "ORDER BY column '" + key.column() + "' is not present in the SELECT list");
+        }
+        Object lv = left.get(idx);
+        Object rv = right.get(idx);
+        if (lv == null || rv == null) {
+          int nullCmp = (lv == null ? 1 : 0) - (rv == null ? 1 : 0);
+          if (!key.asc()) {
+            nullCmp = -nullCmp;
+          }
+          if (nullCmp != 0) {
+            return nullCmp;
+          }
+          continue;
+        }
+        int cmp = ExpressionEvaluator.typedCompare(lv, rv);
+        if (cmp != 0) {
+          return key.asc() ? cmp : -cmp;
+        }
+      }
+      return 0;
+    };
+    rows.sort(comparator);
+  }
+
+  private static Map<String, Integer> buildOrderIndex(AggregatePlan plan) {
+    Map<String, Integer> mapping = new HashMap<>();
+    List<ResultColumn> columns = plan.resultColumns();
+    for (int i = 0; i < columns.size(); i++) {
+      ResultColumn column = columns.get(i);
+      registerOrderKey(mapping, column.label(), i);
+      if (column.isAggregate()) {
+        AggregateSpec spec = plan.specs().get(column.aggregateIndex());
+        registerOrderKey(mapping, spec.label(), i);
+        registerOrderKey(mapping, aggregateExpressionText(spec), i);
+      } else {
+        GroupExpression group = plan.groupExpressions().get(column.groupIndex());
+        registerOrderKey(mapping, group.label(), i);
+        registerOrderKey(mapping, group.expression().toString(), i);
+      }
+    }
+    return mapping;
+  }
+
+  private static void registerOrderKey(Map<String, Integer> mapping, String key, int index) {
+    if (key == null || key.isBlank()) {
+      return;
+    }
+    mapping.putIfAbsent(key.toLowerCase(Locale.ROOT), index);
+  }
+
+  private static String aggregateExpressionText(AggregateSpec spec) {
+    if (spec.countStar()) {
+      return "COUNT(*)";
+    }
+    if (spec.arguments().isEmpty()) {
+      return spec.type().name();
+    }
+    return spec.type().name() + "(" + spec.arguments().stream().map(Object::toString).collect(Collectors.joining(", "))
+        + ")";
+  }
+
+  private static List<Object> evaluateGroupValues(List<GroupExpression> groupExpressions, ValueExpressionEvaluator eval,
+      GenericRecord record, List<GroupTypeTracker> trackers) {
+    if (groupExpressions.isEmpty()) {
+      return List.of();
+    }
+    List<Object> values = new ArrayList<>(groupExpressions.size());
+    for (int i = 0; i < groupExpressions.size(); i++) {
+      Object value = eval.eval(groupExpressions.get(i).expression(), record);
+      values.add(value);
+      trackers.get(i).track(value);
+    }
+    return values;
+  }
+
+  private static List<Object> buildRow(AggregatePlan plan, List<Object> groupValues, List<Object> aggregateValues) {
+    List<Object> row = new ArrayList<>(plan.resultColumns().size());
+    for (ResultColumn column : plan.resultColumns()) {
+      if (column.isAggregate()) {
+        row.add(aggregateValues.get(column.aggregateIndex()));
+      } else {
+        row.add(groupValues.get(column.groupIndex()));
+      }
+    }
+    return List.copyOf(row);
+  }
+
+  private static Map<String, Object> buildLabelLookup(AggregatePlan plan, List<Object> rowValues,
+      List<Object> groupValues) {
+    Map<String, Object> map = new HashMap<>();
+    List<ResultColumn> columns = plan.resultColumns();
+    for (int i = 0; i < columns.size(); i++) {
+      String label = columns.get(i).label();
+      if (label != null && !label.isBlank()) {
+        map.put(label.toLowerCase(Locale.ROOT), rowValues.get(i));
+      }
+    }
+    List<GroupExpression> groups = plan.groupExpressions();
+    for (int i = 0; i < groups.size(); i++) {
+      String label = groups.get(i).label();
+      if (label != null && !label.isBlank()) {
+        map.putIfAbsent(label.toLowerCase(Locale.ROOT), groupValues.get(i));
+      }
+    }
+    return map;
+  }
+
+  private static final class GroupState {
+    private final List<Object> groupValues;
+    private final AggregateAccumulator[] accumulators;
+
+    GroupState(List<Object> groupValues, List<AggregateSpec> specs) {
+      this.groupValues = List.copyOf(groupValues);
+      this.accumulators = new AggregateAccumulator[specs.size()];
+      for (int i = 0; i < specs.size(); i++) {
+        this.accumulators[i] = AggregateAccumulator.create(specs.get(i));
+      }
+    }
+
+    void add(ValueExpressionEvaluator eval, GenericRecord record) {
+      for (AggregateAccumulator accumulator : accumulators) {
+        accumulator.add(eval, record);
+      }
+    }
+
+    List<Object> groupValues() {
+      return groupValues;
+    }
+
+    AggregateAccumulator accumulator(int index) {
+      if (index < 0 || index >= accumulators.length) {
+        throw new IllegalArgumentException("Accumulator index out of bounds: " + index);
+      }
+      return accumulators[index];
+    }
+
+    List<Object> results() {
+      List<Object> values = new ArrayList<>(accumulators.length);
+      for (AggregateAccumulator accumulator : accumulators) {
+        values.add(accumulator.result());
+      }
+      return List.copyOf(values);
+    }
+  }
+
+  private static final class GroupKey {
+    private final List<Object> values;
+    private final int hash;
+
+    GroupKey(List<Object> values) {
+      this.values = List.copyOf(values);
+      this.hash = this.values.hashCode();
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (this == obj) {
+        return true;
+      }
+      if (!(obj instanceof GroupKey other)) {
+        return false;
+      }
+      return values.equals(other.values);
+    }
+
+    @Override
+    public int hashCode() {
+      return hash;
+    }
+  }
+
+  private static final class GroupTypeTracker {
+    private Class<?> observedType;
+
+    void track(Object value) {
+      if (value != null && observedType == null) {
+        observedType = value.getClass();
+      }
+    }
+
+    int sqlType() {
+      return sqlTypeForClass(observedType);
+    }
   }
 
   private static final class HavingEvaluator {
     private final AggregatePlan plan;
-    private final List<Object> values;
+    private final List<Object> aggregateValues;
     private final SubqueryExecutor subqueryExecutor;
     private final Map<String, Object> labelLookup;
 
-    HavingEvaluator(AggregatePlan plan, List<Object> values, SubqueryExecutor subqueryExecutor) {
+    HavingEvaluator(AggregatePlan plan, List<Object> aggregateValues, Map<String, Object> labelLookup,
+        SubqueryExecutor subqueryExecutor) {
       this.plan = plan;
-      this.values = values;
+      this.aggregateValues = aggregateValues;
+      this.labelLookup = Map.copyOf(labelLookup);
       this.subqueryExecutor = subqueryExecutor;
-      this.labelLookup = buildLabelLookup(plan, values);
     }
 
     boolean eval(Expression expression) {
@@ -608,7 +998,7 @@ public final class AggregateFunctions {
             continue;
           }
         }
-        return values.get(i);
+        return aggregateValues.get(i);
       }
       throw new IllegalArgumentException("HAVING references aggregate not present in SELECT: " + func);
     }
@@ -618,19 +1008,6 @@ public final class AggregateFunctions {
         return null;
       }
       return labelLookup.get(name.toLowerCase(Locale.ROOT));
-    }
-
-    private static Map<String, Object> buildLabelLookup(AggregatePlan plan, List<Object> values) {
-      Map<String, Object> map = new HashMap<>();
-      List<AggregateSpec> specs = plan.specs();
-      for (int i = 0; i < specs.size() && i < values.size(); i++) {
-        AggregateSpec spec = specs.get(i);
-        String label = spec.label();
-        if (label != null && !label.isBlank()) {
-          map.put(label.toLowerCase(Locale.ROOT), values.get(i));
-        }
-      }
-      return map;
     }
 
     private BigDecimal toBigDecimal(Object value) {
