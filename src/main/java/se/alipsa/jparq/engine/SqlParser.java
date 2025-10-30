@@ -3,8 +3,12 @@ package se.alipsa.jparq.engine;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.*;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
@@ -575,7 +579,7 @@ public final class SqlParser {
 
     expr.accept(new ExpressionVisitorAdapter<Void>() {
       @Override
-      public void visit(Column column) {
+      public <S> Void visit(Column column, S context) {
         Table t = column.getTable();
         if (t != null) {
           String q = t.getName();
@@ -588,9 +592,95 @@ public final class SqlParser {
             }
           }
         }
-        // no need to call super.visit(column)
+        return super.visit(column, context);
+      }
+
+      @Override
+      public <S> Void visit(ParenthesedSelect subSelect, S context) {
+        // Preserve qualifiers in sub queries to support correlated references.
+        // Intentionally do not traverse into the sub select.
+        return null;
       }
     });
+  }
+
+  /**
+   * Collect column names that reference any of the supplied qualifiers.
+   *
+   * @param expr
+   *          the expression to inspect
+   * @param qualifiers
+   *          table names or aliases to match
+   * @return a set of column names that reference one of the qualifiers
+   */
+  public static Set<String> collectQualifiedColumns(Expression expr, List<String> qualifiers) {
+    if (expr == null || qualifiers == null || qualifiers.isEmpty()) {
+      return Set.of();
+    }
+    List<String> qualifierList = qualifiers == null ? List.of() : List.copyOf(qualifiers);
+    Set<String> normalized = qualifierList.stream()
+        .map(SqlParser::normalizeQualifier)
+        .filter(s -> s != null && !s.isEmpty())
+        .collect(Collectors.toCollection(LinkedHashSet::new));
+    if (normalized.isEmpty()) {
+      return Set.of();
+    }
+    Set<String> columns = new LinkedHashSet<>();
+    expr.accept(new ExpressionVisitorAdapter<Void>() {
+      @Override
+      public <S> Void visit(Column column, S context) {
+        Table table = column.getTable();
+        if (table != null) {
+          String[] candidates = {table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()};
+          for (String candidate : candidates) {
+            String normalizedCandidate = normalizeQualifier(candidate);
+            if (normalizedCandidate != null && normalized.contains(normalizedCandidate)) {
+              columns.add(column.getColumnName());
+              break;
+            }
+          }
+        }
+        return super.visit(column, context);
+      }
+
+      @Override
+      public <S> Void visit(ParenthesedSelect select, S context) {
+        CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(
+            select,
+            qualifierList,
+            name -> null);
+        columns.addAll(rewritten.correlatedColumns());
+        return super.visit(select, context);
+      }
+
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.statement.select.Select select, S context) {
+        CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(
+            select,
+            qualifierList,
+            name -> null);
+        columns.addAll(rewritten.correlatedColumns());
+        return super.visit(select, context);
+      }
+    });
+    return Set.copyOf(columns);
+  }
+
+  private static String normalizeQualifier(String qualifier) {
+    if (qualifier == null) {
+      return null;
+    }
+    String trimmed = qualifier.trim();
+    if (trimmed.isEmpty()) {
+      return null;
+    }
+    if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("`") && trimmed.endsWith("`"))) {
+      trimmed = trimmed.substring(1, trimmed.length() - 1);
+    }
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      trimmed = trimmed.substring(1, trimmed.length() - 1);
+    }
+    return trimmed.toLowerCase(Locale.ROOT);
   }
 
   private static List<Expression> parseGroupBy(GroupByElement groupBy, FromInfo fromInfo) {

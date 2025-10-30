@@ -487,12 +487,16 @@ public final class AggregateFunctions {
    * @param subqueryExecutor
    *          executor used to evaluate subqueries referenced by the aggregate
    *          expressions
+   * @param outerQualifiers
+   *          table names or aliases from the outer query scope used when
+   *          resolving correlated subquery references
    * @return aggregate rows and associated column metadata
    * @throws IOException
    *           if reading the parquet file fails
    */
   public static AggregateResult evaluate(ParquetReader<GenericRecord> reader, AggregatePlan plan, Expression residual,
-      Expression having, List<OrderKey> orderBy, SubqueryExecutor subqueryExecutor) throws IOException {
+      Expression having, List<OrderKey> orderBy, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers)
+      throws IOException {
     List<GroupExpression> groupExpressions = plan.groupExpressions();
     List<GroupTypeTracker> groupTrackers = new ArrayList<>(groupExpressions.size());
     for (int i = 0; i < groupExpressions.size(); i++) {
@@ -517,9 +521,9 @@ public final class AggregateFunctions {
         if (schema == null) {
           schema = rec.getSchema();
           if (residual != null) {
-            whereEval = new ExpressionEvaluator(schema, subqueryExecutor);
+            whereEval = new ExpressionEvaluator(schema, subqueryExecutor, outerQualifiers);
           }
-          valueEval = new ValueExpressionEvaluator(schema, subqueryExecutor);
+          valueEval = new ValueExpressionEvaluator(schema, subqueryExecutor, outerQualifiers);
         }
 
         boolean matches = residual == null || whereEval.eval(residual, rec);
@@ -567,7 +571,8 @@ public final class AggregateFunctions {
       Map<String, Object> labelLookup = buildLabelLookup(plan, row, state.groupValues());
       boolean include = true;
       if (normalizedHaving != null) {
-        HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues, labelLookup, subqueryExecutor);
+        HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues, labelLookup, subqueryExecutor,
+            outerQualifiers);
         include = evaluator.eval(normalizedHaving);
       }
       if (include) {
@@ -788,13 +793,15 @@ public final class AggregateFunctions {
     private final List<Object> aggregateValues;
     private final SubqueryExecutor subqueryExecutor;
     private final Map<String, Object> labelLookup;
+    private final List<String> correlatedQualifiers;
 
     HavingEvaluator(AggregatePlan plan, List<Object> aggregateValues, Map<String, Object> labelLookup,
-        SubqueryExecutor subqueryExecutor) {
+        SubqueryExecutor subqueryExecutor, List<String> correlatedQualifiers) {
       this.plan = plan;
       this.aggregateValues = aggregateValues;
       this.labelLookup = Map.copyOf(labelLookup);
       this.subqueryExecutor = subqueryExecutor;
+      this.correlatedQualifiers = correlatedQualifiers == null ? List.of() : List.copyOf(correlatedQualifiers);
     }
 
     boolean eval(Expression expression) {
@@ -902,7 +909,11 @@ public final class AggregateFunctions {
       if (!(exists.getRightExpression() instanceof Select subSelect)) {
         throw new IllegalArgumentException("EXISTS requires a subquery");
       }
-      boolean hasRows = !subqueryExecutor.execute(subSelect).rows().isEmpty();
+      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, correlatedQualifiers,
+          this::aliasValue);
+      SubqueryExecutor.SubqueryResult result = rewritten.correlated() ? subqueryExecutor.executeRaw(rewritten.sql())
+          : subqueryExecutor.execute(subSelect);
+      boolean hasRows = !result.rows().isEmpty();
       return exists.isNot() != hasRows;
     }
 

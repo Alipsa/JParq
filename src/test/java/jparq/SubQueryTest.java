@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import java.io.IOException;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Path;
@@ -14,6 +15,11 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.parquet.avro.AvroParquetReader;
+import org.apache.parquet.hadoop.ParquetReader;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
@@ -22,6 +28,7 @@ import se.alipsa.jparq.JParqSql;
 public class SubQueryTest {
 
   static JParqSql jparqSql;
+  static Path mtcarsFilePath;
 
   @BeforeAll
   static void setup() throws URISyntaxException {
@@ -30,6 +37,7 @@ public class SubQueryTest {
 
     Path mtcarsPath = Paths.get(mtcarsUrl.toURI());
     Path dir = mtcarsPath.getParent();
+    mtcarsFilePath = mtcarsPath;
 
     jparqSql = new JParqSql("jdbc:jparq:" + dir.toAbsolutePath());
   }
@@ -127,6 +135,37 @@ public class SubQueryTest {
   }
 
   @Test
+  void correlatedExistsFiltersRows() throws IOException {
+    List<Car> cars = loadCars();
+    List<String> expected = cars.stream()
+        .filter(car -> cars.stream()
+            .anyMatch(other -> other != car && other.cyl() == car.cyl() && other.hp() > car.hp()))
+        .map(Car::model)
+        .sorted()
+        .collect(Collectors.toList());
+
+    jparqSql.query(
+        "SELECT model FROM mtcars m WHERE EXISTS (SELECT 1 FROM mtcars sub "
+            + "WHERE sub.cyl = m.cyl AND sub.hp > m.hp)",
+        rs -> {
+          try {
+            List<String> actual = new ArrayList<>();
+            while (rs.next()) {
+              actual.add(rs.getString("model"));
+            }
+            actual.sort(String::compareTo);
+            assertEquals(
+                expected,
+                actual,
+                "Correlated EXISTS should include cars that have a peer with the same cylinder count "
+                    + "and higher horsepower");
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
+  }
+
+  @Test
   void havingClauseSupportsSubqueries() {
     jparqSql.query("SELECT COUNT(*) AS total FROM mtcars HAVING COUNT(*) >= (SELECT COUNT(*) FROM mtcars)", rs -> {
       try {
@@ -145,6 +184,38 @@ public class SubQueryTest {
         fail(e);
       }
     });
+  }
+
+  /**
+   * Read all car rows from the Parquet test dataset.
+   *
+   * @return list of {@link Car} records loaded from {@code mtcars.parquet}
+   * @throws IOException
+   *           if the Parquet file cannot be read
+   */
+  private static List<Car> loadCars() throws IOException {
+    List<Car> cars = new ArrayList<>();
+    Configuration conf = new Configuration(false);
+    org.apache.hadoop.fs.Path filePath = new org.apache.hadoop.fs.Path(mtcarsFilePath.toUri());
+    try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(filePath).withConf(conf)
+        .build()) {
+      GenericRecord record = reader.read();
+      while (record != null) {
+        String model = record.get("model").toString();
+        int cyl = ((Number) record.get("cyl")).intValue();
+        int hp = ((Number) record.get("hp")).intValue();
+        cars.add(new Car(model, cyl, hp));
+        record = reader.read();
+      }
+    }
+    return cars;
+  }
+
+  /**
+   * Simple value object representing a car entry from the {@code mtcars}
+   * dataset.
+   */
+  private record Car(String model, int cyl, int hp) {
   }
 
 }

@@ -30,6 +30,7 @@ public final class QueryProcessor implements AutoCloseable {
   private final boolean hasPreStage;
   private final List<String> distinctColumns;
   private final List<String> preStageDistinctColumns;
+  private final List<String> outerQualifiers;
 
   // Evaluator is lazily created if schema was not provided
   private ExpressionEvaluator evaluator;
@@ -58,6 +59,7 @@ public final class QueryProcessor implements AutoCloseable {
     private List<SqlParser.OrderKey> preOrderBy = List.of();
     private List<String> distinctColumns;
     private List<String> preStageDistinctColumns = List.of();
+    private List<String> outerQualifiers = List.of();
 
     private Options() {
       // use factory
@@ -209,6 +211,19 @@ public final class QueryProcessor implements AutoCloseable {
       this.preStageDistinctColumns = hasColumns ? List.copyOf(preStageDistinctColumns) : List.of();
       return this;
     }
+
+    /**
+     * Provide table names or aliases that should be visible to correlated sub
+     * queries evaluated by the processor.
+     *
+     * @param qualifiers
+     *          table names or aliases from the outer query scope
+     * @return {@code this} for chaining
+     */
+    public Options outerQualifiers(List<String> qualifiers) {
+      this.outerQualifiers = (qualifiers == null || qualifiers.isEmpty()) ? List.of() : List.copyOf(qualifiers);
+      return this;
+    }
   }
 
   /**
@@ -244,7 +259,9 @@ public final class QueryProcessor implements AutoCloseable {
     this.preStageDistinctColumns = (opts.preStageDistinctColumns == null || opts.preStageDistinctColumns.isEmpty())
         ? distinctCols
         : opts.preStageDistinctColumns;
-    this.evaluator = (opts.schema != null) ? new ExpressionEvaluator(opts.schema, subqueryExecutor) : null;
+    this.outerQualifiers = opts.outerQualifiers;
+    this.evaluator = (opts.schema != null) ? new ExpressionEvaluator(opts.schema, subqueryExecutor, outerQualifiers)
+        : null;
     this.emitted = Math.max(0, opts.initialEmitted);
     this.orderBy = opts.orderBy;
     this.distinctSeen = distinct ? new LinkedHashSet<>() : null;
@@ -368,13 +385,13 @@ public final class QueryProcessor implements AutoCloseable {
 
   private void ensureEvaluator(GenericRecord rec) {
     if (where != null && evaluator == null && rec != null) {
-      evaluator = new ExpressionEvaluator(rec.getSchema(), subqueryExecutor);
+      evaluator = new ExpressionEvaluator(rec.getSchema(), subqueryExecutor, outerQualifiers);
     }
   }
 
   private void ensureEvaluator(Schema schema) {
     if (where != null && evaluator == null && schema != null) {
-      evaluator = new ExpressionEvaluator(schema, subqueryExecutor);
+      evaluator = new ExpressionEvaluator(schema, subqueryExecutor, outerQualifiers);
     }
     // If still null, it will be lazily created from the first record seen.
   }
