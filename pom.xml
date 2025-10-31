@@ -4,7 +4,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>se.alipsa</groupId>
   <artifactId>parquet-jdbc</artifactId>
-  <version>0.2.0-SNAPHOT</version>
+  <version>0.5.0</version>
   <name>JDBC Driver for Parquet files</name>
 
   <description>JDBC Driver for reading Parquet files</description>
@@ -34,7 +34,8 @@
     <checkstyle.plugin.version>3.6.0</checkstyle.plugin.version>
     <hadoop.version>3.4.2</hadoop.version>
     <jsqlparser.version>5.3</jsqlparser.version>
-    <junit.version>6.0.0</junit.version>
+    <jackson.version>2.20.1</jackson.version>
+    <junit.version>6.0.1</junit.version>
     <parquet.version>1.16.0</parquet.version>
     <pmd.plugin.version>3.28.0</pmd.plugin.version>
     <slf4j.version>2.0.17</slf4j.version>
@@ -59,7 +60,7 @@
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
-      <version>2.18.1</version>
+      <version>${jackson.version}</version>
     </dependency>
     <!-- Minimal Hadoop bits needed by parquet-hadoop -->
     <dependency>
