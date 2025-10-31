@@ -260,7 +260,8 @@ public final class QueryProcessor implements AutoCloseable {
         ? distinctCols
         : opts.preStageDistinctColumns;
     this.outerQualifiers = opts.outerQualifiers;
-    this.evaluator = (opts.schema != null) ? new ExpressionEvaluator(opts.schema, subqueryExecutor, outerQualifiers)
+    this.evaluator = (opts.schema != null)
+        ? new ExpressionEvaluator(opts.schema, subqueryExecutor, outerQualifiers)
         : null;
     this.emitted = Math.max(0, opts.initialEmitted);
     this.orderBy = opts.orderBy;

@@ -138,25 +138,19 @@ public class SubQueryTest {
   void correlatedExistsFiltersRows() throws IOException {
     List<Car> cars = loadCars();
     List<String> expected = cars.stream()
-        .filter(car -> cars.stream()
-            .anyMatch(other -> other != car && other.cyl() == car.cyl() && other.hp() > car.hp()))
-        .map(Car::model)
-        .sorted()
-        .collect(Collectors.toList());
+        .filter(
+            car -> cars.stream().anyMatch(other -> other != car && other.cyl() == car.cyl() && other.hp() > car.hp()))
+        .map(Car::model).sorted().collect(Collectors.toList());
 
-    jparqSql.query(
-        "SELECT model FROM mtcars m WHERE EXISTS (SELECT 1 FROM mtcars sub "
-            + "WHERE sub.cyl = m.cyl AND sub.hp > m.hp)",
-        rs -> {
+    jparqSql.query("SELECT model FROM mtcars m WHERE EXISTS (SELECT 1 FROM mtcars sub "
+        + "WHERE sub.cyl = m.cyl AND sub.hp > m.hp)", rs -> {
           try {
             List<String> actual = new ArrayList<>();
             while (rs.next()) {
               actual.add(rs.getString("model"));
             }
             actual.sort(String::compareTo);
-            assertEquals(
-                expected,
-                actual,
+            assertEquals(expected, actual,
                 "Correlated EXISTS should include cars that have a peer with the same cylinder count "
                     + "and higher horsepower");
           } catch (SQLException e) {
@@ -212,8 +206,7 @@ public class SubQueryTest {
   }
 
   /**
-   * Simple value object representing a car entry from the {@code mtcars}
-   * dataset.
+   * Simple value object representing a car entry from the {@code mtcars} dataset.
    */
   private record Car(String model, int cyl, int hp) {
   }

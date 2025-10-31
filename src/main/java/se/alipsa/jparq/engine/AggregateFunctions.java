@@ -911,7 +911,8 @@ public final class AggregateFunctions {
       }
       CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, correlatedQualifiers,
           this::aliasValue);
-      SubqueryExecutor.SubqueryResult result = rewritten.correlated() ? subqueryExecutor.executeRaw(rewritten.sql())
+      SubqueryExecutor.SubqueryResult result = rewritten.correlated()
+          ? subqueryExecutor.executeRaw(rewritten.sql())
           : subqueryExecutor.execute(subSelect);
       boolean hasRows = !result.rows().isEmpty();
       return exists.isNot() != hasRows;
