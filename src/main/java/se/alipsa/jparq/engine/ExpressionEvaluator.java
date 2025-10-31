@@ -475,7 +475,7 @@ public final class ExpressionEvaluator {
     Schema comparisonSchema = otherOperand.schemaOrNull;
 
     for (Object rawValue : values) {
-      Object candidate = comparisonSchema == null ? rawValue : coerceLiteralToColumnType(rawValue, comparisonSchema);
+      Object candidate = coerceIfSchemaNotNull(rawValue, comparisonSchema);
 
       if (candidate == null) {
         allMatch = false;
