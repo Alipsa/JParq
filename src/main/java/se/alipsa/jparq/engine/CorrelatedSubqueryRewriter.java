@@ -2,7 +2,6 @@ package se.alipsa.jparq.engine;
 
 import java.util.Collection;
 import java.util.LinkedHashSet;
-import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -24,6 +23,7 @@ import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.select.SelectVisitor;
 import net.sf.jsqlparser.util.deparser.ExpressionDeParser;
 import net.sf.jsqlparser.util.deparser.SelectDeParser;
+import se.alipsa.jparq.helper.JParqUtil;
 
 /**
  * Utility that rewrites sub queries containing correlated column references by
@@ -70,8 +70,8 @@ final class CorrelatedSubqueryRewriter {
       return new Result(select.toString(), false, Set.of());
     }
 
-    Set<String> normalized = outerQualifiers.stream().map(CorrelatedSubqueryRewriter::normalizeQualifier)
-        .filter(Objects::nonNull).collect(Collectors.toUnmodifiableSet());
+    Set<String> normalized = outerQualifiers.stream().map(JParqUtil::normalizeQualifier).filter(Objects::nonNull)
+        .collect(Collectors.toUnmodifiableSet());
 
     if (normalized.isEmpty()) {
       return new Result(select.toString(), false, Set.of());
@@ -90,7 +90,7 @@ final class CorrelatedSubqueryRewriter {
               table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()
           };
           for (String candidate : candidates) {
-            String normalizedCandidate = normalizeQualifier(candidate);
+            String normalizedCandidate = JParqUtil.normalizeQualifier(candidate);
             if (normalizedCandidate != null && normalized.contains(normalizedCandidate)) {
               Object value = valueResolver.apply(column.getColumnName());
               correlated.set(true);
@@ -121,23 +121,6 @@ final class CorrelatedSubqueryRewriter {
   private static String toSqlLiteral(Object value) {
     Expression literal = toLiteralExpression(value);
     return literal.toString();
-  }
-
-  private static String normalizeQualifier(String qualifier) {
-    if (qualifier == null) {
-      return null;
-    }
-    String trimmed = qualifier.trim();
-    if (trimmed.isEmpty()) {
-      return null;
-    }
-    if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("`") && trimmed.endsWith("`"))) {
-      trimmed = trimmed.substring(1, trimmed.length() - 1);
-    }
-    if ((trimmed.startsWith("[") && trimmed.endsWith("]"))) {
-      trimmed = trimmed.substring(1, trimmed.length() - 1);
-    }
-    return trimmed.toLowerCase(Locale.ROOT);
   }
 
   private static Expression toLiteralExpression(Object value) {

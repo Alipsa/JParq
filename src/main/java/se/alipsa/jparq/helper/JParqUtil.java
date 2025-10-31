@@ -4,6 +4,7 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Properties;
 import se.alipsa.jparq.model.MetaDataResultSet;
 
@@ -83,5 +84,30 @@ public final class JParqUtil {
    */
   public static ResultSet listResultSet(String[] headers, List<Object[]> rows) {
     return new MetaDataResultSet(headers, rows);
+  }
+
+  /**
+   * Normalizes a SQL table or column qualifier by removing quotes, backticks, and
+   * brackets, and converting to lowercase.
+   *
+   * @param qualifier
+   *          the qualifier to normalize (e.g., table name, column name)
+   * @return the normalized qualifier, or null if the input is null or empty
+   */
+  public static String normalizeQualifier(String qualifier) {
+    if (qualifier == null) {
+      return null;
+    }
+    String trimmed = qualifier.trim();
+    if (trimmed.isEmpty()) {
+      return null;
+    }
+    if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("`") && trimmed.endsWith("`"))) {
+      trimmed = trimmed.substring(1, trimmed.length() - 1);
+    }
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      trimmed = trimmed.substring(1, trimmed.length() - 1);
+    }
+    return trimmed.toLowerCase(Locale.ROOT);
   }
 }
