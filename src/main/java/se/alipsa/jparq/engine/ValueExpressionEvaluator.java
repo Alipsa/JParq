@@ -1026,19 +1026,7 @@ public final class ValueExpressionEvaluator {
 
   private Object columnValue(Column column, GenericRecord record) {
     String name = column.getColumnName();
-    String lookup = name;
-    Schema colSchema = fieldSchemas.get(name);
-    if (colSchema == null) {
-      String canonical = caseInsensitiveIndex.get(name.toLowerCase(Locale.ROOT));
-      if (canonical != null) {
-        colSchema = fieldSchemas.get(canonical);
-        lookup = canonical;
-      }
-    }
-    if (colSchema == null) {
-      return null;
-    }
-    return AvroCoercions.unwrap(record.get(lookup), colSchema);
+    return resolveColumnValue(name, record);
   }
 
   private Object resolveColumnValue(String columnName, GenericRecord record) {
