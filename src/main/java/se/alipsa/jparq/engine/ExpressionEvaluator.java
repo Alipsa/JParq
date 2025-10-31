@@ -485,7 +485,7 @@ public final class ExpressionEvaluator {
       Object leftVal = anyOnLeft ? candidate : otherValue;
       Object rightVal = anyOnLeft ? otherValue : candidate;
 
-      if (leftVal == null || rightVal == null) {
+      if (rightVal == null) {
         allMatch = false;
         continue;
       }
