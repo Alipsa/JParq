@@ -22,7 +22,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Integration tests verifying SQL {@code ANY}/{@code ALL} handling through the JDBC driver.
+ * Integration tests verifying SQL {@code ANY}/{@code ALL} handling through the
+ * JDBC driver.
  */
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 class AnyAllIntegrationTest {

@@ -99,8 +99,7 @@ public final class SqlParser {
      * @return list of OrderKey objects
      */
     public List<OrderKey> orderBy() {
-      // NOTE: Removed the redundant 'orderBy == null ? List.of() : orderBy' check
-      // as parseSelect already ensures List.copyOf() which prevents null.
+      // parseSelect already ensures List.copyOf() which prevents null.
       return orderBy;
     }
   }
@@ -643,7 +642,7 @@ public final class SqlParser {
       }
 
       @Override
-      public <S> Void visit(net.sf.jsqlparser.expression.AnyComparisonExpression any, S context) {
+      public <S> Void visit(AnyComparisonExpression any, S context) {
         net.sf.jsqlparser.statement.select.Select subSelect = any.getSelect();
         if (subSelect != null) {
           subSelect.accept(this, context);

@@ -398,8 +398,8 @@ public final class ExpressionEvaluator {
   }
 
   /**
-   * Determine whether the provided expressions involve an {@code ANY}, {@code SOME}, or {@code ALL}
-   * comparison.
+   * Determine whether the provided expressions involve an {@code ANY},
+   * {@code SOME}, or {@code ALL} comparison.
    *
    * @param left
    *          the left-hand expression
@@ -412,13 +412,15 @@ public final class ExpressionEvaluator {
   }
 
   /**
-   * Evaluate comparison expressions that use the SQL {@code ANY}/{@code SOME}/{@code ALL} syntax.
+   * Evaluate comparison expressions that use the SQL
+   * {@code ANY}/{@code SOME}/{@code ALL} syntax.
    *
    * @param be
    *          the comparison expression to evaluate
    * @param rec
    *          the current record being processed
-   * @return {@code true} if the comparison evaluates to {@code true}, otherwise {@code false}
+   * @return {@code true} if the comparison evaluates to {@code true}, otherwise
+   *         {@code false}
    */
   private boolean evalAnyComparison(BinaryExpression be, GenericRecord rec) {
     Expression left = be.getLeftExpression();
@@ -434,18 +436,21 @@ public final class ExpressionEvaluator {
   }
 
   /**
-   * Evaluate a single {@link AnyComparisonExpression} against the provided expression.
+   * Evaluate a single {@link AnyComparisonExpression} against the provided
+   * expression.
    *
    * @param anyExpr
    *          the ANY/SOME/ALL expression
    * @param otherExpr
    *          the expression to compare with the results of {@code anyExpr}
    * @param operator
-   *          the comparison operator ({@code =}, {@code <>}, {@code >}, {@code >=}, {@code <}, or {@code <=})
+   *          the comparison operator ({@code =}, {@code <>}, {@code >},
+   *          {@code >=}, {@code <}, or {@code <=})
    * @param rec
    *          the record currently under evaluation
    * @param anyOnLeft
-   *          {@code true} if {@code anyExpr} appeared on the left-hand side of the operator
+   *          {@code true} if {@code anyExpr} appeared on the left-hand side of
+   *          the operator
    * @return {@code true} if the comparison succeeds, otherwise {@code false}
    */
   private boolean evalAnyComparison(AnyComparisonExpression anyExpr, Expression otherExpr, String operator,
@@ -463,9 +468,11 @@ public final class ExpressionEvaluator {
 
     List<Object> values = fetchAnyAllValues(anyExpr, rec);
     if (values.isEmpty()) {
-      // Per SQL semantics, ALL comparisons over an empty set return TRUE (vacuously true),
+      // Per SQL semantics, ALL comparisons over an empty set return TRUE (vacuously
+      // true),
       // while ANY/SOME comparisons over an empty set return FALSE.
-      // See SQL:2016, section 8.2 <quantified comparison predicate> and 8.3 <in predicate>.
+      // See SQL:2016, section 8.2 <quantified comparison predicate> and 8.3 <in
+      // predicate>.
       return anyExpr.getAnyType() == AnyType.ALL;
     }
 
@@ -475,7 +482,7 @@ public final class ExpressionEvaluator {
     Schema comparisonSchema = otherOperand.schemaOrNull;
 
     for (Object rawValue : values) {
-      Object candidate = coerceIfSchemaNotNull(rawValue, comparisonSchema);
+      Object candidate = comparisonSchema == null ? rawValue : coerceLiteralToColumnType(rawValue, comparisonSchema);
 
       if (candidate == null) {
         allMatch = false;
@@ -520,7 +527,8 @@ public final class ExpressionEvaluator {
    *          textual representation of the operator
    * @param cmp
    *          comparison result ({@code <0}, {@code 0}, {@code >0})
-   * @return {@code true} if the operator holds for {@code cmp}, otherwise {@code false}
+   * @return {@code true} if the operator holds for {@code cmp}, otherwise
+   *         {@code false}
    */
   private static boolean applyComparisonOperator(String operator, int cmp) {
     return switch (operator) {
@@ -535,8 +543,8 @@ public final class ExpressionEvaluator {
   }
 
   /**
-   * Execute the subquery associated with an {@link AnyComparisonExpression} and return the values of
-   * its first column.
+   * Execute the subquery associated with an {@link AnyComparisonExpression} and
+   * return the values of its first column.
    *
    * @param anyExpr
    *          the comparison expression whose subquery should be evaluated
@@ -546,9 +554,12 @@ public final class ExpressionEvaluator {
    */
   private List<Object> fetchAnyAllValues(AnyComparisonExpression anyExpr, GenericRecord rec) {
     net.sf.jsqlparser.statement.select.Select subSelect = anyExpr.getSelect();
-    // For correlated subqueries, resolveColumnValue fetches the value of a referenced column
-    // from the current outer record (rec). This is critical for correct ANY/ALL evaluation semantics,
-    // as correlated column references must be resolved in the context of the current row.
+    // For correlated subqueries, resolveColumnValue fetches the value of a
+    // referenced column
+    // from the current outer record (rec). This is critical for correct ANY/ALL
+    // evaluation semantics,
+    // as correlated column references must be resolved in the context of the
+    // current row.
     CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
         column -> resolveColumnValue(column, rec));
 
@@ -629,8 +640,10 @@ public final class ExpressionEvaluator {
    * @param value
    *          the literal value to coerce (may be {@code null})
    * @param columnSchemaOrNull
-   *          the schema of the comparison column, or {@code null} when comparing two literals
-   * @return the coerced literal when a schema is supplied; otherwise the original value
+   *          the schema of the comparison column, or {@code null} when comparing
+   *          two literals
+   * @return the coerced literal when a schema is supplied; otherwise the original
+   *         value
    */
   private static Object coerceLiteralToColumnType(Object value, Schema columnSchemaOrNull) {
     return columnSchemaOrNull == null ? value : coerceLiteral(value, columnSchemaOrNull);
