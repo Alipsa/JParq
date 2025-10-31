@@ -26,6 +26,8 @@ public final class QueryProcessor implements AutoCloseable {
   private final boolean distinctBeforePreLimit;
   private final SubqueryExecutor subqueryExecutor;
   private final int preLimit;
+  private final int offset;
+  private final int preOffset;
   private final List<SqlParser.OrderKey> preOrderBy;
   private final boolean hasPreStage;
   private final List<String> distinctColumns;
@@ -41,6 +43,9 @@ public final class QueryProcessor implements AutoCloseable {
   private int idx = 0;
 
   private int emitted;
+  private int skipped;
+  private int preOffsetApplied;
+  private GenericRecord prefetched;
   private final Set<List<Object>> distinctSeen;
 
   /**
@@ -56,6 +61,8 @@ public final class QueryProcessor implements AutoCloseable {
     private GenericRecord firstAlreadyRead;
     private SubqueryExecutor subqueryExecutor;
     private int preLimit = -1;
+    private int offset;
+    private int preOffset;
     private List<SqlParser.OrderKey> preOrderBy = List.of();
     private List<String> distinctColumns;
     private List<String> preStageDistinctColumns = List.of();
@@ -173,6 +180,31 @@ public final class QueryProcessor implements AutoCloseable {
     }
 
     /**
+     * Apply an OFFSET that should be honored after filtering.
+     *
+     * @param offset
+     *          number of rows to skip; negative values are treated as zero
+     * @return {@code this} for chaining
+     */
+    public Options offset(int offset) {
+      this.offset = Math.max(0, offset);
+      return this;
+    }
+
+    /**
+     * Apply an OFFSET that must be enforced prior to any pre-stage processing.
+     *
+     * @param preOffset
+     *          number of rows to skip before applying pre-stage ORDER BY or LIMIT
+     *          logic
+     * @return {@code this} for chaining
+     */
+    public Options preOffset(int preOffset) {
+      this.preOffset = Math.max(0, preOffset);
+      return this;
+    }
+
+    /**
      * Apply ORDER BY keys that must run before the outer projection.
      *
      * @param preOrderBy
@@ -252,8 +284,10 @@ public final class QueryProcessor implements AutoCloseable {
     this.distinctBeforePreLimit = opts.distinctBeforePreLimit;
     this.subqueryExecutor = opts.subqueryExecutor;
     this.preLimit = opts.preLimit;
+    this.offset = Math.max(0, opts.offset);
+    this.preOffset = Math.max(0, opts.preOffset);
     this.preOrderBy = opts.preOrderBy;
-    this.hasPreStage = (this.preLimit >= 0) || !this.preOrderBy.isEmpty();
+    this.hasPreStage = (this.preLimit >= 0) || !this.preOrderBy.isEmpty() || (this.preOffset > 0);
     List<String> distinctCols = opts.distinctColumns == null ? this.projection : opts.distinctColumns;
     this.distinctColumns = distinctCols;
     this.preStageDistinctColumns = (opts.preStageDistinctColumns == null || opts.preStageDistinctColumns.isEmpty())
@@ -264,7 +298,10 @@ public final class QueryProcessor implements AutoCloseable {
         ? new ExpressionEvaluator(opts.schema, subqueryExecutor, outerQualifiers)
         : null;
     this.emitted = Math.max(0, opts.initialEmitted);
+    this.skipped = Math.min(this.offset, Math.max(0, opts.initialEmitted));
     this.orderBy = opts.orderBy;
+    this.prefetched = (opts.initialEmitted > 0 && this.offset == 0) ? null : opts.firstAlreadyRead;
+    this.preOffsetApplied = 0;
     this.distinctSeen = distinct ? new LinkedHashSet<>() : null;
 
     GenericRecord firstAlreadyRead = opts.firstAlreadyRead;
@@ -275,6 +312,7 @@ public final class QueryProcessor implements AutoCloseable {
 
     if (!this.orderBy.isEmpty() || hasPreStage) {
       bufferAndSort(firstAlreadyRead, opts.schema);
+      this.prefetched = null;
     }
   }
 
@@ -331,6 +369,17 @@ public final class QueryProcessor implements AutoCloseable {
         if (!preOrderBy.isEmpty() && sortSchema != null && buf.size() > 1) {
           buf.sort(buildComparator(sortSchema, preOrderBy));
         }
+        if (preOffset > 0 && !buf.isEmpty()) {
+          int before = buf.size();
+          if (preOffset >= before) {
+            buf = new ArrayList<>();
+          } else {
+            buf = new ArrayList<>(buf.subList(preOffset, before));
+          }
+          preOffsetApplied = Math.min(preOffset, before);
+        } else {
+          preOffsetApplied = 0;
+        }
         if (preLimit >= 0 && buf.size() > preLimit) {
           buf = new ArrayList<>(buf.subList(0, preLimit));
         }
@@ -346,7 +395,14 @@ public final class QueryProcessor implements AutoCloseable {
       }
 
       this.sorted = buf;
-      this.idx = 0;
+      int effectiveOffset = Math.max(0, offset - preOffsetApplied);
+      if (effectiveOffset >= sorted.size()) {
+        this.idx = sorted.size();
+        this.skipped = offset;
+      } else {
+        this.idx = effectiveOffset;
+        this.skipped = offset;
+      }
     } catch (IOException e) {
       throw new RuntimeException("ORDER BY buffer/sort failed", e);
     }
@@ -428,17 +484,22 @@ public final class QueryProcessor implements AutoCloseable {
     }
 
     // Streaming path
-    GenericRecord rec = reader.read();
+    GenericRecord rec = nextRawRecord();
     while (rec != null) {
       if (matches(rec)) {
         if (distinct && !registerDistinct(rec)) {
-          rec = reader.read();
+          rec = nextRawRecord();
+          continue;
+        }
+        if (skipped < offset) {
+          skipped++;
+          rec = nextRawRecord();
           continue;
         }
         emitted++;
         return rec;
       }
-      rec = reader.read();
+      rec = nextRawRecord();
     }
     return null;
   }
@@ -478,6 +539,15 @@ public final class QueryProcessor implements AutoCloseable {
     }
     List<Object> key = distinctKey(rec, distinctColumns);
     return distinctSeen.add(key);
+  }
+
+  private GenericRecord nextRawRecord() throws IOException {
+    if (prefetched != null) {
+      GenericRecord next = prefetched;
+      prefetched = null;
+      return next;
+    }
+    return reader.read();
   }
 
   private List<GenericRecord> applyDistinct(List<GenericRecord> records) {

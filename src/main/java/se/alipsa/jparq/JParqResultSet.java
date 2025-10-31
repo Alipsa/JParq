@@ -125,7 +125,8 @@ public class JParqResultSet extends ResultSetAdapter {
         QueryProcessor.Options options = QueryProcessor.Options.builder().distinct(select.distinct())
             .distinctBeforePreLimit(select.innerDistinct()).subqueryExecutor(subqueryExecutor)
             .preLimit(select.preLimit()).preOrderBy(select.preOrderBy()).outerQualifiers(queryQualifiers)
-            .preStageDistinctColumns(select.innerDistinctColumns());
+            .preStageDistinctColumns(select.innerDistinctColumns()).offset(select.offset())
+            .preOffset(select.preOffset());
         this.qp = new QueryProcessor(reader, this.columnOrder, /* where */ residual, select.limit(), options);
         this.current = null;
         this.rowNum = 0;
@@ -151,21 +152,22 @@ public class JParqResultSet extends ResultSetAdapter {
       }
 
       var order = select.orderBy();
+      boolean usePrefetchedAsCurrent = match && select.offset() == 0;
       if (order == null || order.isEmpty()) {
-        int initialEmitted = match ? 1 : 0;
-        GenericRecord firstForDistinct = match ? first : null;
+        int initialEmitted = usePrefetchedAsCurrent ? 1 : 0;
         QueryProcessor.Options options = QueryProcessor.Options.builder().schema(schema).initialEmitted(initialEmitted)
-            .distinct(select.distinct()).distinctBeforePreLimit(select.innerDistinct())
-            .firstAlreadyRead(firstForDistinct).subqueryExecutor(subqueryExecutor).preLimit(select.preLimit())
-            .preOrderBy(select.preOrderBy()).preStageDistinctColumns(select.innerDistinctColumns())
-            .outerQualifiers(queryQualifiers);
+            .distinct(select.distinct()).distinctBeforePreLimit(select.innerDistinct()).firstAlreadyRead(first)
+            .subqueryExecutor(subqueryExecutor).preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
+            .preStageDistinctColumns(select.innerDistinctColumns()).outerQualifiers(queryQualifiers)
+            .offset(select.offset()).preOffset(select.preOffset());
         this.qp = new QueryProcessor(reader, proj, residual, select.limit(), options);
-        this.current = match ? first : qp.nextMatching();
+        this.current = usePrefetchedAsCurrent ? first : qp.nextMatching();
       } else {
         QueryProcessor.Options options = QueryProcessor.Options.builder().schema(schema).distinct(select.distinct())
             .distinctBeforePreLimit(select.innerDistinct()).orderBy(order).firstAlreadyRead(first)
             .subqueryExecutor(subqueryExecutor).preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
-            .preStageDistinctColumns(select.innerDistinctColumns()).outerQualifiers(queryQualifiers);
+            .preStageDistinctColumns(select.innerDistinctColumns()).outerQualifiers(queryQualifiers)
+            .offset(select.offset()).preOffset(select.preOffset());
         this.qp = new QueryProcessor(reader, proj, residual, select.limit(), options);
         this.current = qp.nextMatching();
       }

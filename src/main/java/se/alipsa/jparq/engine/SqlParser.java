@@ -55,6 +55,8 @@ public final class SqlParser {
    *          queries)
    * @param limit
    *          the limit value (-1 if none)
+   * @param offset
+   *          number of rows to skip after filtering (0 if not specified)
    * @param orderBy
    *          ORDER BY keys (empty if none)
    * @param distinct
@@ -75,14 +77,17 @@ public final class SqlParser {
    * @param preLimit
    *          a limit that must be applied before outer ORDER BY logic (typically
    *          sourced from an inner SELECT)
+   * @param preOffset
+   *          number of rows to skip prior to enforcing pre-stage ORDER BY and
+   *          LIMIT operations
    * @param preOrderBy
    *          ORDER BY keys that must be applied prior to the outer ORDER BY
    *          (typically inherited from an inner SELECT)
    */
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
-      int limit, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct, List<String> innerDistinctColumns,
-      List<Expression> expressions, List<Expression> groupByExpressions, Expression having, int preLimit,
-      List<OrderKey> preOrderBy) {
+      int limit, int offset, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct,
+      List<String> innerDistinctColumns, List<Expression> expressions, List<Expression> groupByExpressions,
+      Expression having, int preLimit, int preOffset, List<OrderKey> preOrderBy) {
 
     /**
      * returns "*" if no explicit projection.
@@ -139,13 +144,15 @@ public final class SqlParser {
 
   private static Select parsePlainSelect(PlainSelect ps) {
     FromInfo fromInfo = parseFromItem(ps.getFromItem());
-    Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo);
+    final Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo);
 
     Expression whereExpr = ps.getWhere();
     stripQualifier(whereExpr, fromInfo.tableName(), fromInfo.tableAlias());
     int outerLimit = computeLimit(ps);
+    int outerOffset = computeOffset(ps);
     Select inner = fromInfo.innerSelect();
     int innerLimit = inner == null ? -1 : inner.limit();
+    int innerOffset = inner == null ? 0 : inner.offset();
 
     int limit;
     if (outerLimit >= 0 && innerLimit >= 0) {
@@ -154,6 +161,11 @@ public final class SqlParser {
       limit = outerLimit;
     } else {
       limit = innerLimit;
+    }
+
+    int offset = outerOffset;
+    if (innerOffset > 0) {
+      offset += innerOffset;
     }
 
     List<OrderKey> orderKeys = computeOrderKeys(ps, projection.labels(), projection.physicalCols(),
@@ -171,8 +183,12 @@ public final class SqlParser {
     }
 
     int preLimit = -1;
+    int preOffset = 0;
     if (innerLimit >= 0 && outerRequestedOrder) {
       preLimit = innerLimit;
+    }
+    if (innerOffset > 0 && (outerRequestedOrder || preLimit >= 0)) {
+      preOffset = innerOffset;
     }
 
     List<String> labels = projection.labels();
@@ -220,8 +236,8 @@ public final class SqlParser {
     List<String> innerDistinctCols = innerDistinct && inner != null ? List.copyOf(inner.columnNames()) : List.of();
 
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
-        orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, groupByExpressions, combinedHaving,
-        preLimit, preOrderCopy);
+        offset, orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, groupByExpressions,
+        combinedHaving, preLimit, preOffset, preOrderCopy);
   }
 
   // === Parsing Helper Methods =================================================
@@ -366,6 +382,22 @@ public final class SqlParser {
       return Integer.parseInt(rowCountExpr.toString());
     }
     return -1;
+  }
+
+  private static int computeOffset(PlainSelect ps) {
+    Offset off = ps.getOffset();
+    if (off != null && off.getOffset() != null) {
+      Expression expr = off.getOffset();
+      if (expr instanceof LongValue lv) {
+        return lv.getBigIntegerValue().intValue();
+      }
+      try {
+        return Integer.parseInt(expr.toString());
+      } catch (NumberFormatException e) {
+        throw new IllegalArgumentException("Invalid OFFSET value: '" + expr + "'", e);
+      }
+    }
+    return 0;
   }
 
   /**
