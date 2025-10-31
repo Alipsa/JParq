@@ -393,8 +393,11 @@ public final class SqlParser {
       if (expr instanceof LongValue lv) {
         return lv.getBigIntegerValue().intValue();
       }
-      return Integer.parseInt(expr.toString());
-    }
+      try {
+        return Integer.parseInt(expr.toString());
+      } catch (NumberFormatException e) {
+        throw new IllegalArgumentException("Invalid OFFSET value: '" + expr + "'", e);
+      }
     return 0;
   }
 
