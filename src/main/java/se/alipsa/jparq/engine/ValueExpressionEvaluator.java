@@ -1042,22 +1042,7 @@ public final class ValueExpressionEvaluator {
   }
 
   private Object resolveColumnValue(String columnName, GenericRecord record) {
-    if (columnName == null || record == null) {
-      return null;
-    }
-    String lookup = columnName;
-    Schema colSchema = fieldSchemas.get(columnName);
-    if (colSchema == null) {
-      String canonical = caseInsensitiveIndex.get(columnName.toLowerCase(Locale.ROOT));
-      if (canonical != null) {
-        lookup = canonical;
-        colSchema = fieldSchemas.get(canonical);
-      }
-    }
-    if (colSchema == null) {
-      return null;
-    }
-    return AvroCoercions.unwrap(record.get(lookup), colSchema);
+    return AvroCoercions.resolveColumnValue(columnName, record, fieldSchemas, caseInsensitiveIndex);
   }
 
   private BigDecimal toBigDecimal(Object value) {

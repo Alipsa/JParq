@@ -410,23 +410,7 @@ public final class ExpressionEvaluator {
   }
 
   private Object resolveColumnValue(String columnName, GenericRecord rec) {
-    if (columnName == null) {
-      return null;
-    }
-    String lookup = columnName;
-    Schema schema = fieldSchemas.get(columnName);
-    if (schema == null) {
-      String canonical = caseInsensitiveIndex.get(columnName.toLowerCase(Locale.ROOT));
-      if (canonical != null) {
-        lookup = canonical;
-        schema = fieldSchemas.get(canonical);
-      }
-    }
-    if (schema == null) {
-      return null;
-    }
-    Object value = rec.get(lookup);
-    return AvroCoercions.unwrap(value, schema);
+    return AvroCoercions.resolveColumnValue(columnName, rec, fieldSchemas, caseInsensitiveIndex);
   }
 
   private Operand operand(Expression e, GenericRecord rec) {
