@@ -15,7 +15,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
-/** Integration tests verifying OFFSET semantics for simple and derived queries. */
+/**
+ * Integration tests verifying OFFSET semantics for simple and derived queries.
+ */
 class SqlParserOffsetTest {
 
   private static JParqSql jparqSql;
@@ -90,9 +92,7 @@ class SqlParserOffsetTest {
     List<CarRow> innerSlice = orderedRows.subList(innerStart, innerEnd);
 
     List<String> expected = innerSlice.stream()
-        .sorted(Comparator.comparingDouble(CarRow::mpg).thenComparing(CarRow::model))
-        .limit(3)
-        .map(CarRow::model)
+        .sorted(Comparator.comparingDouble(CarRow::mpg).thenComparing(CarRow::model)).limit(3).map(CarRow::model)
         .toList();
 
     List<String> actual = new ArrayList<>();
@@ -120,4 +120,3 @@ class SqlParserOffsetTest {
   private record CarRow(String model, double mpg) {
   }
 }
-

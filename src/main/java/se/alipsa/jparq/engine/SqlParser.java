@@ -233,9 +233,7 @@ public final class SqlParser {
     List<OrderKey> orderCopy = List.copyOf(orderKeys);
     List<OrderKey> preOrderCopy = List.copyOf(preOrderBy);
     List<Expression> expressionCopy = List.copyOf(expressions);
-    List<String> innerDistinctCols = innerDistinct && inner != null
-        ? List.copyOf(inner.columnNames())
-        : List.of();
+    List<String> innerDistinctCols = innerDistinct && inner != null ? List.copyOf(inner.columnNames()) : List.of();
 
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
         offset, orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, groupByExpressions,
@@ -398,6 +396,7 @@ public final class SqlParser {
       } catch (NumberFormatException e) {
         throw new IllegalArgumentException("Invalid OFFSET value: '" + expr + "'", e);
       }
+    }
     return 0;
   }
 

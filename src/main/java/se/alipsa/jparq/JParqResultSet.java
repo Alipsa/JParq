@@ -156,10 +156,10 @@ public class JParqResultSet extends ResultSetAdapter {
       if (order == null || order.isEmpty()) {
         int initialEmitted = usePrefetchedAsCurrent ? 1 : 0;
         QueryProcessor.Options options = QueryProcessor.Options.builder().schema(schema).initialEmitted(initialEmitted)
-            .distinct(select.distinct()).distinctBeforePreLimit(select.innerDistinct())
-            .firstAlreadyRead(first).subqueryExecutor(subqueryExecutor).preLimit(select.preLimit())
-            .preOrderBy(select.preOrderBy()).preStageDistinctColumns(select.innerDistinctColumns())
-            .outerQualifiers(queryQualifiers).offset(select.offset()).preOffset(select.preOffset());
+            .distinct(select.distinct()).distinctBeforePreLimit(select.innerDistinct()).firstAlreadyRead(first)
+            .subqueryExecutor(subqueryExecutor).preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
+            .preStageDistinctColumns(select.innerDistinctColumns()).outerQualifiers(queryQualifiers)
+            .offset(select.offset()).preOffset(select.preOffset());
         this.qp = new QueryProcessor(reader, proj, residual, select.limit(), options);
         this.current = usePrefetchedAsCurrent ? first : qp.nextMatching();
       } else {

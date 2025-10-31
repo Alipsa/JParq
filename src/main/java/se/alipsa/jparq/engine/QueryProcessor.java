@@ -195,7 +195,8 @@ public final class QueryProcessor implements AutoCloseable {
      * Apply an OFFSET that must be enforced prior to any pre-stage processing.
      *
      * @param preOffset
-     *          number of rows to skip before applying pre-stage ORDER BY or LIMIT logic
+     *          number of rows to skip before applying pre-stage ORDER BY or LIMIT
+     *          logic
      * @return {@code this} for chaining
      */
     public Options preOffset(int preOffset) {
