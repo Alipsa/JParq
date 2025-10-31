@@ -479,10 +479,8 @@ public final class ExpressionEvaluator {
         : otherValue;
 
     for (Object rawValue : values) {
-      // Coerce candidate once per iteration to match the schema
-      Object candidate = otherOperand.schemaOrNull != null
-          ? coerceLiteral(rawValue, otherOperand.schemaOrNull)
-          : rawValue;
+      // Coerce candidate once per iteration using its own type
+      Object candidate = coerceIfColumnType(rawValue);
 
       if (candidate == null) {
         allMatch = false;
