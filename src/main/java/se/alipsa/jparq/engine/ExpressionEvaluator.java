@@ -11,6 +11,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import net.sf.jsqlparser.JSQLParserException;
+import net.sf.jsqlparser.expression.AnyComparisonExpression;
+import net.sf.jsqlparser.expression.AnyType;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.NotExpression;
@@ -186,23 +188,41 @@ public final class ExpressionEvaluator {
 
     // Comparison operators
     if (expr instanceof EqualsTo e) {
+      if (involvesAnyComparison(e.getLeftExpression(), e.getRightExpression())) {
+        return evalAnyComparison(e, rec);
+      }
       return compare(e.getLeftExpression(), e.getRightExpression(), rec) == 0;
     }
     if (expr instanceof GreaterThan gt) {
+      if (involvesAnyComparison(gt.getLeftExpression(), gt.getRightExpression())) {
+        return evalAnyComparison(gt, rec);
+      }
       return compare(gt.getLeftExpression(), gt.getRightExpression(), rec) > 0;
     }
     if (expr instanceof MinorThan lt) {
+      if (involvesAnyComparison(lt.getLeftExpression(), lt.getRightExpression())) {
+        return evalAnyComparison(lt, rec);
+      }
       return compare(lt.getLeftExpression(), lt.getRightExpression(), rec) < 0;
     }
     if (expr instanceof GreaterThanEquals ge) {
+      if (involvesAnyComparison(ge.getLeftExpression(), ge.getRightExpression())) {
+        return evalAnyComparison(ge, rec);
+      }
       return compare(ge.getLeftExpression(), ge.getRightExpression(), rec) >= 0;
     }
     if (expr instanceof MinorThanEquals le) {
+      if (involvesAnyComparison(le.getLeftExpression(), le.getRightExpression())) {
+        return evalAnyComparison(le, rec);
+      }
       return compare(le.getLeftExpression(), le.getRightExpression(), rec) <= 0;
     }
 
     // Generic fallback for binary comparisons (covers parenthesized variants too)
     if (expr instanceof BinaryExpression be) {
+      if (involvesAnyComparison(be.getLeftExpression(), be.getRightExpression())) {
+        return evalAnyComparison(be, rec);
+      }
       return evalBinary(be, rec);
     }
 
@@ -296,8 +316,8 @@ public final class ExpressionEvaluator {
     Operand hi = operand(between.getBetweenExpressionEnd(), rec);
 
     Object curVal = val.value;
-    Object lowVal = coerceIfColumnType(lo.value, val.schemaOrNull);
-    Object highVal = coerceIfColumnType(hi.value, val.schemaOrNull);
+    Object lowVal = coerceLiteralToColumnType(lo.value, val.schemaOrNull);
+    Object highVal = coerceLiteralToColumnType(hi.value, val.schemaOrNull);
 
     if (curVal == null || lowVal == null || highVal == null) {
       return false;
@@ -319,7 +339,7 @@ public final class ExpressionEvaluator {
         Operand rightOperand = operand(e, rec);
 
         Object leftVal = left.value;
-        Object rightVal = coerceIfColumnType(rightOperand.value, left.schemaOrNull);
+        Object rightVal = coerceLiteralToColumnType(rightOperand.value, left.schemaOrNull);
 
         if (leftVal != null && rightVal != null && typedCompare(leftVal, rightVal) == 0) {
           found = true;
@@ -335,7 +355,7 @@ public final class ExpressionEvaluator {
       List<Object> values = subqueryExecutor.execute(subSelect).firstColumnValues();
       boolean found = false;
       for (Object value : values) {
-        Object rightVal = coerceIfColumnType(value, left.schemaOrNull);
+        Object rightVal = coerceLiteralToColumnType(value, left.schemaOrNull);
         Object leftVal = left.value;
         if (leftVal != null && rightVal != null && typedCompare(leftVal, rightVal) == 0) {
           found = true;
@@ -375,6 +395,161 @@ public final class ExpressionEvaluator {
       case "<>", "!=" -> cmp != 0;
       default -> throw new IllegalArgumentException("Unsupported operator: " + op);
     };
+  }
+
+  /**
+   * Determine whether the provided expressions involve an {@code ANY}, {@code SOME}, or {@code ALL}
+   * comparison.
+   *
+   * @param left
+   *          the left-hand expression
+   * @param right
+   *          the right-hand expression
+   * @return {@code true} if either side is an {@link AnyComparisonExpression}
+   */
+  private static boolean involvesAnyComparison(Expression left, Expression right) {
+    return left instanceof AnyComparisonExpression || right instanceof AnyComparisonExpression;
+  }
+
+  /**
+   * Evaluate comparison expressions that use the SQL {@code ANY}/{@code SOME}/{@code ALL} syntax.
+   *
+   * @param be
+   *          the comparison expression to evaluate
+   * @param rec
+   *          the current record being processed
+   * @return {@code true} if the comparison evaluates to {@code true}, otherwise {@code false}
+   */
+  private boolean evalAnyComparison(BinaryExpression be, GenericRecord rec) {
+    Expression left = be.getLeftExpression();
+    Expression right = be.getRightExpression();
+
+    if (left instanceof AnyComparisonExpression any) {
+      return evalAnyComparison(any, right, be.getStringExpression(), rec, true);
+    }
+    if (right instanceof AnyComparisonExpression any) {
+      return evalAnyComparison(any, left, be.getStringExpression(), rec, false);
+    }
+    throw new IllegalArgumentException("ANY/ALL evaluation requested without AnyComparisonExpression");
+  }
+
+  /**
+   * Evaluate a single {@link AnyComparisonExpression} against the provided expression.
+   *
+   * @param anyExpr
+   *          the ANY/SOME/ALL expression
+   * @param otherExpr
+   *          the expression to compare with the results of {@code anyExpr}
+   * @param operator
+   *          the comparison operator ({@code =}, {@code <>}, {@code >}, {@code >=}, {@code <}, or {@code <=})
+   * @param rec
+   *          the record currently under evaluation
+   * @param anyOnLeft
+   *          {@code true} if {@code anyExpr} appeared on the left-hand side of the operator
+   * @return {@code true} if the comparison succeeds, otherwise {@code false}
+   */
+  private boolean evalAnyComparison(AnyComparisonExpression anyExpr, Expression otherExpr, String operator,
+      GenericRecord rec, boolean anyOnLeft) {
+    if (subqueryExecutor == null) {
+      throw new IllegalStateException("ANY/ALL subqueries require a subquery executor");
+    }
+
+    Operand otherOperand = operand(otherExpr, rec);
+    Object otherValue = otherOperand.value;
+
+    if (otherValue == null) {
+      return false;
+    }
+
+    List<Object> values = fetchAnyAllValues(anyExpr, rec);
+    if (values.isEmpty()) {
+      return anyExpr.getAnyType() == AnyType.ALL;
+    }
+
+    boolean isAll = anyExpr.getAnyType() == AnyType.ALL;
+    boolean anyMatch = false;
+    boolean allMatch = true;
+    Schema comparisonSchema = otherOperand.schemaOrNull;
+
+    for (Object rawValue : values) {
+      Object candidate = comparisonSchema == null ? rawValue : coerceLiteralToColumnType(rawValue, comparisonSchema);
+
+      if (candidate == null) {
+        allMatch = false;
+        continue;
+      }
+
+      Object leftVal = anyOnLeft ? candidate : otherValue;
+      Object rightVal = anyOnLeft ? otherValue : candidate;
+
+      if (leftVal == null || rightVal == null) {
+        allMatch = false;
+        continue;
+      }
+
+      int cmp;
+      try {
+        cmp = typedCompare(leftVal, rightVal);
+      } catch (Exception ex) {
+        allMatch = false;
+        continue;
+      }
+
+      boolean comparisonResult = applyComparisonOperator(operator, cmp);
+      if (comparisonResult) {
+        anyMatch = true;
+      } else {
+        allMatch = false;
+      }
+
+      if (!isAll && anyMatch) {
+        return true;
+      }
+    }
+
+    return isAll ? allMatch : anyMatch;
+  }
+
+  /**
+   * Apply the provided comparison operator to a {@code compareTo}-style result.
+   *
+   * @param operator
+   *          textual representation of the operator
+   * @param cmp
+   *          comparison result ({@code <0}, {@code 0}, {@code >0})
+   * @return {@code true} if the operator holds for {@code cmp}, otherwise {@code false}
+   */
+  private static boolean applyComparisonOperator(String operator, int cmp) {
+    return switch (operator) {
+      case "=" -> cmp == 0;
+      case "<" -> cmp < 0;
+      case ">" -> cmp > 0;
+      case "<=" -> cmp <= 0;
+      case ">=" -> cmp >= 0;
+      case "<>", "!=" -> cmp != 0;
+      default -> throw new IllegalArgumentException("Unsupported operator for ANY/ALL: " + operator);
+    };
+  }
+
+  /**
+   * Execute the subquery associated with an {@link AnyComparisonExpression} and return the values of
+   * its first column.
+   *
+   * @param anyExpr
+   *          the comparison expression whose subquery should be evaluated
+   * @param rec
+   *          the current record, used when rewriting correlated subqueries
+   * @return the list of values from the first column of the subquery result
+   */
+  private List<Object> fetchAnyAllValues(AnyComparisonExpression anyExpr, GenericRecord rec) {
+    net.sf.jsqlparser.statement.select.Select subSelect = anyExpr.getSelect();
+    CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
+        column -> resolveColumnValue(column, rec));
+
+    SubqueryExecutor.SubqueryResult result = rewritten.correlated()
+        ? subqueryExecutor.executeRaw(rewritten.sql())
+        : subqueryExecutor.execute(subSelect);
+    return result.firstColumnValues();
   }
 
   // -------------------------
@@ -442,8 +617,17 @@ public final class ExpressionEvaluator {
     return new Operand(literal, null);
   }
 
-  private static Object coerceIfColumnType(Object value, Schema columnSchemaOrNull) {
-    return (columnSchemaOrNull == null) ? value : coerceLiteral(value, columnSchemaOrNull);
+  /**
+   * Coerce a literal value to the provided column schema, if present.
+   *
+   * @param value
+   *          the literal value to coerce (may be {@code null})
+   * @param columnSchemaOrNull
+   *          the schema of the comparison column, or {@code null} when comparing two literals
+   * @return the coerced literal when a schema is supplied; otherwise the original value
+   */
+  private static Object coerceLiteralToColumnType(Object value, Schema columnSchemaOrNull) {
+    return columnSchemaOrNull == null ? value : coerceLiteral(value, columnSchemaOrNull);
   }
 
   static int typedCompare(Object l, Object r) {

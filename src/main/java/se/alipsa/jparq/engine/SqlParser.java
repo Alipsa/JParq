@@ -643,6 +643,15 @@ public final class SqlParser {
       }
 
       @Override
+      public <S> Void visit(net.sf.jsqlparser.expression.AnyComparisonExpression any, S context) {
+        net.sf.jsqlparser.statement.select.Select subSelect = any.getSelect();
+        if (subSelect != null) {
+          subSelect.accept(this, context);
+        }
+        return super.visit(any, context);
+      }
+
+      @Override
       public <S> Void visit(ParenthesedSelect select, S context) {
         CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(select, qualifiers,
             name -> null);
