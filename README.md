@@ -1,3 +1,5 @@
+[![Maven Central](https://maven-badges.herokuapp.com/maven-central/se.alipsa/jparq/badge.svg)](https://maven-badges.herokuapp.com/maven-central/se.alipsa/jparq)
+[![javadoc](https://javadoc.io/badge2/se.alipsa/jparq/javadoc.svg)](https://javadoc.io/doc/se.alipsa/jparq)
 # JParq
 JParq is a JDBC driver for parquet files. It allows you to query parquet files using SQL.
 It works by regarding a directory as a database and each parquet file in that directory as a table. Each parquet file must have a `.parquet` extension and each such file is referred to using the filename (minus the .parquet extension) as the table.
@@ -10,8 +12,8 @@ Note: A large proportion of the code was created in collaboration with ChatGPT 5
 ```xml
 <dependency>
   <groupId>se.alipsa</groupId>
-  <artifactId>parquet-jdbc</artifactId>
-  <version>0.1.0</version>
+  <artifactId>jparq</artifactId>
+  <version>0.5.0</version>
 </dependency>
 ```
 
