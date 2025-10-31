@@ -546,6 +546,9 @@ public final class ExpressionEvaluator {
    */
   private List<Object> fetchAnyAllValues(AnyComparisonExpression anyExpr, GenericRecord rec) {
     net.sf.jsqlparser.statement.select.Select subSelect = anyExpr.getSelect();
+    // For correlated subqueries, resolveColumnValue fetches the value of a referenced column
+    // from the current outer record (rec). This is critical for correct ANY/ALL evaluation semantics,
+    // as correlated column references must be resolved in the context of the current row.
     CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
         column -> resolveColumnValue(column, rec));
 
