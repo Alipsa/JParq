@@ -213,8 +213,7 @@ public class DistinctTest {
         while (rs.next()) {
           actual.add(rs.getInt("carb"));
         }
-        assertEquals(expected, actual,
-            "Outer DISTINCT should evaluate after skipping the inner OFFSET rows");
+        assertEquals(expected, actual, "Outer DISTINCT should evaluate after skipping the inner OFFSET rows");
       } catch (SQLException e) {
         fail(e);
       }
