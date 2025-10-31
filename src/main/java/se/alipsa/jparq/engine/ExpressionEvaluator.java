@@ -463,6 +463,9 @@ public final class ExpressionEvaluator {
 
     List<Object> values = fetchAnyAllValues(anyExpr, rec);
     if (values.isEmpty()) {
+      // Per SQL standard: "column = ANY (empty set)" returns false (no values to match),
+      // while "column = ALL (empty set)" returns true (the condition vacuously holds for all zero values).
+      // This is subtle but intentional SQL behavior; see SQL-92 8.2 <quantified comparison predicate>.
       return anyExpr.getAnyType() == AnyType.ALL;
     }
 
