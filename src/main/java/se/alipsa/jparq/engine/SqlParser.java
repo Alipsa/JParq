@@ -5,7 +5,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -17,6 +16,7 @@ import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.*;
+import se.alipsa.jparq.helper.JParqUtil;
 
 /**
  * Handles parsing the SQL and translates that into something that the parquet
@@ -617,7 +617,7 @@ public final class SqlParser {
     if (expr == null || qualifiers == null || qualifiers.isEmpty()) {
       return Set.of();
     }
-    Set<String> normalized = qualifiers.stream().map(SqlParser::normalizeQualifier)
+    Set<String> normalized = qualifiers.stream().map(JParqUtil::normalizeQualifier)
         .filter(s -> s != null && !s.isEmpty()).collect(Collectors.toCollection(LinkedHashSet::new));
     if (normalized.isEmpty()) {
       return Set.of();
@@ -632,7 +632,7 @@ public final class SqlParser {
               table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()
           };
           for (String candidate : candidates) {
-            String normalizedCandidate = normalizeQualifier(candidate);
+            String normalizedCandidate = JParqUtil.normalizeQualifier(candidate);
             if (normalizedCandidate != null && normalized.contains(normalizedCandidate)) {
               columns.add(column.getColumnName());
               break;
@@ -659,23 +659,6 @@ public final class SqlParser {
       }
     });
     return Set.copyOf(columns);
-  }
-
-  private static String normalizeQualifier(String qualifier) {
-    if (qualifier == null) {
-      return null;
-    }
-    String trimmed = qualifier.trim();
-    if (trimmed.isEmpty()) {
-      return null;
-    }
-    if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("`") && trimmed.endsWith("`"))) {
-      trimmed = trimmed.substring(1, trimmed.length() - 1);
-    }
-    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-      trimmed = trimmed.substring(1, trimmed.length() - 1);
-    }
-    return trimmed.toLowerCase(Locale.ROOT);
   }
 
   private static List<Expression> parseGroupBy(GroupByElement groupBy, FromInfo fromInfo) {
