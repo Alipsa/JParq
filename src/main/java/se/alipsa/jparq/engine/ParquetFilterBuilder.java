@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.NotExpression;
@@ -205,6 +206,10 @@ public final class ParquetFilterBuilder {
     String col = colExpr.getColumnName();
     Schema.Field f = findFieldCaseInsensitive(avroSchema, col);
     if (f == null) {
+      return Optional.empty();
+    }
+
+    if (litExpr instanceof AnyComparisonExpression) {
       return Optional.empty();
     }
 
