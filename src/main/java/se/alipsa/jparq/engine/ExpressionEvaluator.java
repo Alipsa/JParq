@@ -491,11 +491,6 @@ public final class ExpressionEvaluator {
       Object leftVal = anyOnLeft ? candidate : coercedOther;
       Object rightVal = anyOnLeft ? coercedOther : candidate;
 
-      if (leftVal == null || rightVal == null) {
-        allMatch = false;
-        continue;
-      }
-
       int cmp;
       try {
         cmp = typedCompare(leftVal, rightVal);
