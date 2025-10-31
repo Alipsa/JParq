@@ -11,6 +11,7 @@ import java.nio.file.Paths;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeAll;
@@ -182,5 +183,41 @@ public class DistinctTest {
             fail(e);
           }
         });
+  }
+
+  @Test
+  void innerOffsetPropagatesToOuterDistinct() {
+    List<Integer> allCarbs = new ArrayList<>();
+    jparqSql.query("select carb from mtcars", rs -> {
+      try {
+        while (rs.next()) {
+          allCarbs.add(rs.getInt("carb"));
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    List<Integer> expected = new ArrayList<>();
+    LinkedHashSet<Integer> seen = new LinkedHashSet<>();
+    for (int i = 5; i < allCarbs.size(); i++) {
+      int value = allCarbs.get(i);
+      if (seen.add(value)) {
+        expected.add(value);
+      }
+    }
+
+    jparqSql.query("select distinct carb from (select carb from mtcars offset 5) t", rs -> {
+      List<Integer> actual = new ArrayList<>();
+      try {
+        while (rs.next()) {
+          actual.add(rs.getInt("carb"));
+        }
+        assertEquals(expected, actual,
+            "Outer DISTINCT should evaluate after skipping the inner OFFSET rows");
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
   }
 }

@@ -78,8 +78,8 @@ public final class SqlParser {
    *          a limit that must be applied before outer ORDER BY logic (typically
    *          sourced from an inner SELECT)
    * @param preOffset
-   *          number of rows to skip prior to enforcing pre-stage ORDER BY and
-   *          LIMIT operations
+   *          number of rows to skip prior to enforcing pre-stage ORDER BY,
+   *          DISTINCT, and LIMIT operations
    * @param preOrderBy
    *          ORDER BY keys that must be applied prior to the outer ORDER BY
    *          (typically inherited from an inner SELECT)
@@ -182,12 +182,15 @@ public final class SqlParser {
       }
     }
 
+    final boolean outerDistinct = ps.getDistinct() != null;
+    final boolean innerDistinct = inner != null && inner.distinct();
+
     int preLimit = -1;
     int preOffset = 0;
     if (innerLimit >= 0 && outerRequestedOrder) {
       preLimit = innerLimit;
     }
-    if (innerOffset > 0 && (outerRequestedOrder || preLimit >= 0)) {
+    if (innerOffset > 0 && (outerRequestedOrder || preLimit >= 0 || outerDistinct)) {
       preOffset = innerOffset;
     }
 
@@ -214,8 +217,6 @@ public final class SqlParser {
       orderKeys = List.of();
     }
 
-    boolean outerDistinct = ps.getDistinct() != null;
-    boolean innerDistinct = fromInfo.innerSelect() != null && fromInfo.innerSelect().distinct();
     boolean distinct = outerDistinct || innerDistinct;
 
     Expression havingExpr = ps.getHaving();
