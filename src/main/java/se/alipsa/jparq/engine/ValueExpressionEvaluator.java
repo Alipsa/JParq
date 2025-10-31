@@ -55,6 +55,7 @@ public final class ValueExpressionEvaluator {
   private final Map<String, String> caseInsensitiveIndex;
   private final Schema schema;
   private final SubqueryExecutor subqueryExecutor;
+  private final List<String> outerQualifiers;
   private ExpressionEvaluator conditionEvaluator;
 
   /**
@@ -64,7 +65,7 @@ public final class ValueExpressionEvaluator {
    *          the Avro schema describing the available columns
    */
   public ValueExpressionEvaluator(Schema schema) {
-    this(schema, null);
+    this(schema, null, List.of());
   }
 
   /**
@@ -77,6 +78,21 @@ public final class ValueExpressionEvaluator {
    *          executor used for scalar subqueries (may be {@code null})
    */
   public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor) {
+    this(schema, subqueryExecutor, List.of());
+  }
+
+  /**
+   * Create an evaluator bound to the supplied Avro {@link Schema} with optional
+   * subquery execution support and correlated outer qualifiers.
+   *
+   * @param schema
+   *          the Avro schema describing the available columns
+   * @param subqueryExecutor
+   *          executor used for scalar subqueries (may be {@code null})
+   * @param outerQualifiers
+   *          table names or aliases that belong to the outer query scope
+   */
+  public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers) {
     Map<String, Schema> fs = new HashMap<>();
     Map<String, String> ci = new HashMap<>();
     for (Schema.Field f : schema.getFields()) {
@@ -87,6 +103,7 @@ public final class ValueExpressionEvaluator {
     this.caseInsensitiveIndex = Map.copyOf(ci);
     this.schema = schema;
     this.subqueryExecutor = subqueryExecutor;
+    this.outerQualifiers = outerQualifiers == null ? List.of() : List.copyOf(outerQualifiers);
   }
 
   /**
@@ -187,16 +204,20 @@ public final class ValueExpressionEvaluator {
       return evaluateFunction(func, record);
     }
     if (expression instanceof net.sf.jsqlparser.statement.select.Select subSelect) {
-      return evaluateScalarSubquery(subSelect);
+      return evaluateScalarSubquery(subSelect, record);
     }
     return LiteralConverter.toLiteral(expression);
   }
 
-  private Object evaluateScalarSubquery(net.sf.jsqlparser.statement.select.Select subSelect) {
+  private Object evaluateScalarSubquery(net.sf.jsqlparser.statement.select.Select subSelect, GenericRecord record) {
     if (subqueryExecutor == null) {
       throw new IllegalStateException("Scalar subqueries require a subquery executor");
     }
-    SubqueryExecutor.SubqueryResult result = subqueryExecutor.execute(subSelect);
+    CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
+        column -> resolveColumnValue(column, record));
+    SubqueryExecutor.SubqueryResult result = rewritten.correlated()
+        ? subqueryExecutor.executeRaw(rewritten.sql())
+        : subqueryExecutor.execute(subSelect);
     if (result.rows().isEmpty()) {
       return null;
     }
@@ -244,7 +265,7 @@ public final class ValueExpressionEvaluator {
     }
     if (conditionEvaluator == null) {
       Schema schemaToUse = schema != null ? schema : record.getSchema();
-      conditionEvaluator = new ExpressionEvaluator(schemaToUse, subqueryExecutor);
+      conditionEvaluator = new ExpressionEvaluator(schemaToUse, subqueryExecutor, outerQualifiers);
     }
     return conditionEvaluator.eval(condition, record);
   }
@@ -1005,19 +1026,11 @@ public final class ValueExpressionEvaluator {
 
   private Object columnValue(Column column, GenericRecord record) {
     String name = column.getColumnName();
-    String lookup = name;
-    Schema colSchema = fieldSchemas.get(name);
-    if (colSchema == null) {
-      String canonical = caseInsensitiveIndex.get(name.toLowerCase(Locale.ROOT));
-      if (canonical != null) {
-        colSchema = fieldSchemas.get(canonical);
-        lookup = canonical;
-      }
-    }
-    if (colSchema == null) {
-      return null;
-    }
-    return AvroCoercions.unwrap(record.get(lookup), colSchema);
+    return resolveColumnValue(name, record);
+  }
+
+  private Object resolveColumnValue(String columnName, GenericRecord record) {
+    return AvroCoercions.resolveColumnValue(columnName, record, fieldSchemas, caseInsensitiveIndex);
   }
 
   private BigDecimal toBigDecimal(Object value) {

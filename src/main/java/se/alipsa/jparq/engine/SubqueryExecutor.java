@@ -44,6 +44,19 @@ public final class SubqueryExecutor {
     return cache.computeIfAbsent(sql, this::runQuery);
   }
 
+  /**
+   * Execute the provided SQL text without caching the result. This is used for
+   * correlated sub queries where the SQL string changes for each outer row.
+   *
+   * @param sql
+   *          the SQL text to execute
+   * @return the {@link SubqueryResult}
+   */
+  public SubqueryResult executeRaw(String sql) {
+    Objects.requireNonNull(sql, "sql");
+    return runQuery(normalize(sql));
+  }
+
   private SubqueryResult runQuery(String sql) {
     try (Statement stmt = connection.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
       ResultSetMetaData meta = rs.getMetaData();

@@ -10,7 +10,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.generic.GenericRecord;
@@ -18,6 +20,7 @@ import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.QueryProcessor;
+import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.model.ResultSetAdapter;
@@ -33,6 +36,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private final String tableName;
   private final List<Expression> selectExpressions;
   private final SubqueryExecutor subqueryExecutor;
+  private final List<String> queryQualifiers;
   private ValueExpressionEvaluator projectionEvaluator;
   private final boolean aggregateQuery;
   private List<List<Object>> aggregateRows;
@@ -63,13 +67,21 @@ public class JParqResultSet extends ResultSetAdapter {
    * @throws SQLException
    *           if reading fails
    */
-  public JParqResultSet(ParquetReader<GenericRecord> reader, se.alipsa.jparq.engine.SqlParser.Select select,
-      String tableName, Expression residual, List<String> columnOrder, // projection labels (aliases) or null
+  public JParqResultSet(ParquetReader<GenericRecord> reader, SqlParser.Select select, String tableName,
+      Expression residual, List<String> columnOrder, // projection labels (aliases) or null
       List<String> physicalColumnOrder, SubqueryExecutor subqueryExecutor) // physical names (may be null)
       throws SQLException {
     this.tableName = tableName;
     this.selectExpressions = List.copyOf(select.expressions());
     this.subqueryExecutor = subqueryExecutor;
+    List<String> qualifiers = new ArrayList<>();
+    if (select.table() != null && !select.table().isBlank()) {
+      qualifiers.add(select.table());
+    }
+    if (select.tableAlias() != null && !select.tableAlias().isBlank()) {
+      qualifiers.add(select.tableAlias());
+    }
+    this.queryQualifiers = List.copyOf(qualifiers);
     List<String> labels = (columnOrder != null ? new ArrayList<>(columnOrder) : new ArrayList<>());
     List<String> physical = physicalColumnOrder;
 
@@ -79,7 +91,7 @@ public class JParqResultSet extends ResultSetAdapter {
       physical = null;
       try {
         AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan, residual,
-            select.having(), select.orderBy(), subqueryExecutor);
+            select.having(), select.orderBy(), subqueryExecutor, queryQualifiers);
         this.aggregateRows = new ArrayList<>(result.rows());
         this.aggregateSqlTypes = result.sqlTypes();
       } catch (Exception e) {
@@ -112,7 +124,7 @@ public class JParqResultSet extends ResultSetAdapter {
         }
         QueryProcessor.Options options = QueryProcessor.Options.builder().distinct(select.distinct())
             .distinctBeforePreLimit(select.innerDistinct()).subqueryExecutor(subqueryExecutor)
-            .preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
+            .preLimit(select.preLimit()).preOrderBy(select.preOrderBy()).outerQualifiers(queryQualifiers)
             .preStageDistinctColumns(select.innerDistinctColumns());
         this.qp = new QueryProcessor(reader, this.columnOrder, /* where */ residual, select.limit(), options);
         this.current = null;
@@ -121,12 +133,19 @@ public class JParqResultSet extends ResultSetAdapter {
       }
 
       var schema = first.getSchema();
-      var evaluator = new se.alipsa.jparq.engine.ExpressionEvaluator(schema, subqueryExecutor);
-      boolean match = (residual == null) || evaluator.eval(residual, first);
+      var evaluator = new se.alipsa.jparq.engine.ExpressionEvaluator(schema, subqueryExecutor, queryQualifiers);
+      final boolean match = residual == null || evaluator.eval(residual, first);
 
       // Compute physical projection from schema; only add if we don’t already have
       // labels
       List<String> proj = QueryProcessor.computeProjection(select.columns(), schema);
+      Set<String> requiredColumns = new LinkedHashSet<>(proj);
+      requiredColumns.addAll(SqlParser.collectQualifiedColumns(select.where(), queryQualifiers));
+      requiredColumns.addAll(SqlParser.collectQualifiedColumns(select.having(), queryQualifiers));
+      for (Expression expression : selectExpressions) {
+        requiredColumns.addAll(SqlParser.collectQualifiedColumns(expression, queryQualifiers));
+      }
+      proj = new ArrayList<>(requiredColumns);
       if (this.columnOrder.isEmpty()) {
         this.columnOrder.addAll(proj); // keep mutable
       }
@@ -138,14 +157,15 @@ public class JParqResultSet extends ResultSetAdapter {
         QueryProcessor.Options options = QueryProcessor.Options.builder().schema(schema).initialEmitted(initialEmitted)
             .distinct(select.distinct()).distinctBeforePreLimit(select.innerDistinct())
             .firstAlreadyRead(firstForDistinct).subqueryExecutor(subqueryExecutor).preLimit(select.preLimit())
-            .preOrderBy(select.preOrderBy()).preStageDistinctColumns(select.innerDistinctColumns());
+            .preOrderBy(select.preOrderBy()).preStageDistinctColumns(select.innerDistinctColumns())
+            .outerQualifiers(queryQualifiers);
         this.qp = new QueryProcessor(reader, proj, residual, select.limit(), options);
         this.current = match ? first : qp.nextMatching();
       } else {
         QueryProcessor.Options options = QueryProcessor.Options.builder().schema(schema).distinct(select.distinct())
             .distinctBeforePreLimit(select.innerDistinct()).orderBy(order).firstAlreadyRead(first)
             .subqueryExecutor(subqueryExecutor).preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
-            .preStageDistinctColumns(select.innerDistinctColumns());
+            .preStageDistinctColumns(select.innerDistinctColumns()).outerQualifiers(queryQualifiers);
         this.qp = new QueryProcessor(reader, proj, residual, select.limit(), options);
         this.current = qp.nextMatching();
       }
@@ -263,7 +283,7 @@ public class JParqResultSet extends ResultSetAdapter {
 
   private void ensureProjectionEvaluator(GenericRecord record) {
     if (projectionEvaluator == null && record != null && !selectExpressions.isEmpty()) {
-      projectionEvaluator = new ValueExpressionEvaluator(record.getSchema(), subqueryExecutor);
+      projectionEvaluator = new ValueExpressionEvaluator(record.getSchema(), subqueryExecutor, queryQualifiers);
     }
   }
 

@@ -55,6 +55,7 @@ public final class ExpressionEvaluator {
   private final Map<String, String> caseInsensitiveIndex;
   private final ValueExpressionEvaluator literalEvaluator;
   private final SubqueryExecutor subqueryExecutor;
+  private final List<String> outerQualifiers;
 
   /**
    * Creates a new evaluator for the provided Avro {@link Schema}.
@@ -64,7 +65,7 @@ public final class ExpressionEvaluator {
    *          {@code null}
    */
   public ExpressionEvaluator(Schema schema) {
-    this(schema, null);
+    this(schema, null, List.of());
   }
 
   /**
@@ -78,6 +79,21 @@ public final class ExpressionEvaluator {
    *          executor used for sub queries (may be {@code null})
    */
   public ExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor) {
+    this(schema, subqueryExecutor, List.of());
+  }
+
+  /**
+   * Creates a new evaluator that supports correlated sub queries.
+   *
+   * @param schema
+   *          the Avro schema of the records to evaluate against; must not be
+   *          {@code null}
+   * @param subqueryExecutor
+   *          executor used for sub queries (may be {@code null})
+   * @param outerQualifiers
+   *          table names or aliases that belong to the outer query scope
+   */
+  public ExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers) {
     Map<String, Schema> fs = new HashMap<>();
     Map<String, String> ci = new HashMap<>();
     for (Schema.Field f : schema.getFields()) {
@@ -86,8 +102,10 @@ public final class ExpressionEvaluator {
     }
     this.fieldSchemas = Collections.unmodifiableMap(fs);
     this.caseInsensitiveIndex = Collections.unmodifiableMap(ci);
-    this.literalEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor);
+    List<String> qualifiers = outerQualifiers == null ? List.of() : List.copyOf(outerQualifiers);
+    this.literalEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, qualifiers);
     this.subqueryExecutor = subqueryExecutor;
+    this.outerQualifiers = qualifiers;
   }
 
   /**
@@ -336,7 +354,11 @@ public final class ExpressionEvaluator {
     if (!(exists.getRightExpression() instanceof net.sf.jsqlparser.statement.select.Select subSelect)) {
       throw new IllegalArgumentException("EXISTS requires a subquery");
     }
-    SubqueryExecutor.SubqueryResult result = subqueryExecutor.execute(subSelect);
+    CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
+        column -> resolveColumnValue(column, rec));
+    SubqueryExecutor.SubqueryResult result = rewritten.correlated()
+        ? subqueryExecutor.executeRaw(rewritten.sql())
+        : subqueryExecutor.execute(subSelect);
     boolean hasRows = !result.rows().isEmpty();
     return exists.isNot() != hasRows;
   }
@@ -385,6 +407,10 @@ public final class ExpressionEvaluator {
   }
 
   private record Operand(Object value, Schema schemaOrNull) {
+  }
+
+  private Object resolveColumnValue(String columnName, GenericRecord rec) {
+    return AvroCoercions.resolveColumnValue(columnName, rec, fieldSchemas, caseInsensitiveIndex);
   }
 
   private Operand operand(Expression e, GenericRecord rec) {
