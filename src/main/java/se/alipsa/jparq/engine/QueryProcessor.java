@@ -299,7 +299,7 @@ public final class QueryProcessor implements AutoCloseable {
     this.emitted = Math.max(0, opts.initialEmitted);
     this.skipped = Math.min(this.offset, Math.max(0, opts.initialEmitted));
     this.orderBy = opts.orderBy;
-    this.prefetched = (opts.initialEmitted > 0) ? null : opts.firstAlreadyRead;
+    this.prefetched = (opts.initialEmitted > 0 && this.offset == 0) ? null : opts.firstAlreadyRead;
     this.preOffsetApplied = 0;
     this.distinctSeen = distinct ? new LinkedHashSet<>() : null;
 
