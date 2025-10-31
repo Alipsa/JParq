@@ -184,7 +184,8 @@ public class SubQueryTest {
    * Read all car rows from the Parquet test dataset.
    *
    * @return list of {@link Car} records loaded from {@code mtcars.parquet}
-   * @throws IOException if the Parquet file cannot be read
+   * @throws IOException
+   *           if the Parquet file cannot be read
    */
   private static List<Car> loadCars() throws IOException {
     List<Car> cars = new ArrayList<>();
