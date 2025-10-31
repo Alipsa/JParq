@@ -82,6 +82,7 @@ The following SQL statements are supported:
   - Comparison operators: `=`, `!=`, `<`, `>`, `<=`, `>=` 
   - Null checks: `IS NULL`, `IS NOT NULL` 
 - `ORDER BY` clause with multiple columns and `ASC`/`DESC` options
+- `OFFSET` and `LIMIT` support
 - `DISTINCT` support
 - Functions support
   - Date functions
@@ -136,9 +137,6 @@ The following SQL statements are supported:
   (SELECT column_name
   FROM table_name
   WHERE condition);
-
-### To be implemented in the near future
-- `OFFSET` support
 
 ## Roadmap: Might be implemented in the future
 - Join support
