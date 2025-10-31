@@ -118,8 +118,6 @@ The following SQL statements are supported:
   FROM table_name
   WHERE EXISTS
   (SELECT column_name FROM table_name WHERE condition);
-
-### To be implemented in the near future
 - any and all support
   SELECT column_name(s)
   FROM table_name
@@ -139,6 +137,7 @@ The following SQL statements are supported:
   FROM table_name
   WHERE condition);
 
+### To be implemented in the near future
 - `OFFSET` support
 
 ## Roadmap: Might be implemented in the future
