@@ -473,28 +473,25 @@ public final class ExpressionEvaluator {
     boolean anyMatch = false;
     boolean allMatch = true;
 
-    Object coercedOther = otherValue;
-    if (otherOperand.schemaOrNull != null && !anyOnLeft) {
-      coercedOther = coerceLiteral(otherValue, otherOperand.schemaOrNull);
-    }
+    // Coerce otherValue once before the loop
+    Object coercedOther = otherOperand.schemaOrNull != null
+        ? coerceLiteral(otherValue, otherOperand.schemaOrNull)
+        : otherValue;
 
     for (Object rawValue : values) {
-      Object candidate = rawValue;
-      if (!anyOnLeft && otherOperand.schemaOrNull != null) {
-        candidate = coerceLiteral(candidate, otherOperand.schemaOrNull);
-      }
+      // Coerce candidate once per iteration to match the schema
+      Object candidate = otherOperand.schemaOrNull != null
+          ? coerceLiteral(rawValue, otherOperand.schemaOrNull)
+          : rawValue;
 
       if (candidate == null) {
         allMatch = false;
         continue;
       }
 
+      // Assign to left/right based on position; values are already coerced
       Object leftVal = anyOnLeft ? candidate : coercedOther;
       Object rightVal = anyOnLeft ? coercedOther : candidate;
-
-      if (anyOnLeft && otherOperand.schemaOrNull != null) {
-        leftVal = coerceLiteral(leftVal, otherOperand.schemaOrNull);
-      }
 
       if (leftVal == null || rightVal == null) {
         allMatch = false;
