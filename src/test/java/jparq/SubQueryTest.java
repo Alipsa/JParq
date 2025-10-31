@@ -20,6 +20,7 @@ import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.avro.AvroParquetReader;
 import org.apache.parquet.hadoop.ParquetReader;
+import org.apache.parquet.hadoop.util.HadoopInputFile;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
@@ -183,7 +184,7 @@ public class SubQueryTest {
   /**
    * Read all car rows from the Parquet test dataset.
    *
-   * @return list of {@link Car} records loaded from {@code mtcars.parquet}
+   * @return the list of {@link Car} records loaded from {@code mtcars.parquet}
    * @throws IOException
    *           if the Parquet file cannot be read
    */
@@ -191,8 +192,8 @@ public class SubQueryTest {
     List<Car> cars = new ArrayList<>();
     Configuration conf = new Configuration(false);
     org.apache.hadoop.fs.Path filePath = new org.apache.hadoop.fs.Path(mtcarsFilePath.toUri());
-    try (ParquetReader<GenericRecord> reader = AvroParquetReader.<GenericRecord>builder(filePath).withConf(conf)
-        .build()) {
+    try (ParquetReader<GenericRecord> reader = AvroParquetReader
+        .<GenericRecord>builder(HadoopInputFile.fromPath(filePath, conf)).withConf(conf).build()) {
       GenericRecord record = reader.read();
       while (record != null) {
         String model = record.get("model").toString();
@@ -203,6 +204,12 @@ public class SubQueryTest {
       }
     }
     return cars;
+  }
+
+  @Test
+  void loadCarsReadsAllRows() throws IOException {
+    List<Car> cars = loadCars();
+    assertEquals(32, cars.size(), "Expected all cars to be loaded from the Parquet dataset");
   }
 
   /**
