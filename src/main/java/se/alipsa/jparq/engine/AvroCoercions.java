@@ -6,9 +6,12 @@ import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Locale;
+import java.util.Map;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
+import org.apache.avro.generic.GenericRecord;
 
 /**
  * Utility class for coercing Avro values to Java types and vice versa.
@@ -111,6 +114,39 @@ public final class AvroCoercions {
       default:
         return lit; // bytes/arrays/etc. not coerced for WHERE in this minimal impl
     }
+  }
+
+  /**
+   * Resolves a column value from a GenericRecord using case-insensitive lookup.
+   *
+   * @param columnName
+   *          the name of the column to look up
+   * @param record
+   *          the GenericRecord to retrieve the value from (may be {@code null})
+   * @param fieldSchemas
+   *          map from exact field name to schema
+   * @param caseInsensitiveIndex
+   *          map from lowercase field name to canonical field name
+   * @return the unwrapped column value, or {@code null} if not found
+   */
+  public static Object resolveColumnValue(String columnName, GenericRecord record, Map<String, Schema> fieldSchemas,
+      Map<String, String> caseInsensitiveIndex) {
+    if (columnName == null || record == null) {
+      return null;
+    }
+    String lookup = columnName;
+    Schema schema = fieldSchemas.get(columnName);
+    if (schema == null) {
+      String canonical = caseInsensitiveIndex.get(columnName.toLowerCase(Locale.ROOT));
+      if (canonical != null) {
+        lookup = canonical;
+        schema = fieldSchemas.get(canonical);
+      }
+    }
+    if (schema == null) {
+      return null;
+    }
+    return unwrap(record.get(lookup), schema);
   }
 
   /**
