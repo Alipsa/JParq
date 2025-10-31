@@ -24,9 +24,12 @@ import java.sql.SQLWarning;
 import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
@@ -159,19 +162,19 @@ class JParqPreparedStatement implements PreparedStatement {
       return;
     }
 
-    java.util.Set<String> selectColumns = ProjectionFields.fromSelect(parsedSelect);
+    Set<String> selectColumns = ProjectionFields.fromSelect(parsedSelect);
     boolean selectAll = selectColumns == null && aggregatePlan == null;
     if (selectAll) {
       return;
     }
 
-    java.util.Set<String> needed = new java.util.LinkedHashSet<>();
+    Set<String> needed = new LinkedHashSet<>();
     addColumns(needed, selectColumns);
     if (!parsedSelect.innerDistinctColumns().isEmpty()) {
-      addColumns(needed, new java.util.LinkedHashSet<>(parsedSelect.innerDistinctColumns()));
+      addColumns(needed, new LinkedHashSet<>(parsedSelect.innerDistinctColumns()));
     }
     addColumns(needed, ColumnsUsed.inWhere(parsedSelect.where()));
-    java.util.List<String> qualifiers = new java.util.ArrayList<>();
+    List<String> qualifiers = new ArrayList<>();
     if (parsedSelect.table() != null && !parsedSelect.table().isBlank()) {
       qualifiers.add(parsedSelect.table());
     }
@@ -208,7 +211,7 @@ class JParqPreparedStatement implements PreparedStatement {
     }
   }
 
-  private static void addColumns(java.util.Set<String> target, java.util.Set<String> source) {
+  private static void addColumns(Set<String> target, Set<String> source) {
     if (source == null || source.isEmpty()) {
       return;
     }
@@ -217,7 +220,7 @@ class JParqPreparedStatement implements PreparedStatement {
     }
   }
 
-  private static void addColumn(java.util.Set<String> target, String column) {
+  private static void addColumn(Set<String> target, String column) {
     if (column != null) {
       target.add(column);
     }

@@ -67,8 +67,8 @@ public class JParqResultSet extends ResultSetAdapter {
    * @throws SQLException
    *           if reading fails
    */
-  public JParqResultSet(ParquetReader<GenericRecord> reader, se.alipsa.jparq.engine.SqlParser.Select select,
-      String tableName, Expression residual, List<String> columnOrder, // projection labels (aliases) or null
+  public JParqResultSet(ParquetReader<GenericRecord> reader, SqlParser.Select select, String tableName,
+      Expression residual, List<String> columnOrder, // projection labels (aliases) or null
       List<String> physicalColumnOrder, SubqueryExecutor subqueryExecutor) // physical names (may be null)
       throws SQLException {
     this.tableName = tableName;
