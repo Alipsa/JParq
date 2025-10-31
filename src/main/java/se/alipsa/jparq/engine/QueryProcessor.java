@@ -286,7 +286,7 @@ public final class QueryProcessor implements AutoCloseable {
     this.offset = Math.max(0, opts.offset);
     this.preOffset = Math.max(0, opts.preOffset);
     this.preOrderBy = opts.preOrderBy;
-    this.hasPreStage = (this.preLimit >= 0) || !this.preOrderBy.isEmpty();
+    this.hasPreStage = (this.preLimit >= 0) || !this.preOrderBy.isEmpty() || (this.preOffset > 0);
     List<String> distinctCols = opts.distinctColumns == null ? this.projection : opts.distinctColumns;
     this.distinctColumns = distinctCols;
     this.preStageDistinctColumns = (opts.preStageDistinctColumns == null || opts.preStageDistinctColumns.isEmpty())
