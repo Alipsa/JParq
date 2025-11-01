@@ -166,7 +166,10 @@ public final class SqlParser {
     RIGHT_OUTER,
     /** A FULL (OUTER) JOIN participant. */
     FULL_OUTER,
-    /** A CROSS JOIN introduced via explicit {@code CROSS JOIN} or comma-separated syntax. */
+    /**
+     * A CROSS JOIN introduced via explicit {@code CROSS JOIN} or comma-separated
+     * syntax.
+     */
     CROSS
   }
 

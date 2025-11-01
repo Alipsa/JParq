@@ -28,7 +28,8 @@ class CrossJoinTest {
   }
 
   /**
-   * Ensure explicit {@code CROSS JOIN} syntax produces the Cartesian product of the joined tables.
+   * Ensure explicit {@code CROSS JOIN} syntax produces the Cartesian product of
+   * the joined tables.
    */
   @Test
   void explicitCrossJoinProducesCartesianProduct() {
@@ -55,7 +56,8 @@ class CrossJoinTest {
   }
 
   /**
-   * Verify that comma-separated table references behave as an implicit {@code CROSS JOIN}.
+   * Verify that comma-separated table references behave as an implicit
+   * {@code CROSS JOIN}.
    */
   @Test
   void implicitCrossJoinViaCommaSeparatedTables() {
@@ -72,8 +74,7 @@ class CrossJoinTest {
 
     Set<String> expectedDepartments = Set.of("IT", "HR", "Sales");
 
-    Assertions.assertEquals(employeeCount, employees.size(),
-        "Implicit CROSS JOIN should still include all employees");
+    Assertions.assertEquals(employeeCount, employees.size(), "Implicit CROSS JOIN should still include all employees");
     Assertions.assertEquals(expectedDepartments, departments,
         "Implicit CROSS JOIN should still include all departments");
     Assertions.assertEquals(employeeCount * departments.size(), rowCount,
@@ -81,7 +82,8 @@ class CrossJoinTest {
   }
 
   /**
-   * Execute a query and collect distinct employee and department values for assertions.
+   * Execute a query and collect distinct employee and department values for
+   * assertions.
    *
    * @param sql
    *          the SQL statement to execute
@@ -92,7 +94,9 @@ class CrossJoinTest {
    * @return the number of rows produced by the query
    */
   private int executeAndCollect(String sql, Set<Integer> employees, Set<String> departments) {
-    final int[] count = {0};
+    final int[] count = {
+        0
+    };
     jparqSql.query(sql, rs -> {
       try {
         while (rs.next()) {
@@ -115,7 +119,9 @@ class CrossJoinTest {
    * @return the number of rows present in the table
    */
   private int countRows(String table) {
-    final int[] count = {0};
+    final int[] count = {
+        0
+    };
     jparqSql.query("SELECT COUNT(*) AS cnt FROM " + table, rs -> {
       try {
         if (rs.next()) {
