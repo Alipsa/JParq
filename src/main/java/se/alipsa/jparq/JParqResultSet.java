@@ -372,7 +372,7 @@ public class JParqResultSet extends ResultSetAdapter {
         canonical.set(i, "column_" + i);
       }
     }
-    return Collections.unmodifiableList(canonical);
+    return List.copyOf(canonical);
   }
 
   /**
