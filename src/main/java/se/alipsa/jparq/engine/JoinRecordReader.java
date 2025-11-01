@@ -17,8 +17,8 @@ import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 
 /**
- * In-memory implementation of explicit SQL joins using a simple materialised
- * representation of each participating table.
+ * In-memory implementation of explicit SQL joins using streaming iteration
+ * across participating tables.
  *
  * <p>
  * The reader currently supports {@code INNER}, {@code CROSS}, and {@code LEFT
@@ -32,8 +32,12 @@ public final class JoinRecordReader implements RecordReader {
   private final List<String> columnNames;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
-  private final List<GenericRecord> joinedRows;
-  private int position = 0;
+  private final List<JoinTable> joinTables;
+  private final List<FieldMapping> fieldMappings;
+  private final ExpressionEvaluator evaluator;
+  private final List<GenericRecord> assignments;
+  private final List<TableState> tableStates;
+  private int resumeIndex;
 
   /**
    * Representation of a table participating in the join.
@@ -106,15 +110,24 @@ public final class JoinRecordReader implements RecordReader {
     if (joinTables.get(0).joinType() != SqlParser.JoinType.BASE) {
       throw new IllegalArgumentException("The first table must be marked as BASE");
     }
-    List<FieldMapping> fieldMappings = new ArrayList<>();
-    SchemaContext context = buildSchema(joinTables, fieldMappings);
+    List<FieldMapping> mappings = new ArrayList<>();
+    SchemaContext context = buildSchema(joinTables, mappings);
     this.schema = context.schema();
-    this.columnNames = buildColumnNames(fieldMappings);
+    this.columnNames = buildColumnNames(mappings);
     this.qualifierColumnMapping = context.qualifierMapping();
     this.unqualifiedColumnMapping = context.unqualifiedMapping();
-    ExpressionEvaluator evaluator = new ExpressionEvaluator(schema, null, List.of(), qualifierColumnMapping,
-        unqualifiedColumnMapping);
-    this.joinedRows = buildJoinedRows(joinTables, fieldMappings, schema, evaluator);
+    this.joinTables = joinTables;
+    this.fieldMappings = List.copyOf(mappings);
+    this.evaluator = new ExpressionEvaluator(schema, null, List.of(), qualifierColumnMapping, unqualifiedColumnMapping);
+    this.assignments = new ArrayList<>(joinTables.size());
+    for (int i = 0; i < joinTables.size(); i++) {
+      assignments.add(null);
+    }
+    this.tableStates = new ArrayList<>(joinTables.size());
+    for (int i = 0; i < joinTables.size(); i++) {
+      tableStates.add(new TableState());
+    }
+    this.resumeIndex = 0;
   }
 
   private static SchemaContext buildSchema(List<JoinTable> tables, List<FieldMapping> mappings) {
@@ -192,64 +205,11 @@ public final class JoinRecordReader implements RecordReader {
     return List.copyOf(names);
   }
 
-  private static List<GenericRecord> buildJoinedRows(List<JoinTable> tables, List<FieldMapping> mappings, Schema schema,
-      ExpressionEvaluator evaluator) {
-    List<GenericRecord> results = new ArrayList<>();
-    if (tables.isEmpty()) {
-      return results;
-    }
-    List<GenericRecord> assignments = new ArrayList<>();
-    joinRecursive(tables, mappings, schema, evaluator, 0, assignments, results);
-    return results;
-  }
-
-  private static void joinRecursive(List<JoinTable> tables, List<FieldMapping> mappings, Schema schema,
-      ExpressionEvaluator evaluator, int index, List<GenericRecord> assignments, List<GenericRecord> results) {
-    JoinTable current = tables.get(index);
-    if (index == 0) {
-      for (GenericRecord row : current.rows()) {
-        assignments.add(row);
-        if (tables.size() == 1) {
-          results.add(buildRecord(assignments, mappings, schema));
-        } else {
-          joinRecursive(tables, mappings, schema, evaluator, index + 1, assignments, results);
-        }
-        assignments.remove(assignments.size() - 1);
-      }
-      return;
-    }
-
-    boolean matched = false;
-    for (GenericRecord row : current.rows()) {
-      assignments.add(row);
-      if (conditionMatches(current.joinCondition(), evaluator, assignments, mappings, schema)) {
-        matched = true;
-        if (index == tables.size() - 1) {
-          results.add(buildRecord(assignments, mappings, schema));
-        } else {
-          joinRecursive(tables, mappings, schema, evaluator, index + 1, assignments, results);
-        }
-      }
-      assignments.remove(assignments.size() - 1);
-    }
-
-    if (!matched && current.joinType() == SqlParser.JoinType.LEFT_OUTER) {
-      assignments.add(null);
-      if (index == tables.size() - 1) {
-        results.add(buildRecord(assignments, mappings, schema));
-      } else {
-        joinRecursive(tables, mappings, schema, evaluator, index + 1, assignments, results);
-      }
-      assignments.remove(assignments.size() - 1);
-    }
-  }
-
-  private static boolean conditionMatches(Expression condition, ExpressionEvaluator evaluator,
-      List<GenericRecord> assignments, List<FieldMapping> mappings, Schema schema) {
+  private boolean conditionMatches(Expression condition) {
     if (condition == null) {
       return true;
     }
-    GenericRecord record = buildRecord(assignments, mappings, schema);
+    GenericRecord record = buildRecord(assignments, fieldMappings, schema);
     return evaluator.eval(condition, record);
   }
 
@@ -308,16 +268,92 @@ public final class JoinRecordReader implements RecordReader {
 
   @Override
   public GenericRecord read() throws IOException {
-    if (position >= joinedRows.size()) {
-      return null;
+    if (nextCombination()) {
+      return buildRecord(assignments, fieldMappings, schema);
     }
-    GenericRecord record = joinedRows.get(position);
-    position++;
-    return record;
+    return null;
   }
 
   @Override
   public void close() throws IOException {
-    // nothing to release, data already materialised
+    // nothing to release, all data is sourced from in-memory tables
+  }
+
+  private boolean nextCombination() {
+    if (joinTables.isEmpty()) {
+      return false;
+    }
+    int index = resumeIndex;
+    while (index >= 0 && index < joinTables.size()) {
+      if (advanceState(index)) {
+        if (index == joinTables.size() - 1) {
+          resumeIndex = joinTables.size() - 1;
+          return true;
+        }
+        index++;
+      } else {
+        index--;
+      }
+    }
+    resumeIndex = -1;
+    return false;
+  }
+
+  private boolean advanceState(int index) {
+    TableState state = tableStates.get(index);
+    JoinTable table = joinTables.get(index);
+    if (!state.initialized) {
+      state.reset();
+      assignments.set(index, null);
+      state.initialized = true;
+    }
+    while (true) {
+      if (state.nextRowIndex < table.rows().size()) {
+        GenericRecord candidate = table.rows().get(state.nextRowIndex);
+        state.nextRowIndex++;
+        assignments.set(index, candidate);
+        if (index == 0 || conditionMatches(table.joinCondition())) {
+          state.hadMatch = true;
+          resetDescendants(index);
+          return true;
+        }
+      } else if (table.joinType() == SqlParser.JoinType.LEFT_OUTER && !state.hadMatch && !state.producedNull) {
+        state.producedNull = true;
+        assignments.set(index, null);
+        resetDescendants(index);
+        return true;
+      } else {
+        state.initialized = false;
+        assignments.set(index, null);
+        return false;
+      }
+    }
+  }
+
+  private void resetDescendants(int index) {
+    for (int i = index + 1; i < tableStates.size(); i++) {
+      TableState state = tableStates.get(i);
+      state.initialized = false;
+      assignments.set(i, null);
+    }
+  }
+
+  /**
+   * Tracks iteration state for a table participating in the join.
+   */
+  private static final class TableState {
+    private int nextRowIndex;
+    private boolean hadMatch;
+    private boolean producedNull;
+    private boolean initialized;
+
+    /**
+     * Reset iteration counters for a fresh traversal of the table rows.
+     */
+    private void reset() {
+      nextRowIndex = 0;
+      hadMatch = false;
+      producedNull = false;
+    }
   }
 }
