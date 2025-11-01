@@ -467,13 +467,26 @@ class JParqPreparedStatement implements PreparedStatement {
 
   private String columnLabel(ResultSetMetaData meta, int column) throws SQLException {
     String label = meta.getColumnLabel(column);
-    if (label == null || label.isBlank()) {
-      label = meta.getColumnName(column);
+    String name = meta.getColumnName(column);
+    return fallbackColumnLabel(label, name, column);
+  }
+
+  /**
+   * Returns a column label, falling back to column name, then to "column_{index}" if both are blank or null.
+   *
+   * @param label  the column label (may be null or blank)
+   * @param name   the column name (may be null or blank)
+   * @param index  the column index (1-based)
+   * @return the best available column label
+   */
+  private static String fallbackColumnLabel(String label, String name, int index) {
+    if (label != null && !label.isBlank()) {
+      return label;
     }
-    if (label == null || label.isBlank()) {
-      label = "column_" + column;
+    if (name != null && !name.isBlank()) {
+      return name;
     }
-    return label;
+    return "column_" + index;
   }
 
   private Number asNumber(Object value) throws SQLException {
