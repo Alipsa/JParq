@@ -34,7 +34,17 @@ public final class SqlParser {
    * @param asc
    *          true if ascending order, false if descending
    */
-  public record OrderKey(String column, boolean asc) {
+  /**
+   * ORDER BY key (simple: column + direction and optional qualifier).
+   *
+   * @param column
+   *          the column name (unqualified physical column name)
+   * @param asc
+   *          true if ascending order, false if descending
+   * @param qualifier
+   *          optional table or alias qualifier associated with the column
+   */
+  public record OrderKey(String column, boolean asc, String qualifier) {
   }
 
   /**
@@ -499,6 +509,7 @@ public final class SqlParser {
 
       for (OrderByElement e : ob) {
         Expression ex = e.getExpression();
+        String qualifier = null;
 
         // normalize qualifiers (t.col -> col) for single-table
         if (tableRefs.size() == 1) {
@@ -509,6 +520,9 @@ public final class SqlParser {
         String keyText;
         if (ex instanceof Column c) {
           keyText = c.getColumnName();
+          if (tableRefs.size() > 1) {
+            qualifier = extractQualifier(c);
+          }
         } else if (ex instanceof StringValue sv) {
           keyText = sv.getValue();
         } else {
@@ -519,10 +533,24 @@ public final class SqlParser {
         String physicalKey = aliasToPhysical.getOrDefault(keyText, keyText);
 
         boolean asc = !e.isAscDescPresent() || e.isAsc(); // default ASC
-        orderKeys.add(new OrderKey(physicalKey, asc));
+        orderKeys.add(new OrderKey(physicalKey, asc, qualifier));
       }
     }
     return orderKeys;
+  }
+
+  private static String extractQualifier(Column column) {
+    Table table = column.getTable();
+    if (table == null) {
+      return null;
+    }
+    if (table.getAlias() != null && table.getAlias().getName() != null && !table.getAlias().getName().isBlank()) {
+      return table.getAlias().getName();
+    }
+    if (table.getName() != null && !table.getName().isBlank()) {
+      return table.getName();
+    }
+    return null;
   }
 
   // === Qualifier Stripping =================================================

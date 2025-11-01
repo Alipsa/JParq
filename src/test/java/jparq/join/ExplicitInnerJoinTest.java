@@ -5,7 +5,9 @@ import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
@@ -61,5 +63,37 @@ class ExplicitInnerJoinTest {
         "Karin Pettersson's salary should be available after the join");
     Assertions.assertEquals(230000.0d, salaries.get("Sixten Svensson"), DELTA,
         "Sixten Svensson's salary should be available after the join");
+  }
+
+  /**
+   * Ensure duplicate column names from different tables map to canonical join
+   * fields and remain readable via the JDBC {@link java.sql.ResultSet} API.
+   */
+  @Test
+  void explicitJoinHandlesDuplicateColumnNames() {
+    String sql = """
+        SELECT e.id, d.id
+        FROM employees e
+        INNER JOIN employee_department ed ON e.id = ed.employee
+        INNER JOIN departments d ON ed.department = d.id
+        ORDER BY e.id
+        """;
+
+    List<Integer> employeeIds = new ArrayList<>();
+    List<Integer> departmentIds = new ArrayList<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          employeeIds.add(rs.getInt(1));
+          departmentIds.add(rs.getInt(2));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(employeeIds.isEmpty(), "Joined employee identifiers should be available");
+    Assertions.assertEquals(employeeIds.size(), departmentIds.size(),
+        "Each employee row should have a matching department identifier");
   }
 }

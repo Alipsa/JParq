@@ -14,10 +14,12 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.schema.Table;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroCoercions;
@@ -101,7 +103,10 @@ public class JParqResultSet extends ResultSetAdapter {
     this.qualifierColumnMapping = qualifierMapping;
     this.unqualifiedColumnMapping = unqualifiedMapping;
     List<String> labels = (columnOrder != null ? new ArrayList<>(columnOrder) : new ArrayList<>());
-    List<String> physical = physicalColumnOrder;
+    List<String> canonicalPhysical = canonicalizeProjection(select, physicalColumnOrder, qualifierMapping,
+        unqualifiedMapping);
+    List<String> requestedColumns = canonicalPhysical != null ? canonicalPhysical : select.columns();
+    List<String> physical = canonicalPhysical;
 
     AggregateFunctions.AggregatePlan aggregatePlan = AggregateFunctions.plan(select);
     if (aggregatePlan != null) {
@@ -147,7 +152,11 @@ public class JParqResultSet extends ResultSetAdapter {
             .qualifierColumnMapping(qualifierColumnMapping).unqualifiedColumnMapping(unqualifiedColumnMapping)
             .preStageDistinctColumns(select.innerDistinctColumns()).offset(select.offset())
             .preOffset(select.preOffset());
-        this.qp = new QueryProcessor(reader, this.columnOrder, /* where */ residual, select.limit(), options);
+        List<String> projectionColumns = requestedColumns;
+        if (projectionColumns == null || projectionColumns.isEmpty()) {
+          projectionColumns = select.columns();
+        }
+        this.qp = new QueryProcessor(reader, projectionColumns, /* where */ residual, select.limit(), options);
         this.current = null;
         this.rowNum = 0;
         return;
@@ -160,7 +169,7 @@ public class JParqResultSet extends ResultSetAdapter {
 
       // Compute physical projection from schema; only add if we don’t already have
       // labels
-      List<String> proj = QueryProcessor.computeProjection(select.columns(), schema);
+      List<String> proj = QueryProcessor.computeProjection(requestedColumns, schema);
       Set<String> requiredColumns = new LinkedHashSet<>(proj);
       requiredColumns.addAll(SqlParser.collectQualifiedColumns(select.where(), queryQualifiers));
       requiredColumns.addAll(SqlParser.collectQualifiedColumns(select.having(), queryQualifiers));
@@ -302,6 +311,107 @@ public class JParqResultSet extends ResultSetAdapter {
     int i = idx - 1;
     if (i >= 0 && i < selectExpressions.size()) {
       return selectExpressions.get(i);
+    }
+    return null;
+  }
+
+  /**
+   * Translate projection column names to the canonical field names emitted by an
+   * {@link InnerJoinRecordReader} when joining multiple tables.
+   *
+   * @param select
+   *          parsed SELECT statement supplying the projection expressions
+   * @param physicalColumnOrder
+   *          physical column names recorded during parsing (may be {@code null}
+   *          or empty)
+   * @param qualifierMapping
+   *          mapping from qualifier to canonical column names provided by the
+   *          join reader
+   * @param unqualifiedMapping
+   *          mapping for unqualified column references that remain unique across
+   *          the join
+   * @return a list containing canonical column names when available; otherwise
+   *         the original {@code physicalColumnOrder}
+   */
+  private static List<String> canonicalizeProjection(SqlParser.Select select, List<String> physicalColumnOrder,
+      Map<String, Map<String, String>> qualifierMapping, Map<String, String> unqualifiedMapping) {
+    if (physicalColumnOrder == null || physicalColumnOrder.isEmpty()) {
+      return physicalColumnOrder;
+    }
+    if ((qualifierMapping == null || qualifierMapping.isEmpty())
+        && (unqualifiedMapping == null || unqualifiedMapping.isEmpty())) {
+      return physicalColumnOrder;
+    }
+    List<String> canonical = new ArrayList<>(physicalColumnOrder);
+    List<Expression> expressions = select.expressions();
+    int expressionCount = expressions == null ? 0 : expressions.size();
+    int limit = Math.min(canonical.size(), expressionCount);
+    for (int i = 0; i < limit; i++) {
+      Expression expr = expressions.get(i);
+      if (expr instanceof Column column) {
+        canonical.set(i, canonicalColumnName(column, canonical.get(i), qualifierMapping, unqualifiedMapping));
+      }
+    }
+    return List.copyOf(canonical);
+  }
+
+  /**
+   * Resolve the canonical column name for a single projection entry.
+   *
+   * @param column
+   *          the column expression containing optional qualifier metadata
+   * @param currentValue
+   *          the existing physical column name discovered during parsing
+   * @param qualifierMapping
+   *          mapping from qualifier to canonical column names
+   * @param unqualifiedMapping
+   *          mapping for columns that remain unique without a qualifier
+   * @return the canonical column name if available, otherwise the best known
+   *         fallback
+   */
+  private static String canonicalColumnName(Column column, String currentValue,
+      Map<String, Map<String, String>> qualifierMapping, Map<String, String> unqualifiedMapping) {
+    String qualifier = resolveQualifier(column);
+    String columnName = column.getColumnName();
+    if (qualifier != null && qualifierMapping != null) {
+      Map<String, String> mapping = qualifierMapping.get(qualifier.toLowerCase(Locale.ROOT));
+      if (mapping != null) {
+        String canonical = mapping.get(columnName.toLowerCase(Locale.ROOT));
+        if (canonical != null) {
+          return canonical;
+        }
+      }
+    }
+    if (unqualifiedMapping != null) {
+      String canonical = unqualifiedMapping.get(columnName.toLowerCase(Locale.ROOT));
+      if (canonical != null) {
+        return canonical;
+      }
+    }
+    if (currentValue != null) {
+      return currentValue;
+    }
+    return columnName;
+  }
+
+  /**
+   * Extract the effective qualifier for a {@link Column}, preferring an explicit
+   * alias over the table name when available.
+   *
+   * @param column
+   *          column expression to inspect
+   * @return the qualifier string or {@code null} if none exists
+   */
+  private static String resolveQualifier(Column column) {
+    Table table = column.getTable();
+    if (table == null) {
+      return null;
+    }
+    if (table.getAlias() != null && table.getAlias().getName() != null && !table.getAlias().getName().isBlank()) {
+      return table.getAlias().getName();
+    }
+    if (table.getName() != null && !table.getName().isBlank()) {
+      return table.getName();
     }
     return null;
   }

@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.Objects;
 import java.util.Set;
+import java.util.Locale;
 import net.sf.jsqlparser.expression.Expression;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
@@ -326,23 +327,23 @@ public final class QueryProcessor implements AutoCloseable {
     this.preLimit = opts.preLimit;
     this.offset = Math.max(0, opts.offset);
     this.preOffset = Math.max(0, opts.preOffset);
-    this.preOrderBy = opts.preOrderBy;
+    this.outerQualifiers = opts.outerQualifiers;
+    this.qualifierColumnMapping = opts.qualifierColumnMapping;
+    this.unqualifiedColumnMapping = opts.unqualifiedColumnMapping;
+    this.preOrderBy = canonicalizeOrderKeys(opts.preOrderBy);
     this.hasPreStage = (this.preLimit >= 0) || !this.preOrderBy.isEmpty() || (this.preOffset > 0);
     List<String> distinctCols = opts.distinctColumns == null ? this.projection : opts.distinctColumns;
     this.distinctColumns = distinctCols;
     this.preStageDistinctColumns = (opts.preStageDistinctColumns == null || opts.preStageDistinctColumns.isEmpty())
         ? distinctCols
         : opts.preStageDistinctColumns;
-    this.outerQualifiers = opts.outerQualifiers;
-    this.qualifierColumnMapping = opts.qualifierColumnMapping;
-    this.unqualifiedColumnMapping = opts.unqualifiedColumnMapping;
+    this.orderBy = canonicalizeOrderKeys(opts.orderBy);
     this.evaluator = (opts.schema != null)
         ? new ExpressionEvaluator(opts.schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
             unqualifiedColumnMapping)
         : null;
     this.emitted = Math.max(0, opts.initialEmitted);
     this.skipped = Math.min(this.offset, Math.max(0, opts.initialEmitted));
-    this.orderBy = opts.orderBy;
     this.prefetched = (opts.initialEmitted > 0 && this.offset == 0) ? null : opts.firstAlreadyRead;
     this.preOffsetApplied = 0;
     this.distinctSeen = distinct ? new LinkedHashSet<>() : null;
@@ -481,6 +482,44 @@ public final class QueryProcessor implements AutoCloseable {
       }
       return 0;
     };
+  }
+
+  private List<SqlParser.OrderKey> canonicalizeOrderKeys(List<SqlParser.OrderKey> keys) {
+    if (keys == null || keys.isEmpty()) {
+      return List.of();
+    }
+    List<SqlParser.OrderKey> canonical = new ArrayList<>(keys.size());
+    for (SqlParser.OrderKey key : keys) {
+      if (key == null) {
+        continue;
+      }
+      String column = key.column();
+      String resolved = canonicalOrderColumn(column, key.qualifier());
+      canonical.add(new SqlParser.OrderKey(resolved, key.asc(), key.qualifier()));
+    }
+    return List.copyOf(canonical);
+  }
+
+  private String canonicalOrderColumn(String column, String qualifier) {
+    if (column == null) {
+      return null;
+    }
+    if (qualifier != null && qualifierColumnMapping != null && !qualifierColumnMapping.isEmpty()) {
+      Map<String, String> mapping = qualifierColumnMapping.get(qualifier.toLowerCase(Locale.ROOT));
+      if (mapping != null) {
+        String resolved = mapping.get(column.toLowerCase(Locale.ROOT));
+        if (resolved != null) {
+          return resolved;
+        }
+      }
+    }
+    if (unqualifiedColumnMapping != null && !unqualifiedColumnMapping.isEmpty()) {
+      String resolved = unqualifiedColumnMapping.get(column.toLowerCase(Locale.ROOT));
+      if (resolved != null) {
+        return resolved;
+      }
+    }
+    return column;
   }
 
   private void ensureEvaluator(GenericRecord rec) {
