@@ -23,7 +23,7 @@ import net.sf.jsqlparser.schema.Table;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroCoercions;
-import se.alipsa.jparq.engine.InnerJoinRecordReader;
+import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.QueryProcessor;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
@@ -96,7 +96,7 @@ public class JParqResultSet extends ResultSetAdapter {
     this.queryQualifiers = List.copyOf(qualifiers);
     Map<String, Map<String, String>> qualifierMapping = Map.of();
     Map<String, String> unqualifiedMapping = Map.of();
-    if (reader instanceof InnerJoinRecordReader joinReader) {
+    if (reader instanceof JoinRecordReader joinReader) {
       qualifierMapping = joinReader.qualifierColumnMapping();
       unqualifiedMapping = joinReader.unqualifiedColumnMapping();
     }
@@ -317,7 +317,7 @@ public class JParqResultSet extends ResultSetAdapter {
 
   /**
    * Translate projection column names to the canonical field names emitted by an
-   * {@link InnerJoinRecordReader} when joining multiple tables.
+   * {@link JoinRecordReader} when joining multiple tables.
    *
    * @param select
    *          parsed SELECT statement supplying the projection expressions
