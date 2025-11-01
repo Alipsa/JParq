@@ -11,26 +11,29 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import net.sf.jsqlparser.expression.Expression;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 
 /**
- * In-memory implementation of an INNER JOIN using a simple Cartesian product
- * followed by evaluation of the query {@code WHERE} clause. Each table is fully
- * materialized in memory which keeps the implementation straightforward and is
- * sufficient for the test scenarios shipped with the project.
+ * In-memory implementation of explicit SQL joins using a simple materialised
+ * representation of each participating table.
+ *
+ * <p>
+ * The reader currently supports {@code INNER}, {@code CROSS}, and {@code LEFT
+ * OUTER} joins. Rows from the left side of a {@code LEFT JOIN} are always
+ * emitted, even when no matching row exists on the right side.
+ * </p>
  */
-public final class InnerJoinRecordReader implements RecordReader {
+public final class JoinRecordReader implements RecordReader {
 
   private final Schema schema;
-  private final List<List<GenericRecord>> tableRows;
-  private final List<FieldMapping> fieldMappings;
-  private final int[] indices;
   private final List<String> columnNames;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
-  private boolean hasNext;
+  private final List<GenericRecord> joinedRows;
+  private int position = 0;
 
   /**
    * Representation of a table participating in the join.
@@ -43,8 +46,13 @@ public final class InnerJoinRecordReader implements RecordReader {
    *          schema describing the table
    * @param rows
    *          all rows read from the table
+   * @param joinType
+   *          type of join introducing the table (BASE for the first table)
+   * @param joinCondition
+   *          condition associated with the join (may be {@code null})
    */
-  public record JoinTable(String tableName, String alias, Schema schema, List<GenericRecord> rows) {
+  public record JoinTable(String tableName, String alias, Schema schema, List<GenericRecord> rows,
+      SqlParser.JoinType joinType, Expression joinCondition) {
 
     /**
      * Validates mandatory state for the join table to guard against null elements.
@@ -53,36 +61,50 @@ public final class InnerJoinRecordReader implements RecordReader {
       Objects.requireNonNull(tableName, "tableName");
       Objects.requireNonNull(schema, "schema");
       Objects.requireNonNull(rows, "rows");
+      Objects.requireNonNull(joinType, "joinType");
+      if (joinType == SqlParser.JoinType.BASE && joinCondition != null) {
+        throw new IllegalArgumentException("The base table cannot specify a join condition");
+      }
+      rows = List.copyOf(rows);
+    }
+
+    @Override
+    public List<GenericRecord> rows() {
+      return rows;
     }
   }
 
   private record FieldMapping(int tableIndex, String sourceField, String targetField) {
   }
 
+  private record SchemaContext(Schema schema, Map<String, Map<String, String>> qualifierMapping,
+      Map<String, String> unqualifiedMapping) {
+  }
+
   /**
-   * Create a new reader capable of iterating over the Cartesian product of the
-   * supplied tables.
+   * Create a new reader capable of iterating over the joined result set.
    *
    * @param tables
-   *          tables participating in the INNER JOIN
+   *          tables participating in the join, in evaluation order
    */
-  public InnerJoinRecordReader(List<JoinTable> tables) {
+  public JoinRecordReader(List<JoinTable> tables) {
     Objects.requireNonNull(tables, "tables");
     if (tables.isEmpty()) {
       throw new IllegalArgumentException("At least one table is required for a join");
     }
-    this.fieldMappings = new ArrayList<>();
-    SchemaContext context = buildSchema(tables, fieldMappings);
+    List<JoinTable> joinTables = List.copyOf(tables);
+    if (joinTables.get(0).joinType() != SqlParser.JoinType.BASE) {
+      throw new IllegalArgumentException("The first table must be marked as BASE");
+    }
+    List<FieldMapping> fieldMappings = new ArrayList<>();
+    SchemaContext context = buildSchema(joinTables, fieldMappings);
     this.schema = context.schema();
     this.columnNames = buildColumnNames(fieldMappings);
     this.qualifierColumnMapping = context.qualifierMapping();
     this.unqualifiedColumnMapping = context.unqualifiedMapping();
-    this.tableRows = new ArrayList<>(tables.size());
-    for (JoinTable table : tables) {
-      tableRows.add(new ArrayList<>(table.rows()));
-    }
-    this.indices = new int[tables.size()];
-    this.hasNext = tableRows.stream().allMatch(list -> !list.isEmpty());
+    ExpressionEvaluator evaluator = new ExpressionEvaluator(schema, null, List.of(), qualifierColumnMapping,
+        unqualifiedColumnMapping);
+    this.joinedRows = buildJoinedRows(joinTables, fieldMappings, schema, evaluator);
   }
 
   private static SchemaContext buildSchema(List<JoinTable> tables, List<FieldMapping> mappings) {
@@ -119,7 +141,7 @@ public final class InnerJoinRecordReader implements RecordReader {
         }
       }
     }
-    Schema joinSchema = Schema.createRecord("inner_join_record", null, null, false);
+    Schema joinSchema = Schema.createRecord("join_record", null, null, false);
     joinSchema.setFields(fields);
     return new SchemaContext(joinSchema, qualifierMap, unqualifiedMap);
   }
@@ -152,16 +174,86 @@ public final class InnerJoinRecordReader implements RecordReader {
     return qualifier == null ? null : qualifier.toLowerCase(Locale.ROOT);
   }
 
-  private record SchemaContext(Schema schema, Map<String, Map<String, String>> qualifierMapping,
-      Map<String, String> unqualifiedMapping) {
-  }
-
   private static List<String> buildColumnNames(List<FieldMapping> mappings) {
     List<String> names = new ArrayList<>(mappings.size());
     for (FieldMapping mapping : mappings) {
       names.add(mapping.targetField());
     }
     return List.copyOf(names);
+  }
+
+  private static List<GenericRecord> buildJoinedRows(List<JoinTable> tables, List<FieldMapping> mappings, Schema schema,
+      ExpressionEvaluator evaluator) {
+    List<GenericRecord> results = new ArrayList<>();
+    if (tables.isEmpty()) {
+      return results;
+    }
+    List<GenericRecord> assignments = new ArrayList<>();
+    joinRecursive(tables, mappings, schema, evaluator, 0, assignments, results);
+    return results;
+  }
+
+  private static void joinRecursive(List<JoinTable> tables, List<FieldMapping> mappings, Schema schema,
+      ExpressionEvaluator evaluator, int index, List<GenericRecord> assignments, List<GenericRecord> results) {
+    JoinTable current = tables.get(index);
+    if (index == 0) {
+      for (GenericRecord row : current.rows()) {
+        assignments.add(row);
+        if (tables.size() == 1) {
+          results.add(buildRecord(assignments, mappings, schema));
+        } else {
+          joinRecursive(tables, mappings, schema, evaluator, index + 1, assignments, results);
+        }
+        assignments.remove(assignments.size() - 1);
+      }
+      return;
+    }
+
+    boolean matched = false;
+    for (GenericRecord row : current.rows()) {
+      assignments.add(row);
+      if (conditionMatches(current.joinCondition(), evaluator, assignments, mappings, schema)) {
+        matched = true;
+        if (index == tables.size() - 1) {
+          results.add(buildRecord(assignments, mappings, schema));
+        } else {
+          joinRecursive(tables, mappings, schema, evaluator, index + 1, assignments, results);
+        }
+      }
+      assignments.remove(assignments.size() - 1);
+    }
+
+    if (!matched && current.joinType() == SqlParser.JoinType.LEFT_OUTER) {
+      assignments.add(null);
+      if (index == tables.size() - 1) {
+        results.add(buildRecord(assignments, mappings, schema));
+      } else {
+        joinRecursive(tables, mappings, schema, evaluator, index + 1, assignments, results);
+      }
+      assignments.remove(assignments.size() - 1);
+    }
+  }
+
+  private static boolean conditionMatches(Expression condition, ExpressionEvaluator evaluator,
+      List<GenericRecord> assignments, List<FieldMapping> mappings, Schema schema) {
+    if (condition == null) {
+      return true;
+    }
+    GenericRecord record = buildRecord(assignments, mappings, schema);
+    return evaluator.eval(condition, record);
+  }
+
+  private static GenericRecord buildRecord(List<GenericRecord> assignments,
+      List<FieldMapping> mappings, Schema schema) {
+    GenericData.Record record = new GenericData.Record(schema);
+    for (FieldMapping mapping : mappings) {
+      GenericRecord source = mapping.tableIndex() < assignments.size()
+          ? assignments.get(mapping.tableIndex())
+          : null;
+      Object value = source == null ? null : source.get(mapping.sourceField());
+      record.put(mapping.targetField(), value);
+    }
+    return record;
   }
 
   /**
@@ -206,30 +298,12 @@ public final class InnerJoinRecordReader implements RecordReader {
 
   @Override
   public GenericRecord read() throws IOException {
-    if (!hasNext) {
+    if (position >= joinedRows.size()) {
       return null;
     }
-    GenericData.Record record = new GenericData.Record(schema);
-    for (FieldMapping mapping : fieldMappings) {
-      GenericRecord source = tableRows.get(mapping.tableIndex()).get(indices[mapping.tableIndex()]);
-      record.put(mapping.targetField(), source.get(mapping.sourceField()));
-    }
-    advance();
+    GenericRecord record = joinedRows.get(position);
+    position++;
     return record;
-  }
-
-  private void advance() {
-    for (int i = indices.length - 1; i >= 0; i--) {
-      int nextIndex = indices[i] + 1;
-      if (nextIndex < tableRows.get(i).size()) {
-        indices[i] = nextIndex;
-        for (int j = i + 1; j < indices.length; j++) {
-          indices[j] = 0;
-        }
-        return;
-      }
-    }
-    hasNext = false;
   }
 
   @Override

@@ -146,6 +146,20 @@ public final class SqlParser {
   }
 
   /**
+   * Supported join types for explicit joins in the {@code FROM} clause.
+   */
+  public enum JoinType {
+    /** The first table in the FROM clause. */
+    BASE,
+    /** An INNER JOIN participant. */
+    INNER,
+    /** A LEFT (OUTER) JOIN participant. */
+    LEFT_OUTER,
+    /** A CROSS JOIN introduced via simple join syntax. */
+    CROSS
+  }
+
+  /**
    * Public representation of a table reference discovered in the {@code FROM}
    * clause.
    *
@@ -153,8 +167,12 @@ public final class SqlParser {
    *          the referenced table name
    * @param tableAlias
    *          optional alias used for the table (may be {@code null})
+   * @param joinType
+   *          type of join that introduced the table (BASE for the first table)
+   * @param joinCondition
+   *          expression defining the join condition (may be {@code null})
    */
-  public record TableReference(String tableName, String tableAlias) {
+  public record TableReference(String tableName, String tableAlias, JoinType joinType, Expression joinCondition) {
   }
 
   /**
@@ -777,7 +795,7 @@ public final class SqlParser {
     return List.copyOf(expressions);
   }
 
-  private record JoinInfo(FromInfo table, Expression condition, boolean simple) {
+  private record JoinInfo(FromInfo table, Expression condition, JoinType joinType) {
   }
 
   private static List<JoinInfo> parseJoins(List<Join> joins) {
@@ -786,13 +804,25 @@ public final class SqlParser {
     }
     List<JoinInfo> joinInfos = new ArrayList<>(joins.size());
     for (Join join : joins) {
-      boolean simple = join.isSimple();
-      boolean inner = join.isInner();
-      if (!simple && !inner) {
-        throw new IllegalArgumentException("Only INNER JOIN is supported");
+      if (join.isRight() || join.isFull()) {
+        throw new IllegalArgumentException("RIGHT and FULL JOIN are not supported");
       }
-      if (join.isOuter() || join.isLeft() || join.isRight() || join.isFull()) {
-        throw new IllegalArgumentException("Only INNER JOIN is supported");
+      if (join.isNatural()) {
+        throw new IllegalArgumentException("NATURAL JOIN is not supported");
+      }
+      if (join.getUsingColumns() != null && !join.getUsingColumns().isEmpty()) {
+        throw new IllegalArgumentException("JOIN ... USING (...) is not supported");
+      }
+      JoinType joinType;
+      if (join.isLeft() || (join.isOuter() && !join.isRight() && !join.isFull())) {
+        joinType = JoinType.LEFT_OUTER;
+      } else if (join.isCross() || join.isSimple()) {
+        joinType = JoinType.CROSS;
+      } else {
+        joinType = JoinType.INNER;
+      }
+      if (join.isOuter() && joinType != JoinType.LEFT_OUTER) {
+        throw new IllegalArgumentException("Unsupported outer join type");
       }
       FromInfo info = parseFromItem(join.getRightItem());
       Expression condition = null;
@@ -801,18 +831,18 @@ public final class SqlParser {
           condition = combineExpressions(condition, on);
         }
       }
-      joinInfos.add(new JoinInfo(info, condition, simple));
+      joinInfos.add(new JoinInfo(info, condition, joinType));
     }
     return List.copyOf(joinInfos);
   }
 
   private static List<TableReference> buildTableReferences(FromInfo base, List<JoinInfo> joins) {
     List<TableReference> refs = new ArrayList<>();
-    refs.add(new TableReference(base.tableName(), base.tableAlias()));
+    refs.add(new TableReference(base.tableName(), base.tableAlias(), JoinType.BASE, null));
     if (joins != null) {
       for (JoinInfo join : joins) {
         FromInfo info = join.table();
-        refs.add(new TableReference(info.tableName(), info.tableAlias()));
+        refs.add(new TableReference(info.tableName(), info.tableAlias(), join.joinType(), join.condition()));
       }
     }
     return List.copyOf(refs);
@@ -841,6 +871,9 @@ public final class SqlParser {
     Expression combined = null;
     List<String> qualifierList = qualifiers(tableRefs);
     for (JoinInfo join : joinInfos) {
+      if (join.joinType() == JoinType.LEFT_OUTER) {
+        continue;
+      }
       Expression condition = join.condition();
       if (condition != null) {
         if (tableRefs.size() == 1) {
