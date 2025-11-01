@@ -115,8 +115,8 @@ public final class ValueExpressionEvaluator {
     this.schema = schema;
     this.subqueryExecutor = subqueryExecutor;
     this.outerQualifiers = outerQualifiers == null ? List.of() : List.copyOf(outerQualifiers);
-    this.qualifierColumnMapping = normaliseQualifierMapping(qualifierColumnMapping);
-    this.unqualifiedColumnMapping = normaliseUnqualifiedMapping(unqualifiedColumnMapping);
+    this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(qualifierColumnMapping);
+    this.unqualifiedColumnMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(unqualifiedColumnMapping);
   }
 
   /**
@@ -1054,65 +1054,8 @@ public final class ValueExpressionEvaluator {
   }
 
   private String canonicalFieldName(String qualifier, String columnName) {
-    String normalizedColumn = columnName.toLowerCase(Locale.ROOT);
-    if (qualifier != null && !qualifier.isBlank()) {
-      String normalizedQualifier = normalizeQualifier(qualifier);
-      Map<String, String> mapping = qualifierColumnMapping.get(normalizedQualifier);
-      if (mapping != null) {
-        String canonical = mapping.get(normalizedColumn);
-        if (canonical != null) {
-          return canonical;
-        }
-      }
-      throw new IllegalArgumentException("Unknown column '" + columnName + "' for qualifier '" + qualifier + "'");
-    }
-    if (!qualifierColumnMapping.isEmpty()) {
-      String canonical = unqualifiedColumnMapping.get(normalizedColumn);
-      if (canonical != null) {
-        return canonical;
-      }
-      throw new IllegalArgumentException("Ambiguous column reference: " + columnName);
-    }
-    String canonical = caseInsensitiveIndex.get(normalizedColumn);
-    return canonical != null ? canonical : columnName;
-  }
-
-  private static Map<String, Map<String, String>> normaliseQualifierMapping(
-      Map<String, Map<String, String>> source) {
-    if (source == null || source.isEmpty()) {
-      return Map.of();
-    }
-    Map<String, Map<String, String>> normalized = new HashMap<>();
-    for (Map.Entry<String, Map<String, String>> entry : source.entrySet()) {
-      String qualifier = normalizeQualifier(entry.getKey());
-      if (qualifier == null) {
-        continue;
-      }
-      Map<String, String> inner = new HashMap<>();
-      Map<String, String> value = entry.getValue();
-      if (value != null) {
-        for (Map.Entry<String, String> innerEntry : value.entrySet()) {
-          inner.put(innerEntry.getKey().toLowerCase(Locale.ROOT), innerEntry.getValue());
-        }
-      }
-      normalized.put(qualifier, Map.copyOf(inner));
-    }
-    return Map.copyOf(normalized);
-  }
-
-  private static Map<String, String> normaliseUnqualifiedMapping(Map<String, String> source) {
-    if (source == null || source.isEmpty()) {
-      return Map.of();
-    }
-    Map<String, String> normalized = new HashMap<>();
-    for (Map.Entry<String, String> entry : source.entrySet()) {
-      normalized.put(entry.getKey().toLowerCase(Locale.ROOT), entry.getValue());
-    }
-    return Map.copyOf(normalized);
-  }
-
-  private static String normalizeQualifier(String qualifier) {
-    return qualifier == null ? null : qualifier.toLowerCase(Locale.ROOT);
+    return ColumnMappingUtil.canonicalFieldName(qualifier, columnName, qualifierColumnMapping,
+        unqualifiedColumnMapping, caseInsensitiveIndex);
   }
 
   private BigDecimal toBigDecimal(Object value) {

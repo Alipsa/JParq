@@ -263,7 +263,7 @@ public final class SqlParser {
       stripQualifier(havingExpr, qualifiers(tableRefs));
     }
 
-    List<Expression> groupByExpressions = parseGroupBy(ps.getGroupBy(), fromInfo, tableRefs);
+    List<Expression> groupByExpressions = parseGroupBy(ps.getGroupBy(), tableRefs);
 
     Expression joinCondition = combineJoinConditions(joinInfos, tableRefs);
     Expression combinedWhere = combineExpressions(
@@ -762,8 +762,7 @@ public final class SqlParser {
     return Set.copyOf(columns);
   }
 
-  private static List<Expression> parseGroupBy(GroupByElement groupBy, FromInfo fromInfo,
-      List<TableReference> tableRefs) {
+  private static List<Expression> parseGroupBy(GroupByElement groupBy, List<TableReference> tableRefs) {
     ExpressionList<?> expressionList = groupBy == null ? null : groupBy.getGroupByExpressionList();
     if (expressionList == null || expressionList.isEmpty()) {
       return List.of();
