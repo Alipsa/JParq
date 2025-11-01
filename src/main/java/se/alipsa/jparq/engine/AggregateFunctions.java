@@ -363,13 +363,16 @@ public final class AggregateFunctions {
   /**
    * Produce normalized lookup keys for the provided expression.
    *
-   * <p>The returned list contains the rendered expression text and, when the
+   * <p>
+   * The returned list contains the rendered expression text and, when the
    * expression represents a column reference, additional entries for any table
    * aliases or names that qualify the column. These keys allow quick matching
    * against GROUP BY expressions regardless of how they were written in the
-   * query.</p>
+   * query.
+   * </p>
    *
-   * @param expression the expression to analyze, may be {@code null}
+   * @param expression
+   *          the expression to analyze, may be {@code null}
    * @return immutable list of normalized expression keys
    */
   private static List<String> expressionKeys(Expression expression) {
@@ -518,8 +521,10 @@ public final class AggregateFunctions {
   /**
    * Adds a rendered expression to the key set if it is not blank.
    *
-   * @param keys the accumulator of keys, never {@code null}
-   * @param rendered the expression rendered as text, may be {@code null}
+   * @param keys
+   *          the accumulator of keys, never {@code null}
+   * @param rendered
+   *          the expression rendered as text, may be {@code null}
    */
   private static void addIfNotBlank(java.util.Set<String> keys, String rendered) {
     if (rendered != null && !rendered.isBlank()) {
@@ -528,11 +533,15 @@ public final class AggregateFunctions {
   }
 
   /**
-   * Adds table-qualified column names to the key set when a table reference exists.
+   * Adds table-qualified column names to the key set when a table reference
+   * exists.
    *
-   * @param keys the accumulator of keys, never {@code null}
-   * @param columnName the normalized column name, never {@code null}
-   * @param table the table reference that may contribute qualifiers
+   * @param keys
+   *          the accumulator of keys, never {@code null}
+   * @param columnName
+   *          the normalized column name, never {@code null}
+   * @param table
+   *          the table reference that may contribute qualifiers
    */
   private static void addTableQualifiers(java.util.Set<String> keys, String columnName, Table table) {
     if (table == null) {
@@ -547,12 +556,14 @@ public final class AggregateFunctions {
   /**
    * Adds a qualified key to the set when the qualifier is present.
    *
-   * @param keys the accumulator of keys, never {@code null}
-   * @param qualifier the qualifier to prefix, may be {@code null}
-   * @param columnName the normalized column name, never {@code null}
+   * @param keys
+   *          the accumulator of keys, never {@code null}
+   * @param qualifier
+   *          the qualifier to prefix, may be {@code null}
+   * @param columnName
+   *          the normalized column name, never {@code null}
    */
-  private static void addQualifiedIfPresent(
-      java.util.Set<String> keys, String qualifier, String columnName) {
+  private static void addQualifiedIfPresent(java.util.Set<String> keys, String qualifier, String columnName) {
     if (qualifier != null) {
       keys.add(qualifier + "." + columnName);
     }
@@ -561,7 +572,8 @@ public final class AggregateFunctions {
   /**
    * Normalizes the alias of a table when available.
    *
-   * @param table the table that may contain an alias
+   * @param table
+   *          the table that may contain an alias
    * @return the normalized alias or {@code null}
    */
   private static String tableAlias(Table table) {
@@ -574,7 +586,8 @@ public final class AggregateFunctions {
   /**
    * Normalizes the table name when available.
    *
-   * @param table the table containing the name
+   * @param table
+   *          the table containing the name
    * @return the normalized table name or {@code null}
    */
   private static String tableName(Table table) {

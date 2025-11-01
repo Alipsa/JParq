@@ -27,10 +27,8 @@ class SqlParserProjectionAliasTest {
          AND s.change_date = m.max_cd
         """);
 
-    SqlParser.TableReference derived = select.tableReferences().stream()
-        .filter(ref -> "m".equals(ref.tableAlias()))
-        .findFirst()
-        .orElseThrow(() -> new IllegalStateException("Derived table alias m should exist"));
+    SqlParser.TableReference derived = select.tableReferences().stream().filter(ref -> "m".equals(ref.tableAlias()))
+        .findFirst().orElseThrow(() -> new IllegalStateException("Derived table alias m should exist"));
 
     List<String> physical = derived.subquery().columnNames();
 
