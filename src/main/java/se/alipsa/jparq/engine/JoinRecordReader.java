@@ -17,13 +17,13 @@ import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 
 /**
- * In-memory implementation of explicit SQL joins using streaming iteration
- * across participating tables.
+ * In-memory implementation of explicit SQL joins using eager materialisation of
+ * the combined result set.
  *
  * <p>
- * The reader currently supports {@code INNER}, {@code CROSS}, and {@code LEFT
- * OUTER} joins. Rows from the left side of a {@code LEFT JOIN} are always
- * emitted, even when no matching row exists on the right side.
+ * The reader supports {@code INNER}, {@code CROSS}, {@code LEFT OUTER}, and
+ * {@code RIGHT OUTER} joins. Rows from the preserved side of an outer join are
+ * always emitted, even when the other side has no matching row.
  * </p>
  */
 public final class JoinRecordReader implements RecordReader {
@@ -35,9 +35,9 @@ public final class JoinRecordReader implements RecordReader {
   private final List<JoinTable> joinTables;
   private final List<FieldMapping> fieldMappings;
   private final ExpressionEvaluator evaluator;
-  private final List<GenericRecord> assignments;
-  private final List<TableState> tableStates;
-  private int resumeIndex;
+  private final List<GenericRecord> resultRows;
+  private int resultIndex;
+  private final int tableCount;
 
   /**
    * Representation of a table participating in the join.
@@ -124,15 +124,9 @@ public final class JoinRecordReader implements RecordReader {
     this.joinTables = joinTables;
     this.fieldMappings = List.copyOf(mappings);
     this.evaluator = new ExpressionEvaluator(schema, null, List.of(), qualifierColumnMapping, unqualifiedColumnMapping);
-    this.assignments = new ArrayList<>(joinTables.size());
-    for (int i = 0; i < joinTables.size(); i++) {
-      assignments.add(null);
-    }
-    this.tableStates = new ArrayList<>(joinTables.size());
-    for (int i = 0; i < joinTables.size(); i++) {
-      tableStates.add(new TableState());
-    }
-    this.resumeIndex = 0;
+    this.tableCount = joinTables.size();
+    this.resultRows = computeResultRows();
+    this.resultIndex = 0;
   }
 
   private static SchemaContext buildSchema(List<JoinTable> tables, List<FieldMapping> mappings) {
@@ -210,14 +204,6 @@ public final class JoinRecordReader implements RecordReader {
     return List.copyOf(names);
   }
 
-  private boolean conditionMatches(Expression condition) {
-    if (condition == null) {
-      return true;
-    }
-    GenericRecord record = buildRecord(assignments, fieldMappings, schema);
-    return evaluator.eval(condition, record);
-  }
-
   private static GenericRecord buildRecord(List<GenericRecord> assignments, List<FieldMapping> mappings,
       Schema schema) {
     GenericData.Record record = new GenericData.Record(schema);
@@ -271,8 +257,10 @@ public final class JoinRecordReader implements RecordReader {
 
   @Override
   public GenericRecord read() throws IOException {
-    if (nextCombination()) {
-      return buildRecord(assignments, fieldMappings, schema);
+    if (resultIndex < resultRows.size()) {
+      GenericRecord record = resultRows.get(resultIndex);
+      resultIndex++;
+      return record;
     }
     return null;
   }
@@ -282,81 +270,122 @@ public final class JoinRecordReader implements RecordReader {
     // nothing to release, all data is sourced from in-memory tables
   }
 
-  private boolean nextCombination() {
+  private List<GenericRecord> computeResultRows() {
+    List<List<GenericRecord>> combinations = initialiseCombinations();
+    for (int index = 1; index < joinTables.size(); index++) {
+      JoinTable table = joinTables.get(index);
+      if (table.joinType() == SqlParser.JoinType.RIGHT_OUTER) {
+        combinations = combineRightOuter(combinations, table, index);
+      } else {
+        combinations = combineStandard(combinations, table, index);
+      }
+    }
     if (joinTables.isEmpty()) {
-      return false;
+      return List.of();
     }
-    int index = resumeIndex;
-    while (index >= 0 && index < joinTables.size()) {
-      if (advanceState(index)) {
-        if (index == joinTables.size() - 1) {
-          resumeIndex = joinTables.size() - 1;
-          return true;
+    List<GenericRecord> results = new ArrayList<>(combinations.size());
+    for (List<GenericRecord> assignment : combinations) {
+      results.add(buildRecord(assignment, fieldMappings, schema));
+    }
+    return List.copyOf(results);
+  }
+
+  private List<List<GenericRecord>> initialiseCombinations() {
+    if (joinTables.isEmpty()) {
+      return List.of();
+    }
+    JoinTable base = joinTables.get(0);
+    List<List<GenericRecord>> combinations = new ArrayList<>();
+    if (base.rows().isEmpty()) {
+      return combinations;
+    }
+    for (GenericRecord row : base.rows()) {
+      List<GenericRecord> assignment = emptyAssignment();
+      assignment.set(0, row);
+      combinations.add(assignment);
+    }
+    return combinations;
+  }
+
+  private List<GenericRecord> emptyAssignment() {
+    List<GenericRecord> assignment = new ArrayList<>(tableCount);
+    for (int i = 0; i < tableCount; i++) {
+      assignment.add(null);
+    }
+    return assignment;
+  }
+
+  private List<List<GenericRecord>> combineStandard(List<List<GenericRecord>> leftCombos, JoinTable table, int index) {
+    List<List<GenericRecord>> results = new ArrayList<>();
+    if (leftCombos.isEmpty()) {
+      return results;
+    }
+    boolean cross = table.joinType() == SqlParser.JoinType.CROSS;
+    for (List<GenericRecord> combo : leftCombos) {
+      boolean matched = false;
+      if (cross) {
+        for (GenericRecord row : table.rows()) {
+          List<GenericRecord> assignment = new ArrayList<>(combo);
+          assignment.set(index, row);
+          results.add(assignment);
         }
-        index++;
-      } else {
-        index--;
+        continue;
+      }
+      for (GenericRecord row : table.rows()) {
+        List<GenericRecord> assignment = new ArrayList<>(combo);
+        assignment.set(index, row);
+        if (conditionMatches(table.joinCondition(), assignment)) {
+          results.add(assignment);
+          matched = true;
+        }
+      }
+      if (!matched && table.joinType() == SqlParser.JoinType.LEFT_OUTER) {
+        List<GenericRecord> assignment = new ArrayList<>(combo);
+        assignment.set(index, null);
+        results.add(assignment);
       }
     }
-    resumeIndex = -1;
-    return false;
+    return results;
   }
 
-  private boolean advanceState(int index) {
-    TableState state = tableStates.get(index);
-    JoinTable table = joinTables.get(index);
-    if (!state.initialized) {
-      state.reset();
-      assignments.set(index, null);
-      state.initialized = true;
+  private List<List<GenericRecord>> combineRightOuter(List<List<GenericRecord>> leftCombos, JoinTable table,
+      int index) {
+    List<List<GenericRecord>> results = new ArrayList<>();
+    if (table.rows().isEmpty()) {
+      return results;
     }
-    while (true) {
-      if (state.nextRowIndex < table.rows().size()) {
-        GenericRecord candidate = table.rows().get(state.nextRowIndex);
-        state.nextRowIndex++;
-        assignments.set(index, candidate);
-        if (index == 0 || conditionMatches(table.joinCondition())) {
-          state.hadMatch = true;
-          resetDescendants(index);
-          return true;
+    if (leftCombos.isEmpty()) {
+      for (GenericRecord row : table.rows()) {
+        List<GenericRecord> assignment = emptyAssignment();
+        assignment.set(index, row);
+        results.add(assignment);
+      }
+      return results;
+    }
+    for (GenericRecord row : table.rows()) {
+      boolean matched = false;
+      for (List<GenericRecord> combo : leftCombos) {
+        List<GenericRecord> assignment = new ArrayList<>(combo);
+        assignment.set(index, row);
+        if (conditionMatches(table.joinCondition(), assignment)) {
+          results.add(assignment);
+          matched = true;
         }
-      } else if (table.joinType() == SqlParser.JoinType.LEFT_OUTER && !state.hadMatch && !state.producedNull) {
-        state.producedNull = true;
-        assignments.set(index, null);
-        resetDescendants(index);
-        return true;
-      } else {
-        state.initialized = false;
-        assignments.set(index, null);
-        return false;
+      }
+      if (!matched) {
+        List<GenericRecord> assignment = emptyAssignment();
+        assignment.set(index, row);
+        results.add(assignment);
       }
     }
+    return results;
   }
 
-  private void resetDescendants(int index) {
-    for (int i = index + 1; i < tableStates.size(); i++) {
-      TableState state = tableStates.get(i);
-      state.initialized = false;
-      assignments.set(i, null);
+  private boolean conditionMatches(Expression condition, List<GenericRecord> assignments) {
+    if (condition == null) {
+      return true;
     }
-  }
-
-  /**
-   * Tracks iteration state for a table participating in the join.
-   */
-  private static final class TableState {
-    private int nextRowIndex;
-    private boolean hadMatch;
-    private boolean producedNull;
-    private boolean initialized;
-
-    /**
-     * Reset iteration counters for a fresh traversal of the table rows.
-     */
-    private void reset() {
-      nextRowIndex = 0;
-      hadMatch = false;
-      producedNull = false;
-    }
+    GenericRecord record = buildRecord(assignments, fieldMappings, schema);
+    return evaluator.eval(condition, record);
   }
 }
