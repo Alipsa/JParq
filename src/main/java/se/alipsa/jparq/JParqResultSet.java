@@ -12,6 +12,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -344,6 +345,7 @@ public class JParqResultSet extends ResultSetAdapter {
     }
     List<String> canonical = new ArrayList<>(physicalColumnOrder);
     List<Expression> expressions = select.expressions();
+    List<String> labels = select.labels();
     int expressionCount = expressions == null ? 0 : expressions.size();
     int limit = Math.min(canonical.size(), expressionCount);
     for (int i = 0; i < limit; i++) {
@@ -351,8 +353,26 @@ public class JParqResultSet extends ResultSetAdapter {
       if (expr instanceof Column column) {
         canonical.set(i, canonicalColumnName(column, canonical.get(i), qualifierMapping, unqualifiedMapping));
       }
+      if (canonical.get(i) == null) {
+        String fallback = null;
+        if (labels != null && i < labels.size()) {
+          fallback = labels.get(i);
+        }
+        if (fallback == null && expr != null) {
+          fallback = expr.toString();
+        }
+        canonical.set(i, fallback);
+      }
     }
-    return List.copyOf(canonical);
+    for (int i = 0; i < canonical.size(); i++) {
+      if (canonical.get(i) == null && labels != null && i < labels.size()) {
+        canonical.set(i, labels.get(i));
+      }
+      if (canonical.get(i) == null) {
+        canonical.set(i, "column_" + i);
+      }
+    }
+    return Collections.unmodifiableList(canonical);
   }
 
   /**
