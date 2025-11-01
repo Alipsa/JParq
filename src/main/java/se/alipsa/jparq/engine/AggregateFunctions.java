@@ -45,11 +45,13 @@ import net.sf.jsqlparser.expression.operators.relational.MinorThan;
 import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals;
 import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
 import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.SqlParser.OrderKey;
+import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.StringExpressions;
 
@@ -291,7 +293,12 @@ public final class AggregateFunctions {
     List<GroupExpression> groupExpressions = buildGroupExpressions(select.groupByExpressions());
     Map<String, Integer> groupIndexByText = new HashMap<>();
     for (int i = 0; i < groupExpressions.size(); i++) {
-      groupIndexByText.put(groupExpressions.get(i).expression().toString(), i);
+      Expression expression = groupExpressions.get(i).expression();
+      for (String key : expressionKeys(expression)) {
+        if (key != null) {
+          groupIndexByText.putIfAbsent(key, i);
+        }
+      }
     }
 
     boolean hasGroupBy = !groupExpressions.isEmpty();
@@ -323,7 +330,16 @@ public final class AggregateFunctions {
         return null; // simple projection without grouping/aggregates
       }
 
-      Integer groupIndex = groupIndexByText.get(expr.toString());
+      Integer groupIndex = null;
+      for (String key : expressionKeys(expr)) {
+        if (key == null) {
+          continue;
+        }
+        groupIndex = groupIndexByText.get(key);
+        if (groupIndex != null) {
+          break;
+        }
+      }
       if (groupIndex == null) {
         throw new IllegalArgumentException(
             "SELECT expression '" + expr + "' must appear in the GROUP BY clause when aggregates are present");
@@ -342,6 +358,39 @@ public final class AggregateFunctions {
     }
 
     return new AggregatePlan(specs, resultColumns, groupExpressions);
+  }
+
+  private static List<String> expressionKeys(Expression expression) {
+    if (expression == null) {
+      return List.of();
+    }
+    java.util.Set<String> keys = new java.util.LinkedHashSet<>();
+    String rendered = expression.toString();
+    if (rendered != null && !rendered.isBlank()) {
+      keys.add(rendered);
+    }
+    if (expression instanceof Column column) {
+      String columnName = JParqUtil.normalizeQualifier(column.getColumnName());
+      if (columnName != null) {
+        keys.add(columnName);
+        Table table = column.getTable();
+        if (table != null) {
+          if (table.getAlias() != null && table.getAlias().getName() != null) {
+            String alias = JParqUtil.normalizeQualifier(table.getAlias().getName());
+            if (alias != null) {
+              keys.add(alias + "." + columnName);
+            }
+          }
+          if (table.getName() != null) {
+            String tableName = JParqUtil.normalizeQualifier(table.getName());
+            if (tableName != null) {
+              keys.add(tableName + "." + columnName);
+            }
+          }
+        }
+      }
+    }
+    return List.copyOf(keys);
   }
 
   private static AggregateSpec aggregateSpec(Function func, String label) {
