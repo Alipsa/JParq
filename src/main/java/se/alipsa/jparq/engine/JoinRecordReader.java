@@ -385,8 +385,8 @@ public final class JoinRecordReader implements RecordReader {
   }
 
   /**
-   * Combine the accumulated left-hand assignments with the rows from the
-   * current table when performing a {@code FULL [OUTER] JOIN}.
+   * Combine the accumulated left-hand assignments with the rows from the current
+   * table when performing a {@code FULL [OUTER] JOIN}.
    *
    * @param leftCombos
    *          assignments produced by the previous join stages
@@ -397,8 +397,7 @@ public final class JoinRecordReader implements RecordReader {
    * @return a list containing the expanded assignments representing the full
    *         outer join result
    */
-  private List<List<GenericRecord>> combineFullOuter(List<List<GenericRecord>> leftCombos, JoinTable table,
-      int index) {
+  private List<List<GenericRecord>> combineFullOuter(List<List<GenericRecord>> leftCombos, JoinTable table, int index) {
     List<List<GenericRecord>> results = new ArrayList<>();
     List<GenericRecord> rightRows = table.rows();
     if (leftCombos.isEmpty() && rightRows.isEmpty()) {

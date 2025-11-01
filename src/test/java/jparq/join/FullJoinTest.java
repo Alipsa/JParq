@@ -115,10 +115,8 @@ class FullJoinTest {
       }
     });
 
-    Assertions.assertEquals(employeeIds, observedEmployees,
-        "Full outer join should preserve employee identifiers");
-    Assertions.assertEquals(salaryEmployees, observedSalary,
-        "Full outer join should preserve salary identifiers");
+    Assertions.assertEquals(employeeIds, observedEmployees, "Full outer join should preserve employee identifiers");
+    Assertions.assertEquals(salaryEmployees, observedSalary, "Full outer join should preserve salary identifiers");
     Assertions.assertTrue(sawMatchingRow.get(), "At least one row should contain matching values from both tables");
   }
 
