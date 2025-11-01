@@ -164,6 +164,8 @@ public final class SqlParser {
     LEFT_OUTER,
     /** A RIGHT (OUTER) JOIN participant. */
     RIGHT_OUTER,
+    /** A FULL (OUTER) JOIN participant. */
+    FULL_OUTER,
     /** A CROSS JOIN introduced via simple join syntax. */
     CROSS
   }
@@ -823,9 +825,6 @@ public final class SqlParser {
     }
     List<JoinInfo> joinInfos = new ArrayList<>(joins.size());
     for (Join join : joins) {
-      if (join.isFull()) {
-        throw new IllegalArgumentException("FULL JOIN is not supported");
-      }
       if (join.isNatural()) {
         throw new IllegalArgumentException("NATURAL JOIN is not supported");
       }
@@ -833,16 +832,19 @@ public final class SqlParser {
         throw new IllegalArgumentException("JOIN ... USING (...) is not supported");
       }
       JoinType joinType;
-      if (join.isRight() || (join.isOuter() && join.isRight())) {
+      if (join.isFull()) {
+        joinType = JoinType.FULL_OUTER;
+      } else if (join.isRight() || (join.isOuter() && join.isRight())) {
         joinType = JoinType.RIGHT_OUTER;
-      } else if (join.isLeft() || (join.isOuter() && !join.isFull())) {
+      } else if (join.isLeft() || join.isOuter()) {
         joinType = JoinType.LEFT_OUTER;
       } else if (join.isCross() || join.isSimple()) {
         joinType = JoinType.CROSS;
       } else {
         joinType = JoinType.INNER;
       }
-      if (join.isOuter() && joinType != JoinType.LEFT_OUTER && joinType != JoinType.RIGHT_OUTER) {
+      if (join.isOuter() && joinType != JoinType.LEFT_OUTER && joinType != JoinType.RIGHT_OUTER
+          && joinType != JoinType.FULL_OUTER) {
         throw new IllegalArgumentException("Unsupported outer join type");
       }
       FromInfo info = parseFromItem(join.getRightItem());
@@ -894,7 +896,8 @@ public final class SqlParser {
     Expression combined = null;
     List<String> qualifierList = qualifiers(tableRefs);
     for (JoinInfo join : joinInfos) {
-      if (join.joinType() == JoinType.LEFT_OUTER || join.joinType() == JoinType.RIGHT_OUTER) {
+      if (join.joinType() == JoinType.LEFT_OUTER || join.joinType() == JoinType.RIGHT_OUTER
+          || join.joinType() == JoinType.FULL_OUTER) {
         continue;
       }
       Expression condition = join.condition();

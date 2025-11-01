@@ -21,9 +21,10 @@ import org.apache.avro.generic.GenericRecord;
  * the combined result set.
  *
  * <p>
- * The reader supports {@code INNER}, {@code CROSS}, {@code LEFT OUTER}, and
- * {@code RIGHT OUTER} joins. Rows from the preserved side of an outer join are
- * always emitted, even when the other side has no matching row.
+ * The reader supports {@code INNER}, {@code CROSS}, {@code LEFT OUTER},
+ * {@code RIGHT OUTER}, and {@code FULL OUTER} joins. Rows from the preserved
+ * side of an outer join are always emitted, even when the other side has no
+ * matching row.
  * </p>
  */
 public final class JoinRecordReader implements RecordReader {
@@ -276,6 +277,8 @@ public final class JoinRecordReader implements RecordReader {
       JoinTable table = joinTables.get(index);
       if (table.joinType() == SqlParser.JoinType.RIGHT_OUTER) {
         combinations = combineRightOuter(combinations, table, index);
+      } else if (table.joinType() == SqlParser.JoinType.FULL_OUTER) {
+        combinations = combineFullOuter(combinations, table, index);
       } else {
         combinations = combineStandard(combinations, table, index);
       }
@@ -375,6 +378,73 @@ public final class JoinRecordReader implements RecordReader {
       if (!matched) {
         List<GenericRecord> assignment = emptyAssignment();
         assignment.set(index, row);
+        results.add(assignment);
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Combine the accumulated left-hand assignments with the rows from the
+   * current table when performing a {@code FULL [OUTER] JOIN}.
+   *
+   * @param leftCombos
+   *          assignments produced by the previous join stages
+   * @param table
+   *          table participating in the join at the supplied {@code index}
+   * @param index
+   *          zero-based index of the table within the join order
+   * @return a list containing the expanded assignments representing the full
+   *         outer join result
+   */
+  private List<List<GenericRecord>> combineFullOuter(List<List<GenericRecord>> leftCombos, JoinTable table,
+      int index) {
+    List<List<GenericRecord>> results = new ArrayList<>();
+    List<GenericRecord> rightRows = table.rows();
+    if (leftCombos.isEmpty() && rightRows.isEmpty()) {
+      return results;
+    }
+    if (leftCombos.isEmpty()) {
+      for (GenericRecord row : rightRows) {
+        List<GenericRecord> assignment = emptyAssignment();
+        assignment.set(index, row);
+        results.add(assignment);
+      }
+      return results;
+    }
+    if (rightRows.isEmpty()) {
+      for (List<GenericRecord> combo : leftCombos) {
+        List<GenericRecord> assignment = new ArrayList<>(combo);
+        assignment.set(index, null);
+        results.add(assignment);
+      }
+      return results;
+    }
+    boolean[] leftMatched = new boolean[leftCombos.size()];
+    boolean[] rightMatched = new boolean[rightRows.size()];
+    for (int leftIndex = 0; leftIndex < leftCombos.size(); leftIndex++) {
+      List<GenericRecord> combo = leftCombos.get(leftIndex);
+      for (int rightIndex = 0; rightIndex < rightRows.size(); rightIndex++) {
+        List<GenericRecord> assignment = new ArrayList<>(combo);
+        assignment.set(index, rightRows.get(rightIndex));
+        if (conditionMatches(table.joinCondition(), assignment)) {
+          results.add(assignment);
+          leftMatched[leftIndex] = true;
+          rightMatched[rightIndex] = true;
+        }
+      }
+    }
+    for (int leftIndex = 0; leftIndex < leftCombos.size(); leftIndex++) {
+      if (!leftMatched[leftIndex]) {
+        List<GenericRecord> assignment = new ArrayList<>(leftCombos.get(leftIndex));
+        assignment.set(index, null);
+        results.add(assignment);
+      }
+    }
+    for (int rightIndex = 0; rightIndex < rightRows.size(); rightIndex++) {
+      if (!rightMatched[rightIndex]) {
+        List<GenericRecord> assignment = emptyAssignment();
+        assignment.set(index, rightRows.get(rightIndex));
         results.add(assignment);
       }
     }
