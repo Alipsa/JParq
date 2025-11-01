@@ -139,6 +139,7 @@ The following SQL statements are supported:
   (SELECT column_name
   FROM table_name
   WHERE condition);
+- Inner Join support
 
 ## Roadmap: Might be implemented in the future
 - Join support
