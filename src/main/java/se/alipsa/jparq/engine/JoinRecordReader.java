@@ -74,6 +74,16 @@ public final class JoinRecordReader implements RecordReader {
     }
   }
 
+  /**
+   * Describes how a field from an input table maps into the combined join record.
+   *
+   * @param tableIndex
+   *          zero-based index of the table that owns the field
+   * @param sourceField
+   *          original name of the field in the source table
+   * @param targetField
+   *          canonical field name in the joined schema
+   */
   private record FieldMapping(int tableIndex, String sourceField, String targetField) {
   }
 
