@@ -56,6 +56,8 @@ public final class ValueExpressionEvaluator {
   private final Schema schema;
   private final SubqueryExecutor subqueryExecutor;
   private final List<String> outerQualifiers;
+  private final Map<String, Map<String, String>> qualifierColumnMapping;
+  private final Map<String, String> unqualifiedColumnMapping;
   private ExpressionEvaluator conditionEvaluator;
 
   /**
@@ -65,7 +67,7 @@ public final class ValueExpressionEvaluator {
    *          the Avro schema describing the available columns
    */
   public ValueExpressionEvaluator(Schema schema) {
-    this(schema, null, List.of());
+    this(schema, null, List.of(), Map.of(), Map.of());
   }
 
   /**
@@ -78,7 +80,7 @@ public final class ValueExpressionEvaluator {
    *          executor used for scalar subqueries (may be {@code null})
    */
   public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor) {
-    this(schema, subqueryExecutor, List.of());
+    this(schema, subqueryExecutor, List.of(), Map.of(), Map.of());
   }
 
   /**
@@ -91,8 +93,17 @@ public final class ValueExpressionEvaluator {
    *          executor used for scalar subqueries (may be {@code null})
    * @param outerQualifiers
    *          table names or aliases that belong to the outer query scope
+   * @param qualifierColumnMapping
+   *          mapping of qualifier (table/alias) to canonical column names used
+   *          when resolving {@link Column} references inside expressions (may be
+   *          {@code null})
+   * @param unqualifiedColumnMapping
+   *          mapping of unqualified column names to canonical names for
+   *          expressions referencing columns that are unique across all tables
+   *          (may be {@code null})
    */
-  public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers) {
+  public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
+      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping) {
     Map<String, Schema> fs = new HashMap<>();
     Map<String, String> ci = new HashMap<>();
     for (Schema.Field f : schema.getFields()) {
@@ -104,6 +115,8 @@ public final class ValueExpressionEvaluator {
     this.schema = schema;
     this.subqueryExecutor = subqueryExecutor;
     this.outerQualifiers = outerQualifiers == null ? List.of() : List.copyOf(outerQualifiers);
+    this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(qualifierColumnMapping);
+    this.unqualifiedColumnMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(unqualifiedColumnMapping);
   }
 
   /**
@@ -265,7 +278,8 @@ public final class ValueExpressionEvaluator {
     }
     if (conditionEvaluator == null) {
       Schema schemaToUse = schema != null ? schema : record.getSchema();
-      conditionEvaluator = new ExpressionEvaluator(schemaToUse, subqueryExecutor, outerQualifiers);
+      conditionEvaluator = new ExpressionEvaluator(schemaToUse, subqueryExecutor, outerQualifiers,
+          qualifierColumnMapping, unqualifiedColumnMapping);
     }
     return conditionEvaluator.eval(condition, record);
   }
@@ -1025,12 +1039,23 @@ public final class ValueExpressionEvaluator {
   }
 
   private Object columnValue(Column column, GenericRecord record) {
+    String qualifier = column.getTable() == null ? null : column.getTable().getName();
     String name = column.getColumnName();
-    return resolveColumnValue(name, record);
+    return resolveColumnValue(qualifier, name, record);
   }
 
   private Object resolveColumnValue(String columnName, GenericRecord record) {
-    return AvroCoercions.resolveColumnValue(columnName, record, fieldSchemas, caseInsensitiveIndex);
+    return resolveColumnValue(null, columnName, record);
+  }
+
+  private Object resolveColumnValue(String qualifier, String columnName, GenericRecord record) {
+    String canonical = canonicalFieldName(qualifier, columnName);
+    return AvroCoercions.resolveColumnValue(canonical, record, fieldSchemas, caseInsensitiveIndex);
+  }
+
+  private String canonicalFieldName(String qualifier, String columnName) {
+    return ColumnMappingUtil.canonicalFieldName(qualifier, columnName, qualifierColumnMapping, unqualifiedColumnMapping,
+        caseInsensitiveIndex);
   }
 
   private BigDecimal toBigDecimal(Object value) {
