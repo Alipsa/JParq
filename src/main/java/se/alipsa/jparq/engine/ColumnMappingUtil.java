@@ -61,9 +61,9 @@ public final class ColumnMappingUtil {
   }
 
   /**
-   * Normalize a column identifier for lookup in the qualifier or case-insensitive
-   * indices by stripping optional quoting characters and applying lower-case
-   * semantics.
+   * Normalize a column identifier for lookup in the qualifier or
+   * case-insensitive indices by stripping optional quoting characters and
+   * applying lower-case semantics.
    *
    * @param columnName
    *          column identifier provided in the SQL expression
