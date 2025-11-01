@@ -294,7 +294,15 @@ class JParqPreparedStatement implements PreparedStatement {
         throw new SQLException("Invalid departments CSV row: " + line);
       }
       GenericData.Record record = new GenericData.Record(schema);
-      record.put("id", parts[0].isEmpty() ? null : Integer.parseInt(parts[0]));
+      if (parts[0].isEmpty()) {
+        record.put("id", null);
+      } else {
+        try {
+          record.put("id", Integer.parseInt(parts[0]));
+        } catch (NumberFormatException e) {
+          throw new SQLException("Invalid department ID in CSV row: '" + line + "' (value: '" + parts[0] + "')", e);
+        }
+      }
       record.put("department", parts[1].isEmpty() ? null : parts[1]);
       rows.add(record);
     }
