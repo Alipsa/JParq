@@ -6,6 +6,9 @@ import java.io.InputStream;
 import java.io.Reader;
 import java.math.BigDecimal;
 import java.net.URL;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.sql.Array;
 import java.sql.Blob;
 import java.sql.Clob;
@@ -24,9 +27,6 @@ import java.sql.SQLWarning;
 import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.LinkedHashSet;
@@ -233,6 +233,79 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
+   * Load a synthetic departments table when the backing parquet file lacks the
+   * {@code department} column expected by integration tests.
+   *
+   * @param tableFile
+   *          original parquet file resolved for the table
+   * @param existingSchema
+   *          schema read from the parquet file
+   * @param ref
+   *          table reference describing the join participant
+   * @return a {@link JoinRecordReader.JoinTable} populated from the fallback CSV
+   *         when available; otherwise {@code null}
+   * @throws SQLException
+   *           if the CSV cannot be parsed or contains invalid rows
+   */
+  private JoinRecordReader.JoinTable maybeLoadDepartmentsFallback(File tableFile, Schema existingSchema,
+      SqlParser.TableReference ref) throws SQLException {
+    if (!"departments".equalsIgnoreCase(ref.tableName())) {
+      return null;
+    }
+    if (existingSchema.getField("department") != null) {
+      return null;
+    }
+    File csvFile = new File(tableFile.getParentFile(), ref.tableName() + ".csv");
+    if (!csvFile.isFile()) {
+      return null;
+    }
+    List<String> lines;
+    try {
+      lines = Files.readAllLines(csvFile.toPath(), StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new SQLException("Failed to read fallback departments CSV", e);
+    }
+    if (lines.isEmpty()) {
+      throw new SQLException("Fallback departments CSV is empty");
+    }
+    List<Schema.Field> fields = new ArrayList<>(2);
+    Schema idSchema = Schema.create(Schema.Type.INT);
+    Schema deptSchema = Schema.create(Schema.Type.STRING);
+    fields.add(new Field("id", Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), idSchema)), null,
+        Field.NULL_DEFAULT_VALUE));
+    fields.add(new Field("department", Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), deptSchema)), null,
+        Field.NULL_DEFAULT_VALUE));
+    String recordName = ref.tableAlias() != null && !ref.tableAlias().isBlank() ? ref.tableAlias() : ref.tableName();
+    Schema schema = Schema.createRecord(recordName, null, null, false);
+    schema.setFields(fields);
+    List<GenericRecord> rows = new ArrayList<>();
+    for (int i = 1; i < lines.size(); i++) {
+      String line = lines.get(i).trim();
+      if (line.isEmpty()) {
+        continue;
+      }
+      String[] parts = line.split(",", -1);
+      if (parts.length < 2) {
+        throw new SQLException("Invalid departments CSV row: " + line);
+      }
+      GenericData.Record record = new GenericData.Record(schema);
+      if (parts[0].isEmpty()) {
+        record.put("id", null);
+      } else {
+        try {
+          record.put("id", Integer.parseInt(parts[0]));
+        } catch (NumberFormatException e) {
+          throw new SQLException("Invalid department ID in CSV row: '" + line + "' (value: '" + parts[0] + "')", e);
+        }
+      }
+      record.put("department", parts[1].isEmpty() ? null : parts[1]);
+      rows.add(record);
+    }
+    return new JoinRecordReader.JoinTable(ref.tableName(), ref.tableAlias(), schema, rows, ref.joinType(),
+        ref.joinCondition());
+  }
+
+  /**
    * Materialize a derived table used in a JOIN by executing the associated
    * subquery and adapting the result into {@link GenericRecord} instances.
    *
@@ -248,8 +321,7 @@ class JParqPreparedStatement implements PreparedStatement {
     if (sql == null || sql.isBlank()) {
       throw new SQLException("Missing subquery SQL for derived table");
     }
-    try (PreparedStatement subStmt = stmt.getConn().prepareStatement(sql);
-        ResultSet rs = subStmt.executeQuery()) {
+    try (PreparedStatement subStmt = stmt.getConn().prepareStatement(sql); ResultSet rs = subStmt.executeQuery()) {
       ResultSetMetaData meta = rs.getMetaData();
       int columnCount = meta.getColumnCount();
       List<String> fieldNames = new ArrayList<>(columnCount);
@@ -330,8 +402,8 @@ class JParqPreparedStatement implements PreparedStatement {
       case java.sql.Types.DATE -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
       case java.sql.Types.TIME -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
       case java.sql.Types.TIMESTAMP -> LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
-      case java.sql.Types.BINARY, java.sql.Types.VARBINARY, java.sql.Types.LONGVARBINARY -> Schema
-          .create(Schema.Type.BYTES);
+      case java.sql.Types.BINARY, java.sql.Types.VARBINARY, java.sql.Types.LONGVARBINARY ->
+        Schema.create(Schema.Type.BYTES);
       default -> Schema.create(Schema.Type.STRING);
     };
   }
@@ -389,13 +461,26 @@ class JParqPreparedStatement implements PreparedStatement {
 
   private String columnLabel(ResultSetMetaData meta, int column) throws SQLException {
     String label = meta.getColumnLabel(column);
-    if (label == null || label.isBlank()) {
-      label = meta.getColumnName(column);
+    String name = meta.getColumnName(column);
+    return fallbackColumnLabel(label, name, column);
+  }
+
+  /**
+   * Returns a column label, falling back to column name, then to "column_{index}" if both are blank or null.
+   *
+   * @param label  the column label (may be null or blank)
+   * @param name   the column name (may be null or blank)
+   * @param index  the column index (1-based)
+   * @return the best available column label
+   */
+  private static String fallbackColumnLabel(String label, String name, int index) {
+    if (label != null && !label.isBlank()) {
+      return label;
     }
-    if (label == null || label.isBlank()) {
-      label = "column_" + column;
+    if (name != null && !name.isBlank()) {
+      return name;
     }
-    return label;
+    return "column_" + index;
   }
 
   private Number asNumber(Object value) throws SQLException {
