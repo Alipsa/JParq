@@ -1,4 +1,4 @@
-package jparq;
+package jparq.join;
 
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -6,8 +6,10 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
+import jparq.WhereTest;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
 public class JoinTest {
@@ -32,7 +34,7 @@ public class JoinTest {
    * join salary S on S."employee" = E."id"
    * </pre></code>
    */
-  // @Test
+  @Test
   void testSimpleJoin() {
     String sql = """
         select first_name, last_name, salary
@@ -70,7 +72,7 @@ public class JoinTest {
    *  AND s."change_date" = m.max_cd
    *  </pre></code>
    */
-  // @Test
+  @Test
   void testLatestSalaryPerEmployee() {
     String sql = """
         SELECT e.first_name, e.last_name, s.salary
@@ -116,7 +118,7 @@ public class JoinTest {
    * group by d."department"
    * </pre></code>
    */
-  // @Test
+  @Test
   void testJoinGroupByAvg() {
     String sql = """
         select d.department, avg(s.salary) as avg_salary from

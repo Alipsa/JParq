@@ -111,8 +111,7 @@ class LeftJoinTest {
       }
     });
 
-    Assertions.assertEquals(employeeIds, observedIds,
-        "Left outer join should produce rows for every employee");
+    Assertions.assertEquals(employeeIds, observedIds, "Left outer join should produce rows for every employee");
     Assertions.assertTrue(foundNullSalary.get(), "Optional OUTER keyword should still allow unmatched rows");
     Assertions.assertFalse(salaries.isEmpty(), "Matched salary rows should still be returned");
   }

@@ -72,6 +72,11 @@ public final class JoinRecordReader implements RecordReader {
       rows = List.copyOf(rows);
     }
 
+    /**
+     * Retrieve all rows from the table.
+     *
+     * @return an immutable list of all rows
+     */
     @Override
     public List<GenericRecord> rows() {
       return rows;
@@ -213,13 +218,11 @@ public final class JoinRecordReader implements RecordReader {
     return evaluator.eval(condition, record);
   }
 
-  private static GenericRecord buildRecord(List<GenericRecord> assignments,
-      List<FieldMapping> mappings, Schema schema) {
+  private static GenericRecord buildRecord(List<GenericRecord> assignments, List<FieldMapping> mappings,
+      Schema schema) {
     GenericData.Record record = new GenericData.Record(schema);
     for (FieldMapping mapping : mappings) {
-      GenericRecord source = mapping.tableIndex() < assignments.size()
-          ? assignments.get(mapping.tableIndex())
-          : null;
+      GenericRecord source = mapping.tableIndex() < assignments.size() ? assignments.get(mapping.tableIndex()) : null;
       Object value = source == null ? null : source.get(mapping.sourceField());
       record.put(mapping.targetField(), value);
     }
