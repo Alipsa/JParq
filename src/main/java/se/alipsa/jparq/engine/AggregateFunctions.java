@@ -366,28 +366,12 @@ public final class AggregateFunctions {
     }
     java.util.Set<String> keys = new java.util.LinkedHashSet<>();
     String rendered = expression.toString();
-    if (rendered != null && !rendered.isBlank()) {
-      keys.add(rendered);
-    }
+    addIfNotBlank(keys, rendered);
     if (expression instanceof Column column) {
       String columnName = JParqUtil.normalizeQualifier(column.getColumnName());
       if (columnName != null) {
         keys.add(columnName);
-        Table table = column.getTable();
-        if (table != null) {
-          if (table.getAlias() != null && table.getAlias().getName() != null) {
-            String alias = JParqUtil.normalizeQualifier(table.getAlias().getName());
-            if (alias != null) {
-              keys.add(alias + "." + columnName);
-            }
-          }
-          if (table.getName() != null) {
-            String tableName = JParqUtil.normalizeQualifier(table.getName());
-            if (tableName != null) {
-              keys.add(tableName + "." + columnName);
-            }
-          }
-        }
+        addTableQualifiers(keys, columnName, column.getTable());
       }
     }
     return List.copyOf(keys);
@@ -517,6 +501,75 @@ public final class AggregateFunctions {
     List<Expression> params = new ArrayList<>(list.size());
     params.addAll(list);
     return params;
+  }
+
+  /**
+   * Adds a rendered expression to the key set if it is not blank.
+   *
+   * @param keys the accumulator of keys, never {@code null}
+   * @param rendered the expression rendered as text, may be {@code null}
+   */
+  private static void addIfNotBlank(java.util.Set<String> keys, String rendered) {
+    if (rendered != null && !rendered.isBlank()) {
+      keys.add(rendered);
+    }
+  }
+
+  /**
+   * Adds table-qualified column names to the key set when a table reference exists.
+   *
+   * @param keys the accumulator of keys, never {@code null}
+   * @param columnName the normalized column name, never {@code null}
+   * @param table the table reference that may contribute qualifiers
+   */
+  private static void addTableQualifiers(java.util.Set<String> keys, String columnName, Table table) {
+    if (table == null) {
+      return;
+    }
+    String alias = tableAlias(table);
+    addQualifiedIfPresent(keys, alias, columnName);
+    String tableName = tableName(table);
+    addQualifiedIfPresent(keys, tableName, columnName);
+  }
+
+  /**
+   * Adds a qualified key to the set when the qualifier is present.
+   *
+   * @param keys the accumulator of keys, never {@code null}
+   * @param qualifier the qualifier to prefix, may be {@code null}
+   * @param columnName the normalized column name, never {@code null}
+   */
+  private static void addQualifiedIfPresent(
+      java.util.Set<String> keys, String qualifier, String columnName) {
+    if (qualifier != null) {
+      keys.add(qualifier + "." + columnName);
+    }
+  }
+
+  /**
+   * Normalizes the alias of a table when available.
+   *
+   * @param table the table that may contain an alias
+   * @return the normalized alias or {@code null}
+   */
+  private static String tableAlias(Table table) {
+    if (table.getAlias() == null || table.getAlias().getName() == null) {
+      return null;
+    }
+    return JParqUtil.normalizeQualifier(table.getAlias().getName());
+  }
+
+  /**
+   * Normalizes the table name when available.
+   *
+   * @param table the table containing the name
+   * @return the normalized table name or {@code null}
+   */
+  private static String tableName(Table table) {
+    if (table.getName() == null) {
+      return null;
+    }
+    return JParqUtil.normalizeQualifier(table.getName());
   }
 
   /**

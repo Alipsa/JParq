@@ -498,9 +498,9 @@ class JParqPreparedStatement implements PreparedStatement {
       return buffer;
     }
     if (value instanceof String str) {
-      return ByteBuffer.wrap(str.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      return ByteBuffer.wrap(str.getBytes(StandardCharsets.UTF_8));
     }
-    return ByteBuffer.wrap(value.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    return ByteBuffer.wrap(value.toString().getBytes(StandardCharsets.UTF_8));
   }
 
   private Object toDecimalBytes(Object value, LogicalTypes.Decimal decimal) throws SQLException {
