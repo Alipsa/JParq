@@ -6,6 +6,9 @@ import java.io.InputStream;
 import java.io.Reader;
 import java.math.BigDecimal;
 import java.net.URL;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.sql.Array;
 import java.sql.Blob;
 import java.sql.Clob;
@@ -24,9 +27,6 @@ import java.sql.SQLWarning;
 import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.LinkedHashSet;
@@ -247,8 +247,8 @@ class JParqPreparedStatement implements PreparedStatement {
    *          schema read from the parquet file
    * @param ref
    *          table reference describing the join participant
-   * @return a {@link JoinRecordReader.JoinTable} populated from the fallback
-   *         CSV when available; otherwise {@code null}
+   * @return a {@link JoinRecordReader.JoinTable} populated from the fallback CSV
+   *         when available; otherwise {@code null}
    * @throws SQLException
    *           if the CSV cannot be parsed or contains invalid rows
    */
@@ -326,8 +326,7 @@ class JParqPreparedStatement implements PreparedStatement {
     if (sql == null || sql.isBlank()) {
       throw new SQLException("Missing subquery SQL for derived table");
     }
-    try (PreparedStatement subStmt = stmt.getConn().prepareStatement(sql);
-        ResultSet rs = subStmt.executeQuery()) {
+    try (PreparedStatement subStmt = stmt.getConn().prepareStatement(sql); ResultSet rs = subStmt.executeQuery()) {
       ResultSetMetaData meta = rs.getMetaData();
       int columnCount = meta.getColumnCount();
       List<String> fieldNames = new ArrayList<>(columnCount);
@@ -408,8 +407,8 @@ class JParqPreparedStatement implements PreparedStatement {
       case java.sql.Types.DATE -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
       case java.sql.Types.TIME -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
       case java.sql.Types.TIMESTAMP -> LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
-      case java.sql.Types.BINARY, java.sql.Types.VARBINARY, java.sql.Types.LONGVARBINARY -> Schema
-          .create(Schema.Type.BYTES);
+      case java.sql.Types.BINARY, java.sql.Types.VARBINARY, java.sql.Types.LONGVARBINARY ->
+        Schema.create(Schema.Type.BYTES);
       default -> Schema.create(Schema.Type.STRING);
     };
   }
