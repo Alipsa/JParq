@@ -108,7 +108,8 @@ class RightJoinTest {
   }
 
   /**
-   * Retrieve the employee identifiers present in the salary table in a stable order.
+   * Retrieve the employee identifiers present in the salary table in a stable
+   * order.
    *
    * @return sorted list of employee identifiers backed by the salary table
    */
