@@ -37,7 +37,7 @@ public final class ColumnMappingUtil {
     Objects.requireNonNull(columnName, "columnName");
     Objects.requireNonNull(caseInsensitiveIndex, "caseInsensitiveIndex");
 
-    String normalizedColumn = columnName.toLowerCase(Locale.ROOT);
+    String normalizedColumn = normalizeColumnKey(columnName);
     if (qualifier != null && !qualifier.isBlank()) {
       String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
       if (normalizedQualifier != null) {
@@ -58,6 +58,26 @@ public final class ColumnMappingUtil {
     }
     String canonical = caseInsensitiveIndex.get(normalizedColumn);
     return canonical != null ? canonical : columnName;
+  }
+
+  /**
+   * Normalize a column identifier for lookup in the qualifier or
+   * case-insensitive indices by stripping optional quoting characters and
+   * applying lower-case semantics.
+   *
+   * @param columnName
+   *          column identifier provided in the SQL expression
+   * @return normalized lookup key, or {@code null} when the input is null
+   */
+  private static String normalizeColumnKey(String columnName) {
+    if (columnName == null) {
+      return null;
+    }
+    String normalized = JParqUtil.normalizeQualifier(columnName);
+    if (normalized != null) {
+      return normalized;
+    }
+    return columnName.toLowerCase(Locale.ROOT);
   }
 
   /**

@@ -140,9 +140,16 @@ public final class SqlParser {
    *          the table name
    * @param tableAlias
    *          the table alias (may be null)
-   * @return the FromInfo record
+   * @param columnMapping
+   *          mapping between projection labels and physical column names
+   * @param innerSelect
+   *          parsed representation of the subquery when {@code fromItem} is a
+   *          derived table
+   * @param subquerySql
+   *          textual SQL used to materialize the derived table
    */
-  private record FromInfo(String tableName, String tableAlias, Map<String, String> columnMapping, Select innerSelect) {
+  private record FromInfo(String tableName, String tableAlias, Map<String, String> columnMapping, Select innerSelect,
+      String subquerySql) {
   }
 
   /**
@@ -171,8 +178,15 @@ public final class SqlParser {
    *          type of join that introduced the table (BASE for the first table)
    * @param joinCondition
    *          expression defining the join condition (may be {@code null})
+   * @param subquery
+   *          parsed representation of the subquery backing this table reference
+   *          (may be {@code null})
+   * @param subquerySql
+   *          textual SQL used to materialize the derived table (may be
+   *          {@code null})
    */
-  public record TableReference(String tableName, String tableAlias, JoinType joinType, Expression joinCondition) {
+  public record TableReference(String tableName, String tableAlias, JoinType joinType, Expression joinCondition,
+      Select subquery, String subquerySql) {
   }
 
   /**
@@ -319,7 +333,7 @@ public final class SqlParser {
     if (fromItem instanceof Table t) {
       String tableName = t.getName();
       String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
-      return new FromInfo(tableName, tableAlias, Map.of(), null);
+      return new FromInfo(tableName, tableAlias, Map.of(), null, null);
     }
     if (fromItem instanceof net.sf.jsqlparser.statement.select.Select sub) {
       PlainSelect innerPlain = sub.getPlainSelect();
@@ -332,7 +346,8 @@ public final class SqlParser {
         alias = innerSelect.table();
       }
       Map<String, String> mapping = buildColumnMapping(innerSelect);
-      return new FromInfo(innerSelect.table(), alias, mapping, innerSelect);
+      String subquerySql = innerPlain.toString();
+      return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql);
     }
     throw new IllegalArgumentException("Unsupported FROM item: " + fromItem);
   }
@@ -351,8 +366,9 @@ public final class SqlParser {
     for (int i = 0; i < count; i++) {
       String label = labels.get(i);
       String phys = physical.get(i);
-      if (label != null && phys != null) {
-        mapping.put(label, phys);
+      if (label != null) {
+        String mapped = phys == null || phys.isBlank() ? label : phys;
+        mapping.put(label, mapped);
       }
     }
     return Map.copyOf(mapping);
@@ -408,6 +424,7 @@ public final class SqlParser {
         } else {
           label = expr.toString();
         }
+        underlying = label;
       }
 
       labels.add(label);
@@ -838,11 +855,13 @@ public final class SqlParser {
 
   private static List<TableReference> buildTableReferences(FromInfo base, List<JoinInfo> joins) {
     List<TableReference> refs = new ArrayList<>();
-    refs.add(new TableReference(base.tableName(), base.tableAlias(), JoinType.BASE, null));
+    refs.add(new TableReference(base.tableName(), base.tableAlias(), JoinType.BASE, null, base.innerSelect(),
+        base.subquerySql()));
     if (joins != null) {
       for (JoinInfo join : joins) {
         FromInfo info = join.table();
-        refs.add(new TableReference(info.tableName(), info.tableAlias(), join.joinType(), join.condition()));
+        refs.add(new TableReference(info.tableName(), info.tableAlias(), join.joinType(), join.condition(),
+            info.innerSelect(), info.subquerySql()));
       }
     }
     return List.copyOf(refs);

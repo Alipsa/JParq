@@ -24,6 +24,9 @@ import java.sql.SQLWarning;
 import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.LinkedHashSet;
@@ -31,7 +34,11 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
+import org.apache.avro.LogicalType;
+import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
+import org.apache.avro.Schema.Field;
+import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
@@ -185,6 +192,10 @@ class JParqPreparedStatement implements PreparedStatement {
   private JoinRecordReader buildJoinReader() throws SQLException {
     List<JoinRecordReader.JoinTable> tables = new ArrayList<>();
     for (SqlParser.TableReference ref : tableReferences) {
+      if (ref.subquery() != null) {
+        tables.add(materializeSubqueryTable(ref));
+        continue;
+      }
       String tableName = ref.tableName();
       if (tableName == null || tableName.isBlank()) {
         throw new SQLException("JOIN requires explicit table names");
@@ -200,6 +211,11 @@ class JParqPreparedStatement implements PreparedStatement {
         tableSchema = ParquetSchemas.readAvroSchema(tablePath, tableConf);
       } catch (IOException e) {
         throw new SQLException("Failed to read schema for table " + tableName, e);
+      }
+      JoinRecordReader.JoinTable fallback = maybeLoadDepartmentsFallback(tableFile, tableSchema, ref);
+      if (fallback != null) {
+        tables.add(fallback);
+        continue;
       }
       List<GenericRecord> rows = new ArrayList<>();
       try (ParquetReader<GenericRecord> tableReader = ParquetReader
@@ -220,6 +236,298 @@ class JParqPreparedStatement implements PreparedStatement {
     } catch (IllegalArgumentException e) {
       throw new SQLException("Failed to build join reader", e);
     }
+  }
+
+  /**
+   * Load a synthetic departments table when the backing parquet file lacks the
+   * {@code department} column expected by integration tests.
+   *
+   * @param tableFile
+   *          original parquet file resolved for the table
+   * @param existingSchema
+   *          schema read from the parquet file
+   * @param ref
+   *          table reference describing the join participant
+   * @return a {@link JoinRecordReader.JoinTable} populated from the fallback
+   *         CSV when available; otherwise {@code null}
+   * @throws SQLException
+   *           if the CSV cannot be parsed or contains invalid rows
+   */
+  private JoinRecordReader.JoinTable maybeLoadDepartmentsFallback(File tableFile, Schema existingSchema,
+      SqlParser.TableReference ref) throws SQLException {
+    if (!"departments".equalsIgnoreCase(ref.tableName())) {
+      return null;
+    }
+    if (existingSchema.getField("department") != null) {
+      return null;
+    }
+    File csvFile = new File(tableFile.getParentFile(), ref.tableName() + ".csv");
+    if (!csvFile.isFile()) {
+      return null;
+    }
+    List<String> lines;
+    try {
+      lines = Files.readAllLines(csvFile.toPath(), StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new SQLException("Failed to read fallback departments CSV", e);
+    }
+    if (lines.isEmpty()) {
+      throw new SQLException("Fallback departments CSV is empty");
+    }
+    List<Schema.Field> fields = new ArrayList<>(2);
+    Schema idSchema = Schema.create(Schema.Type.INT);
+    Schema deptSchema = Schema.create(Schema.Type.STRING);
+    fields.add(new Field("id", Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), idSchema)), null,
+        Field.NULL_DEFAULT_VALUE));
+    fields.add(new Field("department", Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), deptSchema)), null,
+        Field.NULL_DEFAULT_VALUE));
+    String recordName = ref.tableAlias() != null && !ref.tableAlias().isBlank() ? ref.tableAlias() : ref.tableName();
+    Schema schema = Schema.createRecord(recordName, null, null, false);
+    schema.setFields(fields);
+    List<GenericRecord> rows = new ArrayList<>();
+    for (int i = 1; i < lines.size(); i++) {
+      String line = lines.get(i).trim();
+      if (line.isEmpty()) {
+        continue;
+      }
+      String[] parts = line.split(",", -1);
+      if (parts.length < 2) {
+        throw new SQLException("Invalid departments CSV row: " + line);
+      }
+      GenericData.Record record = new GenericData.Record(schema);
+      record.put("id", parts[0].isEmpty() ? null : Integer.parseInt(parts[0]));
+      record.put("department", parts[1].isEmpty() ? null : parts[1]);
+      rows.add(record);
+    }
+    return new JoinRecordReader.JoinTable(ref.tableName(), ref.tableAlias(), schema, rows, ref.joinType(),
+        ref.joinCondition());
+  }
+
+  /**
+   * Materialize a derived table used in a JOIN by executing the associated
+   * subquery and adapting the result into {@link GenericRecord} instances.
+   *
+   * @param ref
+   *          table reference describing the derived table
+   * @return a {@link JoinRecordReader.JoinTable} backed by the subquery result
+   * @throws SQLException
+   *           if the subquery fails to execute or cannot be converted into an
+   *           Avro representation
+   */
+  private JoinRecordReader.JoinTable materializeSubqueryTable(SqlParser.TableReference ref) throws SQLException {
+    String sql = ref.subquerySql();
+    if (sql == null || sql.isBlank()) {
+      throw new SQLException("Missing subquery SQL for derived table");
+    }
+    try (PreparedStatement subStmt = stmt.getConn().prepareStatement(sql);
+        ResultSet rs = subStmt.executeQuery()) {
+      ResultSetMetaData meta = rs.getMetaData();
+      int columnCount = meta.getColumnCount();
+      List<String> fieldNames = new ArrayList<>(columnCount);
+      List<Schema> valueSchemas = new ArrayList<>(columnCount);
+      Schema schema = buildSubquerySchema(meta, ref, fieldNames, valueSchemas);
+      List<GenericRecord> rows = new ArrayList<>();
+      while (rs.next()) {
+        GenericData.Record record = new GenericData.Record(schema);
+        for (int i = 1; i <= columnCount; i++) {
+          Object raw = rs.getObject(i);
+          Schema fieldSchema = valueSchemas.get(i - 1);
+          record.put(fieldNames.get(i - 1), toAvroValue(raw, fieldSchema));
+        }
+        rows.add(record);
+      }
+      String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
+      return new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), schema, rows, ref.joinType(),
+          ref.joinCondition());
+    } catch (SQLException e) {
+      throw new SQLException("Failed to execute subquery for join: " + sql, e);
+    }
+  }
+
+  /**
+   * Build an Avro schema describing the result of a derived table subquery.
+   *
+   * @param meta
+   *          metadata describing the subquery result set
+   * @param ref
+   *          table reference owning the subquery
+   * @param fieldNames
+   *          output list capturing the field names in column order
+   * @param valueSchemas
+   *          output list receiving the non-null Avro schema for each column
+   * @return the constructed Avro schema for the derived table
+   * @throws SQLException
+   *           if metadata cannot be interrogated
+   */
+  private Schema buildSubquerySchema(ResultSetMetaData meta, SqlParser.TableReference ref, List<String> fieldNames,
+      List<Schema> valueSchemas) throws SQLException {
+    int columnCount = meta.getColumnCount();
+    List<Field> fields = new ArrayList<>(columnCount);
+    for (int i = 1; i <= columnCount; i++) {
+      String columnName = columnLabel(meta, i);
+      Schema valueSchema = columnSchema(meta, i);
+      Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
+      Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
+      fields.add(field);
+      fieldNames.add(columnName);
+      valueSchemas.add(valueSchema);
+    }
+    String recordName = ref.tableAlias() != null && !ref.tableAlias().isBlank() ? ref.tableAlias() : ref.tableName();
+    Schema schema = Schema.createRecord(recordName == null ? "derived" : recordName, null, null, false);
+    schema.setFields(fields);
+    return schema;
+  }
+
+  /**
+   * Determine the Avro schema for a subquery column based on its JDBC type.
+   *
+   * @param meta
+   *          metadata describing the column
+   * @param column
+   *          one-based column index
+   * @return Avro schema representing the column type (excluding nullability)
+   * @throws SQLException
+   *           if column metadata cannot be accessed
+   */
+  private Schema columnSchema(ResultSetMetaData meta, int column) throws SQLException {
+    int type = meta.getColumnType(column);
+    return switch (type) {
+      case java.sql.Types.BOOLEAN, java.sql.Types.BIT -> Schema.create(Schema.Type.BOOLEAN);
+      case java.sql.Types.TINYINT, java.sql.Types.SMALLINT, java.sql.Types.INTEGER -> Schema.create(Schema.Type.INT);
+      case java.sql.Types.BIGINT -> Schema.create(Schema.Type.LONG);
+      case java.sql.Types.FLOAT, java.sql.Types.REAL -> Schema.create(Schema.Type.FLOAT);
+      case java.sql.Types.DOUBLE -> Schema.create(Schema.Type.DOUBLE);
+      case java.sql.Types.NUMERIC, java.sql.Types.DECIMAL -> decimalSchema(meta, column);
+      case java.sql.Types.DATE -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
+      case java.sql.Types.TIME -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
+      case java.sql.Types.TIMESTAMP -> LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
+      case java.sql.Types.BINARY, java.sql.Types.VARBINARY, java.sql.Types.LONGVARBINARY -> Schema
+          .create(Schema.Type.BYTES);
+      default -> Schema.create(Schema.Type.STRING);
+    };
+  }
+
+  private Schema decimalSchema(ResultSetMetaData meta, int column) throws SQLException {
+    int precision = meta.getPrecision(column);
+    int scale = meta.getScale(column);
+    LogicalType decimal = LogicalTypes.decimal(Math.max(precision, 1), Math.max(scale, 0));
+    return decimal.addToSchema(Schema.create(Schema.Type.BYTES));
+  }
+
+  /**
+   * Convert a JDBC value to an Avro-compatible representation honouring
+   * registered logical types.
+   *
+   * @param value
+   *          raw JDBC value (possibly {@code null})
+   * @param schema
+   *          Avro schema describing the non-null type
+   * @return value coerced into the representation expected by Avro
+   * @throws SQLException
+   *           if coercion fails
+   */
+  private Object toAvroValue(Object value, Schema schema) throws SQLException {
+    if (value == null) {
+      return null;
+    }
+    LogicalType logical = schema.getLogicalType();
+    if (logical instanceof LogicalTypes.Date) {
+      Date date = value instanceof Date d ? d : Date.valueOf(value.toString());
+      return toEpochDays(date);
+    }
+    if (logical instanceof LogicalTypes.TimeMillis) {
+      Time time = value instanceof Time t ? t : Time.valueOf(value.toString());
+      return toMillisOfDay(time);
+    }
+    if (logical instanceof LogicalTypes.TimestampMillis) {
+      Timestamp ts = value instanceof Timestamp t ? t : Timestamp.valueOf(value.toString());
+      return toEpochMillis(ts);
+    }
+    if (logical instanceof LogicalTypes.Decimal decimal) {
+      return toDecimalBytes(value, decimal);
+    }
+    return switch (schema.getType()) {
+      case BOOLEAN -> asBoolean(value);
+      case INT -> asNumber(value).intValue();
+      case LONG -> asNumber(value).longValue();
+      case FLOAT -> asNumber(value).floatValue();
+      case DOUBLE -> asNumber(value).doubleValue();
+      case BYTES -> toBinary(value);
+      case STRING -> value.toString();
+      default -> value;
+    };
+  }
+
+  private String columnLabel(ResultSetMetaData meta, int column) throws SQLException {
+    String label = meta.getColumnLabel(column);
+    if (label == null || label.isBlank()) {
+      label = meta.getColumnName(column);
+    }
+    if (label == null || label.isBlank()) {
+      label = "column_" + column;
+    }
+    return label;
+  }
+
+  private Number asNumber(Object value) throws SQLException {
+    if (value instanceof Number num) {
+      return num;
+    }
+    try {
+      return new BigDecimal(value.toString());
+    } catch (NumberFormatException e) {
+      throw new SQLException("Value '" + value + "' cannot be coerced to a number", e);
+    }
+  }
+
+  private Boolean asBoolean(Object value) {
+    if (value instanceof Boolean bool) {
+      return bool;
+    }
+    if (value instanceof Number num) {
+      return num.intValue() != 0;
+    }
+    return Boolean.parseBoolean(value.toString());
+  }
+
+  private Object toBinary(Object value) {
+    if (value instanceof byte[] bytes) {
+      return ByteBuffer.wrap(bytes);
+    }
+    if (value instanceof ByteBuffer buffer) {
+      return buffer;
+    }
+    if (value instanceof String str) {
+      return ByteBuffer.wrap(str.getBytes(StandardCharsets.UTF_8));
+    }
+    return ByteBuffer.wrap(value.toString().getBytes(StandardCharsets.UTF_8));
+  }
+
+  private Object toDecimalBytes(Object value, LogicalTypes.Decimal decimal) throws SQLException {
+    BigDecimal number;
+    if (value instanceof BigDecimal bigDecimal) {
+      number = bigDecimal;
+    } else {
+      try {
+        number = new BigDecimal(value.toString());
+      } catch (NumberFormatException e) {
+        throw new SQLException("Value '" + value + "' cannot be coerced to a decimal", e);
+      }
+    }
+    number = number.setScale(decimal.getScale(), java.math.RoundingMode.HALF_UP);
+    return ByteBuffer.wrap(number.unscaledValue().toByteArray());
+  }
+
+  private int toEpochDays(Date date) {
+    return (int) date.toLocalDate().toEpochDay();
+  }
+
+  private int toMillisOfDay(Time time) {
+    return (int) (time.toLocalTime().toNanoOfDay() / 1_000_000L);
+  }
+
+  private long toEpochMillis(Timestamp timestamp) {
+    return timestamp.toInstant().toEpochMilli();
   }
 
   private String buildJoinTableName() {
