@@ -142,6 +142,41 @@ The following SQL statements are supported:
 
 ## Roadmap: Might be implemented in the future
 - Join support
+    - ## LEFT [OUTER] JOIN
+  Returns all rows from the left table (TableA) and the matching rows from the right table (TableB). If there is no match, NULL values are returned for columns from the right table.
+  
+  Syntax: FROM TableA LEFT JOIN TableB ON TableA.col = TableB.col (The OUTER keyword is optional in standard SQL).
+  
+  ## RIGHT [OUTER] JOIN
+  Returns all rows from the right table (TableB) and the matching rows from the left table (TableA). If there is no match, NULL values are returned for columns from the left table.
+  
+  Syntax: FROM TableA RIGHT JOIN TableB ON TableA.col = TableB.col
+  
+  ## FULL [OUTER] JOIN: Returns all rows when there is a match in one of the tables. It effectively combines the results of a LEFT JOIN and a RIGHT JOIN. Rows with no match in the other table have NULL values for the columns of the non-matching table.
+  
+  Syntax: FROM TableA FULL JOIN TableB ON TableA.col = TableB.col
+  
+  ## CROSS JOIN
+  Returns the Cartesian product of the two tables—every row from the first table is combined with every row from the second table. This join does not use an ON clause.
+  
+  Syntax: FROM TableA CROSS JOIN TableB
+  
+  Also support Implicit CROSS JOIN I.e. achieved simply by listing the tables in the FROM clause separated by commas, with no WHERE clause to connect them.E
+  Example: SELECT * FROM TableA, TableB;
+  
+  # Join Condition Clauses
+  The standard provides a few ways to specify the join condition within the explicit join syntax:
+  
+  ON clause: The most common and flexible way to specify the condition for the join.
+  
+  Example: INNER JOIN Employees ON Departments.DeptID = Employees.DeptID
+  
+  USING clause: Used when the join columns in both tables have the exact same name. It is a shorthand for the ON clause in this specific case.
+  
+  Example: INNER JOIN Employees USING (DeptID)
+  
+  Support for NATURAL JOIN does NOT have to be implemented.
+
 - union support
 - CTE
 - Windowing
