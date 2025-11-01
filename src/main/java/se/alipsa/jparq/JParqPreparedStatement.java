@@ -42,7 +42,7 @@ import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
-import se.alipsa.jparq.engine.InnerJoinRecordReader;
+import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
 import se.alipsa.jparq.engine.ParquetRecordReaderAdapter;
 import se.alipsa.jparq.engine.ParquetSchemas;
@@ -137,7 +137,7 @@ class JParqPreparedStatement implements PreparedStatement {
     String resultTableName;
     try {
       if (joinQuery) {
-        InnerJoinRecordReader joinReader = buildJoinReader();
+        JoinRecordReader joinReader = buildJoinReader();
         reader = joinReader;
         resultTableName = buildJoinTableName();
       } else {
@@ -182,8 +182,8 @@ class JParqPreparedStatement implements PreparedStatement {
     // context.
   }
 
-  private InnerJoinRecordReader buildJoinReader() throws SQLException {
-    List<InnerJoinRecordReader.JoinTable> tables = new ArrayList<>();
+  private JoinRecordReader buildJoinReader() throws SQLException {
+    List<JoinRecordReader.JoinTable> tables = new ArrayList<>();
     for (SqlParser.TableReference ref : tableReferences) {
       String tableName = ref.tableName();
       if (tableName == null || tableName.isBlank()) {
@@ -212,10 +212,11 @@ class JParqPreparedStatement implements PreparedStatement {
       } catch (Exception e) {
         throw new SQLException("Failed to read data for table " + tableName, e);
       }
-      tables.add(new InnerJoinRecordReader.JoinTable(tableName, ref.tableAlias(), tableSchema, rows));
+      tables.add(new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), tableSchema, rows, ref.joinType(),
+          ref.joinCondition()));
     }
     try {
-      return new InnerJoinRecordReader(tables);
+      return new JoinRecordReader(tables);
     } catch (IllegalArgumentException e) {
       throw new SQLException("Failed to build join reader", e);
     }
