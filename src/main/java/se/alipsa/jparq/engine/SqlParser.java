@@ -166,7 +166,7 @@ public final class SqlParser {
     RIGHT_OUTER,
     /** A FULL (OUTER) JOIN participant. */
     FULL_OUTER,
-    /** A CROSS JOIN introduced via simple join syntax. */
+    /** A CROSS JOIN introduced via explicit {@code CROSS JOIN} or comma-separated syntax. */
     CROSS
   }
 
@@ -842,6 +842,9 @@ public final class SqlParser {
         joinType = JoinType.CROSS;
       } else {
         joinType = JoinType.INNER;
+      }
+      if (joinType == JoinType.CROSS && join.getOnExpressions() != null && !join.getOnExpressions().isEmpty()) {
+        throw new IllegalArgumentException("CROSS JOIN cannot specify an ON condition");
       }
       if (join.isOuter() && joinType != JoinType.LEFT_OUTER && joinType != JoinType.RIGHT_OUTER
           && joinType != JoinType.FULL_OUTER) {
