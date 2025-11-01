@@ -96,6 +96,13 @@ public final class ExpressionEvaluator {
    *          executor used for sub queries (may be {@code null})
    * @param outerQualifiers
    *          table names or aliases that belong to the outer query scope
+   * @param qualifierColumnMapping
+   *          mapping of qualifier (table/alias) to canonical column names used
+   *          during expression resolution (may be {@code null})
+   * @param unqualifiedColumnMapping
+   *          mapping of unqualified column names to canonical names for
+   *          expressions where the column is unique across all tables (may be
+   *          {@code null})
    */
   public ExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping) {

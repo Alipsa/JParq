@@ -83,6 +83,9 @@ public final class SqlParser {
    * @param preOrderBy
    *          ORDER BY keys that must be applied prior to the outer ORDER BY
    *          (typically inherited from an inner SELECT)
+   * @param tableReferences
+   *          ordered collection of tables referenced in the {@code FROM} clause,
+   *          including any JOIN participants
    */
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
       int limit, int offset, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct,

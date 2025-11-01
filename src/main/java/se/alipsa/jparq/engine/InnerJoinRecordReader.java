@@ -46,6 +46,10 @@ public final class InnerJoinRecordReader implements RecordReader {
    */
   public record JoinTable(String tableName, String alias, Schema schema, List<GenericRecord> rows) {
 
+    /**
+     * Validates mandatory state for the join table to guard against null
+     * elements.
+     */
     public JoinTable {
       Objects.requireNonNull(tableName, "tableName");
       Objects.requireNonNull(schema, "schema");
