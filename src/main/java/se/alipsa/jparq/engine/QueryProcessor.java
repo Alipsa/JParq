@@ -6,19 +6,21 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.Objects;
 import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
-import org.apache.parquet.hadoop.ParquetReader;
 
 /**
- * Processes a ParquetReader with projection, WHERE clause, LIMIT, and ORDER BY.
+ * Processes a {@link RecordReader} with projection, WHERE clause, LIMIT, and
+ * ORDER BY.
  */
 public final class QueryProcessor implements AutoCloseable {
 
-  private final ParquetReader<GenericRecord> reader;
+  private final RecordReader reader;
   private final List<String> projection;
   private final Expression where;
   private final int limit;
@@ -33,6 +35,8 @@ public final class QueryProcessor implements AutoCloseable {
   private final List<String> distinctColumns;
   private final List<String> preStageDistinctColumns;
   private final List<String> outerQualifiers;
+  private final Map<String, Map<String, String>> qualifierColumnMapping;
+  private final Map<String, String> unqualifiedColumnMapping;
 
   // Evaluator is lazily created if schema was not provided
   private ExpressionEvaluator evaluator;
@@ -67,6 +71,8 @@ public final class QueryProcessor implements AutoCloseable {
     private List<String> distinctColumns;
     private List<String> preStageDistinctColumns = List.of();
     private List<String> outerQualifiers = List.of();
+    private Map<String, Map<String, String>> qualifierColumnMapping = Map.of();
+    private Map<String, String> unqualifiedColumnMapping = Map.of();
 
     private Options() {
       // use factory
@@ -256,6 +262,40 @@ public final class QueryProcessor implements AutoCloseable {
       this.outerQualifiers = (qualifiers == null || qualifiers.isEmpty()) ? List.of() : List.copyOf(qualifiers);
       return this;
     }
+
+    /**
+     * Provide a mapping between table qualifiers and canonical column names.
+     *
+     * @param mapping
+     *          qualifier to column mapping (may be {@code null})
+     * @return {@code this} for chaining
+     */
+    public Options qualifierColumnMapping(Map<String, Map<String, String>> mapping) {
+      if (mapping == null || mapping.isEmpty()) {
+        this.qualifierColumnMapping = Map.of();
+      } else {
+        Map<String, Map<String, String>> copy = new HashMap<>();
+        for (Map.Entry<String, Map<String, String>> entry : mapping.entrySet()) {
+          copy.put(entry.getKey(), Map.copyOf(entry.getValue()));
+        }
+        this.qualifierColumnMapping = Map.copyOf(copy);
+      }
+      return this;
+    }
+
+    /**
+     * Provide canonical names for unqualified columns that remain unique after a
+     * join.
+     *
+     * @param mapping
+     *          mapping from column name to canonical field name (may be
+     *          {@code null})
+     * @return {@code this} for chaining
+     */
+    public Options unqualifiedColumnMapping(Map<String, String> mapping) {
+      this.unqualifiedColumnMapping = (mapping == null || mapping.isEmpty()) ? Map.of() : Map.copyOf(mapping);
+      return this;
+    }
   }
 
   /**
@@ -263,7 +303,7 @@ public final class QueryProcessor implements AutoCloseable {
    * supplied {@link Options}.
    *
    * @param reader
-   *          the Parquet reader
+   *          the reader providing {@link GenericRecord} instances
    * @param projection
    *          list of columns to project
    * @param where
@@ -273,7 +313,7 @@ public final class QueryProcessor implements AutoCloseable {
    * @param options
    *          configuration for DISTINCT, ORDER BY and other behaviour
    */
-  public QueryProcessor(ParquetReader<GenericRecord> reader, List<String> projection, Expression where, int limit,
+  public QueryProcessor(RecordReader reader, List<String> projection, Expression where, int limit,
       Options options) {
     this.reader = Objects.requireNonNull(reader);
     this.projection = Collections.unmodifiableList(new ArrayList<>(projection));
@@ -294,8 +334,11 @@ public final class QueryProcessor implements AutoCloseable {
         ? distinctCols
         : opts.preStageDistinctColumns;
     this.outerQualifiers = opts.outerQualifiers;
+    this.qualifierColumnMapping = opts.qualifierColumnMapping;
+    this.unqualifiedColumnMapping = opts.unqualifiedColumnMapping;
     this.evaluator = (opts.schema != null)
-        ? new ExpressionEvaluator(opts.schema, subqueryExecutor, outerQualifiers)
+        ? new ExpressionEvaluator(opts.schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
+            unqualifiedColumnMapping)
         : null;
     this.emitted = Math.max(0, opts.initialEmitted);
     this.skipped = Math.min(this.offset, Math.max(0, opts.initialEmitted));
@@ -442,13 +485,15 @@ public final class QueryProcessor implements AutoCloseable {
 
   private void ensureEvaluator(GenericRecord rec) {
     if (where != null && evaluator == null && rec != null) {
-      evaluator = new ExpressionEvaluator(rec.getSchema(), subqueryExecutor, outerQualifiers);
+      evaluator = new ExpressionEvaluator(rec.getSchema(), subqueryExecutor, outerQualifiers, qualifierColumnMapping,
+          unqualifiedColumnMapping);
     }
   }
 
   private void ensureEvaluator(Schema schema) {
     if (where != null && evaluator == null && schema != null) {
-      evaluator = new ExpressionEvaluator(schema, subqueryExecutor, outerQualifiers);
+      evaluator = new ExpressionEvaluator(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
+          unqualifiedColumnMapping);
     }
     // If still null, it will be lazily created from the first record seen.
   }

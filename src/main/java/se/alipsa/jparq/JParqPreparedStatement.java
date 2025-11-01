@@ -42,11 +42,14 @@ import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
+import se.alipsa.jparq.engine.InnerJoinRecordReader;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
 import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.ProjectionFields;
+import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
+import se.alipsa.jparq.engine.ParquetRecordReaderAdapter;
 
 /** An implementation of the java.sql.PreparedStatement interface. */
 @SuppressWarnings({
@@ -64,6 +67,8 @@ class JParqPreparedStatement implements PreparedStatement {
   private final Expression residualExpression;
   private final Path path;
   private final File file;
+  private final boolean joinQuery;
+  private final List<SqlParser.TableReference> tableReferences;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
     this.stmt = stmt;
@@ -72,7 +77,8 @@ class JParqPreparedStatement implements PreparedStatement {
     try {
       // 1. Parse SQL
       this.parsedSelect = SqlParser.parseSelect(sql);
-      this.file = stmt.getConn().tableFile(parsedSelect.table());
+      this.tableReferences = parsedSelect.tableReferences();
+      this.joinQuery = parsedSelect.hasMultipleTables();
       final var aggregatePlan = AggregateFunctions.plan(parsedSelect);
 
       // 2. Setup Configuration
@@ -80,29 +86,39 @@ class JParqPreparedStatement implements PreparedStatement {
       conf.setBoolean("parquet.filter.statistics.enabled", true);
       conf.setBoolean("parquet.read.filter.columnindex.enabled", true);
       conf.setBoolean("parquet.filter.dictionary.enabled", true);
-      this.path = new Path(file.toURI());
 
-      // 3. Read Schema and Setup Projection/Filter
-      Schema avro;
-      try {
-        avro = ParquetSchemas.readAvroSchema(path, conf);
-      } catch (IOException ignore) {
-        /* No schema -> no pushdown */
-        avro = null;
-      }
-
-      this.fileAvro = avro;
-
-      // 4. Projection Pushdown (SELECT U WHERE columns)
-      configureProjectionPushdown(fileAvro, aggregatePlan);
-
-      // 5. Filter Pushdown & Residual Calculation
-      if (!parsedSelect.distinct() && fileAvro != null && parsedSelect.where() != null) {
-        this.parquetPredicate = ParquetFilterBuilder.build(fileAvro, parsedSelect.where());
-        this.residualExpression = ParquetFilterBuilder.residual(fileAvro, parsedSelect.where());
-      } else {
+      if (joinQuery) {
+        this.file = null;
+        this.path = null;
+        this.fileAvro = null;
         this.parquetPredicate = Optional.empty();
         this.residualExpression = parsedSelect.where();
+      } else {
+        this.file = stmt.getConn().tableFile(parsedSelect.table());
+        this.path = new Path(file.toURI());
+
+        // 3. Read Schema and Setup Projection/Filter
+        Schema avro;
+        try {
+          avro = ParquetSchemas.readAvroSchema(path, conf);
+        } catch (IOException ignore) {
+          /* No schema -> no pushdown */
+          avro = null;
+        }
+
+        this.fileAvro = avro;
+
+        // 4. Projection Pushdown (SELECT U WHERE columns)
+        configureProjectionPushdown(fileAvro, aggregatePlan);
+
+        // 5. Filter Pushdown & Residual Calculation
+        if (!parsedSelect.distinct() && fileAvro != null && parsedSelect.where() != null) {
+          this.parquetPredicate = ParquetFilterBuilder.build(fileAvro, parsedSelect.where());
+          this.residualExpression = ParquetFilterBuilder.residual(fileAvro, parsedSelect.where());
+        } else {
+          this.parquetPredicate = Optional.empty();
+          this.residualExpression = parsedSelect.where();
+        }
       }
 
     } catch (Exception e) {
@@ -117,18 +133,27 @@ class JParqPreparedStatement implements PreparedStatement {
   @SuppressWarnings("PMD.CloseResource")
   @Override
   public ResultSet executeQuery() throws SQLException {
-    ParquetReader<GenericRecord> reader;
+    RecordReader reader;
+    String resultTableName;
     try {
-      ParquetReader.Builder<GenericRecord> builder = ParquetReader.<GenericRecord>builder(new AvroReadSupport<>(), path)
-          .withConf(conf);
+      if (joinQuery) {
+        InnerJoinRecordReader joinReader = buildJoinReader();
+        reader = joinReader;
+        resultTableName = buildJoinTableName();
+      } else {
+        ParquetReader.Builder<GenericRecord> builder = ParquetReader
+            .<GenericRecord>builder(new AvroReadSupport<>(), path).withConf(conf);
 
-      if (parquetPredicate.isPresent()) {
-        builder = builder.withFilter(FilterCompat.get(parquetPredicate.get()));
+        if (parquetPredicate.isPresent()) {
+          builder = builder.withFilter(FilterCompat.get(parquetPredicate.get()));
+        }
+
+        ParquetReader<GenericRecord> parquetReader = builder.build();
+        reader = new ParquetRecordReaderAdapter(parquetReader);
+        resultTableName = file.getName();
       }
-
-      reader = builder.build();
     } catch (Exception e) {
-      throw new SQLException("Failed to open parquet file: " + file, e);
+      throw new SQLException("Failed to open parquet data source", e);
     }
 
     // Derive label/physical lists from the parsed SELECT
@@ -138,7 +163,7 @@ class JParqPreparedStatement implements PreparedStatement {
     // Create the result set, passing reader, select plan, residual filter,
     // plus projection labels and physical names (for metadata & value lookups)
     SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn());
-    JParqResultSet rs = new JParqResultSet(reader, parsedSelect, file.getName(), residualExpression, labels, physical,
+    JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, residualExpression, labels, physical,
         subqueryExecutor);
 
     stmt.setCurrentRs(rs);
@@ -157,8 +182,71 @@ class JParqPreparedStatement implements PreparedStatement {
     // context.
   }
 
+  private InnerJoinRecordReader buildJoinReader() throws SQLException {
+    List<InnerJoinRecordReader.JoinTable> tables = new ArrayList<>();
+    for (SqlParser.TableReference ref : tableReferences) {
+      String tableName = ref.tableName();
+      if (tableName == null || tableName.isBlank()) {
+        throw new SQLException("JOIN requires explicit table names");
+      }
+      File tableFile = stmt.getConn().tableFile(tableName);
+      Path tablePath = new Path(tableFile.toURI());
+      Configuration tableConf = new Configuration(false);
+      tableConf.setBoolean("parquet.filter.statistics.enabled", true);
+      tableConf.setBoolean("parquet.read.filter.columnindex.enabled", true);
+      tableConf.setBoolean("parquet.filter.dictionary.enabled", true);
+      Schema tableSchema;
+      try {
+        tableSchema = ParquetSchemas.readAvroSchema(tablePath, tableConf);
+      } catch (IOException e) {
+        throw new SQLException("Failed to read schema for table " + tableName, e);
+      }
+      List<GenericRecord> rows = new ArrayList<>();
+      try (ParquetReader<GenericRecord> tableReader = ParquetReader
+          .<GenericRecord>builder(new AvroReadSupport<>(), tablePath).withConf(tableConf).build()) {
+        GenericRecord record = tableReader.read();
+        while (record != null) {
+          rows.add(record);
+          record = tableReader.read();
+        }
+      } catch (Exception e) {
+        throw new SQLException("Failed to read data for table " + tableName, e);
+      }
+      tables.add(new InnerJoinRecordReader.JoinTable(tableName, ref.tableAlias(), tableSchema, rows));
+    }
+    try {
+      return new InnerJoinRecordReader(tables);
+    } catch (IllegalArgumentException e) {
+      throw new SQLException("Failed to build join reader", e);
+    }
+  }
+
+  private String buildJoinTableName() {
+    if (tableReferences == null || tableReferences.isEmpty()) {
+      return "join";
+    }
+    List<String> names = new ArrayList<>();
+    for (SqlParser.TableReference ref : tableReferences) {
+      String candidate = ref.tableAlias();
+      if (candidate == null || candidate.isBlank()) {
+        candidate = ref.tableName();
+      }
+      if (candidate != null && !candidate.isBlank() && !names.contains(candidate)) {
+        names.add(candidate);
+      }
+    }
+    if (names.isEmpty()) {
+      return "join";
+    }
+    return String.join("_", names);
+  }
+
   private void configureProjectionPushdown(Schema schema, AggregateFunctions.AggregatePlan aggregatePlan) {
     if (schema == null) {
+      return;
+    }
+
+    if (parsedSelect.hasMultipleTables()) {
       return;
     }
 
@@ -175,11 +263,15 @@ class JParqPreparedStatement implements PreparedStatement {
     }
     addColumns(needed, ColumnsUsed.inWhere(parsedSelect.where()));
     List<String> qualifiers = new ArrayList<>();
-    if (parsedSelect.table() != null && !parsedSelect.table().isBlank()) {
-      qualifiers.add(parsedSelect.table());
-    }
-    if (parsedSelect.tableAlias() != null && !parsedSelect.tableAlias().isBlank()) {
-      qualifiers.add(parsedSelect.tableAlias());
+    if (parsedSelect.tableReferences() != null) {
+      for (SqlParser.TableReference ref : parsedSelect.tableReferences()) {
+        if (ref.tableName() != null && !ref.tableName().isBlank()) {
+          qualifiers.add(ref.tableName());
+        }
+        if (ref.tableAlias() != null && !ref.tableAlias().isBlank()) {
+          qualifiers.add(ref.tableAlias());
+        }
+      }
     }
     for (Expression expression : parsedSelect.expressions()) {
       addColumns(needed, SqlParser.collectQualifiedColumns(expression, qualifiers));

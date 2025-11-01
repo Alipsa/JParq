@@ -1,6 +1,8 @@
 package se.alipsa.jparq;
 
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
@@ -12,13 +14,15 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.generic.GenericRecord;
-import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroCoercions;
+import se.alipsa.jparq.engine.InnerJoinRecordReader;
+import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.QueryProcessor;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
@@ -38,6 +42,8 @@ public class JParqResultSet extends ResultSetAdapter {
   private final SubqueryExecutor subqueryExecutor;
   private final List<String> queryQualifiers;
   private ValueExpressionEvaluator projectionEvaluator;
+  private final Map<String, Map<String, String>> qualifierColumnMapping;
+  private final Map<String, String> unqualifiedColumnMapping;
   private final boolean aggregateQuery;
   private List<List<Object>> aggregateRows;
   private List<Integer> aggregateSqlTypes;
@@ -51,7 +57,7 @@ public class JParqResultSet extends ResultSetAdapter {
    * Constructor for JParqResultSet.
    *
    * @param reader
-   *          ParquetReader to read from
+   *          record reader to read from
    * @param select
    *          the parsed select statement
    * @param tableName
@@ -67,7 +73,7 @@ public class JParqResultSet extends ResultSetAdapter {
    * @throws SQLException
    *           if reading fails
    */
-  public JParqResultSet(ParquetReader<GenericRecord> reader, SqlParser.Select select, String tableName,
+  public JParqResultSet(RecordReader reader, SqlParser.Select select, String tableName,
       Expression residual, List<String> columnOrder, // projection labels (aliases) or null
       List<String> physicalColumnOrder, SubqueryExecutor subqueryExecutor) // physical names (may be null)
       throws SQLException {
@@ -75,13 +81,25 @@ public class JParqResultSet extends ResultSetAdapter {
     this.selectExpressions = List.copyOf(select.expressions());
     this.subqueryExecutor = subqueryExecutor;
     List<String> qualifiers = new ArrayList<>();
-    if (select.table() != null && !select.table().isBlank()) {
-      qualifiers.add(select.table());
-    }
-    if (select.tableAlias() != null && !select.tableAlias().isBlank()) {
-      qualifiers.add(select.tableAlias());
+    if (select.tableReferences() != null) {
+      for (SqlParser.TableReference ref : select.tableReferences()) {
+        if (ref.tableName() != null && !ref.tableName().isBlank()) {
+          qualifiers.add(ref.tableName());
+        }
+        if (ref.tableAlias() != null && !ref.tableAlias().isBlank()) {
+          qualifiers.add(ref.tableAlias());
+        }
+      }
     }
     this.queryQualifiers = List.copyOf(qualifiers);
+    Map<String, Map<String, String>> qualifierMapping = Map.of();
+    Map<String, String> unqualifiedMapping = Map.of();
+    if (reader instanceof InnerJoinRecordReader joinReader) {
+      qualifierMapping = joinReader.qualifierColumnMapping();
+      unqualifiedMapping = joinReader.unqualifiedColumnMapping();
+    }
+    this.qualifierColumnMapping = qualifierMapping;
+    this.unqualifiedColumnMapping = unqualifiedMapping;
     List<String> labels = (columnOrder != null ? new ArrayList<>(columnOrder) : new ArrayList<>());
     List<String> physical = physicalColumnOrder;
 
@@ -91,7 +109,8 @@ public class JParqResultSet extends ResultSetAdapter {
       physical = null;
       try {
         AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan, residual,
-            select.having(), select.orderBy(), subqueryExecutor, queryQualifiers);
+            select.having(), select.orderBy(), subqueryExecutor, queryQualifiers, qualifierColumnMapping,
+            unqualifiedColumnMapping);
         this.aggregateRows = new ArrayList<>(result.rows());
         this.aggregateSqlTypes = result.sqlTypes();
       } catch (Exception e) {
@@ -125,6 +144,7 @@ public class JParqResultSet extends ResultSetAdapter {
         QueryProcessor.Options options = QueryProcessor.Options.builder().distinct(select.distinct())
             .distinctBeforePreLimit(select.innerDistinct()).subqueryExecutor(subqueryExecutor)
             .preLimit(select.preLimit()).preOrderBy(select.preOrderBy()).outerQualifiers(queryQualifiers)
+            .qualifierColumnMapping(qualifierColumnMapping).unqualifiedColumnMapping(unqualifiedColumnMapping)
             .preStageDistinctColumns(select.innerDistinctColumns()).offset(select.offset())
             .preOffset(select.preOffset());
         this.qp = new QueryProcessor(reader, this.columnOrder, /* where */ residual, select.limit(), options);
@@ -134,7 +154,8 @@ public class JParqResultSet extends ResultSetAdapter {
       }
 
       var schema = first.getSchema();
-      var evaluator = new se.alipsa.jparq.engine.ExpressionEvaluator(schema, subqueryExecutor, queryQualifiers);
+      var evaluator = new se.alipsa.jparq.engine.ExpressionEvaluator(schema, subqueryExecutor, queryQualifiers,
+          qualifierColumnMapping, unqualifiedColumnMapping);
       final boolean match = residual == null || evaluator.eval(residual, first);
 
       // Compute physical projection from schema; only add if we don’t already have
@@ -159,6 +180,7 @@ public class JParqResultSet extends ResultSetAdapter {
             .distinct(select.distinct()).distinctBeforePreLimit(select.innerDistinct()).firstAlreadyRead(first)
             .subqueryExecutor(subqueryExecutor).preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
             .preStageDistinctColumns(select.innerDistinctColumns()).outerQualifiers(queryQualifiers)
+            .qualifierColumnMapping(qualifierColumnMapping).unqualifiedColumnMapping(unqualifiedColumnMapping)
             .offset(select.offset()).preOffset(select.preOffset());
         this.qp = new QueryProcessor(reader, proj, residual, select.limit(), options);
         this.current = usePrefetchedAsCurrent ? first : qp.nextMatching();
@@ -167,6 +189,7 @@ public class JParqResultSet extends ResultSetAdapter {
             .distinctBeforePreLimit(select.innerDistinct()).orderBy(order).firstAlreadyRead(first)
             .subqueryExecutor(subqueryExecutor).preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
             .preStageDistinctColumns(select.innerDistinctColumns()).outerQualifiers(queryQualifiers)
+            .qualifierColumnMapping(qualifierColumnMapping).unqualifiedColumnMapping(unqualifiedColumnMapping)
             .offset(select.offset()).preOffset(select.preOffset());
         this.qp = new QueryProcessor(reader, proj, residual, select.limit(), options);
         this.current = qp.nextMatching();
@@ -285,7 +308,8 @@ public class JParqResultSet extends ResultSetAdapter {
 
   private void ensureProjectionEvaluator(GenericRecord record) {
     if (projectionEvaluator == null && record != null && !selectExpressions.isEmpty()) {
-      projectionEvaluator = new ValueExpressionEvaluator(record.getSchema(), subqueryExecutor, queryQualifiers);
+      projectionEvaluator = new ValueExpressionEvaluator(record.getSchema(), subqueryExecutor, queryQualifiers,
+          qualifierColumnMapping, unqualifiedColumnMapping);
     }
   }
 
@@ -331,7 +355,19 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public String getString(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    return v == null ? null : v.toString();
+    if (v == null) {
+      return null;
+    }
+    if (v instanceof byte[] bytes) {
+      return new String(bytes, StandardCharsets.UTF_8);
+    }
+    if (v instanceof ByteBuffer buffer) {
+      ByteBuffer dup = buffer.duplicate();
+      byte[] bytes = new byte[dup.remaining()];
+      dup.get(bytes);
+      return new String(bytes, StandardCharsets.UTF_8);
+    }
+    return v.toString();
   }
 
   @Override

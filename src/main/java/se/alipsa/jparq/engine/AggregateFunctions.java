@@ -49,7 +49,6 @@ import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
-import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.SqlParser.OrderKey;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.StringExpressions;
@@ -490,12 +489,17 @@ public final class AggregateFunctions {
    * @param outerQualifiers
    *          table names or aliases from the outer query scope used when
    *          resolving correlated subquery references
+   * @param qualifierColumnMapping
+   *          mapping from qualifier to canonical column names (may be empty)
+   * @param unqualifiedColumnMapping
+   *          mapping from unqualified column names to canonical field names
    * @return aggregate rows and associated column metadata
    * @throws IOException
-   *           if reading the parquet file fails
+   *           if reading the records fails
    */
-  public static AggregateResult evaluate(ParquetReader<GenericRecord> reader, AggregatePlan plan, Expression residual,
-      Expression having, List<OrderKey> orderBy, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers)
+  public static AggregateResult evaluate(RecordReader reader, AggregatePlan plan, Expression residual,
+      Expression having, List<OrderKey> orderBy, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
+      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping)
       throws IOException {
     List<GroupExpression> groupExpressions = plan.groupExpressions();
     List<GroupTypeTracker> groupTrackers = new ArrayList<>(groupExpressions.size());
@@ -511,7 +515,7 @@ public final class AggregateFunctions {
 
     Map<GroupKey, GroupState> states = new LinkedHashMap<>();
 
-    try (ParquetReader<GenericRecord> autoClose = reader) {
+    try (RecordReader autoClose = reader) {
       GenericRecord rec = autoClose.read();
       Schema schema = null;
       ExpressionEvaluator whereEval = null;
@@ -521,9 +525,11 @@ public final class AggregateFunctions {
         if (schema == null) {
           schema = rec.getSchema();
           if (residual != null) {
-            whereEval = new ExpressionEvaluator(schema, subqueryExecutor, outerQualifiers);
+            whereEval = new ExpressionEvaluator(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
+                unqualifiedColumnMapping);
           }
-          valueEval = new ValueExpressionEvaluator(schema, subqueryExecutor, outerQualifiers);
+          valueEval = new ValueExpressionEvaluator(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
+              unqualifiedColumnMapping);
         }
 
         boolean matches = residual == null || whereEval.eval(residual, rec);
