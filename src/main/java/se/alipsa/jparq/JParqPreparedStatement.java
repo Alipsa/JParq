@@ -211,11 +211,6 @@ class JParqPreparedStatement implements PreparedStatement {
       } catch (IOException e) {
         throw new SQLException("Failed to read schema for table " + tableName, e);
       }
-      JoinRecordReader.JoinTable fallback = maybeLoadDepartmentsFallback(tableFile, tableSchema, ref);
-      if (fallback != null) {
-        tables.add(fallback);
-        continue;
-      }
       List<GenericRecord> rows = new ArrayList<>();
       try (ParquetReader<GenericRecord> tableReader = ParquetReader
           .<GenericRecord>builder(new AvroReadSupport<>(), tablePath).withConf(tableConf).build()) {
@@ -235,79 +230,6 @@ class JParqPreparedStatement implements PreparedStatement {
     } catch (IllegalArgumentException e) {
       throw new SQLException("Failed to build join reader", e);
     }
-  }
-
-  /**
-   * Load a synthetic departments table when the backing parquet file lacks the
-   * {@code department} column expected by integration tests.
-   *
-   * @param tableFile
-   *          original parquet file resolved for the table
-   * @param existingSchema
-   *          schema read from the parquet file
-   * @param ref
-   *          table reference describing the join participant
-   * @return a {@link JoinRecordReader.JoinTable} populated from the fallback
-   *         CSV when available; otherwise {@code null}
-   * @throws SQLException
-   *           if the CSV cannot be parsed or contains invalid rows
-   */
-  private JoinRecordReader.JoinTable maybeLoadDepartmentsFallback(File tableFile, Schema existingSchema,
-      SqlParser.TableReference ref) throws SQLException {
-    if (!"departments".equalsIgnoreCase(ref.tableName())) {
-      return null;
-    }
-    if (existingSchema.getField("department") != null) {
-      return null;
-    }
-    File csvFile = new File(tableFile.getParentFile(), ref.tableName() + ".csv");
-    if (!csvFile.isFile()) {
-      return null;
-    }
-    List<String> lines;
-    try {
-      lines = Files.readAllLines(csvFile.toPath(), StandardCharsets.UTF_8);
-    } catch (IOException e) {
-      throw new SQLException("Failed to read fallback departments CSV", e);
-    }
-    if (lines.isEmpty()) {
-      throw new SQLException("Fallback departments CSV is empty");
-    }
-    List<Schema.Field> fields = new ArrayList<>(2);
-    Schema idSchema = Schema.create(Schema.Type.INT);
-    Schema deptSchema = Schema.create(Schema.Type.STRING);
-    fields.add(new Field("id", Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), idSchema)), null,
-        Field.NULL_DEFAULT_VALUE));
-    fields.add(new Field("department", Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), deptSchema)), null,
-        Field.NULL_DEFAULT_VALUE));
-    String recordName = ref.tableAlias() != null && !ref.tableAlias().isBlank() ? ref.tableAlias() : ref.tableName();
-    Schema schema = Schema.createRecord(recordName, null, null, false);
-    schema.setFields(fields);
-    List<GenericRecord> rows = new ArrayList<>();
-    for (int i = 1; i < lines.size(); i++) {
-      String line = lines.get(i).trim();
-      if (line.isEmpty()) {
-        continue;
-      }
-      String[] parts = line.split(",", -1);
-      if (parts.length < 2) {
-        throw new SQLException("Invalid departments CSV row: " + line);
-      }
-      GenericData.Record record = new GenericData.Record(schema);
-      if (parts[0].isEmpty()) {
-        record.put("id", null);
-      } else {
-        try {
-          record.put("id", Integer.parseInt(parts[0]));
-        } catch (NumberFormatException e) {
-          throw new SQLException("Invalid department ID in CSV row: '" + line + "' (value: '" + parts[0] + "')", e);
-        }
-      }
-      record.put("department", parts[1].isEmpty() ? null : parts[1]);
-      rows.add(record);
-    }
-    return new JoinRecordReader.JoinTable(ref.tableName(), ref.tableAlias(), schema, rows, ref.joinType(),
-        ref.joinCondition());
   }
 
   /**
@@ -369,12 +291,12 @@ class JParqPreparedStatement implements PreparedStatement {
   private Schema buildSubquerySchema(ResultSetMetaData meta, SqlParser.TableReference ref, List<String> fieldNames,
       List<Schema> valueSchemas) throws SQLException {
     int columnCount = meta.getColumnCount();
-    List<Field> fields = new ArrayList<>(columnCount);
+    List<Schema.Field> fields = new ArrayList<>(columnCount);
     for (int i = 1; i <= columnCount; i++) {
       String columnName = columnLabel(meta, i);
       Schema valueSchema = columnSchema(meta, i);
       Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
-      Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
+      Schema.Field field = new Schema.Field(columnName, union, null, Schema.Field.NULL_DEFAULT_VALUE);
       fields.add(field);
       fieldNames.add(columnName);
       valueSchemas.add(valueSchema);
