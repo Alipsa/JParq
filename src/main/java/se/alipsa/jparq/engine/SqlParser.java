@@ -34,7 +34,17 @@ public final class SqlParser {
    * @param asc
    *          true if ascending order, false if descending
    */
-  public record OrderKey(String column, boolean asc) {
+  /**
+   * ORDER BY key (simple: column + direction and optional qualifier).
+   *
+   * @param column
+   *          the column name (unqualified physical column name)
+   * @param asc
+   *          true if ascending order, false if descending
+   * @param qualifier
+   *          optional table or alias qualifier associated with the column
+   */
+  public record OrderKey(String column, boolean asc, String qualifier) {
   }
 
   /**
@@ -83,11 +93,14 @@ public final class SqlParser {
    * @param preOrderBy
    *          ORDER BY keys that must be applied prior to the outer ORDER BY
    *          (typically inherited from an inner SELECT)
+   * @param tableReferences
+   *          ordered collection of tables referenced in the {@code FROM} clause,
+   *          including any JOIN participants
    */
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
       int limit, int offset, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct,
       List<String> innerDistinctColumns, List<Expression> expressions, List<Expression> groupByExpressions,
-      Expression having, int preLimit, int preOffset, List<OrderKey> preOrderBy) {
+      Expression having, int preLimit, int preOffset, List<OrderKey> preOrderBy, List<TableReference> tableReferences) {
 
     /**
      * returns "*" if no explicit projection.
@@ -107,6 +120,17 @@ public final class SqlParser {
       // parseSelect already ensures List.copyOf() which prevents null.
       return orderBy;
     }
+
+    /**
+     * Determine whether the SELECT statement references more than one table in the
+     * {@code FROM} clause.
+     *
+     * @return {@code true} if multiple tables participate in the query, otherwise
+     *         {@code false}
+     */
+    public boolean hasMultipleTables() {
+      return tableReferences != null && tableReferences.size() > 1;
+    }
   }
 
   /**
@@ -119,6 +143,18 @@ public final class SqlParser {
    * @return the FromInfo record
    */
   private record FromInfo(String tableName, String tableAlias, Map<String, String> columnMapping, Select innerSelect) {
+  }
+
+  /**
+   * Public representation of a table reference discovered in the {@code FROM}
+   * clause.
+   *
+   * @param tableName
+   *          the referenced table name
+   * @param tableAlias
+   *          optional alias used for the table (may be {@code null})
+   */
+  public record TableReference(String tableName, String tableAlias) {
   }
 
   /**
@@ -144,10 +180,14 @@ public final class SqlParser {
 
   private static Select parsePlainSelect(PlainSelect ps) {
     FromInfo fromInfo = parseFromItem(ps.getFromItem());
-    final Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo);
+    List<JoinInfo> joinInfos = parseJoins(ps.getJoins());
+    List<TableReference> tableRefs = buildTableReferences(fromInfo, joinInfos);
+    final Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo, tableRefs);
 
     Expression whereExpr = ps.getWhere();
-    stripQualifier(whereExpr, fromInfo.tableName(), fromInfo.tableAlias());
+    if (tableRefs.size() == 1) {
+      stripQualifier(whereExpr, qualifiers(tableRefs));
+    }
     int outerLimit = computeLimit(ps);
     int outerOffset = computeOffset(ps);
     Select inner = fromInfo.innerSelect();
@@ -168,8 +208,7 @@ public final class SqlParser {
       offset += innerOffset;
     }
 
-    List<OrderKey> orderKeys = computeOrderKeys(ps, projection.labels(), projection.physicalCols(),
-        fromInfo.tableName(), fromInfo.tableAlias());
+    List<OrderKey> orderKeys = computeOrderKeys(ps, projection.labels(), projection.physicalCols(), tableRefs);
     boolean outerRequestedOrder = orderKeys != null && !orderKeys.isEmpty();
     if ((orderKeys == null || orderKeys.isEmpty()) && inner != null) {
       orderKeys = inner.orderBy();
@@ -220,12 +259,16 @@ public final class SqlParser {
     boolean distinct = outerDistinct || innerDistinct;
 
     Expression havingExpr = ps.getHaving();
-    stripQualifier(havingExpr, fromInfo.tableName(), fromInfo.tableAlias());
+    if (tableRefs.size() == 1) {
+      stripQualifier(havingExpr, qualifiers(tableRefs));
+    }
 
-    List<Expression> groupByExpressions = parseGroupBy(ps.getGroupBy(), fromInfo);
+    List<Expression> groupByExpressions = parseGroupBy(ps.getGroupBy(), tableRefs);
 
+    Expression joinCondition = combineJoinConditions(joinInfos, tableRefs);
     Expression combinedWhere = combineExpressions(
-        fromInfo.innerSelect() == null ? null : fromInfo.innerSelect().where(), whereExpr);
+        combineExpressions(fromInfo.innerSelect() == null ? null : fromInfo.innerSelect().where(), joinCondition),
+        whereExpr);
     Expression combinedHaving = combineExpressions(
         fromInfo.innerSelect() == null ? null : fromInfo.innerSelect().having(), havingExpr);
 
@@ -238,7 +281,7 @@ public final class SqlParser {
 
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
         offset, orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, groupByExpressions,
-        combinedHaving, preLimit, preOffset, preOrderCopy);
+        combinedHaving, preLimit, preOffset, preOrderCopy, tableRefs);
   }
 
   // === Parsing Helper Methods =================================================
@@ -301,7 +344,8 @@ public final class SqlParser {
    * Parses the SELECT list, resolving aliases and determining physical column
    * names.
    */
-  private static Projection parseProjectionList(List<SelectItem<?>> selectItems, FromInfo fromInfo) {
+  private static Projection parseProjectionList(List<SelectItem<?>> selectItems, FromInfo fromInfo,
+      List<TableReference> tableRefs) {
     List<String> labels = new ArrayList<>();
     List<String> physicalCols = new ArrayList<>();
     List<Expression> expressions = new ArrayList<>();
@@ -319,7 +363,9 @@ public final class SqlParser {
       }
 
       final Expression expr = item.getExpression();
-      stripQualifier(expr, fromInfo.tableName(), fromInfo.tableAlias());
+      if (tableRefs.size() == 1) {
+        stripQualifier(expr, qualifiers(tableRefs));
+      }
 
       final Alias aliasObj = item.getAlias();
       final String alias = aliasObj == null ? null : aliasObj.getName();
@@ -437,15 +483,14 @@ public final class SqlParser {
    *          SELECT list)
    * @param physicalCols
    *          the underlying physical column names corresponding to {@code labels}
-   * @param tableName
-   *          the table name in the FROM clause
-   * @param tableAlias
-   *          the alias of the table, if any (may be {@code null})
+   * @param tableRefs
+   *          table references participating in the query (used to normalise
+   *          qualifiers)
    * @return a list of {@link OrderKey} objects representing the resolved ORDER BY
    *         keys; an empty list if the query has no ORDER BY clause
    */
   private static List<OrderKey> computeOrderKeys(PlainSelect ps, List<String> labels, List<String> physicalCols,
-      String tableName, String tableAlias) {
+      List<TableReference> tableRefs) {
     List<OrderKey> orderKeys = new ArrayList<>();
     List<OrderByElement> ob = ps.getOrderByElements();
     if (ob != null) {
@@ -464,14 +509,20 @@ public final class SqlParser {
 
       for (OrderByElement e : ob) {
         Expression ex = e.getExpression();
+        String qualifier = null;
 
         // normalize qualifiers (t.col -> col) for single-table
-        stripQualifier(ex, tableName, tableAlias);
+        if (tableRefs.size() == 1) {
+          stripQualifier(ex, qualifiers(tableRefs));
+        }
 
         // Extract the ORDER BY token as text
         String keyText;
         if (ex instanceof Column c) {
           keyText = c.getColumnName();
+          if (tableRefs.size() > 1) {
+            qualifier = extractQualifier(c);
+          }
         } else if (ex instanceof StringValue sv) {
           keyText = sv.getValue();
         } else {
@@ -482,10 +533,24 @@ public final class SqlParser {
         String physicalKey = aliasToPhysical.getOrDefault(keyText, keyText);
 
         boolean asc = !e.isAscDescPresent() || e.isAsc(); // default ASC
-        orderKeys.add(new OrderKey(physicalKey, asc));
+        orderKeys.add(new OrderKey(physicalKey, asc, qualifier));
       }
     }
     return orderKeys;
+  }
+
+  private static String extractQualifier(Column column) {
+    Table table = column.getTable();
+    if (table == null) {
+      return null;
+    }
+    if (table.getAlias() != null && table.getAlias().getName() != null && !table.getAlias().getName().isBlank()) {
+      return table.getAlias().getName();
+    }
+    if (table.getName() != null && !table.getName().isBlank()) {
+      return table.getName();
+    }
+    return null;
   }
 
   // === Qualifier Stripping =================================================
@@ -597,17 +662,12 @@ public final class SqlParser {
    * unqualified. This keeps downstream evaluation simple (operate on column names
    * only).
    */
-  private static void stripQualifier(Expression expr, String tableName, String tableAlias) {
+  private static void stripQualifier(Expression expr, List<String> allowedQualifiers) {
     if (expr == null) {
       return;
     }
 
-    // Allow both the real table name and alias (if any)
-    List<String> allowed = new ArrayList<>();
-    allowed.add(tableName);
-    if (tableAlias != null && !tableAlias.isBlank()) {
-      allowed.add(tableAlias);
-    }
+    List<String> allowed = allowedQualifiers == null ? List.of() : allowedQualifiers;
 
     expr.accept(new ExpressionVisitorAdapter<Void>() {
       @Override
@@ -618,9 +678,9 @@ public final class SqlParser {
           if (q != null) {
             boolean known = allowed.stream().anyMatch(name -> name.equalsIgnoreCase(q));
             if (known) {
-              column.setTable(null); // drop qualifier for single-table queries
+              column.setTable(null);
             } else {
-              throw new IllegalArgumentException("Unknown table qualifier '" + q + "' for single-table SELECT");
+              throw new IllegalArgumentException("Unknown table qualifier '" + q + "'");
             }
           }
         }
@@ -702,17 +762,94 @@ public final class SqlParser {
     return Set.copyOf(columns);
   }
 
-  private static List<Expression> parseGroupBy(GroupByElement groupBy, FromInfo fromInfo) {
+  private static List<Expression> parseGroupBy(GroupByElement groupBy, List<TableReference> tableRefs) {
     ExpressionList<?> expressionList = groupBy == null ? null : groupBy.getGroupByExpressionList();
     if (expressionList == null || expressionList.isEmpty()) {
       return List.of();
     }
     List<Expression> expressions = new ArrayList<>(expressionList.size());
     for (Expression expr : expressionList) {
-      stripQualifier(expr, fromInfo.tableName(), fromInfo.tableAlias());
+      if (tableRefs.size() == 1) {
+        stripQualifier(expr, qualifiers(tableRefs));
+      }
       expressions.add(expr);
     }
     return List.copyOf(expressions);
+  }
+
+  private record JoinInfo(FromInfo table, Expression condition, boolean simple) {
+  }
+
+  private static List<JoinInfo> parseJoins(List<Join> joins) {
+    if (joins == null || joins.isEmpty()) {
+      return List.of();
+    }
+    List<JoinInfo> joinInfos = new ArrayList<>(joins.size());
+    for (Join join : joins) {
+      boolean simple = join.isSimple();
+      boolean inner = join.isInner();
+      if (!simple && !inner) {
+        throw new IllegalArgumentException("Only INNER JOIN is supported");
+      }
+      if (join.isOuter() || join.isLeft() || join.isRight() || join.isFull()) {
+        throw new IllegalArgumentException("Only INNER JOIN is supported");
+      }
+      FromInfo info = parseFromItem(join.getRightItem());
+      Expression condition = null;
+      if (join.getOnExpressions() != null) {
+        for (Expression on : join.getOnExpressions()) {
+          condition = combineExpressions(condition, on);
+        }
+      }
+      joinInfos.add(new JoinInfo(info, condition, simple));
+    }
+    return List.copyOf(joinInfos);
+  }
+
+  private static List<TableReference> buildTableReferences(FromInfo base, List<JoinInfo> joins) {
+    List<TableReference> refs = new ArrayList<>();
+    refs.add(new TableReference(base.tableName(), base.tableAlias()));
+    if (joins != null) {
+      for (JoinInfo join : joins) {
+        FromInfo info = join.table();
+        refs.add(new TableReference(info.tableName(), info.tableAlias()));
+      }
+    }
+    return List.copyOf(refs);
+  }
+
+  private static List<String> qualifiers(List<TableReference> tableRefs) {
+    if (tableRefs == null || tableRefs.isEmpty()) {
+      return List.of();
+    }
+    List<String> qualifiers = new ArrayList<>();
+    for (TableReference ref : tableRefs) {
+      if (ref.tableName() != null && !ref.tableName().isBlank()) {
+        qualifiers.add(ref.tableName());
+      }
+      if (ref.tableAlias() != null && !ref.tableAlias().isBlank()) {
+        qualifiers.add(ref.tableAlias());
+      }
+    }
+    return qualifiers;
+  }
+
+  private static Expression combineJoinConditions(List<JoinInfo> joinInfos, List<TableReference> tableRefs) {
+    if (joinInfos == null || joinInfos.isEmpty()) {
+      return null;
+    }
+    Expression combined = null;
+    List<String> qualifierList = qualifiers(tableRefs);
+    for (JoinInfo join : joinInfos) {
+      Expression condition = join.condition();
+      if (condition != null) {
+        if (tableRefs.size() == 1) {
+          stripQualifier(condition, qualifierList);
+        }
+        combined = combineExpressions(combined, condition);
+      }
+    }
+    return combined;
   }
 
 }

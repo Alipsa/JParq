@@ -58,6 +58,8 @@ public final class ExpressionEvaluator {
   private final ValueExpressionEvaluator literalEvaluator;
   private final SubqueryExecutor subqueryExecutor;
   private final List<String> outerQualifiers;
+  private final Map<String, Map<String, String>> qualifierColumnMapping;
+  private final Map<String, String> unqualifiedColumnMapping;
 
   /**
    * Creates a new evaluator for the provided Avro {@link Schema}.
@@ -67,7 +69,7 @@ public final class ExpressionEvaluator {
    *          {@code null}
    */
   public ExpressionEvaluator(Schema schema) {
-    this(schema, null, List.of());
+    this(schema, null, List.of(), Map.of(), Map.of());
   }
 
   /**
@@ -81,7 +83,7 @@ public final class ExpressionEvaluator {
    *          executor used for sub queries (may be {@code null})
    */
   public ExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor) {
-    this(schema, subqueryExecutor, List.of());
+    this(schema, subqueryExecutor, List.of(), Map.of(), Map.of());
   }
 
   /**
@@ -94,8 +96,16 @@ public final class ExpressionEvaluator {
    *          executor used for sub queries (may be {@code null})
    * @param outerQualifiers
    *          table names or aliases that belong to the outer query scope
+   * @param qualifierColumnMapping
+   *          mapping of qualifier (table/alias) to canonical column names used
+   *          during expression resolution (may be {@code null})
+   * @param unqualifiedColumnMapping
+   *          mapping of unqualified column names to canonical names for
+   *          expressions where the column is unique across all tables (may be
+   *          {@code null})
    */
-  public ExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers) {
+  public ExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
+      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping) {
     Map<String, Schema> fs = new HashMap<>();
     Map<String, String> ci = new HashMap<>();
     for (Schema.Field f : schema.getFields()) {
@@ -105,7 +115,10 @@ public final class ExpressionEvaluator {
     this.fieldSchemas = Collections.unmodifiableMap(fs);
     this.caseInsensitiveIndex = Collections.unmodifiableMap(ci);
     List<String> qualifiers = outerQualifiers == null ? List.of() : List.copyOf(outerQualifiers);
-    this.literalEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, qualifiers);
+    this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(qualifierColumnMapping);
+    this.unqualifiedColumnMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(unqualifiedColumnMapping);
+    this.literalEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, qualifiers,
+        this.qualifierColumnMapping, this.unqualifiedColumnMapping);
     this.subqueryExecutor = subqueryExecutor;
     this.outerQualifiers = qualifiers;
   }
@@ -602,7 +615,23 @@ public final class ExpressionEvaluator {
   }
 
   private Object resolveColumnValue(String columnName, GenericRecord rec) {
-    return AvroCoercions.resolveColumnValue(columnName, rec, fieldSchemas, caseInsensitiveIndex);
+    if (columnName == null) {
+      return null;
+    }
+    String qualifier = null;
+    String name = columnName;
+    int dot = columnName.indexOf('.');
+    if (dot > 0) {
+      qualifier = columnName.substring(0, dot);
+      name = columnName.substring(dot + 1);
+    }
+    String canonical = canonicalFieldName(qualifier, name);
+    return AvroCoercions.resolveColumnValue(canonical, rec, fieldSchemas, caseInsensitiveIndex);
+  }
+
+  private String canonicalFieldName(String qualifier, String columnName) {
+    return ColumnMappingUtil.canonicalFieldName(qualifier, columnName, qualifierColumnMapping, unqualifiedColumnMapping,
+        caseInsensitiveIndex);
   }
 
   private Operand operand(Expression e, GenericRecord rec) {
@@ -614,16 +643,10 @@ public final class ExpressionEvaluator {
       return new Operand(null, null);
     }
     if (expr instanceof Column c) {
+      String qualifier = c.getTable() == null ? null : c.getTable().getName();
       String name = c.getColumnName();
-      String lookupName = name; // default to the parsed token
-      Schema colSchema = fieldSchemas.get(name);
-      if (colSchema == null) {
-        String canon = caseInsensitiveIndex.get(name.toLowerCase(Locale.ROOT));
-        if (canon != null) {
-          colSchema = fieldSchemas.get(canon);
-          lookupName = canon; // USE canonical name when reading from the record
-        }
-      }
+      String lookupName = canonicalFieldName(qualifier, name);
+      Schema colSchema = fieldSchemas.get(lookupName);
       if (colSchema == null) {
         return new Operand(null, null);
       }
