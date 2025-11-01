@@ -1054,8 +1054,8 @@ public final class ValueExpressionEvaluator {
   }
 
   private String canonicalFieldName(String qualifier, String columnName) {
-    return ColumnMappingUtil.canonicalFieldName(qualifier, columnName, qualifierColumnMapping,
-        unqualifiedColumnMapping, caseInsensitiveIndex);
+    return ColumnMappingUtil.canonicalFieldName(qualifier, columnName, qualifierColumnMapping, unqualifiedColumnMapping,
+        caseInsensitiveIndex);
   }
 
   private BigDecimal toBigDecimal(Object value) {

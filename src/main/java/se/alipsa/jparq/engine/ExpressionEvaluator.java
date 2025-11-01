@@ -630,8 +630,8 @@ public final class ExpressionEvaluator {
   }
 
   private String canonicalFieldName(String qualifier, String columnName) {
-    return ColumnMappingUtil.canonicalFieldName(qualifier, columnName, qualifierColumnMapping,
-        unqualifiedColumnMapping, caseInsensitiveIndex);
+    return ColumnMappingUtil.canonicalFieldName(qualifier, columnName, qualifierColumnMapping, unqualifiedColumnMapping,
+        caseInsensitiveIndex);
   }
 
   private Operand operand(Expression e, GenericRecord rec) {

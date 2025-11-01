@@ -44,12 +44,12 @@ import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.InnerJoinRecordReader;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
+import se.alipsa.jparq.engine.ParquetRecordReaderAdapter;
 import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
-import se.alipsa.jparq.engine.ParquetRecordReaderAdapter;
 
 /** An implementation of the java.sql.PreparedStatement interface. */
 @SuppressWarnings({

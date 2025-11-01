@@ -4,13 +4,13 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.util.HashMap;
 import java.util.Objects;
 import java.util.Set;
-import java.util.Locale;
 import net.sf.jsqlparser.expression.Expression;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
@@ -314,8 +314,7 @@ public final class QueryProcessor implements AutoCloseable {
    * @param options
    *          configuration for DISTINCT, ORDER BY and other behaviour
    */
-  public QueryProcessor(RecordReader reader, List<String> projection, Expression where, int limit,
-      Options options) {
+  public QueryProcessor(RecordReader reader, List<String> projection, Expression where, int limit, Options options) {
     this.reader = Objects.requireNonNull(reader);
     this.projection = Collections.unmodifiableList(new ArrayList<>(projection));
     this.where = where;

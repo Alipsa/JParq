@@ -18,18 +18,20 @@ public final class ColumnMappingUtil {
   /**
    * Resolve the canonical field name for the provided column reference.
    *
-   * @param qualifier the table qualifier, may be {@code null}
-   * @param columnName the column name to resolve
-   * @param qualifierColumnMapping a map of normalized qualifier to column name mappings
-   * @param unqualifiedColumnMapping a map of unqualified column names to canonical names
-   * @param caseInsensitiveIndex a fallback case-insensitive index for single-table queries
+   * @param qualifier
+   *          the table qualifier, may be {@code null}
+   * @param columnName
+   *          the column name to resolve
+   * @param qualifierColumnMapping
+   *          a map of normalized qualifier to column name mappings
+   * @param unqualifiedColumnMapping
+   *          a map of unqualified column names to canonical names
+   * @param caseInsensitiveIndex
+   *          a fallback case-insensitive index for single-table queries
    * @return the canonical field name to use when reading the record
    */
-  public static String canonicalFieldName(
-      String qualifier,
-      String columnName,
-      Map<String, Map<String, String>> qualifierColumnMapping,
-      Map<String, String> unqualifiedColumnMapping,
+  public static String canonicalFieldName(String qualifier, String columnName,
+      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping,
       Map<String, String> caseInsensitiveIndex) {
 
     Objects.requireNonNull(columnName, "columnName");
@@ -45,8 +47,7 @@ public final class ColumnMappingUtil {
           return canonical;
         }
       }
-      throw new IllegalArgumentException(
-          "Unknown column '" + columnName + "' for qualifier '" + qualifier + "'");
+      throw new IllegalArgumentException("Unknown column '" + columnName + "' for qualifier '" + qualifier + "'");
     }
     if (!qualifierColumnMapping.isEmpty()) {
       String canonical = unqualifiedColumnMapping.get(normalizedColumn);
@@ -63,11 +64,11 @@ public final class ColumnMappingUtil {
    * Normalizes the qualifier mapping so lookups can be performed with
    * case-insensitive qualifiers and column names.
    *
-   * @param source the raw qualifier mapping from the join reader
+   * @param source
+   *          the raw qualifier mapping from the join reader
    * @return an immutable map using normalized qualifiers and column names
    */
-  public static Map<String, Map<String, String>> normaliseQualifierMapping(
-      Map<String, Map<String, String>> source) {
+  public static Map<String, Map<String, String>> normaliseQualifierMapping(Map<String, Map<String, String>> source) {
     if (source == null || source.isEmpty()) {
       return Map.of();
     }
@@ -92,7 +93,8 @@ public final class ColumnMappingUtil {
   /**
    * Normalizes unqualified column mappings to ensure case-insensitive lookups.
    *
-   * @param source the raw mapping provided by the join reader
+   * @param source
+   *          the raw mapping provided by the join reader
    * @return an immutable map keyed by lower-cased column names
    */
   public static Map<String, String> normaliseUnqualifiedMapping(Map<String, String> source) {

@@ -24,8 +24,8 @@ import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.InnerJoinRecordReader;
-import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.QueryProcessor;
+import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
@@ -75,8 +75,8 @@ public class JParqResultSet extends ResultSetAdapter {
    * @throws SQLException
    *           if reading fails
    */
-  public JParqResultSet(RecordReader reader, SqlParser.Select select, String tableName,
-      Expression residual, List<String> columnOrder, // projection labels (aliases) or null
+  public JParqResultSet(RecordReader reader, SqlParser.Select select, String tableName, Expression residual,
+      List<String> columnOrder, // projection labels (aliases) or null
       List<String> physicalColumnOrder, SubqueryExecutor subqueryExecutor) // physical names (may be null)
       throws SQLException {
     this.tableName = tableName;

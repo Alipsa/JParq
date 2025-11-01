@@ -125,8 +125,8 @@ public final class SqlParser {
      * Determine whether the SELECT statement references more than one table in the
      * {@code FROM} clause.
      *
-     * @return {@code true} if multiple tables participate in the query,
-     *         otherwise {@code false}
+     * @return {@code true} if multiple tables participate in the query, otherwise
+     *         {@code false}
      */
     public boolean hasMultipleTables() {
       return tableReferences != null && tableReferences.size() > 1;
