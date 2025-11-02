@@ -203,4 +203,31 @@ class CTETest {
     assertTrue(values.stream().mapToInt(Integer::intValue).distinct().count() == values.size(),
         "Recursive CTE should not produce duplicate rows");
   }
+
+  @Test
+  @DisplayName("Recursive UNION CTE removes duplicate anchor rows")
+  void recursiveUnionCteDeduplicatesAnchorRows() {
+    String sql = """
+        WITH RECURSIVE cyls(c) AS (
+          SELECT cyl FROM mtcars WHERE cyl IN (4, 6)
+          UNION
+          SELECT c + 2 FROM cyls WHERE c < 6
+        )
+        SELECT c FROM cyls ORDER BY c
+        """;
+
+    List<Integer> values = new ArrayList<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          values.add(rs.getInt(1));
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    assertIterableEquals(List.of(4, 6), values,
+        "UNION recursion should eliminate duplicates from the anchor member");
+  }
 }

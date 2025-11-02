@@ -1101,9 +1101,23 @@ class JParqPreparedStatement implements PreparedStatement {
     }
     CteResult anchor = executeCteQuery(components.get(0).sql(), available, cte.name(), cte.columnAliases());
     Schema schema = anchor.schema();
-    List<GenericRecord> accumulated = new ArrayList<>(anchor.rows());
-    List<GenericRecord> working = new ArrayList<>(anchor.rows());
-    LinkedHashSet<GenericRecord> distinct = new LinkedHashSet<>(accumulated);
+    boolean dedupeAnchorRows =
+        components.size() > 1 && components.get(1).operator() == SqlParser.SetOperator.UNION;
+    LinkedHashSet<GenericRecord> distinct = new LinkedHashSet<>();
+    List<GenericRecord> initialRows;
+    if (dedupeAnchorRows) {
+      initialRows = new ArrayList<>();
+      for (GenericRecord record : anchor.rows()) {
+        if (distinct.add(record)) {
+          initialRows.add(record);
+        }
+      }
+    } else {
+      initialRows = new ArrayList<>(anchor.rows());
+      distinct.addAll(initialRows);
+    }
+    List<GenericRecord> accumulated = new ArrayList<>(initialRows);
+    List<GenericRecord> working = new ArrayList<>(initialRows);
     String key = normalizeCteKey(cte.name());
     boolean changed;
     do {
