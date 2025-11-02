@@ -182,8 +182,7 @@ class SelfJoinTest {
       }
     });
 
-    Assertions.assertEquals(employeeIds, observedLeft,
-        "Aliased table should still emit every row in join order");
+    Assertions.assertEquals(employeeIds, observedLeft, "Aliased table should still emit every row in join order");
     Assertions.assertEquals(observedLeft, observedRight,
         "Join condition must resolve columns when the right-hand table is unaliased");
   }

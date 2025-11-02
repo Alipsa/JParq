@@ -48,7 +48,7 @@ public class JoinTest {
           String firstName = rs.getString("first_name");
           String lastName = rs.getString("last_name");
           double salary = rs.getDouble("salary");
-          //System.out.printf("%s %s: %.2f%n", firstName, lastName, salary);
+          // System.out.printf("%s %s: %.2f%n", firstName, lastName, salary);
           rowCount++;
         }
         Assertions.assertEquals(8, rowCount, "Expected 8 rows from join");
