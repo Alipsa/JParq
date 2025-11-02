@@ -29,6 +29,7 @@ import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -218,7 +219,7 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Execute a SQL set operation (UNION, INTERSECT) by delegating to the
+   * Execute a SQL set operation (UNION, INTERSECT, EXCEPT) by delegating to the
    * individual component SELECT statements and materializing the combined result.
    *
    * @return a {@link JParqResultSet} containing the materialized set operation
@@ -268,7 +269,7 @@ class JParqPreparedStatement implements PreparedStatement {
           for (int col = 1; col <= columnCount; col++) {
             row.add(rs.getObject(col));
           }
-          componentData.add(List.copyOf(row));
+          componentData.add(materializeRow(row));
         }
       }
       componentRows.add(componentData);
@@ -285,7 +286,7 @@ class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Evaluate the list of set operation components honoring SQL operator
-   * precedence (INTERSECT before UNION/UNION ALL).
+   * precedence (INTERSECT before UNION/UNION ALL/EXCEPT).
    *
    * @param components
    *          parsed set operation components in encounter order
@@ -340,7 +341,7 @@ class JParqPreparedStatement implements PreparedStatement {
   private int precedence(SqlParser.SetOperator operator) throws SQLException {
     return switch (operator) {
       case INTERSECT -> 2;
-      case UNION, UNION_ALL -> 1;
+      case UNION, UNION_ALL, EXCEPT -> 1;
       default -> throw new SQLException("Unsupported set operator: " + operator);
     };
   }
@@ -369,8 +370,20 @@ class JParqPreparedStatement implements PreparedStatement {
         yield combined;
       }
       case INTERSECT -> intersectDistinct(left, right);
+      case EXCEPT -> exceptDistinct(left, right);
       default -> throw new SQLException("Unsupported set operator: " + operator);
     };
+  }
+
+  /**
+   * Create an immutable snapshot of the provided row while permitting {@code null} values.
+   *
+   * @param row
+   *          mutable row populated from a {@link ResultSet}
+   * @return an immutable copy of {@code row}
+   */
+  private List<Object> materializeRow(List<Object> row) {
+    return Collections.unmodifiableList(new ArrayList<>(row));
   }
 
   /**
@@ -490,6 +503,36 @@ class JParqPreparedStatement implements PreparedStatement {
     List<List<Object>> ordered = new ArrayList<>();
     for (List<Object> row : accumulated) {
       if (incomingSet.contains(row) && result.add(row)) {
+        ordered.add(row);
+      }
+    }
+    return new ArrayList<>(ordered);
+  }
+
+  /**
+   * Compute the DISTINCT difference between the accumulated rows and the
+   * provided incoming rows while preserving the encounter order from the
+   * accumulated input.
+   *
+   * @param accumulated
+   *          rows previously materialized
+   * @param incoming
+   *          rows produced by the current set operation component
+   * @return a list containing rows that appear only in the left operand
+   */
+  private List<List<Object>> exceptDistinct(List<List<Object>> accumulated, List<List<Object>> incoming) {
+    if (accumulated.isEmpty()) {
+      return new ArrayList<>();
+    }
+    if (incoming.isEmpty()) {
+      LinkedHashSet<List<Object>> unique = new LinkedHashSet<>(accumulated);
+      return new ArrayList<>(unique);
+    }
+    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(incoming);
+    LinkedHashSet<List<Object>> emitted = new LinkedHashSet<>();
+    List<List<Object>> ordered = new ArrayList<>();
+    for (List<Object> row : accumulated) {
+      if (!incomingSet.contains(row) && emitted.add(row)) {
         ordered.add(row);
       }
     }
