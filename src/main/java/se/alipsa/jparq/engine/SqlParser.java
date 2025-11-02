@@ -27,13 +27,11 @@ public final class SqlParser {
   }
 
   /**
-   * ORDER BY key (simple: column + direction).
-   *
-   * @param column
-   *          the column name (unqualified, physical column name)
-   * @param asc
-   *          true if ascending order, false if descending
+   * Representation of a parsed SQL query supported by the engine.
    */
+  public sealed interface Query permits Select, UnionQuery {
+  }
+
   /**
    * ORDER BY key (simple: column + direction and optional qualifier).
    *
@@ -100,7 +98,8 @@ public final class SqlParser {
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
       int limit, int offset, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct,
       List<String> innerDistinctColumns, List<Expression> expressions, List<Expression> groupByExpressions,
-      Expression having, int preLimit, int preOffset, List<OrderKey> preOrderBy, List<TableReference> tableReferences) {
+      Expression having, int preLimit, int preOffset, List<OrderKey> preOrderBy, List<TableReference> tableReferences)
+      implements Query {
 
     /**
      * returns "*" if no explicit projection.
@@ -131,6 +130,48 @@ public final class SqlParser {
     public boolean hasMultipleTables() {
       return tableReferences != null && tableReferences.size() > 1;
     }
+  }
+
+  /**
+   * Representation of a UNION/UNION ALL query.
+   *
+   * @param components
+   *          ordered list of union components
+   * @param orderBy
+   *          order specification applied to the combined result
+   * @param limit
+   *          optional limit applied after the union (-1 if not specified)
+   * @param offset
+   *          number of rows to skip from the combined result (0 if not specified)
+   */
+  public record UnionQuery(List<UnionComponent> components, List<UnionOrder> orderBy, int limit, int offset)
+      implements Query {
+  }
+
+  /**
+   * A single component participating in a UNION query.
+   *
+   * @param select
+   *          parsed representation of the component SELECT statement
+   * @param unionAll
+   *          {@code true} when the component is combined using UNION ALL, {@code false} for UNION
+   * @param sql
+   *          textual SQL used to execute the component SELECT statement
+   */
+  public record UnionComponent(Select select, boolean unionAll, String sql) {
+  }
+
+  /**
+   * ORDER BY key for UNION queries supporting either column positions or labels.
+   *
+   * @param columnIndex
+   *          1-based column index when ORDER BY uses positional syntax, {@code null} otherwise
+   * @param columnLabel
+   *          column label when ORDER BY references a column name, {@code null} otherwise
+   * @param asc
+   *          {@code true} when ascending order is requested, {@code false} for descending
+   */
+  public record UnionOrder(Integer columnIndex, String columnLabel, boolean asc) {
   }
 
   /**
@@ -206,12 +247,38 @@ public final class SqlParser {
    */
   @SuppressWarnings("PMD.AvoidLiteralsInIfCondition")
   public static Select parseSelect(String sql) {
+    Query query = parseQuery(sql);
+    if (query instanceof Select sel) {
+      return sel;
+    }
+    throw new IllegalArgumentException("SQL statement does not represent a single SELECT query: " + sql);
+  }
+
+  /**
+   * Parse a SQL query producing either a plain SELECT or a UNION based query.
+   *
+   * @param sql
+   *          the SQL string, optionally containing {@code --} line comments or block comments
+   * @return a parsed {@link Query} representation
+   */
+  public static Query parseQuery(String sql) {
     try {
       String normalizedSql = stripSqlComments(sql);
       net.sf.jsqlparser.statement.select.Select stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
           .parse(normalizedSql);
-      PlainSelect ps = stmt.getPlainSelect();
-      return parsePlainSelect(ps);
+      if (stmt instanceof SetOperationList setList) {
+        return parseUnionList(setList);
+      }
+      if (stmt instanceof PlainSelect plain) {
+        return parsePlainSelect(plain);
+      }
+      if (stmt instanceof ParenthesedSelect parenthesed) {
+        PlainSelect plain = unwrapPlainSelect(parenthesed);
+        if (plain != null) {
+          return parsePlainSelect(plain);
+        }
+      }
+      throw new IllegalArgumentException("Unsupported SELECT statement: " + sql);
     } catch (Exception e) {
       throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
     }
@@ -321,6 +388,138 @@ public final class SqlParser {
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
         offset, orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, groupByExpressions,
         combinedHaving, preLimit, preOffset, preOrderCopy, tableRefs);
+  }
+
+  /**
+   * Parse a {@link SetOperationList} into a {@link UnionQuery} representation.
+   *
+   * @param list
+   *          parsed set operation list produced by JSqlParser
+   * @return a normalized {@link UnionQuery} describing the UNION components and
+   *         modifiers
+   */
+  private static UnionQuery parseUnionList(SetOperationList list) {
+    List<net.sf.jsqlparser.statement.select.Select> selects = list.getSelects();
+    List<SetOperation> operations = list.getOperations();
+    if (selects == null || selects.isEmpty()) {
+      throw new IllegalArgumentException("UNION query must contain at least one SELECT statement");
+    }
+    List<UnionComponent> components = new ArrayList<>();
+    for (int i = 0; i < selects.size(); i++) {
+      net.sf.jsqlparser.statement.select.Select body = selects.get(i);
+      PlainSelect plain = unwrapPlainSelect(body);
+      if (plain == null) {
+        throw new IllegalArgumentException("Unsupported UNION component: " + body);
+      }
+      Select parsed = parsePlainSelect(plain);
+      boolean unionAll = true;
+      if (i > 0) {
+        SetOperation op = operations.get(i - 1);
+        if (op instanceof UnionOp unionOp) {
+          unionAll = unionOp.isAll();
+        } else {
+          throw new IllegalArgumentException("Unsupported set operation: " + op);
+        }
+      }
+      components.add(new UnionComponent(parsed, unionAll, body.toString()));
+    }
+    List<UnionOrder> orderBy = parseUnionOrderBy(list.getOrderByElements());
+    int limit = extractLimit(list.getLimit());
+    int offset = extractOffset(list.getOffset());
+    return new UnionQuery(List.copyOf(components), orderBy, limit, offset);
+  }
+
+  /**
+   * Resolve the innermost {@link PlainSelect} contained within a SELECT body.
+   *
+   * @param select
+   *          select body potentially wrapped in parentheses
+   * @return the contained {@link PlainSelect}
+   */
+  private static PlainSelect unwrapPlainSelect(net.sf.jsqlparser.statement.select.Select select) {
+    if (select == null) {
+      return null;
+    }
+    if (select instanceof SetOperationList) {
+      throw new IllegalArgumentException("Nested set operations are not supported");
+    }
+    if (select instanceof ParenthesedSelect parenthesed) {
+      net.sf.jsqlparser.statement.select.Select inner = parenthesed.getSelect();
+      return unwrapPlainSelect(inner);
+    }
+    if (select instanceof PlainSelect plain) {
+      return plain;
+    }
+    return null;
+  }
+
+  /**
+   * Parse UNION-level ORDER BY elements.
+   *
+   * @param orderByElements
+   *          raw ORDER BY elements from the parser
+   * @return normalized {@link UnionOrder} definitions
+   */
+  private static List<UnionOrder> parseUnionOrderBy(List<OrderByElement> orderByElements) {
+    if (orderByElements == null || orderByElements.isEmpty()) {
+      return List.of();
+    }
+    List<UnionOrder> orders = new ArrayList<>(orderByElements.size());
+    for (OrderByElement element : orderByElements) {
+      Expression expression = element.getExpression();
+      Integer columnIndex = null;
+      String columnLabel = null;
+      if (expression instanceof LongValue value) {
+        columnIndex = value.getBigIntegerValue().intValue();
+      } else if (expression instanceof Column column) {
+        columnLabel = column.getColumnName();
+      } else {
+        throw new IllegalArgumentException("UNION ORDER BY supports column index or name only: " + expression);
+      }
+      boolean asc = !element.isAscDescPresent() || element.isAsc();
+      orders.add(new UnionOrder(columnIndex, columnLabel, asc));
+    }
+    return List.copyOf(orders);
+  }
+
+  /**
+   * Extract the LIMIT value from a parsed clause.
+   *
+   * @param limit
+   *          LIMIT clause (may be {@code null})
+   * @return limit value, or {@code -1} when not specified
+   */
+  private static int extractLimit(Limit limit) {
+    if (limit == null || limit.getRowCount() == null) {
+      return -1;
+    }
+    Expression rowCountExpr = limit.getRowCount();
+    if (rowCountExpr instanceof LongValue lv) {
+      return lv.getBigIntegerValue().intValue();
+    }
+    return Integer.parseInt(rowCountExpr.toString());
+  }
+
+  /**
+   * Extract the OFFSET value from a parsed clause.
+   *
+   * @param offset
+   *          OFFSET clause (may be {@code null})
+   * @return offset value, or {@code 0} when not specified
+   */
+  private static int extractOffset(Offset offset) {
+    if (offset == null || offset.getOffset() == null) {
+      return 0;
+    }
+    Expression expr = offset.getOffset();
+    if (expr instanceof LongValue lv) {
+      return lv.getBigIntegerValue().intValue();
+    }
+    try {
+      return Integer.parseInt(expr.toString());
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException("Invalid OFFSET value: '" + expr + "'", e);
+    }
   }
 
   // === Parsing Helper Methods =================================================

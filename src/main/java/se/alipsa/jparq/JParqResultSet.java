@@ -57,6 +57,25 @@ public class JParqResultSet extends ResultSetAdapter {
   private boolean lastWasNull = false;
 
   /**
+   * Create a {@link JParqResultSet} backed by materialized rows (used for UNION
+   * queries and other precomputed datasets).
+   *
+   * @param tableName
+   *          virtual table name reported via metadata
+   * @param columnLabels
+   *          column labels exposed to the caller
+   * @param sqlTypes
+   *          SQL types corresponding to each column label
+   * @param rows
+   *          materialized row data
+   * @return a {@link JParqResultSet} instance representing the supplied rows
+   */
+  static JParqResultSet materializedResult(String tableName, List<String> columnLabels, List<Integer> sqlTypes,
+      List<List<Object>> rows) {
+    return new JParqResultSet(tableName, columnLabels, sqlTypes, rows);
+  }
+
+  /**
    * Constructor for JParqResultSet.
    *
    * @param reader
@@ -208,6 +227,40 @@ public class JParqResultSet extends ResultSetAdapter {
     } catch (Exception e) {
       throw new SQLException("Failed reading first parquet record", e);
     }
+  }
+
+  /**
+   * Create a {@link JParqResultSet} from precomputed rows.
+   *
+   * @param tableName
+   *          virtual table name to expose through metadata
+   * @param columnLabels
+   *          column labels returned to callers
+   * @param sqlTypes
+   *          SQL types corresponding to {@code columnLabels}
+   * @param rows
+   *          materialized row data backing the result set
+   */
+  private JParqResultSet(String tableName, List<String> columnLabels, List<Integer> sqlTypes, List<List<Object>> rows) {
+    this.tableName = tableName;
+    this.selectExpressions = List.of();
+    this.subqueryExecutor = null;
+    this.queryQualifiers = List.of();
+    this.qualifierColumnMapping = Map.of();
+    this.unqualifiedColumnMapping = Map.of();
+    this.columnOrder = new ArrayList<>(columnLabels);
+    this.physicalColumnOrder = null;
+    this.aggregateQuery = true;
+    this.aggregateRows = rows == null ? new ArrayList<>() : new ArrayList<>(rows);
+    this.aggregateSqlTypes = sqlTypes == null ? List.of() : List.copyOf(sqlTypes);
+    this.aggregateRowIndex = -1;
+    this.aggregateOnRow = false;
+    this.qp = null;
+    this.current = null;
+    this.projectionEvaluator = null;
+    this.closed = false;
+    this.rowNum = 0;
+    this.lastWasNull = false;
   }
 
   @Override
