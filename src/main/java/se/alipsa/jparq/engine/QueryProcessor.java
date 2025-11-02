@@ -267,7 +267,8 @@ public final class QueryProcessor implements AutoCloseable {
      *
      * @param mapping
      *          qualifier to column mapping (may be {@code null}); entries are
-     *          normalized using {@link ColumnMappingUtil#normaliseQualifierMapping(Map)}
+     *          normalized using
+     *          {@link ColumnMappingUtil#normaliseQualifierMapping(Map)}
      * @return {@code this} for chaining
      */
     public Options qualifierColumnMapping(Map<String, Map<String, String>> mapping) {

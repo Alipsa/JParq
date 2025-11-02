@@ -11,10 +11,9 @@ class ColumnMappingUtilTest {
 
   @Test
   void canonicalOrderColumnResolvesQualifiedMappings() {
-    Map<String, Map<String, String>> qualifierMapping = ColumnMappingUtil.normaliseQualifierMapping(
-        Map.of("Cars", Map.of("MPG", "cars__mpg")));
-    Map<String, String> unqualifiedMapping = ColumnMappingUtil
-        .normaliseUnqualifiedMapping(Map.of("MPG", "cars__mpg"));
+    Map<String, Map<String, String>> qualifierMapping = ColumnMappingUtil
+        .normaliseQualifierMapping(Map.of("Cars", Map.of("MPG", "cars__mpg")));
+    Map<String, String> unqualifiedMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(Map.of("MPG", "cars__mpg"));
 
     String resolved = ColumnMappingUtil.canonicalOrderColumn("MpG", "CARS", qualifierMapping, unqualifiedMapping);
 
@@ -23,10 +22,9 @@ class ColumnMappingUtilTest {
 
   @Test
   void canonicalOrderColumnFallsBackToUnqualifiedMappings() {
-    Map<String, Map<String, String>> qualifierMapping = ColumnMappingUtil.normaliseQualifierMapping(
-        Map.of("Cars", Map.of("WEIGHT", "cars__weight")));
-    Map<String, String> unqualifiedMapping = ColumnMappingUtil
-        .normaliseUnqualifiedMapping(Map.of("Hp", "cars__hp"));
+    Map<String, Map<String, String>> qualifierMapping = ColumnMappingUtil
+        .normaliseQualifierMapping(Map.of("Cars", Map.of("WEIGHT", "cars__weight")));
+    Map<String, String> unqualifiedMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(Map.of("Hp", "cars__hp"));
 
     String resolved = ColumnMappingUtil.canonicalOrderColumn("HP", null, qualifierMapping, unqualifiedMapping);
 
@@ -63,4 +61,3 @@ class ColumnMappingUtilTest {
         "Null columns should yield null");
   }
 }
-

@@ -60,12 +60,12 @@ public final class ColumnMappingUtil {
     return canonical != null ? canonical : columnName;
   }
 
-   /**
-    * Resolve the canonical column name for ORDER BY or DISTINCT operations where
-    * case-insensitive lookups are sufficient and missing mappings should fall
-    * back to the original identifier. The unqualified mapping is consulted even
-    * when no qualifier mappings are available to preserve case-insensitive
-    * single-table lookups.
+  /**
+   * Resolve the canonical column name for ORDER BY or DISTINCT operations where
+   * case-insensitive lookups are sufficient and missing mappings should fall back
+   * to the original identifier. The unqualified mapping is consulted even when no
+   * qualifier mappings are available to preserve case-insensitive single-table
+   * lookups.
    *
    * @param columnName
    *          the column name to resolve (may include quoting)
@@ -77,8 +77,8 @@ public final class ColumnMappingUtil {
    * @param unqualifiedColumnMapping
    *          normalized unqualified mapping as produced by
    *          {@link #normaliseUnqualifiedMapping(Map)}; may be {@code null}
-   * @return the canonical column name if a mapping exists, otherwise the
-   *         original {@code columnName}
+   * @return the canonical column name if a mapping exists, otherwise the original
+   *         {@code columnName}
    */
   public static String canonicalOrderColumn(String columnName, String qualifier,
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping) {
@@ -88,9 +88,7 @@ public final class ColumnMappingUtil {
     Map<String, Map<String, String>> qualifierMapping = (qualifierColumnMapping == null)
         ? Map.of()
         : qualifierColumnMapping;
-    Map<String, String> unqualifiedMapping = (unqualifiedColumnMapping == null)
-        ? Map.of()
-        : unqualifiedColumnMapping;
+    Map<String, String> unqualifiedMapping = (unqualifiedColumnMapping == null) ? Map.of() : unqualifiedColumnMapping;
 
     String normalizedColumn = normalizeColumnKey(columnName);
 
