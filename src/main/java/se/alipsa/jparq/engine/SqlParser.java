@@ -98,8 +98,8 @@ public final class SqlParser {
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
       int limit, int offset, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct,
       List<String> innerDistinctColumns, List<Expression> expressions, List<Expression> groupByExpressions,
-      Expression having, int preLimit, int preOffset, List<OrderKey> preOrderBy, List<TableReference> tableReferences)
-      implements Query {
+      Expression having, int preLimit, int preOffset, List<OrderKey> preOrderBy,
+      List<TableReference> tableReferences) implements Query {
 
     /**
      * returns "*" if no explicit projection.
@@ -144,8 +144,8 @@ public final class SqlParser {
    * @param offset
    *          number of rows to skip from the combined result (0 if not specified)
    */
-  public record UnionQuery(List<UnionComponent> components, List<UnionOrder> orderBy, int limit, int offset)
-      implements Query {
+  public record UnionQuery(List<UnionComponent> components, List<UnionOrder> orderBy, int limit,
+      int offset) implements Query {
   }
 
   /**
@@ -154,7 +154,8 @@ public final class SqlParser {
    * @param select
    *          parsed representation of the component SELECT statement
    * @param unionAll
-   *          {@code true} when the component is combined using UNION ALL, {@code false} for UNION
+   *          {@code true} when the component is combined using UNION ALL,
+   *          {@code false} for UNION
    * @param sql
    *          textual SQL used to execute the component SELECT statement
    */
@@ -165,11 +166,14 @@ public final class SqlParser {
    * ORDER BY key for UNION queries supporting either column positions or labels.
    *
    * @param columnIndex
-   *          1-based column index when ORDER BY uses positional syntax, {@code null} otherwise
+   *          1-based column index when ORDER BY uses positional syntax,
+   *          {@code null} otherwise
    * @param columnLabel
-   *          column label when ORDER BY references a column name, {@code null} otherwise
+   *          column label when ORDER BY references a column name, {@code null}
+   *          otherwise
    * @param asc
-   *          {@code true} when ascending order is requested, {@code false} for descending
+   *          {@code true} when ascending order is requested, {@code false} for
+   *          descending
    */
   public record UnionOrder(Integer columnIndex, String columnLabel, boolean asc) {
   }
@@ -258,7 +262,8 @@ public final class SqlParser {
    * Parse a SQL query producing either a plain SELECT or a UNION based query.
    *
    * @param sql
-   *          the SQL string, optionally containing {@code --} line comments or block comments
+   *          the SQL string, optionally containing {@code --} line comments or
+   *          block comments
    * @return a parsed {@link Query} representation
    */
   public static Query parseQuery(String sql) {

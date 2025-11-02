@@ -413,8 +413,8 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Compare two non-null scalar values following SQL type promotion rules used
-   * by the engine.
+   * Compare two non-null scalar values following SQL type promotion rules used by
+   * the engine.
    *
    * @param left
    *          left value
@@ -442,8 +442,7 @@ class JParqPreparedStatement implements PreparedStatement {
     if (left instanceof TemporalInterval lInterval && right instanceof TemporalInterval rInterval) {
       return lInterval.compareTo(rInterval);
     }
-    if (left instanceof Comparable<?> comparable && right != null
-        && comparable.getClass().isInstance(right)) {
+    if (left instanceof Comparable<?> comparable && right != null && comparable.getClass().isInstance(right)) {
       @SuppressWarnings("unchecked")
       Comparable<Object> cmp = (Comparable<Object>) comparable;
       return cmp.compareTo(right);
