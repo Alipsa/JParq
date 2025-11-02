@@ -148,6 +148,46 @@ class SelfJoinTest {
         "Join condition must resolve correctly when only the right-hand table is aliased");
   }
 
+  /**
+   * Ensure a self join remains valid when the first table uses an alias and the
+   * second reference keeps the original table name.
+   */
+  @Test
+  void explicitSelfJoinAllowsUnaliasedRightTable() {
+    String sql = """
+        SELECT e1.id AS lhs_id, employees.id AS rhs_id
+        FROM employees e1
+        INNER JOIN employees ON e1.id = employees.id
+        ORDER BY e1.id
+        """;
+
+    var parsed = se.alipsa.jparq.engine.SqlParser.parseSelect(sql);
+    Assertions.assertEquals("employees", parsed.tableReferences().get(0).tableName());
+    Assertions.assertEquals("e1", parsed.tableReferences().get(0).tableAlias());
+    Assertions.assertEquals("employees", parsed.tableReferences().get(1).tableName());
+    Assertions.assertNull(parsed.tableReferences().get(1).tableAlias());
+
+    List<Integer> employeeIds = fetchEmployeeIds();
+    List<Integer> observedLeft = new ArrayList<>();
+    List<Integer> observedRight = new ArrayList<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          observedLeft.add(rs.getInt("lhs_id"));
+          observedRight.add(rs.getInt("rhs_id"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertEquals(employeeIds, observedLeft,
+        "Aliased table should still emit every row in join order");
+    Assertions.assertEquals(observedLeft, observedRight,
+        "Join condition must resolve columns when the right-hand table is unaliased");
+  }
+
   private static List<Integer> fetchEmployeeIds() {
     List<Integer> ids = new ArrayList<>();
     jparqSql.query("SELECT id FROM employees ORDER BY id", rs -> {

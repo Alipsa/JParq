@@ -142,6 +142,7 @@ public final class JoinRecordReader implements RecordReader {
     Map<String, Map<String, String>> qualifierMap = new LinkedHashMap<>();
     Map<String, String> unqualifiedMap = new LinkedHashMap<>();
     Set<String> reservedTableQualifiers = new HashSet<>();
+    Map<String, Integer> aliaslessTableCounts = new HashMap<>();
     for (int tableIndex = 0; tableIndex < tables.size(); tableIndex++) {
       JoinTable joinTable = tables.get(tableIndex);
       Schema tableSchema = joinTable.schema();
@@ -151,12 +152,19 @@ public final class JoinRecordReader implements RecordReader {
       String normalizedTableName = normalize(joinTable.tableName());
       boolean includeTableQualifier = true;
       if (normalizedTableName != null) {
-        if (!reservedTableQualifiers.add(normalizedTableName)) {
-          if (!aliasPresent) {
+        int aliaslessCount = aliaslessTableCounts.getOrDefault(normalizedTableName, 0);
+        boolean duplicateTable = !reservedTableQualifiers.add(normalizedTableName);
+        if (duplicateTable) {
+          if (!aliasPresent && aliaslessCount >= 1) {
             throw new IllegalArgumentException("Multiple references to table '" + joinTable.tableName()
                 + "' require aliases to disambiguate column references");
           }
-          includeTableQualifier = false;
+          if (aliasPresent) {
+            includeTableQualifier = false;
+          }
+        }
+        if (!aliasPresent) {
+          aliaslessTableCounts.put(normalizedTableName, aliaslessCount + 1);
         }
       }
       for (Schema.Field field : tableSchema.getFields()) {
