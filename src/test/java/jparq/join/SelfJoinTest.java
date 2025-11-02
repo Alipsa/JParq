@@ -15,8 +15,8 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
 /**
- * Integration tests covering explicit self joins where the same table appears multiple times in
- * the {@code FROM} clause using distinct aliases.
+ * Integration tests covering explicit self joins where the same table appears
+ * multiple times in the {@code FROM} clause using distinct aliases.
  */
 class SelfJoinTest {
 
@@ -31,8 +31,8 @@ class SelfJoinTest {
   }
 
   /**
-   * Verify that an explicit {@code INNER JOIN} can reference the same table twice when distinct
-   * aliases are supplied.
+   * Verify that an explicit {@code INNER JOIN} can reference the same table twice
+   * when distinct aliases are supplied.
    */
   @Test
   void explicitInnerSelfJoinMatchesRows() {
@@ -64,8 +64,7 @@ class SelfJoinTest {
       }
     });
 
-    Assertions.assertEquals(employeeIds.size(), observedEmployees.size(),
-        "Self join should emit a row per employee");
+    Assertions.assertEquals(employeeIds.size(), observedEmployees.size(), "Self join should emit a row per employee");
     Assertions.assertEquals(observedEmployees, observedMirrorIds,
         "Joined identifiers should originate from both table aliases");
     Assertions.assertEquals(employeeNames, mirrorNames,
@@ -73,8 +72,9 @@ class SelfJoinTest {
   }
 
   /**
-   * Perform a {@code LEFT JOIN} against the same table to ensure join conditions can reference
-   * columns from both aliases and produce {@code NULL} values when the predicate does not match.
+   * Perform a {@code LEFT JOIN} against the same table to ensure join conditions
+   * can reference columns from both aliases and produce {@code NULL} values when
+   * the predicate does not match.
    */
   @Test
   void leftSelfJoinSupportsNonMatchingPredicates() {
@@ -110,8 +110,8 @@ class SelfJoinTest {
   }
 
   /**
-   * Ensure that a self join works when the left-hand table is referenced without an explicit alias
-   * while the right-hand table uses a distinct alias.
+   * Ensure that a self join works when the left-hand table is referenced without
+   * an explicit alias while the right-hand table uses a distinct alias.
    */
   @Test
   void explicitSelfJoinAllowsUnaliasedBaseTable() {
