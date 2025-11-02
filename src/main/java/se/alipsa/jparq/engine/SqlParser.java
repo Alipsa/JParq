@@ -133,7 +133,7 @@ public final class SqlParser {
   }
 
   /**
-   * Representation of a SQL set operation query (UNION, INTERSECT).
+   * Representation of a SQL set operation query (UNION, INTERSECT, EXCEPT).
    *
    * @param components
    *          ordered list of query components participating in the set operation
@@ -189,7 +189,9 @@ public final class SqlParser {
     /** UNION ALL preserving duplicates. */
     UNION_ALL,
     /** INTERSECT using distinct semantics. */
-    INTERSECT
+    INTERSECT,
+    /** EXCEPT using distinct semantics. */
+    EXCEPT
   }
 
   /**
@@ -441,6 +443,11 @@ public final class SqlParser {
             throw new IllegalArgumentException("INTERSECT ALL is not supported");
           }
           operator = SetOperator.INTERSECT;
+        } else if (op instanceof ExceptOp exceptOp) {
+          if (exceptOp.isAll()) {
+            throw new IllegalArgumentException("EXCEPT ALL is not supported");
+          }
+          operator = SetOperator.EXCEPT;
         } else {
           throw new IllegalArgumentException("Unsupported set operation: " + op);
         }
