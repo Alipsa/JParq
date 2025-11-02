@@ -238,9 +238,9 @@ class JParqPreparedStatement implements PreparedStatement {
     List<String> labels = null;
     List<Integer> sqlTypes = null;
     int columnCount = -1;
-    Set<List<Object>> seen = new LinkedHashSet<>();
     for (int i = 0; i < components.size(); i++) {
       SqlParser.UnionComponent component = components.get(i);
+      List<List<Object>> componentRows = new ArrayList<>();
       try (PreparedStatement prepared = stmt.getConn().prepareStatement(component.sql());
           ResultSet rs = prepared.executeQuery()) {
         ResultSetMetaData meta = rs.getMetaData();
@@ -267,14 +267,15 @@ class JParqPreparedStatement implements PreparedStatement {
           for (int col = 1; col <= columnCount; col++) {
             row.add(rs.getObject(col));
           }
-          List<Object> immutableRow = List.copyOf(row);
-          if (i == 0 || component.unionAll()) {
-            combined.add(immutableRow);
-            seen.add(immutableRow);
-          } else if (seen.add(immutableRow)) {
-            combined.add(immutableRow);
-          }
+          componentRows.add(List.copyOf(row));
         }
+      }
+      if (i == 0) {
+        combined.addAll(componentRows);
+      } else if (component.unionAll()) {
+        combined.addAll(componentRows);
+      } else {
+        combined = mergeUnionDistinct(combined, componentRows);
       }
     }
     if (labels == null) {
@@ -354,6 +355,33 @@ class JParqPreparedStatement implements PreparedStatement {
     }
     int end = limit >= 0 ? Math.min(rows.size(), start + limit) : rows.size();
     return new ArrayList<>(rows.subList(start, end));
+  }
+
+  /**
+   * Merge UNION components using DISTINCT semantics. All duplicates present in
+   * the accumulated rows or the incoming rows are removed while preserving the
+   * original encounter order.
+   *
+   * @param accumulated
+   *          rows previously materialized
+   * @param incoming
+   *          rows produced by the current UNION component
+   * @return a combined list containing only distinct rows
+   */
+  private List<List<Object>> mergeUnionDistinct(List<List<Object>> accumulated, List<List<Object>> incoming) {
+    LinkedHashSet<List<Object>> unique = new LinkedHashSet<>(accumulated.size() + incoming.size());
+    List<List<Object>> result = new ArrayList<>(accumulated.size() + incoming.size());
+    for (List<Object> row : accumulated) {
+      if (unique.add(row)) {
+        result.add(row);
+      }
+    }
+    for (List<Object> row : incoming) {
+      if (unique.add(row)) {
+        result.add(row);
+      }
+    }
+    return result;
   }
 
   /**

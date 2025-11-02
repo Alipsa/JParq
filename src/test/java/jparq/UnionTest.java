@@ -60,10 +60,13 @@ public class UnionTest {
         """;
     jparqSql.query(sql, rs -> {
       try {
+        int rows = 0;
         Set<Integer> values = new LinkedHashSet<>();
         while (rs.next()) {
+          rows++;
           values.add(rs.getInt(1));
         }
+        assertEquals(3, rows, "UNION should emit a single row per distinct value");
         assertEquals(3, values.size(), "UNION should eliminate duplicates");
         assertTrue(values.containsAll(Set.of(4, 6, 8)), "UNION result must include all unique cylinder counts");
       } catch (SQLException e) {
@@ -84,10 +87,13 @@ public class UnionTest {
     jparqSql.query(sql, rs -> {
       try {
         int rows = 0;
+        Set<Integer> values = new LinkedHashSet<>();
         while (rs.next()) {
           rows++;
+          values.add(rs.getInt(1));
         }
-        assertEquals(18, rows, "UNION should retain UNION ALL duplicates but suppress later duplicates");
+        assertEquals(2, rows, "Subsequent UNION should collapse earlier UNION ALL duplicates");
+        assertEquals(Set.of(4, 6), values, "Combined result should contain the deduplicated cylinder values");
       } catch (SQLException e) {
         throw new RuntimeException(e);
       }
