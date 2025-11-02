@@ -60,10 +60,12 @@ public final class ColumnMappingUtil {
     return canonical != null ? canonical : columnName;
   }
 
-  /**
-   * Resolve the canonical column name for ORDER BY or DISTINCT operations where
-   * case-insensitive lookups are sufficient and missing mappings should fall
-   * back to the original identifier.
+   /**
+    * Resolve the canonical column name for ORDER BY or DISTINCT operations where
+    * case-insensitive lookups are sufficient and missing mappings should fall
+    * back to the original identifier. The unqualified mapping is consulted even
+    * when no qualifier mappings are available to preserve case-insensitive
+    * single-table lookups.
    *
    * @param columnName
    *          the column name to resolve (may include quoting)
@@ -103,11 +105,9 @@ public final class ColumnMappingUtil {
       }
     }
 
-    if (!qualifierMapping.isEmpty()) {
-      String canonical = unqualifiedMapping.get(normalizedColumn);
-      if (canonical != null) {
-        return canonical;
-      }
+    String canonical = unqualifiedMapping.get(normalizedColumn);
+    if (canonical != null) {
+      return canonical;
     }
 
     return columnName;

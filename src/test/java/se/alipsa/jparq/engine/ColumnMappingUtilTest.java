@@ -34,6 +34,17 @@ class ColumnMappingUtilTest {
   }
 
   @Test
+  void canonicalOrderColumnUsesUnqualifiedMappingWhenQualifierMapEmpty() {
+    Map<String, Map<String, String>> qualifierMapping = ColumnMappingUtil.normaliseQualifierMapping(Map.of());
+    Map<String, String> unqualifiedMapping = ColumnMappingUtil
+        .normaliseUnqualifiedMapping(Map.of("WEIGHT", "cars__weight"));
+
+    String resolved = ColumnMappingUtil.canonicalOrderColumn("weight", null, qualifierMapping, unqualifiedMapping);
+
+    assertEquals("cars__weight", resolved, "Should honor unqualified mappings without qualifier definitions");
+  }
+
+  @Test
   void canonicalOrderColumnReturnsOriginalWhenUnknown() {
     Map<String, Map<String, String>> qualifierMapping = ColumnMappingUtil.normaliseQualifierMapping(Map.of());
     Map<String, String> unqualifiedMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(Map.of());
