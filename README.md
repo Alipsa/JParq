@@ -13,7 +13,7 @@ Note: A large proportion of the code was created in collaboration with ChatGPT 5
 <dependency>
   <groupId>se.alipsa</groupId>
   <artifactId>jparq</artifactId>
-  <version>0.7.0</version>
+  <version>0.8.0</version>
 </dependency>
 ```
 
