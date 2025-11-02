@@ -72,7 +72,7 @@ class JParqPreparedStatement implements PreparedStatement {
 
   // --- Query Plan Fields (calculated in constructor) ---
   private final SqlParser.Select parsedSelect;
-  private final SqlParser.UnionQuery parsedUnion;
+  private final SqlParser.SetQuery parsedSetQuery;
   private final Configuration conf;
   private final Schema fileAvro;
   private final Optional<FilterPredicate> parquetPredicate;
@@ -81,7 +81,7 @@ class JParqPreparedStatement implements PreparedStatement {
   private final File file;
   private final boolean joinQuery;
   private final List<SqlParser.TableReference> tableReferences;
-  private final boolean unionQuery;
+  private final boolean setOperationQuery;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
     this.stmt = stmt;
@@ -89,10 +89,10 @@ class JParqPreparedStatement implements PreparedStatement {
     // --- QUERY PLANNING PHASE (Expensive CPU Work) ---
     try {
       SqlParser.Query query = SqlParser.parseQuery(sql);
-      if (query instanceof SqlParser.UnionQuery union) {
+      if (query instanceof SqlParser.SetQuery setQuery) {
         this.parsedSelect = null;
-        this.parsedUnion = union;
-        this.unionQuery = true;
+        this.parsedSetQuery = setQuery;
+        this.setOperationQuery = true;
         this.tableReferences = List.of();
         this.joinQuery = false;
         this.conf = null;
@@ -105,8 +105,8 @@ class JParqPreparedStatement implements PreparedStatement {
       }
 
       this.parsedSelect = (SqlParser.Select) query;
-      this.parsedUnion = null;
-      this.unionQuery = false;
+      this.parsedSetQuery = null;
+      this.setOperationQuery = false;
       this.tableReferences = parsedSelect.tableReferences();
       this.joinQuery = parsedSelect.hasMultipleTables();
       final var aggregatePlan = AggregateFunctions.plan(parsedSelect);
@@ -163,8 +163,8 @@ class JParqPreparedStatement implements PreparedStatement {
   @SuppressWarnings("PMD.CloseResource")
   @Override
   public ResultSet executeQuery() throws SQLException {
-    if (unionQuery) {
-      JParqResultSet rs = executeUnion();
+    if (setOperationQuery) {
+      JParqResultSet rs = executeSetOperation();
       stmt.setCurrentRs(rs);
       return rs;
     }
@@ -218,28 +218,30 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Execute a UNION or UNION ALL query by delegating to individual component
-   * SELECT statements and materializing the combined result.
+   * Execute a SQL set operation (UNION, INTERSECT) by delegating to the
+   * individual component SELECT statements and materializing the combined
+   * result.
    *
-   * @return a {@link JParqResultSet} containing the unioned rows
+   * @return a {@link JParqResultSet} containing the materialized set operation
+   *         result
    * @throws SQLException
-   *           if executing any component fails or if UNION requirements are
-   *           violated
+   *           if executing any component fails or if set operation requirements
+   *           are violated
    */
-  private JParqResultSet executeUnion() throws SQLException {
-    if (parsedUnion == null) {
-      throw new SQLException("UNION query not available for execution");
+  private JParqResultSet executeSetOperation() throws SQLException {
+    if (parsedSetQuery == null) {
+      throw new SQLException("Set operation query not available for execution");
     }
-    List<SqlParser.UnionComponent> components = parsedUnion.components();
+    List<SqlParser.SetComponent> components = parsedSetQuery.components();
     if (components == null || components.isEmpty()) {
-      throw new SQLException("UNION query must contain at least one SELECT statement");
+      throw new SQLException("Set operation query must contain at least one SELECT statement");
     }
     List<List<Object>> combined = new ArrayList<>();
     List<String> labels = null;
     List<Integer> sqlTypes = null;
     int columnCount = -1;
     for (int i = 0; i < components.size(); i++) {
-      SqlParser.UnionComponent component = components.get(i);
+      SqlParser.SetComponent component = components.get(i);
       List<List<Object>> componentRows = new ArrayList<>();
       try (PreparedStatement prepared = stmt.getConn().prepareStatement(component.sql());
           ResultSet rs = prepared.executeQuery()) {
@@ -253,12 +255,12 @@ class JParqPreparedStatement implements PreparedStatement {
             sqlTypes.add(meta.getColumnType(col));
           }
         } else if (meta.getColumnCount() != columnCount) {
-          throw new SQLException("UNION components must project the same number of columns");
+          throw new SQLException("Set operation components must project the same number of columns");
         } else {
           for (int col = 1; col <= columnCount; col++) {
             Integer expectedType = sqlTypes == null ? null : sqlTypes.get(col - 1);
             if (expectedType != null && expectedType != meta.getColumnType(col)) {
-              throw new SQLException("UNION components must use compatible column types");
+              throw new SQLException("Set operation components must use compatible column types");
             }
           }
         }
@@ -270,38 +272,47 @@ class JParqPreparedStatement implements PreparedStatement {
           componentRows.add(List.copyOf(row));
         }
       }
-      if (i == 0) {
-        combined.addAll(componentRows);
-      } else if (component.unionAll()) {
-        combined.addAll(componentRows);
-      } else {
-        combined = mergeUnionDistinct(combined, componentRows);
+      switch (component.operator()) {
+        case FIRST:
+          combined.addAll(componentRows);
+          break;
+        case UNION_ALL:
+          combined.addAll(componentRows);
+          break;
+        case UNION:
+          combined = mergeDistinct(combined, componentRows);
+          break;
+        case INTERSECT:
+          combined = intersectDistinct(combined, componentRows);
+          break;
+        default:
+          throw new SQLException("Unsupported set operator: " + component.operator());
       }
     }
     if (labels == null) {
       labels = List.of();
       sqlTypes = List.of();
     }
-    List<List<Object>> ordered = applyUnionOrdering(combined, labels, parsedUnion.orderBy());
-    List<List<Object>> sliced = applyUnionLimitOffset(ordered, parsedUnion.limit(), parsedUnion.offset());
-    return JParqResultSet.materializedResult("union_result", labels, sqlTypes, sliced);
+    List<List<Object>> ordered = applySetOrdering(combined, labels, parsedSetQuery.orderBy());
+    List<List<Object>> sliced = applySetLimitOffset(ordered, parsedSetQuery.limit(), parsedSetQuery.offset());
+    return JParqResultSet.materializedResult("set_operation_result", labels, sqlTypes, sliced);
   }
 
   /**
-   * Apply UNION-level ORDER BY semantics to the materialized rows.
+   * Apply set operation ORDER BY semantics to the materialized rows.
    *
    * @param rows
    *          materialized row data
    * @param labels
    *          column labels used for ORDER BY name resolution
    * @param orderBy
-   *          order specification parsed from the UNION query
+   *          order specification parsed from the set operation query
    * @return ordered rows (or the original rows when no ordering is requested)
    * @throws SQLException
    *           if an ORDER BY column cannot be resolved
    */
-  private List<List<Object>> applyUnionOrdering(List<List<Object>> rows, List<String> labels,
-      List<SqlParser.UnionOrder> orderBy) throws SQLException {
+  private List<List<Object>> applySetOrdering(List<List<Object>> rows, List<String> labels,
+      List<SqlParser.SetOrder> orderBy) throws SQLException {
     if (orderBy == null || orderBy.isEmpty() || rows.isEmpty()) {
       return rows;
     }
@@ -309,33 +320,33 @@ class JParqPreparedStatement implements PreparedStatement {
     for (int i = 0; i < labels.size(); i++) {
       labelIndexes.put(labels.get(i).toLowerCase(Locale.ROOT), i);
     }
-    List<ResolvedUnionOrder> resolved = new ArrayList<>(orderBy.size());
-    for (SqlParser.UnionOrder order : orderBy) {
+    List<ResolvedSetOrder> resolved = new ArrayList<>(orderBy.size());
+    for (SqlParser.SetOrder order : orderBy) {
       int index;
       if (order.columnIndex() != null) {
         index = order.columnIndex() - 1;
       } else {
         if (order.columnLabel() == null) {
-          throw new SQLException("UNION ORDER BY requires column index or label");
+          throw new SQLException("Set operation ORDER BY requires column index or label");
         }
         Integer mapped = labelIndexes.get(order.columnLabel().toLowerCase(Locale.ROOT));
         if (mapped == null) {
-          throw new SQLException("Unknown UNION ORDER BY column: " + order.columnLabel());
+          throw new SQLException("Unknown set operation ORDER BY column: " + order.columnLabel());
         }
         index = mapped;
       }
       if (index < 0 || index >= labels.size()) {
-        throw new SQLException("UNION ORDER BY column index out of range: " + (index + 1));
+        throw new SQLException("Set operation ORDER BY column index out of range: " + (index + 1));
       }
-      resolved.add(new ResolvedUnionOrder(index, order.asc()));
+      resolved.add(new ResolvedSetOrder(index, order.asc()));
     }
     List<List<Object>> sorted = new ArrayList<>(rows);
-    sorted.sort((left, right) -> compareUnionRows(left, right, resolved));
+    sorted.sort((left, right) -> compareSetRows(left, right, resolved));
     return sorted;
   }
 
   /**
-   * Apply UNION-level OFFSET and LIMIT processing to the provided rows.
+   * Apply set operation OFFSET and LIMIT processing to the provided rows.
    *
    * @param rows
    *          ordered row data
@@ -345,7 +356,7 @@ class JParqPreparedStatement implements PreparedStatement {
    *          number of rows to skip before emitting results
    * @return a view of {@code rows} honoring the requested limit/offset
    */
-  private List<List<Object>> applyUnionLimitOffset(List<List<Object>> rows, int limit, int offset) {
+  private List<List<Object>> applySetLimitOffset(List<List<Object>> rows, int limit, int offset) {
     if (rows.isEmpty()) {
       return rows;
     }
@@ -358,17 +369,17 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Merge UNION components using DISTINCT semantics. All duplicates present in
-   * the accumulated rows or the incoming rows are removed while preserving the
-   * original encounter order.
+   * Merge set operation components using DISTINCT semantics. All duplicates
+   * present in the accumulated rows or the incoming rows are removed while
+   * preserving the original encounter order.
    *
    * @param accumulated
    *          rows previously materialized
    * @param incoming
-   *          rows produced by the current UNION component
+   *          rows produced by the current component
    * @return a combined list containing only distinct rows
    */
-  private List<List<Object>> mergeUnionDistinct(List<List<Object>> accumulated, List<List<Object>> incoming) {
+  private List<List<Object>> mergeDistinct(List<List<Object>> accumulated, List<List<Object>> incoming) {
     LinkedHashSet<List<Object>> unique = new LinkedHashSet<>(accumulated.size() + incoming.size());
     List<List<Object>> result = new ArrayList<>(accumulated.size() + incoming.size());
     for (List<Object> row : accumulated) {
@@ -385,7 +396,34 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Compare two rows using the resolved UNION ORDER BY specification.
+   * Compute the DISTINCT intersection between the accumulated rows and the
+   * provided incoming rows while preserving the encounter order from the
+   * accumulated input.
+   *
+   * @param accumulated
+   *          rows previously materialized
+   * @param incoming
+   *          rows produced by the current set operation component
+   * @return a list containing rows that appear in both inputs without
+   *         duplicates
+   */
+  private List<List<Object>> intersectDistinct(List<List<Object>> accumulated, List<List<Object>> incoming) {
+    if (accumulated.isEmpty() || incoming.isEmpty()) {
+      return new ArrayList<>();
+    }
+    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(incoming);
+    LinkedHashSet<List<Object>> result = new LinkedHashSet<>();
+    List<List<Object>> ordered = new ArrayList<>();
+    for (List<Object> row : accumulated) {
+      if (incomingSet.contains(row) && result.add(row)) {
+        ordered.add(row);
+      }
+    }
+    return new ArrayList<>(ordered);
+  }
+
+  /**
+   * Compare two rows using the resolved set operation ORDER BY specification.
    *
    * @param left
    *          left row
@@ -395,15 +433,15 @@ class JParqPreparedStatement implements PreparedStatement {
    *          resolved order directives
    * @return comparison result consistent with SQL ordering semantics
    */
-  private int compareUnionRows(List<Object> left, List<Object> right, List<ResolvedUnionOrder> orders) {
-    for (ResolvedUnionOrder order : orders) {
+  private int compareSetRows(List<Object> left, List<Object> right, List<ResolvedSetOrder> orders) {
+    for (ResolvedSetOrder order : orders) {
       Object lv = left.get(order.index());
       Object rv = right.get(order.index());
       int cmp;
       if (lv == null || rv == null) {
         cmp = (lv == null ? 1 : 0) - (rv == null ? 1 : 0);
       } else {
-        cmp = compareUnionValues(lv, rv);
+        cmp = compareSetValues(lv, rv);
       }
       if (cmp != 0) {
         return order.asc() ? cmp : -cmp;
@@ -423,7 +461,7 @@ class JParqPreparedStatement implements PreparedStatement {
    * @return negative when {@code left < right}, zero when equal, positive when
    *         {@code left > right}
    */
-  private int compareUnionValues(Object left, Object right) {
+  private int compareSetValues(Object left, Object right) {
     if (left instanceof Number lNum && right instanceof Number rNum) {
       return new BigDecimal(lNum.toString()).compareTo(new BigDecimal(rNum.toString()));
     }
@@ -451,10 +489,10 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Internal representation of a UNION ORDER BY directive once column positions
-   * have been resolved.
+   * Internal representation of a set operation ORDER BY directive once column
+   * positions have been resolved.
    */
-  private record ResolvedUnionOrder(int index, boolean asc) {
+  private record ResolvedSetOrder(int index, boolean asc) {
   }
 
   private JoinRecordReader buildJoinReader() throws SQLException {
