@@ -141,10 +141,24 @@ public final class JoinRecordReader implements RecordReader {
     }
     Map<String, Map<String, String>> qualifierMap = new LinkedHashMap<>();
     Map<String, String> unqualifiedMap = new LinkedHashMap<>();
+    Set<String> reservedTableQualifiers = new HashSet<>();
     for (int tableIndex = 0; tableIndex < tables.size(); tableIndex++) {
-      Schema tableSchema = tables.get(tableIndex).schema();
-      String qualifierPrefix = qualifierPrefix(tables.get(tableIndex), tableIndex);
-      Set<String> qualifiers = qualifierSet(tables.get(tableIndex), tableIndex);
+      JoinTable joinTable = tables.get(tableIndex);
+      Schema tableSchema = joinTable.schema();
+      String qualifierPrefix = qualifierPrefix(joinTable, tableIndex);
+      Set<String> qualifiers = qualifierSet(joinTable, tableIndex);
+      boolean aliasPresent = joinTable.alias() != null && !joinTable.alias().isBlank();
+      String normalizedTableName = normalize(joinTable.tableName());
+      boolean includeTableQualifier = true;
+      if (normalizedTableName != null) {
+        if (!reservedTableQualifiers.add(normalizedTableName)) {
+          if (!aliasPresent) {
+            throw new IllegalArgumentException("Multiple references to table '" + joinTable.tableName()
+                + "' require aliases to disambiguate column references");
+          }
+          includeTableQualifier = false;
+        }
+      }
       for (Schema.Field field : tableSchema.getFields()) {
         String name = field.name();
         boolean duplicate = columnCounts.getOrDefault(name, 0) > 1;
@@ -155,12 +169,19 @@ public final class JoinRecordReader implements RecordReader {
         Schema.Field newField = new Schema.Field(canonical, field.schema(), field.doc(), field.defaultVal());
         fields.add(newField);
         mappings.add(new FieldMapping(tableIndex, name, canonical));
+        String lookupKey = name.toLowerCase(Locale.ROOT);
         for (String qualifier : qualifiers) {
-          qualifierMap.computeIfAbsent(normalize(qualifier), k -> new LinkedHashMap<>())
-              .put(name.toLowerCase(Locale.ROOT), canonical);
+          String normalizedQualifier = normalize(qualifier);
+          if (normalizedQualifier == null) {
+            continue;
+          }
+          if (!includeTableQualifier && normalizedQualifier.equals(normalizedTableName)) {
+            continue;
+          }
+          qualifierMap.computeIfAbsent(normalizedQualifier, k -> new LinkedHashMap<>()).put(lookupKey, canonical);
         }
         if (!duplicate) {
-          unqualifiedMap.put(name.toLowerCase(Locale.ROOT), canonical);
+          unqualifiedMap.put(lookupKey, canonical);
         }
       }
     }
