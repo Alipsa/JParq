@@ -139,10 +139,65 @@ The following SQL statements are supported:
   (SELECT column_name
   FROM table_name
   WHERE condition);
-- INNER, LEFT, RIGHT, FULL, and CROSS Join support
+- INNER, LEFT, RIGHT, FULL, CROSS, and Self Join support
 
 ## Roadmap: Might be implemented in the future
-- union support
+- union and union all support
+- intersect
+  - The SQL INTERSECT set operator is used to return rows that are present in the result set of both the first query (Set A) and the second query (Set B).
+  - It performs a logical intersection operation, similar to the mathematical concept of finding common elements between two sets.
+  - INTERSECT returns only distinct rows (i.e., it automatically removes duplicates)
+  - returns the rows that are unique to the first set (Set A) when compared against the second set (Set B).
+  - EXCEPT is directional. A EXCEPT B is different from B EXCEPT A.
+  - NULL handling: For set operations, two rows are considered equal (and thus intersect) if the value in every corresponding column is equal, or if both values are NULL (NULL = NULL). This is different from the standard WHERE clause logic where NULL is never equal to anything.
+  - intersect example:
+  You want to find the IDs of employees who are working on both Project A and Project B.
+  SELECT Employee_ID
+  FROM ProjectA
+  INTERSECT
+  SELECT Employee_ID
+  FROM ProjectB;
+  - Implementation hints:
+    - Execution Strategy: The engine will typically need to sort and compare the full result sets of both queries or use highly optimized hashing/joining techniques. 
+    - Internal Rewriting: The most common internal implementation is often converting A INTERSECT B into an INNER JOIN of the two result sets followed by a DISTINCT operation. For example, (SELECT A) INTERSECT (SELECT B) is often executed as:
+      SELECT DISTINCT A.*
+      FROM (SELECT * FROM A) AS A_Temp
+      INNER JOIN (SELECT * FROM B) AS B_Temp
+      ON A_Temp.col1 = B_Temp.col1 AND A_Temp.col2 = B_Temp.col2 ...;
+  - Column Naming and Ordering
+    - Result Column Names: The columns in the final result set should inherit the names (and data types) from the first SELECT statement (Set A). 
+    - ORDER BY Clause: The ORDER BY clause, if used, must be placed at the very end and can only reference columns from the final result set (i.e., by name or position from the first query).
+- except support
+  - The SQL EXCEPT set operator is used to return rows that exist in the result set of the first query (Set A) but do not exist in the result set of the second query (Set B).
+  - EXCEPT is directional: A EXCEPT B is generally not the same as B EXCEPT A.Like INTERSECT, the default behavior of EXCEPT is to return only distinct rows.
+  - Structural Compatibility
+    The rules are identical to other set operators:
+    - Equal Columns: Both SELECT statements must return the same number of columns. 
+    - Compatible Types: Corresponding columns must have compatible data types to allow for comparison. 
+  - Directional Comparison 
+    - The implementation must strictly respect the order of the queries:
+    - The final result set must contain only the rows originating from Set A. 
+    - A row from Set A is included if and only if no identical row is found in Set B. 
+  - Null Comparison
+   This is the most critical logic point for set operators:
+    - Standard Rule: For a row in Set A to be excluded by Set B, the row in Set B must be identical to the row in Set A. Two rows are considered identical if the value in every corresponding column is equal, or if both values are NULL (NULL equals NULL for the purpose of set operations).
+  - Implementation hints
+    - Internal Rewriting: The most common way to execute A EXCEPT B is to rewrite it internally using a combination of joins or existence checks:
+      SELECT DISTINCT A.*
+      FROM (SELECT * FROM QueryA) AS A_Temp
+      WHERE NOT EXISTS (
+      SELECT 1
+      FROM (SELECT * FROM QueryB) AS B_Temp
+      WHERE A_Temp.col1 = B_Temp.col1 AND A_Temp.col2 = B_Temp.col2 ...
+      -- NOTE: Special logic is needed here to correctly handle NULL = NULL
+      ); 
+    Alternatively, a Left Anti Join (a type of join that returns only rows from the left table that have no match in the right table) is often used for optimal performance. 
+    - Hashing/Sorting: For large result sets, the engine must efficiently build a data structure (like a hash table) of all rows in Set B to quickly check if each row from Set A exists within it.
+  - except example:
+  This query asks: "Which employees are in Project A but NOT in Project B?"
+    SELECT Employee_ID FROM ProjectA -- Set A
+    EXCEPT
+    SELECT Employee_ID FROM ProjectB; -- Set B
 - CTE
 - Windowing
 
