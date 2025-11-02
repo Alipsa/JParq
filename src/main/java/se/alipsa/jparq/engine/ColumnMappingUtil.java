@@ -60,6 +60,59 @@ public final class ColumnMappingUtil {
     return canonical != null ? canonical : columnName;
   }
 
+   /**
+    * Resolve the canonical column name for ORDER BY or DISTINCT operations where
+    * case-insensitive lookups are sufficient and missing mappings should fall
+    * back to the original identifier. The unqualified mapping is consulted even
+    * when no qualifier mappings are available to preserve case-insensitive
+    * single-table lookups.
+   *
+   * @param columnName
+   *          the column name to resolve (may include quoting)
+   * @param qualifier
+   *          the table qualifier, may be {@code null}
+   * @param qualifierColumnMapping
+   *          normalized qualifier mapping as produced by
+   *          {@link #normaliseQualifierMapping(Map)}; may be {@code null}
+   * @param unqualifiedColumnMapping
+   *          normalized unqualified mapping as produced by
+   *          {@link #normaliseUnqualifiedMapping(Map)}; may be {@code null}
+   * @return the canonical column name if a mapping exists, otherwise the
+   *         original {@code columnName}
+   */
+  public static String canonicalOrderColumn(String columnName, String qualifier,
+      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping) {
+    if (columnName == null) {
+      return null;
+    }
+    Map<String, Map<String, String>> qualifierMapping = (qualifierColumnMapping == null)
+        ? Map.of()
+        : qualifierColumnMapping;
+    Map<String, String> unqualifiedMapping = (unqualifiedColumnMapping == null)
+        ? Map.of()
+        : unqualifiedColumnMapping;
+
+    String normalizedColumn = normalizeColumnKey(columnName);
+
+    if (qualifier != null && !qualifier.isBlank() && !qualifierMapping.isEmpty()) {
+      String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
+      if (normalizedQualifier != null) {
+        Map<String, String> mapping = qualifierMapping.getOrDefault(normalizedQualifier, Map.of());
+        String canonical = mapping.get(normalizedColumn);
+        if (canonical != null) {
+          return canonical;
+        }
+      }
+    }
+
+    String canonical = unqualifiedMapping.get(normalizedColumn);
+    if (canonical != null) {
+      return canonical;
+    }
+
+    return columnName;
+  }
+
   /**
    * Normalize a column identifier for lookup in the qualifier or case-insensitive
    * indices by stripping optional quoting characters and applying lower-case

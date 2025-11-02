@@ -4,10 +4,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -268,19 +266,12 @@ public final class QueryProcessor implements AutoCloseable {
      * Provide a mapping between table qualifiers and canonical column names.
      *
      * @param mapping
-     *          qualifier to column mapping (may be {@code null})
+     *          qualifier to column mapping (may be {@code null}); entries are
+     *          normalized using {@link ColumnMappingUtil#normaliseQualifierMapping(Map)}
      * @return {@code this} for chaining
      */
     public Options qualifierColumnMapping(Map<String, Map<String, String>> mapping) {
-      if (mapping == null || mapping.isEmpty()) {
-        this.qualifierColumnMapping = Map.of();
-      } else {
-        Map<String, Map<String, String>> copy = new HashMap<>();
-        for (Map.Entry<String, Map<String, String>> entry : mapping.entrySet()) {
-          copy.put(entry.getKey(), Map.copyOf(entry.getValue()));
-        }
-        this.qualifierColumnMapping = Map.copyOf(copy);
-      }
+      this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(mapping);
       return this;
     }
 
@@ -290,11 +281,12 @@ public final class QueryProcessor implements AutoCloseable {
      *
      * @param mapping
      *          mapping from column name to canonical field name (may be
-     *          {@code null})
+     *          {@code null}); entries are normalized using
+     *          {@link ColumnMappingUtil#normaliseUnqualifiedMapping(Map)}
      * @return {@code this} for chaining
      */
     public Options unqualifiedColumnMapping(Map<String, String> mapping) {
-      this.unqualifiedColumnMapping = (mapping == null || mapping.isEmpty()) ? Map.of() : Map.copyOf(mapping);
+      this.unqualifiedColumnMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(mapping);
       return this;
     }
   }
@@ -493,32 +485,11 @@ public final class QueryProcessor implements AutoCloseable {
         continue;
       }
       String column = key.column();
-      String resolved = canonicalOrderColumn(column, key.qualifier());
+      String resolved = ColumnMappingUtil.canonicalOrderColumn(column, key.qualifier(), qualifierColumnMapping,
+          unqualifiedColumnMapping);
       canonical.add(new SqlParser.OrderKey(resolved, key.asc(), key.qualifier()));
     }
     return List.copyOf(canonical);
-  }
-
-  private String canonicalOrderColumn(String column, String qualifier) {
-    if (column == null) {
-      return null;
-    }
-    if (qualifier != null && qualifierColumnMapping != null && !qualifierColumnMapping.isEmpty()) {
-      Map<String, String> mapping = qualifierColumnMapping.get(qualifier.toLowerCase(Locale.ROOT));
-      if (mapping != null) {
-        String resolved = mapping.get(column.toLowerCase(Locale.ROOT));
-        if (resolved != null) {
-          return resolved;
-        }
-      }
-    }
-    if (unqualifiedColumnMapping != null && !unqualifiedColumnMapping.isEmpty()) {
-      String resolved = unqualifiedColumnMapping.get(column.toLowerCase(Locale.ROOT));
-      if (resolved != null) {
-        return resolved;
-      }
-    }
-    return column;
   }
 
   private void ensureEvaluator(GenericRecord rec) {
