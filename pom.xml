@@ -4,7 +4,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>se.alipsa</groupId>
   <artifactId>jparq</artifactId>
-  <version>0.7.0</version>
+  <version>0.8.0</version>
   <name>JDBC Driver for Parquet files</name>
 
   <description>JDBC Driver for reading Parquet files</description>

@@ -1,5 +1,8 @@
 # Version history
 
+### 0.8.0. in progress
+- Add support for CTE (Common Table Expressions)
+
 ### 0.7.0 (2025-11-02)
 - Add support for self joins.
 - Add support for UNION, and UNION ALL

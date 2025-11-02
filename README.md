@@ -123,14 +123,14 @@ The following SQL statements are supported:
 - intersect and except support
 
 ## Roadmap: Might be implemented in the future
-- CTE
+- CTE (Common Table Expressions) support
 - Windowing
   - Ranking functions
-    - row_number, rank, dense_rank, PERCENT_RANK, CUME_DIST, ntile,
-  - aggregate window functions
+    - ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE,
+  - Aggregate window functions
     - SUM, AVG, MIN, MAX, COUNT
   - Analytic Value/Navigation Functions
-    -  lag, lead, FIRST_VALUE, LAST_VALUE, NTH_VALUE
+    -  LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
 
 #### String functions support details
 ##### Character Length and Position
