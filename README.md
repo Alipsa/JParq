@@ -120,41 +120,17 @@ The following SQL statements are supported:
 - any and all support
 - INNER, LEFT, RIGHT, FULL, CROSS, and Self Join support
 - union and union all support
-- intersect support
+- intersect and except support
+
 ## Roadmap: Might be implemented in the future
-- except support
-  - The SQL EXCEPT set operator is used to return rows that exist in the result set of the first query (Set A) but do not exist in the result set of the second query (Set B).
-  - EXCEPT is directional: A EXCEPT B is generally not the same as B EXCEPT A.Like INTERSECT, the default behavior of EXCEPT is to return only distinct rows.
-  - Structural Compatibility
-    The rules are identical to other set operators:
-    - Equal Columns: Both SELECT statements must return the same number of columns. 
-    - Compatible Types: Corresponding columns must have compatible data types to allow for comparison. 
-  - Directional Comparison 
-    - The implementation must strictly respect the order of the queries:
-    - The final result set must contain only the rows originating from Set A. 
-    - A row from Set A is included if and only if no identical row is found in Set B. 
-  - Null Comparison
-   This is the most critical logic point for set operators:
-    - Standard Rule: For a row in Set A to be excluded by Set B, the row in Set B must be identical to the row in Set A. Two rows are considered identical if the value in every corresponding column is equal, or if both values are NULL (NULL equals NULL for the purpose of set operations).
-  - Implementation hints
-    - Internal Rewriting: The most common way to execute A EXCEPT B is to rewrite it internally using a combination of joins or existence checks:
-      SELECT DISTINCT A.*
-      FROM (SELECT * FROM QueryA) AS A_Temp
-      WHERE NOT EXISTS (
-      SELECT 1
-      FROM (SELECT * FROM QueryB) AS B_Temp
-      WHERE A_Temp.col1 = B_Temp.col1 AND A_Temp.col2 = B_Temp.col2 ...
-      -- NOTE: Special logic is needed here to correctly handle NULL = NULL
-      ); 
-    Alternatively, a Left Anti Join (a type of join that returns only rows from the left table that have no match in the right table) is often used for optimal performance. 
-    - Hashing/Sorting: For large result sets, the engine must efficiently build a data structure (like a hash table) of all rows in Set B to quickly check if each row from Set A exists within it.
-  - except example:
-  This query asks: "Which employees are in Project A but NOT in Project B?"
-    SELECT Employee_ID FROM ProjectA -- Set A
-    EXCEPT
-    SELECT Employee_ID FROM ProjectB; -- Set B
 - CTE
 - Windowing
+  - Ranking functions
+    - row_number, rank, dense_rank, PERCENT_RANK, CUME_DIST, ntile,
+  - aggregate window functions
+    - SUM, AVG, MIN, MAX, COUNT
+  - Analytic Value/Navigation Functions
+    -  lag, lead, FIRST_VALUE, LAST_VALUE, NTH_VALUE
 
 #### String functions support details
 ##### Character Length and Position
