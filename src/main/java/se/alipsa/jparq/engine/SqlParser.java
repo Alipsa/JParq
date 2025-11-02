@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -30,6 +31,13 @@ public final class SqlParser {
    * Representation of a parsed SQL query supported by the engine.
    */
   public sealed interface Query permits Select, SetQuery {
+
+    /**
+     * The common table expressions that are visible to the query.
+     *
+     * @return an immutable list of {@link CommonTableExpression} definitions
+     */
+    List<CommonTableExpression> commonTableExpressions();
   }
 
   /**
@@ -94,12 +102,15 @@ public final class SqlParser {
    * @param tableReferences
    *          ordered collection of tables referenced in the {@code FROM} clause,
    *          including any JOIN participants
+   * @param commonTableExpressions
+   *          the common table expressions that can be referenced from this
+   *          query
    */
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
       int limit, int offset, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct,
       List<String> innerDistinctColumns, List<Expression> expressions, List<Expression> groupByExpressions,
       Expression having, int preLimit, int preOffset, List<OrderKey> preOrderBy,
-      List<TableReference> tableReferences) implements Query {
+      List<TableReference> tableReferences, List<CommonTableExpression> commonTableExpressions) implements Query {
 
     /**
      * returns "*" if no explicit projection.
@@ -143,9 +154,12 @@ public final class SqlParser {
    *          optional limit applied after the set operation (-1 if not specified)
    * @param offset
    *          number of rows to skip from the combined result (0 if not specified)
+   * @param commonTableExpressions
+   *          the common table expressions that can be referenced from this
+   *          query
    */
-  public record SetQuery(List<SetComponent> components, List<SetOrder> orderBy, int limit,
-      int offset) implements Query {
+  public record SetQuery(List<SetComponent> components, List<SetOrder> orderBy, int limit, int offset,
+      List<CommonTableExpression> commonTableExpressions) implements Query {
   }
 
   /**
@@ -176,6 +190,21 @@ public final class SqlParser {
    *          descending
    */
   public record SetOrder(Integer columnIndex, String columnLabel, boolean asc) {
+  }
+
+  /**
+   * Definition of a common table expression present in the query.
+   *
+   * @param name
+   *          the exposed name of the CTE
+   * @param columnAliases
+   *          optional column aliases defined alongside the CTE name
+   * @param query
+   *          the parsed query that produces the rows of the CTE
+   * @param sql
+   *          textual representation of the CTE body
+   */
+  public record CommonTableExpression(String name, List<String> columnAliases, Query query, String sql) {
   }
 
   /**
@@ -210,7 +239,7 @@ public final class SqlParser {
    *          textual SQL used to materialize the derived table
    */
   private record FromInfo(String tableName, String tableAlias, Map<String, String> columnMapping, Select innerSelect,
-      String subquerySql) {
+      String subquerySql, CommonTableExpression commonTableExpression) {
   }
 
   /**
@@ -252,9 +281,12 @@ public final class SqlParser {
    * @param subquerySql
    *          textual SQL used to materialize the derived table (may be
    *          {@code null})
+   * @param commonTableExpression
+   *          the referenced common table expression when the table originates
+   *          from a CTE definition (may be {@code null})
    */
   public record TableReference(String tableName, String tableAlias, JoinType joinType, Expression joinCondition,
-      Select subquery, String subquerySql) {
+      Select subquery, String subquerySql, CommonTableExpression commonTableExpression) {
   }
 
   /**
@@ -288,27 +320,124 @@ public final class SqlParser {
       String normalizedSql = stripSqlComments(sql);
       net.sf.jsqlparser.statement.select.Select stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
           .parse(normalizedSql);
-      if (stmt instanceof SetOperationList setList) {
-        return parseSetOperationList(setList);
-      }
-      if (stmt instanceof PlainSelect plain) {
-        return parsePlainSelect(plain);
-      }
-      if (stmt instanceof ParenthesedSelect parenthesed) {
-        PlainSelect plain = unwrapPlainSelect(parenthesed);
-        if (plain != null) {
-          return parsePlainSelect(plain);
-        }
-      }
-      throw new IllegalArgumentException("Unsupported SELECT statement: " + sql);
+      List<CommonTableExpression> ctes = parseWithItems(stmt.getWithItemsList());
+      Map<String, CommonTableExpression> cteLookup = buildCteLookup(ctes);
+      return parseSelectStatement(stmt, ctes, cteLookup);
     } catch (Exception e) {
       throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
     }
   }
 
-  private static Select parsePlainSelect(PlainSelect ps) {
-    FromInfo fromInfo = parseFromItem(ps.getFromItem());
-    List<JoinInfo> joinInfos = parseJoins(ps.getJoins());
+  private static Query parseSelectStatement(net.sf.jsqlparser.statement.select.Select stmt,
+      List<CommonTableExpression> ctes, Map<String, CommonTableExpression> cteLookup) {
+    if (stmt instanceof ParenthesedSelect parenthesed) {
+      return parseSelectStatement(parenthesed.getSelect(), ctes, cteLookup);
+    }
+    if (stmt instanceof SetOperationList setList) {
+      return parseSetOperationList(setList, ctes, cteLookup);
+    }
+    if (stmt instanceof PlainSelect plain) {
+      return parsePlainSelect(plain, ctes, cteLookup);
+    }
+    throw new IllegalArgumentException("Unsupported SELECT statement: " + stmt);
+  }
+
+  private static List<CommonTableExpression> parseWithItems(List<WithItem<?>> withItems) {
+    if (withItems == null || withItems.isEmpty()) {
+      return List.of();
+    }
+    List<CommonTableExpression> parsed = new ArrayList<>(withItems.size());
+    List<CommonTableExpression> prior = new ArrayList<>();
+    for (WithItem<?> item : withItems) {
+      if (item == null) {
+        continue;
+      }
+      ParenthesedSelect select = item.getSelect();
+      if (select == null || select.getSelect() == null) {
+        throw new IllegalArgumentException("Unsupported WITH item: " + item);
+      }
+      List<CommonTableExpression> available = List.copyOf(prior);
+      Map<String, CommonTableExpression> availableLookup = buildCteLookup(available);
+      Query query = parseSelectStatement(select.getSelect(), available, availableLookup);
+      List<String> columnAliases = parseCteColumns(item.getWithItemList());
+      String sql = select.toString();
+      String name = item.getUnquotedAliasName();
+      if (name == null || name.isBlank()) {
+        name = item.getAliasName();
+      }
+      if (name == null || name.isBlank()) {
+        throw new IllegalArgumentException("WITH item is missing a name: " + item);
+      }
+      CommonTableExpression cte = new CommonTableExpression(name, columnAliases, query, sql);
+      parsed.add(cte);
+      prior.add(cte);
+    }
+    return List.copyOf(parsed);
+  }
+
+  private static Map<String, CommonTableExpression> buildCteLookup(List<CommonTableExpression> ctes) {
+    if (ctes == null || ctes.isEmpty()) {
+      return Map.of();
+    }
+    Map<String, CommonTableExpression> lookup = new HashMap<>();
+    for (CommonTableExpression cte : ctes) {
+      if (cte == null || cte.name() == null) {
+        continue;
+      }
+      String key = identifierKey(cte.name());
+      if (key != null) {
+        lookup.put(key, cte);
+      }
+    }
+    return Map.copyOf(lookup);
+  }
+
+  private static List<String> parseCteColumns(List<SelectItem<?>> items) {
+    if (items == null || items.isEmpty()) {
+      return List.of();
+    }
+    List<String> columns = new ArrayList<>(items.size());
+    for (SelectItem<?> item : items) {
+      columns.add(item.toString().trim());
+    }
+    return List.copyOf(columns);
+  }
+
+  private static CommonTableExpression resolveCommonTableExpression(Table table,
+      Map<String, CommonTableExpression> cteLookup) {
+    if (table == null || cteLookup == null || cteLookup.isEmpty()) {
+      return null;
+    }
+    String[] candidates = {
+        table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()
+    };
+    for (String candidate : candidates) {
+      String key = identifierKey(candidate);
+      if (key != null) {
+        CommonTableExpression cte = cteLookup.get(key);
+        if (cte != null) {
+          return cte;
+        }
+      }
+    }
+    return null;
+  }
+
+  private static String identifierKey(String identifier) {
+    if (identifier == null) {
+      return null;
+    }
+    String trimmed = identifier.trim();
+    if (trimmed.isEmpty()) {
+      return null;
+    }
+    return trimmed.toLowerCase(Locale.ROOT);
+  }
+
+  private static Select parsePlainSelect(PlainSelect ps, List<CommonTableExpression> ctes,
+      Map<String, CommonTableExpression> cteLookup) {
+    FromInfo fromInfo = parseFromItem(ps.getFromItem(), ctes, cteLookup);
+    List<JoinInfo> joinInfos = parseJoins(ps.getJoins(), ctes, cteLookup);
     List<TableReference> tableRefs = buildTableReferences(fromInfo, joinInfos);
     final Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo, tableRefs);
 
@@ -409,7 +538,7 @@ public final class SqlParser {
 
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
         offset, orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, groupByExpressions,
-        combinedHaving, preLimit, preOffset, preOrderCopy, tableRefs);
+        combinedHaving, preLimit, preOffset, preOrderCopy, tableRefs, List.copyOf(ctes));
   }
 
   /**
@@ -419,7 +548,8 @@ public final class SqlParser {
    *          parsed set operation list produced by JSqlParser
    * @return a normalized {@link SetQuery} describing the components and modifiers
    */
-  private static SetQuery parseSetOperationList(SetOperationList list) {
+  private static SetQuery parseSetOperationList(SetOperationList list, List<CommonTableExpression> ctes,
+      Map<String, CommonTableExpression> cteLookup) {
     List<net.sf.jsqlparser.statement.select.Select> selects = list.getSelects();
     List<SetOperation> operations = list.getOperations();
     if (selects == null || selects.isEmpty()) {
@@ -432,7 +562,7 @@ public final class SqlParser {
       if (plain == null) {
         throw new IllegalArgumentException("Unsupported set operation component: " + body);
       }
-      Select parsed = parsePlainSelect(plain);
+      Select parsed = parsePlainSelect(plain, ctes, cteLookup);
       SetOperator operator = SetOperator.FIRST;
       if (i > 0) {
         SetOperation op = operations.get(i - 1);
@@ -457,7 +587,7 @@ public final class SqlParser {
     List<SetOrder> orderBy = parseSetOrderBy(list.getOrderByElements());
     int limit = extractLimit(list.getLimit());
     int offset = extractOffset(list.getOffset());
-    return new SetQuery(List.copyOf(components), orderBy, limit, offset);
+    return new SetQuery(List.copyOf(components), orderBy, limit, offset, List.copyOf(ctes));
   }
 
   /**
@@ -566,25 +696,46 @@ public final class SqlParser {
    * Parses the FROM clause, ensuring it's a single table and extracts its
    * name/alias.
    */
-  private static FromInfo parseFromItem(FromItem fromItem) {
+  private static FromInfo parseFromItem(FromItem fromItem, List<CommonTableExpression> ctes,
+      Map<String, CommonTableExpression> cteLookup) {
     if (fromItem instanceof Table t) {
       String tableName = t.getName();
       String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
-      return new FromInfo(tableName, tableAlias, Map.of(), null, null);
+      CommonTableExpression cte = resolveCommonTableExpression(t, cteLookup);
+      Map<String, String> mapping = Map.of();
+      Select innerSelect = null;
+      if (cte != null) {
+        if (cte.query() instanceof Select selectQuery) {
+          innerSelect = selectQuery;
+          mapping = buildColumnMapping(selectQuery);
+        }
+        if (cte.columnAliases() != null && !cte.columnAliases().isEmpty()) {
+          Map<String, String> aliasMapping = new HashMap<>();
+          for (String alias : cte.columnAliases()) {
+            if (alias != null && !alias.isBlank()) {
+              aliasMapping.put(alias, alias);
+            }
+          }
+          if (!aliasMapping.isEmpty()) {
+            mapping = Map.copyOf(aliasMapping);
+          }
+        }
+      }
+      return new FromInfo(tableName, tableAlias, mapping, innerSelect, null, cte);
     }
     if (fromItem instanceof net.sf.jsqlparser.statement.select.Select sub) {
       PlainSelect innerPlain = sub.getPlainSelect();
       if (innerPlain == null) {
         throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
       }
-      Select innerSelect = parsePlainSelect(innerPlain);
+      Select innerSelect = parsePlainSelect(innerPlain, ctes, cteLookup);
       String alias = sub.getAlias() != null ? sub.getAlias().getName() : innerSelect.tableAlias();
       if (alias == null) {
         alias = innerSelect.table();
       }
       Map<String, String> mapping = buildColumnMapping(innerSelect);
       String subquerySql = innerPlain.toString();
-      return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql);
+      return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql, null);
     }
     throw new IllegalArgumentException("Unsupported FROM item: " + fromItem);
   }
@@ -1052,7 +1203,8 @@ public final class SqlParser {
   private record JoinInfo(FromInfo table, Expression condition, JoinType joinType) {
   }
 
-  private static List<JoinInfo> parseJoins(List<Join> joins) {
+  private static List<JoinInfo> parseJoins(List<Join> joins, List<CommonTableExpression> ctes,
+      Map<String, CommonTableExpression> cteLookup) {
     if (joins == null || joins.isEmpty()) {
       return List.of();
     }
@@ -1083,7 +1235,7 @@ public final class SqlParser {
           && joinType != JoinType.FULL_OUTER) {
         throw new IllegalArgumentException("Unsupported outer join type");
       }
-      FromInfo info = parseFromItem(join.getRightItem());
+      FromInfo info = parseFromItem(join.getRightItem(), ctes, cteLookup);
       Expression condition = null;
       if (join.getOnExpressions() != null) {
         for (Expression on : join.getOnExpressions()) {
@@ -1098,12 +1250,12 @@ public final class SqlParser {
   private static List<TableReference> buildTableReferences(FromInfo base, List<JoinInfo> joins) {
     List<TableReference> refs = new ArrayList<>();
     refs.add(new TableReference(base.tableName(), base.tableAlias(), JoinType.BASE, null, base.innerSelect(),
-        base.subquerySql()));
+        base.subquerySql(), base.commonTableExpression()));
     if (joins != null) {
       for (JoinInfo join : joins) {
         FromInfo info = join.table();
         refs.add(new TableReference(info.tableName(), info.tableAlias(), join.joinType(), join.condition(),
-            info.innerSelect(), info.subquerySql()));
+            info.innerSelect(), info.subquerySql(), info.commonTableExpression()));
       }
     }
     return List.copyOf(refs);
