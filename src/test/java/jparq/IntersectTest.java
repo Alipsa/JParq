@@ -94,6 +94,34 @@ public class IntersectTest {
   }
 
   /**
+   * Ensure INTERSECT is evaluated before UNION when operators are mixed without
+   * parentheses.
+   */
+  @Test
+  void intersectHasHigherPrecedenceThanUnion() {
+    String sql = """
+        SELECT cyl FROM mtcars WHERE cyl = 4
+        UNION
+        SELECT cyl FROM mtcars WHERE cyl IN (6, 8)
+        INTERSECT
+        SELECT cyl FROM mtcars WHERE cyl = 6
+        ORDER BY cyl
+        """;
+    jparqSql.query(sql, rs -> {
+      try {
+        List<Integer> values = new ArrayList<>();
+        while (rs.next()) {
+          values.add(rs.getInt(1));
+        }
+        assertEquals(List.of(4, 6), values,
+            "INTERSECT must be applied before UNION when operators are mixed");
+      } catch (SQLException e) {
+        throw new RuntimeException(e);
+      }
+    });
+  }
+
+  /**
    * Ensure that INTERSECT ALL is rejected as it is not supported by the engine.
    */
   @Test

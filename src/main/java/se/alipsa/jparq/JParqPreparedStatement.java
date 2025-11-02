@@ -236,13 +236,13 @@ class JParqPreparedStatement implements PreparedStatement {
     if (components == null || components.isEmpty()) {
       throw new SQLException("Set operation query must contain at least one SELECT statement");
     }
-    List<List<Object>> combined = new ArrayList<>();
+    List<List<List<Object>>> componentRows = new ArrayList<>(components.size());
     List<String> labels = null;
     List<Integer> sqlTypes = null;
     int columnCount = -1;
     for (int i = 0; i < components.size(); i++) {
       SqlParser.SetComponent component = components.get(i);
-      List<List<Object>> componentRows = new ArrayList<>();
+      List<List<Object>> componentData = new ArrayList<>();
       try (PreparedStatement prepared = stmt.getConn().prepareStatement(component.sql());
           ResultSet rs = prepared.executeQuery()) {
         ResultSetMetaData meta = rs.getMetaData();
@@ -269,33 +269,109 @@ class JParqPreparedStatement implements PreparedStatement {
           for (int col = 1; col <= columnCount; col++) {
             row.add(rs.getObject(col));
           }
-          componentRows.add(List.copyOf(row));
+          componentData.add(List.copyOf(row));
         }
       }
-      switch (component.operator()) {
-        case FIRST:
-          combined.addAll(componentRows);
-          break;
-        case UNION_ALL:
-          combined.addAll(componentRows);
-          break;
-        case UNION:
-          combined = mergeDistinct(combined, componentRows);
-          break;
-        case INTERSECT:
-          combined = intersectDistinct(combined, componentRows);
-          break;
-        default:
-          throw new SQLException("Unsupported set operator: " + component.operator());
-      }
+      componentRows.add(componentData);
     }
     if (labels == null) {
       labels = List.of();
       sqlTypes = List.of();
     }
+    List<List<Object>> combined = evaluateSetOperation(components, componentRows);
     List<List<Object>> ordered = applySetOrdering(combined, labels, parsedSetQuery.orderBy());
     List<List<Object>> sliced = applySetLimitOffset(ordered, parsedSetQuery.limit(), parsedSetQuery.offset());
     return JParqResultSet.materializedResult("set_operation_result", labels, sqlTypes, sliced);
+  }
+
+  /**
+   * Evaluate the list of set operation components honoring SQL operator
+   * precedence (INTERSECT before UNION/UNION ALL).
+   *
+   * @param components
+   *          parsed set operation components in encounter order
+   * @param rowsPerComponent
+   *          materialized rows corresponding to each component
+   * @return combined rows representing the full set operation result
+   * @throws SQLException
+   *           if an unsupported operator is encountered or if evaluation fails
+   */
+  private List<List<Object>> evaluateSetOperation(List<SqlParser.SetComponent> components,
+      List<List<List<Object>>> rowsPerComponent) throws SQLException {
+    if (components.isEmpty()) {
+      return List.<List<Object>>of();
+    }
+    List<List<List<Object>>> valueStack = new ArrayList<>();
+    List<SqlParser.SetOperator> operatorStack = new ArrayList<>();
+    valueStack.add(new ArrayList<>(rowsPerComponent.get(0)));
+    for (int i = 1; i < components.size(); i++) {
+      SqlParser.SetOperator operator = components.get(i).operator();
+      if (operator == SqlParser.SetOperator.FIRST) {
+        throw new SQLException("Unexpected FIRST operator in set operation evaluation");
+      }
+      while (!operatorStack.isEmpty()
+          && precedence(operatorStack.get(operatorStack.size() - 1)) >= precedence(operator)) {
+        SqlParser.SetOperator top = operatorStack.remove(operatorStack.size() - 1);
+        List<List<Object>> right = valueStack.remove(valueStack.size() - 1);
+        List<List<Object>> left = valueStack.remove(valueStack.size() - 1);
+        valueStack.add(applySetOperator(left, right, top));
+      }
+      operatorStack.add(operator);
+      valueStack.add(new ArrayList<>(rowsPerComponent.get(i)));
+    }
+    while (!operatorStack.isEmpty()) {
+      SqlParser.SetOperator top = operatorStack.remove(operatorStack.size() - 1);
+      List<List<Object>> right = valueStack.remove(valueStack.size() - 1);
+      List<List<Object>> left = valueStack.remove(valueStack.size() - 1);
+      valueStack.add(applySetOperator(left, right, top));
+    }
+    return valueStack.isEmpty() ? List.<List<Object>>of() : valueStack.get(0);
+  }
+
+  /**
+   * Determine the evaluation precedence for a set operator. Higher numbers
+   * represent higher precedence.
+   *
+   * @param operator
+   *          set operator to evaluate
+   * @return precedence rank used for evaluation ordering
+   * @throws SQLException
+   *           if an unsupported operator is encountered
+   */
+  private int precedence(SqlParser.SetOperator operator) throws SQLException {
+    return switch (operator) {
+      case INTERSECT -> 2;
+      case UNION, UNION_ALL -> 1;
+      default -> throw new SQLException("Unsupported set operator: " + operator);
+    };
+  }
+
+  /**
+   * Apply a set operator to two operand result sets.
+   *
+   * @param left
+   *          left operand rows
+   * @param right
+   *          right operand rows
+   * @param operator
+   *          operator describing how to combine the operands
+   * @return combined rows representing the operator result
+   * @throws SQLException
+   *           if the operator is not supported
+   */
+  private List<List<Object>> applySetOperator(List<List<Object>> left, List<List<Object>> right,
+      SqlParser.SetOperator operator) throws SQLException {
+    return switch (operator) {
+      case UNION -> mergeDistinct(left, right);
+      case UNION_ALL -> {
+        List<List<Object>> combined = new ArrayList<>(left.size() + right.size());
+        combined.addAll(left);
+        combined.addAll(right);
+        yield combined;
+      }
+      case INTERSECT -> intersectDistinct(left, right);
+      default -> throw new SQLException("Unsupported set operator: " + operator);
+    };
   }
 
   /**
