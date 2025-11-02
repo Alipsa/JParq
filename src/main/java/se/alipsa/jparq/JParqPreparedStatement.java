@@ -376,7 +376,8 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Create an immutable snapshot of the provided row while permitting {@code null} values.
+   * Create an immutable snapshot of the provided row while permitting
+   * {@code null} values.
    *
    * @param row
    *          mutable row populated from a {@link ResultSet}
@@ -510,9 +511,9 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Compute the DISTINCT difference between the accumulated rows and the
-   * provided incoming rows while preserving the encounter order from the
-   * accumulated input.
+   * Compute the DISTINCT difference between the accumulated rows and the provided
+   * incoming rows while preserving the encounter order from the accumulated
+   * input.
    *
    * @param accumulated
    *          rows previously materialized

@@ -23,7 +23,8 @@ public class ExceptTest {
   private static JParqSql jparqSql;
 
   /**
-   * Configure the shared {@link JParqSql} instance backed by the test Parquet dataset.
+   * Configure the shared {@link JParqSql} instance backed by the test Parquet
+   * dataset.
    *
    * @throws URISyntaxException
    *           if the dataset path cannot be resolved
@@ -40,8 +41,8 @@ public class ExceptTest {
   }
 
   /**
-   * Verify that EXCEPT returns only the rows from the left input that are not present in the right
-   * input and removes duplicates.
+   * Verify that EXCEPT returns only the rows from the left input that are not
+   * present in the right input and removes duplicates.
    */
   @Test
   void exceptReturnsDistinctDirectionalRows() {
@@ -67,8 +68,8 @@ public class ExceptTest {
   }
 
   /**
-   * Verify that an ORDER BY clause applied to the EXCEPT result respects column aliases defined in
-   * the first SELECT statement.
+   * Verify that an ORDER BY clause applied to the EXCEPT result respects column
+   * aliases defined in the first SELECT statement.
    */
   @Test
   void exceptSupportsFinalOrderBy() {
@@ -93,8 +94,8 @@ public class ExceptTest {
   }
 
   /**
-   * Ensure that EXCEPT treats NULL values as equal when determining whether a row should be
-   * excluded by the right input.
+   * Ensure that EXCEPT treats NULL values as equal when determining whether a row
+   * should be excluded by the right input.
    */
   @Test
   void exceptTreatsNullsAsEqual() {
@@ -118,8 +119,8 @@ public class ExceptTest {
   }
 
   /**
-   * Ensure EXCEPT has the same precedence as UNION and evaluates left-to-right when operators are
-   * mixed without parentheses.
+   * Ensure EXCEPT has the same precedence as UNION and evaluates left-to-right
+   * when operators are mixed without parentheses.
    */
   @Test
   void exceptEvaluatesLeftToRightWithUnion() {
@@ -159,8 +160,7 @@ public class ExceptTest {
     }));
     assertTrue(ex.getCause() instanceof SQLException, "Expected SQLException for EXCEPT ALL rejection");
     Throwable root = ex.getCause().getCause();
-    assertTrue(root instanceof IllegalArgumentException,
-        "Underlying cause should describe unsupported EXCEPT ALL");
+    assertTrue(root instanceof IllegalArgumentException, "Underlying cause should describe unsupported EXCEPT ALL");
     assertTrue(root.getMessage().contains("EXCEPT ALL"), "Error message should mention EXCEPT ALL");
   }
 }
