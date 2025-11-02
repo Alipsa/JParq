@@ -2,7 +2,7 @@
 
 ### 0.7.0 (2025-11-02)
 - Add support for self joins.
-- Add support for UNION, UNION ALL, INTERSECT, and EXCEPT SQL statements
+- Add support for UNION, and UNION ALL
 
 ## 0.6.0 (2025-11-01)
 - Add support for INNER, LEFT, RIGHT, FULL, and CROSS Join
