@@ -122,9 +122,8 @@ The following SQL statements are supported:
 - union and union all support
 - intersect and except support
 - CTE (Common Table Expressions) support
-- 
-## Roadmap: Might be implemented in the future
 
+## Roadmap: Might be implemented in the future
 - Windowing
   - Ranking functions
     - ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE,
@@ -142,7 +141,17 @@ The following SQL statements are supported:
   - Example 2:
     declare @myVar INT = 10;
     SELECT * FROM myTable WHERE myColumn > @myVar;
+    Advanced GROUP BY constructs. SqlParser.parseGroupBy only collects a flat list of grouping expressions; there is no handling for SQL-standard GROUPING SETS, ROLLUP, or CUBE elements.
 
+- JOIN ... USING syntax. The join parser rejects both forms, which the SQL standard includes for read-only queries.
+
+- FROM-clause table constructors and lateral items. parseFromItem accepts only base tables or plain subqueries; it throws for any other construct, leaving out SQL-standard features such as VALUES table constructors, LATERAL derived tables, TABLE/UNNEST functions, and TABLESAMPLE.
+
+- Qualified wildcard projections (table.*). The projection parser raises an error when encountering a qualified asterisk, so row-source-specific wildcards from the standard are unavailable.
+
+- Complete set-operation coverage. While UNION/INTERSECT/EXCEPT are supported, the parser rejects SQL-standard variants like INTERSECT ALL, EXCEPT ALL, and any nesting of set operations, so those result-set combinations remain unsupported.
+
+- Standard row-limiting syntax (FETCH FIRST / OFFSET … FETCH). The limit handler inspects only the non-standard LIMIT clause, leaving the SQL-standard FETCH clause unimplemented.
 
 #### String functions support details
 ##### Character Length and Position
