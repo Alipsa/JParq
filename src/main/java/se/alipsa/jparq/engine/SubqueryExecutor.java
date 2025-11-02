@@ -1,9 +1,9 @@
 package se.alipsa.jparq.engine;
 
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +19,7 @@ public final class SubqueryExecutor {
 
   private final JParqConnection connection;
   private final Map<String, SubqueryResult> cache = new ConcurrentHashMap<>();
+  private final StatementFactory statementFactory;
 
   /**
    * Create a new executor bound to the provided connection.
@@ -27,7 +28,22 @@ public final class SubqueryExecutor {
    *          the active connection
    */
   public SubqueryExecutor(JParqConnection connection) {
+    this(connection, null);
+  }
+
+  /**
+   * Create a new executor bound to the provided connection using a custom
+   * statement factory.
+   *
+   * @param connection
+   *          the active connection
+   * @param statementFactory
+   *          factory used to create prepared statements aware of the caller's
+   *          execution context
+   */
+  public SubqueryExecutor(JParqConnection connection, StatementFactory statementFactory) {
     this.connection = Objects.requireNonNull(connection, "connection");
+    this.statementFactory = statementFactory;
   }
 
   /**
@@ -58,7 +74,7 @@ public final class SubqueryExecutor {
   }
 
   private SubqueryResult runQuery(String sql) {
-    try (Statement stmt = connection.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
+    try (PreparedStatement stmt = prepareStatement(sql); ResultSet rs = stmt.executeQuery()) {
       ResultSetMetaData meta = rs.getMetaData();
       int columnCount = meta.getColumnCount();
       List<String> columnLabels = new ArrayList<>(columnCount);
@@ -82,6 +98,13 @@ public final class SubqueryExecutor {
     } catch (SQLException e) {
       throw new IllegalStateException("Failed to execute sub query: " + sql, e);
     }
+  }
+
+  private PreparedStatement prepareStatement(String sql) throws SQLException {
+    if (statementFactory != null) {
+      return statementFactory.prepare(sql);
+    }
+    return connection.prepareStatement(sql);
   }
 
   private static String normalize(String sql) {
@@ -127,5 +150,24 @@ public final class SubqueryExecutor {
       }
       return values;
     }
+  }
+
+  /**
+   * Factory for creating prepared statements tailored to the caller's
+   * execution context.
+   */
+  @FunctionalInterface
+  public interface StatementFactory {
+
+    /**
+     * Create a prepared statement for the supplied SQL text.
+     *
+     * @param sql
+     *          SQL text to prepare
+     * @return a prepared statement ready for execution
+     * @throws SQLException
+     *           if the statement cannot be created
+     */
+    PreparedStatement prepare(String sql) throws SQLException;
   }
 }

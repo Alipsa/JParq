@@ -31,10 +31,12 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
@@ -53,6 +55,7 @@ import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
+import se.alipsa.jparq.engine.InMemoryRecordReader;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
 import se.alipsa.jparq.engine.ParquetRecordReaderAdapter;
@@ -83,78 +86,125 @@ class JParqPreparedStatement implements PreparedStatement {
   private final boolean joinQuery;
   private final List<SqlParser.TableReference> tableReferences;
   private final boolean setOperationQuery;
+  private final Map<String, CteResult> cteResults;
+  private final CteResult baseCteResult;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
+    this(stmt, sql, Map.of());
+  }
+
+  JParqPreparedStatement(JParqStatement stmt, String sql, Map<String, CteResult> inheritedCtes)
+      throws SQLException {
     this.stmt = stmt;
+
+    SqlParser.Select tmpSelect = null;
+    SqlParser.SetQuery tmpSetQuery = null;
+    boolean tmpSetOperation = false;
+    List<SqlParser.TableReference> tmpTableRefs = List.of();
+    boolean tmpJoinQuery = false;
+    Configuration tmpConf = null;
+    Schema tmpFileAvro = null;
+    Optional<FilterPredicate> tmpPredicate = Optional.empty();
+    Expression tmpResidual = null;
+    Path tmpPath = null;
+    File tmpFile = null;
+    CteResult tmpBaseCteResult = null;
+    Map<String, CteResult> tmpCteResults;
 
     // --- QUERY PLANNING PHASE (Expensive CPU Work) ---
     try {
       SqlParser.Query query = SqlParser.parseQuery(sql);
+
+      Map<String, CteResult> mutableCtes = new LinkedHashMap<>();
+      if (inheritedCtes != null && !inheritedCtes.isEmpty()) {
+        for (Map.Entry<String, CteResult> entry : inheritedCtes.entrySet()) {
+          String key = normalizeCteKey(entry.getKey());
+          if (key != null && entry.getValue() != null) {
+            mutableCtes.put(key, entry.getValue());
+          }
+        }
+      }
+      evaluateCommonTableExpressions(query.commonTableExpressions(), mutableCtes);
+      tmpCteResults = Map.copyOf(mutableCtes);
+
       if (query instanceof SqlParser.SetQuery setQuery) {
-        this.parsedSelect = null;
-        this.parsedSetQuery = setQuery;
-        this.setOperationQuery = true;
-        this.tableReferences = List.of();
-        this.joinQuery = false;
-        this.conf = null;
-        this.fileAvro = null;
-        this.parquetPredicate = Optional.empty();
-        this.residualExpression = null;
-        this.path = null;
-        this.file = null;
-        return;
-      }
-
-      this.parsedSelect = (SqlParser.Select) query;
-      this.parsedSetQuery = null;
-      this.setOperationQuery = false;
-      this.tableReferences = parsedSelect.tableReferences();
-      this.joinQuery = parsedSelect.hasMultipleTables();
-      final var aggregatePlan = AggregateFunctions.plan(parsedSelect);
-
-      // 2. Setup Configuration
-      this.conf = new Configuration(false);
-      conf.setBoolean("parquet.filter.statistics.enabled", true);
-      conf.setBoolean("parquet.read.filter.columnindex.enabled", true);
-      conf.setBoolean("parquet.filter.dictionary.enabled", true);
-
-      if (joinQuery) {
-        this.file = null;
-        this.path = null;
-        this.fileAvro = null;
-        this.parquetPredicate = Optional.empty();
-        this.residualExpression = parsedSelect.where();
+        tmpSetQuery = setQuery;
+        tmpSetOperation = true;
+        tmpTableRefs = List.of();
+        tmpJoinQuery = false;
       } else {
-        this.file = stmt.getConn().tableFile(parsedSelect.table());
-        this.path = new Path(file.toURI());
+        tmpSelect = (SqlParser.Select) query;
+        tmpSetOperation = false;
+        tmpTableRefs = tmpSelect.tableReferences();
+        tmpJoinQuery = tmpSelect.hasMultipleTables();
+        final var aggregatePlan = AggregateFunctions.plan(tmpSelect);
 
-        // 3. Read Schema and Setup Projection/Filter
-        Schema avro;
-        try {
-          avro = ParquetSchemas.readAvroSchema(path, conf);
-        } catch (IOException ignore) {
-          /* No schema -> no pushdown */
-          avro = null;
-        }
+        SqlParser.TableReference baseRef = tmpTableRefs.isEmpty() ? null : tmpTableRefs.getFirst();
+        boolean baseIsCte = baseRef != null
+            && (baseRef.commonTableExpression() != null
+                || resolveCteResultByName(baseRef.tableName(), tmpCteResults) != null);
 
-        this.fileAvro = avro;
-
-        // 4. Projection Pushdown (SELECT U WHERE columns)
-        configureProjectionPushdown(fileAvro, aggregatePlan);
-
-        // 5. Filter Pushdown & Residual Calculation
-        if (!parsedSelect.distinct() && fileAvro != null && parsedSelect.where() != null) {
-          this.parquetPredicate = ParquetFilterBuilder.build(fileAvro, parsedSelect.where());
-          this.residualExpression = ParquetFilterBuilder.residual(fileAvro, parsedSelect.where());
+        if (tmpJoinQuery) {
+          tmpResidual = tmpSelect.where();
+        } else if (baseIsCte) {
+          CteResult resolved =
+              baseRef.commonTableExpression() != null
+                  ? resolveCteResult(baseRef.commonTableExpression(), tmpCteResults)
+                  : resolveCteResultByName(baseRef.tableName(), tmpCteResults);
+          if (resolved == null) {
+            throw new SQLException("CTE result not available for table '" + baseRef.tableName() + "'");
+          }
+          tmpBaseCteResult = resolved;
+          tmpFileAvro = resolved.schema();
+          tmpResidual = tmpSelect.where();
+          tmpPredicate = Optional.empty();
         } else {
-          this.parquetPredicate = Optional.empty();
-          this.residualExpression = parsedSelect.where();
+          tmpConf = new Configuration(false);
+          tmpConf.setBoolean("parquet.filter.statistics.enabled", true);
+          tmpConf.setBoolean("parquet.read.filter.columnindex.enabled", true);
+          tmpConf.setBoolean("parquet.filter.dictionary.enabled", true);
+
+          tmpFile = stmt.getConn().tableFile(tmpSelect.table());
+          tmpPath = new Path(tmpFile.toURI());
+
+          Schema avro;
+          try {
+            avro = ParquetSchemas.readAvroSchema(tmpPath, tmpConf);
+          } catch (IOException ignore) {
+            /* No schema -> no pushdown */
+            avro = null;
+          }
+
+          tmpFileAvro = avro;
+
+          configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf);
+
+          if (!tmpSelect.distinct() && tmpFileAvro != null && tmpSelect.where() != null) {
+            tmpPredicate = ParquetFilterBuilder.build(tmpFileAvro, tmpSelect.where());
+            tmpResidual = ParquetFilterBuilder.residual(tmpFileAvro, tmpSelect.where());
+          } else {
+            tmpPredicate = Optional.empty();
+            tmpResidual = tmpSelect.where();
+          }
         }
       }
-
     } catch (Exception e) {
       throw new SQLException("Failed to prepare query: " + sql, e);
     }
+
+    this.parsedSelect = tmpSelect;
+    this.parsedSetQuery = tmpSetQuery;
+    this.setOperationQuery = tmpSetOperation;
+    this.tableReferences = tmpTableRefs;
+    this.joinQuery = tmpJoinQuery;
+    this.conf = tmpConf;
+    this.fileAvro = tmpFileAvro;
+    this.parquetPredicate = tmpPredicate == null ? Optional.empty() : tmpPredicate;
+    this.residualExpression = tmpResidual;
+    this.path = tmpPath;
+    this.file = tmpFile;
+    this.cteResults = tmpCteResults;
+    this.baseCteResult = tmpBaseCteResult;
   }
 
   /**
@@ -176,6 +226,9 @@ class JParqPreparedStatement implements PreparedStatement {
         JoinRecordReader joinReader = buildJoinReader();
         reader = joinReader;
         resultTableName = buildJoinTableName();
+      } else if (baseCteResult != null) {
+        reader = new InMemoryRecordReader(baseCteResult.rows());
+        resultTableName = parsedSelect.tableAlias() != null ? parsedSelect.tableAlias() : parsedSelect.table();
       } else {
         ParquetReader.Builder<GenericRecord> builder = ParquetReader
             .<GenericRecord>builder(new AvroReadSupport<>(), path).withConf(conf);
@@ -198,7 +251,7 @@ class JParqPreparedStatement implements PreparedStatement {
     final List<String> physical = parsedSelect.labels().isEmpty() ? null : parsedSelect.columnNames();
     // Create the result set, passing reader, select plan, residual filter,
     // plus projection labels and physical names (for metadata & value lookups)
-    SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn());
+    SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
     JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, residualExpression, labels, physical,
         subqueryExecutor);
 
@@ -216,6 +269,10 @@ class JParqPreparedStatement implements PreparedStatement {
   public void close() {
     // No-op for now, as PreparedStatement cleanup is minimal in this read-only
     // context.
+  }
+
+  private PreparedStatement prepareSubqueryStatement(String sql) throws SQLException {
+    return new JParqPreparedStatement(stmt, sql, cteResults);
   }
 
   /**
@@ -243,7 +300,7 @@ class JParqPreparedStatement implements PreparedStatement {
     for (int i = 0; i < components.size(); i++) {
       SqlParser.SetComponent component = components.get(i);
       List<List<Object>> componentData = new ArrayList<>();
-      try (PreparedStatement prepared = stmt.getConn().prepareStatement(component.sql());
+      try (JParqPreparedStatement prepared = new JParqPreparedStatement(stmt, component.sql(), cteResults);
           ResultSet rs = prepared.executeQuery()) {
         ResultSetMetaData meta = rs.getMetaData();
         if (labels == null) {
@@ -613,9 +670,37 @@ class JParqPreparedStatement implements PreparedStatement {
   private record ResolvedSetOrder(int index, boolean asc) {
   }
 
+  /**
+   * Materialised result of a common table expression.
+   *
+   * @param schema
+   *          Avro schema describing the CTE rows
+   * @param rows
+   *          immutable list of rows produced by the CTE
+   */
+  private record CteResult(Schema schema, List<GenericRecord> rows) {
+
+    private CteResult {
+      schema = Objects.requireNonNull(schema, "schema");
+      rows = List.copyOf(Objects.requireNonNull(rows, "rows"));
+    }
+  }
+
   private JoinRecordReader buildJoinReader() throws SQLException {
     List<JoinRecordReader.JoinTable> tables = new ArrayList<>();
     for (SqlParser.TableReference ref : tableReferences) {
+      CteResult cteResult = null;
+      if (ref.commonTableExpression() != null) {
+        cteResult = resolveCteResult(ref.commonTableExpression(), cteResults);
+      } else if (ref.tableName() != null) {
+        cteResult = resolveCteResultByName(ref.tableName(), cteResults);
+      }
+      if (cteResult != null) {
+        String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
+        tables.add(new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), cteResult.schema(), cteResult.rows(),
+            ref.joinType(), ref.joinCondition()));
+        continue;
+      }
       if (ref.subquery() != null) {
         tables.add(materializeSubqueryTable(ref));
         continue;
@@ -784,10 +869,30 @@ class JParqPreparedStatement implements PreparedStatement {
    */
   private Schema buildSubquerySchema(ResultSetMetaData meta, SqlParser.TableReference ref, List<String> fieldNames,
       List<Schema> valueSchemas) throws SQLException {
+    String recordName = ref.tableAlias() != null && !ref.tableAlias().isBlank() ? ref.tableAlias() : ref.tableName();
+    return buildResultSchema(meta, recordName, fieldNames, valueSchemas, null);
+  }
+
+  private Schema buildResultSchema(ResultSetMetaData meta, String recordName, List<String> fieldNames,
+      List<Schema> valueSchemas, List<String> columnAliases) throws SQLException {
     int columnCount = meta.getColumnCount();
+    if (columnAliases != null && !columnAliases.isEmpty() && columnAliases.size() != columnCount) {
+      throw new SQLException(
+          "Number of column aliases (" + columnAliases.size() + ") does not match projected column count "
+              + columnCount);
+    }
     List<Field> fields = new ArrayList<>(columnCount);
     for (int i = 1; i <= columnCount; i++) {
-      String columnName = columnLabel(meta, i);
+      String columnName;
+      if (columnAliases != null && !columnAliases.isEmpty()) {
+        String alias = columnAliases.get(i - 1);
+        if (alias == null || alias.isBlank()) {
+          throw new SQLException("CTE column alias cannot be blank");
+        }
+        columnName = alias.trim();
+      } else {
+        columnName = columnLabel(meta, i);
+      }
       Schema valueSchema = columnSchema(meta, i);
       Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
       Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
@@ -795,8 +900,8 @@ class JParqPreparedStatement implements PreparedStatement {
       fieldNames.add(columnName);
       valueSchemas.add(valueSchema);
     }
-    String recordName = ref.tableAlias() != null && !ref.tableAlias().isBlank() ? ref.tableAlias() : ref.tableName();
-    Schema schema = Schema.createRecord(recordName == null ? "derived" : recordName, null, null, false);
+    String schemaName = recordName == null || recordName.isBlank() ? "derived" : recordName;
+    Schema schema = Schema.createRecord(schemaName, null, null, false);
     schema.setFields(fields);
     return schema;
   }
@@ -953,6 +1058,259 @@ class JParqPreparedStatement implements PreparedStatement {
     return timestamp.toInstant().toEpochMilli();
   }
 
+  private void evaluateCommonTableExpressions(List<SqlParser.CommonTableExpression> ctes,
+      Map<String, CteResult> target) throws SQLException {
+    if (ctes == null || ctes.isEmpty()) {
+      return;
+    }
+    for (SqlParser.CommonTableExpression cte : ctes) {
+      if (cte == null) {
+        continue;
+      }
+      String key = normalizeCteKey(cte.name());
+      if (key == null || key.isEmpty()) {
+        throw new SQLException("CTE definition is missing a name");
+      }
+      if (target.containsKey(key)) {
+        throw new SQLException("Duplicate CTE name detected: " + cte.name());
+      }
+      CteResult result = evaluateCte(cte, target);
+      target.put(key, result);
+    }
+  }
+
+  private CteResult evaluateCte(SqlParser.CommonTableExpression cte, Map<String, CteResult> available)
+      throws SQLException {
+    if (cte == null) {
+      throw new SQLException("CTE definition cannot be null");
+    }
+    if (queryReferencesCte(cte.query(), cte.name())) {
+      return evaluateRecursiveCte(cte, available);
+    }
+    return executeCteQuery(cte.sql(), available, cte.name(), cte.columnAliases());
+  }
+
+  private CteResult evaluateRecursiveCte(SqlParser.CommonTableExpression cte, Map<String, CteResult> available)
+      throws SQLException {
+    if (!(cte.query() instanceof SqlParser.SetQuery setQuery)) {
+      throw new SQLException("Recursive CTE '" + cte.name() + "' must use a UNION or UNION ALL set query");
+    }
+    List<SqlParser.SetComponent> components = setQuery.components();
+    if (components == null || components.isEmpty()) {
+      return executeCteQuery(cte.sql(), available, cte.name(), cte.columnAliases());
+    }
+    CteResult anchor = executeCteQuery(components.get(0).sql(), available, cte.name(), cte.columnAliases());
+    Schema schema = anchor.schema();
+    boolean dedupeAnchorRows =
+        components.size() > 1 && components.get(1).operator() == SqlParser.SetOperator.UNION;
+    LinkedHashSet<GenericRecord> distinct = new LinkedHashSet<>();
+    List<GenericRecord> initialRows;
+    if (dedupeAnchorRows) {
+      initialRows = new ArrayList<>();
+      for (GenericRecord record : anchor.rows()) {
+        if (distinct.add(record)) {
+          initialRows.add(record);
+        }
+      }
+    } else {
+      initialRows = new ArrayList<>(anchor.rows());
+      distinct.addAll(initialRows);
+    }
+    List<GenericRecord> accumulated = new ArrayList<>(initialRows);
+    List<GenericRecord> working = new ArrayList<>(initialRows);
+    String key = normalizeCteKey(cte.name());
+    boolean changed;
+    do {
+      changed = false;
+      if (working.isEmpty()) {
+        break;
+      }
+      Map<String, CteResult> iterationContext = new LinkedHashMap<>(available);
+      iterationContext.put(key, new CteResult(schema, List.copyOf(working)));
+      List<GenericRecord> nextWorking = new ArrayList<>();
+      List<GenericRecord> rowsToAdd = new ArrayList<>();
+      for (int i = 1; i < components.size(); i++) {
+        SqlParser.SetComponent component = components.get(i);
+        SqlParser.SetOperator operator = component.operator();
+        if (operator != SqlParser.SetOperator.UNION && operator != SqlParser.SetOperator.UNION_ALL) {
+          throw new SQLException("Recursive CTE '" + cte.name() + "' uses unsupported operator " + operator);
+        }
+        CteResult partial =
+            executeCteQuery(component.sql(), iterationContext, cte.name(), cte.columnAliases());
+        if (!schemasCompatible(schema, partial.schema())) {
+          throw new SQLException("Recursive CTE '" + cte.name() + "' produced mismatched schemas");
+        }
+        List<GenericRecord> alignedRows = new ArrayList<>(partial.rows().size());
+        for (GenericRecord record : partial.rows()) {
+          alignedRows.add(alignRecord(record, schema));
+        }
+        if (operator == SqlParser.SetOperator.UNION) {
+          for (GenericRecord record : alignedRows) {
+            if (distinct.add(record)) {
+              rowsToAdd.add(record);
+              nextWorking.add(record);
+            }
+          }
+        } else if (!alignedRows.isEmpty()) {
+          rowsToAdd.addAll(alignedRows);
+          nextWorking.addAll(alignedRows);
+        }
+      }
+      if (!rowsToAdd.isEmpty()) {
+        accumulated.addAll(rowsToAdd);
+        working = nextWorking;
+        changed = true;
+      } else {
+        working = List.of();
+      }
+    } while (changed);
+    return new CteResult(schema, List.copyOf(accumulated));
+  }
+
+  private boolean queryReferencesCte(SqlParser.Query query, String cteName) {
+    if (query == null || cteName == null) {
+      return false;
+    }
+    String key = normalizeCteKey(cteName);
+    if (key == null) {
+      return false;
+    }
+    if (query instanceof SqlParser.Select select) {
+      List<SqlParser.TableReference> refs = select.tableReferences();
+      if (refs != null) {
+        for (SqlParser.TableReference ref : refs) {
+          if (ref == null) {
+            continue;
+          }
+          if (ref.commonTableExpression() != null
+              && key.equals(normalizeCteKey(ref.commonTableExpression().name()))) {
+            return true;
+          }
+          if (ref.tableName() != null && key.equals(normalizeCteKey(ref.tableName()))) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+    if (query instanceof SqlParser.SetQuery setQuery) {
+      for (SqlParser.SetComponent component : setQuery.components()) {
+        if (component != null && queryReferencesCte(component.select(), cteName)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private CteResult executeCteQuery(String sql, Map<String, CteResult> context, String tableName,
+      List<String> columnAliases) throws SQLException {
+    try (JParqPreparedStatement prepared = new JParqPreparedStatement(stmt, sql, context);
+        ResultSet rs = prepared.executeQuery()) {
+      return consumeResultSet(rs, tableName, columnAliases);
+    }
+  }
+
+  private CteResult consumeResultSet(ResultSet rs, String tableName, List<String> columnAliases) throws SQLException {
+    ResultSetMetaData meta = rs.getMetaData();
+    List<String> fieldNames = new ArrayList<>(meta.getColumnCount());
+    List<Schema> valueSchemas = new ArrayList<>(meta.getColumnCount());
+    Schema schema = buildResultSchema(meta, tableName, fieldNames, valueSchemas, columnAliases);
+    List<GenericRecord> rows = new ArrayList<>();
+    while (rs.next()) {
+      GenericData.Record record = new GenericData.Record(schema);
+      for (int i = 1; i <= fieldNames.size(); i++) {
+        Object raw = rs.getObject(i);
+        record.put(fieldNames.get(i - 1), toAvroValue(raw, valueSchemas.get(i - 1)));
+      }
+      rows.add(record);
+    }
+    return new CteResult(schema, rows);
+  }
+
+  private CteResult resolveCteResult(SqlParser.CommonTableExpression cte, Map<String, CteResult> available) {
+    if (cte == null || available == null || available.isEmpty()) {
+      return null;
+    }
+    String key = normalizeCteKey(cte.name());
+    if (key == null) {
+      return null;
+    }
+    return available.get(key);
+  }
+
+  private CteResult resolveCteResultByName(String name, Map<String, CteResult> available) {
+    if (name == null || available == null || available.isEmpty()) {
+      return null;
+    }
+    String key = normalizeCteKey(name);
+    if (key == null) {
+      return null;
+    }
+    return available.get(key);
+  }
+
+  private boolean schemasCompatible(Schema expected, Schema actual) {
+    if (expected == null || actual == null) {
+      return false;
+    }
+    if (expected.getType() != actual.getType()) {
+      return false;
+    }
+    List<Field> expectedFields = expected.getFields();
+    if (expectedFields.size() != actual.getFields().size()) {
+      return false;
+    }
+    for (Field expectedField : expectedFields) {
+      if (actual.getField(expectedField.name()) == null) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private GenericRecord alignRecord(GenericRecord record, Schema targetSchema) throws SQLException {
+    if (record == null || targetSchema == null) {
+      return record;
+    }
+    if (record.getSchema() == targetSchema) {
+      return record;
+    }
+    GenericData.Record converted = new GenericData.Record(targetSchema);
+    for (Field field : targetSchema.getFields()) {
+      Schema fieldSchema = field.schema();
+      Schema nonNullSchema;
+      if (fieldSchema.getType() == Schema.Type.UNION) {
+        nonNullSchema = null;
+        for (Schema type : fieldSchema.getTypes()) {
+          if (type.getType() != Schema.Type.NULL) {
+            nonNullSchema = type;
+            break;
+          }
+        }
+        if (nonNullSchema == null) {
+          nonNullSchema = Schema.create(Schema.Type.NULL);
+        }
+      } else {
+        nonNullSchema = fieldSchema;
+      }
+      Object raw = record.get(field.name());
+      converted.put(field.name(), toAvroValue(raw, nonNullSchema));
+    }
+    return converted;
+  }
+
+  private static String normalizeCteKey(String name) {
+    if (name == null) {
+      return null;
+    }
+    String trimmed = name.trim();
+    if (trimmed.isEmpty()) {
+      return null;
+    }
+    return trimmed.toLowerCase(Locale.ROOT);
+  }
+
   private String buildJoinTableName() {
     if (tableReferences == null || tableReferences.isEmpty()) {
       return "join";
@@ -973,16 +1331,17 @@ class JParqPreparedStatement implements PreparedStatement {
     return String.join("_", names);
   }
 
-  private void configureProjectionPushdown(Schema schema, AggregateFunctions.AggregatePlan aggregatePlan) {
-    if (schema == null) {
+  private void configureProjectionPushdown(SqlParser.Select select, Schema schema,
+      AggregateFunctions.AggregatePlan aggregatePlan, Configuration configuration) {
+    if (schema == null || configuration == null) {
       return;
     }
 
-    if (parsedSelect.hasMultipleTables()) {
+    if (select == null || select.hasMultipleTables()) {
       return;
     }
 
-    Set<String> selectColumns = ProjectionFields.fromSelect(parsedSelect);
+    Set<String> selectColumns = ProjectionFields.fromSelect(select);
     boolean selectAll = selectColumns == null && aggregatePlan == null;
     if (selectAll) {
       return;
@@ -990,13 +1349,13 @@ class JParqPreparedStatement implements PreparedStatement {
 
     Set<String> needed = new LinkedHashSet<>();
     addColumns(needed, selectColumns);
-    if (!parsedSelect.innerDistinctColumns().isEmpty()) {
-      addColumns(needed, new LinkedHashSet<>(parsedSelect.innerDistinctColumns()));
+    if (!select.innerDistinctColumns().isEmpty()) {
+      addColumns(needed, new LinkedHashSet<>(select.innerDistinctColumns()));
     }
-    addColumns(needed, ColumnsUsed.inWhere(parsedSelect.where()));
+    addColumns(needed, ColumnsUsed.inWhere(select.where()));
     List<String> qualifiers = new ArrayList<>();
-    if (parsedSelect.tableReferences() != null) {
-      for (SqlParser.TableReference ref : parsedSelect.tableReferences()) {
+    if (select.tableReferences() != null) {
+      for (SqlParser.TableReference ref : select.tableReferences()) {
         if (ref.tableName() != null && !ref.tableName().isBlank()) {
           qualifiers.add(ref.tableName());
         }
@@ -1005,14 +1364,14 @@ class JParqPreparedStatement implements PreparedStatement {
         }
       }
     }
-    for (Expression expression : parsedSelect.expressions()) {
+    for (Expression expression : select.expressions()) {
       addColumns(needed, SqlParser.collectQualifiedColumns(expression, qualifiers));
     }
-    addColumns(needed, SqlParser.collectQualifiedColumns(parsedSelect.where(), qualifiers));
-    for (SqlParser.OrderKey key : parsedSelect.orderBy()) {
+    addColumns(needed, SqlParser.collectQualifiedColumns(select.where(), qualifiers));
+    for (SqlParser.OrderKey key : select.orderBy()) {
       addColumn(needed, key.column());
     }
-    for (SqlParser.OrderKey key : parsedSelect.preOrderBy()) {
+    for (SqlParser.OrderKey key : select.preOrderBy()) {
       addColumn(needed, key.column());
     }
     if (aggregatePlan != null) {
@@ -1030,8 +1389,8 @@ class JParqPreparedStatement implements PreparedStatement {
 
     if (!needed.isEmpty()) {
       Schema avroProjection = AvroProjections.project(schema, needed);
-      AvroReadSupport.setRequestedProjection(conf, avroProjection);
-      AvroReadSupport.setAvroReadSchema(conf, avroProjection);
+      AvroReadSupport.setRequestedProjection(configuration, avroProjection);
+      AvroReadSupport.setAvroReadSchema(configuration, avroProjection);
     }
   }
 
