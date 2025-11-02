@@ -113,8 +113,7 @@ public class IntersectTest {
         while (rs.next()) {
           values.add(rs.getInt(1));
         }
-        assertEquals(List.of(4, 6), values,
-            "INTERSECT must be applied before UNION when operators are mixed");
+        assertEquals(List.of(4, 6), values, "INTERSECT must be applied before UNION when operators are mixed");
       } catch (SQLException e) {
         throw new RuntimeException(e);
       }

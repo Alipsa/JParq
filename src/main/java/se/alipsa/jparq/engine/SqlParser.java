@@ -136,16 +136,13 @@ public final class SqlParser {
    * Representation of a SQL set operation query (UNION, INTERSECT).
    *
    * @param components
-   *          ordered list of query components participating in the set
-   *          operation
+   *          ordered list of query components participating in the set operation
    * @param orderBy
    *          order specification applied to the combined result
    * @param limit
-   *          optional limit applied after the set operation (-1 if not
-   *          specified)
+   *          optional limit applied after the set operation (-1 if not specified)
    * @param offset
-   *          number of rows to skip from the combined result (0 if not
-   *          specified)
+   *          number of rows to skip from the combined result (0 if not specified)
    */
   public record SetQuery(List<SetComponent> components, List<SetOrder> orderBy, int limit,
       int offset) implements Query {
@@ -165,8 +162,8 @@ public final class SqlParser {
   }
 
   /**
-   * ORDER BY key for set operation queries supporting either column positions
-   * or labels.
+   * ORDER BY key for set operation queries supporting either column positions or
+   * labels.
    *
    * @param columnIndex
    *          1-based column index when ORDER BY uses positional syntax,
@@ -418,8 +415,7 @@ public final class SqlParser {
    *
    * @param list
    *          parsed set operation list produced by JSqlParser
-   * @return a normalized {@link SetQuery} describing the components and
-   *         modifiers
+   * @return a normalized {@link SetQuery} describing the components and modifiers
    */
   private static SetQuery parseSetOperationList(SetOperationList list) {
     List<net.sf.jsqlparser.statement.select.Select> selects = list.getSelects();

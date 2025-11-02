@@ -219,8 +219,7 @@ class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Execute a SQL set operation (UNION, INTERSECT) by delegating to the
-   * individual component SELECT statements and materializing the combined
-   * result.
+   * individual component SELECT statements and materializing the combined result.
    *
    * @return a {@link JParqResultSet} containing the materialized set operation
    *         result
@@ -480,8 +479,7 @@ class JParqPreparedStatement implements PreparedStatement {
    *          rows previously materialized
    * @param incoming
    *          rows produced by the current set operation component
-   * @return a list containing rows that appear in both inputs without
-   *         duplicates
+   * @return a list containing rows that appear in both inputs without duplicates
    */
   private List<List<Object>> intersectDistinct(List<List<Object>> accumulated, List<List<Object>> incoming) {
     if (accumulated.isEmpty() || incoming.isEmpty()) {
