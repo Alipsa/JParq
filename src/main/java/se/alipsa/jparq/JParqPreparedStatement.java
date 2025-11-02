@@ -78,7 +78,6 @@ class JParqPreparedStatement implements PreparedStatement {
   private final SqlParser.Select parsedSelect;
   private final SqlParser.SetQuery parsedSetQuery;
   private final Configuration conf;
-  private final Schema fileAvro;
   private final Optional<FilterPredicate> parquetPredicate;
   private final Expression residualExpression;
   private final Path path;
@@ -93,17 +92,16 @@ class JParqPreparedStatement implements PreparedStatement {
     this(stmt, sql, Map.of());
   }
 
-  JParqPreparedStatement(JParqStatement stmt, String sql, Map<String, CteResult> inheritedCtes)
-      throws SQLException {
+  JParqPreparedStatement(JParqStatement stmt, String sql, Map<String, CteResult> inheritedCtes) throws SQLException {
     this.stmt = stmt;
 
     SqlParser.Select tmpSelect = null;
     SqlParser.SetQuery tmpSetQuery = null;
-    boolean tmpSetOperation = false;
-    List<SqlParser.TableReference> tmpTableRefs = List.of();
-    boolean tmpJoinQuery = false;
+    boolean tmpSetOperation;
+    List<SqlParser.TableReference> tmpTableRefs;
+    boolean tmpJoinQuery;
     Configuration tmpConf = null;
-    Schema tmpFileAvro = null;
+    Schema tmpFileAvro;
     Optional<FilterPredicate> tmpPredicate = Optional.empty();
     Expression tmpResidual = null;
     Path tmpPath = null;
@@ -140,17 +138,15 @@ class JParqPreparedStatement implements PreparedStatement {
         final var aggregatePlan = AggregateFunctions.plan(tmpSelect);
 
         SqlParser.TableReference baseRef = tmpTableRefs.isEmpty() ? null : tmpTableRefs.getFirst();
-        boolean baseIsCte = baseRef != null
-            && (baseRef.commonTableExpression() != null
-                || resolveCteResultByName(baseRef.tableName(), tmpCteResults) != null);
+        boolean baseIsCte = baseRef != null && (baseRef.commonTableExpression() != null
+            || resolveCteResultByName(baseRef.tableName(), tmpCteResults) != null);
 
         if (tmpJoinQuery) {
           tmpResidual = tmpSelect.where();
         } else if (baseIsCte) {
-          CteResult resolved =
-              baseRef.commonTableExpression() != null
-                  ? resolveCteResult(baseRef.commonTableExpression(), tmpCteResults)
-                  : resolveCteResultByName(baseRef.tableName(), tmpCteResults);
+          CteResult resolved = baseRef.commonTableExpression() != null
+              ? resolveCteResult(baseRef.commonTableExpression(), tmpCteResults)
+              : resolveCteResultByName(baseRef.tableName(), tmpCteResults);
           if (resolved == null) {
             throw new SQLException("CTE result not available for table '" + baseRef.tableName() + "'");
           }
@@ -198,7 +194,6 @@ class JParqPreparedStatement implements PreparedStatement {
     this.tableReferences = tmpTableRefs;
     this.joinQuery = tmpJoinQuery;
     this.conf = tmpConf;
-    this.fileAvro = tmpFileAvro;
     this.parquetPredicate = tmpPredicate == null ? Optional.empty() : tmpPredicate;
     this.residualExpression = tmpResidual;
     this.path = tmpPath;
@@ -877,9 +872,8 @@ class JParqPreparedStatement implements PreparedStatement {
       List<Schema> valueSchemas, List<String> columnAliases) throws SQLException {
     int columnCount = meta.getColumnCount();
     if (columnAliases != null && !columnAliases.isEmpty() && columnAliases.size() != columnCount) {
-      throw new SQLException(
-          "Number of column aliases (" + columnAliases.size() + ") does not match projected column count "
-              + columnCount);
+      throw new SQLException("Number of column aliases (" + columnAliases.size()
+          + ") does not match projected column count " + columnCount);
     }
     List<Field> fields = new ArrayList<>(columnCount);
     for (int i = 1; i <= columnCount; i++) {
@@ -1058,8 +1052,8 @@ class JParqPreparedStatement implements PreparedStatement {
     return timestamp.toInstant().toEpochMilli();
   }
 
-  private void evaluateCommonTableExpressions(List<SqlParser.CommonTableExpression> ctes,
-      Map<String, CteResult> target) throws SQLException {
+  private void evaluateCommonTableExpressions(List<SqlParser.CommonTableExpression> ctes, Map<String, CteResult> target)
+      throws SQLException {
     if (ctes == null || ctes.isEmpty()) {
       return;
     }
@@ -1101,8 +1095,7 @@ class JParqPreparedStatement implements PreparedStatement {
     }
     CteResult anchor = executeCteQuery(components.get(0).sql(), available, cte.name(), cte.columnAliases());
     Schema schema = anchor.schema();
-    boolean dedupeAnchorRows =
-        components.size() > 1 && components.get(1).operator() == SqlParser.SetOperator.UNION;
+    boolean dedupeAnchorRows = components.size() > 1 && components.get(1).operator() == SqlParser.SetOperator.UNION;
     LinkedHashSet<GenericRecord> distinct = new LinkedHashSet<>();
     List<GenericRecord> initialRows;
     if (dedupeAnchorRows) {
@@ -1135,8 +1128,7 @@ class JParqPreparedStatement implements PreparedStatement {
         if (operator != SqlParser.SetOperator.UNION && operator != SqlParser.SetOperator.UNION_ALL) {
           throw new SQLException("Recursive CTE '" + cte.name() + "' uses unsupported operator " + operator);
         }
-        CteResult partial =
-            executeCteQuery(component.sql(), iterationContext, cte.name(), cte.columnAliases());
+        CteResult partial = executeCteQuery(component.sql(), iterationContext, cte.name(), cte.columnAliases());
         if (!schemasCompatible(schema, partial.schema())) {
           throw new SQLException("Recursive CTE '" + cte.name() + "' produced mismatched schemas");
         }
@@ -1182,8 +1174,7 @@ class JParqPreparedStatement implements PreparedStatement {
           if (ref == null) {
             continue;
           }
-          if (ref.commonTableExpression() != null
-              && key.equals(normalizeCteKey(ref.commonTableExpression().name()))) {
+          if (ref.commonTableExpression() != null && key.equals(normalizeCteKey(ref.commonTableExpression().name()))) {
             return true;
           }
           if (ref.tableName() != null && key.equals(normalizeCteKey(ref.tableName()))) {

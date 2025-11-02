@@ -227,7 +227,6 @@ class CTETest {
       }
     });
 
-    assertIterableEquals(List.of(4, 6), values,
-        "UNION recursion should eliminate duplicates from the anchor member");
+    assertIterableEquals(List.of(4, 6), values, "UNION recursion should eliminate duplicates from the anchor member");
   }
 }

@@ -70,9 +70,8 @@ class SqlParserCteTest {
     assertEquals(1, setQuery.commonTableExpressions().size(), "Set query should expose CTE definitions");
     SqlParser.CommonTableExpression cte = setQuery.commonTableExpressions().get(0);
     assertEquals("base", cte.name());
-    assertTrue(setQuery.components().stream()
-        .allMatch(component -> component.select().commonTableExpressions().contains(cte)),
+    assertTrue(
+        setQuery.components().stream().allMatch(component -> component.select().commonTableExpressions().contains(cte)),
         "Each set component should be able to reference the CTE");
   }
 }
-

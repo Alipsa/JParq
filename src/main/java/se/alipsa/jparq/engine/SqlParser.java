@@ -103,14 +103,13 @@ public final class SqlParser {
    *          ordered collection of tables referenced in the {@code FROM} clause,
    *          including any JOIN participants
    * @param commonTableExpressions
-   *          the common table expressions that can be referenced from this
-   *          query
+   *          the common table expressions that can be referenced from this query
    */
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
       int limit, int offset, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct,
       List<String> innerDistinctColumns, List<Expression> expressions, List<Expression> groupByExpressions,
-      Expression having, int preLimit, int preOffset, List<OrderKey> preOrderBy,
-      List<TableReference> tableReferences, List<CommonTableExpression> commonTableExpressions) implements Query {
+      Expression having, int preLimit, int preOffset, List<OrderKey> preOrderBy, List<TableReference> tableReferences,
+      List<CommonTableExpression> commonTableExpressions) implements Query {
 
     /**
      * returns "*" if no explicit projection.
@@ -155,8 +154,7 @@ public final class SqlParser {
    * @param offset
    *          number of rows to skip from the combined result (0 if not specified)
    * @param commonTableExpressions
-   *          the common table expressions that can be referenced from this
-   *          query
+   *          the common table expressions that can be referenced from this query
    */
   public record SetQuery(List<SetComponent> components, List<SetOrder> orderBy, int limit, int offset,
       List<CommonTableExpression> commonTableExpressions) implements Query {

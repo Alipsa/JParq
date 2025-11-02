@@ -153,8 +153,8 @@ public final class SubqueryExecutor {
   }
 
   /**
-   * Factory for creating prepared statements tailored to the caller's
-   * execution context.
+   * Factory for creating prepared statements tailored to the caller's execution
+   * context.
    */
   @FunctionalInterface
   public interface StatementFactory {

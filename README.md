@@ -121,9 +121,10 @@ The following SQL statements are supported:
 - INNER, LEFT, RIGHT, FULL, CROSS, and Self Join support
 - union and union all support
 - intersect and except support
-
-## Roadmap: Might be implemented in the future
 - CTE (Common Table Expressions) support
+- 
+## Roadmap: Might be implemented in the future
+
 - Windowing
   - Ranking functions
     - ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE,
@@ -131,6 +132,17 @@ The following SQL statements are supported:
     - SUM, AVG, MIN, MAX, COUNT
   - Analytic Value/Navigation Functions
     -  LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
+- Support # syntax for creating temporary tables within the current statement
+- Support ## syntax for creating temporary tables that persist for the duration of the connection. CREATE TEMPORARY TABLE is a synonym for this.
+- Support for variable assignment and use within SQL scripts. @variable_name syntax to define a variable that exists for the duration of the statement and @@variable_name for connection-scoped variables.
+  - Example 1: 
+    declare @myVar INT;
+    set @myVar = 10;
+    SELECT * FROM myTable WHERE myColumn > @myVar;
+  - Example 2:
+    declare @myVar INT = 10;
+    SELECT * FROM myTable WHERE myColumn > @myVar;
+
 
 #### String functions support details
 ##### Character Length and Position
