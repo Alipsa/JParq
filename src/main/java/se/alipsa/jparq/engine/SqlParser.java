@@ -29,7 +29,7 @@ public final class SqlParser {
   /**
    * Representation of a parsed SQL query supported by the engine.
    */
-  public sealed interface Query permits Select, UnionQuery {
+  public sealed interface Query permits Select, SetQuery {
   }
 
   /**
@@ -133,37 +133,40 @@ public final class SqlParser {
   }
 
   /**
-   * Representation of a UNION/UNION ALL query.
+   * Representation of a SQL set operation query (UNION, INTERSECT).
    *
    * @param components
-   *          ordered list of union components
+   *          ordered list of query components participating in the set
+   *          operation
    * @param orderBy
    *          order specification applied to the combined result
    * @param limit
-   *          optional limit applied after the union (-1 if not specified)
+   *          optional limit applied after the set operation (-1 if not
+   *          specified)
    * @param offset
-   *          number of rows to skip from the combined result (0 if not specified)
+   *          number of rows to skip from the combined result (0 if not
+   *          specified)
    */
-  public record UnionQuery(List<UnionComponent> components, List<UnionOrder> orderBy, int limit,
+  public record SetQuery(List<SetComponent> components, List<SetOrder> orderBy, int limit,
       int offset) implements Query {
   }
 
   /**
-   * A single component participating in a UNION query.
+   * A single component participating in a SQL set operation query.
    *
    * @param select
    *          parsed representation of the component SELECT statement
-   * @param unionAll
-   *          {@code true} when the component is combined using UNION ALL,
-   *          {@code false} for UNION
+   * @param operator
+   *          operator used to combine this component with the previous one
    * @param sql
    *          textual SQL used to execute the component SELECT statement
    */
-  public record UnionComponent(Select select, boolean unionAll, String sql) {
+  public record SetComponent(Select select, SetOperator operator, String sql) {
   }
 
   /**
-   * ORDER BY key for UNION queries supporting either column positions or labels.
+   * ORDER BY key for set operation queries supporting either column positions
+   * or labels.
    *
    * @param columnIndex
    *          1-based column index when ORDER BY uses positional syntax,
@@ -175,7 +178,21 @@ public final class SqlParser {
    *          {@code true} when ascending order is requested, {@code false} for
    *          descending
    */
-  public record UnionOrder(Integer columnIndex, String columnLabel, boolean asc) {
+  public record SetOrder(Integer columnIndex, String columnLabel, boolean asc) {
+  }
+
+  /**
+   * Enumeration of supported set operators applied between SELECT components.
+   */
+  public enum SetOperator {
+    /** The first SELECT statement in the set query. */
+    FIRST,
+    /** UNION using distinct semantics. */
+    UNION,
+    /** UNION ALL preserving duplicates. */
+    UNION_ALL,
+    /** INTERSECT using distinct semantics. */
+    INTERSECT
   }
 
   /**
@@ -259,7 +276,8 @@ public final class SqlParser {
   }
 
   /**
-   * Parse a SQL query producing either a plain SELECT or a UNION based query.
+   * Parse a SQL query producing either a plain SELECT or a set operation based
+   * query.
    *
    * @param sql
    *          the SQL string, optionally containing {@code --} line comments or
@@ -272,7 +290,7 @@ public final class SqlParser {
       net.sf.jsqlparser.statement.select.Select stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
           .parse(normalizedSql);
       if (stmt instanceof SetOperationList setList) {
-        return parseUnionList(setList);
+        return parseSetOperationList(setList);
       }
       if (stmt instanceof PlainSelect plain) {
         return parsePlainSelect(plain);
@@ -396,42 +414,47 @@ public final class SqlParser {
   }
 
   /**
-   * Parse a {@link SetOperationList} into a {@link UnionQuery} representation.
+   * Parse a {@link SetOperationList} into a {@link SetQuery} representation.
    *
    * @param list
    *          parsed set operation list produced by JSqlParser
-   * @return a normalized {@link UnionQuery} describing the UNION components and
+   * @return a normalized {@link SetQuery} describing the components and
    *         modifiers
    */
-  private static UnionQuery parseUnionList(SetOperationList list) {
+  private static SetQuery parseSetOperationList(SetOperationList list) {
     List<net.sf.jsqlparser.statement.select.Select> selects = list.getSelects();
     List<SetOperation> operations = list.getOperations();
     if (selects == null || selects.isEmpty()) {
-      throw new IllegalArgumentException("UNION query must contain at least one SELECT statement");
+      throw new IllegalArgumentException("Set operation query must contain at least one SELECT statement");
     }
-    List<UnionComponent> components = new ArrayList<>();
+    List<SetComponent> components = new ArrayList<>();
     for (int i = 0; i < selects.size(); i++) {
       net.sf.jsqlparser.statement.select.Select body = selects.get(i);
       PlainSelect plain = unwrapPlainSelect(body);
       if (plain == null) {
-        throw new IllegalArgumentException("Unsupported UNION component: " + body);
+        throw new IllegalArgumentException("Unsupported set operation component: " + body);
       }
       Select parsed = parsePlainSelect(plain);
-      boolean unionAll = true;
+      SetOperator operator = SetOperator.FIRST;
       if (i > 0) {
         SetOperation op = operations.get(i - 1);
         if (op instanceof UnionOp unionOp) {
-          unionAll = unionOp.isAll();
+          operator = unionOp.isAll() ? SetOperator.UNION_ALL : SetOperator.UNION;
+        } else if (op instanceof IntersectOp intersectOp) {
+          if (intersectOp.isAll()) {
+            throw new IllegalArgumentException("INTERSECT ALL is not supported");
+          }
+          operator = SetOperator.INTERSECT;
         } else {
           throw new IllegalArgumentException("Unsupported set operation: " + op);
         }
       }
-      components.add(new UnionComponent(parsed, unionAll, body.toString()));
+      components.add(new SetComponent(parsed, operator, body.toString()));
     }
-    List<UnionOrder> orderBy = parseUnionOrderBy(list.getOrderByElements());
+    List<SetOrder> orderBy = parseSetOrderBy(list.getOrderByElements());
     int limit = extractLimit(list.getLimit());
     int offset = extractOffset(list.getOffset());
-    return new UnionQuery(List.copyOf(components), orderBy, limit, offset);
+    return new SetQuery(List.copyOf(components), orderBy, limit, offset);
   }
 
   /**
@@ -459,17 +482,17 @@ public final class SqlParser {
   }
 
   /**
-   * Parse UNION-level ORDER BY elements.
+   * Parse ORDER BY elements applied to a set operation query.
    *
    * @param orderByElements
    *          raw ORDER BY elements from the parser
-   * @return normalized {@link UnionOrder} definitions
+   * @return normalized {@link SetOrder} definitions
    */
-  private static List<UnionOrder> parseUnionOrderBy(List<OrderByElement> orderByElements) {
+  private static List<SetOrder> parseSetOrderBy(List<OrderByElement> orderByElements) {
     if (orderByElements == null || orderByElements.isEmpty()) {
       return List.of();
     }
-    List<UnionOrder> orders = new ArrayList<>(orderByElements.size());
+    List<SetOrder> orders = new ArrayList<>(orderByElements.size());
     for (OrderByElement element : orderByElements) {
       Expression expression = element.getExpression();
       Integer columnIndex = null;
@@ -479,10 +502,10 @@ public final class SqlParser {
       } else if (expression instanceof Column column) {
         columnLabel = column.getColumnName();
       } else {
-        throw new IllegalArgumentException("UNION ORDER BY supports column index or name only: " + expression);
+        throw new IllegalArgumentException("Set operation ORDER BY supports column index or name only: " + expression);
       }
       boolean asc = !element.isAscDescPresent() || element.isAsc();
-      orders.add(new UnionOrder(columnIndex, columnLabel, asc));
+      orders.add(new SetOrder(columnIndex, columnLabel, asc));
     }
     return List.copyOf(orders);
   }
