@@ -14,6 +14,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   private final List<String> labels; // projection labels (aliases if present)
   private final List<String> physicalNames; // underlying physical column names (null for computed)
   private final String tableName;
+  private final List<net.sf.jsqlparser.expression.Expression> expressions;
 
   /**
    * Constructor: labels (aliases) + physical names (null entries allowed).
@@ -26,12 +27,16 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
    *          the underlying physical column names (null for computed)
    * @param tableName
    *          the table name
+   * @param expressions
+   *          parsed SELECT-list expressions corresponding to {@code labels}
    */
-  public JParqResultSetMetaData(Schema schema, List<String> labels, List<String> physicalNames, String tableName) {
+  public JParqResultSetMetaData(Schema schema, List<String> labels, List<String> physicalNames, String tableName,
+      List<net.sf.jsqlparser.expression.Expression> expressions) {
     this.schema = schema;
     this.labels = labels;
     this.physicalNames = physicalNames;
     this.tableName = tableName;
+    this.expressions = expressions == null ? List.of() : List.copyOf(expressions);
   }
 
   @Override
@@ -66,18 +71,16 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     if (schema == null) {
       return Types.OTHER;
     }
-    // Prefer physical name for schema lookup; fall back to label if needed
-    String name = getColumnName(column);
-    Schema.Field f = schema.getField(name);
-    if (f == null) {
-      f = schema.getField(getColumnLabel(column));
+
+    Schema.Field field = resolveField(column);
+    if (field == null) {
+      return resolveComputedColumnType(column);
     }
-    if (f == null) {
-      return Types.OTHER;
-    }
-    Schema s = f.schema().getType() == Schema.Type.UNION
-        ? f.schema().getTypes().stream().filter(t -> t.getType() != Schema.Type.NULL).findFirst().orElse(f.schema())
-        : f.schema();
+
+    Schema s = field.schema().getType() == Schema.Type.UNION
+        ? field.schema().getTypes().stream().filter(t -> t.getType() != Schema.Type.NULL).findFirst()
+            .orElse(field.schema())
+        : field.schema();
     return switch (s.getType()) {
       case STRING, ENUM -> Types.VARCHAR;
       case INT -> (LogicalTypes.date().equals(s.getLogicalType()) ? Types.DATE : Types.INTEGER);
@@ -101,5 +104,51 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   @Override
   public int isNullable(int column) {
     return columnNullableUnknown;
+  }
+
+  /**
+   * Resolve the Avro schema field associated with the supplied column index. The
+   * physical column name is preferred, falling back to the projected label when
+   * the column originates from an expression.
+   *
+   * @param column
+   *          the 1-based column index from the result set
+   * @return the matching {@link Schema.Field}, or {@code null} when the column is
+   *         computed
+   */
+  private Schema.Field resolveField(int column) {
+    // Prefer physical name for schema lookup; fall back to label if needed
+    String name = getColumnName(column);
+    Schema.Field field = schema.getField(name);
+    if (field != null) {
+      return field;
+    }
+    return schema.getField(getColumnLabel(column));
+  }
+
+  /**
+   * Determine the JDBC type for a computed column when no Avro schema field is
+   * available. At present only analytic window functions are recognised.
+   *
+   * @param column
+   *          the 1-based column index from the result set
+   * @return the resolved {@link java.sql.Types JDBC type}
+   */
+  private int resolveComputedColumnType(int column) {
+    if (expressions == null || expressions.isEmpty()) {
+      return Types.OTHER;
+    }
+    int index = column - 1;
+    if (index < 0 || index >= expressions.size()) {
+      return Types.OTHER;
+    }
+    net.sf.jsqlparser.expression.Expression expression = expressions.get(index);
+    if (expression instanceof net.sf.jsqlparser.expression.AnalyticExpression analytic) {
+      String functionName = analytic.getName();
+      if (functionName != null && "ROW_NUMBER".equalsIgnoreCase(functionName)) {
+        return Types.BIGINT;
+      }
+    }
+    return Types.OTHER;
   }
 }
