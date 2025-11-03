@@ -45,6 +45,7 @@ public final class WindowFunctions {
       return null;
     }
     List<RowNumberWindow> rowNumberWindows = new ArrayList<>();
+    List<RankWindow> rankWindows = new ArrayList<>();
     for (Expression expression : expressions) {
       if (expression == null) {
         continue;
@@ -52,33 +53,37 @@ public final class WindowFunctions {
       expression.accept(new ExpressionVisitorAdapter<Void>() {
         @Override
         public <S> Void visit(AnalyticExpression analytic, S context) {
-          registerAnalyticExpression(analytic, rowNumberWindows);
+          registerAnalyticExpression(analytic, rowNumberWindows, rankWindows);
           return super.visit(analytic, context);
         }
       });
     }
-    if (rowNumberWindows.isEmpty()) {
+    if (rowNumberWindows.isEmpty() && rankWindows.isEmpty()) {
       return null;
     }
-    return new WindowPlan(List.copyOf(rowNumberWindows));
+    return new WindowPlan(List.copyOf(rowNumberWindows), List.copyOf(rankWindows));
   }
 
-  private static void registerAnalyticExpression(AnalyticExpression analytic, List<RowNumberWindow> windows) {
+  private static void registerAnalyticExpression(AnalyticExpression analytic, List<RowNumberWindow> rowNumberWindows,
+      List<RankWindow> rankWindows) {
     if (analytic == null) {
       return;
     }
     String name = analytic.getName();
-    if (name == null || !"ROW_NUMBER".equalsIgnoreCase(name)) {
+    if (name == null) {
+      return;
+    }
+    if (!"ROW_NUMBER".equalsIgnoreCase(name) && !"RANK".equalsIgnoreCase(name)) {
       return;
     }
     if (analytic.getExpression() != null) {
-      throw new IllegalArgumentException("ROW_NUMBER must not include an argument expression: " + analytic);
+      throw new IllegalArgumentException(name + " must not include an argument expression: " + analytic);
     }
     if (analytic.isDistinct() || analytic.isUnique()) {
-      throw new IllegalArgumentException("ROW_NUMBER does not support DISTINCT or UNIQUE modifiers: " + analytic);
+      throw new IllegalArgumentException(name + " does not support DISTINCT or UNIQUE modifiers: " + analytic);
     }
     if (analytic.getKeep() != null) {
-      throw new IllegalArgumentException("ROW_NUMBER does not support KEEP clause: " + analytic);
+      throw new IllegalArgumentException(name + " does not support KEEP clause: " + analytic);
     }
     ExpressionList<?> partitionList = analytic.getPartitionExpressionList();
     List<Expression> partitions = new ArrayList<>();
@@ -89,7 +94,14 @@ public final class WindowFunctions {
     }
     List<OrderByElement> orderBy = analytic.getOrderByElements();
     List<OrderByElement> orderElements = orderBy == null ? List.of() : List.copyOf(orderBy);
-    windows.add(new RowNumberWindow(analytic, List.copyOf(partitions), orderElements));
+    if ("ROW_NUMBER".equalsIgnoreCase(name)) {
+      rowNumberWindows.add(new RowNumberWindow(analytic, List.copyOf(partitions), orderElements));
+    } else {
+      if (orderElements.isEmpty()) {
+        throw new IllegalArgumentException("RANK requires an ORDER BY clause: " + analytic);
+      }
+      rankWindows.add(new RankWindow(analytic, List.copyOf(partitions), orderElements));
+    }
   }
 
   /**
@@ -120,23 +132,22 @@ public final class WindowFunctions {
     ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, outerQualifiers,
         qualifierColumnMapping, unqualifiedColumnMapping, WindowState.empty());
     IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues = new IdentityHashMap<>();
+    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues = new IdentityHashMap<>();
     for (RowNumberWindow window : plan.rowNumberWindows()) {
       IdentityHashMap<GenericRecord, Long> values = computeRowNumbers(window, records, evaluator);
       rowNumberValues.put(window.expression(), values);
     }
-    return new WindowState(rowNumberValues);
+    for (RankWindow window : plan.rankWindows()) {
+      IdentityHashMap<GenericRecord, Long> values = computeRank(window, records, evaluator);
+      rankValues.put(window.expression(), values);
+    }
+    return new WindowState(rowNumberValues, rankValues);
   }
 
   private static IdentityHashMap<GenericRecord, Long> computeRowNumbers(RowNumberWindow window,
       List<GenericRecord> records, ValueExpressionEvaluator evaluator) {
-    List<RowContext> contexts = new ArrayList<>(records.size());
-    int index = 0;
-    for (GenericRecord record : records) {
-      List<Object> partitionValues = evaluateAll(window.partitionExpressions(), evaluator, record);
-      List<OrderComponent> orderValues = buildOrderComponents(window.orderByElements(), evaluator, record);
-      contexts.add(new RowContext(record, partitionValues, orderValues, index++));
-    }
-    contexts.sort((left, right) -> compareContexts(left, right, window.orderByElements()));
+    List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
+        evaluator);
 
     IdentityHashMap<GenericRecord, Long> values = new IdentityHashMap<>();
     List<Object> previousPartition = null;
@@ -151,6 +162,48 @@ public final class WindowFunctions {
       values.put(context.record(), rowNumber);
     }
     return values;
+  }
+
+  private static IdentityHashMap<GenericRecord, Long> computeRank(RankWindow window, List<GenericRecord> records,
+      ValueExpressionEvaluator evaluator) {
+    List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
+        evaluator);
+
+    IdentityHashMap<GenericRecord, Long> values = new IdentityHashMap<>();
+    List<Object> previousPartition = null;
+    List<OrderComponent> previousOrder = null;
+    long processedInPartition = 0L;
+    long currentRank = 0L;
+    for (RowContext context : contexts) {
+      if (!Objects.equals(previousPartition, context.partitionValues())) {
+        previousPartition = context.partitionValues();
+        previousOrder = null;
+        processedInPartition = 0L;
+        currentRank = 0L;
+      }
+      processedInPartition++;
+      if (previousOrder == null) {
+        currentRank = 1L;
+      } else if (!orderComponentsEqual(previousOrder, context.orderComponents())) {
+        currentRank = processedInPartition;
+      }
+      values.put(context.record(), currentRank);
+      previousOrder = context.orderComponents();
+    }
+    return values;
+  }
+
+  private static List<RowContext> buildSortedContexts(List<Expression> partitionExpressions,
+      List<OrderByElement> orderByElements, List<GenericRecord> records, ValueExpressionEvaluator evaluator) {
+    List<RowContext> contexts = new ArrayList<>(records.size());
+    int index = 0;
+    for (GenericRecord record : records) {
+      List<Object> partitionValues = evaluateAll(partitionExpressions, evaluator, record);
+      List<OrderComponent> orderValues = buildOrderComponents(orderByElements, evaluator, record);
+      contexts.add(new RowContext(record, partitionValues, orderValues, index++));
+    }
+    contexts.sort((left, right) -> compareContexts(left, right, orderByElements));
+    return contexts;
   }
 
   private static List<Object> evaluateAll(List<Expression> expressions, ValueExpressionEvaluator evaluator,
@@ -178,6 +231,26 @@ public final class WindowFunctions {
       components.add(new OrderComponent(value, asc, nullOrdering));
     }
     return List.copyOf(components);
+  }
+
+  private static boolean orderComponentsEqual(List<OrderComponent> left, List<OrderComponent> right) {
+    if (left == right) {
+      return true;
+    }
+    if (left == null || right == null) {
+      return (left == null || left.isEmpty()) && (right == null || right.isEmpty());
+    }
+    if (left.size() != right.size()) {
+      return false;
+    }
+    for (int i = 0; i < left.size(); i++) {
+      OrderComponent lc = left.get(i);
+      OrderComponent rc = right.get(i);
+      if (compareOrderValues(lc, rc) != 0) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static int compareContexts(RowContext left, RowContext right, List<OrderByElement> orderElements) {
@@ -313,9 +386,11 @@ public final class WindowFunctions {
   public static final class WindowPlan {
 
     private final List<RowNumberWindow> rowNumberWindows;
+    private final List<RankWindow> rankWindows;
 
-    WindowPlan(List<RowNumberWindow> rowNumberWindows) {
+    WindowPlan(List<RowNumberWindow> rowNumberWindows, List<RankWindow> rankWindows) {
       this.rowNumberWindows = rowNumberWindows == null ? List.of() : rowNumberWindows;
+      this.rankWindows = rankWindows == null ? List.of() : rankWindows;
     }
 
     /**
@@ -325,7 +400,7 @@ public final class WindowFunctions {
      *         otherwise {@code false}
      */
     public boolean isEmpty() {
-      return rowNumberWindows.isEmpty();
+      return rowNumberWindows.isEmpty() && rankWindows.isEmpty();
     }
 
     /**
@@ -335,6 +410,15 @@ public final class WindowFunctions {
      */
     public List<RowNumberWindow> rowNumberWindows() {
       return rowNumberWindows;
+    }
+
+    /**
+     * Access the RANK windows captured by this plan.
+     *
+     * @return immutable list of {@link RankWindow} instances
+     */
+    public List<RankWindow> rankWindows() {
+      return rankWindows;
     }
   }
 
@@ -382,6 +466,50 @@ public final class WindowFunctions {
     }
   }
 
+  /**
+   * Representation of a RANK analytic expression.
+   */
+  public static final class RankWindow {
+
+    private final AnalyticExpression expression;
+    private final List<Expression> partitionExpressions;
+    private final List<OrderByElement> orderByElements;
+
+    RankWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
+        List<OrderByElement> orderByElements) {
+      this.expression = expression;
+      this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
+      this.orderByElements = orderByElements == null ? List.of() : orderByElements;
+    }
+
+    /**
+     * Retrieve the underlying analytic expression.
+     *
+     * @return the {@link AnalyticExpression} represented by this window
+     */
+    public AnalyticExpression expression() {
+      return expression;
+    }
+
+    /**
+     * Retrieve expressions defining the PARTITION BY clause.
+     *
+     * @return immutable list of partition expressions
+     */
+    public List<Expression> partitionExpressions() {
+      return partitionExpressions;
+    }
+
+    /**
+     * Retrieve ORDER BY elements defining the ordering within each partition.
+     *
+     * @return immutable list of {@link OrderByElement} descriptors
+     */
+    public List<OrderByElement> orderByElements() {
+      return orderByElements;
+    }
+  }
+
   private record RowContext(GenericRecord record, List<Object> partitionValues, List<OrderComponent> orderComponents,
       int originalIndex) {
   }
@@ -394,12 +522,15 @@ public final class WindowFunctions {
    */
   public static final class WindowState {
 
-    private static final WindowState EMPTY = new WindowState(new IdentityHashMap<>());
+    private static final WindowState EMPTY = new WindowState(Map.of(), Map.of());
 
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
+    private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues;
 
-    WindowState(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues) {
+    WindowState(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues,
+        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues) {
       this.rowNumberValues = rowNumberValues == null ? Map.of() : Collections.unmodifiableMap(rowNumberValues);
+      this.rankValues = rankValues == null ? Map.of() : Collections.unmodifiableMap(rankValues);
     }
 
     /**
@@ -417,7 +548,7 @@ public final class WindowFunctions {
      * @return {@code true} when no window values are present
      */
     public boolean isEmpty() {
-      return rowNumberValues.isEmpty();
+      return rowNumberValues.isEmpty() && rankValues.isEmpty();
     }
 
     /**
@@ -438,6 +569,27 @@ public final class WindowFunctions {
       Long value = values.get(record);
       if (value == null) {
         throw new IllegalArgumentException("No ROW_NUMBER value computed for record: " + record);
+      }
+      return value;
+    }
+
+    /**
+     * Obtain the precomputed RANK value for the supplied expression and record.
+     *
+     * @param expression
+     *          the analytic expression
+     * @param record
+     *          the current record
+     * @return the computed rank value
+     */
+    public long rank(AnalyticExpression expression, GenericRecord record) {
+      IdentityHashMap<GenericRecord, Long> values = rankValues.get(expression);
+      if (values == null) {
+        throw new IllegalArgumentException("No RANK values available for expression: " + expression);
+      }
+      Long value = values.get(record);
+      if (value == null) {
+        throw new IllegalArgumentException("No RANK value computed for record: " + record);
       }
       return value;
     }

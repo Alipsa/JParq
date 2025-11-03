@@ -1379,6 +1379,16 @@ class JParqPreparedStatement implements PreparedStatement {
           }
         }
       }
+      for (WindowFunctions.RankWindow window : windowPlan.rankWindows()) {
+        for (Expression partition : window.partitionExpressions()) {
+          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+        }
+        for (OrderByElement order : window.orderByElements()) {
+          if (order != null && order.getExpression() != null) {
+            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+          }
+        }
+      }
     }
     if (aggregatePlan != null) {
       for (AggregateFunctions.AggregateSpec spec : aggregatePlan.specs()) {
