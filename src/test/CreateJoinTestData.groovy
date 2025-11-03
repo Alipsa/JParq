@@ -18,7 +18,6 @@ import se.alipsa.matrix.sql.MatrixSqlFactory
 
 import java.time.LocalDate
 
-
 @SourceURI
 @Field
 URI sourceUri
@@ -61,8 +60,6 @@ println("exported salary")
 
 println "creating h2 database"
 
-import se.alipsa.matrix.sql.MatrixSqlFactory
-import se.alipsa.matrix.sql.MatrixSql
 File dbFile = new File(scriptDir, 'resources/acmeh2')
 try(MatrixSql matrixSql = MatrixSqlFactory.createH2(dbFile, 'sa', '')) {
   matrixSql.create(employees)
