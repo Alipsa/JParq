@@ -722,8 +722,7 @@ public final class ExpressionEvaluator {
     if (right == null) {
       return 1;
     }
-    int cmp = Arrays.compare(left, right);
-    return cmp;
+    return Arrays.compare(left, right);
   }
 
   private int compare(Expression leftExpr, Expression rightExpr, GenericRecord rec) {
