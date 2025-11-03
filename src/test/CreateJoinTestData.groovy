@@ -8,6 +8,7 @@ Note, this script MUST be run on java 21 or lesser (8-21 is fine) due to Hadoop 
 @Grab('se.alipsa.matrix:matrix-sql:2.2.0')
 @Grab('com.h2database:h2:2.4.240')
 
+import groovy.ant.AntBuilder
 import groovy.transform.SourceURI
 import groovy.transform.Field
 import se.alipsa.matrix.core.Matrix
@@ -17,7 +18,6 @@ import se.alipsa.matrix.sql.MatrixSql
 import se.alipsa.matrix.sql.MatrixSqlFactory
 
 import java.time.LocalDate
-
 
 @SourceURI
 @Field
@@ -61,10 +61,15 @@ println("exported salary")
 
 println "creating h2 database"
 
-import se.alipsa.matrix.sql.MatrixSqlFactory
-import se.alipsa.matrix.sql.MatrixSql
-File dbFile = new File(scriptDir, 'resources/acmeh2')
-try(MatrixSql matrixSql = MatrixSqlFactory.createH2(dbFile, 'sa', '')) {
+String h2FileName = 'acmeh2'
+File dbFile = new File(scriptDir, "resources/$h2FileName")
+def ant = new AntBuilder()
+ant.delete {
+  fileset(dir: 'resources') {
+    include(name: "$h2FileName*")
+  }
+}
+try(MatrixSql matrixSql = MatrixSqlFactory.createH2(dbFile, 'sa', '', 'DATABASE_TO_UPPER=FALSE;CASE_INSENSITIVE_IDENTIFIERS=TRUE')) {
   matrixSql.create(employees)
   matrixSql.create(departments)
   matrixSql.create(employeeDepartments)
