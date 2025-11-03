@@ -40,6 +40,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.statement.select.OrderByElement;
 import org.apache.avro.LogicalType;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
@@ -63,6 +64,7 @@ import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
+import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.helper.TemporalInterval;
 
@@ -1364,6 +1366,19 @@ class JParqPreparedStatement implements PreparedStatement {
     }
     for (SqlParser.OrderKey key : select.preOrderBy()) {
       addColumn(needed, key.column());
+    }
+    WindowFunctions.WindowPlan windowPlan = WindowFunctions.plan(select.expressions());
+    if (windowPlan != null && !windowPlan.isEmpty()) {
+      for (WindowFunctions.RowNumberWindow window : windowPlan.rowNumberWindows()) {
+        for (Expression partition : window.partitionExpressions()) {
+          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+        }
+        for (OrderByElement order : window.orderByElements()) {
+          if (order != null && order.getExpression() != null) {
+            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+          }
+        }
+      }
     }
     if (aggregatePlan != null) {
       for (AggregateFunctions.AggregateSpec spec : aggregatePlan.specs()) {

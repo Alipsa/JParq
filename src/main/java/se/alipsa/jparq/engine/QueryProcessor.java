@@ -12,6 +12,7 @@ import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.engine.window.WindowFunctions;
 
 /**
  * Processes a {@link RecordReader} with projection, WHERE clause, LIMIT, and
@@ -36,6 +37,9 @@ public final class QueryProcessor implements AutoCloseable {
   private final List<String> outerQualifiers;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
+  private final WindowFunctions.WindowPlan windowPlan;
+  private WindowFunctions.WindowState windowState;
+  private final boolean windowed;
 
   // Evaluator is lazily created if schema was not provided
   private ExpressionEvaluator evaluator;
@@ -72,6 +76,7 @@ public final class QueryProcessor implements AutoCloseable {
     private List<String> outerQualifiers = List.of();
     private Map<String, Map<String, String>> qualifierColumnMapping = Map.of();
     private Map<String, String> unqualifiedColumnMapping = Map.of();
+    private WindowFunctions.WindowPlan windowPlan;
 
     private Options() {
       // use factory
@@ -290,6 +295,18 @@ public final class QueryProcessor implements AutoCloseable {
       this.unqualifiedColumnMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(mapping);
       return this;
     }
+
+    /**
+     * Provide a plan describing analytic window functions that require materialization.
+     *
+     * @param windowPlan
+     *          plan describing analytic window functions, {@code null} when none are present
+     * @return {@code this} for chaining
+     */
+    public Options windowPlan(WindowFunctions.WindowPlan windowPlan) {
+      this.windowPlan = windowPlan;
+      return this;
+    }
   }
 
   /**
@@ -322,6 +339,9 @@ public final class QueryProcessor implements AutoCloseable {
     this.outerQualifiers = opts.outerQualifiers;
     this.qualifierColumnMapping = opts.qualifierColumnMapping;
     this.unqualifiedColumnMapping = opts.unqualifiedColumnMapping;
+    this.windowPlan = opts.windowPlan;
+    this.windowed = windowPlan != null && !windowPlan.isEmpty();
+    this.windowState = WindowFunctions.WindowState.empty();
     this.preOrderBy = canonicalizeOrderKeys(opts.preOrderBy);
     this.hasPreStage = (this.preLimit >= 0) || !this.preOrderBy.isEmpty() || (this.preOffset > 0);
     List<String> distinctCols = opts.distinctColumns == null ? this.projection : opts.distinctColumns;
@@ -346,7 +366,7 @@ public final class QueryProcessor implements AutoCloseable {
       registerDistinct(firstAlreadyRead);
     }
 
-    if (!this.orderBy.isEmpty() || hasPreStage) {
+    if (!this.orderBy.isEmpty() || hasPreStage || windowed) {
       bufferAndSort(firstAlreadyRead, opts.schema);
       this.prefetched = null;
     }
@@ -423,6 +443,14 @@ public final class QueryProcessor implements AutoCloseable {
 
       if (distinct && !buf.isEmpty() && !distinctApplied) {
         buf = applyDistinct(buf);
+      }
+
+      if (windowed) {
+        if (sortSchema == null && !buf.isEmpty()) {
+          sortSchema = buf.getFirst().getSchema();
+        }
+        windowState = WindowFunctions.compute(windowPlan, buf, sortSchema, subqueryExecutor, outerQualifiers,
+            qualifierColumnMapping, unqualifiedColumnMapping);
       }
 
       // sort by ORDER BY keys if we have schema and >1 row
@@ -529,7 +557,7 @@ public final class QueryProcessor implements AutoCloseable {
     }
 
     // ORDER BY path: consume from sorted buffer
-    if (!orderBy.isEmpty() || hasPreStage) {
+    if (!orderBy.isEmpty() || hasPreStage || windowed) {
       if (sorted == null || idx >= sorted.size()) {
         return null;
       }
@@ -561,6 +589,15 @@ public final class QueryProcessor implements AutoCloseable {
 
   List<String> projection() {
     return projection;
+  }
+
+  /**
+   * Retrieve the precomputed analytic window state associated with this processor.
+   *
+   * @return the computed {@link WindowFunctions.WindowState}, or an empty state when no window functions are present
+   */
+  public WindowFunctions.WindowState windowState() {
+    return windowState == null ? WindowFunctions.WindowState.empty() : windowState;
   }
 
   @Override

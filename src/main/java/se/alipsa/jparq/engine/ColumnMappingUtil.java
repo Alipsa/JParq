@@ -41,10 +41,18 @@ public final class ColumnMappingUtil {
     if (qualifier != null && !qualifier.isBlank()) {
       String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
       if (normalizedQualifier != null) {
-        Map<String, String> mapping = qualifierColumnMapping.getOrDefault(normalizedQualifier, Map.of());
-        String canonical = mapping.get(normalizedColumn);
-        if (canonical != null) {
-          return canonical;
+        Map<String, String> mapping = qualifierColumnMapping.get(normalizedQualifier);
+        if (mapping != null && !mapping.isEmpty()) {
+          String canonical = mapping.get(normalizedColumn);
+          if (canonical != null) {
+            return canonical;
+          }
+          throw new IllegalArgumentException(
+              "Unknown column '" + columnName + "' for qualifier '" + qualifier + "'");
+        }
+        String fallback = caseInsensitiveIndex.get(normalizedColumn);
+        if (fallback != null) {
+          return fallback;
         }
       }
       throw new IllegalArgumentException("Unknown column '" + columnName + "' for qualifier '" + qualifier + "'");

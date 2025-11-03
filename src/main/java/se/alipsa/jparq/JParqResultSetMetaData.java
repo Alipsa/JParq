@@ -14,6 +14,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   private final List<String> labels; // projection labels (aliases if present)
   private final List<String> physicalNames; // underlying physical column names (null for computed)
   private final String tableName;
+  private final List<net.sf.jsqlparser.expression.Expression> expressions;
 
   /**
    * Constructor: labels (aliases) + physical names (null entries allowed).
@@ -26,12 +27,16 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
    *          the underlying physical column names (null for computed)
    * @param tableName
    *          the table name
+   * @param expressions
+   *          parsed SELECT-list expressions corresponding to {@code labels}
    */
-  public JParqResultSetMetaData(Schema schema, List<String> labels, List<String> physicalNames, String tableName) {
+  public JParqResultSetMetaData(Schema schema, List<String> labels, List<String> physicalNames, String tableName,
+      List<net.sf.jsqlparser.expression.Expression> expressions) {
     this.schema = schema;
     this.labels = labels;
     this.physicalNames = physicalNames;
     this.tableName = tableName;
+    this.expressions = expressions == null ? List.of() : List.copyOf(expressions);
   }
 
   @Override
@@ -73,6 +78,18 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
       f = schema.getField(getColumnLabel(column));
     }
     if (f == null) {
+      if (expressions != null) {
+        int index = column - 1;
+        if (index >= 0 && index < expressions.size()) {
+          net.sf.jsqlparser.expression.Expression expression = expressions.get(index);
+          if (expression instanceof net.sf.jsqlparser.expression.AnalyticExpression analytic) {
+            String functionName = analytic.getName();
+            if (functionName != null && "ROW_NUMBER".equalsIgnoreCase(functionName)) {
+              return Types.BIGINT;
+            }
+          }
+        }
+      }
       return Types.OTHER;
     }
     Schema s = f.schema().getType() == Schema.Type.UNION

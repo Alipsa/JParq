@@ -11,6 +11,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -885,10 +886,10 @@ public final class AggregateFunctions {
     private final List<Object> values;
     private final int hash;
 
-    GroupKey(List<Object> values) {
-      this.values = List.copyOf(values);
-      this.hash = this.values.hashCode();
-    }
+      GroupKey(List<Object> values) {
+        this.values = Collections.unmodifiableList(new ArrayList<>(values));
+        this.hash = this.values.hashCode();
+      }
 
     @Override
     public boolean equals(Object obj) {
