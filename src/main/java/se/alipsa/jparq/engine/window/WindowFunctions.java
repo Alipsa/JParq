@@ -5,7 +5,6 @@ import java.nio.ByteBuffer;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -299,9 +298,12 @@ public final class WindowFunctions {
     if (right == null) {
       return 1;
     }
-    int cmp = Arrays.compare(left, right);
-    if (cmp != 0) {
-      return cmp;
+    int minLength = Math.min(left.length, right.length);
+    for (int i = 0; i < minLength; i++) {
+      int cmp = Byte.compare(left[i], right[i]);
+      if (cmp != 0) {
+        return cmp;
+      }
     }
     return Integer.compare(left.length, right.length);
   }
