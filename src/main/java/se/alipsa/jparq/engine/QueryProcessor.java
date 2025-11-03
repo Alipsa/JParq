@@ -6,6 +6,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -46,6 +47,7 @@ public final class QueryProcessor implements AutoCloseable {
 
   // ORDER BY support
   private final List<SqlParser.OrderKey> orderBy; // empty => streaming path
+  private final Map<String, Expression> orderByExpressions;
   private List<GenericRecord> sorted; // buffer when ORDER BY is used
   private int idx = 0;
 
@@ -54,6 +56,7 @@ public final class QueryProcessor implements AutoCloseable {
   private int preOffsetApplied;
   private GenericRecord prefetched;
   private final Set<List<Object>> distinctSeen;
+  private ValueExpressionEvaluator orderByEvaluator;
 
   /**
    * Builder-style options for configuring {@link QueryProcessor} instances.
@@ -65,6 +68,7 @@ public final class QueryProcessor implements AutoCloseable {
     private boolean distinct;
     private boolean distinctBeforePreLimit;
     private List<SqlParser.OrderKey> orderBy = List.of();
+    private Map<String, Expression> orderByExpressions = Map.of();
     private GenericRecord firstAlreadyRead;
     private SubqueryExecutor subqueryExecutor;
     private int preLimit = -1;
@@ -149,6 +153,24 @@ public final class QueryProcessor implements AutoCloseable {
      */
     public Options orderBy(List<SqlParser.OrderKey> orderBy) {
       this.orderBy = (orderBy == null || orderBy.isEmpty()) ? List.of() : List.copyOf(orderBy);
+      return this;
+    }
+
+    /**
+     * Provide expressions corresponding to projection labels referenced from
+     * ORDER BY clauses.
+     *
+     * @param orderByExpressions
+     *          mapping of projection label to expression; {@code null} or empty
+     *          indicates no computed expressions are required
+     * @return {@code this} for chaining
+     */
+    public Options orderByExpressions(Map<String, Expression> orderByExpressions) {
+      if (orderByExpressions == null || orderByExpressions.isEmpty()) {
+        this.orderByExpressions = Map.of();
+      } else {
+        this.orderByExpressions = Map.copyOf(orderByExpressions);
+      }
       return this;
     }
 
@@ -352,6 +374,7 @@ public final class QueryProcessor implements AutoCloseable {
         ? distinctCols
         : opts.preStageDistinctColumns;
     this.orderBy = canonicalizeOrderKeys(opts.orderBy);
+    this.orderByExpressions = normalizeOrderByExpressions(opts.orderByExpressions);
     this.evaluator = (opts.schema != null)
         ? new ExpressionEvaluator(opts.schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
             unqualifiedColumnMapping)
@@ -453,6 +476,7 @@ public final class QueryProcessor implements AutoCloseable {
         }
         windowState = WindowFunctions.compute(windowPlan, buf, sortSchema, subqueryExecutor, outerQualifiers,
             qualifierColumnMapping, unqualifiedColumnMapping);
+        orderByEvaluator = null;
       }
 
       // sort by ORDER BY keys if we have schema and >1 row
@@ -474,16 +498,11 @@ public final class QueryProcessor implements AutoCloseable {
     }
   }
 
-  private static Comparator<GenericRecord> buildComparator(Schema schema, List<SqlParser.OrderKey> keys) {
+  private Comparator<GenericRecord> buildComparator(Schema schema, List<SqlParser.OrderKey> keys) {
     return (a, b) -> {
       for (SqlParser.OrderKey k : keys) {
-        Schema.Field f = schema.getField(k.column());
-        if (f == null) {
-          throw new IllegalArgumentException("Unknown ORDER BY column: " + k.column());
-        }
-
-        Object va = AvroCoercions.unwrap(a.get(k.column()), f.schema());
-        Object vb = AvroCoercions.unwrap(b.get(k.column()), f.schema());
+        Object va = resolveOrderValue(a, schema, k);
+        Object vb = resolveOrderValue(b, schema, k);
 
         // NULLS LAST for ASC, NULLS FIRST for DESC
         if (va == null || vb == null) {
@@ -504,6 +523,60 @@ public final class QueryProcessor implements AutoCloseable {
       }
       return 0;
     };
+  }
+
+  private Map<String, Expression> normalizeOrderByExpressions(Map<String, Expression> expressions) {
+    if (expressions == null || expressions.isEmpty()) {
+      return Map.of();
+    }
+    Map<String, Expression> normalized = new java.util.HashMap<>();
+    for (Map.Entry<String, Expression> entry : expressions.entrySet()) {
+      String key = entry.getKey();
+      Expression expression = entry.getValue();
+      if (key == null || key.isBlank() || expression == null) {
+        continue;
+      }
+      normalized.putIfAbsent(key, expression);
+      normalized.putIfAbsent(key.toLowerCase(Locale.ROOT), expression);
+      String canonical = ColumnMappingUtil.canonicalOrderColumn(key, null, qualifierColumnMapping,
+          unqualifiedColumnMapping);
+      if (canonical != null) {
+        normalized.putIfAbsent(canonical, expression);
+        normalized.putIfAbsent(canonical.toLowerCase(Locale.ROOT), expression);
+      }
+    }
+    return Map.copyOf(normalized);
+  }
+
+  private void ensureOrderByEvaluator(Schema schema) {
+    if (orderByEvaluator == null && schema != null) {
+      orderByEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, outerQualifiers,
+          qualifierColumnMapping, unqualifiedColumnMapping, windowState());
+    }
+  }
+
+  private Object resolveOrderValue(GenericRecord record, Schema schema, SqlParser.OrderKey key) {
+    Schema.Field field = schema.getField(key.column());
+    if (field != null) {
+      return AvroCoercions.unwrap(record.get(key.column()), field.schema());
+    }
+    Expression expression = orderExpressionFor(key.column());
+    if (expression != null) {
+      ensureOrderByEvaluator(schema);
+      return orderByEvaluator.eval(expression, record);
+    }
+    throw new IllegalArgumentException("Unknown ORDER BY column: " + key.column());
+  }
+
+  private Expression orderExpressionFor(String column) {
+    if (column == null || orderByExpressions.isEmpty()) {
+      return null;
+    }
+    Expression expression = orderByExpressions.get(column);
+    if (expression != null) {
+      return expression;
+    }
+    return orderByExpressions.get(column.toLowerCase(Locale.ROOT));
   }
 
   private List<SqlParser.OrderKey> canonicalizeOrderKeys(List<SqlParser.OrderKey> keys) {

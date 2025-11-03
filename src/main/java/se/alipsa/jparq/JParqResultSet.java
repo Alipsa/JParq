@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.HashMap;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.Parenthesis;
@@ -179,6 +180,7 @@ public class JParqResultSet extends ResultSetAdapter {
     this.windowState = WindowFunctions.WindowState.empty();
 
     WindowFunctions.WindowPlan windowPlan = WindowFunctions.plan(selectExpressions);
+    Map<String, Expression> orderByExpressions = extractOrderByExpressions(select);
 
     try {
       GenericRecord first = reader.read();
@@ -194,7 +196,8 @@ public class JParqResultSet extends ResultSetAdapter {
             .subqueryExecutor(subqueryExecutor).preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
             .outerQualifiers(queryQualifiers).qualifierColumnMapping(qualifierColumnMapping)
             .unqualifiedColumnMapping(unqualifiedColumnMapping).preStageDistinctColumns(select.innerDistinctColumns())
-            .offset(select.offset()).preOffset(select.preOffset()).windowPlan(windowPlan);
+            .offset(select.offset()).preOffset(select.preOffset()).windowPlan(windowPlan)
+            .orderByExpressions(orderByExpressions);
         List<String> projectionColumns = requestedColumns;
         if (projectionColumns == null || projectionColumns.isEmpty()) {
           projectionColumns = select.columns();
@@ -260,7 +263,8 @@ public class JParqResultSet extends ResultSetAdapter {
             .preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
             .preStageDistinctColumns(select.innerDistinctColumns()).outerQualifiers(queryQualifiers)
             .qualifierColumnMapping(qualifierColumnMapping).unqualifiedColumnMapping(unqualifiedColumnMapping)
-            .offset(select.offset()).preOffset(select.preOffset()).windowPlan(windowPlan);
+            .offset(select.offset()).preOffset(select.preOffset()).windowPlan(windowPlan)
+            .orderByExpressions(orderByExpressions);
         this.qp = new QueryProcessor(reader, proj, effectiveResidual, select.limit(), options);
         this.current = usePrefetchedAsCurrent ? first : qp.nextMatching();
         this.windowState = qp.windowState();
@@ -272,7 +276,7 @@ public class JParqResultSet extends ResultSetAdapter {
             .preOrderBy(select.preOrderBy()).preStageDistinctColumns(select.innerDistinctColumns())
             .outerQualifiers(queryQualifiers).qualifierColumnMapping(qualifierColumnMapping)
             .unqualifiedColumnMapping(unqualifiedColumnMapping).offset(select.offset()).preOffset(select.preOffset())
-            .windowPlan(windowPlan);
+            .windowPlan(windowPlan).orderByExpressions(orderByExpressions);
         this.qp = new QueryProcessor(reader, proj, effectiveResidual, select.limit(), options);
         this.current = qp.nextMatching();
         this.windowState = qp.windowState();
@@ -549,6 +553,38 @@ public class JParqResultSet extends ResultSetAdapter {
       return null;
     }
     return columns;
+  }
+
+  /**
+   * Extract expressions from the SELECT list that may be referenced by ORDER BY
+   * aliases.
+   *
+   * @param select
+   *          select statement providing projection labels and expressions
+   * @return mapping of projection label to the corresponding expression; empty
+   *         when no computed expressions are present
+   */
+  private static Map<String, Expression> extractOrderByExpressions(SqlParser.Select select) {
+    if (select == null || select.expressions() == null || select.expressions().isEmpty()) {
+      return Map.of();
+    }
+    List<Expression> expressions = select.expressions();
+    List<String> labels = select.labels();
+    int size = Math.min(expressions.size(), labels.size());
+    Map<String, Expression> mapping = new HashMap<>();
+    for (int i = 0; i < size; i++) {
+      Expression expression = expressions.get(i);
+      String label = labels.get(i);
+      if (expression == null || expression instanceof Column) {
+        continue;
+      }
+      if (label == null || label.isBlank()) {
+        continue;
+      }
+      mapping.putIfAbsent(label, expression);
+      mapping.putIfAbsent(label.toLowerCase(Locale.ROOT), expression);
+    }
+    return mapping.isEmpty() ? Map.of() : Map.copyOf(mapping);
   }
 
   /**

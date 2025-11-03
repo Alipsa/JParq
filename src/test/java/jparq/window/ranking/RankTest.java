@@ -73,6 +73,45 @@ public class RankTest {
     Assertions.assertEquals(16.107, averages.get(2), 0.001, "Gear 3 should have the lowest average mpg");
   }
 
+  @Test
+  void testRankFollowsRankOrdering() {
+    String sql = """
+        WITH GearAverages AS (
+          SELECT gear, AVG(mpg) AS avg_mpg
+          FROM mtcars
+          GROUP BY gear
+        )
+        SELECT gear, avg_mpg,
+        RANK() OVER (ORDER BY avg_mpg DESC) AS mpg_rank
+        FROM GearAverages
+        ORDER BY mpg_rank
+        """;
+
+    List<Integer> gears = new ArrayList<>();
+    List<Double> averages = new ArrayList<>();
+    List<Long> ranks = new ArrayList<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          gears.add(rs.getInt("gear"));
+          averages.add(rs.getDouble("avg_mpg"));
+          ranks.add(rs.getLong("mpg_rank"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertEquals(List.of(4, 5, 3), gears, "Gear ranking must follow descending average mpg");
+    Assertions.assertEquals(3, averages.size(), "Expected one aggregate row per gear value");
+    Assertions.assertEquals(3, ranks.size(), "Expected a rank value for each aggregated row");
+    Assertions.assertEquals(List.of(1L, 2L, 3L), ranks, "Ranks must start at one and increase sequentially");
+    Assertions.assertEquals(24.533, averages.get(0), 0.001, "Gear 4 should have the highest average mpg");
+    Assertions.assertEquals(21.380, averages.get(1), 0.001, "Gear 5 should have the second highest average mpg");
+    Assertions.assertEquals(16.107, averages.get(2), 0.001, "Gear 3 should have the lowest average mpg");
+  }
+
   /**
    * Ensure that RANK assigns identical values to ties and introduces gaps after
    * groups of equal ORDER BY keys.
