@@ -723,10 +723,7 @@ public final class ExpressionEvaluator {
       return 1;
     }
     int cmp = Arrays.compare(left, right);
-    if (cmp != 0) {
-      return cmp;
-    }
-    return Integer.compare(left.length, right.length);
+    return cmp;
   }
 
   private int compare(Expression leftExpr, Expression rightExpr, GenericRecord rec) {

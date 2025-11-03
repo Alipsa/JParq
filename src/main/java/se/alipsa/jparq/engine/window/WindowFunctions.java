@@ -227,7 +227,7 @@ public final class WindowFunctions {
       return 0;
     }
     if (lv == null || rv == null) {
-      return compareNulls(lv, rv, left.ascending(), right.nullOrdering());
+      return compareNulls(lv, rv, left.ascending(), left.nullOrdering());
     }
     int cmp = compareValues(lv, rv);
     return left.ascending() ? cmp : -cmp;
