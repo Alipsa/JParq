@@ -174,8 +174,7 @@ public class RowNumberTest {
           final double salary = rs.getDouble(4);
           final long rank = rs.getLong(5);
 
-          Assertions.assertTrue(rank >= 1 && rank <= 3,
-              "Row number must be within requested top three per department");
+          Assertions.assertTrue(rank >= 1 && rank <= 3, "Row number must be within requested top three per department");
 
           long expectedRank = lastRank.getOrDefault(department, 0L) + 1L;
           Assertions.assertEquals(expectedRank, rank,

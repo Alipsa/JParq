@@ -297,10 +297,12 @@ public final class QueryProcessor implements AutoCloseable {
     }
 
     /**
-     * Provide a plan describing analytic window functions that require materialization.
+     * Provide a plan describing analytic window functions that require
+     * materialization.
      *
      * @param windowPlan
-     *          plan describing analytic window functions, {@code null} when none are present
+     *          plan describing analytic window functions, {@code null} when none
+     *          are present
      * @return {@code this} for chaining
      */
     public Options windowPlan(WindowFunctions.WindowPlan windowPlan) {
@@ -592,9 +594,11 @@ public final class QueryProcessor implements AutoCloseable {
   }
 
   /**
-   * Retrieve the precomputed analytic window state associated with this processor.
+   * Retrieve the precomputed analytic window state associated with this
+   * processor.
    *
-   * @return the computed {@link WindowFunctions.WindowState}, or an empty state when no window functions are present
+   * @return the computed {@link WindowFunctions.WindowState}, or an empty state
+   *         when no window functions are present
    */
   public WindowFunctions.WindowState windowState() {
     return windowState == null ? WindowFunctions.WindowState.empty() : windowState;

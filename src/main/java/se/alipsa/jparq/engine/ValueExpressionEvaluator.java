@@ -40,11 +40,11 @@ import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.helper.DateTimeExpressions;
 import se.alipsa.jparq.helper.JsonExpressions;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.StringExpressions;
-import se.alipsa.jparq.engine.window.WindowFunctions;
 
 /**
  * Evaluates SELECT-list expressions (e.g. computed columns, {@code CASE}

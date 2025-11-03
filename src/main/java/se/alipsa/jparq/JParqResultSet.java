@@ -27,8 +27,8 @@ import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.OrderByElement;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.AggregateFunctions;
-import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.AvroCoercions;
+import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.QueryProcessor;
 import se.alipsa.jparq.engine.RecordReader;
@@ -36,8 +36,8 @@ import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.window.WindowFunctions;
-import se.alipsa.jparq.model.ResultSetAdapter;
 import se.alipsa.jparq.helper.JParqUtil;
+import se.alipsa.jparq.model.ResultSetAdapter;
 
 /** An implementation of the java.sql.ResultSet interface. */
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
@@ -151,8 +151,8 @@ public class JParqResultSet extends ResultSetAdapter {
       labels = new ArrayList<>(aggregatePlan.labels());
       physical = null;
       try {
-        AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader,
-            aggregatePlan, effectiveResidual, select.having(), select.orderBy(), subqueryExecutor, queryQualifiers,
+        AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan,
+            effectiveResidual, select.having(), select.orderBy(), subqueryExecutor, queryQualifiers,
             qualifierColumnMapping, unqualifiedColumnMapping);
         this.aggregateRows = new ArrayList<>(result.rows());
         this.aggregateSqlTypes = result.sqlTypes();
@@ -190,12 +190,11 @@ public class JParqResultSet extends ResultSetAdapter {
         }
         List<String> distinctProjection = resolveDistinctColumns(select);
         QueryProcessor.Options options = QueryProcessor.Options.builder().distinct(select.distinct())
-            .distinctColumns(distinctProjection)
-            .distinctBeforePreLimit(select.innerDistinct()).subqueryExecutor(subqueryExecutor)
-            .preLimit(select.preLimit()).preOrderBy(select.preOrderBy()).outerQualifiers(queryQualifiers)
-            .qualifierColumnMapping(qualifierColumnMapping).unqualifiedColumnMapping(unqualifiedColumnMapping)
-            .preStageDistinctColumns(select.innerDistinctColumns()).offset(select.offset())
-            .preOffset(select.preOffset()).windowPlan(windowPlan);
+            .distinctColumns(distinctProjection).distinctBeforePreLimit(select.innerDistinct())
+            .subqueryExecutor(subqueryExecutor).preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
+            .outerQualifiers(queryQualifiers).qualifierColumnMapping(qualifierColumnMapping)
+            .unqualifiedColumnMapping(unqualifiedColumnMapping).preStageDistinctColumns(select.innerDistinctColumns())
+            .offset(select.offset()).preOffset(select.preOffset()).windowPlan(windowPlan);
         List<String> projectionColumns = requestedColumns;
         if (projectionColumns == null || projectionColumns.isEmpty()) {
           projectionColumns = select.columns();
@@ -247,8 +246,8 @@ public class JParqResultSet extends ResultSetAdapter {
         List<String> distinctProjection = resolveDistinctColumns(select);
         QueryProcessor.Options options = QueryProcessor.Options.builder().schema(schema).initialEmitted(initialEmitted)
             .distinct(select.distinct()).distinctColumns(distinctProjection)
-            .distinctBeforePreLimit(select.innerDistinct()).firstAlreadyRead(first)
-            .subqueryExecutor(subqueryExecutor).preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
+            .distinctBeforePreLimit(select.innerDistinct()).firstAlreadyRead(first).subqueryExecutor(subqueryExecutor)
+            .preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
             .preStageDistinctColumns(select.innerDistinctColumns()).outerQualifiers(queryQualifiers)
             .qualifierColumnMapping(qualifierColumnMapping).unqualifiedColumnMapping(unqualifiedColumnMapping)
             .offset(select.offset()).preOffset(select.preOffset()).windowPlan(windowPlan);
@@ -259,11 +258,11 @@ public class JParqResultSet extends ResultSetAdapter {
         List<String> distinctProjection = resolveDistinctColumns(select);
         QueryProcessor.Options options = QueryProcessor.Options.builder().schema(schema).distinct(select.distinct())
             .distinctColumns(distinctProjection).distinctBeforePreLimit(select.innerDistinct()).orderBy(order)
-            .firstAlreadyRead(first)
-            .subqueryExecutor(subqueryExecutor).preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
-            .preStageDistinctColumns(select.innerDistinctColumns()).outerQualifiers(queryQualifiers)
-            .qualifierColumnMapping(qualifierColumnMapping).unqualifiedColumnMapping(unqualifiedColumnMapping)
-            .offset(select.offset()).preOffset(select.preOffset()).windowPlan(windowPlan);
+            .firstAlreadyRead(first).subqueryExecutor(subqueryExecutor).preLimit(select.preLimit())
+            .preOrderBy(select.preOrderBy()).preStageDistinctColumns(select.innerDistinctColumns())
+            .outerQualifiers(queryQualifiers).qualifierColumnMapping(qualifierColumnMapping)
+            .unqualifiedColumnMapping(unqualifiedColumnMapping).offset(select.offset()).preOffset(select.preOffset())
+            .windowPlan(windowPlan);
         this.qp = new QueryProcessor(reader, proj, effectiveResidual, select.limit(), options);
         this.current = qp.nextMatching();
         this.windowState = qp.windowState();
@@ -520,11 +519,13 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
-   * Determine the columns participating in DISTINCT evaluation for the supplied select statement.
+   * Determine the columns participating in DISTINCT evaluation for the supplied
+   * select statement.
    *
    * @param select
    *          select statement to inspect
-   * @return list of column names or {@code null} when DISTINCT should consider the full projection
+   * @return list of column names or {@code null} when DISTINCT should consider
+   *         the full projection
    */
   private static List<String> resolveDistinctColumns(SqlParser.Select select) {
     if (select == null) {
@@ -541,7 +542,8 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
-   * Remove predicates that reference qualifiers not available to the current query scope.
+   * Remove predicates that reference qualifiers not available to the current
+   * query scope.
    *
    * @param expression
    *          the predicate expression to prune (may be {@code null})
@@ -558,14 +560,15 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
-   * Recursively prune predicates referencing unavailable qualifiers while preserving
-   * the structure of AND/parenthesized expressions when possible.
+   * Recursively prune predicates referencing unavailable qualifiers while
+   * preserving the structure of AND/parenthesized expressions when possible.
    *
    * @param expression
    *          expression to inspect
    * @param availableQualifiers
    *          normalized qualifiers that remain accessible
-   * @return pruned expression or {@code null} when the predicate cannot be satisfied
+   * @return pruned expression or {@code null} when the predicate cannot be
+   *         satisfied
    */
   private static Expression pruneExpression(Expression expression, Set<String> availableQualifiers) {
     if (expression == null) {

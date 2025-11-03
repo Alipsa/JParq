@@ -23,7 +23,8 @@ import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
- * Utility methods for planning and evaluating SQL window functions that appear in SELECT lists.
+ * Utility methods for planning and evaluating SQL window functions that appear
+ * in SELECT lists.
  */
 public final class WindowFunctions {
 
@@ -31,11 +32,13 @@ public final class WindowFunctions {
   }
 
   /**
-   * Create a plan describing analytic window functions that require pre-computation.
+   * Create a plan describing analytic window functions that require
+   * pre-computation.
    *
    * @param expressions
    *          expressions present in the SELECT list
-   * @return a window plan capturing supported analytic expressions or {@code null} when none are present
+   * @return a window plan capturing supported analytic expressions or
+   *         {@code null} when none are present
    */
   public static WindowPlan plan(List<Expression> expressions) {
     if (expressions == null || expressions.isEmpty()) {
@@ -287,7 +290,8 @@ public final class WindowFunctions {
    *          left-hand binary value (may be {@code null})
    * @param right
    *          right-hand binary value (may be {@code null})
-   * @return negative when {@code left < right}, zero when equal, otherwise positive
+   * @return negative when {@code left < right}, zero when equal, otherwise
+   *         positive
    */
   private static int compareBinary(byte[] left, byte[] right) {
     if (left == right) {
@@ -303,7 +307,8 @@ public final class WindowFunctions {
   }
 
   /**
-   * Description of analytic window operations that must be computed prior to projection evaluation.
+   * Description of analytic window operations that must be computed prior to
+   * projection evaluation.
    */
   public static final class WindowPlan {
 
@@ -316,7 +321,8 @@ public final class WindowFunctions {
     /**
      * Determine whether the plan contains any analytic window functions.
      *
-     * @return {@code true} when the plan includes pre-computed window functions, otherwise {@code false}
+     * @return {@code true} when the plan includes pre-computed window functions,
+     *         otherwise {@code false}
      */
     public boolean isEmpty() {
       return rowNumberWindows.isEmpty();
@@ -415,7 +421,8 @@ public final class WindowFunctions {
     }
 
     /**
-     * Obtain the precomputed ROW_NUMBER value for the supplied expression and record.
+     * Obtain the precomputed ROW_NUMBER value for the supplied expression and
+     * record.
      *
      * @param expression
      *          the analytic expression

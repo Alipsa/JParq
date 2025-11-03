@@ -64,8 +64,8 @@ import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
-import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.SubqueryExecutor;
+import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /** An implementation of the java.sql.PreparedStatement interface. */

@@ -710,7 +710,8 @@ public final class ExpressionEvaluator {
    *          left-hand value, may be {@code null}
    * @param right
    *          right-hand value, may be {@code null}
-   * @return negative when {@code left < right}, zero when equal, otherwise positive
+   * @return negative when {@code left < right}, zero when equal, otherwise
+   *         positive
    */
   private static int compareBinary(byte[] left, byte[] right) {
     if (left == right) {

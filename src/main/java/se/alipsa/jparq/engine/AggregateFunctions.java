@@ -885,10 +885,10 @@ public final class AggregateFunctions {
     private final List<Object> values;
     private final int hash;
 
-      GroupKey(List<Object> values) {
-        this.values = List.copyOf(values);
-        this.hash = this.values.hashCode();
-      }
+    GroupKey(List<Object> values) {
+      this.values = List.copyOf(values);
+      this.hash = this.values.hashCode();
+    }
 
     @Override
     public boolean equals(Object obj) {

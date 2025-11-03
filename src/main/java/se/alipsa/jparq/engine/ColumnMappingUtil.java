@@ -175,8 +175,8 @@ public final class ColumnMappingUtil {
   }
 
   /**
-   * Determine whether the provided qualifier should participate in the
-   * resolution process.
+   * Determine whether the provided qualifier should participate in the resolution
+   * process.
    *
    * @param qualifier
    *          optional table qualifier from the SQL statement

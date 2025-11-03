@@ -78,7 +78,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     }
 
     Schema s = field.schema().getType() == Schema.Type.UNION
-        ? field.schema().getTypes().stream().filter(t -> t.getType() != Schema.Type.NULL).findFirst().orElse(field.schema())
+        ? field.schema().getTypes().stream().filter(t -> t.getType() != Schema.Type.NULL).findFirst()
+            .orElse(field.schema())
         : field.schema();
     return switch (s.getType()) {
       case STRING, ENUM -> Types.VARCHAR;
@@ -106,14 +107,14 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   }
 
   /**
-   * Resolve the Avro schema field associated with the supplied column index.
-   * The physical column name is preferred, falling back to the projected label
-   * when the column originates from an expression.
+   * Resolve the Avro schema field associated with the supplied column index. The
+   * physical column name is preferred, falling back to the projected label when
+   * the column originates from an expression.
    *
    * @param column
    *          the 1-based column index from the result set
-   * @return the matching {@link Schema.Field}, or {@code null} when the column
-   *         is computed
+   * @return the matching {@link Schema.Field}, or {@code null} when the column is
+   *         computed
    */
   private Schema.Field resolveField(int column) {
     // Prefer physical name for schema lookup; fall back to label if needed
