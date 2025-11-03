@@ -208,4 +208,36 @@ public class RowNumberTest {
           "Highest salary must match the aggregate maximum for department " + entry.getKey());
     }
   }
+
+  @Test
+  void testAliasQualifiedWhereClausePreserved() {
+    List<Integer> expectedIds = new ArrayList<>();
+    jparqSql.query("SELECT MIN(id) AS min_id FROM employees", rs -> {
+      try {
+        while (rs.next()) {
+          expectedIds.add(rs.getInt(1));
+        }
+      } catch (Exception e) {
+        Assertions.fail(e);
+      }
+    });
+    Assertions.assertFalse(expectedIds.isEmpty(), "Expected at least one employee identifier");
+    int targetId = expectedIds.getFirst();
+
+    String sql = "SELECT e.id FROM employees e WHERE e.id = " + targetId;
+    List<Integer> filtered = new ArrayList<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          filtered.add(rs.getInt(1));
+        }
+      } catch (Exception e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertEquals(1, filtered.size(), "Alias-qualified WHERE clause must restrict the result set");
+    Assertions.assertEquals(targetId, filtered.getFirst(),
+        "Alias-qualified predicate must retain the requested employee identifier");
+  }
 }

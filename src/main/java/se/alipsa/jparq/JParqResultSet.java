@@ -131,6 +131,14 @@ public class JParqResultSet extends ResultSetAdapter {
     this.qualifierColumnMapping = qualifierMapping;
     this.unqualifiedColumnMapping = unqualifiedMapping;
     Set<String> availableQualifiers = new LinkedHashSet<>(this.qualifierColumnMapping.keySet());
+    if (availableQualifiers.isEmpty() && !this.queryQualifiers.isEmpty()) {
+      for (String qualifier : this.queryQualifiers) {
+        String normalized = JParqUtil.normalizeQualifier(qualifier);
+        if (normalized != null && !normalized.isEmpty()) {
+          availableQualifiers.add(normalized);
+        }
+      }
+    }
     Expression effectiveResidual = pruneUnavailableQualifiers(residual, availableQualifiers);
     List<String> labels = (columnOrder != null ? new ArrayList<>(columnOrder) : new ArrayList<>());
     List<String> canonicalPhysical = canonicalizeProjection(select, physicalColumnOrder, qualifierMapping,
