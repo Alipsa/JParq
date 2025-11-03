@@ -5,6 +5,7 @@ import static se.alipsa.jparq.engine.AvroCoercions.coerceLiteral;
 import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.Timestamp;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -679,6 +680,16 @@ public final class ExpressionEvaluator {
     if (l instanceof Boolean && r instanceof Boolean) {
       return Boolean.compare((Boolean) l, (Boolean) r);
     }
+    if (l instanceof byte[] && r instanceof byte[]) {
+      return compareBinary((byte[]) l, (byte[]) r);
+    }
+    if (l instanceof java.nio.ByteBuffer lb && r instanceof java.nio.ByteBuffer rb) {
+      byte[] la = new byte[lb.remaining()];
+      byte[] ra = new byte[rb.remaining()];
+      lb.duplicate().get(la);
+      rb.duplicate().get(ra);
+      return compareBinary(la, ra);
+    }
     if (l instanceof Timestamp && r instanceof Timestamp) {
       return Long.compare(((Timestamp) l).getTime(), ((Timestamp) r).getTime());
     }
@@ -690,6 +701,29 @@ public final class ExpressionEvaluator {
       return li.compareTo(ri);
     }
     return l.toString().compareTo(r.toString());
+  }
+
+  /**
+   * Compare two byte arrays using lexicographic ordering.
+   *
+   * @param left
+   *          left-hand value, may be {@code null}
+   * @param right
+   *          right-hand value, may be {@code null}
+   * @return negative when {@code left < right}, zero when equal, otherwise
+   *         positive
+   */
+  private static int compareBinary(byte[] left, byte[] right) {
+    if (left == right) {
+      return 0;
+    }
+    if (left == null) {
+      return -1;
+    }
+    if (right == null) {
+      return 1;
+    }
+    return Arrays.compare(left, right);
   }
 
   private int compare(Expression leftExpr, Expression rightExpr, GenericRecord rec) {
