@@ -54,12 +54,15 @@ JSON_OUT="$OUT_DIR/loc.json"
 CSV_OUT="$OUT_DIR/loc.csv"
 
 echo ">> Counting Java & Groovy lines of code in current directory"
-run_cloc "$PATH_ARG" "${CLOC_ARGS[@]}" | tee "$TEXT_OUT" >/dev/null
+version=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+echo $version >> "$TEXT_OUT"
+run_cloc "$PATH_ARG" "${CLOC_ARGS[@]}" | tee --append "$TEXT_OUT" >/dev/null
 run_cloc "$PATH_ARG" "${CLOC_ARGS[@]}" --json > "$JSON_OUT"
 run_cloc "$PATH_ARG" "${CLOC_ARGS[@]}" --csv --report-file="$CSV_OUT" >/dev/null
 
 cat $TEXT_OUT
 echo
+echo "Version $version"
 echo "✅ LOC reports created:"
 echo "  - Text : $TEXT_OUT"
 echo "  - JSON : $JSON_OUT"
