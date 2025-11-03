@@ -157,8 +157,8 @@ public final class QueryProcessor implements AutoCloseable {
     }
 
     /**
-     * Provide expressions corresponding to projection labels referenced from
-     * ORDER BY clauses.
+     * Provide expressions corresponding to projection labels referenced from ORDER
+     * BY clauses.
      *
      * @param orderByExpressions
      *          mapping of projection label to expression; {@code null} or empty
@@ -550,8 +550,8 @@ public final class QueryProcessor implements AutoCloseable {
 
   private void ensureOrderByEvaluator(Schema schema) {
     if (orderByEvaluator == null && schema != null) {
-      orderByEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, outerQualifiers,
-          qualifierColumnMapping, unqualifiedColumnMapping, windowState());
+      orderByEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
+          unqualifiedColumnMapping, windowState());
     }
   }
 
