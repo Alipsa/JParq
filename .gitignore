@@ -2,3 +2,4 @@
 /target/
 /src/test/resources/acmeh2.trace.db
 /reports/
+/src/test/resources/datasets.trace.db

@@ -1,28 +1,7 @@
+Please add support for XXX as described in the SQL:1999 and SQL:2003 standards
 
-- Alias support (e.g select model as type from mtcars)
-- expose an INFORMATION_SCHEMA with tables/columns via in-memory result sets
-- slim deps with shading/exclusions to get a leaner jar.
-- GROUP BY support
-- HAVING support
-- Aggregation Functions support (min, max, count, avg, sum)
-- CAST support
-- EXISTS support
-- CASE support
-- ANY support e.g. SELECT ProductName
-  FROM Products
-  WHERE ProductID = ANY
-  (SELECT ProductID
-  FROM OrderDetails
-  WHERE Quantity = 10);
-- ALL support e.g. SELECT ProductName
-  FROM Products
-  WHERE ProductID = ALL
-  (SELECT ProductID
-  FROM OrderDetails
-  WHERE Quantity = 10);
-- COMMENTS support
-- string functions support
-- numeric function support
-- date functions support
-- JOIN support (join, inner join, left join, right join, full join)
-- UNION support
+# Important!
+- Create test to verify the functionality in a test class called jparq.XXXTest.java in the src/test/java/se/alipsa/jparq directory.
+- Remember to also update javadocs (all classes and public methods must have a description, all params must be listed and return and throws specified when appropriate) where needed.
+- All tests must pass after the implementation using `mvn -Dspotless.check.skip=true test` to ensure that there is no regression.
+- Adhere to the coding standard defined in checkstyle.xml, pmd-ruleset.xml and spotless-formatting.xml and also pay attention to the design principles of low coupling, high cohesion, clarity and DRY (don't repeat yourself).
