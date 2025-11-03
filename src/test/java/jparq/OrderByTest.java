@@ -1,6 +1,8 @@
 package jparq;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertIterableEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -12,7 +14,10 @@ import java.nio.file.Paths;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Stream;
+
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
@@ -135,6 +140,49 @@ public class OrderByTest {
         }
 
         assertEquals(32, rows, "Expected 32 rows");
+      } catch (SQLException e) {
+        System.err.println(String.join("\n", seen));
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void testOrderByAlias() {
+    jparqSql.query("""
+        SELECT gear,
+        AVG(mpg) AS avgMpg
+        FROM mtcars
+        GROUP BY gear
+        order by avgMpg desc
+        """, rs -> {
+      List<String> seen = new ArrayList<>();
+      try {
+        ResultSetMetaData md = rs.getMetaData();
+        assertEquals(2, md.getColumnCount(), "Expected 2 columns");
+
+        int rows = 0;
+        double prev = Double.POSITIVE_INFINITY;
+        List<Integer> gears = new ArrayList<>();
+        List<Double> avgMpgs = new ArrayList<>();
+
+        while (rs.next()) {
+          int gear = rs.getInt("gear");
+          double mpg = rs.getDouble("avgMpg");
+          gears.add(gear);
+          avgMpgs.add(mpg);
+          seen.add(gear + " " + mpg);
+
+          // non-increasing
+          assertTrue(mpg <= prev, "avgMpg must be non-increasing: " + String.join(", ", seen));
+          prev = mpg;
+          rows++;
+        }
+        assertEquals(3, rows, "Expected 3 rows");
+        double[] expectedAvgMpgs = Stream.of(24.533, 21.38, 16.107).mapToDouble(Double::doubleValue).toArray();
+        double[] actualAvgMpgs = avgMpgs.stream().mapToDouble(Double::doubleValue).toArray();
+        assertArrayEquals(expectedAvgMpgs, actualAvgMpgs, 0.001, "Unexpected avgMpg values");
+
       } catch (SQLException e) {
         System.err.println(String.join("\n", seen));
         fail(e);
