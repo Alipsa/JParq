@@ -225,7 +225,7 @@ public final class WindowFunctions {
     }
     List<OrderComponent> components = new ArrayList<>(elements.size());
     for (OrderByElement element : elements) {
-      boolean asc = !element.isAscDescPresent() || element.isAsc();
+      boolean asc = element.isAsc();
       OrderByElement.NullOrdering nullOrdering = element.getNullOrdering();
       Object value = evaluator.eval(element.getExpression(), record);
       components.add(new OrderComponent(value, asc, nullOrdering));
