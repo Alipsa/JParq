@@ -134,11 +134,11 @@ The following SQL statements are supported:
 - CTE (Common Table Expressions) support
 - Windowing
   - Ranking functions
-    - ROW_NUMBER, RANK
+    - ROW_NUMBER, RANK, DENSE_RANK
 ## Roadmap: Might be implemented in the future
 - Windowing
   - Ranking functions
-    - DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE,
+    - PERCENT_RANK, CUME_DIST, NTILE,
   - Aggregate window functions
     - SUM, AVG, MIN, MAX, COUNT
   - Analytic Value/Navigation Functions

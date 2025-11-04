@@ -16,7 +16,8 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
 /**
- * Integration tests covering the SQL standard RANK and DENSE_RANK window functions.
+ * Integration tests covering the SQL standard RANK and DENSE_RANK window
+ * functions.
  */
 public class RankTest {
 
@@ -190,7 +191,8 @@ public class RankTest {
   }
 
   /**
-   * Verify that DENSE_RANK assigns consecutive ranks without gaps for identical ORDER BY values.
+   * Verify that DENSE_RANK assigns consecutive ranks without gaps for identical
+   * ORDER BY values.
    */
   @Test
   void testDenseRankProducesNoGaps() {
@@ -242,7 +244,8 @@ public class RankTest {
   }
 
   /**
-   * Verify that DENSE_RANK restarts for each partition and remains gapless within partitions.
+   * Verify that DENSE_RANK restarts for each partition and remains gapless within
+   * partitions.
    */
   @Test
   void testDenseRankRespectsPartitions() {

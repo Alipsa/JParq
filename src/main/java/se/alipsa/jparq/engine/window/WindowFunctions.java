@@ -691,7 +691,8 @@ public final class WindowFunctions {
     }
 
     /**
-     * Obtain the precomputed DENSE_RANK value for the supplied expression and record.
+     * Obtain the precomputed DENSE_RANK value for the supplied expression and
+     * record.
      *
      * @param expression
      *          the analytic expression
