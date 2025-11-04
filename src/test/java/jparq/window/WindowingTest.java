@@ -28,11 +28,11 @@ public class WindowingTest {
   }
 
   /**
-   * This query is a common and standard SQL pattern used to find the greatest-n-per-group.
-   * In this case, get the single, most recent salary for each employee.
+   * This query is a common and standard SQL pattern used to find the
+   * greatest-n-per-group. In this case, get the single, most recent salary for
+   * each employee.
    * <p>
-   * H2 equivalent:
-   * <code><pre>
+   * H2 equivalent: <code><pre>
    *   SELECT e."first_name", e."last_name", s."salary"
    *   FROM
    *   employees e
@@ -45,43 +45,41 @@ public class WindowingTest {
    *     FROM salary
    *   ) s ON s."employee" = e."id"
    *   WHERE s.rn = 1
-   * </pre></code>
-   * The expected result is
+   * </pre></code> The expected result is
    * <table>
-   *   <thead>
-   *     <tr>
-   *       <th>first_name</th>
-   *       <th>last_name</th>
-   *       <th>salary</th>
-   *     </tr>
-   *   </thead>
-   *   <tbody>
-   *     <tr>
-   *       <td>Karin</td>
-   *       <td>Pettersson</td>
-   *       <td>180000</td>
-   *     </tr>
-   *     <tr>
-   *       <td>Arne</td>
-   *       <td>Larsson</td>
-   *       <td>195000</td>
-   *     </tr>
-   *     <tr>
-   *       <td>Sixten</td>
-   *       <td>Svensson</td>
-   *       <td>230000</td>
-   *     </tr>
-   *     <tr>
-   *       <td>Tage</td>
-   *       <td>Lundström</td>
-   *       <td>140000</td>
-   *     </tr>
-   *     <tr>
-   *       <td>Per</td>
-   *       <td>Andersson</td>
-   *       <td>165000</td>
-   *     </tr>
-   *   </tbody>
+   * <thead>
+   * <tr>
+   * <th>first_name</th>
+   * <th>last_name</th>
+   * <th>salary</th>
+   * </tr>
+   * </thead> <tbody>
+   * <tr>
+   * <td>Karin</td>
+   * <td>Pettersson</td>
+   * <td>180000</td>
+   * </tr>
+   * <tr>
+   * <td>Arne</td>
+   * <td>Larsson</td>
+   * <td>195000</td>
+   * </tr>
+   * <tr>
+   * <td>Sixten</td>
+   * <td>Svensson</td>
+   * <td>230000</td>
+   * </tr>
+   * <tr>
+   * <td>Tage</td>
+   * <td>Lundström</td>
+   * <td>140000</td>
+   * </tr>
+   * <tr>
+   * <td>Per</td>
+   * <td>Andersson</td>
+   * <td>165000</td>
+   * </tr>
+   * </tbody>
    * </table>
    */
   @Test
