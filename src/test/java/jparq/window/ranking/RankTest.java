@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,7 +16,7 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
 /**
- * Integration tests covering the SQL standard RANK window function.
+ * Integration tests covering the SQL standard RANK and DENSE_RANK window functions.
  */
 public class RankTest {
 
@@ -186,6 +187,104 @@ public class RankTest {
       Assertions.assertTrue(rankedCount >= baseCount,
           "Ranked rows must include every row from the base data set for cylinder " + cyl);
     }
+  }
+
+  /**
+   * Verify that DENSE_RANK assigns consecutive ranks without gaps for identical ORDER BY values.
+   */
+  @Test
+  void testDenseRankProducesNoGaps() {
+    String sql = """
+        SELECT model, hp,
+               DENSE_RANK() OVER (ORDER BY hp DESC) AS hp_dense_rank
+        FROM mtcars
+        ORDER BY hp DESC, model
+        """;
+
+    List<Integer> horsepower = new ArrayList<>();
+    List<Long> denseRanks = new ArrayList<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          horsepower.add(rs.getInt("hp"));
+          denseRanks.add(rs.getLong("hp_dense_rank"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(horsepower.isEmpty(), "Expected horsepower values from the base data set");
+    Assertions.assertEquals(horsepower.size(), denseRanks.size(), "Each row must produce a dense rank value");
+
+    LinkedHashMap<Integer, Long> expectedRankByHp = new LinkedHashMap<>();
+    long nextRank = 1L;
+    Integer previousHp = null;
+    for (int i = 0; i < horsepower.size(); i++) {
+      Integer hp = horsepower.get(i);
+      if (!hp.equals(previousHp)) {
+        expectedRankByHp.putIfAbsent(hp, nextRank);
+        previousHp = hp;
+        nextRank++;
+      }
+      long observedRank = denseRanks.get(i);
+      long expectedRank = expectedRankByHp.get(hp);
+      Assertions.assertEquals(expectedRank, observedRank,
+          "Dense rank must remain constant for equal ORDER BY values and advance without gaps");
+    }
+
+    long uniqueHpCount = expectedRankByHp.size();
+    for (long rank = 1L; rank <= uniqueHpCount; rank++) {
+      Assertions.assertTrue(expectedRankByHp.containsValue(rank),
+          "Dense rank values must cover every integer from 1 to the number of unique ORDER BY values");
+    }
+  }
+
+  /**
+   * Verify that DENSE_RANK restarts for each partition and remains gapless within partitions.
+   */
+  @Test
+  void testDenseRankRespectsPartitions() {
+    String sql = """
+        SELECT cyl, hp,
+               DENSE_RANK() OVER (PARTITION BY cyl ORDER BY hp DESC) AS cyl_hp_dense_rank
+        FROM mtcars
+        ORDER BY cyl, cyl_hp_dense_rank, hp DESC
+        """;
+
+    Map<Long, Integer> previousHpByCyl = new HashMap<>();
+    Map<Long, Long> currentRankByCyl = new HashMap<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          long cyl = toLong(rs.getObject("cyl"));
+          int hp = rs.getInt("hp");
+          long denseRank = rs.getLong("cyl_hp_dense_rank");
+
+          Integer previousHp = previousHpByCyl.get(cyl);
+          long expectedRank;
+          if (previousHp == null) {
+            expectedRank = 1L;
+          } else if (previousHp.intValue() == hp) {
+            expectedRank = currentRankByCyl.get(cyl);
+          } else {
+            expectedRank = currentRankByCyl.get(cyl) + 1L;
+          }
+
+          Assertions.assertEquals(expectedRank, denseRank,
+              "Dense rank must reset and advance sequentially within each partition");
+
+          previousHpByCyl.put(cyl, hp);
+          currentRankByCyl.put(cyl, expectedRank);
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(previousHpByCyl.isEmpty(), "Expected to observe at least one partition");
   }
 
   /**
