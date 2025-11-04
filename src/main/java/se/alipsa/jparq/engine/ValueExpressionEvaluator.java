@@ -276,6 +276,9 @@ public final class ValueExpressionEvaluator {
     if ("DENSE_RANK".equalsIgnoreCase(name)) {
       return windowState.denseRank(analytic, record);
     }
+    if ("PERCENT_RANK".equalsIgnoreCase(name)) {
+      return windowState.percentRank(analytic, record);
+    }
     throw new IllegalArgumentException("Unsupported analytic function: " + analytic);
   }
 

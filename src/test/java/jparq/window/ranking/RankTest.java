@@ -16,8 +16,8 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
 /**
- * Integration tests covering the SQL standard RANK and DENSE_RANK window
- * functions.
+ * Integration tests covering the SQL standard RANK, DENSE_RANK and PERCENT_RANK
+ * window functions.
  */
 public class RankTest {
 
@@ -73,6 +73,90 @@ public class RankTest {
     Assertions.assertEquals(24.533, averages.get(0), 0.001, "Gear 4 should have the highest average mpg");
     Assertions.assertEquals(21.380, averages.get(1), 0.001, "Gear 5 should have the second highest average mpg");
     Assertions.assertEquals(16.107, averages.get(2), 0.001, "Gear 3 should have the lowest average mpg");
+  }
+
+  /**
+   * Verify that PERCENT_RANK follows the SQL specification using an aggregate
+   * ordering example from the mtcars data set.
+   */
+  @Test
+  void testPercentRankFollowsAggregateOrdering() {
+    String sql = """
+        WITH GearAverages AS (
+            SELECT gear, AVG(mpg) AS avg_mpg
+            FROM mtcars
+            GROUP BY gear
+        )
+        SELECT gear, avg_mpg,
+               PERCENT_RANK() OVER (ORDER BY avg_mpg DESC) AS mpg_percent_rank
+        FROM GearAverages
+        ORDER BY avg_mpg DESC
+        """;
+
+    List<Integer> gears = new ArrayList<>();
+    List<Double> averages = new ArrayList<>();
+    List<Double> percentRanks = new ArrayList<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          gears.add(rs.getInt("gear"));
+          averages.add(rs.getDouble("avg_mpg"));
+          percentRanks.add(rs.getDouble("mpg_percent_rank"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertEquals(List.of(4, 5, 3), gears, "Gear ordering must follow descending average mpg");
+    Assertions.assertEquals(3, averages.size(), "Expected one aggregate row per gear value");
+    Assertions.assertEquals(3, percentRanks.size(), "Expected a percent rank value for each aggregated row");
+
+    Assertions.assertEquals(0.0, percentRanks.get(0), 0.0001,
+        "First row in a partition must receive a percent rank of zero");
+    Assertions.assertEquals(0.5, percentRanks.get(1), 0.0001,
+        "Second gear should be halfway between the best and worst averages");
+    Assertions.assertEquals(1.0, percentRanks.get(2), 0.0001,
+        "Final row in a partition must receive a percent rank of one when multiple rows exist");
+  }
+
+  /**
+   * Ensure that queries projecting only the PERCENT_RANK window value still
+   * populate the required partition and ordering columns during execution.
+   */
+  @Test
+  void testPercentRankProjectionWithoutUnderlyingColumns() {
+    String sql = """
+        SELECT PERCENT_RANK() OVER (PARTITION BY cyl ORDER BY mpg) AS mpg_percent_rank
+        FROM mtcars
+        WHERE cyl = 4
+        ORDER BY mpg_percent_rank
+        """;
+
+    List<Double> percentRanks = new ArrayList<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          percentRanks.add(rs.getDouble("mpg_percent_rank"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(percentRanks.isEmpty(), "Expected percent ranks for four-cylinder cars");
+    Assertions.assertEquals(0.0, percentRanks.get(0), 0.0001,
+        "First ordered row must receive the minimum percent rank");
+    Assertions.assertEquals(1.0, percentRanks.get(percentRanks.size() - 1), 0.0001,
+        "Last ordered row must receive the maximum percent rank");
+
+    double previous = Double.NEGATIVE_INFINITY;
+    for (double value : percentRanks) {
+      Assertions.assertTrue(value >= 0.0 && value <= 1.0, "Percent rank values must fall within [0, 1]");
+      Assertions.assertTrue(value >= previous - 0.0000001, "Percent rank values must be non-decreasing after ordering");
+      previous = value;
+    }
   }
 
   @Test
@@ -288,6 +372,87 @@ public class RankTest {
     });
 
     Assertions.assertFalse(previousHpByCyl.isEmpty(), "Expected to observe at least one partition");
+  }
+
+  /**
+   * Verify that PERCENT_RANK resets for each partition and follows the
+   * {@code (rank - 1) / (rows - 1)} formula when multiple rows are present.
+   */
+  @Test
+  void testPercentRankRespectsPartitions() {
+    LinkedHashMap<Long, Long> countsByCyl = new LinkedHashMap<>();
+    jparqSql.query("SELECT cyl, COUNT(*) AS cnt FROM mtcars GROUP BY cyl ORDER BY cyl", rs -> {
+      try {
+        while (rs.next()) {
+          long cyl = toLong(rs.getObject("cyl"));
+          long count = toLong(rs.getObject("cnt"));
+          countsByCyl.put(cyl, count);
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(countsByCyl.isEmpty(), "Expected cylinder counts from the base data set");
+
+    String sql = """
+        SELECT cyl, hp,
+               PERCENT_RANK() OVER (PARTITION BY cyl ORDER BY hp DESC) AS cyl_hp_percent_rank
+        FROM mtcars
+        ORDER BY cyl, hp DESC
+        """;
+
+    Map<Long, Long> processedByCyl = new HashMap<>();
+    Map<Long, Integer> previousHpByCyl = new HashMap<>();
+    Map<Long, Long> currentRankByCyl = new HashMap<>();
+    Map<Long, Double> previousPercentByCyl = new HashMap<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          long cyl = toLong(rs.getObject("cyl"));
+          int hp = rs.getInt("hp");
+          double percentRank = rs.getDouble("cyl_hp_percent_rank");
+
+          long processed = processedByCyl.merge(cyl, 1L, Long::sum);
+          long expectedRank;
+          Integer previousHp = previousHpByCyl.get(cyl);
+          if (previousHp == null) {
+            expectedRank = 1L;
+          } else if (previousHp.intValue() == hp) {
+            expectedRank = currentRankByCyl.get(cyl);
+          } else {
+            expectedRank = processed;
+          }
+
+          long totalRows = countsByCyl.getOrDefault(cyl, 0L);
+          double expectedPercentRank = totalRows <= 1L ? 0.0 : (double) (expectedRank - 1L) / (double) (totalRows - 1L);
+
+          Assertions.assertEquals(expectedPercentRank, percentRank, 0.0001,
+              "Percent rank must follow the SQL formula within each partition");
+
+          if (processed == 1L) {
+            Assertions.assertEquals(0.0, percentRank, 0.0001,
+                "First row of each partition must have a percent rank of zero");
+          }
+          Double previousPercent = previousPercentByCyl.put(cyl, percentRank);
+          if (previousPercent != null) {
+            Assertions.assertTrue(percentRank + 0.0001 >= previousPercent.doubleValue(),
+                "Percent rank values must be non-decreasing within a partition");
+          }
+
+          Assertions.assertTrue(percentRank >= 0.0 && percentRank <= 1.0,
+              "Percent rank must remain within the inclusive [0, 1] range");
+
+          previousHpByCyl.put(cyl, hp);
+          currentRankByCyl.put(cyl, expectedRank);
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(processedByCyl.isEmpty(), "Expected to observe at least one partition");
   }
 
   /**
