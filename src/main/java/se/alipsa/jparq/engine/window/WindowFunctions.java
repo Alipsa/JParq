@@ -118,7 +118,10 @@ public final class WindowFunctions {
       denseRankWindows.add(new DenseRankWindow(analytic, List.copyOf(partitions), orderElements));
       return;
     }
-    percentRankWindows.add(new PercentRankWindow(analytic, List.copyOf(partitions), orderElements));
+    if ("PERCENT_RANK".equalsIgnoreCase(name)) {
+      percentRankWindows.add(new PercentRankWindow(analytic, List.copyOf(partitions), orderElements));
+      return;
+    }
   }
 
   /**
