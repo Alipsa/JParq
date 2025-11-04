@@ -269,39 +269,42 @@ public final class WindowFunctions {
         evaluator);
 
     IdentityHashMap<GenericRecord, BigDecimal> values = new IdentityHashMap<>();
-    Map<List<Object>, Long> partitionCounts = new HashMap<>();
-    for (RowContext context : contexts) {
-      partitionCounts.merge(context.partitionValues(), 1L, Long::sum);
-    }
 
-    List<Object> previousPartition = null;
-    List<OrderComponent> previousOrder = null;
-    long processedInPartition = 0L;
-    long currentRank = 0L;
-    for (RowContext context : contexts) {
-      if (!Objects.equals(previousPartition, context.partitionValues())) {
-        previousPartition = context.partitionValues();
-        previousOrder = null;
-        processedInPartition = 0L;
-        currentRank = 0L;
+    int i = 0;
+    final int n = contexts.size();
+    while (i < n) {
+      // Identify the partition starting at i
+      List<Object> partitionValues = contexts.get(i).partitionValues();
+      int partitionStart = i;
+      int partitionEnd = i;
+      while (partitionEnd < n && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+        partitionEnd++;
       }
-      processedInPartition++;
-      if (previousOrder == null) {
-        currentRank = 1L;
-      } else if (!orderComponentsEqual(previousOrder, context.orderComponents())) {
-        currentRank = processedInPartition;
+      long totalRows = partitionEnd - partitionStart;
+
+      List<OrderComponent> previousOrder = null;
+      long processedInPartition = 0L;
+      long currentRank = 0L;
+      for (int j = partitionStart; j < partitionEnd; j++) {
+        RowContext context = contexts.get(j);
+        processedInPartition++;
+        if (previousOrder == null) {
+          currentRank = 1L;
+        } else if (!orderComponentsEqual(previousOrder, context.orderComponents())) {
+          currentRank = processedInPartition;
+        }
+        BigDecimal percentRank;
+        if (totalRows <= 1L) {
+          percentRank = BigDecimal.ZERO;
+        } else {
+          BigDecimal numerator = BigDecimal.valueOf(currentRank - 1L);
+          BigDecimal denominator = BigDecimal.valueOf(totalRows - 1L);
+          percentRank = numerator.divide(denominator, MathContext.DECIMAL128);
+        }
+        values.put(context.record(), percentRank);
+        previousOrder = context.orderComponents();
       }
-      long totalRows = partitionCounts.getOrDefault(context.partitionValues(), 0L);
-      BigDecimal percentRank;
-      if (totalRows <= 1L) {
-        percentRank = BigDecimal.ZERO;
-      } else {
-        BigDecimal numerator = BigDecimal.valueOf(currentRank - 1L);
-        BigDecimal denominator = BigDecimal.valueOf(totalRows - 1L);
-        percentRank = numerator.divide(denominator, MathContext.DECIMAL128);
-      }
-      values.put(context.record(), percentRank);
-      previousOrder = context.orderComponents();
+      i = partitionEnd;
     }
     return values;
   }
