@@ -16,8 +16,8 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
 /**
- * Integration tests covering the SQL standard RANK, DENSE_RANK and
- * PERCENT_RANK window functions.
+ * Integration tests covering the SQL standard RANK, DENSE_RANK and PERCENT_RANK
+ * window functions.
  */
 public class RankTest {
 
@@ -154,8 +154,7 @@ public class RankTest {
     double previous = Double.NEGATIVE_INFINITY;
     for (double value : percentRanks) {
       Assertions.assertTrue(value >= 0.0 && value <= 1.0, "Percent rank values must fall within [0, 1]");
-      Assertions.assertTrue(value >= previous - 0.0000001,
-          "Percent rank values must be non-decreasing after ordering");
+      Assertions.assertTrue(value >= previous - 0.0000001, "Percent rank values must be non-decreasing after ordering");
       previous = value;
     }
   }
@@ -427,8 +426,7 @@ public class RankTest {
           }
 
           long totalRows = countsByCyl.getOrDefault(cyl, 0L);
-          double expectedPercentRank = totalRows <= 1L ? 0.0
-              : (double) (expectedRank - 1L) / (double) (totalRows - 1L);
+          double expectedPercentRank = totalRows <= 1L ? 0.0 : (double) (expectedRank - 1L) / (double) (totalRows - 1L);
 
           Assertions.assertEquals(expectedPercentRank, percentRank, 0.0001,
               "Percent rank must follow the SQL formula within each partition");

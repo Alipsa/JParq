@@ -8,7 +8,6 @@ import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -57,8 +56,7 @@ public final class WindowFunctions {
       expression.accept(new ExpressionVisitorAdapter<Void>() {
         @Override
         public <S> Void visit(AnalyticExpression analytic, S context) {
-          registerAnalyticExpression(analytic, rowNumberWindows, rankWindows, denseRankWindows,
-              percentRankWindows);
+          registerAnalyticExpression(analytic, rowNumberWindows, rankWindows, denseRankWindows, percentRankWindows);
           return super.visit(analytic, context);
         }
       });
@@ -81,8 +79,8 @@ public final class WindowFunctions {
     if (name == null) {
       return;
     }
-    if (!"ROW_NUMBER".equalsIgnoreCase(name) && !"RANK".equalsIgnoreCase(name)
-        && !"DENSE_RANK".equalsIgnoreCase(name) && !"PERCENT_RANK".equalsIgnoreCase(name)) {
+    if (!"ROW_NUMBER".equalsIgnoreCase(name) && !"RANK".equalsIgnoreCase(name) && !"DENSE_RANK".equalsIgnoreCase(name)
+        && !"PERCENT_RANK".equalsIgnoreCase(name)) {
       return;
     }
     if (analytic.getExpression() != null) {
@@ -120,7 +118,7 @@ public final class WindowFunctions {
     }
     if ("PERCENT_RANK".equalsIgnoreCase(name)) {
       percentRankWindows.add(new PercentRankWindow(analytic, List.copyOf(partitions), orderElements));
-      return;
+      // return;
     }
   }
 
@@ -166,8 +164,8 @@ public final class WindowFunctions {
       IdentityHashMap<GenericRecord, Long> values = computeDenseRank(window, records, evaluator);
       denseRankValues.put(window.expression(), values);
     }
-    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues =
-        new IdentityHashMap<>();
+    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues;
+    percentRankValues = new IdentityHashMap<>();
     for (PercentRankWindow window : plan.percentRankWindows()) {
       IdentityHashMap<GenericRecord, BigDecimal> values = computePercentRank(window, records, evaluator);
       percentRankValues.put(window.expression(), values);
@@ -251,8 +249,8 @@ public final class WindowFunctions {
   }
 
   /**
-   * Compute the SQL standard {@code PERCENT_RANK} values for the supplied
-   * window definition.
+   * Compute the SQL standard {@code PERCENT_RANK} values for the supplied window
+   * definition.
    *
    * @param window
    *          analytic window specification
@@ -260,8 +258,7 @@ public final class WindowFunctions {
    *          records participating in the computation
    * @param evaluator
    *          evaluator for partition and ordering expressions
-   * @return mapping from {@link GenericRecord} to the computed percent rank
-   *         value
+   * @return mapping from {@link GenericRecord} to the computed percent rank value
    */
   private static IdentityHashMap<GenericRecord, BigDecimal> computePercentRank(PercentRankWindow window,
       List<GenericRecord> records, ValueExpressionEvaluator evaluator) {
