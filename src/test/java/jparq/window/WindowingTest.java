@@ -31,6 +31,7 @@ public class WindowingTest {
    * This query is a common and standard SQL pattern used to find the
    * greatest-n-per-group. In this case, get the single, most recent salary for
    * each employee.
+   *
    * <p>
    * H2 equivalent: <code><pre>
    *   SELECT e."first_name", e."last_name", s."salary"
