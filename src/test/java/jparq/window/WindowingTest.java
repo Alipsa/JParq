@@ -119,4 +119,52 @@ public class WindowingTest {
       }
     });
   }
+
+  /**
+   * Verify that the window function correctly identifies the most recent salary
+   * for each employee even when multiple changes share the same change date.
+   */
+  @Test
+  void testRowNumberOrderingInSalaryTable() {
+    String sql = """
+        SELECT employee, salary,
+          ROW_NUMBER() OVER (
+            PARTITION BY employee
+            ORDER BY change_date DESC, id DESC
+          ) AS rn
+        FROM salary
+        ORDER BY employee, rn
+        """;
+
+    Map<Integer, Map<Long, Double>> salaryByEmployee = new HashMap<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          int employeeId = rs.getInt("employee");
+          long rowNumber = rs.getLong("rn");
+          double salary = rs.getDouble("salary");
+          salaryByEmployee.computeIfAbsent(employeeId, ignored -> new HashMap<>()).put(rowNumber, salary);
+        }
+      } catch (Exception e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(salaryByEmployee.isEmpty(), "Expected salary rows to be returned");
+    Map<Integer, Double> expectedLatest = Map.of(
+        1, 165000.0,
+        2, 180000.0,
+        3, 140000.0,
+        4, 195000.0,
+        5, 230000.0);
+
+    expectedLatest.forEach((employeeId, expectedSalary) -> {
+      Map<Long, Double> rows = salaryByEmployee.get(employeeId);
+      Assertions.assertNotNull(rows, "Employee " + employeeId + " must be present in the result");
+      Double latest = rows.get(1L);
+      Assertions.assertNotNull(latest, "Employee " + employeeId + " must have a row number 1");
+      Assertions.assertEquals(expectedSalary, latest, delta,
+          "Employee " + employeeId + " latest salary should match");
+    });
+  }
 }
