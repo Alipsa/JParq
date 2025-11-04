@@ -1,10 +1,11 @@
-package se.alipsa.jparq.engine;
+package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.engine.ColumnMappingUtil;
 
 /** Tests for {@link ColumnMappingUtil}. */
 class ColumnMappingUtilTest {

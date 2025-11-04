@@ -1,10 +1,11 @@
-package se.alipsa.jparq.engine.window;
+package jparq.window;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.engine.window.WindowFunctions;
 
 /**
  * Tests for the private binary comparison helper used by window ordering.

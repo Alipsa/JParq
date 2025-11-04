@@ -62,7 +62,6 @@ Always work with **Java 21** and **Maven ≥ 3.9.9**; the Maven Enforcer plugin 
   - `JParqSql` offers a lightweight wrapper for direct query execution in client code.
 - Test suites of note:
   - `jparq.WhereTest`, `LikeTest`, `IsNullTest` cover predicate evaluation.
-  - `jparq.StringFunctionsTest` delegates to subpackages in `jparq.strfunc` for exhaustive coverage.
   - `jparq.engine.*` exercises parser and evaluator internals.
   - `PredicatePushdownPerfFS` (Failsafe) verifies filesystem behavior.
 
