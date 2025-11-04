@@ -121,6 +121,45 @@ public class RankTest {
         "Final row in a partition must receive a percent rank of one when multiple rows exist");
   }
 
+  /**
+   * Ensure that queries projecting only the PERCENT_RANK window value still
+   * populate the required partition and ordering columns during execution.
+   */
+  @Test
+  void testPercentRankProjectionWithoutUnderlyingColumns() {
+    String sql = """
+        SELECT PERCENT_RANK() OVER (PARTITION BY cyl ORDER BY mpg) AS mpg_percent_rank
+        FROM mtcars
+        WHERE cyl = 4
+        ORDER BY mpg_percent_rank
+        """;
+
+    List<Double> percentRanks = new ArrayList<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          percentRanks.add(rs.getDouble("mpg_percent_rank"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(percentRanks.isEmpty(), "Expected percent ranks for four-cylinder cars");
+    Assertions.assertEquals(0.0, percentRanks.get(0), 0.0001,
+        "First ordered row must receive the minimum percent rank");
+    Assertions.assertEquals(1.0, percentRanks.get(percentRanks.size() - 1), 0.0001,
+        "Last ordered row must receive the maximum percent rank");
+
+    double previous = Double.NEGATIVE_INFINITY;
+    for (double value : percentRanks) {
+      Assertions.assertTrue(value >= 0.0 && value <= 1.0, "Percent rank values must fall within [0, 1]");
+      Assertions.assertTrue(value >= previous - 0.0000001,
+          "Percent rank values must be non-decreasing after ordering");
+      previous = value;
+    }
+  }
+
   @Test
   void testRankFollowsRankOrdering() {
     String sql = """
