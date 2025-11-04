@@ -151,20 +151,14 @@ public class WindowingTest {
     });
 
     Assertions.assertFalse(salaryByEmployee.isEmpty(), "Expected salary rows to be returned");
-    Map<Integer, Double> expectedLatest = Map.of(
-        1, 165000.0,
-        2, 180000.0,
-        3, 140000.0,
-        4, 195000.0,
-        5, 230000.0);
+    Map<Integer, Double> expectedLatest = Map.of(1, 165000.0, 2, 180000.0, 3, 140000.0, 4, 195000.0, 5, 230000.0);
 
     expectedLatest.forEach((employeeId, expectedSalary) -> {
       Map<Long, Double> rows = salaryByEmployee.get(employeeId);
       Assertions.assertNotNull(rows, "Employee " + employeeId + " must be present in the result");
       Double latest = rows.get(1L);
       Assertions.assertNotNull(latest, "Employee " + employeeId + " must have a row number 1");
-      Assertions.assertEquals(expectedSalary, latest, delta,
-          "Employee " + employeeId + " latest salary should match");
+      Assertions.assertEquals(expectedSalary, latest, delta, "Employee " + employeeId + " latest salary should match");
     });
   }
 }
