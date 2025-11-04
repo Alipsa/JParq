@@ -273,6 +273,9 @@ public final class ValueExpressionEvaluator {
     if ("RANK".equalsIgnoreCase(name)) {
       return windowState.rank(analytic, record);
     }
+    if ("DENSE_RANK".equalsIgnoreCase(name)) {
+      return windowState.denseRank(analytic, record);
+    }
     throw new IllegalArgumentException("Unsupported analytic function: " + analytic);
   }
 

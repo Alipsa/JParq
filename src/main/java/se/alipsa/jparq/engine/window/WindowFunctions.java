@@ -46,6 +46,7 @@ public final class WindowFunctions {
     }
     List<RowNumberWindow> rowNumberWindows = new ArrayList<>();
     List<RankWindow> rankWindows = new ArrayList<>();
+    List<DenseRankWindow> denseRankWindows = new ArrayList<>();
     for (Expression expression : expressions) {
       if (expression == null) {
         continue;
@@ -53,19 +54,19 @@ public final class WindowFunctions {
       expression.accept(new ExpressionVisitorAdapter<Void>() {
         @Override
         public <S> Void visit(AnalyticExpression analytic, S context) {
-          registerAnalyticExpression(analytic, rowNumberWindows, rankWindows);
+          registerAnalyticExpression(analytic, rowNumberWindows, rankWindows, denseRankWindows);
           return super.visit(analytic, context);
         }
       });
     }
-    if (rowNumberWindows.isEmpty() && rankWindows.isEmpty()) {
+    if (rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()) {
       return null;
     }
-    return new WindowPlan(List.copyOf(rowNumberWindows), List.copyOf(rankWindows));
+    return new WindowPlan(List.copyOf(rowNumberWindows), List.copyOf(rankWindows), List.copyOf(denseRankWindows));
   }
 
   private static void registerAnalyticExpression(AnalyticExpression analytic, List<RowNumberWindow> rowNumberWindows,
-      List<RankWindow> rankWindows) {
+      List<RankWindow> rankWindows, List<DenseRankWindow> denseRankWindows) {
     if (analytic == null) {
       return;
     }
@@ -73,7 +74,8 @@ public final class WindowFunctions {
     if (name == null) {
       return;
     }
-    if (!"ROW_NUMBER".equalsIgnoreCase(name) && !"RANK".equalsIgnoreCase(name)) {
+    if (!"ROW_NUMBER".equalsIgnoreCase(name) && !"RANK".equalsIgnoreCase(name)
+        && !"DENSE_RANK".equalsIgnoreCase(name)) {
       return;
     }
     if (analytic.getExpression() != null) {
@@ -96,11 +98,15 @@ public final class WindowFunctions {
     List<OrderByElement> orderElements = orderBy == null ? List.of() : List.copyOf(orderBy);
     if ("ROW_NUMBER".equalsIgnoreCase(name)) {
       rowNumberWindows.add(new RowNumberWindow(analytic, List.copyOf(partitions), orderElements));
-    } else {
-      if (orderElements.isEmpty()) {
-        throw new IllegalArgumentException("RANK requires an ORDER BY clause: " + analytic);
-      }
+      return;
+    }
+    if (orderElements.isEmpty()) {
+      throw new IllegalArgumentException(name + " requires an ORDER BY clause: " + analytic);
+    }
+    if ("RANK".equalsIgnoreCase(name)) {
       rankWindows.add(new RankWindow(analytic, List.copyOf(partitions), orderElements));
+    } else {
+      denseRankWindows.add(new DenseRankWindow(analytic, List.copyOf(partitions), orderElements));
     }
   }
 
@@ -133,6 +139,7 @@ public final class WindowFunctions {
         qualifierColumnMapping, unqualifiedColumnMapping, WindowState.empty());
     IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues = new IdentityHashMap<>();
     IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues = new IdentityHashMap<>();
+    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues = new IdentityHashMap<>();
     for (RowNumberWindow window : plan.rowNumberWindows()) {
       IdentityHashMap<GenericRecord, Long> values = computeRowNumbers(window, records, evaluator);
       rowNumberValues.put(window.expression(), values);
@@ -141,7 +148,11 @@ public final class WindowFunctions {
       IdentityHashMap<GenericRecord, Long> values = computeRank(window, records, evaluator);
       rankValues.put(window.expression(), values);
     }
-    return new WindowState(rowNumberValues, rankValues);
+    for (DenseRankWindow window : plan.denseRankWindows()) {
+      IdentityHashMap<GenericRecord, Long> values = computeDenseRank(window, records, evaluator);
+      denseRankValues.put(window.expression(), values);
+    }
+    return new WindowState(rowNumberValues, rankValues, denseRankValues);
   }
 
   private static IdentityHashMap<GenericRecord, Long> computeRowNumbers(RowNumberWindow window,
@@ -186,6 +197,32 @@ public final class WindowFunctions {
         currentRank = 1L;
       } else if (!orderComponentsEqual(previousOrder, context.orderComponents())) {
         currentRank = processedInPartition;
+      }
+      values.put(context.record(), currentRank);
+      previousOrder = context.orderComponents();
+    }
+    return values;
+  }
+
+  private static IdentityHashMap<GenericRecord, Long> computeDenseRank(DenseRankWindow window,
+      List<GenericRecord> records, ValueExpressionEvaluator evaluator) {
+    List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
+        evaluator);
+
+    IdentityHashMap<GenericRecord, Long> values = new IdentityHashMap<>();
+    List<Object> previousPartition = null;
+    List<OrderComponent> previousOrder = null;
+    long currentRank = 0L;
+    for (RowContext context : contexts) {
+      if (!Objects.equals(previousPartition, context.partitionValues())) {
+        previousPartition = context.partitionValues();
+        previousOrder = null;
+        currentRank = 0L;
+      }
+      if (previousOrder == null) {
+        currentRank = 1L;
+      } else if (!orderComponentsEqual(previousOrder, context.orderComponents())) {
+        currentRank++;
       }
       values.put(context.record(), currentRank);
       previousOrder = context.orderComponents();
@@ -387,10 +424,13 @@ public final class WindowFunctions {
 
     private final List<RowNumberWindow> rowNumberWindows;
     private final List<RankWindow> rankWindows;
+    private final List<DenseRankWindow> denseRankWindows;
 
-    WindowPlan(List<RowNumberWindow> rowNumberWindows, List<RankWindow> rankWindows) {
+    WindowPlan(List<RowNumberWindow> rowNumberWindows, List<RankWindow> rankWindows,
+        List<DenseRankWindow> denseRankWindows) {
       this.rowNumberWindows = rowNumberWindows == null ? List.of() : rowNumberWindows;
       this.rankWindows = rankWindows == null ? List.of() : rankWindows;
+      this.denseRankWindows = denseRankWindows == null ? List.of() : denseRankWindows;
     }
 
     /**
@@ -400,7 +440,7 @@ public final class WindowFunctions {
      *         otherwise {@code false}
      */
     public boolean isEmpty() {
-      return rowNumberWindows.isEmpty() && rankWindows.isEmpty();
+      return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty();
     }
 
     /**
@@ -419,6 +459,15 @@ public final class WindowFunctions {
      */
     public List<RankWindow> rankWindows() {
       return rankWindows;
+    }
+
+    /**
+     * Access the DENSE_RANK windows captured by this plan.
+     *
+     * @return immutable list of {@link DenseRankWindow} instances
+     */
+    public List<DenseRankWindow> denseRankWindows() {
+      return denseRankWindows;
     }
   }
 
@@ -510,6 +559,50 @@ public final class WindowFunctions {
     }
   }
 
+  /**
+   * Representation of a DENSE_RANK analytic expression.
+   */
+  public static final class DenseRankWindow {
+
+    private final AnalyticExpression expression;
+    private final List<Expression> partitionExpressions;
+    private final List<OrderByElement> orderByElements;
+
+    DenseRankWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
+        List<OrderByElement> orderByElements) {
+      this.expression = expression;
+      this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
+      this.orderByElements = orderByElements == null ? List.of() : orderByElements;
+    }
+
+    /**
+     * Retrieve the underlying analytic expression.
+     *
+     * @return the {@link AnalyticExpression} represented by this window
+     */
+    public AnalyticExpression expression() {
+      return expression;
+    }
+
+    /**
+     * Retrieve expressions defining the PARTITION BY clause.
+     *
+     * @return immutable list of partition expressions
+     */
+    public List<Expression> partitionExpressions() {
+      return partitionExpressions;
+    }
+
+    /**
+     * Retrieve ORDER BY elements defining the ordering within each partition.
+     *
+     * @return immutable list of {@link OrderByElement} descriptors
+     */
+    public List<OrderByElement> orderByElements() {
+      return orderByElements;
+    }
+  }
+
   private record RowContext(GenericRecord record, List<Object> partitionValues, List<OrderComponent> orderComponents,
       int originalIndex) {
   }
@@ -522,15 +615,18 @@ public final class WindowFunctions {
    */
   public static final class WindowState {
 
-    private static final WindowState EMPTY = new WindowState(Map.of(), Map.of());
+    private static final WindowState EMPTY = new WindowState(Map.of(), Map.of(), Map.of());
 
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues;
+    private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues;
 
     WindowState(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues,
-        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues) {
+        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues,
+        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues) {
       this.rowNumberValues = rowNumberValues == null ? Map.of() : Collections.unmodifiableMap(rowNumberValues);
       this.rankValues = rankValues == null ? Map.of() : Collections.unmodifiableMap(rankValues);
+      this.denseRankValues = denseRankValues == null ? Map.of() : Collections.unmodifiableMap(denseRankValues);
     }
 
     /**
@@ -548,7 +644,7 @@ public final class WindowFunctions {
      * @return {@code true} when no window values are present
      */
     public boolean isEmpty() {
-      return rowNumberValues.isEmpty() && rankValues.isEmpty();
+      return rowNumberValues.isEmpty() && rankValues.isEmpty() && denseRankValues.isEmpty();
     }
 
     /**
@@ -590,6 +686,27 @@ public final class WindowFunctions {
       Long value = values.get(record);
       if (value == null) {
         throw new IllegalArgumentException("No RANK value computed for record: " + record);
+      }
+      return value;
+    }
+
+    /**
+     * Obtain the precomputed DENSE_RANK value for the supplied expression and record.
+     *
+     * @param expression
+     *          the analytic expression
+     * @param record
+     *          the current record
+     * @return the computed dense rank value
+     */
+    public long denseRank(AnalyticExpression expression, GenericRecord record) {
+      IdentityHashMap<GenericRecord, Long> values = denseRankValues.get(expression);
+      if (values == null) {
+        throw new IllegalArgumentException("No DENSE_RANK values available for expression: " + expression);
+      }
+      Long value = values.get(record);
+      if (value == null) {
+        throw new IllegalArgumentException("No DENSE_RANK value computed for record: " + record);
       }
       return value;
     }
