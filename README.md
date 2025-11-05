@@ -145,15 +145,18 @@ The following SQL statements are supported:
     -  LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
 - Support # syntax for creating temporary tables within the current statement
 - Support ## syntax for creating temporary tables that persist for the duration of the connection. CREATE TEMPORARY TABLE is a synonym for this.
-- Support for variable assignment and use within SQL scripts. @variable_name syntax to define a variable that exists for the duration of the statement and @@variable_name for connection-scoped variables.
-  - Example 1:
-    declare @myVar INT;
-    set @myVar = 10;
-    SELECT * FROM myTable WHERE myColumn > @myVar;
-  - Example 2:
-    declare @myVar INT = 10;
-    SELECT * FROM myTable WHERE myColumn > @myVar;
-    Advanced GROUP BY constructs. SqlParser.parseGroupBy only collects a flat list of grouping expressions; there is no handling for SQL-standard GROUPING SETS, ROLLUP, or CUBE elements.
+- Support for variable assignment and use within SQL scripts. 
+  - @variable_name syntax to define a variable that exists for the duration of the statement and @@variable_name for connection-scoped variables.
+    - Example 1 (separate assignment, statement scope):
+      declare @myVar INT;
+      set @myVar = 10;
+      SELECT * FROM myTable WHERE myColumn > @myVar;
+    - Example 2 (direct assignment, connection scope):
+      declare @@myVar INT = 10;
+      SELECT * FROM myTable WHERE myColumn > @@myVar;
+      SELECT * FROM anotherTable LIMIT @@myVar;
+
+- Advanced GROUP BY constructs. SqlParser.parseGroupBy only collects a flat list of grouping expressions; there is no handling for SQL-standard GROUPING SETS, ROLLUP, or CUBE elements.
 
 - JOIN ... USING syntax. The join parser rejects both forms, which the SQL standard includes for read-only queries.
 
