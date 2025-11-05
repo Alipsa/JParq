@@ -723,8 +723,16 @@ public final class WindowFunctions {
     WindowOffset offset = element.getOffset();
     WindowRange range = element.getRange();
     if (offset != null) {
-      FrameBoundary start = rowsBoundary(offset, true);
-      FrameBoundary end = FrameBoundary.currentRow();
+      WindowOffset.Type type = offset.getType();
+      FrameBoundary start;
+      FrameBoundary end;
+      if (type == WindowOffset.Type.FOLLOWING) {
+        start = FrameBoundary.currentRow();
+        end = rowsBoundary(offset, false);
+      } else {
+        start = rowsBoundary(offset, true);
+        end = FrameBoundary.currentRow();
+      }
       return new FrameSpecification(start, end);
     }
     if (range != null) {

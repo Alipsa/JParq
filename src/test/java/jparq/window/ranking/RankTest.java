@@ -876,6 +876,96 @@ public class RankTest {
   }
 
   /**
+   * Verify that ROWS {@code n FOLLOWING} short form expands to the SQL
+   * equivalent frame ({@code CURRENT ROW} to {@code n FOLLOWING}) when used
+   * with {@code SUM(...)} window functions.
+   */
+  @Test
+  void testSumRowsFollowingShortFormExpandsToFutureFrame() {
+    String sql = """
+        SELECT mpg, hp,
+               SUM(hp) OVER (ORDER BY mpg, hp ROWS 2 FOLLOWING) AS future_hp
+        FROM mtcars
+        ORDER BY mpg, hp
+        """;
+
+    List<Integer> horsepower = new ArrayList<>();
+    List<Double> futureTotals = new ArrayList<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          horsepower.add(rs.getInt("hp"));
+          futureTotals.add(rs.getDouble("future_hp"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(horsepower.isEmpty(), "Expected horsepower values from SUM window query");
+    Assertions.assertEquals(horsepower.size(), futureTotals.size(),
+        "SUM window must emit one value per input row");
+
+    for (int i = 0; i < horsepower.size(); i++) {
+      double expected = 0.0;
+      for (int j = i; j < horsepower.size() && j <= i + 2; j++) {
+        expected += horsepower.get(j);
+      }
+      Assertions.assertEquals(expected, futureTotals.get(i), 0.0001,
+          "SUM with ROWS FOLLOWING must aggregate from current row into future rows");
+    }
+  }
+
+  /**
+   * Verify that ROWS {@code UNBOUNDED FOLLOWING} short form expands to the SQL
+   * equivalent frame ({@code CURRENT ROW} to {@code UNBOUNDED FOLLOWING}) for
+   * {@code SUM(...)} window functions.
+   */
+  @Test
+  void testSumRowsUnboundedFollowingExtendsThroughPartitionEnd() {
+    String sql = """
+        SELECT mpg, hp,
+               SUM(hp) OVER (ORDER BY mpg, hp ROWS UNBOUNDED FOLLOWING) AS trailing_hp
+        FROM mtcars
+        ORDER BY mpg, hp
+        """;
+
+    List<Integer> horsepower = new ArrayList<>();
+    List<Double> trailingTotals = new ArrayList<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          horsepower.add(rs.getInt("hp"));
+          trailingTotals.add(rs.getDouble("trailing_hp"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(horsepower.isEmpty(), "Expected horsepower values from SUM window query");
+    Assertions.assertEquals(horsepower.size(), trailingTotals.size(),
+        "SUM window must emit one value per input row");
+
+    double[] expected = new double[horsepower.size()];
+    double running = 0.0;
+    for (int i = horsepower.size() - 1; i >= 0; i--) {
+      running += horsepower.get(i);
+      expected[i] = running;
+    }
+
+    for (int i = 0; i < horsepower.size(); i++) {
+      Assertions.assertEquals(expected[i], trailingTotals.get(i), 0.0001,
+          "SUM with ROWS UNBOUNDED FOLLOWING must include all remaining rows");
+    }
+
+    Assertions.assertEquals(horsepower.get(horsepower.size() - 1), trailingTotals.get(trailingTotals.size() - 1),
+        0.0001, "Final ROWS UNBOUNDED FOLLOWING value must equal the last row's horsepower");
+  }
+
+  /**
    * Ensure that {@code SUM(...)} window functions without an ORDER BY clause
    * compute a constant total for each partition as mandated by the SQL
    * standard.
