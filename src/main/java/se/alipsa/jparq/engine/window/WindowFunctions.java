@@ -348,7 +348,7 @@ public final class WindowFunctions {
       }
 
       long totalRows = partitionEnd - partitionStart;
-      if (totalRows <= 0L) {
+      if (totalRows == 0L) {
         index = partitionEnd;
         continue;
       }
