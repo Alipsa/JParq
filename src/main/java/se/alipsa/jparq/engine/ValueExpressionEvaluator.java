@@ -282,6 +282,9 @@ public final class ValueExpressionEvaluator {
     if ("CUME_DIST".equalsIgnoreCase(name)) {
       return windowState.cumeDist(analytic, record);
     }
+    if ("NTILE".equalsIgnoreCase(name)) {
+      return windowState.ntile(analytic, record);
+    }
     throw new IllegalArgumentException("Unsupported analytic function: " + analytic);
   }
 

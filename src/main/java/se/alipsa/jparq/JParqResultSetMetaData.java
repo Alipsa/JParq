@@ -145,8 +145,14 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     net.sf.jsqlparser.expression.Expression expression = expressions.get(index);
     if (expression instanceof net.sf.jsqlparser.expression.AnalyticExpression analytic) {
       String functionName = analytic.getName();
-      if (functionName != null && "ROW_NUMBER".equalsIgnoreCase(functionName)) {
-        return Types.BIGINT;
+      if (functionName != null) {
+        if ("ROW_NUMBER".equalsIgnoreCase(functionName) || "RANK".equalsIgnoreCase(functionName)
+            || "DENSE_RANK".equalsIgnoreCase(functionName) || "NTILE".equalsIgnoreCase(functionName)) {
+          return Types.BIGINT;
+        }
+        if ("PERCENT_RANK".equalsIgnoreCase(functionName) || "CUME_DIST".equalsIgnoreCase(functionName)) {
+          return Types.DOUBLE;
+        }
       }
     }
     return Types.OTHER;

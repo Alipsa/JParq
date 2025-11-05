@@ -16,8 +16,8 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
 /**
- * Integration tests covering the SQL standard RANK, DENSE_RANK, PERCENT_RANK
- * and CUME_DIST window functions.
+ * Integration tests covering the SQL standard RANK, DENSE_RANK, PERCENT_RANK,
+ * CUME_DIST and NTILE window functions.
  */
 public class RankTest {
 
@@ -272,6 +272,147 @@ public class RankTest {
     }
     Assertions.assertEquals((double) firstGroupCount[0] / (double) totalRows[0], cumeDists.get(0), 0.0001,
         "First row must equal the proportion of the partition represented by its peer group");
+  }
+
+  /**
+   * Verify that NTILE evenly distributes rows across quartiles when the total row count is divisible by the requested
+   * bucket count.
+   */
+  @Test
+  void testNtileDividesIntoQuartiles() {
+    String sql = """
+        SELECT hp,
+               NTILE(4) OVER (ORDER BY hp) AS hp_quartile
+        FROM mtcars
+        ORDER BY hp
+        """;
+
+    List<Integer> quartiles = new ArrayList<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          quartiles.add(rs.getInt("hp_quartile"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertEquals(32, quartiles.size(), "mtcars data set must provide 32 horsepower values");
+
+    Map<Integer, Long> counts = new LinkedHashMap<>();
+    int previous = Integer.MIN_VALUE;
+    for (int quartile : quartiles) {
+      Assertions.assertTrue(quartile >= 1 && quartile <= 4, "Quartile assignment must fall within [1, 4]");
+      if (previous != Integer.MIN_VALUE) {
+        Assertions.assertTrue(quartile >= previous, "Quartile assignments must be non-decreasing after ordering");
+      }
+      previous = quartile;
+      counts.merge(quartile, 1L, Long::sum);
+    }
+
+    for (int tile = 1; tile <= 4; tile++) {
+      Assertions.assertEquals(8L, counts.getOrDefault(tile, 0L),
+          "Each quartile must contain exactly eight rows in the evenly divisible case");
+    }
+  }
+
+  /**
+   * Ensure that NTILE can execute without an ORDER BY clause and that rows are bucketed according to the input
+   * sequence when no ordering is provided.
+   */
+  @Test
+  void testNtileWithoutOrderByClause() {
+    String sql = """
+        SELECT NTILE(3) OVER () AS bucket
+        FROM mtcars
+        ORDER BY bucket
+        """;
+
+    Map<Integer, Long> counts = new LinkedHashMap<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          int bucket = rs.getInt("bucket");
+          Assertions.assertTrue(bucket >= 1 && bucket <= 3, "Bucket assignments must fall within [1, 3]");
+          counts.merge(bucket, 1L, Long::sum);
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertEquals(32L, counts.values().stream().mapToLong(Long::longValue).sum(),
+        "NTILE must process every row in the mtcars data set");
+    Assertions.assertEquals(11L, counts.getOrDefault(1, 0L),
+        "First NTILE bucket must receive the first remainder row when no ordering is supplied");
+    Assertions.assertEquals(11L, counts.getOrDefault(2, 0L),
+        "Second NTILE bucket must receive the second remainder row when no ordering is supplied");
+    Assertions.assertEquals(10L, counts.getOrDefault(3, 0L),
+        "Final NTILE bucket must receive the base number of rows when no ordering is supplied");
+  }
+
+  /**
+   * Ensure that NTILE distributes remainder rows to the earliest buckets when the partition size is not evenly
+   * divisible by the bucket count.
+   */
+  @Test
+  void testNtileBalancesUnevenPartitions() {
+    Map<Integer, Long> partitionSizes = new LinkedHashMap<>();
+    jparqSql.query("SELECT cyl, COUNT(*) AS cnt FROM mtcars GROUP BY cyl ORDER BY cyl", rs -> {
+      try {
+        while (rs.next()) {
+          partitionSizes.put(rs.getInt("cyl"), rs.getLong("cnt"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(partitionSizes.isEmpty(), "Expected partition counts for the cylinder column");
+
+    String sql = """
+        SELECT cyl,
+               NTILE(2) OVER (PARTITION BY cyl ORDER BY hp) AS hp_bucket
+        FROM mtcars
+        ORDER BY cyl, hp_bucket, hp
+        """;
+
+    Map<Integer, Map<Integer, Long>> countsByPartition = new LinkedHashMap<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          int cyl = rs.getInt("cyl");
+          int bucket = rs.getInt("hp_bucket");
+          Assertions.assertTrue(bucket >= 1 && bucket <= 2, "Bucket assignments must fall within [1, 2]");
+          countsByPartition.computeIfAbsent(cyl, ignored -> new LinkedHashMap<>()).merge(bucket, 1L, Long::sum);
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertEquals(partitionSizes.keySet(), countsByPartition.keySet(),
+        "Each cylinder partition must receive NTILE results");
+
+    for (Map.Entry<Integer, Long> entry : partitionSizes.entrySet()) {
+      int cyl = entry.getKey();
+      long total = entry.getValue();
+      Map<Integer, Long> bucketCounts = countsByPartition.get(cyl);
+      Assertions.assertNotNull(bucketCounts, "Missing bucket counts for cylinder " + cyl);
+
+      long baseSize = total / 2L;
+      long remainder = total % 2L;
+      long expectedFirst = baseSize + (remainder > 0L ? 1L : 0L);
+      long expectedSecond = baseSize;
+
+      Assertions.assertEquals(expectedFirst, bucketCounts.getOrDefault(1, 0L),
+          "First NTILE bucket must receive the extra remainder row for cylinder " + cyl);
+      Assertions.assertEquals(expectedSecond, bucketCounts.getOrDefault(2, 0L),
+          "Second NTILE bucket must contain the base share of rows for cylinder " + cyl);
+      Assertions.assertEquals(total, bucketCounts.values().stream().mapToLong(Long::longValue).sum(),
+          "NTILE buckets must account for every row in the partition for cylinder " + cyl);
+    }
   }
 
   @Test

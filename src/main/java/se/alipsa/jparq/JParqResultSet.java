@@ -276,6 +276,20 @@ public class JParqResultSet extends ResultSetAdapter {
             }
           }
         }
+        for (WindowFunctions.NtileWindow window : windowPlan.ntileWindows()) {
+          for (Expression partition : window.partitionExpressions()) {
+            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
+          }
+          for (OrderByElement order : window.orderByElements()) {
+            if (order != null && order.getExpression() != null) {
+              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
+            }
+          }
+          Expression bucketExpression = window.bucketExpression();
+          if (bucketExpression != null) {
+            requiredColumns.addAll(SqlParser.collectQualifiedColumns(bucketExpression, queryQualifiers));
+          }
+        }
       }
       proj = new ArrayList<>(requiredColumns);
       if (this.columnOrder.isEmpty()) {
