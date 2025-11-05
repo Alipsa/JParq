@@ -50,6 +50,7 @@ public final class WindowFunctions {
     List<DenseRankWindow> denseRankWindows = new ArrayList<>();
     List<PercentRankWindow> percentRankWindows = new ArrayList<>();
     List<CumeDistWindow> cumeDistWindows = new ArrayList<>();
+    List<NtileWindow> ntileWindows = new ArrayList<>();
     for (Expression expression : expressions) {
       if (expression == null) {
         continue;
@@ -58,22 +59,22 @@ public final class WindowFunctions {
         @Override
         public <S> Void visit(AnalyticExpression analytic, S context) {
           registerAnalyticExpression(analytic, rowNumberWindows, rankWindows, denseRankWindows, percentRankWindows,
-              cumeDistWindows);
+              cumeDistWindows, ntileWindows);
           return super.visit(analytic, context);
         }
       });
     }
     if (rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
-        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty()) {
+        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty()) {
       return null;
     }
     return new WindowPlan(List.copyOf(rowNumberWindows), List.copyOf(rankWindows), List.copyOf(denseRankWindows),
-        List.copyOf(percentRankWindows), List.copyOf(cumeDistWindows));
+        List.copyOf(percentRankWindows), List.copyOf(cumeDistWindows), List.copyOf(ntileWindows));
   }
 
   private static void registerAnalyticExpression(AnalyticExpression analytic, List<RowNumberWindow> rowNumberWindows,
       List<RankWindow> rankWindows, List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
-      List<CumeDistWindow> cumeDistWindows) {
+      List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows) {
     if (analytic == null) {
       return;
     }
@@ -82,11 +83,9 @@ public final class WindowFunctions {
       return;
     }
     if (!"ROW_NUMBER".equalsIgnoreCase(name) && !"RANK".equalsIgnoreCase(name) && !"DENSE_RANK".equalsIgnoreCase(name)
-        && !"PERCENT_RANK".equalsIgnoreCase(name) && !"CUME_DIST".equalsIgnoreCase(name)) {
+        && !"PERCENT_RANK".equalsIgnoreCase(name) && !"CUME_DIST".equalsIgnoreCase(name)
+        && !"NTILE".equalsIgnoreCase(name)) {
       return;
-    }
-    if (analytic.getExpression() != null) {
-      throw new IllegalArgumentException(name + " must not include an argument expression: " + analytic);
     }
     if (analytic.isDistinct() || analytic.isUnique()) {
       throw new IllegalArgumentException(name + " does not support DISTINCT or UNIQUE modifiers: " + analytic);
@@ -104,6 +103,9 @@ public final class WindowFunctions {
     List<OrderByElement> orderBy = analytic.getOrderByElements();
     List<OrderByElement> orderElements = orderBy == null ? List.of() : List.copyOf(orderBy);
     if ("ROW_NUMBER".equalsIgnoreCase(name)) {
+      if (analytic.getExpression() != null) {
+        throw new IllegalArgumentException("ROW_NUMBER must not include an argument expression: " + analytic);
+      }
       rowNumberWindows.add(new RowNumberWindow(analytic, List.copyOf(partitions), orderElements));
       return;
     }
@@ -111,19 +113,39 @@ public final class WindowFunctions {
       throw new IllegalArgumentException(name + " requires an ORDER BY clause: " + analytic);
     }
     if ("RANK".equalsIgnoreCase(name)) {
+      if (analytic.getExpression() != null) {
+        throw new IllegalArgumentException("RANK must not include an argument expression: " + analytic);
+      }
       rankWindows.add(new RankWindow(analytic, List.copyOf(partitions), orderElements));
       return;
     }
     if ("DENSE_RANK".equalsIgnoreCase(name)) {
+      if (analytic.getExpression() != null) {
+        throw new IllegalArgumentException("DENSE_RANK must not include an argument expression: " + analytic);
+      }
       denseRankWindows.add(new DenseRankWindow(analytic, List.copyOf(partitions), orderElements));
       return;
     }
     if ("PERCENT_RANK".equalsIgnoreCase(name)) {
+      if (analytic.getExpression() != null) {
+        throw new IllegalArgumentException("PERCENT_RANK must not include an argument expression: " + analytic);
+      }
       percentRankWindows.add(new PercentRankWindow(analytic, List.copyOf(partitions), orderElements));
       return;
     }
     if ("CUME_DIST".equalsIgnoreCase(name)) {
+      if (analytic.getExpression() != null) {
+        throw new IllegalArgumentException("CUME_DIST must not include an argument expression: " + analytic);
+      }
       cumeDistWindows.add(new CumeDistWindow(analytic, List.copyOf(partitions), orderElements));
+      return;
+    }
+    if ("NTILE".equalsIgnoreCase(name)) {
+      Expression bucketExpression = analytic.getExpression();
+      if (bucketExpression == null) {
+        throw new IllegalArgumentException("NTILE requires exactly one argument expression: " + analytic);
+      }
+      ntileWindows.add(new NtileWindow(analytic, List.copyOf(partitions), orderElements, bucketExpression));
     }
   }
 
@@ -185,7 +207,13 @@ public final class WindowFunctions {
       IdentityHashMap<GenericRecord, BigDecimal> values = computeCumeDist(window, records, evaluator);
       cumeDistValues.put(window.expression(), values);
     }
-    return new WindowState(rowNumberValues, rankValues, denseRankValues, percentRankValues, cumeDistValues);
+    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues;
+    ntileValues = new IdentityHashMap<>();
+    for (NtileWindow window : plan.ntileWindows()) {
+      IdentityHashMap<GenericRecord, Long> values = computeNtile(window, records, evaluator);
+      ntileValues.put(window.expression(), values);
+    }
+    return new WindowState(rowNumberValues, rankValues, denseRankValues, percentRankValues, cumeDistValues, ntileValues);
   }
 
   private static IdentityHashMap<GenericRecord, Long> computeRowNumbers(RowNumberWindow window,
@@ -381,6 +409,92 @@ public final class WindowFunctions {
     return values;
   }
 
+  /**
+   * Compute the SQL standard {@code NTILE} values for the supplied window definition.
+   *
+   * @param window
+   *          analytic window specification
+   * @param records
+   *          records participating in the computation
+   * @param evaluator
+   *          evaluator for partition, ordering and bucket expressions
+   * @return mapping from {@link GenericRecord} to the computed tile index
+   */
+  private static IdentityHashMap<GenericRecord, Long> computeNtile(NtileWindow window,
+      List<GenericRecord> records, ValueExpressionEvaluator evaluator) {
+    List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
+        evaluator);
+
+    IdentityHashMap<GenericRecord, Long> values = new IdentityHashMap<>();
+
+    int index = 0;
+    final int totalContexts = contexts.size();
+    while (index < totalContexts) {
+      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionStart = index;
+      int partitionEnd = index;
+      while (partitionEnd < totalContexts
+          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+        partitionEnd++;
+      }
+
+      long totalRows = partitionEnd - partitionStart;
+      if (totalRows == 0L) {
+        index = partitionEnd;
+        continue;
+      }
+
+      Long bucketCount = null;
+      for (int j = partitionStart; j < partitionEnd; j++) {
+        RowContext context = contexts.get(j);
+        Object bucketValue = evaluator.eval(window.bucketExpression(), context.record());
+        long resolved = resolvePositiveBucketCount(bucketValue, window.expression());
+        if (bucketCount == null) {
+          bucketCount = resolved;
+        } else if (bucketCount.longValue() != resolved) {
+          throw new IllegalArgumentException(
+              "NTILE bucket expression must evaluate to the same positive integer within a partition: "
+                  + window.expression());
+        }
+      }
+
+      if (bucketCount == null) {
+        index = partitionEnd;
+        continue;
+      }
+
+      long baseSize = totalRows / bucketCount;
+      long remainder = totalRows % bucketCount;
+      long threshold = remainder * (baseSize + 1L);
+
+      long processed = 0L;
+      for (int j = partitionStart; j < partitionEnd; j++) {
+        processed++;
+        long tile;
+        if (processed <= threshold) {
+          long groupSize = baseSize + 1L;
+          tile = (processed - 1L) / groupSize + 1L;
+        } else {
+          if (baseSize == 0L) {
+            tile = remainder + 1L;
+          } else {
+            long indexAfterThreshold = processed - threshold;
+            tile = remainder + (indexAfterThreshold - 1L) / baseSize + 1L;
+          }
+        }
+        if (tile < 1L || tile > bucketCount) {
+          throw new IllegalStateException("Computed NTILE value out of bounds: " + tile + " for expression "
+              + window.expression());
+        }
+        values.put(contexts.get(j).record(), tile);
+      }
+
+      index = partitionEnd;
+    }
+
+    return values;
+  }
+
   private static List<RowContext> buildSortedContexts(List<Expression> partitionExpressions,
       List<OrderByElement> orderByElements, List<GenericRecord> records, ValueExpressionEvaluator evaluator) {
     List<RowContext> contexts = new ArrayList<>(records.size());
@@ -544,6 +658,33 @@ public final class WindowFunctions {
     return left.toString().compareTo(right.toString());
   }
 
+  private static long resolvePositiveBucketCount(Object bucketValue, AnalyticExpression expression) {
+    if (bucketValue == null) {
+      throw new IllegalArgumentException("NTILE bucket expression must evaluate to a positive integer: " + expression);
+    }
+    BigDecimal decimalValue;
+    try {
+      decimalValue = bucketValue instanceof BigDecimal bd ? bd : new BigDecimal(bucketValue.toString());
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException(
+          "NTILE bucket expression produced a non-numeric value for expression " + expression + ": " + bucketValue, e);
+    }
+    long count;
+    try {
+      count = decimalValue.longValueExact();
+    } catch (ArithmeticException e) {
+      throw new IllegalArgumentException(
+          "NTILE bucket expression must resolve to an integer value for expression " + expression + ": " + bucketValue,
+          e);
+    }
+    if (count <= 0L) {
+      throw new IllegalArgumentException(
+          "NTILE bucket expression must evaluate to a strictly positive integer for expression " + expression + ": "
+              + bucketValue);
+    }
+    return count;
+  }
+
   /**
    * Compare two byte sequences using lexicographic ordering.
    *
@@ -578,15 +719,17 @@ public final class WindowFunctions {
     private final List<DenseRankWindow> denseRankWindows;
     private final List<PercentRankWindow> percentRankWindows;
     private final List<CumeDistWindow> cumeDistWindows;
+    private final List<NtileWindow> ntileWindows;
 
     WindowPlan(List<RowNumberWindow> rowNumberWindows, List<RankWindow> rankWindows,
         List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
-        List<CumeDistWindow> cumeDistWindows) {
+        List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows) {
       this.rowNumberWindows = rowNumberWindows == null ? List.of() : rowNumberWindows;
       this.rankWindows = rankWindows == null ? List.of() : rankWindows;
       this.denseRankWindows = denseRankWindows == null ? List.of() : denseRankWindows;
       this.percentRankWindows = percentRankWindows == null ? List.of() : percentRankWindows;
       this.cumeDistWindows = cumeDistWindows == null ? List.of() : cumeDistWindows;
+      this.ntileWindows = ntileWindows == null ? List.of() : ntileWindows;
     }
 
     /**
@@ -597,7 +740,7 @@ public final class WindowFunctions {
      */
     public boolean isEmpty() {
       return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
-          && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty();
+          && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty();
     }
 
     /**
@@ -643,6 +786,15 @@ public final class WindowFunctions {
      */
     public List<CumeDistWindow> cumeDistWindows() {
       return cumeDistWindows;
+    }
+
+    /**
+     * Access the NTILE windows captured by this plan.
+     *
+     * @return immutable list of {@link NtileWindow} instances
+     */
+    public List<NtileWindow> ntileWindows() {
+      return ntileWindows;
     }
   }
 
@@ -866,6 +1018,61 @@ public final class WindowFunctions {
     }
   }
 
+  /**
+   * Representation of an NTILE analytic expression.
+   */
+  public static final class NtileWindow {
+
+    private final AnalyticExpression expression;
+    private final List<Expression> partitionExpressions;
+    private final List<OrderByElement> orderByElements;
+    private final Expression bucketExpression;
+
+    NtileWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
+        List<OrderByElement> orderByElements, Expression bucketExpression) {
+      this.expression = expression;
+      this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
+      this.orderByElements = orderByElements == null ? List.of() : orderByElements;
+      this.bucketExpression = bucketExpression;
+    }
+
+    /**
+     * Retrieve the underlying analytic expression.
+     *
+     * @return the {@link AnalyticExpression} represented by this window
+     */
+    public AnalyticExpression expression() {
+      return expression;
+    }
+
+    /**
+     * Retrieve expressions defining the PARTITION BY clause.
+     *
+     * @return immutable list of partition expressions
+     */
+    public List<Expression> partitionExpressions() {
+      return partitionExpressions;
+    }
+
+    /**
+     * Retrieve ORDER BY elements defining the ordering within each partition.
+     *
+     * @return immutable list of {@link OrderByElement} descriptors
+     */
+    public List<OrderByElement> orderByElements() {
+      return orderByElements;
+    }
+
+    /**
+     * Retrieve the expression supplying the NTILE bucket count.
+     *
+     * @return the {@link Expression} identifying the requested number of tiles
+     */
+    public Expression bucketExpression() {
+      return bucketExpression;
+    }
+  }
+
   private record RowContext(GenericRecord record, List<Object> partitionValues, List<OrderComponent> orderComponents,
       int originalIndex) {
   }
@@ -878,24 +1085,27 @@ public final class WindowFunctions {
    */
   public static final class WindowState {
 
-    private static final WindowState EMPTY = new WindowState(Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
+    private static final WindowState EMPTY = new WindowState(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
 
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues;
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues;
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues;
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues;
+    private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues;
 
     WindowState(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues,
         Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues,
         Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues,
         Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues,
-        Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues) {
+        Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues,
+        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues) {
       this.rowNumberValues = rowNumberValues == null ? Map.of() : Collections.unmodifiableMap(rowNumberValues);
       this.rankValues = rankValues == null ? Map.of() : Collections.unmodifiableMap(rankValues);
       this.denseRankValues = denseRankValues == null ? Map.of() : Collections.unmodifiableMap(denseRankValues);
       this.percentRankValues = percentRankValues == null ? Map.of() : Collections.unmodifiableMap(percentRankValues);
       this.cumeDistValues = cumeDistValues == null ? Map.of() : Collections.unmodifiableMap(cumeDistValues);
+      this.ntileValues = ntileValues == null ? Map.of() : Collections.unmodifiableMap(ntileValues);
     }
 
     /**
@@ -914,7 +1124,7 @@ public final class WindowFunctions {
      */
     public boolean isEmpty() {
       return rowNumberValues.isEmpty() && rankValues.isEmpty() && denseRankValues.isEmpty()
-          && percentRankValues.isEmpty() && cumeDistValues.isEmpty();
+          && percentRankValues.isEmpty() && cumeDistValues.isEmpty() && ntileValues.isEmpty();
     }
 
     /**
@@ -1022,6 +1232,27 @@ public final class WindowFunctions {
       BigDecimal value = values.get(record);
       if (value == null) {
         throw new IllegalArgumentException("No CUME_DIST value computed for record: " + record);
+      }
+      return value;
+    }
+
+    /**
+     * Obtain the precomputed NTILE value for the supplied expression and record.
+     *
+     * @param expression
+     *          the analytic expression
+     * @param record
+     *          the current record
+     * @return the computed tile index
+     */
+    public long ntile(AnalyticExpression expression, GenericRecord record) {
+      IdentityHashMap<GenericRecord, Long> values = ntileValues.get(expression);
+      if (values == null) {
+        throw new IllegalArgumentException("No NTILE values available for expression: " + expression);
+      }
+      Long value = values.get(record);
+      if (value == null) {
+        throw new IllegalArgumentException("No NTILE value computed for record: " + record);
       }
       return value;
     }
