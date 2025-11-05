@@ -205,6 +205,71 @@ public class RankTest {
     }
   }
 
+  /**
+   * Ensure that queries projecting only the CUME_DIST window value still
+   * populate the required partition and ordering columns during execution.
+   */
+  @Test
+  void testCumeDistProjectionWithoutUnderlyingColumns() {
+    final long[] totalRows = {0L};
+    final long[] firstGroupCount = {0L};
+    jparqSql.query("""
+        SELECT mpg, COUNT(*) AS cnt
+        FROM mtcars
+        WHERE cyl = 4
+        GROUP BY mpg
+        ORDER BY mpg
+        """, rs -> {
+      try {
+        boolean first = true;
+        while (rs.next()) {
+          long count = rs.getLong("cnt");
+          totalRows[0] += count;
+          if (first) {
+            firstGroupCount[0] = count;
+            first = false;
+          }
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertTrue(totalRows[0] > 0, "Expected rows for the four-cylinder partition");
+
+    String sql = """
+        SELECT CUME_DIST() OVER (PARTITION BY cyl ORDER BY mpg) AS mpg_cume_dist
+        FROM mtcars
+        WHERE cyl = 4
+        ORDER BY mpg_cume_dist
+        """;
+
+    List<Double> cumeDists = new ArrayList<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          cumeDists.add(rs.getDouble("mpg_cume_dist"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(cumeDists.isEmpty(), "Expected cumulative distributions for four-cylinder cars");
+    Assertions.assertEquals(1.0, cumeDists.get(cumeDists.size() - 1), 0.0001,
+        "Last ordered row must receive a cumulative distribution of one");
+
+    double previous = Double.NEGATIVE_INFINITY;
+    for (double value : cumeDists) {
+      Assertions.assertTrue(value > 0.0 && value <= 1.0, "Cumulative distribution values must fall within (0, 1]");
+      Assertions.assertTrue(value >= previous - 0.0000001,
+          "Cumulative distribution values must be non-decreasing after ordering");
+      previous = value;
+    }
+    Assertions.assertEquals((double) firstGroupCount[0] / (double) totalRows[0], cumeDists.get(0), 0.0001,
+        "First row must equal the proportion of the partition represented by its peer group");
+  }
+
   @Test
   void testRankFollowsRankOrdering() {
     String sql = """
