@@ -791,6 +791,143 @@ public class RankTest {
   }
 
   /**
+   * Verify that the SQL standard RANGE default ({@code UNBOUNDED PRECEDING} to
+   * {@code CURRENT ROW}) used by {@code SUM(...)} window functions respects peer
+   * groups and produces a cumulative total that is constant for tied rows.
+   */
+  @Test
+  void testSumRangeFrameRespectsPeerGroups() {
+    String sql = """
+        SELECT mpg, hp,
+               SUM(hp) OVER (ORDER BY mpg DESC) AS cumulative_hp
+        FROM mtcars
+        ORDER BY mpg DESC, hp DESC
+        """;
+
+    List<Double> mpgs = new ArrayList<>();
+    List<Integer> horsepower = new ArrayList<>();
+    List<Double> cumulativeHp = new ArrayList<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          mpgs.add(rs.getDouble("mpg"));
+          horsepower.add(rs.getInt("hp"));
+          cumulativeHp.add(rs.getDouble("cumulative_hp"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(cumulativeHp.isEmpty(), "Expected cumulative horsepower totals from the window query");
+
+    double previous = Double.NEGATIVE_INFINITY;
+    for (double sum : cumulativeHp) {
+      Assertions.assertTrue(sum + 0.0001 >= previous, "Cumulative SUM must not decrease across ordered rows");
+      previous = sum;
+    }
+
+    double[] expected = new double[cumulativeHp.size()];
+    double running = 0.0;
+    double lastMpg = Double.NaN;
+    List<Integer> currentIndices = new ArrayList<>();
+    double groupTotal = 0.0;
+    boolean sawPeerGroup = false;
+    for (int i = 0; i < mpgs.size(); i++) {
+      double mpg = mpgs.get(i);
+      if (currentIndices.isEmpty()) {
+        lastMpg = mpg;
+      } else if (Double.compare(mpg, lastMpg) != 0) {
+        running += groupTotal;
+        for (int idx : currentIndices) {
+          expected[idx] = running;
+        }
+        if (currentIndices.size() > 1) {
+          sawPeerGroup = true;
+        }
+        currentIndices.clear();
+        groupTotal = 0.0;
+        lastMpg = mpg;
+      }
+      currentIndices.add(i);
+      groupTotal += horsepower.get(i);
+    }
+    if (!currentIndices.isEmpty()) {
+      running += groupTotal;
+      for (int idx : currentIndices) {
+        expected[idx] = running;
+      }
+      if (currentIndices.size() > 1) {
+        sawPeerGroup = true;
+      }
+    }
+
+    for (int i = 0; i < cumulativeHp.size(); i++) {
+      Assertions.assertEquals(expected[i], cumulativeHp.get(i), 0.0001,
+          "SUM window must match the expected cumulative total for row " + i);
+    }
+
+    Assertions.assertTrue(sawPeerGroup, "Test data must include peer groups to validate RANGE semantics");
+
+    int totalHp = horsepower.stream().mapToInt(Integer::intValue).sum();
+    Assertions.assertEquals(totalHp, cumulativeHp.get(cumulativeHp.size() - 1), 0.0001,
+        "Final cumulative SUM must equal the total horsepower observed");
+  }
+
+  /**
+   * Ensure that {@code SUM(...)} window functions without an ORDER BY clause
+   * compute a constant total for each partition as mandated by the SQL
+   * standard.
+   */
+  @Test
+  void testSumPartitionWithoutOrderingProducesPartitionTotals() {
+    String sql = """
+        SELECT cyl, hp,
+               SUM(hp) OVER (PARTITION BY cyl) AS total_hp_per_cyl
+        FROM mtcars
+        ORDER BY cyl, hp DESC
+        """;
+
+    List<Integer> cylinders = new ArrayList<>();
+    List<Integer> horsepower = new ArrayList<>();
+    List<Double> totals = new ArrayList<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          cylinders.add(rs.getInt("cyl"));
+          horsepower.add(rs.getInt("hp"));
+          totals.add(rs.getDouble("total_hp_per_cyl"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(totals.isEmpty(), "Expected partition totals from SUM window evaluation");
+
+    Map<Integer, Integer> expectedTotals = new HashMap<>();
+    Map<Integer, Integer> countsByCylinder = new HashMap<>();
+    for (int i = 0; i < cylinders.size(); i++) {
+      int cyl = cylinders.get(i);
+      int hp = horsepower.get(i);
+      expectedTotals.merge(cyl, hp, Integer::sum);
+      countsByCylinder.merge(cyl, 1, Integer::sum);
+    }
+
+    for (int i = 0; i < cylinders.size(); i++) {
+      int cyl = cylinders.get(i);
+      double expectedTotal = expectedTotals.get(cyl);
+      Assertions.assertEquals(expectedTotal, totals.get(i), 0.0001,
+          "SUM without ORDER BY must produce a constant total per partition");
+    }
+
+    Assertions.assertTrue(countsByCylinder.values().stream().anyMatch(count -> count > 1),
+        "Expected at least one partition containing multiple rows");
+  }
+
+  /**
    * Convert a numeric result value to a primitive {@code long}.
    *
    * @param value

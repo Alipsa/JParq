@@ -1446,6 +1446,23 @@ class JParqPreparedStatement implements PreparedStatement {
           addColumns(needed, ColumnsUsed.inWhere(bucketExpression));
         }
       }
+      for (WindowFunctions.SumWindow window : windowPlan.sumWindows()) {
+        for (Expression partition : window.partitionExpressions()) {
+          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+          addColumns(needed, ColumnsUsed.inWhere(partition));
+        }
+        for (OrderByElement order : window.orderByElements()) {
+          if (order != null && order.getExpression() != null) {
+            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+            addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
+          }
+        }
+        Expression argument = window.argument();
+        if (argument != null) {
+          addColumns(needed, SqlParser.collectQualifiedColumns(argument, qualifiers));
+          addColumns(needed, ColumnsUsed.inWhere(argument));
+        }
+      }
     }
     if (aggregatePlan != null) {
       for (AggregateFunctions.AggregateSpec spec : aggregatePlan.specs()) {
