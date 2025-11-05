@@ -279,6 +279,9 @@ public final class ValueExpressionEvaluator {
     if ("PERCENT_RANK".equalsIgnoreCase(name)) {
       return windowState.percentRank(analytic, record);
     }
+    if ("CUME_DIST".equalsIgnoreCase(name)) {
+      return windowState.cumeDist(analytic, record);
+    }
     throw new IllegalArgumentException("Unsupported analytic function: " + analytic);
   }
 

@@ -16,8 +16,8 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
 /**
- * Integration tests covering the SQL standard RANK, DENSE_RANK and PERCENT_RANK
- * window functions.
+ * Integration tests covering the SQL standard RANK, DENSE_RANK, PERCENT_RANK
+ * and CUME_DIST window functions.
  */
 public class RankTest {
 
@@ -119,6 +119,52 @@ public class RankTest {
         "Second gear should be halfway between the best and worst averages");
     Assertions.assertEquals(1.0, percentRanks.get(2), 0.0001,
         "Final row in a partition must receive a percent rank of one when multiple rows exist");
+  }
+
+  /**
+   * Verify that CUME_DIST follows the SQL specification using an aggregate
+   * ordering example from the mtcars data set.
+   */
+  @Test
+  void testCumeDistFollowsAggregateOrdering() {
+    String sql = """
+        WITH GearAverages AS (
+            SELECT gear, AVG(mpg) AS avg_mpg
+            FROM mtcars
+            GROUP BY gear
+        )
+        SELECT gear, avg_mpg,
+               CUME_DIST() OVER (ORDER BY avg_mpg DESC) AS mpg_cume_dist
+        FROM GearAverages
+        ORDER BY avg_mpg DESC
+        """;
+
+    List<Integer> gears = new ArrayList<>();
+    List<Double> averages = new ArrayList<>();
+    List<Double> cumeDists = new ArrayList<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          gears.add(rs.getInt("gear"));
+          averages.add(rs.getDouble("avg_mpg"));
+          cumeDists.add(rs.getDouble("mpg_cume_dist"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertEquals(List.of(4, 5, 3), gears, "Gear ordering must follow descending average mpg");
+    Assertions.assertEquals(3, averages.size(), "Expected one aggregate row per gear value");
+    Assertions.assertEquals(3, cumeDists.size(), "Expected a cumulative distribution value for each aggregated row");
+
+    Assertions.assertEquals(1.0 / 3.0, cumeDists.get(0), 0.0001,
+        "First ordered row must receive a cumulative distribution of totalRows^{-1}");
+    Assertions.assertEquals(2.0 / 3.0, cumeDists.get(1), 0.0001,
+        "Second row should reflect two thirds of the partitioned rows");
+    Assertions.assertEquals(1.0, cumeDists.get(2), 0.0001,
+        "Final row in a partition must receive a cumulative distribution of one");
   }
 
   /**
@@ -456,6 +502,88 @@ public class RankTest {
   }
 
   /**
+   * Verify that CUME_DIST resets for each partition, remains within (0, 1] and
+   * assigns identical values to peer rows.
+   */
+  @Test
+  void testCumeDistRespectsPartitionsAndPeers() {
+    LinkedHashMap<Long, Long> countsByCyl = new LinkedHashMap<>();
+    jparqSql.query("SELECT cyl, COUNT(*) AS cnt FROM mtcars GROUP BY cyl ORDER BY cyl", rs -> {
+      try {
+        while (rs.next()) {
+          long cyl = toLong(rs.getObject("cyl"));
+          long count = toLong(rs.getObject("cnt"));
+          countsByCyl.put(cyl, count);
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(countsByCyl.isEmpty(), "Expected cylinder counts from the base data set");
+
+    String sql = """
+        SELECT cyl, hp,
+               CUME_DIST() OVER (PARTITION BY cyl ORDER BY hp DESC) AS cyl_hp_cume_dist
+        FROM mtcars
+        ORDER BY cyl, hp DESC, model
+        """;
+
+    Map<Long, List<CumeDistRow>> rowsByCyl = new LinkedHashMap<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          long cyl = toLong(rs.getObject("cyl"));
+          int hp = rs.getInt("hp");
+          double cumeDist = rs.getDouble("cyl_hp_cume_dist");
+          rowsByCyl.computeIfAbsent(cyl, ignored -> new ArrayList<>()).add(new CumeDistRow(hp, cumeDist));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertEquals(countsByCyl.keySet(), rowsByCyl.keySet(),
+        "Each cylinder partition must appear in the cumulative distribution result");
+
+    for (Map.Entry<Long, List<CumeDistRow>> entry : rowsByCyl.entrySet()) {
+      long cyl = entry.getKey();
+      List<CumeDistRow> rows = entry.getValue();
+      long totalRows = countsByCyl.getOrDefault(cyl, 0L);
+      Assertions.assertEquals(totalRows, rows.size(),
+          "Each partition must emit one CUME_DIST value per input row");
+
+      int index = 0;
+      while (index < rows.size()) {
+        int groupEnd = index;
+        int hp = rows.get(index).horsepower();
+        while (groupEnd + 1 < rows.size() && rows.get(groupEnd + 1).horsepower() == hp) {
+          groupEnd++;
+        }
+
+        double expected = (double) (groupEnd + 1) / (double) totalRows;
+        for (int i = index; i <= groupEnd; i++) {
+          double actual = rows.get(i).cumeDist();
+          Assertions.assertEquals(expected, actual, 0.0001,
+              "Peer rows must share the same cumulative distribution");
+          Assertions.assertTrue(actual > 0.0 && actual <= 1.0,
+              "CUME_DIST values must be within the interval (0, 1]");
+        }
+
+        if (index == 0) {
+          Assertions.assertEquals((double) (groupEnd + 1) / (double) totalRows, rows.get(0).cumeDist(), 0.0001,
+              "First peer group must determine the minimum cumulative distribution value");
+        }
+        index = groupEnd + 1;
+      }
+
+      Assertions.assertEquals(1.0, rows.get(rows.size() - 1).cumeDist(), 0.0001,
+          "Final row in a partition must have a cumulative distribution of one");
+    }
+  }
+
+  /**
    * Convert a numeric result value to a primitive {@code long}.
    *
    * @param value
@@ -470,5 +598,11 @@ public class RankTest {
       return Long.parseLong(sequence.toString());
     }
     throw new IllegalArgumentException("Unexpected numeric value type: " + value);
+  }
+
+  /**
+   * Immutable view of a horsepower value and its associated CUME_DIST result.
+   */
+  private record CumeDistRow(int horsepower, double cumeDist) {
   }
 }
