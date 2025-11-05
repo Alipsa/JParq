@@ -318,6 +318,41 @@ public class RankTest {
   }
 
   /**
+   * Ensure that NTILE can execute without an ORDER BY clause and that rows are bucketed according to the input
+   * sequence when no ordering is provided.
+   */
+  @Test
+  void testNtileWithoutOrderByClause() {
+    String sql = """
+        SELECT NTILE(3) OVER () AS bucket
+        FROM mtcars
+        ORDER BY bucket
+        """;
+
+    Map<Integer, Long> counts = new LinkedHashMap<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          int bucket = rs.getInt("bucket");
+          Assertions.assertTrue(bucket >= 1 && bucket <= 3, "Bucket assignments must fall within [1, 3]");
+          counts.merge(bucket, 1L, Long::sum);
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertEquals(32L, counts.values().stream().mapToLong(Long::longValue).sum(),
+        "NTILE must process every row in the mtcars data set");
+    Assertions.assertEquals(11L, counts.getOrDefault(1, 0L),
+        "First NTILE bucket must receive the first remainder row when no ordering is supplied");
+    Assertions.assertEquals(11L, counts.getOrDefault(2, 0L),
+        "Second NTILE bucket must receive the second remainder row when no ordering is supplied");
+    Assertions.assertEquals(10L, counts.getOrDefault(3, 0L),
+        "Final NTILE bucket must receive the base number of rows when no ordering is supplied");
+  }
+
+  /**
    * Ensure that NTILE distributes remainder rows to the earliest buckets when the partition size is not evenly
    * divisible by the bucket count.
    */

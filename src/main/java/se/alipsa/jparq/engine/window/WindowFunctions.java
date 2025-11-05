@@ -109,10 +109,10 @@ public final class WindowFunctions {
       rowNumberWindows.add(new RowNumberWindow(analytic, List.copyOf(partitions), orderElements));
       return;
     }
-    if (orderElements.isEmpty()) {
-      throw new IllegalArgumentException(name + " requires an ORDER BY clause: " + analytic);
-    }
     if ("RANK".equalsIgnoreCase(name)) {
+      if (orderElements.isEmpty()) {
+        throw new IllegalArgumentException("RANK requires an ORDER BY clause: " + analytic);
+      }
       if (analytic.getExpression() != null) {
         throw new IllegalArgumentException("RANK must not include an argument expression: " + analytic);
       }
@@ -120,6 +120,9 @@ public final class WindowFunctions {
       return;
     }
     if ("DENSE_RANK".equalsIgnoreCase(name)) {
+      if (orderElements.isEmpty()) {
+        throw new IllegalArgumentException("DENSE_RANK requires an ORDER BY clause: " + analytic);
+      }
       if (analytic.getExpression() != null) {
         throw new IllegalArgumentException("DENSE_RANK must not include an argument expression: " + analytic);
       }
@@ -127,6 +130,9 @@ public final class WindowFunctions {
       return;
     }
     if ("PERCENT_RANK".equalsIgnoreCase(name)) {
+      if (orderElements.isEmpty()) {
+        throw new IllegalArgumentException("PERCENT_RANK requires an ORDER BY clause: " + analytic);
+      }
       if (analytic.getExpression() != null) {
         throw new IllegalArgumentException("PERCENT_RANK must not include an argument expression: " + analytic);
       }
@@ -134,6 +140,9 @@ public final class WindowFunctions {
       return;
     }
     if ("CUME_DIST".equalsIgnoreCase(name)) {
+      if (orderElements.isEmpty()) {
+        throw new IllegalArgumentException("CUME_DIST requires an ORDER BY clause: " + analytic);
+      }
       if (analytic.getExpression() != null) {
         throw new IllegalArgumentException("CUME_DIST must not include an argument expression: " + analytic);
       }
@@ -444,24 +453,9 @@ public final class WindowFunctions {
         continue;
       }
 
-      Long bucketCount = null;
-      for (int j = partitionStart; j < partitionEnd; j++) {
-        RowContext context = contexts.get(j);
-        Object bucketValue = evaluator.eval(window.bucketExpression(), context.record());
-        long resolved = resolvePositiveBucketCount(bucketValue, window.expression());
-        if (bucketCount == null) {
-          bucketCount = resolved;
-        } else if (bucketCount.longValue() != resolved) {
-          throw new IllegalArgumentException(
-              "NTILE bucket expression must evaluate to the same positive integer within a partition: "
-                  + window.expression());
-        }
-      }
-
-      if (bucketCount == null) {
-        index = partitionEnd;
-        continue;
-      }
+      RowContext firstContext = contexts.get(partitionStart);
+      Object bucketValue = evaluator.eval(window.bucketExpression(), firstContext.record());
+      long bucketCount = resolvePositiveBucketCount(bucketValue, window.expression());
 
       long baseSize = totalRows / bucketCount;
       long remainder = totalRows % bucketCount;
