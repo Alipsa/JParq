@@ -160,7 +160,7 @@ public class RankTest {
     Assertions.assertEquals(3, cumeDists.size(), "Expected a cumulative distribution value for each aggregated row");
 
     Assertions.assertEquals(1.0 / 3.0, cumeDists.get(0), 0.0001,
-        "First ordered row must receive a cumulative distribution of totalRows^{-1}");
+        "First ordered row must receive a cumulative distribution of 1/totalRows");
     Assertions.assertEquals(2.0 / 3.0, cumeDists.get(1), 0.0001,
         "Second row should reflect two thirds of the partitioned rows");
     Assertions.assertEquals(1.0, cumeDists.get(2), 0.0001,
