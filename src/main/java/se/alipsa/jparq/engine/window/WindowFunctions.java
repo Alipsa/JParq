@@ -222,7 +222,8 @@ public final class WindowFunctions {
       IdentityHashMap<GenericRecord, Long> values = computeNtile(window, records, evaluator);
       ntileValues.put(window.expression(), values);
     }
-    return new WindowState(rowNumberValues, rankValues, denseRankValues, percentRankValues, cumeDistValues, ntileValues);
+    return new WindowState(rowNumberValues, rankValues, denseRankValues, percentRankValues, cumeDistValues,
+        ntileValues);
   }
 
   private static IdentityHashMap<GenericRecord, Long> computeRowNumbers(RowNumberWindow window,
@@ -419,7 +420,8 @@ public final class WindowFunctions {
   }
 
   /**
-   * Compute the SQL standard {@code NTILE} values for the supplied window definition.
+   * Compute the SQL standard {@code NTILE} values for the supplied window
+   * definition.
    *
    * @param window
    *          analytic window specification
@@ -429,8 +431,8 @@ public final class WindowFunctions {
    *          evaluator for partition, ordering and bucket expressions
    * @return mapping from {@link GenericRecord} to the computed tile index
    */
-  private static IdentityHashMap<GenericRecord, Long> computeNtile(NtileWindow window,
-      List<GenericRecord> records, ValueExpressionEvaluator evaluator) {
+  private static IdentityHashMap<GenericRecord, Long> computeNtile(NtileWindow window, List<GenericRecord> records,
+      ValueExpressionEvaluator evaluator) {
     List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
         evaluator);
 
@@ -477,8 +479,8 @@ public final class WindowFunctions {
           }
         }
         if (tile < 1L || tile > bucketCount) {
-          throw new IllegalStateException("Computed NTILE value out of bounds: " + tile + " for expression "
-              + window.expression());
+          throw new IllegalStateException(
+              "Computed NTILE value out of bounds: " + tile + " for expression " + window.expression());
         }
         values.put(contexts.get(j).record(), tile);
       }
@@ -1079,7 +1081,8 @@ public final class WindowFunctions {
    */
   public static final class WindowState {
 
-    private static final WindowState EMPTY = new WindowState(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
+    private static final WindowState EMPTY = new WindowState(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(),
+        Map.of());
 
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues;

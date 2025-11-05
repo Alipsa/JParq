@@ -275,8 +275,8 @@ public class RankTest {
   }
 
   /**
-   * Verify that NTILE evenly distributes rows across quartiles when the total row count is divisible by the requested
-   * bucket count.
+   * Verify that NTILE evenly distributes rows across quartiles when the total row
+   * count is divisible by the requested bucket count.
    */
   @Test
   void testNtileDividesIntoQuartiles() {
@@ -318,8 +318,8 @@ public class RankTest {
   }
 
   /**
-   * Ensure that NTILE can execute without an ORDER BY clause and that rows are bucketed according to the input
-   * sequence when no ordering is provided.
+   * Ensure that NTILE can execute without an ORDER BY clause and that rows are
+   * bucketed according to the input sequence when no ordering is provided.
    */
   @Test
   void testNtileWithoutOrderByClause() {
@@ -353,8 +353,8 @@ public class RankTest {
   }
 
   /**
-   * Ensure that NTILE distributes remainder rows to the earliest buckets when the partition size is not evenly
-   * divisible by the bucket count.
+   * Ensure that NTILE distributes remainder rows to the earliest buckets when the
+   * partition size is not evenly divisible by the bucket count.
    */
   @Test
   void testNtileBalancesUnevenPartitions() {
