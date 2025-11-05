@@ -72,8 +72,8 @@ public final class WindowFunctions {
   }
 
   private static void registerAnalyticExpression(AnalyticExpression analytic, List<RowNumberWindow> rowNumberWindows,
-      List<RankWindow> rankWindows, List<DenseRankWindow> denseRankWindows,
-      List<PercentRankWindow> percentRankWindows, List<CumeDistWindow> cumeDistWindows) {
+      List<RankWindow> rankWindows, List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
+      List<CumeDistWindow> cumeDistWindows) {
     if (analytic == null) {
       return;
     }
@@ -154,28 +154,33 @@ public final class WindowFunctions {
     }
     ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, outerQualifiers,
         qualifierColumnMapping, unqualifiedColumnMapping, WindowState.empty());
-    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues = new IdentityHashMap<>();
-    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues = new IdentityHashMap<>();
-    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues = new IdentityHashMap<>();
-    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues = new IdentityHashMap<>();
+
+    final IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
+    rowNumberValues = new IdentityHashMap<>();
     for (RowNumberWindow window : plan.rowNumberWindows()) {
       IdentityHashMap<GenericRecord, Long> values = computeRowNumbers(window, records, evaluator);
       rowNumberValues.put(window.expression(), values);
     }
+    final IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues;
+    rankValues = new IdentityHashMap<>();
     for (RankWindow window : plan.rankWindows()) {
       IdentityHashMap<GenericRecord, Long> values = computeRank(window, records, evaluator);
       rankValues.put(window.expression(), values);
     }
+    final IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues;
+    denseRankValues = new IdentityHashMap<>();
     for (DenseRankWindow window : plan.denseRankWindows()) {
       IdentityHashMap<GenericRecord, Long> values = computeDenseRank(window, records, evaluator);
       denseRankValues.put(window.expression(), values);
     }
-    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues;
+    final IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues;
     percentRankValues = new IdentityHashMap<>();
     for (PercentRankWindow window : plan.percentRankWindows()) {
       IdentityHashMap<GenericRecord, BigDecimal> values = computePercentRank(window, records, evaluator);
       percentRankValues.put(window.expression(), values);
     }
+    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues;
+    cumeDistValues = new IdentityHashMap<>();
     for (CumeDistWindow window : plan.cumeDistWindows()) {
       IdentityHashMap<GenericRecord, BigDecimal> values = computeCumeDist(window, records, evaluator);
       cumeDistValues.put(window.expression(), values);
@@ -359,7 +364,8 @@ public final class WindowFunctions {
       while (groupStart < partitionEnd) {
         List<OrderComponent> orderComponents = contexts.get(groupStart).orderComponents();
         int groupEnd = groupStart;
-        while (groupEnd < partitionEnd && orderComponentsEqual(orderComponents, contexts.get(groupEnd).orderComponents())) {
+        while (groupEnd < partitionEnd
+            && orderComponentsEqual(orderComponents, contexts.get(groupEnd).orderComponents())) {
           groupEnd++;
         }
         processed += groupEnd - groupStart;

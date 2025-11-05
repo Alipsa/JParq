@@ -107,7 +107,7 @@ public class WindowingTest {
           String lastName = rs.getString("last_name");
           double salary = rs.getDouble("salary");
           salaries.put(firstName + " " + lastName, salary);
-          System.out.printf("%s %s: %.2f%n", firstName, lastName, salary);
+          // System.out.printf("%s %s: %.2f%n", firstName, lastName, salary);
           rowCount++;
         }
         Assertions.assertEquals(5, rowCount, "Expected 5 rows, one for each employee");

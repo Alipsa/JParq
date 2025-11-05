@@ -161,7 +161,7 @@
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-simple</artifactId>
       <version>${slf4j.version}</version>
-      <scope>runtime</scope>
+      <!--scope>runtime</scope-->
     </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
@@ -209,7 +209,9 @@
           <execution>
             <id>enforce-bytecode</id>
             <phase>validate</phase>
-            <goals><goal>enforce</goal></goals>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
             <configuration>
               <rules>
                 <enforceBytecodeVersion>
@@ -253,31 +255,40 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-failsafe-plugin</artifactId>
-        <version>3.5.4</version> <executions>
-        <execution>
-          <id>integration-test</id>
-          <goals>
-            <goal>integration-test</goal>
-          </goals>
-          <configuration>
-            <includes>
-              <include>**/*FS.java</include>
-            </includes>
-            <excludes>
-              <exclude>**/*Test.java</exclude>
-            </excludes>
-          </configuration>
-        </execution>
-        <execution>
-          <id>verify</id>
-          <goals>
-            <goal>verify</goal>
-          </goals>
-          <configuration>
-            <testFailureIgnore>true</testFailureIgnore>
-          </configuration>
-        </execution>
-      </executions>
+        <version>3.5.4</version>
+        <configuration>
+          <redirectTestOutputToFile>false</redirectTestOutputToFile>
+          <useFile>false</useFile>
+          <systemPropertyVariables>
+            <org.slf4j.simpleLogger.defaultLogLevel>info</org.slf4j.simpleLogger.defaultLogLevel>
+            <org.slf4j.simpleLogger.log.jparq.PredicatePushdownPerfFS>debug</org.slf4j.simpleLogger.log.jparq.PredicatePushdownPerfFS>
+          </systemPropertyVariables>
+        </configuration>
+        <executions>
+          <execution>
+            <id>integration-test</id>
+            <goals>
+              <goal>integration-test</goal>
+            </goals>
+            <configuration>
+              <includes>
+                <include>**/*FS.java</include>
+              </includes>
+              <excludes>
+                <exclude>**/*Test.java</exclude>
+              </excludes>
+            </configuration>
+          </execution>
+          <execution>
+            <id>verify</id>
+            <goals>
+              <goal>verify</goal>
+            </goals>
+            <configuration>
+              <testFailureIgnore>true</testFailureIgnore>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

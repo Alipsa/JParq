@@ -206,13 +206,17 @@ public class RankTest {
   }
 
   /**
-   * Ensure that queries projecting only the CUME_DIST window value still
-   * populate the required partition and ordering columns during execution.
+   * Ensure that queries projecting only the CUME_DIST window value still populate
+   * the required partition and ordering columns during execution.
    */
   @Test
   void testCumeDistProjectionWithoutUnderlyingColumns() {
-    final long[] totalRows = {0L};
-    final long[] firstGroupCount = {0L};
+    final long[] totalRows = {
+        0L
+    };
+    final long[] firstGroupCount = {
+        0L
+    };
     jparqSql.query("""
         SELECT mpg, COUNT(*) AS cnt
         FROM mtcars
@@ -616,8 +620,7 @@ public class RankTest {
       long cyl = entry.getKey();
       List<CumeDistRow> rows = entry.getValue();
       long totalRows = countsByCyl.getOrDefault(cyl, 0L);
-      Assertions.assertEquals(totalRows, rows.size(),
-          "Each partition must emit one CUME_DIST value per input row");
+      Assertions.assertEquals(totalRows, rows.size(), "Each partition must emit one CUME_DIST value per input row");
 
       int index = 0;
       while (index < rows.size()) {
@@ -630,10 +633,8 @@ public class RankTest {
         double expected = (double) (groupEnd + 1) / (double) totalRows;
         for (int i = index; i <= groupEnd; i++) {
           double actual = rows.get(i).cumeDist();
-          Assertions.assertEquals(expected, actual, 0.0001,
-              "Peer rows must share the same cumulative distribution");
-          Assertions.assertTrue(actual > 0.0 && actual <= 1.0,
-              "CUME_DIST values must be within the interval (0, 1]");
+          Assertions.assertEquals(expected, actual, 0.0001, "Peer rows must share the same cumulative distribution");
+          Assertions.assertTrue(actual > 0.0 && actual <= 1.0, "CUME_DIST values must be within the interval (0, 1]");
         }
 
         if (index == 0) {
