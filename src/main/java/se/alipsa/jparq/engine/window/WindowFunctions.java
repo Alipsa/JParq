@@ -49,6 +49,7 @@ public final class WindowFunctions {
     List<RankWindow> rankWindows = new ArrayList<>();
     List<DenseRankWindow> denseRankWindows = new ArrayList<>();
     List<PercentRankWindow> percentRankWindows = new ArrayList<>();
+    List<CumeDistWindow> cumeDistWindows = new ArrayList<>();
     for (Expression expression : expressions) {
       if (expression == null) {
         continue;
@@ -56,22 +57,23 @@ public final class WindowFunctions {
       expression.accept(new ExpressionVisitorAdapter<Void>() {
         @Override
         public <S> Void visit(AnalyticExpression analytic, S context) {
-          registerAnalyticExpression(analytic, rowNumberWindows, rankWindows, denseRankWindows, percentRankWindows);
+          registerAnalyticExpression(analytic, rowNumberWindows, rankWindows, denseRankWindows, percentRankWindows,
+              cumeDistWindows);
           return super.visit(analytic, context);
         }
       });
     }
     if (rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
-        && percentRankWindows.isEmpty()) {
+        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty()) {
       return null;
     }
     return new WindowPlan(List.copyOf(rowNumberWindows), List.copyOf(rankWindows), List.copyOf(denseRankWindows),
-        List.copyOf(percentRankWindows));
+        List.copyOf(percentRankWindows), List.copyOf(cumeDistWindows));
   }
 
   private static void registerAnalyticExpression(AnalyticExpression analytic, List<RowNumberWindow> rowNumberWindows,
-      List<RankWindow> rankWindows, List<DenseRankWindow> denseRankWindows,
-      List<PercentRankWindow> percentRankWindows) {
+      List<RankWindow> rankWindows, List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
+      List<CumeDistWindow> cumeDistWindows) {
     if (analytic == null) {
       return;
     }
@@ -80,7 +82,7 @@ public final class WindowFunctions {
       return;
     }
     if (!"ROW_NUMBER".equalsIgnoreCase(name) && !"RANK".equalsIgnoreCase(name) && !"DENSE_RANK".equalsIgnoreCase(name)
-        && !"PERCENT_RANK".equalsIgnoreCase(name)) {
+        && !"PERCENT_RANK".equalsIgnoreCase(name) && !"CUME_DIST".equalsIgnoreCase(name)) {
       return;
     }
     if (analytic.getExpression() != null) {
@@ -118,7 +120,10 @@ public final class WindowFunctions {
     }
     if ("PERCENT_RANK".equalsIgnoreCase(name)) {
       percentRankWindows.add(new PercentRankWindow(analytic, List.copyOf(partitions), orderElements));
-      // return;
+      return;
+    }
+    if ("CUME_DIST".equalsIgnoreCase(name)) {
+      cumeDistWindows.add(new CumeDistWindow(analytic, List.copyOf(partitions), orderElements));
     }
   }
 
@@ -149,28 +154,38 @@ public final class WindowFunctions {
     }
     ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, outerQualifiers,
         qualifierColumnMapping, unqualifiedColumnMapping, WindowState.empty());
-    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues = new IdentityHashMap<>();
-    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues = new IdentityHashMap<>();
-    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues = new IdentityHashMap<>();
+
+    final IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
+    rowNumberValues = new IdentityHashMap<>();
     for (RowNumberWindow window : plan.rowNumberWindows()) {
       IdentityHashMap<GenericRecord, Long> values = computeRowNumbers(window, records, evaluator);
       rowNumberValues.put(window.expression(), values);
     }
+    final IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues;
+    rankValues = new IdentityHashMap<>();
     for (RankWindow window : plan.rankWindows()) {
       IdentityHashMap<GenericRecord, Long> values = computeRank(window, records, evaluator);
       rankValues.put(window.expression(), values);
     }
+    final IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues;
+    denseRankValues = new IdentityHashMap<>();
     for (DenseRankWindow window : plan.denseRankWindows()) {
       IdentityHashMap<GenericRecord, Long> values = computeDenseRank(window, records, evaluator);
       denseRankValues.put(window.expression(), values);
     }
-    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues;
+    final IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues;
     percentRankValues = new IdentityHashMap<>();
     for (PercentRankWindow window : plan.percentRankWindows()) {
       IdentityHashMap<GenericRecord, BigDecimal> values = computePercentRank(window, records, evaluator);
       percentRankValues.put(window.expression(), values);
     }
-    return new WindowState(rowNumberValues, rankValues, denseRankValues, percentRankValues);
+    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues;
+    cumeDistValues = new IdentityHashMap<>();
+    for (CumeDistWindow window : plan.cumeDistWindows()) {
+      IdentityHashMap<GenericRecord, BigDecimal> values = computeCumeDist(window, records, evaluator);
+      cumeDistValues.put(window.expression(), values);
+    }
+    return new WindowState(rowNumberValues, rankValues, denseRankValues, percentRankValues, cumeDistValues);
   }
 
   private static IdentityHashMap<GenericRecord, Long> computeRowNumbers(RowNumberWindow window,
@@ -302,6 +317,66 @@ public final class WindowFunctions {
         previousOrder = context.orderComponents();
       }
       i = partitionEnd;
+    }
+    return values;
+  }
+
+  /**
+   * Compute the SQL standard {@code CUME_DIST} values for the supplied window
+   * definition.
+   *
+   * @param window
+   *          analytic window specification
+   * @param records
+   *          records participating in the computation
+   * @param evaluator
+   *          evaluator for partition and ordering expressions
+   * @return mapping from {@link GenericRecord} to the computed cumulative
+   *         distribution value
+   */
+  private static IdentityHashMap<GenericRecord, BigDecimal> computeCumeDist(CumeDistWindow window,
+      List<GenericRecord> records, ValueExpressionEvaluator evaluator) {
+    List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
+        evaluator);
+
+    IdentityHashMap<GenericRecord, BigDecimal> values = new IdentityHashMap<>();
+
+    int index = 0;
+    final int totalContexts = contexts.size();
+    while (index < totalContexts) {
+      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionStart = index;
+      int partitionEnd = index;
+      while (partitionEnd < totalContexts
+          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+        partitionEnd++;
+      }
+
+      long totalRows = partitionEnd - partitionStart;
+      if (totalRows == 0L) {
+        index = partitionEnd;
+        continue;
+      }
+
+      BigDecimal denominator = BigDecimal.valueOf(totalRows);
+      long processed = 0L;
+      int groupStart = partitionStart;
+      while (groupStart < partitionEnd) {
+        List<OrderComponent> orderComponents = contexts.get(groupStart).orderComponents();
+        int groupEnd = groupStart;
+        while (groupEnd < partitionEnd
+            && orderComponentsEqual(orderComponents, contexts.get(groupEnd).orderComponents())) {
+          groupEnd++;
+        }
+        processed += groupEnd - groupStart;
+        BigDecimal cumeDist = BigDecimal.valueOf(processed).divide(denominator, MathContext.DECIMAL128);
+        for (int i = groupStart; i < groupEnd; i++) {
+          RowContext context = contexts.get(i);
+          values.put(context.record(), cumeDist);
+        }
+        groupStart = groupEnd;
+      }
+      index = partitionEnd;
     }
     return values;
   }
@@ -502,13 +577,16 @@ public final class WindowFunctions {
     private final List<RankWindow> rankWindows;
     private final List<DenseRankWindow> denseRankWindows;
     private final List<PercentRankWindow> percentRankWindows;
+    private final List<CumeDistWindow> cumeDistWindows;
 
     WindowPlan(List<RowNumberWindow> rowNumberWindows, List<RankWindow> rankWindows,
-        List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows) {
+        List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
+        List<CumeDistWindow> cumeDistWindows) {
       this.rowNumberWindows = rowNumberWindows == null ? List.of() : rowNumberWindows;
       this.rankWindows = rankWindows == null ? List.of() : rankWindows;
       this.denseRankWindows = denseRankWindows == null ? List.of() : denseRankWindows;
       this.percentRankWindows = percentRankWindows == null ? List.of() : percentRankWindows;
+      this.cumeDistWindows = cumeDistWindows == null ? List.of() : cumeDistWindows;
     }
 
     /**
@@ -519,7 +597,7 @@ public final class WindowFunctions {
      */
     public boolean isEmpty() {
       return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
-          && percentRankWindows.isEmpty();
+          && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty();
     }
 
     /**
@@ -556,6 +634,15 @@ public final class WindowFunctions {
      */
     public List<PercentRankWindow> percentRankWindows() {
       return percentRankWindows;
+    }
+
+    /**
+     * Access the CUME_DIST windows captured by this plan.
+     *
+     * @return immutable list of {@link CumeDistWindow} instances
+     */
+    public List<CumeDistWindow> cumeDistWindows() {
+      return cumeDistWindows;
     }
   }
 
@@ -735,6 +822,50 @@ public final class WindowFunctions {
     }
   }
 
+  /**
+   * Representation of a CUME_DIST analytic expression.
+   */
+  public static final class CumeDistWindow {
+
+    private final AnalyticExpression expression;
+    private final List<Expression> partitionExpressions;
+    private final List<OrderByElement> orderByElements;
+
+    CumeDistWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
+        List<OrderByElement> orderByElements) {
+      this.expression = expression;
+      this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
+      this.orderByElements = orderByElements == null ? List.of() : orderByElements;
+    }
+
+    /**
+     * Retrieve the underlying analytic expression.
+     *
+     * @return the {@link AnalyticExpression} represented by this window
+     */
+    public AnalyticExpression expression() {
+      return expression;
+    }
+
+    /**
+     * Retrieve expressions defining the PARTITION BY clause.
+     *
+     * @return immutable list of partition expressions
+     */
+    public List<Expression> partitionExpressions() {
+      return partitionExpressions;
+    }
+
+    /**
+     * Retrieve ORDER BY elements defining the ordering within each partition.
+     *
+     * @return immutable list of {@link OrderByElement} descriptors
+     */
+    public List<OrderByElement> orderByElements() {
+      return orderByElements;
+    }
+  }
+
   private record RowContext(GenericRecord record, List<Object> partitionValues, List<OrderComponent> orderComponents,
       int originalIndex) {
   }
@@ -747,21 +878,24 @@ public final class WindowFunctions {
    */
   public static final class WindowState {
 
-    private static final WindowState EMPTY = new WindowState(Map.of(), Map.of(), Map.of(), Map.of());
+    private static final WindowState EMPTY = new WindowState(Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
 
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues;
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues;
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues;
+    private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues;
 
     WindowState(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues,
         Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues,
         Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues,
-        Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues) {
+        Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues,
+        Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues) {
       this.rowNumberValues = rowNumberValues == null ? Map.of() : Collections.unmodifiableMap(rowNumberValues);
       this.rankValues = rankValues == null ? Map.of() : Collections.unmodifiableMap(rankValues);
       this.denseRankValues = denseRankValues == null ? Map.of() : Collections.unmodifiableMap(denseRankValues);
       this.percentRankValues = percentRankValues == null ? Map.of() : Collections.unmodifiableMap(percentRankValues);
+      this.cumeDistValues = cumeDistValues == null ? Map.of() : Collections.unmodifiableMap(cumeDistValues);
     }
 
     /**
@@ -780,7 +914,7 @@ public final class WindowFunctions {
      */
     public boolean isEmpty() {
       return rowNumberValues.isEmpty() && rankValues.isEmpty() && denseRankValues.isEmpty()
-          && percentRankValues.isEmpty();
+          && percentRankValues.isEmpty() && cumeDistValues.isEmpty();
     }
 
     /**
@@ -866,6 +1000,28 @@ public final class WindowFunctions {
       BigDecimal value = values.get(record);
       if (value == null) {
         throw new IllegalArgumentException("No PERCENT_RANK value computed for record: " + record);
+      }
+      return value;
+    }
+
+    /**
+     * Obtain the precomputed CUME_DIST value for the supplied expression and
+     * record.
+     *
+     * @param expression
+     *          the analytic expression
+     * @param record
+     *          the current record
+     * @return the computed cumulative distribution value
+     */
+    public BigDecimal cumeDist(AnalyticExpression expression, GenericRecord record) {
+      IdentityHashMap<GenericRecord, BigDecimal> values = cumeDistValues.get(expression);
+      if (values == null) {
+        throw new IllegalArgumentException("No CUME_DIST values available for expression: " + expression);
+      }
+      BigDecimal value = values.get(record);
+      if (value == null) {
+        throw new IllegalArgumentException("No CUME_DIST value computed for record: " + record);
       }
       return value;
     }

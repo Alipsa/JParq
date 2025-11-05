@@ -3,6 +3,8 @@ package jparq;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.nio.file.*;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -71,15 +73,20 @@ public class PredicatePushdownPerfFS {
     assertEquals(baselineRows, schemaRows, "Results must be identical");
 
     // 5) Print timings (ms) to help you see the gain locally
-    System.out.println("No schema time:   " + TimeUnit.NANOSECONDS.toMillis(tNoSchema) + " ms");
-    System.out.println("With schema time: " + TimeUnit.NANOSECONDS.toMillis(tWithSchema) + " ms");
+    LOG.info("No schema time:   {} ms", TimeUnit.NANOSECONDS.toMillis(tNoSchema));
+    LOG.info("With schema time: {} ms", TimeUnit.NANOSECONDS.toMillis(tWithSchema));
 
     // 6) Gentle assertion: schema path should not be slower.
-    double ratio = (double) tWithSchema / (double) tNoSchema;
+    BigDecimal ratio = BigDecimal.valueOf((double) tWithSchema / (double) tNoSchema).setScale(2, RoundingMode.HALF_UP);
     // NOTE: this test is too fast for meaningful comparisons
-    if (tWithSchema > tNoSchema) {
-      LOG.warn("Expected pushdown to be at least faster. diff = {} ratio= {} noSchema= {}" + "ns withSchema= {} ns",
-          tWithSchema - tNoSchema, ratio, tNoSchema, tWithSchema);
+    BigDecimal diff = BigDecimal.valueOf((tWithSchema - tNoSchema) / 1_000_000).setScale(2, RoundingMode.HALF_UP);
+
+    if (tWithSchema < tNoSchema) {
+      LOG.info("Pushdown diff (with schema - no schema = {} ms, ratio= {} ({}% faster)", diff, ratio,
+          BigDecimal.valueOf(100).subtract(ratio.multiply(BigDecimal.valueOf(100))).setScale(0, RoundingMode.HALF_UP));
+    } else {
+      LOG.warn("Expected pushdown to be at least faster. diff = {} ms, ratio= {}, noSchema= {} ns, withSchema= {} ns",
+          diff, ratio, tNoSchema, tWithSchema);
     }
   }
 
@@ -115,8 +122,8 @@ public class PredicatePushdownPerfFS {
     assertEquals(baselineRows, schemaRows, "Results must be identical");
 
     // 5) Print timings (ms) to help you see the gain locally
-    System.out.println("No schema tail time:   " + TimeUnit.NANOSECONDS.toMillis(tNoSchema) + " ms");
-    System.out.println("With schema tail time: " + TimeUnit.NANOSECONDS.toMillis(tWithSchema) + " ms");
+    LOG.info("No schema tail time:   {} ms", TimeUnit.NANOSECONDS.toMillis(tNoSchema));
+    LOG.info("With schema tail time: {} ms", TimeUnit.NANOSECONDS.toMillis(tWithSchema));
 
     // 6) Gentle assertion: schema path should not be slower.
     // Non-regression: pushdown shouldn’t be meaningfully slower locally.

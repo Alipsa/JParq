@@ -1417,6 +1417,18 @@ class JParqPreparedStatement implements PreparedStatement {
           }
         }
       }
+      for (WindowFunctions.CumeDistWindow window : windowPlan.cumeDistWindows()) {
+        for (Expression partition : window.partitionExpressions()) {
+          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+          addColumns(needed, ColumnsUsed.inWhere(partition));
+        }
+        for (OrderByElement order : window.orderByElements()) {
+          if (order != null && order.getExpression() != null) {
+            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+            addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
+          }
+        }
+      }
     }
     if (aggregatePlan != null) {
       for (AggregateFunctions.AggregateSpec spec : aggregatePlan.specs()) {
