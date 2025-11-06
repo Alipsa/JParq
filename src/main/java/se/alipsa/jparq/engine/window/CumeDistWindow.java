@@ -4,6 +4,7 @@ import java.util.List;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.statement.select.OrderByElement;
+
 /**
  * Representation of a CUME_DIST analytic expression.
  */

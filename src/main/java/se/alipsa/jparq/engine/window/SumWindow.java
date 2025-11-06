@@ -3,24 +3,29 @@ package se.alipsa.jparq.engine.window;
 import java.util.List;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.WindowElement;
 import net.sf.jsqlparser.statement.select.OrderByElement;
 
 /**
- * Representation of an NTILE analytic expression.
+ * Representation of a SUM analytic expression.
  */
-public final class NtileWindow {
+public final class SumWindow {
 
   private final AnalyticExpression expression;
   private final List<Expression> partitionExpressions;
   private final List<OrderByElement> orderByElements;
-  private final Expression bucketExpression;
+  private final Expression argument;
+  private final boolean distinct;
+  private final WindowElement windowElement;
 
-  NtileWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
-      List<OrderByElement> orderByElements, Expression bucketExpression) {
+  SumWindow(AnalyticExpression expression, List<Expression> partitionExpressions, List<OrderByElement> orderByElements,
+      Expression argument, boolean distinct, WindowElement windowElement) {
     this.expression = expression;
     this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
     this.orderByElements = orderByElements == null ? List.of() : orderByElements;
-    this.bucketExpression = bucketExpression;
+    this.argument = argument;
+    this.distinct = distinct;
+    this.windowElement = windowElement;
   }
 
   /**
@@ -51,11 +56,30 @@ public final class NtileWindow {
   }
 
   /**
-   * Retrieve the expression supplying the NTILE bucket count.
+   * Retrieve the argument expression evaluated by the SUM function.
    *
-   * @return the {@link Expression} identifying the requested number of tiles
+   * @return the {@link Expression} supplying the value to aggregate
    */
-  public Expression bucketExpression() {
-    return bucketExpression;
+  public Expression argument() {
+    return argument;
+  }
+
+  /**
+   * Determine whether the window request asked for DISTINCT processing.
+   *
+   * @return {@code true} when DISTINCT or UNIQUE modifiers were present
+   */
+  public boolean distinct() {
+    return distinct;
+  }
+
+  /**
+   * Retrieve the window frame specification associated with this SUM window.
+   *
+   * @return the {@link WindowElement} describing the requested frame, or
+   *         {@code null} when the default applies
+   */
+  public WindowElement windowElement() {
+    return windowElement;
   }
 }

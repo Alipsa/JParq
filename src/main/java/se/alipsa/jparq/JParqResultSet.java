@@ -42,6 +42,7 @@ import se.alipsa.jparq.engine.window.NtileWindow;
 import se.alipsa.jparq.engine.window.PercentRankWindow;
 import se.alipsa.jparq.engine.window.RankWindow;
 import se.alipsa.jparq.engine.window.RowNumberWindow;
+import se.alipsa.jparq.engine.window.SumWindow;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.engine.window.WindowState;
@@ -296,6 +297,20 @@ public class JParqResultSet extends ResultSetAdapter {
           Expression bucketExpression = window.bucketExpression();
           if (bucketExpression != null) {
             requiredColumns.addAll(SqlParser.collectQualifiedColumns(bucketExpression, queryQualifiers));
+          }
+        }
+        for (SumWindow window : windowPlan.sumWindows()) {
+          for (Expression partition : window.partitionExpressions()) {
+            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
+          }
+          for (OrderByElement order : window.orderByElements()) {
+            if (order != null && order.getExpression() != null) {
+              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
+            }
+          }
+          Expression argument = window.argument();
+          if (argument != null) {
+            requiredColumns.addAll(SqlParser.collectQualifiedColumns(argument, queryQualifiers));
           }
         }
       }

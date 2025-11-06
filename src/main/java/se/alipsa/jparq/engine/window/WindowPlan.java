@@ -1,6 +1,7 @@
 package se.alipsa.jparq.engine.window;
 
 import java.util.List;
+
 /**
  * Description of analytic window operations that must be computed prior to
  * projection evaluation.
@@ -13,16 +14,18 @@ public final class WindowPlan {
   private final List<PercentRankWindow> percentRankWindows;
   private final List<CumeDistWindow> cumeDistWindows;
   private final List<NtileWindow> ntileWindows;
+  private final List<SumWindow> sumWindows;
 
   WindowPlan(List<RowNumberWindow> rowNumberWindows, List<RankWindow> rankWindows,
       List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
-      List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows) {
+      List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows, List<SumWindow> sumWindows) {
     this.rowNumberWindows = rowNumberWindows == null ? List.of() : rowNumberWindows;
     this.rankWindows = rankWindows == null ? List.of() : rankWindows;
     this.denseRankWindows = denseRankWindows == null ? List.of() : denseRankWindows;
     this.percentRankWindows = percentRankWindows == null ? List.of() : percentRankWindows;
     this.cumeDistWindows = cumeDistWindows == null ? List.of() : cumeDistWindows;
     this.ntileWindows = ntileWindows == null ? List.of() : ntileWindows;
+    this.sumWindows = sumWindows == null ? List.of() : sumWindows;
   }
 
   /**
@@ -33,7 +36,7 @@ public final class WindowPlan {
    */
   public boolean isEmpty() {
     return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
-        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty();
+        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && sumWindows.isEmpty();
   }
 
   /**
@@ -88,5 +91,14 @@ public final class WindowPlan {
    */
   public List<NtileWindow> ntileWindows() {
     return ntileWindows;
+  }
+
+  /**
+   * Access the SUM windows captured by this plan.
+   *
+   * @return immutable list of {@link SumWindow} instances
+   */
+  public List<SumWindow> sumWindows() {
+    return sumWindows;
   }
 }

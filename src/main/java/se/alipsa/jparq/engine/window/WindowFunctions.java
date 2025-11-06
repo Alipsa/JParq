@@ -14,12 +14,16 @@ import java.util.Objects;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
+import net.sf.jsqlparser.expression.WindowElement;
+import net.sf.jsqlparser.expression.WindowOffset;
+import net.sf.jsqlparser.expression.WindowRange;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.statement.select.OrderByElement;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
+import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
@@ -50,6 +54,7 @@ public final class WindowFunctions {
     List<PercentRankWindow> percentRankWindows = new ArrayList<>();
     List<CumeDistWindow> cumeDistWindows = new ArrayList<>();
     List<NtileWindow> ntileWindows = new ArrayList<>();
+    List<SumWindow> sumWindows = new ArrayList<>();
     for (Expression expression : expressions) {
       if (expression == null) {
         continue;
@@ -58,22 +63,24 @@ public final class WindowFunctions {
         @Override
         public <S> Void visit(AnalyticExpression analytic, S context) {
           registerAnalyticExpression(analytic, rowNumberWindows, rankWindows, denseRankWindows, percentRankWindows,
-              cumeDistWindows, ntileWindows);
+              cumeDistWindows, ntileWindows, sumWindows);
           return super.visit(analytic, context);
         }
       });
     }
     if (rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
-        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty()) {
+        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty()
+        && sumWindows.isEmpty()) {
       return null;
     }
     return new WindowPlan(List.copyOf(rowNumberWindows), List.copyOf(rankWindows), List.copyOf(denseRankWindows),
-        List.copyOf(percentRankWindows), List.copyOf(cumeDistWindows), List.copyOf(ntileWindows));
+        List.copyOf(percentRankWindows), List.copyOf(cumeDistWindows), List.copyOf(ntileWindows),
+        List.copyOf(sumWindows));
   }
 
   private static void registerAnalyticExpression(AnalyticExpression analytic, List<RowNumberWindow> rowNumberWindows,
       List<RankWindow> rankWindows, List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
-      List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows) {
+      List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows, List<SumWindow> sumWindows) {
     if (analytic == null) {
       return;
     }
@@ -83,7 +90,7 @@ public final class WindowFunctions {
     }
     if (!"ROW_NUMBER".equalsIgnoreCase(name) && !"RANK".equalsIgnoreCase(name) && !"DENSE_RANK".equalsIgnoreCase(name)
         && !"PERCENT_RANK".equalsIgnoreCase(name) && !"CUME_DIST".equalsIgnoreCase(name)
-        && !"NTILE".equalsIgnoreCase(name)) {
+        && !"NTILE".equalsIgnoreCase(name) && !"SUM".equalsIgnoreCase(name)) {
       return;
     }
     if (analytic.isDistinct() || analytic.isUnique()) {
@@ -154,6 +161,15 @@ public final class WindowFunctions {
         throw new IllegalArgumentException("NTILE requires exactly one argument expression: " + analytic);
       }
       ntileWindows.add(new NtileWindow(analytic, List.copyOf(partitions), orderElements, bucketExpression));
+      return;
+    }
+    if ("SUM".equalsIgnoreCase(name)) {
+      Expression argument = analytic.getExpression();
+      if (argument == null) {
+        throw new IllegalArgumentException("SUM requires an argument expression: " + analytic);
+      }
+      sumWindows.add(new SumWindow(analytic, List.copyOf(partitions), orderElements, argument,
+          analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
     }
   }
 
@@ -221,8 +237,14 @@ public final class WindowFunctions {
       IdentityHashMap<GenericRecord, Long> values = computeNtile(window, records, evaluator);
       ntileValues.put(window.expression(), values);
     }
-    return new WindowState(rowNumberValues, rankValues, denseRankValues, percentRankValues, cumeDistValues,
-        ntileValues);
+    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues;
+    sumValues = new IdentityHashMap<>();
+    for (SumWindow window : plan.sumWindows()) {
+      IdentityHashMap<GenericRecord, Object> values = computeSum(window, records, evaluator);
+      sumValues.put(window.expression(), values);
+    }
+    return new WindowState(rowNumberValues, rankValues, denseRankValues, percentRankValues, cumeDistValues, ntileValues,
+        sumValues);
   }
 
   private static IdentityHashMap<GenericRecord, Long> computeRowNumbers(RowNumberWindow window,
@@ -490,6 +512,293 @@ public final class WindowFunctions {
     return values;
   }
 
+  private static IdentityHashMap<GenericRecord, Object> computeSum(SumWindow window, List<GenericRecord> records,
+      ValueExpressionEvaluator evaluator) {
+
+    List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
+        evaluator);
+    IdentityHashMap<GenericRecord, Object> values = new IdentityHashMap<>();
+    if (contexts.isEmpty()) {
+      return values;
+    }
+
+    List<Object> argumentValues = new ArrayList<>(contexts.size());
+    for (RowContext context : contexts) {
+      Object value = evaluator.eval(window.argument(), context.record());
+      argumentValues.add(value);
+    }
+
+    int index = 0;
+    final int totalContexts = contexts.size();
+    while (index < totalContexts) {
+      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionStart = index;
+      int partitionEnd = index;
+      while (partitionEnd < totalContexts
+          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+        partitionEnd++;
+      }
+      applySumForPartition(window, contexts, argumentValues, partitionStart, partitionEnd, values);
+      index = partitionEnd;
+    }
+
+    return values;
+  }
+
+  private static void applySumForPartition(SumWindow window, List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    if (partitionStart >= partitionEnd) {
+      return;
+    }
+    boolean hasOrder = window.orderByElements() != null && !window.orderByElements().isEmpty();
+    WindowElement element = window.windowElement();
+
+    if (!hasOrder) {
+      SumComputationState state = new SumComputationState();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        state.add(argumentValues.get(i));
+      }
+      Object result = state.result();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        values.put(contexts.get(i).record(), result);
+      }
+      return;
+    }
+
+    if (element == null) {
+      computeDefaultRangeSum(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+
+    if (element.getType() == WindowElement.Type.RANGE) {
+      computeRangeSum(element, contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+
+    if (element.getType() == WindowElement.Type.ROWS) {
+      computeRowsSum(element, contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+
+    throw new IllegalArgumentException("Unsupported window frame type for SUM: " + element);
+  }
+
+  private static void computeDefaultRangeSum(List<RowContext> contexts, List<Object> argumentValues, int partitionStart,
+      int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    SumComputationState running = new SumComputationState();
+    int groupStart = partitionStart;
+    while (groupStart < partitionEnd) {
+      List<OrderComponent> order = contexts.get(groupStart).orderComponents();
+      int groupEnd = groupStart;
+      while (groupEnd < partitionEnd && orderComponentsEqual(order, contexts.get(groupEnd).orderComponents())) {
+        Object value = argumentValues.get(groupEnd);
+        running.add(value);
+        groupEnd++;
+      }
+      Object result = running.result();
+      for (int i = groupStart; i < groupEnd; i++) {
+        values.put(contexts.get(i).record(), result);
+      }
+      groupStart = groupEnd;
+    }
+  }
+
+  private static void computeRangeSum(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    WindowOffset offset = element.getOffset();
+    WindowRange range = element.getRange();
+    if (offset != null) {
+      WindowOffset.Type type = offset.getType();
+      if (type == WindowOffset.Type.PRECEDING || type == WindowOffset.Type.CURRENT) {
+        computeDefaultRangeSum(contexts, argumentValues, partitionStart, partitionEnd, values);
+        return;
+      }
+      if (type == WindowOffset.Type.FOLLOWING) {
+        // UNBOUNDED FOLLOWING results in full partition sum
+        SumComputationState state = new SumComputationState();
+        for (int i = partitionStart; i < partitionEnd; i++) {
+          state.add(argumentValues.get(i));
+        }
+        Object total = state.result();
+        for (int i = partitionStart; i < partitionEnd; i++) {
+          values.put(contexts.get(i).record(), total);
+        }
+        return;
+      }
+      throw new IllegalArgumentException("Unsupported RANGE frame specification for SUM: " + element);
+    }
+    if (range == null) {
+      computeDefaultRangeSum(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    FrameBoundary start = rangeBoundary(range.getStart(), true);
+    FrameBoundary end = rangeBoundary(range.getEnd(), false);
+    if (start.type() == FrameBoundType.UNBOUNDED_PRECEDING && end.type() == FrameBoundType.CURRENT_ROW) {
+      computeDefaultRangeSum(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    if (start.type() == FrameBoundType.UNBOUNDED_PRECEDING && end.type() == FrameBoundType.UNBOUNDED_FOLLOWING) {
+      SumComputationState state = new SumComputationState();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        state.add(argumentValues.get(i));
+      }
+      Object total = state.result();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        values.put(contexts.get(i).record(), total);
+      }
+      return;
+    }
+    if (start.type() == FrameBoundType.CURRENT_ROW && end.type() == FrameBoundType.CURRENT_ROW) {
+      int groupStart = partitionStart;
+      while (groupStart < partitionEnd) {
+        List<OrderComponent> order = contexts.get(groupStart).orderComponents();
+        SumComputationState state = new SumComputationState();
+        int groupEnd = groupStart;
+        while (groupEnd < partitionEnd && orderComponentsEqual(order, contexts.get(groupEnd).orderComponents())) {
+          state.add(argumentValues.get(groupEnd));
+          groupEnd++;
+        }
+        Object total = state.result();
+        for (int i = groupStart; i < groupEnd; i++) {
+          values.put(contexts.get(i).record(), total);
+        }
+        groupStart = groupEnd;
+      }
+      return;
+    }
+    throw new IllegalArgumentException("Unsupported RANGE frame boundaries for SUM: " + element);
+  }
+
+  private static FrameBoundary rangeBoundary(WindowOffset offset, boolean start) {
+    if (offset == null) {
+      return start ? FrameBoundary.unboundedPreceding() : FrameBoundary.currentRow();
+    }
+    if (offset.getExpression() != null) {
+      throw new IllegalArgumentException("Only UNBOUNDED or CURRENT range offsets are supported: " + offset);
+    }
+    WindowOffset.Type type = offset.getType();
+    if (type == WindowOffset.Type.PRECEDING) {
+      return FrameBoundary.unboundedPreceding();
+    }
+    if (type == WindowOffset.Type.FOLLOWING) {
+      return FrameBoundary.unboundedFollowing();
+    }
+    if (type == WindowOffset.Type.CURRENT) {
+      return FrameBoundary.currentRow();
+    }
+    throw new IllegalArgumentException("Unsupported RANGE frame offset: " + offset);
+  }
+
+  private static void computeRowsSum(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    FrameSpecification spec = rowsFrameSpecification(element);
+    int partitionSize = partitionEnd - partitionStart;
+    for (int i = 0; i < partitionSize; i++) {
+      int absoluteIndex = partitionStart + i;
+      int startIndex = resolveRowsStartIndex(spec.start(), i, partitionSize);
+      int endIndex = resolveRowsEndIndex(spec.end(), i, partitionSize);
+      if (startIndex > endIndex || startIndex >= partitionSize || endIndex < 0) {
+        values.put(contexts.get(absoluteIndex).record(), null);
+        continue;
+      }
+      int boundedStart = Math.max(0, startIndex);
+      int boundedEnd = Math.min(partitionSize - 1, endIndex);
+      SumComputationState state = new SumComputationState();
+      for (int j = boundedStart; j <= boundedEnd; j++) {
+        state.add(argumentValues.get(partitionStart + j));
+      }
+      values.put(contexts.get(absoluteIndex).record(), state.result());
+    }
+  }
+
+  private static FrameSpecification rowsFrameSpecification(WindowElement element) {
+    WindowOffset offset = element.getOffset();
+    WindowRange range = element.getRange();
+    if (offset != null) {
+      WindowOffset.Type type = offset.getType();
+      FrameBoundary start;
+      FrameBoundary end;
+      if (type == WindowOffset.Type.FOLLOWING) {
+        start = FrameBoundary.currentRow();
+        end = rowsBoundary(offset, false);
+      } else {
+        start = rowsBoundary(offset, true);
+        end = FrameBoundary.currentRow();
+      }
+      return new FrameSpecification(start, end);
+    }
+    if (range != null) {
+      FrameBoundary start = rowsBoundary(range.getStart(), true);
+      FrameBoundary end = rowsBoundary(range.getEnd(), false);
+      return new FrameSpecification(start, end);
+    }
+    return new FrameSpecification(FrameBoundary.unboundedPreceding(), FrameBoundary.currentRow());
+  }
+
+  private static FrameBoundary rowsBoundary(WindowOffset offset, boolean start) {
+    if (offset == null) {
+      return start ? FrameBoundary.unboundedPreceding() : FrameBoundary.currentRow();
+    }
+    WindowOffset.Type type = offset.getType();
+    if (offset.getExpression() == null) {
+      if (type == WindowOffset.Type.PRECEDING) {
+        return FrameBoundary.unboundedPreceding();
+      }
+      if (type == WindowOffset.Type.FOLLOWING) {
+        return FrameBoundary.unboundedFollowing();
+      }
+      if (type == WindowOffset.Type.CURRENT) {
+        return FrameBoundary.currentRow();
+      }
+      throw new IllegalArgumentException("Unsupported ROWS frame offset: " + offset);
+    }
+    Object literal = LiteralConverter.toLiteral(offset.getExpression());
+    if (!(literal instanceof Number number)) {
+      throw new IllegalArgumentException("ROWS frame offset must evaluate to a numeric literal: " + offset);
+    }
+    long value = number.longValue();
+    if (value < 0L) {
+      throw new IllegalArgumentException("ROWS frame offset must be non-negative: " + offset);
+    }
+    if (type == WindowOffset.Type.PRECEDING || type == WindowOffset.Type.EXPR) {
+      return FrameBoundary.offsetPreceding(value);
+    }
+    if (type == WindowOffset.Type.FOLLOWING) {
+      return FrameBoundary.offsetFollowing(value);
+    }
+    if (type == WindowOffset.Type.CURRENT) {
+      return FrameBoundary.currentRow();
+    }
+    throw new IllegalArgumentException("Unsupported ROWS frame offset: " + offset);
+  }
+
+  private static int resolveRowsStartIndex(FrameBoundary boundary, int position, int partitionSize) {
+    return switch (boundary.type()) {
+      case UNBOUNDED_PRECEDING -> 0;
+      case UNBOUNDED_FOLLOWING -> partitionSize;
+      case CURRENT_ROW -> position;
+      case OFFSET_PRECEDING -> position - safeLongToInt(boundary.offset());
+      case OFFSET_FOLLOWING -> position + safeLongToInt(boundary.offset());
+    };
+  }
+
+  private static int resolveRowsEndIndex(FrameBoundary boundary, int position, int partitionSize) {
+    return switch (boundary.type()) {
+      case UNBOUNDED_PRECEDING -> -1;
+      case UNBOUNDED_FOLLOWING -> partitionSize - 1;
+      case CURRENT_ROW -> position;
+      case OFFSET_PRECEDING -> position - safeLongToInt(boundary.offset());
+      case OFFSET_FOLLOWING -> position + safeLongToInt(boundary.offset());
+    };
+  }
+
+  private static int safeLongToInt(long value) {
+    if (value > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException("Window frame offset exceeds supported range: " + value);
+    }
+    return (int) value;
+  }
+
   private static List<RowContext> buildSortedContexts(List<Expression> partitionExpressions,
       List<OrderByElement> orderByElements, List<GenericRecord> records, ValueExpressionEvaluator evaluator) {
     List<RowContext> contexts = new ArrayList<>(records.size());
@@ -701,6 +1010,35 @@ public final class WindowFunctions {
       return 1;
     }
     return Arrays.compare(left, right);
+  }
+
+  private enum FrameBoundType {
+    UNBOUNDED_PRECEDING, UNBOUNDED_FOLLOWING, CURRENT_ROW, OFFSET_PRECEDING, OFFSET_FOLLOWING
+  }
+
+  private record FrameBoundary(FrameBoundType type, long offset) {
+    static FrameBoundary unboundedPreceding() {
+      return new FrameBoundary(FrameBoundType.UNBOUNDED_PRECEDING, 0L);
+    }
+
+    static FrameBoundary unboundedFollowing() {
+      return new FrameBoundary(FrameBoundType.UNBOUNDED_FOLLOWING, 0L);
+    }
+
+    static FrameBoundary currentRow() {
+      return new FrameBoundary(FrameBoundType.CURRENT_ROW, 0L);
+    }
+
+    static FrameBoundary offsetPreceding(long offset) {
+      return new FrameBoundary(FrameBoundType.OFFSET_PRECEDING, offset);
+    }
+
+    static FrameBoundary offsetFollowing(long offset) {
+      return new FrameBoundary(FrameBoundType.OFFSET_FOLLOWING, offset);
+    }
+  }
+
+  private record FrameSpecification(FrameBoundary start, FrameBoundary end) {
   }
 
   private record RowContext(GenericRecord record, List<Object> partitionValues, List<OrderComponent> orderComponents,

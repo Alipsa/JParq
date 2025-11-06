@@ -21,6 +21,8 @@ import se.alipsa.jparq.JParqSql;
  */
 public class RankTest {
 
+  private static final double DOUBLE_COMPARISON_DELTA = 0.0001;
+
   private static JParqSql jparqSql;
 
   @BeforeAll
@@ -113,11 +115,11 @@ public class RankTest {
     Assertions.assertEquals(3, averages.size(), "Expected one aggregate row per gear value");
     Assertions.assertEquals(3, percentRanks.size(), "Expected a percent rank value for each aggregated row");
 
-    Assertions.assertEquals(0.0, percentRanks.get(0), 0.0001,
+    Assertions.assertEquals(0.0, percentRanks.get(0), DOUBLE_COMPARISON_DELTA,
         "First row in a partition must receive a percent rank of zero");
-    Assertions.assertEquals(0.5, percentRanks.get(1), 0.0001,
+    Assertions.assertEquals(0.5, percentRanks.get(1), DOUBLE_COMPARISON_DELTA,
         "Second gear should be halfway between the best and worst averages");
-    Assertions.assertEquals(1.0, percentRanks.get(2), 0.0001,
+    Assertions.assertEquals(1.0, percentRanks.get(2), DOUBLE_COMPARISON_DELTA,
         "Final row in a partition must receive a percent rank of one when multiple rows exist");
   }
 
@@ -159,11 +161,11 @@ public class RankTest {
     Assertions.assertEquals(3, averages.size(), "Expected one aggregate row per gear value");
     Assertions.assertEquals(3, cumeDists.size(), "Expected a cumulative distribution value for each aggregated row");
 
-    Assertions.assertEquals(1.0 / 3.0, cumeDists.get(0), 0.0001,
+    Assertions.assertEquals(1.0 / 3.0, cumeDists.get(0), DOUBLE_COMPARISON_DELTA,
         "First ordered row must receive a cumulative distribution of 1/totalRows");
-    Assertions.assertEquals(2.0 / 3.0, cumeDists.get(1), 0.0001,
+    Assertions.assertEquals(2.0 / 3.0, cumeDists.get(1), DOUBLE_COMPARISON_DELTA,
         "Second row should reflect two thirds of the partitioned rows");
-    Assertions.assertEquals(1.0, cumeDists.get(2), 0.0001,
+    Assertions.assertEquals(1.0, cumeDists.get(2), DOUBLE_COMPARISON_DELTA,
         "Final row in a partition must receive a cumulative distribution of one");
   }
 
@@ -192,9 +194,9 @@ public class RankTest {
     });
 
     Assertions.assertFalse(percentRanks.isEmpty(), "Expected percent ranks for four-cylinder cars");
-    Assertions.assertEquals(0.0, percentRanks.get(0), 0.0001,
+    Assertions.assertEquals(0.0, percentRanks.get(0), DOUBLE_COMPARISON_DELTA,
         "First ordered row must receive the minimum percent rank");
-    Assertions.assertEquals(1.0, percentRanks.get(percentRanks.size() - 1), 0.0001,
+    Assertions.assertEquals(1.0, percentRanks.get(percentRanks.size() - 1), DOUBLE_COMPARISON_DELTA,
         "Last ordered row must receive the maximum percent rank");
 
     double previous = Double.NEGATIVE_INFINITY;
@@ -260,7 +262,7 @@ public class RankTest {
     });
 
     Assertions.assertFalse(cumeDists.isEmpty(), "Expected cumulative distributions for four-cylinder cars");
-    Assertions.assertEquals(1.0, cumeDists.get(cumeDists.size() - 1), 0.0001,
+    Assertions.assertEquals(1.0, cumeDists.get(cumeDists.size() - 1), DOUBLE_COMPARISON_DELTA,
         "Last ordered row must receive a cumulative distribution of one");
 
     double previous = Double.NEGATIVE_INFINITY;
@@ -270,8 +272,8 @@ public class RankTest {
           "Cumulative distribution values must be non-decreasing after ordering");
       previous = value;
     }
-    Assertions.assertEquals((double) firstGroupCount[0] / (double) totalRows[0], cumeDists.get(0), 0.0001,
-        "First row must equal the proportion of the partition represented by its peer group");
+    Assertions.assertEquals((double) firstGroupCount[0] / (double) totalRows[0], cumeDists.get(0),
+        DOUBLE_COMPARISON_DELTA, "First row must equal the proportion of the partition represented by its peer group");
   }
 
   /**
@@ -684,16 +686,16 @@ public class RankTest {
           long totalRows = countsByCyl.getOrDefault(cyl, 0L);
           double expectedPercentRank = totalRows <= 1L ? 0.0 : (double) (expectedRank - 1L) / (double) (totalRows - 1L);
 
-          Assertions.assertEquals(expectedPercentRank, percentRank, 0.0001,
+          Assertions.assertEquals(expectedPercentRank, percentRank, DOUBLE_COMPARISON_DELTA,
               "Percent rank must follow the SQL formula within each partition");
 
           if (processed == 1L) {
-            Assertions.assertEquals(0.0, percentRank, 0.0001,
+            Assertions.assertEquals(0.0, percentRank, DOUBLE_COMPARISON_DELTA,
                 "First row of each partition must have a percent rank of zero");
           }
           Double previousPercent = previousPercentByCyl.put(cyl, percentRank);
           if (previousPercent != null) {
-            Assertions.assertTrue(percentRank + 0.0001 >= previousPercent.doubleValue(),
+            Assertions.assertTrue(percentRank + DOUBLE_COMPARISON_DELTA >= previousPercent.doubleValue(),
                 "Percent rank values must be non-decreasing within a partition");
           }
 
@@ -774,20 +776,246 @@ public class RankTest {
         double expected = (double) (groupEnd + 1) / (double) totalRows;
         for (int i = index; i <= groupEnd; i++) {
           double actual = rows.get(i).cumeDist();
-          Assertions.assertEquals(expected, actual, 0.0001, "Peer rows must share the same cumulative distribution");
+          Assertions.assertEquals(expected, actual, DOUBLE_COMPARISON_DELTA,
+              "Peer rows must share the same cumulative distribution");
           Assertions.assertTrue(actual > 0.0 && actual <= 1.0, "CUME_DIST values must be within the interval (0, 1]");
         }
 
         if (index == 0) {
-          Assertions.assertEquals((double) (groupEnd + 1) / (double) totalRows, rows.get(0).cumeDist(), 0.0001,
-              "First peer group must determine the minimum cumulative distribution value");
+          Assertions.assertEquals((double) (groupEnd + 1) / (double) totalRows, rows.get(0).cumeDist(),
+              DOUBLE_COMPARISON_DELTA, "First peer group must determine the minimum cumulative distribution value");
         }
         index = groupEnd + 1;
       }
 
-      Assertions.assertEquals(1.0, rows.get(rows.size() - 1).cumeDist(), 0.0001,
+      Assertions.assertEquals(1.0, rows.get(rows.size() - 1).cumeDist(), DOUBLE_COMPARISON_DELTA,
           "Final row in a partition must have a cumulative distribution of one");
     }
+  }
+
+  /**
+   * Verify that the SQL standard RANGE default ({@code UNBOUNDED PRECEDING} to
+   * {@code CURRENT ROW}) used by {@code SUM(...)} window functions respects peer
+   * groups and produces a cumulative total that is constant for tied rows.
+   */
+  @Test
+  void testSumRangeFrameRespectsPeerGroups() {
+    String sql = """
+        SELECT mpg, hp,
+               SUM(hp) OVER (ORDER BY mpg DESC) AS cumulative_hp
+        FROM mtcars
+        ORDER BY mpg DESC, hp DESC
+        """;
+
+    List<Double> mpgs = new ArrayList<>();
+    List<Integer> horsepower = new ArrayList<>();
+    List<Double> cumulativeHp = new ArrayList<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          mpgs.add(rs.getDouble("mpg"));
+          horsepower.add(rs.getInt("hp"));
+          cumulativeHp.add(rs.getDouble("cumulative_hp"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(cumulativeHp.isEmpty(), "Expected cumulative horsepower totals from the window query");
+
+    double previous = Double.NEGATIVE_INFINITY;
+    for (double sum : cumulativeHp) {
+      Assertions.assertTrue(sum + DOUBLE_COMPARISON_DELTA >= previous,
+          "Cumulative SUM must not decrease across ordered rows");
+      previous = sum;
+    }
+
+    double[] expected = new double[cumulativeHp.size()];
+    double running = 0.0;
+    double lastMpg = Double.NaN;
+    List<Integer> currentIndices = new ArrayList<>();
+    double groupTotal = 0.0;
+    boolean sawPeerGroup = false;
+    for (int i = 0; i < mpgs.size(); i++) {
+      double mpg = mpgs.get(i);
+      if (currentIndices.isEmpty()) {
+        lastMpg = mpg;
+      } else if (Double.compare(mpg, lastMpg) != 0) {
+        running += groupTotal;
+        for (int idx : currentIndices) {
+          expected[idx] = running;
+        }
+        if (currentIndices.size() > 1) {
+          sawPeerGroup = true;
+        }
+        currentIndices.clear();
+        groupTotal = 0.0;
+        lastMpg = mpg;
+      }
+      currentIndices.add(i);
+      groupTotal += horsepower.get(i);
+    }
+    if (!currentIndices.isEmpty()) {
+      running += groupTotal;
+      for (int idx : currentIndices) {
+        expected[idx] = running;
+      }
+      if (currentIndices.size() > 1) {
+        sawPeerGroup = true;
+      }
+    }
+
+    for (int i = 0; i < cumulativeHp.size(); i++) {
+      Assertions.assertEquals(expected[i], cumulativeHp.get(i), DOUBLE_COMPARISON_DELTA,
+          "SUM window must match the expected cumulative total for row " + i);
+    }
+
+    Assertions.assertTrue(sawPeerGroup, "Test data must include peer groups to validate RANGE semantics");
+
+    int totalHp = horsepower.stream().mapToInt(Integer::intValue).sum();
+    Assertions.assertEquals(totalHp, cumulativeHp.get(cumulativeHp.size() - 1), DOUBLE_COMPARISON_DELTA,
+        "Final cumulative SUM must equal the total horsepower observed");
+  }
+
+  /**
+   * Verify that ROWS {@code n FOLLOWING} short form expands to the SQL equivalent
+   * frame ({@code CURRENT ROW} to {@code n FOLLOWING}) when used with
+   * {@code SUM(...)} window functions.
+   */
+  @Test
+  void testSumRowsFollowingShortFormExpandsToFutureFrame() {
+    String sql = """
+        SELECT mpg, hp,
+               SUM(hp) OVER (ORDER BY mpg, hp ROWS 2 FOLLOWING) AS future_hp
+        FROM mtcars
+        ORDER BY mpg, hp
+        """;
+
+    List<Integer> horsepower = new ArrayList<>();
+    List<Double> futureTotals = new ArrayList<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          horsepower.add(rs.getInt("hp"));
+          futureTotals.add(rs.getDouble("future_hp"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(horsepower.isEmpty(), "Expected horsepower values from SUM window query");
+    Assertions.assertEquals(horsepower.size(), futureTotals.size(), "SUM window must emit one value per input row");
+
+    for (int i = 0; i < horsepower.size(); i++) {
+      double expected = 0.0;
+      for (int j = i; j < horsepower.size() && j <= i + 2; j++) {
+        expected += horsepower.get(j);
+      }
+      Assertions.assertEquals(expected, futureTotals.get(i), DOUBLE_COMPARISON_DELTA,
+          "SUM with ROWS FOLLOWING must aggregate from current row into future rows");
+    }
+  }
+
+  /**
+   * Verify that ROWS {@code UNBOUNDED FOLLOWING} short form expands to the SQL
+   * equivalent frame ({@code CURRENT ROW} to {@code UNBOUNDED FOLLOWING}) for
+   * {@code SUM(...)} window functions.
+   */
+  @Test
+  void testSumRowsUnboundedFollowingExtendsThroughPartitionEnd() {
+    String sql = """
+        SELECT mpg, hp,
+               SUM(hp) OVER (ORDER BY mpg, hp ROWS UNBOUNDED FOLLOWING) AS trailing_hp
+        FROM mtcars
+        ORDER BY mpg, hp
+        """;
+
+    List<Integer> horsepower = new ArrayList<>();
+    List<Double> trailingTotals = new ArrayList<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          horsepower.add(rs.getInt("hp"));
+          trailingTotals.add(rs.getDouble("trailing_hp"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(horsepower.isEmpty(), "Expected horsepower values from SUM window query");
+    Assertions.assertEquals(horsepower.size(), trailingTotals.size(), "SUM window must emit one value per input row");
+
+    double[] expected = new double[horsepower.size()];
+    double running = 0.0;
+    for (int i = horsepower.size() - 1; i >= 0; i--) {
+      running += horsepower.get(i);
+      expected[i] = running;
+    }
+
+    for (int i = 0; i < horsepower.size(); i++) {
+      Assertions.assertEquals(expected[i], trailingTotals.get(i), DOUBLE_COMPARISON_DELTA,
+          "SUM with ROWS UNBOUNDED FOLLOWING must include all remaining rows");
+    }
+
+    Assertions.assertEquals(horsepower.get(horsepower.size() - 1), trailingTotals.get(trailingTotals.size() - 1),
+        DOUBLE_COMPARISON_DELTA, "Final ROWS UNBOUNDED FOLLOWING value must equal the last row's horsepower");
+  }
+
+  /**
+   * Ensure that {@code SUM(...)} window functions without an ORDER BY clause
+   * compute a constant total for each partition as mandated by the SQL standard.
+   */
+  @Test
+  void testSumPartitionWithoutOrderingProducesPartitionTotals() {
+    String sql = """
+        SELECT cyl, hp,
+               SUM(hp) OVER (PARTITION BY cyl) AS total_hp_per_cyl
+        FROM mtcars
+        ORDER BY cyl, hp DESC
+        """;
+
+    List<Integer> cylinders = new ArrayList<>();
+    List<Integer> horsepower = new ArrayList<>();
+    List<Double> totals = new ArrayList<>();
+
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          cylinders.add(rs.getInt("cyl"));
+          horsepower.add(rs.getInt("hp"));
+          totals.add(rs.getDouble("total_hp_per_cyl"));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+
+    Assertions.assertFalse(totals.isEmpty(), "Expected partition totals from SUM window evaluation");
+
+    Map<Integer, Integer> expectedTotals = new HashMap<>();
+    Map<Integer, Integer> countsByCylinder = new HashMap<>();
+    for (int i = 0; i < cylinders.size(); i++) {
+      int cyl = cylinders.get(i);
+      int hp = horsepower.get(i);
+      expectedTotals.merge(cyl, hp, Integer::sum);
+      countsByCylinder.merge(cyl, 1, Integer::sum);
+    }
+
+    for (int i = 0; i < cylinders.size(); i++) {
+      int cyl = cylinders.get(i);
+      double expectedTotal = expectedTotals.get(cyl);
+      Assertions.assertEquals(expectedTotal, totals.get(i), DOUBLE_COMPARISON_DELTA,
+          "SUM without ORDER BY must produce a constant total per partition");
+    }
+
+    Assertions.assertTrue(countsByCylinder.values().stream().anyMatch(count -> count > 1),
+        "Expected at least one partition containing multiple rows");
   }
 
   /**

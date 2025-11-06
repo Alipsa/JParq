@@ -12,7 +12,8 @@ import org.apache.avro.generic.GenericRecord;
  */
 public final class WindowState {
 
-  private static final WindowState EMPTY = new WindowState(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
+  private static final WindowState EMPTY = new WindowState(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(),
+      Map.of());
 
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues;
@@ -20,19 +21,22 @@ public final class WindowState {
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues;
+  private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues;
 
   WindowState(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues,
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues,
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues,
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues,
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues,
-      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues) {
+      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues,
+      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues) {
     this.rowNumberValues = rowNumberValues == null ? Map.of() : Collections.unmodifiableMap(rowNumberValues);
     this.rankValues = rankValues == null ? Map.of() : Collections.unmodifiableMap(rankValues);
     this.denseRankValues = denseRankValues == null ? Map.of() : Collections.unmodifiableMap(denseRankValues);
     this.percentRankValues = percentRankValues == null ? Map.of() : Collections.unmodifiableMap(percentRankValues);
     this.cumeDistValues = cumeDistValues == null ? Map.of() : Collections.unmodifiableMap(cumeDistValues);
     this.ntileValues = ntileValues == null ? Map.of() : Collections.unmodifiableMap(ntileValues);
+    this.sumValues = sumValues == null ? Map.of() : Collections.unmodifiableMap(sumValues);
   }
 
   /**
@@ -51,7 +55,7 @@ public final class WindowState {
    */
   public boolean isEmpty() {
     return rowNumberValues.isEmpty() && rankValues.isEmpty() && denseRankValues.isEmpty() && percentRankValues.isEmpty()
-        && cumeDistValues.isEmpty() && ntileValues.isEmpty();
+        && cumeDistValues.isEmpty() && ntileValues.isEmpty() && sumValues.isEmpty();
   }
 
   /**
@@ -182,5 +186,25 @@ public final class WindowState {
       throw new IllegalArgumentException("No NTILE value computed for record: " + record);
     }
     return value;
+  }
+
+  /**
+   * Obtain the precomputed SUM value for the supplied expression and record.
+   *
+   * @param expression
+   *          the analytic expression
+   * @param record
+   *          the current record
+   * @return the computed sum value
+   */
+  public Object sum(AnalyticExpression expression, GenericRecord record) {
+    IdentityHashMap<GenericRecord, Object> values = sumValues.get(expression);
+    if (values == null) {
+      throw new IllegalArgumentException("No SUM values available for expression: " + expression);
+    }
+    if (!values.containsKey(record)) {
+      throw new IllegalArgumentException("No SUM value computed for record: " + record);
+    }
+    return values.get(record);
   }
 }
