@@ -514,10 +514,6 @@ public final class WindowFunctions {
 
   private static IdentityHashMap<GenericRecord, Object> computeSum(SumWindow window, List<GenericRecord> records,
       ValueExpressionEvaluator evaluator) {
-    if (window.distinct()) {
-      throw new IllegalArgumentException(
-          "SUM window function does not support DISTINCT or UNIQUE modifiers: " + window.expression());
-    }
 
     List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
         evaluator);
