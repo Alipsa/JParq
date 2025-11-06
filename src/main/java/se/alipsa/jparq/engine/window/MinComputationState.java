@@ -11,7 +11,8 @@ final class MinComputationState {
   /**
    * Incorporate a candidate value into the running minimum.
    *
-   * @param value the value to consider; {@code null} values are ignored
+   * @param value
+   *          the value to consider; {@code null} values are ignored
    */
   void add(Object value) {
     if (value == null) {

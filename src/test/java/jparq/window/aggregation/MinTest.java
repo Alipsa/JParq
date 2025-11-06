@@ -83,7 +83,8 @@ public class MinTest {
   }
 
   /**
-   * Verify that the default RANGE frame yields a cumulative minimum following the ORDER BY clause.
+   * Verify that the default RANGE frame yields a cumulative minimum following the
+   * ORDER BY clause.
    */
   @Test
   void testRunningMinUsesDefaultRangeFrame() {
@@ -134,7 +135,8 @@ public class MinTest {
   }
 
   /**
-   * Validate that ROWS frames calculate the minimum over the specified sliding window.
+   * Validate that ROWS frames calculate the minimum over the specified sliding
+   * window.
    */
   @Test
   void testRowsFrameBoundaries() {

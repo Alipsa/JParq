@@ -192,7 +192,7 @@ public final class WindowFunctions {
       }
       minWindows.add(new MinWindow(analytic, List.copyOf(partitions), orderElements, argument,
           analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
-      return;
+      // return;
     }
   }
 
