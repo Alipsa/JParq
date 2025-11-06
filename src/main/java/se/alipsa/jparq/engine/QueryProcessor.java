@@ -14,6 +14,8 @@ import net.sf.jsqlparser.expression.Expression;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.window.WindowFunctions;
+import se.alipsa.jparq.engine.window.WindowPlan;
+import se.alipsa.jparq.engine.window.WindowState;
 
 /**
  * Processes a {@link RecordReader} with projection, WHERE clause, LIMIT, and
@@ -38,8 +40,8 @@ public final class QueryProcessor implements AutoCloseable {
   private final List<String> outerQualifiers;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
-  private final WindowFunctions.WindowPlan windowPlan;
-  private WindowFunctions.WindowState windowState;
+  private final WindowPlan windowPlan;
+  private WindowState windowState;
   private final boolean windowed;
 
   // Evaluator is lazily created if schema was not provided
@@ -80,7 +82,7 @@ public final class QueryProcessor implements AutoCloseable {
     private List<String> outerQualifiers = List.of();
     private Map<String, Map<String, String>> qualifierColumnMapping = Map.of();
     private Map<String, String> unqualifiedColumnMapping = Map.of();
-    private WindowFunctions.WindowPlan windowPlan;
+    private WindowPlan windowPlan;
 
     private Options() {
       // use factory
@@ -327,7 +329,7 @@ public final class QueryProcessor implements AutoCloseable {
      *          are present
      * @return {@code this} for chaining
      */
-    public Options windowPlan(WindowFunctions.WindowPlan windowPlan) {
+    public Options windowPlan(WindowPlan windowPlan) {
       this.windowPlan = windowPlan;
       return this;
     }
@@ -365,7 +367,7 @@ public final class QueryProcessor implements AutoCloseable {
     this.unqualifiedColumnMapping = opts.unqualifiedColumnMapping;
     this.windowPlan = opts.windowPlan;
     this.windowed = windowPlan != null && !windowPlan.isEmpty();
-    this.windowState = WindowFunctions.WindowState.empty();
+    this.windowState = WindowState.empty();
     this.preOrderBy = canonicalizeOrderKeys(opts.preOrderBy);
     this.hasPreStage = (this.preLimit >= 0) || !this.preOrderBy.isEmpty() || (this.preOffset > 0);
     List<String> distinctCols = opts.distinctColumns == null ? this.projection : opts.distinctColumns;
@@ -670,11 +672,11 @@ public final class QueryProcessor implements AutoCloseable {
    * Retrieve the precomputed analytic window state associated with this
    * processor.
    *
-   * @return the computed {@link WindowFunctions.WindowState}, or an empty state
-   *         when no window functions are present
+   * @return the computed {@link WindowState}, or an empty state when no window
+   *         functions are present
    */
-  public WindowFunctions.WindowState windowState() {
-    return windowState == null ? WindowFunctions.WindowState.empty() : windowState;
+  public WindowState windowState() {
+    return windowState == null ? WindowState.empty() : windowState;
   }
 
   @Override

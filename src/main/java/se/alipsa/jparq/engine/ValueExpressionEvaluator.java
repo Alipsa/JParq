@@ -40,7 +40,7 @@ import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
-import se.alipsa.jparq.engine.window.WindowFunctions;
+import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.DateTimeExpressions;
 import se.alipsa.jparq.helper.JsonExpressions;
 import se.alipsa.jparq.helper.LiteralConverter;
@@ -60,7 +60,7 @@ public final class ValueExpressionEvaluator {
   private final List<String> outerQualifiers;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
-  private final WindowFunctions.WindowState windowState;
+  private final WindowState windowState;
   private ExpressionEvaluator conditionEvaluator;
 
   /**
@@ -70,7 +70,7 @@ public final class ValueExpressionEvaluator {
    *          the Avro schema describing the available columns
    */
   public ValueExpressionEvaluator(Schema schema) {
-    this(schema, null, List.of(), Map.of(), Map.of(), WindowFunctions.WindowState.empty());
+    this(schema, null, List.of(), Map.of(), Map.of(), WindowState.empty());
   }
 
   /**
@@ -83,7 +83,7 @@ public final class ValueExpressionEvaluator {
    *          executor used for scalar subqueries (may be {@code null})
    */
   public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor) {
-    this(schema, subqueryExecutor, List.of(), Map.of(), Map.of(), WindowFunctions.WindowState.empty());
+    this(schema, subqueryExecutor, List.of(), Map.of(), Map.of(), WindowState.empty());
   }
 
   /**
@@ -108,7 +108,7 @@ public final class ValueExpressionEvaluator {
   public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping) {
     this(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping, unqualifiedColumnMapping,
-        WindowFunctions.WindowState.empty());
+        WindowState.empty());
   }
 
   /**
@@ -136,7 +136,7 @@ public final class ValueExpressionEvaluator {
    */
   public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping,
-      WindowFunctions.WindowState windowState) {
+      WindowState windowState) {
     Map<String, Schema> fs = new HashMap<>();
     Map<String, String> ci = new HashMap<>();
     for (Schema.Field f : schema.getFields()) {
@@ -150,7 +150,7 @@ public final class ValueExpressionEvaluator {
     this.outerQualifiers = outerQualifiers == null ? List.of() : List.copyOf(outerQualifiers);
     this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(qualifierColumnMapping);
     this.unqualifiedColumnMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(unqualifiedColumnMapping);
-    this.windowState = windowState == null ? WindowFunctions.WindowState.empty() : windowState;
+    this.windowState = windowState == null ? WindowState.empty() : windowState;
   }
 
   /**
