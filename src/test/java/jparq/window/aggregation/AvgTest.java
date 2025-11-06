@@ -32,7 +32,8 @@ public class AvgTest {
   }
 
   /**
-   * Verify that a partitioned AVG window returns the same averages as a grouped aggregation.
+   * Verify that a partitioned AVG window returns the same averages as a grouped
+   * aggregation.
    */
   @Test
   void testPartitionedAvgMatchesGroupAverages() {
@@ -82,7 +83,8 @@ public class AvgTest {
   }
 
   /**
-   * Ensure that the default RANGE frame produces a running average ordered by miles per gallon.
+   * Ensure that the default RANGE frame produces a running average ordered by
+   * miles per gallon.
    */
   @Test
   void testRunningAverageUsesDefaultRangeFrame() {
@@ -136,8 +138,7 @@ public class AvgTest {
       index = groupEnd;
     }
 
-    Assertions.assertEquals(expected.size(), runningAverages.size(),
-        "Expected running average for each output row");
+    Assertions.assertEquals(expected.size(), runningAverages.size(), "Expected running average for each output row");
     for (int i = 0; i < expected.size(); i++) {
       Assertions.assertEquals(expected.get(i), runningAverages.get(i), 1e-9,
           "RANGE frame must accumulate all peers sharing the ORDER BY value");
