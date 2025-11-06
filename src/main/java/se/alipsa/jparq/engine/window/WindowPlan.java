@@ -15,10 +15,12 @@ public final class WindowPlan {
   private final List<CumeDistWindow> cumeDistWindows;
   private final List<NtileWindow> ntileWindows;
   private final List<SumWindow> sumWindows;
+  private final List<AvgWindow> avgWindows;
 
   WindowPlan(List<RowNumberWindow> rowNumberWindows, List<RankWindow> rankWindows,
       List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
-      List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows, List<SumWindow> sumWindows) {
+      List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows, List<SumWindow> sumWindows,
+      List<AvgWindow> avgWindows) {
     this.rowNumberWindows = rowNumberWindows == null ? List.of() : rowNumberWindows;
     this.rankWindows = rankWindows == null ? List.of() : rankWindows;
     this.denseRankWindows = denseRankWindows == null ? List.of() : denseRankWindows;
@@ -26,6 +28,7 @@ public final class WindowPlan {
     this.cumeDistWindows = cumeDistWindows == null ? List.of() : cumeDistWindows;
     this.ntileWindows = ntileWindows == null ? List.of() : ntileWindows;
     this.sumWindows = sumWindows == null ? List.of() : sumWindows;
+    this.avgWindows = avgWindows == null ? List.of() : avgWindows;
   }
 
   /**
@@ -36,7 +39,8 @@ public final class WindowPlan {
    */
   public boolean isEmpty() {
     return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
-        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && sumWindows.isEmpty();
+        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && sumWindows.isEmpty()
+        && avgWindows.isEmpty();
   }
 
   /**
@@ -100,5 +104,14 @@ public final class WindowPlan {
    */
   public List<SumWindow> sumWindows() {
     return sumWindows;
+  }
+
+  /**
+   * Access the AVG windows captured by this plan.
+   *
+   * @return immutable list of {@link AvgWindow} instances
+   */
+  public List<AvgWindow> avgWindows() {
+    return avgWindows;
   }
 }
