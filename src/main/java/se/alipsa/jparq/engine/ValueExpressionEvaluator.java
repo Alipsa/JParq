@@ -285,6 +285,9 @@ public final class ValueExpressionEvaluator {
     if ("NTILE".equalsIgnoreCase(name)) {
       return windowState.ntile(analytic, record);
     }
+    if ("SUM".equalsIgnoreCase(name)) {
+      return windowState.sum(analytic, record);
+    }
     throw new IllegalArgumentException("Unsupported analytic function: " + analytic);
   }
 

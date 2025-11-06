@@ -1,6 +1,7 @@
 package se.alipsa.jparq.engine.window;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.MathContext;
 import java.nio.ByteBuffer;
 import java.sql.Date;
@@ -15,12 +16,16 @@ import java.util.Objects;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
+import net.sf.jsqlparser.expression.WindowElement;
+import net.sf.jsqlparser.expression.WindowOffset;
+import net.sf.jsqlparser.expression.WindowRange;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.statement.select.OrderByElement;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
+import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
@@ -51,6 +56,7 @@ public final class WindowFunctions {
     List<PercentRankWindow> percentRankWindows = new ArrayList<>();
     List<CumeDistWindow> cumeDistWindows = new ArrayList<>();
     List<NtileWindow> ntileWindows = new ArrayList<>();
+    List<SumWindow> sumWindows = new ArrayList<>();
     for (Expression expression : expressions) {
       if (expression == null) {
         continue;
@@ -58,23 +64,26 @@ public final class WindowFunctions {
       expression.accept(new ExpressionVisitorAdapter<Void>() {
         @Override
         public <S> Void visit(AnalyticExpression analytic, S context) {
-          registerAnalyticExpression(analytic, rowNumberWindows, rankWindows, denseRankWindows, percentRankWindows,
-              cumeDistWindows, ntileWindows);
+          registerAnalyticExpression(analytic, rowNumberWindows, rankWindows,
+              denseRankWindows, percentRankWindows, cumeDistWindows, ntileWindows,
+              sumWindows);
           return super.visit(analytic, context);
         }
       });
     }
     if (rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
-        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty()) {
+        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty()
+        && sumWindows.isEmpty()) {
       return null;
     }
     return new WindowPlan(List.copyOf(rowNumberWindows), List.copyOf(rankWindows), List.copyOf(denseRankWindows),
-        List.copyOf(percentRankWindows), List.copyOf(cumeDistWindows), List.copyOf(ntileWindows));
+        List.copyOf(percentRankWindows), List.copyOf(cumeDistWindows), List.copyOf(ntileWindows),
+        List.copyOf(sumWindows));
   }
 
   private static void registerAnalyticExpression(AnalyticExpression analytic, List<RowNumberWindow> rowNumberWindows,
       List<RankWindow> rankWindows, List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
-      List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows) {
+      List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows, List<SumWindow> sumWindows) {
     if (analytic == null) {
       return;
     }
@@ -84,7 +93,7 @@ public final class WindowFunctions {
     }
     if (!"ROW_NUMBER".equalsIgnoreCase(name) && !"RANK".equalsIgnoreCase(name) && !"DENSE_RANK".equalsIgnoreCase(name)
         && !"PERCENT_RANK".equalsIgnoreCase(name) && !"CUME_DIST".equalsIgnoreCase(name)
-        && !"NTILE".equalsIgnoreCase(name)) {
+        && !"NTILE".equalsIgnoreCase(name) && !"SUM".equalsIgnoreCase(name)) {
       return;
     }
     if (analytic.isDistinct() || analytic.isUnique()) {
@@ -155,6 +164,15 @@ public final class WindowFunctions {
         throw new IllegalArgumentException("NTILE requires exactly one argument expression: " + analytic);
       }
       ntileWindows.add(new NtileWindow(analytic, List.copyOf(partitions), orderElements, bucketExpression));
+      return;
+    }
+    if ("SUM".equalsIgnoreCase(name)) {
+      Expression argument = analytic.getExpression();
+      if (argument == null) {
+        throw new IllegalArgumentException("SUM requires an argument expression: " + analytic);
+      }
+      sumWindows.add(new SumWindow(analytic, List.copyOf(partitions), orderElements, argument, analytic.isDistinct()
+          || analytic.isUnique(), analytic.getWindowElement()));
     }
   }
 
@@ -222,8 +240,14 @@ public final class WindowFunctions {
       IdentityHashMap<GenericRecord, Long> values = computeNtile(window, records, evaluator);
       ntileValues.put(window.expression(), values);
     }
+    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues;
+    sumValues = new IdentityHashMap<>();
+    for (SumWindow window : plan.sumWindows()) {
+      IdentityHashMap<GenericRecord, Object> values = computeSum(window, records, evaluator);
+      sumValues.put(window.expression(), values);
+    }
     return new WindowState(rowNumberValues, rankValues, denseRankValues, percentRankValues, cumeDistValues,
-        ntileValues);
+        ntileValues, sumValues);
   }
 
   private static IdentityHashMap<GenericRecord, Long> computeRowNumbers(RowNumberWindow window,
@@ -491,6 +515,299 @@ public final class WindowFunctions {
     return values;
   }
 
+  private static IdentityHashMap<GenericRecord, Object> computeSum(SumWindow window, List<GenericRecord> records,
+      ValueExpressionEvaluator evaluator) {
+    if (window.distinct()) {
+      throw new IllegalArgumentException("SUM window function does not support DISTINCT or UNIQUE modifiers: "
+          + window.expression());
+    }
+
+    List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
+        evaluator);
+    IdentityHashMap<GenericRecord, Object> values = new IdentityHashMap<>();
+    if (contexts.isEmpty()) {
+      return values;
+    }
+
+    List<Object> argumentValues = new ArrayList<>(contexts.size());
+    for (RowContext context : contexts) {
+      Object value = evaluator.eval(window.argument(), context.record());
+      argumentValues.add(value);
+    }
+
+    int index = 0;
+    final int totalContexts = contexts.size();
+    while (index < totalContexts) {
+      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionStart = index;
+      int partitionEnd = index;
+      while (partitionEnd < totalContexts
+          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+        partitionEnd++;
+      }
+      applySumForPartition(window, contexts, argumentValues, partitionStart, partitionEnd, values);
+      index = partitionEnd;
+    }
+
+    return values;
+  }
+
+  private static void applySumForPartition(SumWindow window, List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    if (partitionStart >= partitionEnd) {
+      return;
+    }
+    boolean hasOrder = window.orderByElements() != null && !window.orderByElements().isEmpty();
+    WindowElement element = window.windowElement();
+
+    if (!hasOrder) {
+      SumComputationState state = new SumComputationState();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        state.add(argumentValues.get(i));
+      }
+      Object result = state.result();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        values.put(contexts.get(i).record(), result);
+      }
+      return;
+    }
+
+    if (element == null) {
+      computeDefaultRangeSum(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+
+    if (element.getType() == WindowElement.Type.RANGE) {
+      computeRangeSum(element, contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+
+    if (element.getType() == WindowElement.Type.ROWS) {
+      computeRowsSum(element, contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+
+    throw new IllegalArgumentException("Unsupported window frame type for SUM: " + element);
+  }
+
+  private static void computeDefaultRangeSum(List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    SumComputationState running = new SumComputationState();
+    int groupStart = partitionStart;
+    while (groupStart < partitionEnd) {
+      List<OrderComponent> order = contexts.get(groupStart).orderComponents();
+      int groupEnd = groupStart;
+      while (groupEnd < partitionEnd
+          && orderComponentsEqual(order, contexts.get(groupEnd).orderComponents())) {
+        Object value = argumentValues.get(groupEnd);
+        running.add(value);
+        groupEnd++;
+      }
+      Object result = running.result();
+      for (int i = groupStart; i < groupEnd; i++) {
+        values.put(contexts.get(i).record(), result);
+      }
+      groupStart = groupEnd;
+    }
+  }
+
+  private static void computeRangeSum(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    WindowOffset offset = element.getOffset();
+    WindowRange range = element.getRange();
+    if (offset != null) {
+      WindowOffset.Type type = offset.getType();
+      if (type == WindowOffset.Type.PRECEDING || type == WindowOffset.Type.CURRENT) {
+        computeDefaultRangeSum(contexts, argumentValues, partitionStart, partitionEnd, values);
+        return;
+      }
+      if (type == WindowOffset.Type.FOLLOWING) {
+        // UNBOUNDED FOLLOWING results in full partition sum
+        SumComputationState state = new SumComputationState();
+        for (int i = partitionStart; i < partitionEnd; i++) {
+          state.add(argumentValues.get(i));
+        }
+        Object total = state.result();
+        for (int i = partitionStart; i < partitionEnd; i++) {
+          values.put(contexts.get(i).record(), total);
+        }
+        return;
+      }
+      throw new IllegalArgumentException("Unsupported RANGE frame specification for SUM: " + element);
+    }
+    if (range == null) {
+      computeDefaultRangeSum(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    FrameBoundary start = rangeBoundary(range.getStart(), true);
+    FrameBoundary end = rangeBoundary(range.getEnd(), false);
+    if (start.type() == FrameBoundType.UNBOUNDED_PRECEDING && end.type() == FrameBoundType.CURRENT_ROW) {
+      computeDefaultRangeSum(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    if (start.type() == FrameBoundType.UNBOUNDED_PRECEDING && end.type() == FrameBoundType.UNBOUNDED_FOLLOWING) {
+      SumComputationState state = new SumComputationState();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        state.add(argumentValues.get(i));
+      }
+      Object total = state.result();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        values.put(contexts.get(i).record(), total);
+      }
+      return;
+    }
+    if (start.type() == FrameBoundType.CURRENT_ROW && end.type() == FrameBoundType.CURRENT_ROW) {
+      int groupStart = partitionStart;
+      while (groupStart < partitionEnd) {
+        List<OrderComponent> order = contexts.get(groupStart).orderComponents();
+        SumComputationState state = new SumComputationState();
+        int groupEnd = groupStart;
+        while (groupEnd < partitionEnd
+            && orderComponentsEqual(order, contexts.get(groupEnd).orderComponents())) {
+          state.add(argumentValues.get(groupEnd));
+          groupEnd++;
+        }
+        Object total = state.result();
+        for (int i = groupStart; i < groupEnd; i++) {
+          values.put(contexts.get(i).record(), total);
+        }
+        groupStart = groupEnd;
+      }
+      return;
+    }
+    throw new IllegalArgumentException("Unsupported RANGE frame boundaries for SUM: " + element);
+  }
+
+  private static FrameBoundary rangeBoundary(WindowOffset offset, boolean start) {
+    if (offset == null) {
+      return start ? FrameBoundary.unboundedPreceding() : FrameBoundary.currentRow();
+    }
+    if (offset.getExpression() != null) {
+      throw new IllegalArgumentException("Only UNBOUNDED or CURRENT range offsets are supported: " + offset);
+    }
+    WindowOffset.Type type = offset.getType();
+    if (type == WindowOffset.Type.PRECEDING) {
+      return FrameBoundary.unboundedPreceding();
+    }
+    if (type == WindowOffset.Type.FOLLOWING) {
+      return FrameBoundary.unboundedFollowing();
+    }
+    if (type == WindowOffset.Type.CURRENT) {
+      return FrameBoundary.currentRow();
+    }
+    throw new IllegalArgumentException("Unsupported RANGE frame offset: " + offset);
+  }
+
+  private static void computeRowsSum(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    FrameSpecification spec = rowsFrameSpecification(element);
+    int partitionSize = partitionEnd - partitionStart;
+    for (int i = 0; i < partitionSize; i++) {
+      int absoluteIndex = partitionStart + i;
+      int startIndex = resolveRowsStartIndex(spec.start(), i, partitionSize);
+      int endIndex = resolveRowsEndIndex(spec.end(), i, partitionSize);
+      if (startIndex > endIndex || startIndex >= partitionSize || endIndex < 0) {
+        values.put(contexts.get(absoluteIndex).record(), null);
+        continue;
+      }
+      int boundedStart = Math.max(0, startIndex);
+      int boundedEnd = Math.min(partitionSize - 1, endIndex);
+      SumComputationState state = new SumComputationState();
+      for (int j = boundedStart; j <= boundedEnd; j++) {
+        state.add(argumentValues.get(partitionStart + j));
+      }
+      values.put(contexts.get(absoluteIndex).record(), state.result());
+    }
+  }
+
+  private static FrameSpecification rowsFrameSpecification(WindowElement element) {
+    WindowOffset offset = element.getOffset();
+    WindowRange range = element.getRange();
+    if (offset != null) {
+      WindowOffset.Type type = offset.getType();
+      FrameBoundary start;
+      FrameBoundary end;
+      if (type == WindowOffset.Type.FOLLOWING) {
+        start = FrameBoundary.currentRow();
+        end = rowsBoundary(offset, false);
+      } else {
+        start = rowsBoundary(offset, true);
+        end = FrameBoundary.currentRow();
+      }
+      return new FrameSpecification(start, end);
+    }
+    if (range != null) {
+      FrameBoundary start = rowsBoundary(range.getStart(), true);
+      FrameBoundary end = rowsBoundary(range.getEnd(), false);
+      return new FrameSpecification(start, end);
+    }
+    return new FrameSpecification(FrameBoundary.unboundedPreceding(), FrameBoundary.currentRow());
+  }
+
+  private static FrameBoundary rowsBoundary(WindowOffset offset, boolean start) {
+    if (offset == null) {
+      return start ? FrameBoundary.unboundedPreceding() : FrameBoundary.currentRow();
+    }
+    WindowOffset.Type type = offset.getType();
+    if (offset.getExpression() == null) {
+      if (type == WindowOffset.Type.PRECEDING) {
+        return FrameBoundary.unboundedPreceding();
+      }
+      if (type == WindowOffset.Type.FOLLOWING) {
+        return FrameBoundary.unboundedFollowing();
+      }
+      if (type == WindowOffset.Type.CURRENT) {
+        return FrameBoundary.currentRow();
+      }
+      throw new IllegalArgumentException("Unsupported ROWS frame offset: " + offset);
+    }
+    Object literal = LiteralConverter.toLiteral(offset.getExpression());
+    if (!(literal instanceof Number number)) {
+      throw new IllegalArgumentException("ROWS frame offset must evaluate to a numeric literal: " + offset);
+    }
+    long value = number.longValue();
+    if (value < 0L) {
+      throw new IllegalArgumentException("ROWS frame offset must be non-negative: " + offset);
+    }
+    if (type == WindowOffset.Type.PRECEDING || type == WindowOffset.Type.EXPR) {
+      return FrameBoundary.offsetPreceding(value);
+    }
+    if (type == WindowOffset.Type.FOLLOWING) {
+      return FrameBoundary.offsetFollowing(value);
+    }
+    if (type == WindowOffset.Type.CURRENT) {
+      return FrameBoundary.currentRow();
+    }
+    throw new IllegalArgumentException("Unsupported ROWS frame offset: " + offset);
+  }
+
+  private static int resolveRowsStartIndex(FrameBoundary boundary, int position, int partitionSize) {
+    return switch (boundary.type()) {
+      case UNBOUNDED_PRECEDING -> 0;
+      case UNBOUNDED_FOLLOWING -> partitionSize;
+      case CURRENT_ROW -> position;
+      case OFFSET_PRECEDING -> position - safeLongToInt(boundary.offset());
+      case OFFSET_FOLLOWING -> position + safeLongToInt(boundary.offset());
+    };
+  }
+
+  private static int resolveRowsEndIndex(FrameBoundary boundary, int position, int partitionSize) {
+    return switch (boundary.type()) {
+      case UNBOUNDED_PRECEDING -> -1;
+      case UNBOUNDED_FOLLOWING -> partitionSize - 1;
+      case CURRENT_ROW -> position;
+      case OFFSET_PRECEDING -> position - safeLongToInt(boundary.offset());
+      case OFFSET_FOLLOWING -> position + safeLongToInt(boundary.offset());
+    };
+  }
+
+  private static int safeLongToInt(long value) {
+    if (value > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException("Window frame offset exceeds supported range: " + value);
+    }
+    return (int) value;
+  }
+
   private static List<RowContext> buildSortedContexts(List<Expression> partitionExpressions,
       List<OrderByElement> orderByElements, List<GenericRecord> records, ValueExpressionEvaluator evaluator) {
     List<RowContext> contexts = new ArrayList<>(records.size());
@@ -716,16 +1033,18 @@ public final class WindowFunctions {
     private final List<PercentRankWindow> percentRankWindows;
     private final List<CumeDistWindow> cumeDistWindows;
     private final List<NtileWindow> ntileWindows;
+    private final List<SumWindow> sumWindows;
 
     WindowPlan(List<RowNumberWindow> rowNumberWindows, List<RankWindow> rankWindows,
         List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
-        List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows) {
+        List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows, List<SumWindow> sumWindows) {
       this.rowNumberWindows = rowNumberWindows == null ? List.of() : rowNumberWindows;
       this.rankWindows = rankWindows == null ? List.of() : rankWindows;
       this.denseRankWindows = denseRankWindows == null ? List.of() : denseRankWindows;
       this.percentRankWindows = percentRankWindows == null ? List.of() : percentRankWindows;
       this.cumeDistWindows = cumeDistWindows == null ? List.of() : cumeDistWindows;
       this.ntileWindows = ntileWindows == null ? List.of() : ntileWindows;
+      this.sumWindows = sumWindows == null ? List.of() : sumWindows;
     }
 
     /**
@@ -736,7 +1055,8 @@ public final class WindowFunctions {
      */
     public boolean isEmpty() {
       return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
-          && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty();
+          && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty()
+          && sumWindows.isEmpty();
     }
 
     /**
@@ -791,6 +1111,15 @@ public final class WindowFunctions {
      */
     public List<NtileWindow> ntileWindows() {
       return ntileWindows;
+    }
+
+    /**
+     * Access the SUM windows captured by this plan.
+     *
+     * @return immutable list of {@link SumWindow} instances
+     */
+    public List<SumWindow> sumWindows() {
+      return sumWindows;
     }
   }
 
@@ -1069,6 +1398,271 @@ public final class WindowFunctions {
     }
   }
 
+  /**
+   * Representation of a SUM analytic expression.
+   */
+  public static final class SumWindow {
+
+    private final AnalyticExpression expression;
+    private final List<Expression> partitionExpressions;
+    private final List<OrderByElement> orderByElements;
+    private final Expression argument;
+    private final boolean distinct;
+    private final WindowElement windowElement;
+
+    SumWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
+        List<OrderByElement> orderByElements, Expression argument, boolean distinct, WindowElement windowElement) {
+      this.expression = expression;
+      this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
+      this.orderByElements = orderByElements == null ? List.of() : orderByElements;
+      this.argument = argument;
+      this.distinct = distinct;
+      this.windowElement = windowElement;
+    }
+
+    /**
+     * Retrieve the underlying analytic expression.
+     *
+     * @return the {@link AnalyticExpression} represented by this window
+     */
+    public AnalyticExpression expression() {
+      return expression;
+    }
+
+    /**
+     * Retrieve expressions defining the PARTITION BY clause.
+     *
+     * @return immutable list of partition expressions
+     */
+    public List<Expression> partitionExpressions() {
+      return partitionExpressions;
+    }
+
+    /**
+     * Retrieve ORDER BY elements defining the ordering within each partition.
+     *
+     * @return immutable list of {@link OrderByElement} descriptors
+     */
+    public List<OrderByElement> orderByElements() {
+      return orderByElements;
+    }
+
+    /**
+     * Retrieve the argument expression evaluated by the SUM function.
+     *
+     * @return the {@link Expression} supplying the value to aggregate
+     */
+    public Expression argument() {
+      return argument;
+    }
+
+    /**
+     * Determine whether the window request asked for DISTINCT processing.
+     *
+     * @return {@code true} when DISTINCT or UNIQUE modifiers were present
+     */
+    public boolean distinct() {
+      return distinct;
+    }
+
+    /**
+     * Retrieve the window frame specification associated with this SUM window.
+     *
+     * @return the {@link WindowElement} describing the requested frame, or
+     *         {@code null} when the default applies
+     */
+    public WindowElement windowElement() {
+      return windowElement;
+    }
+  }
+
+  /**
+   * Mutable helper used to accumulate SUM results while tracking the most
+   * appropriate numeric type for the aggregated values.
+   */
+  private static final class SumComputationState {
+    private BigDecimal sum = BigDecimal.ZERO;
+    private boolean seenValue;
+    private Class<?> observedType;
+
+    /**
+     * Add a value to the running SUM computation.
+     *
+     * @param value
+     *          the value to include in the aggregate (ignored when
+     *          {@code null})
+     */
+    void add(Object value) {
+      if (value == null) {
+        return;
+      }
+      if (!seenValue) {
+        seenValue = true;
+      }
+      trackType(value);
+      sum = sum.add(toBigDecimal(value));
+    }
+
+    /**
+     * Produce the aggregated SUM value using the tracked numeric type.
+     *
+     * @return the computed result or {@code null} when no values were added
+     */
+    Object result() {
+      if (!seenValue) {
+        return null;
+      }
+      if (observedType == BigDecimal.class) {
+        return sum;
+      }
+      if (observedType == Byte.class || observedType == Short.class || observedType == Integer.class
+          || observedType == Long.class) {
+        return sum.longValue();
+      }
+      if (observedType == Float.class || observedType == Double.class) {
+        return sum.doubleValue();
+      }
+      return sum.doubleValue();
+    }
+
+    /**
+     * Update the observed numeric type so the widest encountered type is used
+     * for the final SUM result.
+     *
+     * @param value
+     *          the value currently being aggregated
+     */
+    private void trackType(Object value) {
+      Class<?> valueClass = normalizeType(value.getClass());
+      if (observedType == null) {
+        observedType = valueClass;
+        return;
+      }
+      observedType = widenType(observedType, valueClass);
+    }
+
+    /**
+     * Convert a supported numeric input into a {@link BigDecimal} so all
+     * aggregation occurs using a common representation.
+     *
+     * @param value
+     *          numeric value to convert
+     * @return the {@link BigDecimal} representation of the supplied value
+     */
+    private BigDecimal toBigDecimal(Object value) {
+      if (value instanceof BigDecimal bd) {
+        return bd;
+      }
+      if (value instanceof BigInteger bi) {
+        return new BigDecimal(bi);
+      }
+      if (value instanceof Number number) {
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+          return BigDecimal.valueOf(number.longValue());
+        }
+        return BigDecimal.valueOf(number.doubleValue());
+      }
+      throw new IllegalArgumentException("SUM window functions require numeric inputs but received "
+          + value.getClass().getName());
+    }
+
+    /**
+     * Normalize numeric classes to simplify type comparisons (e.g. treating
+     * {@link java.math.BigInteger} as {@link BigDecimal}).
+     *
+     * @param type
+     *          the observed numeric class
+     * @return the normalized type used for aggregation decisions
+     */
+    private Class<?> normalizeType(Class<?> type) {
+      if (type == BigInteger.class) {
+        return BigDecimal.class;
+      }
+      return type;
+    }
+
+    /**
+     * Determine the widest numeric type between two candidates so the SUM
+     * result faithfully represents mixed numeric inputs.
+     *
+     * @param current
+     *          the type observed so far
+     * @param candidate
+     *          the new type being considered
+     * @return the widened type that can safely represent both values
+     */
+    private Class<?> widenType(Class<?> current, Class<?> candidate) {
+      if (current == BigDecimal.class || candidate == BigDecimal.class) {
+        return BigDecimal.class;
+      }
+      if (isFloatingPoint(current) || isFloatingPoint(candidate)) {
+        return Double.class;
+      }
+      if (isIntegral(current) && isIntegral(candidate)) {
+        return Long.class;
+      }
+      return Double.class;
+    }
+
+    /**
+     * Determine whether the supplied type represents a floating-point numeric
+     * value.
+     *
+     * @param type
+     *          the type to check
+     * @return {@code true} when the type is {@link Float} or {@link Double}
+     */
+    private boolean isFloatingPoint(Class<?> type) {
+      return type == Float.class || type == Double.class;
+    }
+
+    /**
+     * Determine whether the supplied type represents an integral numeric
+     * value.
+     *
+     * @param type
+     *          the type to check
+     * @return {@code true} when the type is {@link Byte}, {@link Short},
+     *         {@link Integer}, or {@link Long}
+     */
+    private boolean isIntegral(Class<?> type) {
+      return type == Byte.class || type == Short.class || type == Integer.class || type == Long.class;
+    }
+  }
+
+  private enum FrameBoundType {
+    UNBOUNDED_PRECEDING,
+    UNBOUNDED_FOLLOWING,
+    CURRENT_ROW,
+    OFFSET_PRECEDING,
+    OFFSET_FOLLOWING
+  }
+
+  private record FrameBoundary(FrameBoundType type, long offset) {
+    static FrameBoundary unboundedPreceding() {
+      return new FrameBoundary(FrameBoundType.UNBOUNDED_PRECEDING, 0L);
+    }
+
+    static FrameBoundary unboundedFollowing() {
+      return new FrameBoundary(FrameBoundType.UNBOUNDED_FOLLOWING, 0L);
+    }
+
+    static FrameBoundary currentRow() {
+      return new FrameBoundary(FrameBoundType.CURRENT_ROW, 0L);
+    }
+
+    static FrameBoundary offsetPreceding(long offset) {
+      return new FrameBoundary(FrameBoundType.OFFSET_PRECEDING, offset);
+    }
+
+    static FrameBoundary offsetFollowing(long offset) {
+      return new FrameBoundary(FrameBoundType.OFFSET_FOLLOWING, offset);
+    }
+  }
+
+  private record FrameSpecification(FrameBoundary start, FrameBoundary end) {
+  }
+
   private record RowContext(GenericRecord record, List<Object> partitionValues, List<OrderComponent> orderComponents,
       int originalIndex) {
   }
@@ -1081,7 +1675,7 @@ public final class WindowFunctions {
    */
   public static final class WindowState {
 
-    private static final WindowState EMPTY = new WindowState(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(),
+    private static final WindowState EMPTY = new WindowState(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(),
         Map.of());
 
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
@@ -1090,19 +1684,22 @@ public final class WindowFunctions {
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues;
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues;
     private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues;
+    private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues;
 
     WindowState(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues,
         Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues,
         Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues,
         Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues,
         Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues,
-        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues) {
+        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues,
+        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues) {
       this.rowNumberValues = rowNumberValues == null ? Map.of() : Collections.unmodifiableMap(rowNumberValues);
       this.rankValues = rankValues == null ? Map.of() : Collections.unmodifiableMap(rankValues);
       this.denseRankValues = denseRankValues == null ? Map.of() : Collections.unmodifiableMap(denseRankValues);
       this.percentRankValues = percentRankValues == null ? Map.of() : Collections.unmodifiableMap(percentRankValues);
       this.cumeDistValues = cumeDistValues == null ? Map.of() : Collections.unmodifiableMap(cumeDistValues);
       this.ntileValues = ntileValues == null ? Map.of() : Collections.unmodifiableMap(ntileValues);
+      this.sumValues = sumValues == null ? Map.of() : Collections.unmodifiableMap(sumValues);
     }
 
     /**
@@ -1121,7 +1718,7 @@ public final class WindowFunctions {
      */
     public boolean isEmpty() {
       return rowNumberValues.isEmpty() && rankValues.isEmpty() && denseRankValues.isEmpty()
-          && percentRankValues.isEmpty() && cumeDistValues.isEmpty() && ntileValues.isEmpty();
+          && percentRankValues.isEmpty() && cumeDistValues.isEmpty() && ntileValues.isEmpty() && sumValues.isEmpty();
     }
 
     /**
@@ -1250,6 +1847,27 @@ public final class WindowFunctions {
       Long value = values.get(record);
       if (value == null) {
         throw new IllegalArgumentException("No NTILE value computed for record: " + record);
+      }
+      return value;
+    }
+
+    /**
+     * Obtain the precomputed SUM value for the supplied expression and record.
+     *
+     * @param expression
+     *          the analytic expression
+     * @param record
+     *          the current record
+     * @return the computed sum value
+     */
+    public Object sum(AnalyticExpression expression, GenericRecord record) {
+      IdentityHashMap<GenericRecord, Object> values = sumValues.get(expression);
+      if (values == null) {
+        throw new IllegalArgumentException("No SUM values available for expression: " + expression);
+      }
+      Object value = values.get(record);
+      if (!values.containsKey(record)) {
+        throw new IllegalArgumentException("No SUM value computed for record: " + record);
       }
       return value;
     }

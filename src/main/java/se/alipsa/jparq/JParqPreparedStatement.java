@@ -1293,6 +1293,13 @@ class JParqPreparedStatement implements PreparedStatement {
     return converted;
   }
 
+  /**
+   * Normalize a CTE identifier for case-insensitive lookups.
+   *
+   * @param name
+   *          the raw CTE name or alias
+   * @return the normalized key or {@code null} when the supplied name is blank
+   */
   private static String normalizeCteKey(String name) {
     if (name == null) {
       return null;
@@ -1444,6 +1451,23 @@ class JParqPreparedStatement implements PreparedStatement {
         if (bucketExpression != null) {
           addColumns(needed, SqlParser.collectQualifiedColumns(bucketExpression, qualifiers));
           addColumns(needed, ColumnsUsed.inWhere(bucketExpression));
+        }
+      }
+      for (WindowFunctions.SumWindow window : windowPlan.sumWindows()) {
+        for (Expression partition : window.partitionExpressions()) {
+          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+          addColumns(needed, ColumnsUsed.inWhere(partition));
+        }
+        for (OrderByElement order : window.orderByElements()) {
+          if (order != null && order.getExpression() != null) {
+            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+            addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
+          }
+        }
+        Expression argument = window.argument();
+        if (argument != null) {
+          addColumns(needed, SqlParser.collectQualifiedColumns(argument, qualifiers));
+          addColumns(needed, ColumnsUsed.inWhere(argument));
         }
       }
     }
