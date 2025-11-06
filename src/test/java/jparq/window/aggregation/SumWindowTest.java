@@ -33,7 +33,8 @@ public class SumWindowTest {
   }
 
   /**
-   * Verify that a partitioned SUM window returns the same totals as a grouped aggregation.
+   * Verify that a partitioned SUM window returns the same totals as a grouped
+   * aggregation.
    */
   @Test
   void testPartitionedSumMatchesGroupTotals() {
@@ -68,8 +69,7 @@ public class SumWindowTest {
           int cyl = rs.getInt("cyl");
           long windowTotal = rs.getLong("window_total_hp");
           Long expectedTotal = totalsByCyl.get(cyl);
-          Assertions.assertNotNull(expectedTotal,
-              "Grouped totals must contain an entry for cylinder " + cyl);
+          Assertions.assertNotNull(expectedTotal, "Grouped totals must contain an entry for cylinder " + cyl);
           Assertions.assertEquals(expectedTotal.longValue(), windowTotal,
               "Partitioned SUM must equal grouped total for cylinder " + cyl);
           rowsPerCylinder.computeIfAbsent(cyl, ignored -> new AtomicInteger()).incrementAndGet();
@@ -84,7 +84,8 @@ public class SumWindowTest {
   }
 
   /**
-   * Ensure that the default RANGE frame produces a running sum ordered by horsepower.
+   * Ensure that the default RANGE frame produces a running sum ordered by
+   * horsepower.
    */
   @Test
   void testRunningSumUsesDefaultRangeFrame() {
