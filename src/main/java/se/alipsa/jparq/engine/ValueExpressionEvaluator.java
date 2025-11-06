@@ -288,6 +288,9 @@ public final class ValueExpressionEvaluator {
     if ("SUM".equalsIgnoreCase(name)) {
       return windowState.sum(analytic, record);
     }
+    if ("AVG".equalsIgnoreCase(name)) {
+      return windowState.avg(analytic, record);
+    }
     throw new IllegalArgumentException("Unsupported analytic function: " + analytic);
   }
 
