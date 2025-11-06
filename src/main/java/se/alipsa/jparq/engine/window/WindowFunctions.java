@@ -1,14 +1,12 @@
 package se.alipsa.jparq.engine.window;
 
 import java.math.BigDecimal;
-import java.math.BigInteger;
 import java.math.MathContext;
 import java.nio.ByteBuffer;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -64,9 +62,8 @@ public final class WindowFunctions {
       expression.accept(new ExpressionVisitorAdapter<Void>() {
         @Override
         public <S> Void visit(AnalyticExpression analytic, S context) {
-          registerAnalyticExpression(analytic, rowNumberWindows, rankWindows,
-              denseRankWindows, percentRankWindows, cumeDistWindows, ntileWindows,
-              sumWindows);
+          registerAnalyticExpression(analytic, rowNumberWindows, rankWindows, denseRankWindows, percentRankWindows,
+              cumeDistWindows, ntileWindows, sumWindows);
           return super.visit(analytic, context);
         }
       });
@@ -171,8 +168,8 @@ public final class WindowFunctions {
       if (argument == null) {
         throw new IllegalArgumentException("SUM requires an argument expression: " + analytic);
       }
-      sumWindows.add(new SumWindow(analytic, List.copyOf(partitions), orderElements, argument, analytic.isDistinct()
-          || analytic.isUnique(), analytic.getWindowElement()));
+      sumWindows.add(new SumWindow(analytic, List.copyOf(partitions), orderElements, argument,
+          analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
     }
   }
 
@@ -246,8 +243,8 @@ public final class WindowFunctions {
       IdentityHashMap<GenericRecord, Object> values = computeSum(window, records, evaluator);
       sumValues.put(window.expression(), values);
     }
-    return new WindowState(rowNumberValues, rankValues, denseRankValues, percentRankValues, cumeDistValues,
-        ntileValues, sumValues);
+    return new WindowState(rowNumberValues, rankValues, denseRankValues, percentRankValues, cumeDistValues, ntileValues,
+        sumValues);
   }
 
   private static IdentityHashMap<GenericRecord, Long> computeRowNumbers(RowNumberWindow window,
@@ -518,8 +515,8 @@ public final class WindowFunctions {
   private static IdentityHashMap<GenericRecord, Object> computeSum(SumWindow window, List<GenericRecord> records,
       ValueExpressionEvaluator evaluator) {
     if (window.distinct()) {
-      throw new IllegalArgumentException("SUM window function does not support DISTINCT or UNIQUE modifiers: "
-          + window.expression());
+      throw new IllegalArgumentException(
+          "SUM window function does not support DISTINCT or UNIQUE modifiers: " + window.expression());
     }
 
     List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
@@ -590,15 +587,14 @@ public final class WindowFunctions {
     throw new IllegalArgumentException("Unsupported window frame type for SUM: " + element);
   }
 
-  private static void computeDefaultRangeSum(List<RowContext> contexts, List<Object> argumentValues,
-      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+  private static void computeDefaultRangeSum(List<RowContext> contexts, List<Object> argumentValues, int partitionStart,
+      int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
     SumComputationState running = new SumComputationState();
     int groupStart = partitionStart;
     while (groupStart < partitionEnd) {
       List<OrderComponent> order = contexts.get(groupStart).orderComponents();
       int groupEnd = groupStart;
-      while (groupEnd < partitionEnd
-          && orderComponentsEqual(order, contexts.get(groupEnd).orderComponents())) {
+      while (groupEnd < partitionEnd && orderComponentsEqual(order, contexts.get(groupEnd).orderComponents())) {
         Object value = argumentValues.get(groupEnd);
         running.add(value);
         groupEnd++;
@@ -662,8 +658,7 @@ public final class WindowFunctions {
         List<OrderComponent> order = contexts.get(groupStart).orderComponents();
         SumComputationState state = new SumComputationState();
         int groupEnd = groupStart;
-        while (groupEnd < partitionEnd
-            && orderComponentsEqual(order, contexts.get(groupEnd).orderComponents())) {
+        while (groupEnd < partitionEnd && orderComponentsEqual(order, contexts.get(groupEnd).orderComponents())) {
           state.add(argumentValues.get(groupEnd));
           groupEnd++;
         }
@@ -1021,555 +1016,8 @@ public final class WindowFunctions {
     return Arrays.compare(left, right);
   }
 
-  /**
-   * Description of analytic window operations that must be computed prior to
-   * projection evaluation.
-   */
-  public static final class WindowPlan {
-
-    private final List<RowNumberWindow> rowNumberWindows;
-    private final List<RankWindow> rankWindows;
-    private final List<DenseRankWindow> denseRankWindows;
-    private final List<PercentRankWindow> percentRankWindows;
-    private final List<CumeDistWindow> cumeDistWindows;
-    private final List<NtileWindow> ntileWindows;
-    private final List<SumWindow> sumWindows;
-
-    WindowPlan(List<RowNumberWindow> rowNumberWindows, List<RankWindow> rankWindows,
-        List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
-        List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows, List<SumWindow> sumWindows) {
-      this.rowNumberWindows = rowNumberWindows == null ? List.of() : rowNumberWindows;
-      this.rankWindows = rankWindows == null ? List.of() : rankWindows;
-      this.denseRankWindows = denseRankWindows == null ? List.of() : denseRankWindows;
-      this.percentRankWindows = percentRankWindows == null ? List.of() : percentRankWindows;
-      this.cumeDistWindows = cumeDistWindows == null ? List.of() : cumeDistWindows;
-      this.ntileWindows = ntileWindows == null ? List.of() : ntileWindows;
-      this.sumWindows = sumWindows == null ? List.of() : sumWindows;
-    }
-
-    /**
-     * Determine whether the plan contains any analytic window functions.
-     *
-     * @return {@code true} when the plan includes pre-computed window functions,
-     *         otherwise {@code false}
-     */
-    public boolean isEmpty() {
-      return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
-          && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty()
-          && sumWindows.isEmpty();
-    }
-
-    /**
-     * Access the ROW_NUMBER windows captured by this plan.
-     *
-     * @return immutable list of {@link RowNumberWindow} instances
-     */
-    public List<RowNumberWindow> rowNumberWindows() {
-      return rowNumberWindows;
-    }
-
-    /**
-     * Access the RANK windows captured by this plan.
-     *
-     * @return immutable list of {@link RankWindow} instances
-     */
-    public List<RankWindow> rankWindows() {
-      return rankWindows;
-    }
-
-    /**
-     * Access the DENSE_RANK windows captured by this plan.
-     *
-     * @return immutable list of {@link DenseRankWindow} instances
-     */
-    public List<DenseRankWindow> denseRankWindows() {
-      return denseRankWindows;
-    }
-
-    /**
-     * Access the PERCENT_RANK windows captured by this plan.
-     *
-     * @return immutable list of {@link PercentRankWindow} instances
-     */
-    public List<PercentRankWindow> percentRankWindows() {
-      return percentRankWindows;
-    }
-
-    /**
-     * Access the CUME_DIST windows captured by this plan.
-     *
-     * @return immutable list of {@link CumeDistWindow} instances
-     */
-    public List<CumeDistWindow> cumeDistWindows() {
-      return cumeDistWindows;
-    }
-
-    /**
-     * Access the NTILE windows captured by this plan.
-     *
-     * @return immutable list of {@link NtileWindow} instances
-     */
-    public List<NtileWindow> ntileWindows() {
-      return ntileWindows;
-    }
-
-    /**
-     * Access the SUM windows captured by this plan.
-     *
-     * @return immutable list of {@link SumWindow} instances
-     */
-    public List<SumWindow> sumWindows() {
-      return sumWindows;
-    }
-  }
-
-  /**
-   * Representation of a ROW_NUMBER analytic expression.
-   */
-  public static final class RowNumberWindow {
-
-    private final AnalyticExpression expression;
-    private final List<Expression> partitionExpressions;
-    private final List<OrderByElement> orderByElements;
-
-    RowNumberWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
-        List<OrderByElement> orderByElements) {
-      this.expression = expression;
-      this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
-      this.orderByElements = orderByElements == null ? List.of() : orderByElements;
-    }
-
-    /**
-     * Retrieve the underlying analytic expression.
-     *
-     * @return the {@link AnalyticExpression} represented by this window
-     */
-    public AnalyticExpression expression() {
-      return expression;
-    }
-
-    /**
-     * Retrieve expressions defining the PARTITION BY clause.
-     *
-     * @return immutable list of partition expressions
-     */
-    public List<Expression> partitionExpressions() {
-      return partitionExpressions;
-    }
-
-    /**
-     * Retrieve ORDER BY elements defining the ordering within each partition.
-     *
-     * @return immutable list of {@link OrderByElement} descriptors
-     */
-    public List<OrderByElement> orderByElements() {
-      return orderByElements;
-    }
-  }
-
-  /**
-   * Representation of a RANK analytic expression.
-   */
-  public static final class RankWindow {
-
-    private final AnalyticExpression expression;
-    private final List<Expression> partitionExpressions;
-    private final List<OrderByElement> orderByElements;
-
-    RankWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
-        List<OrderByElement> orderByElements) {
-      this.expression = expression;
-      this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
-      this.orderByElements = orderByElements == null ? List.of() : orderByElements;
-    }
-
-    /**
-     * Retrieve the underlying analytic expression.
-     *
-     * @return the {@link AnalyticExpression} represented by this window
-     */
-    public AnalyticExpression expression() {
-      return expression;
-    }
-
-    /**
-     * Retrieve expressions defining the PARTITION BY clause.
-     *
-     * @return immutable list of partition expressions
-     */
-    public List<Expression> partitionExpressions() {
-      return partitionExpressions;
-    }
-
-    /**
-     * Retrieve ORDER BY elements defining the ordering within each partition.
-     *
-     * @return immutable list of {@link OrderByElement} descriptors
-     */
-    public List<OrderByElement> orderByElements() {
-      return orderByElements;
-    }
-  }
-
-  /**
-   * Representation of a DENSE_RANK analytic expression.
-   */
-  public static final class DenseRankWindow {
-
-    private final AnalyticExpression expression;
-    private final List<Expression> partitionExpressions;
-    private final List<OrderByElement> orderByElements;
-
-    DenseRankWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
-        List<OrderByElement> orderByElements) {
-      this.expression = expression;
-      this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
-      this.orderByElements = orderByElements == null ? List.of() : orderByElements;
-    }
-
-    /**
-     * Retrieve the underlying analytic expression.
-     *
-     * @return the {@link AnalyticExpression} represented by this window
-     */
-    public AnalyticExpression expression() {
-      return expression;
-    }
-
-    /**
-     * Retrieve expressions defining the PARTITION BY clause.
-     *
-     * @return immutable list of partition expressions
-     */
-    public List<Expression> partitionExpressions() {
-      return partitionExpressions;
-    }
-
-    /**
-     * Retrieve ORDER BY elements defining the ordering within each partition.
-     *
-     * @return immutable list of {@link OrderByElement} descriptors
-     */
-    public List<OrderByElement> orderByElements() {
-      return orderByElements;
-    }
-  }
-
-  /**
-   * Representation of a PERCENT_RANK analytic expression.
-   */
-  public static final class PercentRankWindow {
-
-    private final AnalyticExpression expression;
-    private final List<Expression> partitionExpressions;
-    private final List<OrderByElement> orderByElements;
-
-    PercentRankWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
-        List<OrderByElement> orderByElements) {
-      this.expression = expression;
-      this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
-      this.orderByElements = orderByElements == null ? List.of() : orderByElements;
-    }
-
-    /**
-     * Retrieve the underlying analytic expression.
-     *
-     * @return the {@link AnalyticExpression} represented by this window
-     */
-    public AnalyticExpression expression() {
-      return expression;
-    }
-
-    /**
-     * Retrieve expressions defining the PARTITION BY clause.
-     *
-     * @return immutable list of partition expressions
-     */
-    public List<Expression> partitionExpressions() {
-      return partitionExpressions;
-    }
-
-    /**
-     * Retrieve ORDER BY elements defining the ordering within each partition.
-     *
-     * @return immutable list of {@link OrderByElement} descriptors
-     */
-    public List<OrderByElement> orderByElements() {
-      return orderByElements;
-    }
-  }
-
-  /**
-   * Representation of a CUME_DIST analytic expression.
-   */
-  public static final class CumeDistWindow {
-
-    private final AnalyticExpression expression;
-    private final List<Expression> partitionExpressions;
-    private final List<OrderByElement> orderByElements;
-
-    CumeDistWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
-        List<OrderByElement> orderByElements) {
-      this.expression = expression;
-      this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
-      this.orderByElements = orderByElements == null ? List.of() : orderByElements;
-    }
-
-    /**
-     * Retrieve the underlying analytic expression.
-     *
-     * @return the {@link AnalyticExpression} represented by this window
-     */
-    public AnalyticExpression expression() {
-      return expression;
-    }
-
-    /**
-     * Retrieve expressions defining the PARTITION BY clause.
-     *
-     * @return immutable list of partition expressions
-     */
-    public List<Expression> partitionExpressions() {
-      return partitionExpressions;
-    }
-
-    /**
-     * Retrieve ORDER BY elements defining the ordering within each partition.
-     *
-     * @return immutable list of {@link OrderByElement} descriptors
-     */
-    public List<OrderByElement> orderByElements() {
-      return orderByElements;
-    }
-  }
-
-  /**
-   * Representation of an NTILE analytic expression.
-   */
-  public static final class NtileWindow {
-
-    private final AnalyticExpression expression;
-    private final List<Expression> partitionExpressions;
-    private final List<OrderByElement> orderByElements;
-    private final Expression bucketExpression;
-
-    NtileWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
-        List<OrderByElement> orderByElements, Expression bucketExpression) {
-      this.expression = expression;
-      this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
-      this.orderByElements = orderByElements == null ? List.of() : orderByElements;
-      this.bucketExpression = bucketExpression;
-    }
-
-    /**
-     * Retrieve the underlying analytic expression.
-     *
-     * @return the {@link AnalyticExpression} represented by this window
-     */
-    public AnalyticExpression expression() {
-      return expression;
-    }
-
-    /**
-     * Retrieve expressions defining the PARTITION BY clause.
-     *
-     * @return immutable list of partition expressions
-     */
-    public List<Expression> partitionExpressions() {
-      return partitionExpressions;
-    }
-
-    /**
-     * Retrieve ORDER BY elements defining the ordering within each partition.
-     *
-     * @return immutable list of {@link OrderByElement} descriptors
-     */
-    public List<OrderByElement> orderByElements() {
-      return orderByElements;
-    }
-
-    /**
-     * Retrieve the expression supplying the NTILE bucket count.
-     *
-     * @return the {@link Expression} identifying the requested number of tiles
-     */
-    public Expression bucketExpression() {
-      return bucketExpression;
-    }
-  }
-
-  /**
-   * Representation of a SUM analytic expression.
-   */
-  public static final class SumWindow {
-
-    private final AnalyticExpression expression;
-    private final List<Expression> partitionExpressions;
-    private final List<OrderByElement> orderByElements;
-    private final Expression argument;
-    private final boolean distinct;
-    private final WindowElement windowElement;
-
-    SumWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
-        List<OrderByElement> orderByElements, Expression argument, boolean distinct, WindowElement windowElement) {
-      this.expression = expression;
-      this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
-      this.orderByElements = orderByElements == null ? List.of() : orderByElements;
-      this.argument = argument;
-      this.distinct = distinct;
-      this.windowElement = windowElement;
-    }
-
-    /**
-     * Retrieve the underlying analytic expression.
-     *
-     * @return the {@link AnalyticExpression} represented by this window
-     */
-    public AnalyticExpression expression() {
-      return expression;
-    }
-
-    /**
-     * Retrieve expressions defining the PARTITION BY clause.
-     *
-     * @return immutable list of partition expressions
-     */
-    public List<Expression> partitionExpressions() {
-      return partitionExpressions;
-    }
-
-    /**
-     * Retrieve ORDER BY elements defining the ordering within each partition.
-     *
-     * @return immutable list of {@link OrderByElement} descriptors
-     */
-    public List<OrderByElement> orderByElements() {
-      return orderByElements;
-    }
-
-    /**
-     * Retrieve the argument expression evaluated by the SUM function.
-     *
-     * @return the {@link Expression} supplying the value to aggregate
-     */
-    public Expression argument() {
-      return argument;
-    }
-
-    /**
-     * Determine whether the window request asked for DISTINCT processing.
-     *
-     * @return {@code true} when DISTINCT or UNIQUE modifiers were present
-     */
-    public boolean distinct() {
-      return distinct;
-    }
-
-    /**
-     * Retrieve the window frame specification associated with this SUM window.
-     *
-     * @return the {@link WindowElement} describing the requested frame, or
-     *         {@code null} when the default applies
-     */
-    public WindowElement windowElement() {
-      return windowElement;
-    }
-  }
-
-  private static final class SumComputationState {
-    private BigDecimal sum = BigDecimal.ZERO;
-    private boolean seenValue;
-    private Class<?> observedType;
-
-    void add(Object value) {
-      if (value == null) {
-        return;
-      }
-      if (!seenValue) {
-        seenValue = true;
-      }
-      trackType(value);
-      sum = sum.add(toBigDecimal(value));
-    }
-
-    Object result() {
-      if (!seenValue) {
-        return null;
-      }
-      if (observedType == BigDecimal.class) {
-        return sum;
-      }
-      if (observedType == Byte.class || observedType == Short.class || observedType == Integer.class
-          || observedType == Long.class) {
-        return sum.longValue();
-      }
-      if (observedType == Float.class || observedType == Double.class) {
-        return sum.doubleValue();
-      }
-      return sum.doubleValue();
-    }
-
-    private void trackType(Object value) {
-      Class<?> valueClass = normalizeType(value.getClass());
-      if (observedType == null) {
-        observedType = valueClass;
-        return;
-      }
-      observedType = widenType(observedType, valueClass);
-    }
-
-    private BigDecimal toBigDecimal(Object value) {
-      if (value instanceof BigDecimal bd) {
-        return bd;
-      }
-      if (value instanceof BigInteger bi) {
-        return new BigDecimal(bi);
-      }
-      if (value instanceof Number number) {
-        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
-          return BigDecimal.valueOf(number.longValue());
-        }
-        return BigDecimal.valueOf(number.doubleValue());
-      }
-      throw new IllegalArgumentException("SUM window functions require numeric inputs but received "
-          + value.getClass().getName());
-    }
-
-    private Class<?> normalizeType(Class<?> type) {
-      if (type == BigInteger.class) {
-        return BigDecimal.class;
-      }
-      return type;
-    }
-
-    private Class<?> widenType(Class<?> current, Class<?> candidate) {
-      if (current == BigDecimal.class || candidate == BigDecimal.class) {
-        return BigDecimal.class;
-      }
-      if (isFloatingPoint(current) || isFloatingPoint(candidate)) {
-        return Double.class;
-      }
-      if (isIntegral(current) && isIntegral(candidate)) {
-        return Long.class;
-      }
-      return Double.class;
-    }
-
-    private boolean isFloatingPoint(Class<?> type) {
-      return type == Float.class || type == Double.class;
-    }
-
-    private boolean isIntegral(Class<?> type) {
-      return type == Byte.class || type == Short.class || type == Integer.class || type == Long.class;
-    }
-  }
-
   private enum FrameBoundType {
-    UNBOUNDED_PRECEDING,
-    UNBOUNDED_FOLLOWING,
-    CURRENT_ROW,
-    OFFSET_PRECEDING,
-    OFFSET_FOLLOWING
+    UNBOUNDED_PRECEDING, UNBOUNDED_FOLLOWING, CURRENT_ROW, OFFSET_PRECEDING, OFFSET_FOLLOWING
   }
 
   private record FrameBoundary(FrameBoundType type, long offset) {
@@ -1602,208 +1050,5 @@ public final class WindowFunctions {
   }
 
   private record OrderComponent(Object value, boolean ascending, OrderByElement.NullOrdering nullOrdering) {
-  }
-
-  /**
-   * Immutable container for precomputed window values.
-   */
-  public static final class WindowState {
-
-    private static final WindowState EMPTY = new WindowState(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(),
-        Map.of());
-
-    private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
-    private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues;
-    private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues;
-    private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues;
-    private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues;
-    private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues;
-    private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues;
-
-    WindowState(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues,
-        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues,
-        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues,
-        Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues,
-        Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues,
-        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues,
-        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues) {
-      this.rowNumberValues = rowNumberValues == null ? Map.of() : Collections.unmodifiableMap(rowNumberValues);
-      this.rankValues = rankValues == null ? Map.of() : Collections.unmodifiableMap(rankValues);
-      this.denseRankValues = denseRankValues == null ? Map.of() : Collections.unmodifiableMap(denseRankValues);
-      this.percentRankValues = percentRankValues == null ? Map.of() : Collections.unmodifiableMap(percentRankValues);
-      this.cumeDistValues = cumeDistValues == null ? Map.of() : Collections.unmodifiableMap(cumeDistValues);
-      this.ntileValues = ntileValues == null ? Map.of() : Collections.unmodifiableMap(ntileValues);
-      this.sumValues = sumValues == null ? Map.of() : Collections.unmodifiableMap(sumValues);
-    }
-
-    /**
-     * Retrieve the shared empty window state instance.
-     *
-     * @return shared empty state
-     */
-    public static WindowState empty() {
-      return EMPTY;
-    }
-
-    /**
-     * Determine whether this state contains any window values.
-     *
-     * @return {@code true} when no window values are present
-     */
-    public boolean isEmpty() {
-      return rowNumberValues.isEmpty() && rankValues.isEmpty() && denseRankValues.isEmpty()
-          && percentRankValues.isEmpty() && cumeDistValues.isEmpty() && ntileValues.isEmpty() && sumValues.isEmpty();
-    }
-
-    /**
-     * Obtain the precomputed ROW_NUMBER value for the supplied expression and
-     * record.
-     *
-     * @param expression
-     *          the analytic expression
-     * @param record
-     *          the current record
-     * @return the computed row number value
-     */
-    public long rowNumber(AnalyticExpression expression, GenericRecord record) {
-      IdentityHashMap<GenericRecord, Long> values = rowNumberValues.get(expression);
-      if (values == null) {
-        throw new IllegalArgumentException("No ROW_NUMBER values available for expression: " + expression);
-      }
-      Long value = values.get(record);
-      if (value == null) {
-        throw new IllegalArgumentException("No ROW_NUMBER value computed for record: " + record);
-      }
-      return value;
-    }
-
-    /**
-     * Obtain the precomputed RANK value for the supplied expression and record.
-     *
-     * @param expression
-     *          the analytic expression
-     * @param record
-     *          the current record
-     * @return the computed rank value
-     */
-    public long rank(AnalyticExpression expression, GenericRecord record) {
-      IdentityHashMap<GenericRecord, Long> values = rankValues.get(expression);
-      if (values == null) {
-        throw new IllegalArgumentException("No RANK values available for expression: " + expression);
-      }
-      Long value = values.get(record);
-      if (value == null) {
-        throw new IllegalArgumentException("No RANK value computed for record: " + record);
-      }
-      return value;
-    }
-
-    /**
-     * Obtain the precomputed DENSE_RANK value for the supplied expression and
-     * record.
-     *
-     * @param expression
-     *          the analytic expression
-     * @param record
-     *          the current record
-     * @return the computed dense rank value
-     */
-    public long denseRank(AnalyticExpression expression, GenericRecord record) {
-      IdentityHashMap<GenericRecord, Long> values = denseRankValues.get(expression);
-      if (values == null) {
-        throw new IllegalArgumentException("No DENSE_RANK values available for expression: " + expression);
-      }
-      Long value = values.get(record);
-      if (value == null) {
-        throw new IllegalArgumentException("No DENSE_RANK value computed for record: " + record);
-      }
-      return value;
-    }
-
-    /**
-     * Obtain the precomputed PERCENT_RANK value for the supplied expression and
-     * record.
-     *
-     * @param expression
-     *          the analytic expression
-     * @param record
-     *          the current record
-     * @return the computed percent rank value
-     */
-    public BigDecimal percentRank(AnalyticExpression expression, GenericRecord record) {
-      IdentityHashMap<GenericRecord, BigDecimal> values = percentRankValues.get(expression);
-      if (values == null) {
-        throw new IllegalArgumentException("No PERCENT_RANK values available for expression: " + expression);
-      }
-      BigDecimal value = values.get(record);
-      if (value == null) {
-        throw new IllegalArgumentException("No PERCENT_RANK value computed for record: " + record);
-      }
-      return value;
-    }
-
-    /**
-     * Obtain the precomputed CUME_DIST value for the supplied expression and
-     * record.
-     *
-     * @param expression
-     *          the analytic expression
-     * @param record
-     *          the current record
-     * @return the computed cumulative distribution value
-     */
-    public BigDecimal cumeDist(AnalyticExpression expression, GenericRecord record) {
-      IdentityHashMap<GenericRecord, BigDecimal> values = cumeDistValues.get(expression);
-      if (values == null) {
-        throw new IllegalArgumentException("No CUME_DIST values available for expression: " + expression);
-      }
-      BigDecimal value = values.get(record);
-      if (value == null) {
-        throw new IllegalArgumentException("No CUME_DIST value computed for record: " + record);
-      }
-      return value;
-    }
-
-    /**
-     * Obtain the precomputed NTILE value for the supplied expression and record.
-     *
-     * @param expression
-     *          the analytic expression
-     * @param record
-     *          the current record
-     * @return the computed tile index
-     */
-    public long ntile(AnalyticExpression expression, GenericRecord record) {
-      IdentityHashMap<GenericRecord, Long> values = ntileValues.get(expression);
-      if (values == null) {
-        throw new IllegalArgumentException("No NTILE values available for expression: " + expression);
-      }
-      Long value = values.get(record);
-      if (value == null) {
-        throw new IllegalArgumentException("No NTILE value computed for record: " + record);
-      }
-      return value;
-    }
-
-    /**
-     * Obtain the precomputed SUM value for the supplied expression and record.
-     *
-     * @param expression
-     *          the analytic expression
-     * @param record
-     *          the current record
-     * @return the computed sum value
-     */
-    public Object sum(AnalyticExpression expression, GenericRecord record) {
-      IdentityHashMap<GenericRecord, Object> values = sumValues.get(expression);
-      if (values == null) {
-        throw new IllegalArgumentException("No SUM values available for expression: " + expression);
-      }
-      Object value = values.get(record);
-      if (!values.containsKey(record)) {
-        throw new IllegalArgumentException("No SUM value computed for record: " + record);
-      }
-      return value;
-    }
   }
 }

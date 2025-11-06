@@ -36,7 +36,16 @@ import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
+import se.alipsa.jparq.engine.window.CumeDistWindow;
+import se.alipsa.jparq.engine.window.DenseRankWindow;
+import se.alipsa.jparq.engine.window.NtileWindow;
+import se.alipsa.jparq.engine.window.PercentRankWindow;
+import se.alipsa.jparq.engine.window.RankWindow;
+import se.alipsa.jparq.engine.window.RowNumberWindow;
+import se.alipsa.jparq.engine.window.SumWindow;
 import se.alipsa.jparq.engine.window.WindowFunctions;
+import se.alipsa.jparq.engine.window.WindowPlan;
+import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.model.ResultSetAdapter;
 
@@ -45,7 +54,7 @@ import se.alipsa.jparq.model.ResultSetAdapter;
 public class JParqResultSet extends ResultSetAdapter {
 
   private final List<String> physicalColumnOrder; // may be null
-  private QueryProcessor qp;
+  private final QueryProcessor qp;
   private GenericRecord current;
   private final List<String> columnOrder;
   private final String tableName;
@@ -55,10 +64,10 @@ public class JParqResultSet extends ResultSetAdapter {
   private ValueExpressionEvaluator projectionEvaluator;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
-  private WindowFunctions.WindowState windowState;
+  private WindowState windowState;
   private final boolean aggregateQuery;
-  private List<List<Object>> aggregateRows;
-  private List<Integer> aggregateSqlTypes;
+  private final List<List<Object>> aggregateRows;
+  private final List<Integer> aggregateSqlTypes;
   private int aggregateRowIndex = -1;
   private boolean aggregateOnRow = false;
   private boolean closed = false;
@@ -168,7 +177,7 @@ public class JParqResultSet extends ResultSetAdapter {
       this.qp = null;
       this.current = null;
       this.rowNum = 0;
-      this.windowState = WindowFunctions.WindowState.empty();
+      this.windowState = WindowState.empty();
       return;
     }
 
@@ -177,9 +186,9 @@ public class JParqResultSet extends ResultSetAdapter {
     this.aggregateQuery = false;
     this.aggregateRows = null;
     this.aggregateSqlTypes = null;
-    this.windowState = WindowFunctions.WindowState.empty();
+    this.windowState = WindowState.empty();
 
-    WindowFunctions.WindowPlan windowPlan = WindowFunctions.plan(selectExpressions);
+    WindowPlan windowPlan = WindowFunctions.plan(selectExpressions);
     Map<String, Expression> orderByExpressions = extractOrderByExpressions(select);
 
     try {
@@ -226,7 +235,7 @@ public class JParqResultSet extends ResultSetAdapter {
         requiredColumns.addAll(SqlParser.collectQualifiedColumns(expression, queryQualifiers));
       }
       if (windowPlan != null && !windowPlan.isEmpty()) {
-        for (WindowFunctions.RowNumberWindow window : windowPlan.rowNumberWindows()) {
+        for (RowNumberWindow window : windowPlan.rowNumberWindows()) {
           for (Expression partition : window.partitionExpressions()) {
             requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
           }
@@ -236,7 +245,7 @@ public class JParqResultSet extends ResultSetAdapter {
             }
           }
         }
-        for (WindowFunctions.RankWindow window : windowPlan.rankWindows()) {
+        for (RankWindow window : windowPlan.rankWindows()) {
           for (Expression partition : window.partitionExpressions()) {
             requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
           }
@@ -246,7 +255,7 @@ public class JParqResultSet extends ResultSetAdapter {
             }
           }
         }
-        for (WindowFunctions.DenseRankWindow window : windowPlan.denseRankWindows()) {
+        for (DenseRankWindow window : windowPlan.denseRankWindows()) {
           for (Expression partition : window.partitionExpressions()) {
             requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
           }
@@ -256,7 +265,7 @@ public class JParqResultSet extends ResultSetAdapter {
             }
           }
         }
-        for (WindowFunctions.PercentRankWindow window : windowPlan.percentRankWindows()) {
+        for (PercentRankWindow window : windowPlan.percentRankWindows()) {
           for (Expression partition : window.partitionExpressions()) {
             requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
           }
@@ -266,7 +275,7 @@ public class JParqResultSet extends ResultSetAdapter {
             }
           }
         }
-        for (WindowFunctions.CumeDistWindow window : windowPlan.cumeDistWindows()) {
+        for (CumeDistWindow window : windowPlan.cumeDistWindows()) {
           for (Expression partition : window.partitionExpressions()) {
             requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
           }
@@ -276,7 +285,7 @@ public class JParqResultSet extends ResultSetAdapter {
             }
           }
         }
-        for (WindowFunctions.NtileWindow window : windowPlan.ntileWindows()) {
+        for (NtileWindow window : windowPlan.ntileWindows()) {
           for (Expression partition : window.partitionExpressions()) {
             requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
           }
@@ -290,7 +299,7 @@ public class JParqResultSet extends ResultSetAdapter {
             requiredColumns.addAll(SqlParser.collectQualifiedColumns(bucketExpression, queryQualifiers));
           }
         }
-        for (WindowFunctions.SumWindow window : windowPlan.sumWindows()) {
+        for (SumWindow window : windowPlan.sumWindows()) {
           for (Expression partition : window.partitionExpressions()) {
             requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
           }
@@ -377,7 +386,7 @@ public class JParqResultSet extends ResultSetAdapter {
     this.closed = false;
     this.rowNum = 0;
     this.lastWasNull = false;
-    this.windowState = WindowFunctions.WindowState.empty();
+    this.windowState = WindowState.empty();
   }
 
   @Override

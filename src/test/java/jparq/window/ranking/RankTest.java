@@ -273,8 +273,7 @@ public class RankTest {
       previous = value;
     }
     Assertions.assertEquals((double) firstGroupCount[0] / (double) totalRows[0], cumeDists.get(0),
-        DOUBLE_COMPARISON_DELTA,
-        "First row must equal the proportion of the partition represented by its peer group");
+        DOUBLE_COMPARISON_DELTA, "First row must equal the proportion of the partition represented by its peer group");
   }
 
   /**
@@ -784,8 +783,7 @@ public class RankTest {
 
         if (index == 0) {
           Assertions.assertEquals((double) (groupEnd + 1) / (double) totalRows, rows.get(0).cumeDist(),
-              DOUBLE_COMPARISON_DELTA,
-              "First peer group must determine the minimum cumulative distribution value");
+              DOUBLE_COMPARISON_DELTA, "First peer group must determine the minimum cumulative distribution value");
         }
         index = groupEnd + 1;
       }
@@ -882,9 +880,9 @@ public class RankTest {
   }
 
   /**
-   * Verify that ROWS {@code n FOLLOWING} short form expands to the SQL
-   * equivalent frame ({@code CURRENT ROW} to {@code n FOLLOWING}) when used
-   * with {@code SUM(...)} window functions.
+   * Verify that ROWS {@code n FOLLOWING} short form expands to the SQL equivalent
+   * frame ({@code CURRENT ROW} to {@code n FOLLOWING}) when used with
+   * {@code SUM(...)} window functions.
    */
   @Test
   void testSumRowsFollowingShortFormExpandsToFutureFrame() {
@@ -910,8 +908,7 @@ public class RankTest {
     });
 
     Assertions.assertFalse(horsepower.isEmpty(), "Expected horsepower values from SUM window query");
-    Assertions.assertEquals(horsepower.size(), futureTotals.size(),
-        "SUM window must emit one value per input row");
+    Assertions.assertEquals(horsepower.size(), futureTotals.size(), "SUM window must emit one value per input row");
 
     for (int i = 0; i < horsepower.size(); i++) {
       double expected = 0.0;
@@ -952,8 +949,7 @@ public class RankTest {
     });
 
     Assertions.assertFalse(horsepower.isEmpty(), "Expected horsepower values from SUM window query");
-    Assertions.assertEquals(horsepower.size(), trailingTotals.size(),
-        "SUM window must emit one value per input row");
+    Assertions.assertEquals(horsepower.size(), trailingTotals.size(), "SUM window must emit one value per input row");
 
     double[] expected = new double[horsepower.size()];
     double running = 0.0;
@@ -968,14 +964,12 @@ public class RankTest {
     }
 
     Assertions.assertEquals(horsepower.get(horsepower.size() - 1), trailingTotals.get(trailingTotals.size() - 1),
-        DOUBLE_COMPARISON_DELTA,
-        "Final ROWS UNBOUNDED FOLLOWING value must equal the last row's horsepower");
+        DOUBLE_COMPARISON_DELTA, "Final ROWS UNBOUNDED FOLLOWING value must equal the last row's horsepower");
   }
 
   /**
    * Ensure that {@code SUM(...)} window functions without an ORDER BY clause
-   * compute a constant total for each partition as mandated by the SQL
-   * standard.
+   * compute a constant total for each partition as mandated by the SQL standard.
    */
   @Test
   void testSumPartitionWithoutOrderingProducesPartitionTotals() {

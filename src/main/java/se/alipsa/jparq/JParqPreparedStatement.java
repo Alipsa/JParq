@@ -65,7 +65,15 @@ import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
+import se.alipsa.jparq.engine.window.CumeDistWindow;
+import se.alipsa.jparq.engine.window.DenseRankWindow;
+import se.alipsa.jparq.engine.window.NtileWindow;
+import se.alipsa.jparq.engine.window.PercentRankWindow;
+import se.alipsa.jparq.engine.window.RankWindow;
+import se.alipsa.jparq.engine.window.RowNumberWindow;
+import se.alipsa.jparq.engine.window.SumWindow;
 import se.alipsa.jparq.engine.window.WindowFunctions;
+import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /** An implementation of the java.sql.PreparedStatement interface. */
@@ -1367,9 +1375,9 @@ class JParqPreparedStatement implements PreparedStatement {
     for (SqlParser.OrderKey key : select.preOrderBy()) {
       addColumn(needed, key.column());
     }
-    WindowFunctions.WindowPlan windowPlan = WindowFunctions.plan(select.expressions());
+    WindowPlan windowPlan = WindowFunctions.plan(select.expressions());
     if (windowPlan != null && !windowPlan.isEmpty()) {
-      for (WindowFunctions.RowNumberWindow window : windowPlan.rowNumberWindows()) {
+      for (RowNumberWindow window : windowPlan.rowNumberWindows()) {
         for (Expression partition : window.partitionExpressions()) {
           addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
           addColumns(needed, ColumnsUsed.inWhere(partition));
@@ -1381,7 +1389,7 @@ class JParqPreparedStatement implements PreparedStatement {
           }
         }
       }
-      for (WindowFunctions.RankWindow window : windowPlan.rankWindows()) {
+      for (RankWindow window : windowPlan.rankWindows()) {
         for (Expression partition : window.partitionExpressions()) {
           addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
           addColumns(needed, ColumnsUsed.inWhere(partition));
@@ -1393,7 +1401,7 @@ class JParqPreparedStatement implements PreparedStatement {
           }
         }
       }
-      for (WindowFunctions.DenseRankWindow window : windowPlan.denseRankWindows()) {
+      for (DenseRankWindow window : windowPlan.denseRankWindows()) {
         for (Expression partition : window.partitionExpressions()) {
           addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
           addColumns(needed, ColumnsUsed.inWhere(partition));
@@ -1405,7 +1413,7 @@ class JParqPreparedStatement implements PreparedStatement {
           }
         }
       }
-      for (WindowFunctions.PercentRankWindow window : windowPlan.percentRankWindows()) {
+      for (PercentRankWindow window : windowPlan.percentRankWindows()) {
         for (Expression partition : window.partitionExpressions()) {
           addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
           addColumns(needed, ColumnsUsed.inWhere(partition));
@@ -1417,7 +1425,7 @@ class JParqPreparedStatement implements PreparedStatement {
           }
         }
       }
-      for (WindowFunctions.CumeDistWindow window : windowPlan.cumeDistWindows()) {
+      for (CumeDistWindow window : windowPlan.cumeDistWindows()) {
         for (Expression partition : window.partitionExpressions()) {
           addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
           addColumns(needed, ColumnsUsed.inWhere(partition));
@@ -1429,7 +1437,7 @@ class JParqPreparedStatement implements PreparedStatement {
           }
         }
       }
-      for (WindowFunctions.NtileWindow window : windowPlan.ntileWindows()) {
+      for (NtileWindow window : windowPlan.ntileWindows()) {
         for (Expression partition : window.partitionExpressions()) {
           addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
           addColumns(needed, ColumnsUsed.inWhere(partition));
@@ -1446,7 +1454,7 @@ class JParqPreparedStatement implements PreparedStatement {
           addColumns(needed, ColumnsUsed.inWhere(bucketExpression));
         }
       }
-      for (WindowFunctions.SumWindow window : windowPlan.sumWindows()) {
+      for (SumWindow window : windowPlan.sumWindows()) {
         for (Expression partition : window.partitionExpressions()) {
           addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
           addColumns(needed, ColumnsUsed.inWhere(partition));
