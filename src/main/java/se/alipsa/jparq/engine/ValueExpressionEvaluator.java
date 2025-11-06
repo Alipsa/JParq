@@ -291,6 +291,9 @@ public final class ValueExpressionEvaluator {
     if ("AVG".equalsIgnoreCase(name)) {
       return windowState.avg(analytic, record);
     }
+    if ("MIN".equalsIgnoreCase(name)) {
+      return windowState.min(analytic, record);
+    }
     throw new IllegalArgumentException("Unsupported analytic function: " + analytic);
   }
 

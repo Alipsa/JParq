@@ -56,6 +56,7 @@ public final class WindowFunctions {
     List<NtileWindow> ntileWindows = new ArrayList<>();
     List<SumWindow> sumWindows = new ArrayList<>();
     List<AvgWindow> avgWindows = new ArrayList<>();
+    List<MinWindow> minWindows = new ArrayList<>();
     for (Expression expression : expressions) {
       if (expression == null) {
         continue;
@@ -64,25 +65,25 @@ public final class WindowFunctions {
         @Override
         public <S> Void visit(AnalyticExpression analytic, S context) {
           registerAnalyticExpression(analytic, rowNumberWindows, rankWindows, denseRankWindows, percentRankWindows,
-              cumeDistWindows, ntileWindows, sumWindows, avgWindows);
+              cumeDistWindows, ntileWindows, sumWindows, avgWindows, minWindows);
           return super.visit(analytic, context);
         }
       });
     }
     if (rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
         && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && sumWindows.isEmpty()
-        && avgWindows.isEmpty()) {
+        && avgWindows.isEmpty() && minWindows.isEmpty()) {
       return null;
     }
     return new WindowPlan(List.copyOf(rowNumberWindows), List.copyOf(rankWindows), List.copyOf(denseRankWindows),
         List.copyOf(percentRankWindows), List.copyOf(cumeDistWindows), List.copyOf(ntileWindows),
-        List.copyOf(sumWindows), List.copyOf(avgWindows));
+        List.copyOf(sumWindows), List.copyOf(avgWindows), List.copyOf(minWindows));
   }
 
   private static void registerAnalyticExpression(AnalyticExpression analytic, List<RowNumberWindow> rowNumberWindows,
       List<RankWindow> rankWindows, List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
       List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows, List<SumWindow> sumWindows,
-      List<AvgWindow> avgWindows) {
+      List<AvgWindow> avgWindows, List<MinWindow> minWindows) {
     if (analytic == null) {
       return;
     }
@@ -92,7 +93,8 @@ public final class WindowFunctions {
     }
     if (!"ROW_NUMBER".equalsIgnoreCase(name) && !"RANK".equalsIgnoreCase(name) && !"DENSE_RANK".equalsIgnoreCase(name)
         && !"PERCENT_RANK".equalsIgnoreCase(name) && !"CUME_DIST".equalsIgnoreCase(name)
-        && !"NTILE".equalsIgnoreCase(name) && !"SUM".equalsIgnoreCase(name) && !"AVG".equalsIgnoreCase(name)) {
+        && !"NTILE".equalsIgnoreCase(name) && !"SUM".equalsIgnoreCase(name) && !"AVG".equalsIgnoreCase(name)
+        && !"MIN".equalsIgnoreCase(name)) {
       return;
     }
     if (analytic.isDistinct() || analytic.isUnique()) {
@@ -181,6 +183,16 @@ public final class WindowFunctions {
       }
       avgWindows.add(new AvgWindow(analytic, List.copyOf(partitions), orderElements, argument,
           analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
+      return;
+    }
+    if ("MIN".equalsIgnoreCase(name)) {
+      Expression argument = analytic.getExpression();
+      if (argument == null) {
+        throw new IllegalArgumentException("MIN requires an argument expression: " + analytic);
+      }
+      minWindows.add(new MinWindow(analytic, List.copyOf(partitions), orderElements, argument,
+          analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
+      return;
     }
   }
 
@@ -260,8 +272,14 @@ public final class WindowFunctions {
       IdentityHashMap<GenericRecord, Object> values = computeAvg(window, records, evaluator);
       avgValues.put(window.expression(), values);
     }
+    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> minValues;
+    minValues = new IdentityHashMap<>();
+    for (MinWindow window : plan.minWindows()) {
+      IdentityHashMap<GenericRecord, Object> values = computeMin(window, records, evaluator);
+      minValues.put(window.expression(), values);
+    }
     return new WindowState(rowNumberValues, rankValues, denseRankValues, percentRankValues, cumeDistValues, ntileValues,
-        sumValues, avgValues);
+        sumValues, avgValues, minValues);
   }
 
   private static IdentityHashMap<GenericRecord, Long> computeRowNumbers(RowNumberWindow window,
@@ -798,6 +816,184 @@ public final class WindowFunctions {
     }
   }
 
+  private static IdentityHashMap<GenericRecord, Object> computeMin(MinWindow window, List<GenericRecord> records,
+      ValueExpressionEvaluator evaluator) {
+
+    List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
+        evaluator);
+    IdentityHashMap<GenericRecord, Object> values = new IdentityHashMap<>();
+    if (contexts.isEmpty()) {
+      return values;
+    }
+
+    List<Object> argumentValues = new ArrayList<>(contexts.size());
+    for (RowContext context : contexts) {
+      Object value = evaluator.eval(window.argument(), context.record());
+      argumentValues.add(value);
+    }
+
+    int index = 0;
+    final int totalContexts = contexts.size();
+    while (index < totalContexts) {
+      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionStart = index;
+      int partitionEnd = index;
+      while (partitionEnd < totalContexts
+          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+        partitionEnd++;
+      }
+      applyMinForPartition(window, contexts, argumentValues, partitionStart, partitionEnd, values);
+      index = partitionEnd;
+    }
+
+    return values;
+  }
+
+  private static void applyMinForPartition(MinWindow window, List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    if (partitionStart >= partitionEnd) {
+      return;
+    }
+    boolean hasOrder = window.orderByElements() != null && !window.orderByElements().isEmpty();
+    WindowElement element = window.windowElement();
+
+    if (!hasOrder) {
+      MinComputationState state = new MinComputationState();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        state.add(argumentValues.get(i));
+      }
+      Object result = state.result();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        values.put(contexts.get(i).record(), result);
+      }
+      return;
+    }
+
+    if (element == null) {
+      computeDefaultRangeMin(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+
+    if (element.getType() == WindowElement.Type.RANGE) {
+      computeRangeMin(element, contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+
+    if (element.getType() == WindowElement.Type.ROWS) {
+      computeRowsMin(element, contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+
+    throw new IllegalArgumentException("Unsupported window frame type for MIN: " + element);
+  }
+
+  private static void computeDefaultRangeMin(List<RowContext> contexts, List<Object> argumentValues, int partitionStart,
+      int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    MinComputationState running = new MinComputationState();
+    int groupStart = partitionStart;
+    while (groupStart < partitionEnd) {
+      List<OrderComponent> order = contexts.get(groupStart).orderComponents();
+      int groupEnd = groupStart;
+      while (groupEnd < partitionEnd && orderComponentsEqual(order, contexts.get(groupEnd).orderComponents())) {
+        Object value = argumentValues.get(groupEnd);
+        running.add(value);
+        groupEnd++;
+      }
+      Object result = running.result();
+      for (int i = groupStart; i < groupEnd; i++) {
+        values.put(contexts.get(i).record(), result);
+      }
+      groupStart = groupEnd;
+    }
+  }
+
+  private static void computeRangeMin(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    WindowOffset offset = element.getOffset();
+    WindowRange range = element.getRange();
+    if (offset != null) {
+      WindowOffset.Type type = offset.getType();
+      if (type == WindowOffset.Type.PRECEDING || type == WindowOffset.Type.CURRENT) {
+        computeDefaultRangeMin(contexts, argumentValues, partitionStart, partitionEnd, values);
+        return;
+      }
+      if (type == WindowOffset.Type.FOLLOWING) {
+        MinComputationState state = new MinComputationState();
+        for (int i = partitionStart; i < partitionEnd; i++) {
+          state.add(argumentValues.get(i));
+        }
+        Object result = state.result();
+        for (int i = partitionStart; i < partitionEnd; i++) {
+          values.put(contexts.get(i).record(), result);
+        }
+        return;
+      }
+      throw new IllegalArgumentException("Unsupported RANGE frame specification for MIN: " + element);
+    }
+    if (range == null) {
+      computeDefaultRangeMin(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    FrameBoundary start = rangeBoundary(range.getStart(), true);
+    FrameBoundary end = rangeBoundary(range.getEnd(), false);
+    if (start.type() == FrameBoundType.UNBOUNDED_PRECEDING && end.type() == FrameBoundType.CURRENT_ROW) {
+      computeDefaultRangeMin(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    if (start.type() == FrameBoundType.UNBOUNDED_PRECEDING && end.type() == FrameBoundType.UNBOUNDED_FOLLOWING) {
+      MinComputationState state = new MinComputationState();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        state.add(argumentValues.get(i));
+      }
+      Object result = state.result();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        values.put(contexts.get(i).record(), result);
+      }
+      return;
+    }
+    if (start.type() == FrameBoundType.CURRENT_ROW && end.type() == FrameBoundType.CURRENT_ROW) {
+      int groupStart = partitionStart;
+      while (groupStart < partitionEnd) {
+        List<OrderComponent> order = contexts.get(groupStart).orderComponents();
+        MinComputationState state = new MinComputationState();
+        int groupEnd = groupStart;
+        while (groupEnd < partitionEnd && orderComponentsEqual(order, contexts.get(groupEnd).orderComponents())) {
+          state.add(argumentValues.get(groupEnd));
+          groupEnd++;
+        }
+        Object result = state.result();
+        for (int i = groupStart; i < groupEnd; i++) {
+          values.put(contexts.get(i).record(), result);
+        }
+        groupStart = groupEnd;
+      }
+      return;
+    }
+    throw new IllegalArgumentException("Unsupported RANGE frame boundaries for MIN: " + element);
+  }
+
+  private static void computeRowsMin(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    FrameSpecification spec = rowsFrameSpecification(element);
+    int partitionSize = partitionEnd - partitionStart;
+    for (int i = 0; i < partitionSize; i++) {
+      int absoluteIndex = partitionStart + i;
+      int startIndex = resolveRowsStartIndex(spec.start(), i, partitionSize);
+      int endIndex = resolveRowsEndIndex(spec.end(), i, partitionSize);
+      if (startIndex > endIndex || startIndex >= partitionSize || endIndex < 0) {
+        values.put(contexts.get(absoluteIndex).record(), null);
+        continue;
+      }
+      int boundedStart = Math.max(0, startIndex);
+      int boundedEnd = Math.min(partitionSize - 1, endIndex);
+      MinComputationState state = new MinComputationState();
+      for (int j = boundedStart; j <= boundedEnd; j++) {
+        state.add(argumentValues.get(partitionStart + j));
+      }
+      values.put(contexts.get(absoluteIndex).record(), state.result());
+    }
+  }
+
   private static void computeRangeSum(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
       int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
     WindowOffset offset = element.getOffset();
@@ -1128,7 +1324,7 @@ public final class WindowFunctions {
     return left == null ? -1 : 1;
   }
 
-  private static int compareValues(Object left, Object right) {
+  static int compareValues(Object left, Object right) {
     if (left instanceof Number && right instanceof Number) {
       return new BigDecimal(left.toString()).compareTo(new BigDecimal(right.toString()));
     }

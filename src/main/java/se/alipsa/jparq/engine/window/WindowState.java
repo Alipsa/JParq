@@ -13,7 +13,7 @@ import org.apache.avro.generic.GenericRecord;
 public final class WindowState {
 
   private static final WindowState EMPTY = new WindowState(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(),
-      Map.of(), Map.of());
+      Map.of(), Map.of(), Map.of());
 
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues;
@@ -23,6 +23,7 @@ public final class WindowState {
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> avgValues;
+  private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> minValues;
 
   WindowState(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues,
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues,
@@ -31,7 +32,8 @@ public final class WindowState {
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues,
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues,
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues,
-      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> avgValues) {
+      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> avgValues,
+      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> minValues) {
     this.rowNumberValues = rowNumberValues == null ? Map.of() : Collections.unmodifiableMap(rowNumberValues);
     this.rankValues = rankValues == null ? Map.of() : Collections.unmodifiableMap(rankValues);
     this.denseRankValues = denseRankValues == null ? Map.of() : Collections.unmodifiableMap(denseRankValues);
@@ -40,6 +42,7 @@ public final class WindowState {
     this.ntileValues = ntileValues == null ? Map.of() : Collections.unmodifiableMap(ntileValues);
     this.sumValues = sumValues == null ? Map.of() : Collections.unmodifiableMap(sumValues);
     this.avgValues = avgValues == null ? Map.of() : Collections.unmodifiableMap(avgValues);
+    this.minValues = minValues == null ? Map.of() : Collections.unmodifiableMap(minValues);
   }
 
   /**
@@ -58,7 +61,8 @@ public final class WindowState {
    */
   public boolean isEmpty() {
     return rowNumberValues.isEmpty() && rankValues.isEmpty() && denseRankValues.isEmpty() && percentRankValues.isEmpty()
-        && cumeDistValues.isEmpty() && ntileValues.isEmpty() && sumValues.isEmpty() && avgValues.isEmpty();
+        && cumeDistValues.isEmpty() && ntileValues.isEmpty() && sumValues.isEmpty() && avgValues.isEmpty()
+        && minValues.isEmpty();
   }
 
   /**
@@ -227,6 +231,26 @@ public final class WindowState {
     }
     if (!values.containsKey(record)) {
       throw new IllegalArgumentException("No AVG value computed for record: " + record);
+    }
+    return values.get(record);
+  }
+
+  /**
+   * Obtain the precomputed MIN value for the supplied expression and record.
+   *
+   * @param expression
+   *          the analytic expression
+   * @param record
+   *          the current record
+   * @return the computed minimum value
+   */
+  public Object min(AnalyticExpression expression, GenericRecord record) {
+    IdentityHashMap<GenericRecord, Object> values = minValues.get(expression);
+    if (values == null) {
+      throw new IllegalArgumentException("No MIN values available for expression: " + expression);
+    }
+    if (!values.containsKey(record)) {
+      throw new IllegalArgumentException("No MIN value computed for record: " + record);
     }
     return values.get(record);
   }

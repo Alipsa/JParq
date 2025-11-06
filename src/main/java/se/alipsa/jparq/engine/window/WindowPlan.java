@@ -16,11 +16,12 @@ public final class WindowPlan {
   private final List<NtileWindow> ntileWindows;
   private final List<SumWindow> sumWindows;
   private final List<AvgWindow> avgWindows;
+  private final List<MinWindow> minWindows;
 
   WindowPlan(List<RowNumberWindow> rowNumberWindows, List<RankWindow> rankWindows,
       List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
       List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows, List<SumWindow> sumWindows,
-      List<AvgWindow> avgWindows) {
+      List<AvgWindow> avgWindows, List<MinWindow> minWindows) {
     this.rowNumberWindows = rowNumberWindows == null ? List.of() : rowNumberWindows;
     this.rankWindows = rankWindows == null ? List.of() : rankWindows;
     this.denseRankWindows = denseRankWindows == null ? List.of() : denseRankWindows;
@@ -29,6 +30,7 @@ public final class WindowPlan {
     this.ntileWindows = ntileWindows == null ? List.of() : ntileWindows;
     this.sumWindows = sumWindows == null ? List.of() : sumWindows;
     this.avgWindows = avgWindows == null ? List.of() : avgWindows;
+    this.minWindows = minWindows == null ? List.of() : minWindows;
   }
 
   /**
@@ -40,7 +42,7 @@ public final class WindowPlan {
   public boolean isEmpty() {
     return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
         && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && sumWindows.isEmpty()
-        && avgWindows.isEmpty();
+        && avgWindows.isEmpty() && minWindows.isEmpty();
   }
 
   /**
@@ -113,5 +115,14 @@ public final class WindowPlan {
    */
   public List<AvgWindow> avgWindows() {
     return avgWindows;
+  }
+
+  /**
+   * Retrieve MIN analytic expression descriptors.
+   *
+   * @return immutable list of {@link MinWindow} instances
+   */
+  public List<MinWindow> minWindows() {
+    return minWindows;
   }
 }
