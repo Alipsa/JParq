@@ -202,10 +202,9 @@ public final class WindowState {
     if (values == null) {
       throw new IllegalArgumentException("No SUM values available for expression: " + expression);
     }
-    Object value = values.get(record);
     if (!values.containsKey(record)) {
       throw new IllegalArgumentException("No SUM value computed for record: " + record);
     }
-    return value;
+    return values.get(record);
   }
 }
