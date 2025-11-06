@@ -21,6 +21,8 @@ import se.alipsa.jparq.JParqSql;
  */
 public class RankTest {
 
+  private static final double DOUBLE_COMPARISON_DELTA = 0.0001;
+
   private static JParqSql jparqSql;
 
   @BeforeAll
@@ -113,11 +115,11 @@ public class RankTest {
     Assertions.assertEquals(3, averages.size(), "Expected one aggregate row per gear value");
     Assertions.assertEquals(3, percentRanks.size(), "Expected a percent rank value for each aggregated row");
 
-    Assertions.assertEquals(0.0, percentRanks.get(0), 0.0001,
+    Assertions.assertEquals(0.0, percentRanks.get(0), DOUBLE_COMPARISON_DELTA,
         "First row in a partition must receive a percent rank of zero");
-    Assertions.assertEquals(0.5, percentRanks.get(1), 0.0001,
+    Assertions.assertEquals(0.5, percentRanks.get(1), DOUBLE_COMPARISON_DELTA,
         "Second gear should be halfway between the best and worst averages");
-    Assertions.assertEquals(1.0, percentRanks.get(2), 0.0001,
+    Assertions.assertEquals(1.0, percentRanks.get(2), DOUBLE_COMPARISON_DELTA,
         "Final row in a partition must receive a percent rank of one when multiple rows exist");
   }
 
@@ -159,11 +161,11 @@ public class RankTest {
     Assertions.assertEquals(3, averages.size(), "Expected one aggregate row per gear value");
     Assertions.assertEquals(3, cumeDists.size(), "Expected a cumulative distribution value for each aggregated row");
 
-    Assertions.assertEquals(1.0 / 3.0, cumeDists.get(0), 0.0001,
+    Assertions.assertEquals(1.0 / 3.0, cumeDists.get(0), DOUBLE_COMPARISON_DELTA,
         "First ordered row must receive a cumulative distribution of 1/totalRows");
-    Assertions.assertEquals(2.0 / 3.0, cumeDists.get(1), 0.0001,
+    Assertions.assertEquals(2.0 / 3.0, cumeDists.get(1), DOUBLE_COMPARISON_DELTA,
         "Second row should reflect two thirds of the partitioned rows");
-    Assertions.assertEquals(1.0, cumeDists.get(2), 0.0001,
+    Assertions.assertEquals(1.0, cumeDists.get(2), DOUBLE_COMPARISON_DELTA,
         "Final row in a partition must receive a cumulative distribution of one");
   }
 
@@ -192,9 +194,9 @@ public class RankTest {
     });
 
     Assertions.assertFalse(percentRanks.isEmpty(), "Expected percent ranks for four-cylinder cars");
-    Assertions.assertEquals(0.0, percentRanks.get(0), 0.0001,
+    Assertions.assertEquals(0.0, percentRanks.get(0), DOUBLE_COMPARISON_DELTA,
         "First ordered row must receive the minimum percent rank");
-    Assertions.assertEquals(1.0, percentRanks.get(percentRanks.size() - 1), 0.0001,
+    Assertions.assertEquals(1.0, percentRanks.get(percentRanks.size() - 1), DOUBLE_COMPARISON_DELTA,
         "Last ordered row must receive the maximum percent rank");
 
     double previous = Double.NEGATIVE_INFINITY;
@@ -260,7 +262,7 @@ public class RankTest {
     });
 
     Assertions.assertFalse(cumeDists.isEmpty(), "Expected cumulative distributions for four-cylinder cars");
-    Assertions.assertEquals(1.0, cumeDists.get(cumeDists.size() - 1), 0.0001,
+    Assertions.assertEquals(1.0, cumeDists.get(cumeDists.size() - 1), DOUBLE_COMPARISON_DELTA,
         "Last ordered row must receive a cumulative distribution of one");
 
     double previous = Double.NEGATIVE_INFINITY;
@@ -270,7 +272,8 @@ public class RankTest {
           "Cumulative distribution values must be non-decreasing after ordering");
       previous = value;
     }
-    Assertions.assertEquals((double) firstGroupCount[0] / (double) totalRows[0], cumeDists.get(0), 0.0001,
+    Assertions.assertEquals((double) firstGroupCount[0] / (double) totalRows[0], cumeDists.get(0),
+        DOUBLE_COMPARISON_DELTA,
         "First row must equal the proportion of the partition represented by its peer group");
   }
 
@@ -684,16 +687,16 @@ public class RankTest {
           long totalRows = countsByCyl.getOrDefault(cyl, 0L);
           double expectedPercentRank = totalRows <= 1L ? 0.0 : (double) (expectedRank - 1L) / (double) (totalRows - 1L);
 
-          Assertions.assertEquals(expectedPercentRank, percentRank, 0.0001,
+          Assertions.assertEquals(expectedPercentRank, percentRank, DOUBLE_COMPARISON_DELTA,
               "Percent rank must follow the SQL formula within each partition");
 
           if (processed == 1L) {
-            Assertions.assertEquals(0.0, percentRank, 0.0001,
+            Assertions.assertEquals(0.0, percentRank, DOUBLE_COMPARISON_DELTA,
                 "First row of each partition must have a percent rank of zero");
           }
           Double previousPercent = previousPercentByCyl.put(cyl, percentRank);
           if (previousPercent != null) {
-            Assertions.assertTrue(percentRank + 0.0001 >= previousPercent.doubleValue(),
+            Assertions.assertTrue(percentRank + DOUBLE_COMPARISON_DELTA >= previousPercent.doubleValue(),
                 "Percent rank values must be non-decreasing within a partition");
           }
 
@@ -774,18 +777,20 @@ public class RankTest {
         double expected = (double) (groupEnd + 1) / (double) totalRows;
         for (int i = index; i <= groupEnd; i++) {
           double actual = rows.get(i).cumeDist();
-          Assertions.assertEquals(expected, actual, 0.0001, "Peer rows must share the same cumulative distribution");
+          Assertions.assertEquals(expected, actual, DOUBLE_COMPARISON_DELTA,
+              "Peer rows must share the same cumulative distribution");
           Assertions.assertTrue(actual > 0.0 && actual <= 1.0, "CUME_DIST values must be within the interval (0, 1]");
         }
 
         if (index == 0) {
-          Assertions.assertEquals((double) (groupEnd + 1) / (double) totalRows, rows.get(0).cumeDist(), 0.0001,
+          Assertions.assertEquals((double) (groupEnd + 1) / (double) totalRows, rows.get(0).cumeDist(),
+              DOUBLE_COMPARISON_DELTA,
               "First peer group must determine the minimum cumulative distribution value");
         }
         index = groupEnd + 1;
       }
 
-      Assertions.assertEquals(1.0, rows.get(rows.size() - 1).cumeDist(), 0.0001,
+      Assertions.assertEquals(1.0, rows.get(rows.size() - 1).cumeDist(), DOUBLE_COMPARISON_DELTA,
           "Final row in a partition must have a cumulative distribution of one");
     }
   }
@@ -824,7 +829,8 @@ public class RankTest {
 
     double previous = Double.NEGATIVE_INFINITY;
     for (double sum : cumulativeHp) {
-      Assertions.assertTrue(sum + 0.0001 >= previous, "Cumulative SUM must not decrease across ordered rows");
+      Assertions.assertTrue(sum + DOUBLE_COMPARISON_DELTA >= previous,
+          "Cumulative SUM must not decrease across ordered rows");
       previous = sum;
     }
 
@@ -864,14 +870,14 @@ public class RankTest {
     }
 
     for (int i = 0; i < cumulativeHp.size(); i++) {
-      Assertions.assertEquals(expected[i], cumulativeHp.get(i), 0.0001,
+      Assertions.assertEquals(expected[i], cumulativeHp.get(i), DOUBLE_COMPARISON_DELTA,
           "SUM window must match the expected cumulative total for row " + i);
     }
 
     Assertions.assertTrue(sawPeerGroup, "Test data must include peer groups to validate RANGE semantics");
 
     int totalHp = horsepower.stream().mapToInt(Integer::intValue).sum();
-    Assertions.assertEquals(totalHp, cumulativeHp.get(cumulativeHp.size() - 1), 0.0001,
+    Assertions.assertEquals(totalHp, cumulativeHp.get(cumulativeHp.size() - 1), DOUBLE_COMPARISON_DELTA,
         "Final cumulative SUM must equal the total horsepower observed");
   }
 
@@ -912,7 +918,7 @@ public class RankTest {
       for (int j = i; j < horsepower.size() && j <= i + 2; j++) {
         expected += horsepower.get(j);
       }
-      Assertions.assertEquals(expected, futureTotals.get(i), 0.0001,
+      Assertions.assertEquals(expected, futureTotals.get(i), DOUBLE_COMPARISON_DELTA,
           "SUM with ROWS FOLLOWING must aggregate from current row into future rows");
     }
   }
@@ -957,12 +963,13 @@ public class RankTest {
     }
 
     for (int i = 0; i < horsepower.size(); i++) {
-      Assertions.assertEquals(expected[i], trailingTotals.get(i), 0.0001,
+      Assertions.assertEquals(expected[i], trailingTotals.get(i), DOUBLE_COMPARISON_DELTA,
           "SUM with ROWS UNBOUNDED FOLLOWING must include all remaining rows");
     }
 
     Assertions.assertEquals(horsepower.get(horsepower.size() - 1), trailingTotals.get(trailingTotals.size() - 1),
-        0.0001, "Final ROWS UNBOUNDED FOLLOWING value must equal the last row's horsepower");
+        DOUBLE_COMPARISON_DELTA,
+        "Final ROWS UNBOUNDED FOLLOWING value must equal the last row's horsepower");
   }
 
   /**
@@ -1009,7 +1016,7 @@ public class RankTest {
     for (int i = 0; i < cylinders.size(); i++) {
       int cyl = cylinders.get(i);
       double expectedTotal = expectedTotals.get(cyl);
-      Assertions.assertEquals(expectedTotal, totals.get(i), 0.0001,
+      Assertions.assertEquals(expectedTotal, totals.get(i), DOUBLE_COMPARISON_DELTA,
           "SUM without ORDER BY must produce a constant total per partition");
     }
 

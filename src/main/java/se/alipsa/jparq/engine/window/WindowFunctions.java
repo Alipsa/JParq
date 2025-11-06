@@ -1,6 +1,7 @@
 package se.alipsa.jparq.engine.window;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.MathContext;
 import java.nio.ByteBuffer;
 import java.sql.Date;
@@ -1495,8 +1496,8 @@ public final class WindowFunctions {
       if (!seenValue) {
         return null;
       }
-      if (observedType == null) {
-        return sum.doubleValue();
+      if (observedType == BigDecimal.class) {
+        return sum;
       }
       if (observedType == Byte.class || observedType == Short.class || observedType == Integer.class
           || observedType == Long.class) {
@@ -1505,21 +1506,24 @@ public final class WindowFunctions {
       if (observedType == Float.class || observedType == Double.class) {
         return sum.doubleValue();
       }
-      if (observedType == BigDecimal.class) {
-        return sum;
-      }
       return sum.doubleValue();
     }
 
     private void trackType(Object value) {
+      Class<?> valueClass = normalizeType(value.getClass());
       if (observedType == null) {
-        observedType = value.getClass();
+        observedType = valueClass;
+        return;
       }
+      observedType = widenType(observedType, valueClass);
     }
 
     private BigDecimal toBigDecimal(Object value) {
       if (value instanceof BigDecimal bd) {
         return bd;
+      }
+      if (value instanceof BigInteger bi) {
+        return new BigDecimal(bi);
       }
       if (value instanceof Number number) {
         if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
@@ -1527,7 +1531,36 @@ public final class WindowFunctions {
         }
         return BigDecimal.valueOf(number.doubleValue());
       }
-      return new BigDecimal(value.toString());
+      throw new IllegalArgumentException("SUM window functions require numeric inputs but received "
+          + value.getClass().getName());
+    }
+
+    private Class<?> normalizeType(Class<?> type) {
+      if (type == BigInteger.class) {
+        return BigDecimal.class;
+      }
+      return type;
+    }
+
+    private Class<?> widenType(Class<?> current, Class<?> candidate) {
+      if (current == BigDecimal.class || candidate == BigDecimal.class) {
+        return BigDecimal.class;
+      }
+      if (isFloatingPoint(current) || isFloatingPoint(candidate)) {
+        return Double.class;
+      }
+      if (isIntegral(current) && isIntegral(candidate)) {
+        return Long.class;
+      }
+      return Double.class;
+    }
+
+    private boolean isFloatingPoint(Class<?> type) {
+      return type == Float.class || type == Double.class;
+    }
+
+    private boolean isIntegral(Class<?> type) {
+      return type == Byte.class || type == Short.class || type == Integer.class || type == Long.class;
     }
   }
 
