@@ -135,10 +135,12 @@ The following SQL statements are supported:
 - Windowing
   - Ranking functions
     - ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE
+  -  Aggregate window functions
+    - SUM, AVG
 ## Roadmap: Might be implemented in the future
 - Windowing
   - Aggregate window functions
-    - SUM, AVG, MIN, MAX, COUNT
+    - MIN, MAX, COUNT
   - Analytic Value/Navigation Functions
     -  LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
 - Support # syntax for creating temporary tables within the current statement
