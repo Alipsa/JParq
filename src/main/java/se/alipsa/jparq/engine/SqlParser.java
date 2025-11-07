@@ -1140,6 +1140,12 @@ public final class SqlParser {
       @Override
       public <S> Void visit(Column column, S context) {
         Table table = column.getTable();
+        if (table == null) {
+          if (normalized.size() == 1) {
+            columns.add(column.getColumnName());
+          }
+          return super.visit(column, context);
+        }
         if (table != null) {
           String[] candidates = {
               table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()

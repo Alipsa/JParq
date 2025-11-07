@@ -15,6 +15,7 @@ final class WindowCollector {
   private final List<PercentRankWindow> percentRankWindows = new ArrayList<>();
   private final List<CumeDistWindow> cumeDistWindows = new ArrayList<>();
   private final List<NtileWindow> ntileWindows = new ArrayList<>();
+  private final List<CountWindow> countWindows = new ArrayList<>();
   private final List<SumWindow> sumWindows = new ArrayList<>();
   private final List<AvgWindow> avgWindows = new ArrayList<>();
   private final List<MinWindow> minWindows = new ArrayList<>();
@@ -30,7 +31,8 @@ final class WindowCollector {
   WindowPlan toWindowPlan() {
     return new WindowPlan(List.copyOf(rowNumberWindows), List.copyOf(rankWindows), List.copyOf(denseRankWindows),
         List.copyOf(percentRankWindows), List.copyOf(cumeDistWindows), List.copyOf(ntileWindows),
-        List.copyOf(sumWindows), List.copyOf(avgWindows), List.copyOf(minWindows), List.copyOf(maxWindows));
+        List.copyOf(countWindows), List.copyOf(sumWindows), List.copyOf(avgWindows), List.copyOf(minWindows),
+        List.copyOf(maxWindows));
   }
 
   /**
@@ -41,8 +43,8 @@ final class WindowCollector {
    */
   boolean isEmpty() {
     return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
-        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && sumWindows.isEmpty()
-        && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty();
+        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && countWindows.isEmpty()
+        && sumWindows.isEmpty() && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty();
   }
 
   /**
@@ -103,6 +105,16 @@ final class WindowCollector {
    */
   void addNtileWindow(NtileWindow window) {
     ntileWindows.add(window);
+  }
+
+  /**
+   * Register a {@link CountWindow} for later inclusion in a plan snapshot.
+   *
+   * @param window
+   *          the window definition to retain
+   */
+  void addCountWindow(CountWindow window) {
+    countWindows.add(window);
   }
 
   /**
