@@ -1,6 +1,7 @@
 package jparq.window;
 
 import java.util.List;
+import net.sf.jsqlparser.JSQLParserException;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.junit.jupiter.api.Assertions;
@@ -16,11 +17,11 @@ class WindowFunctionsPlanTest {
   /**
    * Ensure that supported analytic expressions are collected into the plan.
    *
-   * @throws Exception
+   * @throws JSQLParserException
    *           if the SQL expression cannot be parsed
   */
   @Test
-  void planCollectsSupportedAnalyticExpressions() throws Exception {
+  void planCollectsSupportedAnalyticExpressions() throws JSQLParserException {
     List<Expression> expressions = List.of(CCJSqlParserUtil.parseExpression("employee_id"),
         CCJSqlParserUtil.parseExpression("ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC)"),
         CCJSqlParserUtil.parseExpression("SUM(salary) OVER (PARTITION BY dept ORDER BY change_date DESC)"));
@@ -37,11 +38,11 @@ class WindowFunctionsPlanTest {
   /**
    * Verify that a plan is not generated when no analytic expressions are discovered.
    *
-   * @throws Exception
+   * @throws JSQLParserException
    *           if the SQL expression cannot be parsed
   */
   @Test
-  void planReturnsNullWithoutAnalyticExpressions() throws Exception {
+  void planReturnsNullWithoutAnalyticExpressions() throws JSQLParserException {
     List<Expression> expressions = List.of(CCJSqlParserUtil.parseExpression("employee_id"),
         CCJSqlParserUtil.parseExpression("department"));
 
