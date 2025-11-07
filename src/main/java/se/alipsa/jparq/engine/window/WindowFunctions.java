@@ -193,7 +193,7 @@ public final class WindowFunctions {
       }
       minWindows.add(new MinWindow(analytic, List.copyOf(partitions), orderElements, argument,
           analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
-      // return;
+      return;
     }
     if ("MAX".equalsIgnoreCase(name)) {
       Expression argument = analytic.getExpression();
@@ -202,7 +202,7 @@ public final class WindowFunctions {
       }
       maxWindows.add(new MaxWindow(analytic, List.copyOf(partitions), orderElements, argument,
           analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
-      // return;
+      return;
     }
   }
 
