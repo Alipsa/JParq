@@ -68,6 +68,7 @@ import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.window.AvgWindow;
 import se.alipsa.jparq.engine.window.CumeDistWindow;
 import se.alipsa.jparq.engine.window.DenseRankWindow;
+import se.alipsa.jparq.engine.window.MaxWindow;
 import se.alipsa.jparq.engine.window.MinWindow;
 import se.alipsa.jparq.engine.window.NtileWindow;
 import se.alipsa.jparq.engine.window.PercentRankWindow;
@@ -1491,6 +1492,23 @@ class JParqPreparedStatement implements PreparedStatement {
         }
       }
       for (MinWindow window : windowPlan.minWindows()) {
+        for (Expression partition : window.partitionExpressions()) {
+          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+          addColumns(needed, ColumnsUsed.inWhere(partition));
+        }
+        for (OrderByElement order : window.orderByElements()) {
+          if (order != null && order.getExpression() != null) {
+            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+            addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
+          }
+        }
+        Expression argument = window.argument();
+        if (argument != null) {
+          addColumns(needed, SqlParser.collectQualifiedColumns(argument, qualifiers));
+          addColumns(needed, ColumnsUsed.inWhere(argument));
+        }
+      }
+      for (MaxWindow window : windowPlan.maxWindows()) {
         for (Expression partition : window.partitionExpressions()) {
           addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
           addColumns(needed, ColumnsUsed.inWhere(partition));

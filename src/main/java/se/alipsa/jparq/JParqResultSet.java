@@ -39,6 +39,7 @@ import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.window.AvgWindow;
 import se.alipsa.jparq.engine.window.CumeDistWindow;
 import se.alipsa.jparq.engine.window.DenseRankWindow;
+import se.alipsa.jparq.engine.window.MaxWindow;
 import se.alipsa.jparq.engine.window.MinWindow;
 import se.alipsa.jparq.engine.window.NtileWindow;
 import se.alipsa.jparq.engine.window.PercentRankWindow;
@@ -316,6 +317,20 @@ public class JParqResultSet extends ResultSetAdapter {
           }
         }
         for (AvgWindow window : windowPlan.avgWindows()) {
+          for (Expression partition : window.partitionExpressions()) {
+            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
+          }
+          for (OrderByElement order : window.orderByElements()) {
+            if (order != null && order.getExpression() != null) {
+              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
+            }
+          }
+          Expression argument = window.argument();
+          if (argument != null) {
+            requiredColumns.addAll(SqlParser.collectQualifiedColumns(argument, queryQualifiers));
+          }
+        }
+        for (MaxWindow window : windowPlan.maxWindows()) {
           for (Expression partition : window.partitionExpressions()) {
             requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
           }
