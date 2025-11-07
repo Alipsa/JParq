@@ -57,6 +57,7 @@ public final class WindowFunctions {
     List<SumWindow> sumWindows = new ArrayList<>();
     List<AvgWindow> avgWindows = new ArrayList<>();
     List<MinWindow> minWindows = new ArrayList<>();
+    List<MaxWindow> maxWindows = new ArrayList<>();
     for (Expression expression : expressions) {
       if (expression == null) {
         continue;
@@ -65,25 +66,25 @@ public final class WindowFunctions {
         @Override
         public <S> Void visit(AnalyticExpression analytic, S context) {
           registerAnalyticExpression(analytic, rowNumberWindows, rankWindows, denseRankWindows, percentRankWindows,
-              cumeDistWindows, ntileWindows, sumWindows, avgWindows, minWindows);
+              cumeDistWindows, ntileWindows, sumWindows, avgWindows, minWindows, maxWindows);
           return super.visit(analytic, context);
         }
       });
     }
     if (rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
         && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && sumWindows.isEmpty()
-        && avgWindows.isEmpty() && minWindows.isEmpty()) {
+        && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty()) {
       return null;
     }
     return new WindowPlan(List.copyOf(rowNumberWindows), List.copyOf(rankWindows), List.copyOf(denseRankWindows),
         List.copyOf(percentRankWindows), List.copyOf(cumeDistWindows), List.copyOf(ntileWindows),
-        List.copyOf(sumWindows), List.copyOf(avgWindows), List.copyOf(minWindows));
+        List.copyOf(sumWindows), List.copyOf(avgWindows), List.copyOf(minWindows), List.copyOf(maxWindows));
   }
 
   private static void registerAnalyticExpression(AnalyticExpression analytic, List<RowNumberWindow> rowNumberWindows,
       List<RankWindow> rankWindows, List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
       List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows, List<SumWindow> sumWindows,
-      List<AvgWindow> avgWindows, List<MinWindow> minWindows) {
+      List<AvgWindow> avgWindows, List<MinWindow> minWindows, List<MaxWindow> maxWindows) {
     if (analytic == null) {
       return;
     }
@@ -94,7 +95,7 @@ public final class WindowFunctions {
     if (!"ROW_NUMBER".equalsIgnoreCase(name) && !"RANK".equalsIgnoreCase(name) && !"DENSE_RANK".equalsIgnoreCase(name)
         && !"PERCENT_RANK".equalsIgnoreCase(name) && !"CUME_DIST".equalsIgnoreCase(name)
         && !"NTILE".equalsIgnoreCase(name) && !"SUM".equalsIgnoreCase(name) && !"AVG".equalsIgnoreCase(name)
-        && !"MIN".equalsIgnoreCase(name)) {
+        && !"MIN".equalsIgnoreCase(name) && !"MAX".equalsIgnoreCase(name)) {
       return;
     }
     if (analytic.isDistinct() || analytic.isUnique()) {
@@ -194,6 +195,15 @@ public final class WindowFunctions {
           analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
       // return;
     }
+    if ("MAX".equalsIgnoreCase(name)) {
+      Expression argument = analytic.getExpression();
+      if (argument == null) {
+        throw new IllegalArgumentException("MAX requires an argument expression: " + analytic);
+      }
+      maxWindows.add(new MaxWindow(analytic, List.copyOf(partitions), orderElements, argument,
+          analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
+      // return;
+    }
   }
 
   /**
@@ -278,8 +288,14 @@ public final class WindowFunctions {
       IdentityHashMap<GenericRecord, Object> values = computeMin(window, records, evaluator);
       minValues.put(window.expression(), values);
     }
+    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> maxValues;
+    maxValues = new IdentityHashMap<>();
+    for (MaxWindow window : plan.maxWindows()) {
+      IdentityHashMap<GenericRecord, Object> values = computeMax(window, records, evaluator);
+      maxValues.put(window.expression(), values);
+    }
     return new WindowState(rowNumberValues, rankValues, denseRankValues, percentRankValues, cumeDistValues, ntileValues,
-        sumValues, avgValues, minValues);
+        sumValues, avgValues, minValues, maxValues);
   }
 
   private static IdentityHashMap<GenericRecord, Long> computeRowNumbers(RowNumberWindow window,
@@ -987,6 +1003,184 @@ public final class WindowFunctions {
       int boundedStart = Math.max(0, startIndex);
       int boundedEnd = Math.min(partitionSize - 1, endIndex);
       MinComputationState state = new MinComputationState();
+      for (int j = boundedStart; j <= boundedEnd; j++) {
+        state.add(argumentValues.get(partitionStart + j));
+      }
+      values.put(contexts.get(absoluteIndex).record(), state.result());
+    }
+  }
+
+  private static IdentityHashMap<GenericRecord, Object> computeMax(MaxWindow window, List<GenericRecord> records,
+      ValueExpressionEvaluator evaluator) {
+
+    List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
+        evaluator);
+    IdentityHashMap<GenericRecord, Object> values = new IdentityHashMap<>();
+    if (contexts.isEmpty()) {
+      return values;
+    }
+
+    List<Object> argumentValues = new ArrayList<>(contexts.size());
+    for (RowContext context : contexts) {
+      Object value = evaluator.eval(window.argument(), context.record());
+      argumentValues.add(value);
+    }
+
+    int index = 0;
+    final int totalContexts = contexts.size();
+    while (index < totalContexts) {
+      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionStart = index;
+      int partitionEnd = index;
+      while (partitionEnd < totalContexts
+          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+        partitionEnd++;
+      }
+      applyMaxForPartition(window, contexts, argumentValues, partitionStart, partitionEnd, values);
+      index = partitionEnd;
+    }
+
+    return values;
+  }
+
+  private static void applyMaxForPartition(MaxWindow window, List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    if (partitionStart >= partitionEnd) {
+      return;
+    }
+    boolean hasOrder = window.orderByElements() != null && !window.orderByElements().isEmpty();
+    WindowElement element = window.windowElement();
+
+    if (!hasOrder) {
+      MaxComputationState state = new MaxComputationState();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        state.add(argumentValues.get(i));
+      }
+      Object result = state.result();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        values.put(contexts.get(i).record(), result);
+      }
+      return;
+    }
+
+    if (element == null) {
+      computeDefaultRangeMax(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+
+    if (element.getType() == WindowElement.Type.RANGE) {
+      computeRangeMax(element, contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+
+    if (element.getType() == WindowElement.Type.ROWS) {
+      computeRowsMax(element, contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+
+    throw new IllegalArgumentException("Unsupported window frame type for MAX: " + element);
+  }
+
+  private static void computeDefaultRangeMax(List<RowContext> contexts, List<Object> argumentValues, int partitionStart,
+      int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    MaxComputationState running = new MaxComputationState();
+    int groupStart = partitionStart;
+    while (groupStart < partitionEnd) {
+      List<OrderComponent> order = contexts.get(groupStart).orderComponents();
+      int groupEnd = groupStart;
+      while (groupEnd < partitionEnd && orderComponentsEqual(order, contexts.get(groupEnd).orderComponents())) {
+        Object value = argumentValues.get(groupEnd);
+        running.add(value);
+        groupEnd++;
+      }
+      Object result = running.result();
+      for (int i = groupStart; i < groupEnd; i++) {
+        values.put(contexts.get(i).record(), result);
+      }
+      groupStart = groupEnd;
+    }
+  }
+
+  private static void computeRangeMax(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    WindowOffset offset = element.getOffset();
+    WindowRange range = element.getRange();
+    if (offset != null) {
+      WindowOffset.Type type = offset.getType();
+      if (type == WindowOffset.Type.PRECEDING || type == WindowOffset.Type.CURRENT) {
+        computeDefaultRangeMax(contexts, argumentValues, partitionStart, partitionEnd, values);
+        return;
+      }
+      if (type == WindowOffset.Type.FOLLOWING) {
+        MaxComputationState state = new MaxComputationState();
+        for (int i = partitionStart; i < partitionEnd; i++) {
+          state.add(argumentValues.get(i));
+        }
+        Object result = state.result();
+        for (int i = partitionStart; i < partitionEnd; i++) {
+          values.put(contexts.get(i).record(), result);
+        }
+        return;
+      }
+      throw new IllegalArgumentException("Unsupported RANGE frame specification for MAX: " + element);
+    }
+    if (range == null) {
+      computeDefaultRangeMax(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    FrameBoundary start = rangeBoundary(range.getStart(), true);
+    FrameBoundary end = rangeBoundary(range.getEnd(), false);
+    if (start.type() == FrameBoundType.UNBOUNDED_PRECEDING && end.type() == FrameBoundType.CURRENT_ROW) {
+      computeDefaultRangeMax(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    if (start.type() == FrameBoundType.UNBOUNDED_PRECEDING && end.type() == FrameBoundType.UNBOUNDED_FOLLOWING) {
+      MaxComputationState state = new MaxComputationState();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        state.add(argumentValues.get(i));
+      }
+      Object result = state.result();
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        values.put(contexts.get(i).record(), result);
+      }
+      return;
+    }
+    if (start.type() == FrameBoundType.CURRENT_ROW && end.type() == FrameBoundType.CURRENT_ROW) {
+      int groupStart = partitionStart;
+      while (groupStart < partitionEnd) {
+        List<OrderComponent> order = contexts.get(groupStart).orderComponents();
+        MaxComputationState state = new MaxComputationState();
+        int groupEnd = groupStart;
+        while (groupEnd < partitionEnd && orderComponentsEqual(order, contexts.get(groupEnd).orderComponents())) {
+          state.add(argumentValues.get(groupEnd));
+          groupEnd++;
+        }
+        Object result = state.result();
+        for (int i = groupStart; i < groupEnd; i++) {
+          values.put(contexts.get(i).record(), result);
+        }
+        groupStart = groupEnd;
+      }
+      return;
+    }
+    throw new IllegalArgumentException("Unsupported RANGE frame boundaries for MAX: " + element);
+  }
+
+  private static void computeRowsMax(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    FrameSpecification spec = rowsFrameSpecification(element);
+    int partitionSize = partitionEnd - partitionStart;
+    for (int i = 0; i < partitionSize; i++) {
+      int absoluteIndex = partitionStart + i;
+      int startIndex = resolveRowsStartIndex(spec.start(), i, partitionSize);
+      int endIndex = resolveRowsEndIndex(spec.end(), i, partitionSize);
+      if (startIndex > endIndex || startIndex >= partitionSize || endIndex < 0) {
+        values.put(contexts.get(absoluteIndex).record(), null);
+        continue;
+      }
+      int boundedStart = Math.max(0, startIndex);
+      int boundedEnd = Math.min(partitionSize - 1, endIndex);
+      MaxComputationState state = new MaxComputationState();
       for (int j = boundedStart; j <= boundedEnd; j++) {
         state.add(argumentValues.get(partitionStart + j));
       }
