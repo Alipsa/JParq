@@ -1,0 +1,143 @@
+package se.alipsa.jparq.engine.window;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Collects analytic window definitions discovered when scanning expressions for planning.
+ */
+final class WindowCollector {
+
+  private final List<RowNumberWindow> rowNumberWindows = new ArrayList<>();
+  private final List<RankWindow> rankWindows = new ArrayList<>();
+  private final List<DenseRankWindow> denseRankWindows = new ArrayList<>();
+  private final List<PercentRankWindow> percentRankWindows = new ArrayList<>();
+  private final List<CumeDistWindow> cumeDistWindows = new ArrayList<>();
+  private final List<NtileWindow> ntileWindows = new ArrayList<>();
+  private final List<SumWindow> sumWindows = new ArrayList<>();
+  private final List<AvgWindow> avgWindows = new ArrayList<>();
+  private final List<MinWindow> minWindows = new ArrayList<>();
+  private final List<MaxWindow> maxWindows = new ArrayList<>();
+
+  /**
+   * Create an immutable {@link WindowPlan} snapshot from the collected analytic definitions.
+   *
+   * @return an immutable window plan capturing the accumulated analytic expressions
+   */
+  WindowPlan toWindowPlan() {
+    return new WindowPlan(List.copyOf(rowNumberWindows), List.copyOf(rankWindows), List.copyOf(denseRankWindows),
+        List.copyOf(percentRankWindows), List.copyOf(cumeDistWindows), List.copyOf(ntileWindows),
+        List.copyOf(sumWindows), List.copyOf(avgWindows), List.copyOf(minWindows), List.copyOf(maxWindows));
+  }
+
+  /**
+   * Determine whether any analytic expressions have been collected.
+   *
+   * @return {@code true} when no analytic expressions have been registered, otherwise {@code false}
+   */
+  boolean isEmpty() {
+    return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
+        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && sumWindows.isEmpty()
+        && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty();
+  }
+
+  /**
+   * Register a {@link RowNumberWindow} for later inclusion in a plan snapshot.
+   *
+   * @param window
+   *          the window definition to retain
+   */
+  void addRowNumberWindow(RowNumberWindow window) {
+    rowNumberWindows.add(window);
+  }
+
+  /**
+   * Register a {@link RankWindow} for later inclusion in a plan snapshot.
+   *
+   * @param window
+   *          the window definition to retain
+   */
+  void addRankWindow(RankWindow window) {
+    rankWindows.add(window);
+  }
+
+  /**
+   * Register a {@link DenseRankWindow} for later inclusion in a plan snapshot.
+   *
+   * @param window
+   *          the window definition to retain
+   */
+  void addDenseRankWindow(DenseRankWindow window) {
+    denseRankWindows.add(window);
+  }
+
+  /**
+   * Register a {@link PercentRankWindow} for later inclusion in a plan snapshot.
+   *
+   * @param window
+   *          the window definition to retain
+   */
+  void addPercentRankWindow(PercentRankWindow window) {
+    percentRankWindows.add(window);
+  }
+
+  /**
+   * Register a {@link CumeDistWindow} for later inclusion in a plan snapshot.
+   *
+   * @param window
+   *          the window definition to retain
+   */
+  void addCumeDistWindow(CumeDistWindow window) {
+    cumeDistWindows.add(window);
+  }
+
+  /**
+   * Register a {@link NtileWindow} for later inclusion in a plan snapshot.
+   *
+   * @param window
+   *          the window definition to retain
+   */
+  void addNtileWindow(NtileWindow window) {
+    ntileWindows.add(window);
+  }
+
+  /**
+   * Register a {@link SumWindow} for later inclusion in a plan snapshot.
+   *
+   * @param window
+   *          the window definition to retain
+   */
+  void addSumWindow(SumWindow window) {
+    sumWindows.add(window);
+  }
+
+  /**
+   * Register an {@link AvgWindow} for later inclusion in a plan snapshot.
+   *
+   * @param window
+   *          the window definition to retain
+   */
+  void addAvgWindow(AvgWindow window) {
+    avgWindows.add(window);
+  }
+
+  /**
+   * Register a {@link MinWindow} for later inclusion in a plan snapshot.
+   *
+   * @param window
+   *          the window definition to retain
+   */
+  void addMinWindow(MinWindow window) {
+    minWindows.add(window);
+  }
+
+  /**
+   * Register a {@link MaxWindow} for later inclusion in a plan snapshot.
+   *
+   * @param window
+   *          the window definition to retain
+   */
+  void addMaxWindow(MaxWindow window) {
+    maxWindows.add(window);
+  }
+}
