@@ -18,8 +18,8 @@ public final class MaxWindow {
   private final boolean distinct;
   private final WindowElement windowElement;
 
-  MaxWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
-      List<OrderByElement> orderByElements, Expression argument, boolean distinct, WindowElement windowElement) {
+  MaxWindow(AnalyticExpression expression, List<Expression> partitionExpressions, List<OrderByElement> orderByElements,
+      Expression argument, boolean distinct, WindowElement windowElement) {
     this.expression = expression;
     this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
     this.orderByElements = orderByElements == null ? List.of() : orderByElements;

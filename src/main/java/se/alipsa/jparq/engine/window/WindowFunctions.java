@@ -21,6 +21,8 @@ import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.statement.select.OrderByElement;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.helper.LiteralConverter;
@@ -31,6 +33,8 @@ import se.alipsa.jparq.helper.TemporalInterval;
  * in SELECT lists.
  */
 public final class WindowFunctions {
+
+  private static final Logger log = LoggerFactory.getLogger(WindowFunctions.class);
 
   private WindowFunctions() {
   }
@@ -204,6 +208,7 @@ public final class WindowFunctions {
           analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
       return;
     }
+    log.debug("Unsupported analytic expression encountered: {}", analytic);
   }
 
   /**
