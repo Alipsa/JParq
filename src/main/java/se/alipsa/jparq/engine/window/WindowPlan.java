@@ -1,5 +1,6 @@
 package se.alipsa.jparq.engine.window;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -20,21 +21,40 @@ public final class WindowPlan {
   private final List<MinWindow> minWindows;
   private final List<MaxWindow> maxWindows;
 
-  WindowPlan(List<RowNumberWindow> rowNumberWindows, List<RankWindow> rankWindows,
-      List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
-      List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows, List<CountWindow> countWindows,
-      List<SumWindow> sumWindows, List<AvgWindow> avgWindows, List<MinWindow> minWindows, List<MaxWindow> maxWindows) {
-    this.rowNumberWindows = rowNumberWindows == null ? List.of() : rowNumberWindows;
-    this.rankWindows = rankWindows == null ? List.of() : rankWindows;
-    this.denseRankWindows = denseRankWindows == null ? List.of() : denseRankWindows;
-    this.percentRankWindows = percentRankWindows == null ? List.of() : percentRankWindows;
-    this.cumeDistWindows = cumeDistWindows == null ? List.of() : cumeDistWindows;
-    this.ntileWindows = ntileWindows == null ? List.of() : ntileWindows;
-    this.countWindows = countWindows == null ? List.of() : countWindows;
-    this.sumWindows = sumWindows == null ? List.of() : sumWindows;
-    this.avgWindows = avgWindows == null ? List.of() : avgWindows;
-    this.minWindows = minWindows == null ? List.of() : minWindows;
-    this.maxWindows = maxWindows == null ? List.of() : maxWindows;
+  private WindowPlan(Builder builder) {
+    this.rowNumberWindows = immutableList(builder.rowNumberWindows);
+    this.rankWindows = immutableList(builder.rankWindows);
+    this.denseRankWindows = immutableList(builder.denseRankWindows);
+    this.percentRankWindows = immutableList(builder.percentRankWindows);
+    this.cumeDistWindows = immutableList(builder.cumeDistWindows);
+    this.ntileWindows = immutableList(builder.ntileWindows);
+    this.countWindows = immutableList(builder.countWindows);
+    this.sumWindows = immutableList(builder.sumWindows);
+    this.avgWindows = immutableList(builder.avgWindows);
+    this.minWindows = immutableList(builder.minWindows);
+    this.maxWindows = immutableList(builder.maxWindows);
+  }
+
+  /**
+   * Create an immutable view of the supplied list.
+   *
+   * @param <T>
+   *          element type contained within the list
+   * @param source
+   *          the list to copy, may be {@code null}
+   * @return an immutable list containing the supplied elements or an empty list when {@code source} is {@code null}
+   */
+  private static <T> List<T> immutableList(List<T> source) {
+    return source == null ? List.of() : List.copyOf(source);
+  }
+
+  /**
+   * Create a builder for assembling immutable {@link WindowPlan} instances.
+   *
+   * @return a new builder ready to accept analytic window collections
+   */
+  public static Builder builder() {
+    return new Builder();
   }
 
   /**
@@ -146,5 +166,185 @@ public final class WindowPlan {
    */
   public List<MaxWindow> maxWindows() {
     return maxWindows;
+  }
+
+  /**
+   * Builder for assembling immutable {@link WindowPlan} instances.
+   */
+  public static final class Builder {
+
+    private List<RowNumberWindow> rowNumberWindows;
+    private List<RankWindow> rankWindows;
+    private List<DenseRankWindow> denseRankWindows;
+    private List<PercentRankWindow> percentRankWindows;
+    private List<CumeDistWindow> cumeDistWindows;
+    private List<NtileWindow> ntileWindows;
+    private List<CountWindow> countWindows;
+    private List<SumWindow> sumWindows;
+    private List<AvgWindow> avgWindows;
+    private List<MinWindow> minWindows;
+    private List<MaxWindow> maxWindows;
+
+    private Builder() {
+      // Prevent external instantiation.
+    }
+
+    /**
+     * Provide the ROW_NUMBER windows to include in the resulting plan.
+     *
+     * @param rowNumberWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder rowNumberWindows(List<RowNumberWindow> rowNumberWindows) {
+      this.rowNumberWindows = copyOrNull(rowNumberWindows);
+      return this;
+    }
+
+    /**
+     * Provide the RANK windows to include in the resulting plan.
+     *
+     * @param rankWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder rankWindows(List<RankWindow> rankWindows) {
+      this.rankWindows = copyOrNull(rankWindows);
+      return this;
+    }
+
+    /**
+     * Provide the DENSE_RANK windows to include in the resulting plan.
+     *
+     * @param denseRankWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder denseRankWindows(List<DenseRankWindow> denseRankWindows) {
+      this.denseRankWindows = copyOrNull(denseRankWindows);
+      return this;
+    }
+
+    /**
+     * Provide the PERCENT_RANK windows to include in the resulting plan.
+     *
+     * @param percentRankWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder percentRankWindows(List<PercentRankWindow> percentRankWindows) {
+      this.percentRankWindows = copyOrNull(percentRankWindows);
+      return this;
+    }
+
+    /**
+     * Provide the CUME_DIST windows to include in the resulting plan.
+     *
+     * @param cumeDistWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder cumeDistWindows(List<CumeDistWindow> cumeDistWindows) {
+      this.cumeDistWindows = copyOrNull(cumeDistWindows);
+      return this;
+    }
+
+    /**
+     * Provide the NTILE windows to include in the resulting plan.
+     *
+     * @param ntileWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder ntileWindows(List<NtileWindow> ntileWindows) {
+      this.ntileWindows = copyOrNull(ntileWindows);
+      return this;
+    }
+
+    /**
+     * Provide the COUNT windows to include in the resulting plan.
+     *
+     * @param countWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder countWindows(List<CountWindow> countWindows) {
+      this.countWindows = copyOrNull(countWindows);
+      return this;
+    }
+
+    /**
+     * Provide the SUM windows to include in the resulting plan.
+     *
+     * @param sumWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder sumWindows(List<SumWindow> sumWindows) {
+      this.sumWindows = copyOrNull(sumWindows);
+      return this;
+    }
+
+    /**
+     * Provide the AVG windows to include in the resulting plan.
+     *
+     * @param avgWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder avgWindows(List<AvgWindow> avgWindows) {
+      this.avgWindows = copyOrNull(avgWindows);
+      return this;
+    }
+
+    /**
+     * Provide the MIN windows to include in the resulting plan.
+     *
+     * @param minWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder minWindows(List<MinWindow> minWindows) {
+      this.minWindows = copyOrNull(minWindows);
+      return this;
+    }
+
+    /**
+     * Provide the MAX windows to include in the resulting plan.
+     *
+     * @param maxWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder maxWindows(List<MaxWindow> maxWindows) {
+      this.maxWindows = copyOrNull(maxWindows);
+      return this;
+    }
+
+    /**
+     * Create a mutable defensive copy of the supplied list.
+     *
+     * @param <T>
+     *          element type contained within the list
+     * @param source
+     *          the list to copy, may be {@code null}
+     * @return a mutable copy of {@code source} or {@code null} when {@code source} is {@code null}
+     */
+    private <T> List<T> copyOrNull(List<T> source) {
+      if (source == null) {
+        return null;
+      }
+      return new ArrayList<>(source);
+    }
+
+    /**
+     * Assemble an immutable {@link WindowPlan} instance from the configured
+     * collections.
+     *
+     * @return a new immutable plan
+     */
+    public WindowPlan build() {
+      return new WindowPlan(this);
+    }
   }
 }

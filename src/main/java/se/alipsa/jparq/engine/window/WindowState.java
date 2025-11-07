@@ -12,8 +12,7 @@ import org.apache.avro.generic.GenericRecord;
  */
 public final class WindowState {
 
-  private static final WindowState EMPTY = new WindowState(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(),
-      Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
+  private static final WindowState EMPTY = WindowState.builder().build();
 
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues;
@@ -27,28 +26,44 @@ public final class WindowState {
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> minValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> maxValues;
 
-  WindowState(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues,
-      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues,
-      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues,
-      Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues,
-      Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues,
-      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues,
-      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> countValues,
-      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues,
-      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> avgValues,
-      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> minValues,
-      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> maxValues) {
-    this.rowNumberValues = rowNumberValues == null ? Map.of() : Collections.unmodifiableMap(rowNumberValues);
-    this.rankValues = rankValues == null ? Map.of() : Collections.unmodifiableMap(rankValues);
-    this.denseRankValues = denseRankValues == null ? Map.of() : Collections.unmodifiableMap(denseRankValues);
-    this.percentRankValues = percentRankValues == null ? Map.of() : Collections.unmodifiableMap(percentRankValues);
-    this.cumeDistValues = cumeDistValues == null ? Map.of() : Collections.unmodifiableMap(cumeDistValues);
-    this.ntileValues = ntileValues == null ? Map.of() : Collections.unmodifiableMap(ntileValues);
-    this.countValues = countValues == null ? Map.of() : Collections.unmodifiableMap(countValues);
-    this.sumValues = sumValues == null ? Map.of() : Collections.unmodifiableMap(sumValues);
-    this.avgValues = avgValues == null ? Map.of() : Collections.unmodifiableMap(avgValues);
-    this.minValues = minValues == null ? Map.of() : Collections.unmodifiableMap(minValues);
-    this.maxValues = maxValues == null ? Map.of() : Collections.unmodifiableMap(maxValues);
+  private WindowState(Builder builder) {
+    this.rowNumberValues = immutableMap(builder.rowNumberValues);
+    this.rankValues = immutableMap(builder.rankValues);
+    this.denseRankValues = immutableMap(builder.denseRankValues);
+    this.percentRankValues = immutableMap(builder.percentRankValues);
+    this.cumeDistValues = immutableMap(builder.cumeDistValues);
+    this.ntileValues = immutableMap(builder.ntileValues);
+    this.countValues = immutableMap(builder.countValues);
+    this.sumValues = immutableMap(builder.sumValues);
+    this.avgValues = immutableMap(builder.avgValues);
+    this.minValues = immutableMap(builder.minValues);
+    this.maxValues = immutableMap(builder.maxValues);
+  }
+
+  /**
+   * Create an immutable view of the supplied map.
+   *
+   * @param <V>
+   *          value type stored within the inner {@link IdentityHashMap}
+   * @param values
+   *          the map to wrap, may be {@code null}
+   * @return an immutable map or {@link Map#of()} when {@code values} is {@code null}
+   */
+  private static <V> Map<AnalyticExpression, IdentityHashMap<GenericRecord, V>> immutableMap(
+      Map<AnalyticExpression, IdentityHashMap<GenericRecord, V>> values) {
+    if (values == null) {
+      return Map.of();
+    }
+    return Collections.unmodifiableMap(values);
+  }
+
+  /**
+   * Create a builder for assembling immutable {@link WindowState} instances.
+   *
+   * @return a new builder ready to accept computed analytic results
+   */
+  public static Builder builder() {
+    return new Builder();
   }
 
   /**
@@ -300,5 +315,190 @@ public final class WindowState {
       throw new IllegalArgumentException("No MAX value computed for record: " + record);
     }
     return values.get(record);
+  }
+
+  /**
+   * Builder for assembling immutable {@link WindowState} instances.
+   */
+  public static final class Builder {
+
+    private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
+    private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues;
+    private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues;
+    private Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues;
+    private Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues;
+    private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues;
+    private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> countValues;
+    private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues;
+    private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> avgValues;
+    private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> minValues;
+    private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> maxValues;
+
+    private Builder() {
+      // Prevent external instantiation.
+    }
+
+    /**
+     * Provide precomputed ROW_NUMBER results for the window state.
+     *
+     * @param rowNumberValues
+     *          values keyed by analytic expression, may be {@code null}
+     * @return this builder for chaining
+     */
+    public Builder rowNumberValues(
+        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues) {
+      this.rowNumberValues = copyMap(rowNumberValues);
+      return this;
+    }
+
+    /**
+     * Provide precomputed RANK results for the window state.
+     *
+     * @param rankValues
+     *          values keyed by analytic expression, may be {@code null}
+     * @return this builder for chaining
+     */
+    public Builder rankValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues) {
+      this.rankValues = copyMap(rankValues);
+      return this;
+    }
+
+    /**
+     * Provide precomputed DENSE_RANK results for the window state.
+     *
+     * @param denseRankValues
+     *          values keyed by analytic expression, may be {@code null}
+     * @return this builder for chaining
+     */
+    public Builder denseRankValues(
+        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues) {
+      this.denseRankValues = copyMap(denseRankValues);
+      return this;
+    }
+
+    /**
+     * Provide precomputed PERCENT_RANK results for the window state.
+     *
+     * @param percentRankValues
+     *          values keyed by analytic expression, may be {@code null}
+     * @return this builder for chaining
+     */
+    public Builder percentRankValues(
+        Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues) {
+      this.percentRankValues = copyMap(percentRankValues);
+      return this;
+    }
+
+    /**
+     * Provide precomputed CUME_DIST results for the window state.
+     *
+     * @param cumeDistValues
+     *          values keyed by analytic expression, may be {@code null}
+     * @return this builder for chaining
+     */
+    public Builder cumeDistValues(
+        Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues) {
+      this.cumeDistValues = copyMap(cumeDistValues);
+      return this;
+    }
+
+    /**
+     * Provide precomputed NTILE results for the window state.
+     *
+     * @param ntileValues
+     *          values keyed by analytic expression, may be {@code null}
+     * @return this builder for chaining
+     */
+    public Builder ntileValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues) {
+      this.ntileValues = copyMap(ntileValues);
+      return this;
+    }
+
+    /**
+     * Provide precomputed COUNT results for the window state.
+     *
+     * @param countValues
+     *          values keyed by analytic expression, may be {@code null}
+     * @return this builder for chaining
+     */
+    public Builder countValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> countValues) {
+      this.countValues = copyMap(countValues);
+      return this;
+    }
+
+    /**
+     * Provide precomputed SUM results for the window state.
+     *
+     * @param sumValues
+     *          values keyed by analytic expression, may be {@code null}
+     * @return this builder for chaining
+     */
+    public Builder sumValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues) {
+      this.sumValues = copyMap(sumValues);
+      return this;
+    }
+
+    /**
+     * Provide precomputed AVG results for the window state.
+     *
+     * @param avgValues
+     *          values keyed by analytic expression, may be {@code null}
+     * @return this builder for chaining
+     */
+    public Builder avgValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> avgValues) {
+      this.avgValues = copyMap(avgValues);
+      return this;
+    }
+
+    /**
+     * Provide precomputed MIN results for the window state.
+     *
+     * @param minValues
+     *          values keyed by analytic expression, may be {@code null}
+     * @return this builder for chaining
+     */
+    public Builder minValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> minValues) {
+      this.minValues = copyMap(minValues);
+      return this;
+    }
+
+    /**
+     * Provide precomputed MAX results for the window state.
+     *
+     * @param maxValues
+     *          values keyed by analytic expression, may be {@code null}
+     * @return this builder for chaining
+     */
+    public Builder maxValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> maxValues) {
+      this.maxValues = copyMap(maxValues);
+      return this;
+    }
+
+    /**
+     * Create a defensive copy of the supplied map while retaining identity semantics.
+     *
+     * @param <T>
+     *          value type stored within the inner {@link IdentityHashMap}
+     * @param values
+     *          the map to copy, may be {@code null}
+     * @return a copy of {@code values} or {@code null} when {@code values} is {@code null}
+     */
+    private <T> Map<AnalyticExpression, IdentityHashMap<GenericRecord, T>> copyMap(
+        Map<AnalyticExpression, IdentityHashMap<GenericRecord, T>> values) {
+      if (values == null) {
+        return null;
+      }
+      return new IdentityHashMap<>(values);
+    }
+
+    /**
+     * Assemble an immutable {@link WindowState} instance from the provided
+     * analytic results.
+     *
+     * @return a new immutable window state
+     */
+    public WindowState build() {
+      return new WindowState(this);
+    }
   }
 }
