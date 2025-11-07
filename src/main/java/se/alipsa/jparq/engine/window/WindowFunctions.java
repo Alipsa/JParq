@@ -311,8 +311,10 @@ public final class WindowFunctions {
       IdentityHashMap<GenericRecord, Object> values = computeMax(window, records, evaluator);
       maxValues.put(window.expression(), values);
     }
-    return new WindowState(rowNumberValues, rankValues, denseRankValues, percentRankValues, cumeDistValues, ntileValues,
-        countValues, sumValues, avgValues, minValues, maxValues);
+    return WindowState.builder().rowNumberValues(rowNumberValues).rankValues(rankValues)
+        .denseRankValues(denseRankValues).percentRankValues(percentRankValues).cumeDistValues(cumeDistValues)
+        .ntileValues(ntileValues).countValues(countValues).sumValues(sumValues).avgValues(avgValues)
+        .minValues(minValues).maxValues(maxValues).build();
   }
 
   private static IdentityHashMap<GenericRecord, Long> computeRowNumbers(RowNumberWindow window,
