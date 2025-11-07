@@ -52,16 +52,7 @@ public final class WindowFunctions {
     if (expressions == null || expressions.isEmpty()) {
       return null;
     }
-    List<RowNumberWindow> rowNumberWindows = new ArrayList<>();
-    List<RankWindow> rankWindows = new ArrayList<>();
-    List<DenseRankWindow> denseRankWindows = new ArrayList<>();
-    List<PercentRankWindow> percentRankWindows = new ArrayList<>();
-    List<CumeDistWindow> cumeDistWindows = new ArrayList<>();
-    List<NtileWindow> ntileWindows = new ArrayList<>();
-    List<SumWindow> sumWindows = new ArrayList<>();
-    List<AvgWindow> avgWindows = new ArrayList<>();
-    List<MinWindow> minWindows = new ArrayList<>();
-    List<MaxWindow> maxWindows = new ArrayList<>();
+    WindowCollector collector = new WindowCollector();
     for (Expression expression : expressions) {
       if (expression == null) {
         continue;
@@ -69,26 +60,26 @@ public final class WindowFunctions {
       expression.accept(new ExpressionVisitorAdapter<Void>() {
         @Override
         public <S> Void visit(AnalyticExpression analytic, S context) {
-          registerAnalyticExpression(analytic, rowNumberWindows, rankWindows, denseRankWindows, percentRankWindows,
-              cumeDistWindows, ntileWindows, sumWindows, avgWindows, minWindows, maxWindows);
+          registerAnalyticExpression(analytic, collector);
           return super.visit(analytic, context);
         }
       });
     }
-    if (rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
-        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && sumWindows.isEmpty()
-        && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty()) {
+    if (collector.isEmpty()) {
       return null;
     }
-    return new WindowPlan(List.copyOf(rowNumberWindows), List.copyOf(rankWindows), List.copyOf(denseRankWindows),
-        List.copyOf(percentRankWindows), List.copyOf(cumeDistWindows), List.copyOf(ntileWindows),
-        List.copyOf(sumWindows), List.copyOf(avgWindows), List.copyOf(minWindows), List.copyOf(maxWindows));
+    return collector.toWindowPlan();
   }
 
-  private static void registerAnalyticExpression(AnalyticExpression analytic, List<RowNumberWindow> rowNumberWindows,
-      List<RankWindow> rankWindows, List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
-      List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows, List<SumWindow> sumWindows,
-      List<AvgWindow> avgWindows, List<MinWindow> minWindows, List<MaxWindow> maxWindows) {
+  /**
+   * Register analytic expressions discovered during planning into the provided collector.
+   *
+   * @param analytic
+   *          the analytic expression encountered
+   * @param collector
+   *          accumulator for supported analytic window definitions
+   */
+  private static void registerAnalyticExpression(AnalyticExpression analytic, WindowCollector collector) {
     if (analytic == null) {
       return;
     }
@@ -121,7 +112,7 @@ public final class WindowFunctions {
       if (analytic.getExpression() != null) {
         throw new IllegalArgumentException("ROW_NUMBER must not include an argument expression: " + analytic);
       }
-      rowNumberWindows.add(new RowNumberWindow(analytic, List.copyOf(partitions), orderElements));
+      collector.addRowNumberWindow(new RowNumberWindow(analytic, List.copyOf(partitions), orderElements));
       return;
     }
     if ("RANK".equalsIgnoreCase(name)) {
@@ -131,7 +122,7 @@ public final class WindowFunctions {
       if (analytic.getExpression() != null) {
         throw new IllegalArgumentException("RANK must not include an argument expression: " + analytic);
       }
-      rankWindows.add(new RankWindow(analytic, List.copyOf(partitions), orderElements));
+      collector.addRankWindow(new RankWindow(analytic, List.copyOf(partitions), orderElements));
       return;
     }
     if ("DENSE_RANK".equalsIgnoreCase(name)) {
@@ -141,7 +132,7 @@ public final class WindowFunctions {
       if (analytic.getExpression() != null) {
         throw new IllegalArgumentException("DENSE_RANK must not include an argument expression: " + analytic);
       }
-      denseRankWindows.add(new DenseRankWindow(analytic, List.copyOf(partitions), orderElements));
+      collector.addDenseRankWindow(new DenseRankWindow(analytic, List.copyOf(partitions), orderElements));
       return;
     }
     if ("PERCENT_RANK".equalsIgnoreCase(name)) {
@@ -151,7 +142,7 @@ public final class WindowFunctions {
       if (analytic.getExpression() != null) {
         throw new IllegalArgumentException("PERCENT_RANK must not include an argument expression: " + analytic);
       }
-      percentRankWindows.add(new PercentRankWindow(analytic, List.copyOf(partitions), orderElements));
+      collector.addPercentRankWindow(new PercentRankWindow(analytic, List.copyOf(partitions), orderElements));
       return;
     }
     if ("CUME_DIST".equalsIgnoreCase(name)) {
@@ -161,7 +152,7 @@ public final class WindowFunctions {
       if (analytic.getExpression() != null) {
         throw new IllegalArgumentException("CUME_DIST must not include an argument expression: " + analytic);
       }
-      cumeDistWindows.add(new CumeDistWindow(analytic, List.copyOf(partitions), orderElements));
+      collector.addCumeDistWindow(new CumeDistWindow(analytic, List.copyOf(partitions), orderElements));
       return;
     }
     if ("NTILE".equalsIgnoreCase(name)) {
@@ -169,7 +160,7 @@ public final class WindowFunctions {
       if (bucketExpression == null) {
         throw new IllegalArgumentException("NTILE requires exactly one argument expression: " + analytic);
       }
-      ntileWindows.add(new NtileWindow(analytic, List.copyOf(partitions), orderElements, bucketExpression));
+      collector.addNtileWindow(new NtileWindow(analytic, List.copyOf(partitions), orderElements, bucketExpression));
       return;
     }
     if ("SUM".equalsIgnoreCase(name)) {
@@ -177,7 +168,7 @@ public final class WindowFunctions {
       if (argument == null) {
         throw new IllegalArgumentException("SUM requires an argument expression: " + analytic);
       }
-      sumWindows.add(new SumWindow(analytic, List.copyOf(partitions), orderElements, argument,
+      collector.addSumWindow(new SumWindow(analytic, List.copyOf(partitions), orderElements, argument,
           analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
       return;
     }
@@ -186,7 +177,7 @@ public final class WindowFunctions {
       if (argument == null) {
         throw new IllegalArgumentException("AVG requires an argument expression: " + analytic);
       }
-      avgWindows.add(new AvgWindow(analytic, List.copyOf(partitions), orderElements, argument,
+      collector.addAvgWindow(new AvgWindow(analytic, List.copyOf(partitions), orderElements, argument,
           analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
       return;
     }
@@ -195,7 +186,7 @@ public final class WindowFunctions {
       if (argument == null) {
         throw new IllegalArgumentException("MIN requires an argument expression: " + analytic);
       }
-      minWindows.add(new MinWindow(analytic, List.copyOf(partitions), orderElements, argument,
+      collector.addMinWindow(new MinWindow(analytic, List.copyOf(partitions), orderElements, argument,
           analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
       return;
     }
@@ -204,7 +195,7 @@ public final class WindowFunctions {
       if (argument == null) {
         throw new IllegalArgumentException("MAX requires an argument expression: " + analytic);
       }
-      maxWindows.add(new MaxWindow(analytic, List.copyOf(partitions), orderElements, argument,
+      collector.addMaxWindow(new MaxWindow(analytic, List.copyOf(partitions), orderElements, argument,
           analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
       return;
     }
