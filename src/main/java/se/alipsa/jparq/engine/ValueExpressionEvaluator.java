@@ -285,6 +285,9 @@ public final class ValueExpressionEvaluator {
     if ("NTILE".equalsIgnoreCase(name)) {
       return windowState.ntile(analytic, record);
     }
+    if ("COUNT".equalsIgnoreCase(name)) {
+      return windowState.count(analytic, record);
+    }
     if ("SUM".equalsIgnoreCase(name)) {
       return windowState.sum(analytic, record);
     }

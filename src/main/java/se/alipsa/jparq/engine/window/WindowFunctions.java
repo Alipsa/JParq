@@ -90,11 +90,11 @@ public final class WindowFunctions {
     }
     if (!"ROW_NUMBER".equalsIgnoreCase(name) && !"RANK".equalsIgnoreCase(name) && !"DENSE_RANK".equalsIgnoreCase(name)
         && !"PERCENT_RANK".equalsIgnoreCase(name) && !"CUME_DIST".equalsIgnoreCase(name)
-        && !"NTILE".equalsIgnoreCase(name) && !"SUM".equalsIgnoreCase(name) && !"AVG".equalsIgnoreCase(name)
-        && !"MIN".equalsIgnoreCase(name) && !"MAX".equalsIgnoreCase(name)) {
+        && !"NTILE".equalsIgnoreCase(name) && !"COUNT".equalsIgnoreCase(name) && !"SUM".equalsIgnoreCase(name)
+        && !"AVG".equalsIgnoreCase(name) && !"MIN".equalsIgnoreCase(name) && !"MAX".equalsIgnoreCase(name)) {
       return;
     }
-    if (analytic.isDistinct() || analytic.isUnique()) {
+    if ((analytic.isDistinct() || analytic.isUnique()) && !"COUNT".equalsIgnoreCase(name)) {
       throw new IllegalArgumentException(name + " does not support DISTINCT or UNIQUE modifiers: " + analytic);
     }
     if (analytic.getKeep() != null) {
@@ -162,6 +162,20 @@ public final class WindowFunctions {
         throw new IllegalArgumentException("NTILE requires exactly one argument expression: " + analytic);
       }
       collector.addNtileWindow(new NtileWindow(analytic, List.copyOf(partitions), orderElements, bucketExpression));
+      return;
+    }
+    if ("COUNT".equalsIgnoreCase(name)) {
+      boolean countStar = analytic.isAllColumns();
+      Expression argument = analytic.getExpression();
+      if (!countStar && argument == null) {
+        throw new IllegalArgumentException("COUNT requires an argument expression unless COUNT(*) is specified: "
+            + analytic);
+      }
+      if (analytic.isDistinct() || analytic.isUnique()) {
+        throw new IllegalArgumentException("COUNT does not support DISTINCT or UNIQUE modifiers: " + analytic);
+      }
+      collector.addCountWindow(new CountWindow(analytic, List.copyOf(partitions), orderElements, argument, countStar,
+          analytic.getWindowElement()));
       return;
     }
     if ("SUM".equalsIgnoreCase(name)) {
@@ -267,6 +281,12 @@ public final class WindowFunctions {
       IdentityHashMap<GenericRecord, Long> values = computeNtile(window, records, evaluator);
       ntileValues.put(window.expression(), values);
     }
+    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> countValues;
+    countValues = new IdentityHashMap<>();
+    for (CountWindow window : plan.countWindows()) {
+      IdentityHashMap<GenericRecord, Long> values = computeCount(window, records, evaluator);
+      countValues.put(window.expression(), values);
+    }
     IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues;
     sumValues = new IdentityHashMap<>();
     for (SumWindow window : plan.sumWindows()) {
@@ -292,7 +312,7 @@ public final class WindowFunctions {
       maxValues.put(window.expression(), values);
     }
     return new WindowState(rowNumberValues, rankValues, denseRankValues, percentRankValues, cumeDistValues, ntileValues,
-        sumValues, avgValues, minValues, maxValues);
+        countValues, sumValues, avgValues, minValues, maxValues);
   }
 
   private static IdentityHashMap<GenericRecord, Long> computeRowNumbers(RowNumberWindow window,
@@ -558,6 +578,196 @@ public final class WindowFunctions {
     }
 
     return values;
+  }
+
+  private static IdentityHashMap<GenericRecord, Long> computeCount(CountWindow window, List<GenericRecord> records,
+      ValueExpressionEvaluator evaluator) {
+
+    List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
+        evaluator);
+    IdentityHashMap<GenericRecord, Long> values = new IdentityHashMap<>();
+    if (contexts.isEmpty()) {
+      return values;
+    }
+
+    List<Object> argumentValues = new ArrayList<>(contexts.size());
+    if (window.countStar()) {
+      for (int i = 0; i < contexts.size(); i++) {
+        argumentValues.add(Boolean.TRUE);
+      }
+    } else {
+      for (RowContext context : contexts) {
+        Object value = evaluator.eval(window.argument(), context.record());
+        argumentValues.add(value);
+      }
+    }
+
+    int index = 0;
+    final int totalContexts = contexts.size();
+    while (index < totalContexts) {
+      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionStart = index;
+      int partitionEnd = index;
+      while (partitionEnd < totalContexts
+          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+        partitionEnd++;
+      }
+      applyCountForPartition(window, contexts, argumentValues, partitionStart, partitionEnd, values);
+      index = partitionEnd;
+    }
+
+    return values;
+  }
+
+  private static void applyCountForPartition(CountWindow window, List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Long> values) {
+    if (partitionStart >= partitionEnd) {
+      return;
+    }
+    boolean hasOrder = window.orderByElements() != null && !window.orderByElements().isEmpty();
+    WindowElement element = window.windowElement();
+
+    if (!hasOrder) {
+      long total;
+      if (window.countStar()) {
+        total = partitionEnd - partitionStart;
+      } else {
+        CountComputationState state = new CountComputationState(false);
+        for (int i = partitionStart; i < partitionEnd; i++) {
+          state.add(argumentValues.get(i));
+        }
+        total = state.result();
+      }
+      long result = total;
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        values.put(contexts.get(i).record(), result);
+      }
+      return;
+    }
+
+    if (element == null) {
+      computeDefaultRangeCount(window, contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+
+    if (element.getType() == WindowElement.Type.RANGE) {
+      computeRangeCount(window, element, contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+
+    if (element.getType() == WindowElement.Type.ROWS) {
+      computeRowsCount(window, element, contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+
+    throw new IllegalArgumentException("Unsupported window frame type for COUNT: " + element);
+  }
+
+  private static void computeDefaultRangeCount(CountWindow window, List<RowContext> contexts,
+      List<Object> argumentValues, int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Long> values) {
+    CountComputationState state = new CountComputationState(window.countStar());
+    int groupStart = partitionStart;
+    while (groupStart < partitionEnd) {
+      List<OrderComponent> order = contexts.get(groupStart).orderComponents();
+      int groupEnd = groupStart;
+      while (groupEnd < partitionEnd && orderComponentsEqual(order, contexts.get(groupEnd).orderComponents())) {
+        state.add(argumentValues.get(groupEnd));
+        groupEnd++;
+      }
+      long result = state.result();
+      for (int i = groupStart; i < groupEnd; i++) {
+        values.put(contexts.get(i).record(), result);
+      }
+      groupStart = groupEnd;
+    }
+  }
+
+  private static void computeRangeCount(CountWindow window, WindowElement element, List<RowContext> contexts,
+      List<Object> argumentValues, int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Long> values) {
+    WindowOffset offset = element.getOffset();
+    WindowRange range = element.getRange();
+    if (offset != null) {
+      WindowOffset.Type type = offset.getType();
+      if (type == WindowOffset.Type.PRECEDING || type == WindowOffset.Type.CURRENT) {
+        computeDefaultRangeCount(window, contexts, argumentValues, partitionStart, partitionEnd, values);
+        return;
+      }
+      if (type == WindowOffset.Type.FOLLOWING) {
+        long total = countValues(window, argumentValues, partitionStart, partitionEnd);
+        for (int i = partitionStart; i < partitionEnd; i++) {
+          values.put(contexts.get(i).record(), total);
+        }
+        return;
+      }
+      throw new IllegalArgumentException("Unsupported RANGE frame specification for COUNT: " + element);
+    }
+    if (range == null) {
+      computeDefaultRangeCount(window, contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    FrameBoundary start = rangeBoundary(range.getStart(), true);
+    FrameBoundary end = rangeBoundary(range.getEnd(), false);
+    if (start.type() == FrameBoundType.UNBOUNDED_PRECEDING && end.type() == FrameBoundType.CURRENT_ROW) {
+      computeDefaultRangeCount(window, contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    if (start.type() == FrameBoundType.UNBOUNDED_PRECEDING && end.type() == FrameBoundType.UNBOUNDED_FOLLOWING) {
+      long total = countValues(window, argumentValues, partitionStart, partitionEnd);
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        values.put(contexts.get(i).record(), total);
+      }
+      return;
+    }
+    if (start.type() == FrameBoundType.CURRENT_ROW && end.type() == FrameBoundType.CURRENT_ROW) {
+      int groupStart = partitionStart;
+      while (groupStart < partitionEnd) {
+        List<OrderComponent> order = contexts.get(groupStart).orderComponents();
+        CountComputationState state = new CountComputationState(window.countStar());
+        int groupEnd = groupStart;
+        while (groupEnd < partitionEnd && orderComponentsEqual(order, contexts.get(groupEnd).orderComponents())) {
+          state.add(argumentValues.get(groupEnd));
+          groupEnd++;
+        }
+        long result = state.result();
+        for (int i = groupStart; i < groupEnd; i++) {
+          values.put(contexts.get(i).record(), result);
+        }
+        groupStart = groupEnd;
+      }
+      return;
+    }
+    throw new IllegalArgumentException("Unsupported RANGE frame boundaries for COUNT: " + element);
+  }
+
+  private static void computeRowsCount(CountWindow window, WindowElement element, List<RowContext> contexts,
+      List<Object> argumentValues, int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Long> values) {
+    FrameSpecification spec = rowsFrameSpecification(element);
+    int partitionSize = partitionEnd - partitionStart;
+    for (int i = 0; i < partitionSize; i++) {
+      int absoluteIndex = partitionStart + i;
+      int startIndex = resolveRowsStartIndex(spec.start(), i, partitionSize);
+      int endIndex = resolveRowsEndIndex(spec.end(), i, partitionSize);
+      if (startIndex > endIndex || startIndex >= partitionSize || endIndex < 0) {
+        values.put(contexts.get(absoluteIndex).record(), 0L);
+        continue;
+      }
+      int boundedStart = Math.max(0, startIndex);
+      int boundedEnd = Math.min(partitionSize - 1, endIndex);
+      CountComputationState state = new CountComputationState(window.countStar());
+      for (int j = boundedStart; j <= boundedEnd; j++) {
+        state.add(argumentValues.get(partitionStart + j));
+      }
+      values.put(contexts.get(absoluteIndex).record(), state.result());
+    }
+  }
+
+  private static long countValues(CountWindow window, List<Object> argumentValues, int startInclusive,
+      int endExclusive) {
+    CountComputationState state = new CountComputationState(window.countStar());
+    for (int i = startInclusive; i < endExclusive; i++) {
+      state.add(argumentValues.get(i));
+    }
+    return state.result();
   }
 
   private static IdentityHashMap<GenericRecord, Object> computeSum(SumWindow window, List<GenericRecord> records,

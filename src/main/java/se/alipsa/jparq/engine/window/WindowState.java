@@ -13,7 +13,7 @@ import org.apache.avro.generic.GenericRecord;
 public final class WindowState {
 
   private static final WindowState EMPTY = new WindowState(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(),
-      Map.of(), Map.of(), Map.of(), Map.of());
+      Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
 
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues;
@@ -21,6 +21,7 @@ public final class WindowState {
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues;
+  private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> countValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> avgValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> minValues;
@@ -32,6 +33,7 @@ public final class WindowState {
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> percentRankValues,
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues,
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> ntileValues,
+      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> countValues,
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> sumValues,
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> avgValues,
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> minValues,
@@ -42,6 +44,7 @@ public final class WindowState {
     this.percentRankValues = percentRankValues == null ? Map.of() : Collections.unmodifiableMap(percentRankValues);
     this.cumeDistValues = cumeDistValues == null ? Map.of() : Collections.unmodifiableMap(cumeDistValues);
     this.ntileValues = ntileValues == null ? Map.of() : Collections.unmodifiableMap(ntileValues);
+    this.countValues = countValues == null ? Map.of() : Collections.unmodifiableMap(countValues);
     this.sumValues = sumValues == null ? Map.of() : Collections.unmodifiableMap(sumValues);
     this.avgValues = avgValues == null ? Map.of() : Collections.unmodifiableMap(avgValues);
     this.minValues = minValues == null ? Map.of() : Collections.unmodifiableMap(minValues);
@@ -64,8 +67,8 @@ public final class WindowState {
    */
   public boolean isEmpty() {
     return rowNumberValues.isEmpty() && rankValues.isEmpty() && denseRankValues.isEmpty() && percentRankValues.isEmpty()
-        && cumeDistValues.isEmpty() && ntileValues.isEmpty() && sumValues.isEmpty() && avgValues.isEmpty()
-        && minValues.isEmpty() && maxValues.isEmpty();
+        && cumeDistValues.isEmpty() && ntileValues.isEmpty() && countValues.isEmpty() && sumValues.isEmpty()
+        && avgValues.isEmpty() && minValues.isEmpty() && maxValues.isEmpty();
   }
 
   /**
@@ -194,6 +197,27 @@ public final class WindowState {
     Long value = values.get(record);
     if (value == null) {
       throw new IllegalArgumentException("No NTILE value computed for record: " + record);
+    }
+    return value;
+  }
+
+  /**
+   * Obtain the precomputed COUNT value for the supplied expression and record.
+   *
+   * @param expression
+   *          the analytic expression
+   * @param record
+   *          the current record
+   * @return the computed count value
+   */
+  public long count(AnalyticExpression expression, GenericRecord record) {
+    IdentityHashMap<GenericRecord, Long> values = countValues.get(expression);
+    if (values == null) {
+      throw new IllegalArgumentException("No COUNT values available for expression: " + expression);
+    }
+    Long value = values.get(record);
+    if (value == null) {
+      throw new IllegalArgumentException("No COUNT value computed for record: " + record);
     }
     return value;
   }
