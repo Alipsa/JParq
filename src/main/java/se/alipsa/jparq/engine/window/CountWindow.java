@@ -19,8 +19,7 @@ public final class CountWindow {
   private final WindowElement windowElement;
 
   CountWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
-      List<OrderByElement> orderByElements, Expression argument, boolean countStar,
-      WindowElement windowElement) {
+      List<OrderByElement> orderByElements, Expression argument, boolean countStar, WindowElement windowElement) {
     this.expression = expression;
     this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
     this.orderByElements = orderByElements == null ? List.of() : orderByElements;
@@ -59,7 +58,8 @@ public final class CountWindow {
   /**
    * Retrieve the argument expression evaluated by the COUNT function.
    *
-   * @return the {@link Expression} supplying the value to aggregate, or {@code null} when COUNT(*)
+   * @return the {@link Expression} supplying the value to aggregate, or
+   *         {@code null} when COUNT(*)
    */
   public Expression argument() {
     return argument;
@@ -77,7 +77,8 @@ public final class CountWindow {
   /**
    * Retrieve the window frame specification associated with this COUNT window.
    *
-   * @return the {@link WindowElement} describing the requested frame, or {@code null} when the default applies
+   * @return the {@link WindowElement} describing the requested frame, or
+   *         {@code null} when the default applies
    */
   public WindowElement windowElement() {
     return windowElement;

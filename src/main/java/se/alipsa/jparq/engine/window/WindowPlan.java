@@ -23,8 +23,7 @@ public final class WindowPlan {
   WindowPlan(List<RowNumberWindow> rowNumberWindows, List<RankWindow> rankWindows,
       List<DenseRankWindow> denseRankWindows, List<PercentRankWindow> percentRankWindows,
       List<CumeDistWindow> cumeDistWindows, List<NtileWindow> ntileWindows, List<CountWindow> countWindows,
-      List<SumWindow> sumWindows, List<AvgWindow> avgWindows, List<MinWindow> minWindows,
-      List<MaxWindow> maxWindows) {
+      List<SumWindow> sumWindows, List<AvgWindow> avgWindows, List<MinWindow> minWindows, List<MaxWindow> maxWindows) {
     this.rowNumberWindows = rowNumberWindows == null ? List.of() : rowNumberWindows;
     this.rankWindows = rankWindows == null ? List.of() : rankWindows;
     this.denseRankWindows = denseRankWindows == null ? List.of() : denseRankWindows;

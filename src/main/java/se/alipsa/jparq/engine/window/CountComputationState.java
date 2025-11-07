@@ -12,7 +12,8 @@ final class CountComputationState {
    * Create a state holder for COUNT window aggregation.
    *
    * @param countStar
-   *          {@code true} when evaluating COUNT(*) and {@code false} when counting an expression
+   *          {@code true} when evaluating COUNT(*) and {@code false} when
+   *          counting an expression
    */
   CountComputationState(boolean countStar) {
     this.countStar = countStar;

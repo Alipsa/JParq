@@ -168,8 +168,8 @@ public final class WindowFunctions {
       boolean countStar = analytic.isAllColumns();
       Expression argument = analytic.getExpression();
       if (!countStar && argument == null) {
-        throw new IllegalArgumentException("COUNT requires an argument expression unless COUNT(*) is specified: "
-            + analytic);
+        throw new IllegalArgumentException(
+            "COUNT requires an argument expression unless COUNT(*) is specified: " + analytic);
       }
       if (analytic.isDistinct() || analytic.isUnique()) {
         throw new IllegalArgumentException("COUNT does not support DISTINCT or UNIQUE modifiers: " + analytic);

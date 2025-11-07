@@ -109,8 +109,7 @@ public class CountTest {
     });
 
     Assertions.assertFalse(qsecs.isEmpty(), "Expected qsec values for running count validation");
-    Assertions.assertEquals(qsecs.size(), runningCounts.size(),
-        "Each qsec entry must have a running count value");
+    Assertions.assertEquals(qsecs.size(), runningCounts.size(), "Each qsec entry must have a running count value");
 
     Map<Double, Integer> countsByQsec = new TreeMap<>();
     for (double qsec : qsecs) {
@@ -128,13 +127,13 @@ public class CountTest {
       double qsec = qsecs.get(i);
       int running = runningCounts.get(i);
       int expected = expectedByQsec.get(qsec);
-      Assertions.assertEquals(expected, running,
-          "RANGE frame must accumulate all peers sharing the ORDER BY value");
+      Assertions.assertEquals(expected, running, "RANGE frame must accumulate all peers sharing the ORDER BY value");
     }
   }
 
   /**
-   * Validate that COUNT(expression) ignores NULL values produced by the expression.
+   * Validate that COUNT(expression) ignores NULL values produced by the
+   * expression.
    */
   @Test
   void testCountExpressionSkipsNulls() {
@@ -190,15 +189,13 @@ public class CountTest {
         FROM mtcars
         """;
 
-    RuntimeException exception = Assertions.assertThrows(RuntimeException.class,
-        () -> jparqSql.query(sql, rs -> {
-          // No-op; execution should fail during query preparation.
-        }));
+    RuntimeException exception = Assertions.assertThrows(RuntimeException.class, () -> jparqSql.query(sql, rs -> {
+      // No-op; execution should fail during query preparation.
+    }));
 
     Throwable cause = exception.getCause();
     Assertions.assertNotNull(cause, "Wrapped exception should expose the underlying cause");
-    Assertions.assertTrue(cause instanceof java.sql.SQLException,
-        "Expected a SQLException describing the failure");
+    Assertions.assertTrue(cause instanceof java.sql.SQLException, "Expected a SQLException describing the failure");
     Throwable rootCause = cause.getCause();
     Assertions.assertTrue(rootCause instanceof IllegalArgumentException,
         "Root cause should be an IllegalArgumentException rejecting DISTINCT");
