@@ -178,4 +178,31 @@ public class CountTest {
       }
     });
   }
+
+  /**
+   * Verify that COUNT(DISTINCT ...) window expressions are currently unsupported.
+   */
+  @Test
+  void testCountDistinctIsRejected() {
+    String sql = """
+        SELECT gear,
+               COUNT(DISTINCT model) OVER (PARTITION BY gear)
+        FROM mtcars
+        """;
+
+    RuntimeException exception = Assertions.assertThrows(RuntimeException.class,
+        () -> jparqSql.query(sql, rs -> {
+          // No-op; execution should fail during query preparation.
+        }));
+
+    Throwable cause = exception.getCause();
+    Assertions.assertNotNull(cause, "Wrapped exception should expose the underlying cause");
+    Assertions.assertTrue(cause instanceof java.sql.SQLException,
+        "Expected a SQLException describing the failure");
+    Throwable rootCause = cause.getCause();
+    Assertions.assertTrue(rootCause instanceof IllegalArgumentException,
+        "Root cause should be an IllegalArgumentException rejecting DISTINCT");
+    Assertions.assertTrue(rootCause.getMessage().contains("COUNT does not support DISTINCT"),
+        "Error message should indicate that COUNT DISTINCT is unsupported");
+  }
 }

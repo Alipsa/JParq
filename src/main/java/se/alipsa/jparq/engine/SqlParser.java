@@ -1145,8 +1145,7 @@ public final class SqlParser {
             columns.add(column.getColumnName());
           }
           return super.visit(column, context);
-        }
-        if (table != null) {
+        } else {
           String[] candidates = {
               table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()
           };

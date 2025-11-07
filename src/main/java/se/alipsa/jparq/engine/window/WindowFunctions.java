@@ -94,7 +94,7 @@ public final class WindowFunctions {
         && !"AVG".equalsIgnoreCase(name) && !"MIN".equalsIgnoreCase(name) && !"MAX".equalsIgnoreCase(name)) {
       return;
     }
-    if (analytic.isDistinct() || analytic.isUnique()) {
+    if ((analytic.isDistinct() || analytic.isUnique()) && !"COUNT".equalsIgnoreCase(name)) {
       throw new IllegalArgumentException(name + " does not support DISTINCT or UNIQUE modifiers: " + analytic);
     }
     if (analytic.getKeep() != null) {
@@ -171,8 +171,11 @@ public final class WindowFunctions {
         throw new IllegalArgumentException("COUNT requires an argument expression unless COUNT(*) is specified: "
             + analytic);
       }
+      if (analytic.isDistinct() || analytic.isUnique()) {
+        throw new IllegalArgumentException("COUNT does not support DISTINCT or UNIQUE modifiers: " + analytic);
+      }
       collector.addCountWindow(new CountWindow(analytic, List.copyOf(partitions), orderElements, argument, countStar,
-          analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
+          analytic.getWindowElement()));
       return;
     }
     if ("SUM".equalsIgnoreCase(name)) {

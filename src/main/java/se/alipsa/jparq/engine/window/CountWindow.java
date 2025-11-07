@@ -16,18 +16,16 @@ public final class CountWindow {
   private final List<OrderByElement> orderByElements;
   private final Expression argument;
   private final boolean countStar;
-  private final boolean distinct;
   private final WindowElement windowElement;
 
   CountWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
-      List<OrderByElement> orderByElements, Expression argument, boolean countStar, boolean distinct,
+      List<OrderByElement> orderByElements, Expression argument, boolean countStar,
       WindowElement windowElement) {
     this.expression = expression;
     this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
     this.orderByElements = orderByElements == null ? List.of() : orderByElements;
     this.argument = argument;
     this.countStar = countStar;
-    this.distinct = distinct;
     this.windowElement = windowElement;
   }
 
@@ -74,15 +72,6 @@ public final class CountWindow {
    */
   public boolean countStar() {
     return countStar;
-  }
-
-  /**
-   * Determine whether DISTINCT semantics were requested.
-   *
-   * @return {@code true} when DISTINCT or UNIQUE modifiers were present
-   */
-  public boolean distinct() {
-    return distinct;
   }
 
   /**
