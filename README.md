@@ -5,14 +5,17 @@
 
 JParq is a JDBC driver for Apache Parquet files. It treats a directory as a database and every `.parquet` file in that
 directory as a table. The table name is the filename without the `.parquet` extension. JParq uses Apache Arrow and Apache
-Parquet for efficient columnar reads and jsqlparser to parse SQL statements.
+Parquet for efficient columnar reads and jsqlparser to parse SQL statements. It aims to be 100% compliant with the
+read part of the SQL standard. There are a few common extensions supported as well e.g. LIMIT, easy creation of
+temp tables and variables support.
 
 > **Note**
-> A large proportion of the code was created in collaboration with ChatGPT 5.
+> The majority of the code was created in collaboration with (vibe coded with) ChatGPT 5 Codex with Copilot and 
+> myself (Per Nyfelt) as code reviewers.
 
 ## Requirements
 
-- Java 21 or later
+- Java 21 (higher is not supported due to Hadoop restrictions)
 - Parquet files stored in a directory accessible from the JVM running the driver
 
 ## Installation
@@ -136,12 +139,12 @@ The following SQL statements are supported:
   - Ranking functions
     - ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE
   -  Aggregate window functions
-    - SUM, AVG, MIN
+    - SUM, AVG, MIN, MAX
 
 ## Roadmap: Might be implemented in the future
 - Windowing
   - Aggregate window functions
-    - MAX, COUNT
+    - COUNT
   - Analytic Value/Navigation Functions
     -  LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
 - Support # syntax for creating temporary tables within the current statement

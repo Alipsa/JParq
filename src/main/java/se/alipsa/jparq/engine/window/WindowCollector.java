@@ -4,7 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Collects analytic window definitions discovered when scanning expressions for planning.
+ * Collects analytic window definitions discovered when scanning expressions for
+ * planning.
  */
 final class WindowCollector {
 
@@ -20,9 +21,11 @@ final class WindowCollector {
   private final List<MaxWindow> maxWindows = new ArrayList<>();
 
   /**
-   * Create an immutable {@link WindowPlan} snapshot from the collected analytic definitions.
+   * Create an immutable {@link WindowPlan} snapshot from the collected analytic
+   * definitions.
    *
-   * @return an immutable window plan capturing the accumulated analytic expressions
+   * @return an immutable window plan capturing the accumulated analytic
+   *         expressions
    */
   WindowPlan toWindowPlan() {
     return new WindowPlan(List.copyOf(rowNumberWindows), List.copyOf(rankWindows), List.copyOf(denseRankWindows),
@@ -33,7 +36,8 @@ final class WindowCollector {
   /**
    * Determine whether any analytic expressions have been collected.
    *
-   * @return {@code true} when no analytic expressions have been registered, otherwise {@code false}
+   * @return {@code true} when no analytic expressions have been registered,
+   *         otherwise {@code false}
    */
   boolean isEmpty() {
     return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()

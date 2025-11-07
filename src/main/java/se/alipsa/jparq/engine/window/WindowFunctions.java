@@ -72,7 +72,8 @@ public final class WindowFunctions {
   }
 
   /**
-   * Register analytic expressions discovered during planning into the provided collector.
+   * Register analytic expressions discovered during planning into the provided
+   * collector.
    *
    * @param analytic
    *          the analytic expression encountered

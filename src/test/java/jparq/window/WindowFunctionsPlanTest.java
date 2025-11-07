@@ -19,7 +19,7 @@ class WindowFunctionsPlanTest {
    *
    * @throws JSQLParserException
    *           if the SQL expression cannot be parsed
-  */
+   */
   @Test
   void planCollectsSupportedAnalyticExpressions() throws JSQLParserException {
     List<Expression> expressions = List.of(CCJSqlParserUtil.parseExpression("employee_id"),
@@ -36,11 +36,12 @@ class WindowFunctionsPlanTest {
   }
 
   /**
-   * Verify that a plan is not generated when no analytic expressions are discovered.
+   * Verify that a plan is not generated when no analytic expressions are
+   * discovered.
    *
    * @throws JSQLParserException
    *           if the SQL expression cannot be parsed
-  */
+   */
   @Test
   void planReturnsNullWithoutAnalyticExpressions() throws JSQLParserException {
     List<Expression> expressions = List.of(CCJSqlParserUtil.parseExpression("employee_id"),
