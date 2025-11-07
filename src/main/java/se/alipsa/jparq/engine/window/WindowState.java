@@ -12,7 +12,7 @@ import org.apache.avro.generic.GenericRecord;
  */
 public final class WindowState {
 
-  private static final WindowState EMPTY = WindowState.builder().build();
+  private static final WindowState EMPTY = builder().build();
 
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rankValues;
@@ -47,7 +47,8 @@ public final class WindowState {
    *          value type stored within the inner {@link IdentityHashMap}
    * @param values
    *          the map to wrap, may be {@code null}
-   * @return an immutable map or {@link Map#of()} when {@code values} is {@code null}
+   * @return an immutable map or {@link Map#of()} when {@code values} is
+   *         {@code null}
    */
   private static <V> Map<AnalyticExpression, IdentityHashMap<GenericRecord, V>> immutableMap(
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, V>> values) {
@@ -345,8 +346,7 @@ public final class WindowState {
      *          values keyed by analytic expression, may be {@code null}
      * @return this builder for chaining
      */
-    public Builder rowNumberValues(
-        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues) {
+    public Builder rowNumberValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues) {
       this.rowNumberValues = copyMap(rowNumberValues);
       return this;
     }
@@ -370,8 +370,7 @@ public final class WindowState {
      *          values keyed by analytic expression, may be {@code null}
      * @return this builder for chaining
      */
-    public Builder denseRankValues(
-        Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues) {
+    public Builder denseRankValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> denseRankValues) {
       this.denseRankValues = copyMap(denseRankValues);
       return this;
     }
@@ -396,8 +395,7 @@ public final class WindowState {
      *          values keyed by analytic expression, may be {@code null}
      * @return this builder for chaining
      */
-    public Builder cumeDistValues(
-        Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues) {
+    public Builder cumeDistValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, BigDecimal>> cumeDistValues) {
       this.cumeDistValues = copyMap(cumeDistValues);
       return this;
     }
@@ -475,13 +473,15 @@ public final class WindowState {
     }
 
     /**
-     * Create a defensive copy of the supplied map while retaining identity semantics.
+     * Create a defensive copy of the supplied map while retaining identity
+     * semantics.
      *
      * @param <T>
      *          value type stored within the inner {@link IdentityHashMap}
      * @param values
      *          the map to copy, may be {@code null}
-     * @return a copy of {@code values} or {@code null} when {@code values} is {@code null}
+     * @return a copy of {@code values} or {@code null} when {@code values} is
+     *         {@code null}
      */
     private <T> Map<AnalyticExpression, IdentityHashMap<GenericRecord, T>> copyMap(
         Map<AnalyticExpression, IdentityHashMap<GenericRecord, T>> values) {
@@ -492,8 +492,8 @@ public final class WindowState {
     }
 
     /**
-     * Assemble an immutable {@link WindowState} instance from the provided
-     * analytic results.
+     * Assemble an immutable {@link WindowState} instance from the provided analytic
+     * results.
      *
      * @return a new immutable window state
      */

@@ -42,7 +42,8 @@ public final class WindowPlan {
    *          element type contained within the list
    * @param source
    *          the list to copy, may be {@code null}
-   * @return an immutable list containing the supplied elements or an empty list when {@code source} is {@code null}
+   * @return an immutable list containing the supplied elements or an empty list
+   *         when {@code source} is {@code null}
    */
   private static <T> List<T> immutableList(List<T> source) {
     return source == null ? List.of() : List.copyOf(source);
@@ -328,7 +329,8 @@ public final class WindowPlan {
      *          element type contained within the list
      * @param source
      *          the list to copy, may be {@code null}
-     * @return a mutable copy of {@code source} or {@code null} when {@code source} is {@code null}
+     * @return a mutable copy of {@code source} or {@code null} when {@code source}
+     *         is {@code null}
      */
     private <T> List<T> copyOrNull(List<T> source) {
       if (source == null) {

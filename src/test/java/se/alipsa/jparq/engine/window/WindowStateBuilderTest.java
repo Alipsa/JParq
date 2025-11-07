@@ -54,7 +54,7 @@ class WindowStateBuilderTest {
 
     Assertions.assertFalse(state.isEmpty(), "Expected state to contain configured values");
     Assertions.assertEquals(1L, state.rowNumber(expression, record), "Unexpected row number value");
-    Assertions.assertThrows(IllegalArgumentException.class,
-        () -> state.rank(expression, record), "Rank lookup should fail when no values are present");
+    Assertions.assertThrows(IllegalArgumentException.class, () -> state.rank(expression, record),
+        "Rank lookup should fail when no values are present");
   }
 }

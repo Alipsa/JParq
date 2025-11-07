@@ -29,12 +29,11 @@ final class WindowCollector {
    *         expressions
    */
   WindowPlan toWindowPlan() {
-    return WindowPlan.builder().rowNumberWindows(List.copyOf(rowNumberWindows))
-        .rankWindows(List.copyOf(rankWindows)).denseRankWindows(List.copyOf(denseRankWindows))
-        .percentRankWindows(List.copyOf(percentRankWindows)).cumeDistWindows(List.copyOf(cumeDistWindows))
-        .ntileWindows(List.copyOf(ntileWindows)).countWindows(List.copyOf(countWindows))
-        .sumWindows(List.copyOf(sumWindows)).avgWindows(List.copyOf(avgWindows)).minWindows(List.copyOf(minWindows))
-        .maxWindows(List.copyOf(maxWindows)).build();
+    return WindowPlan.builder().rowNumberWindows(List.copyOf(rowNumberWindows)).rankWindows(List.copyOf(rankWindows))
+        .denseRankWindows(List.copyOf(denseRankWindows)).percentRankWindows(List.copyOf(percentRankWindows))
+        .cumeDistWindows(List.copyOf(cumeDistWindows)).ntileWindows(List.copyOf(ntileWindows))
+        .countWindows(List.copyOf(countWindows)).sumWindows(List.copyOf(sumWindows)).avgWindows(List.copyOf(avgWindows))
+        .minWindows(List.copyOf(minWindows)).maxWindows(List.copyOf(maxWindows)).build();
   }
 
   /**

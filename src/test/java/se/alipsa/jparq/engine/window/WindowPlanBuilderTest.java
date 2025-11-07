@@ -38,8 +38,7 @@ class WindowPlanBuilderTest {
         .parseExpression("ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC)");
     List<Expression> rowPartitions = partitionExpressions(rowNumberExpression);
     List<OrderByElement> rowOrder = orderByElements(rowNumberExpression);
-    RowNumberWindow rowNumberWindow = new RowNumberWindow(rowNumberExpression,
-        rowPartitions, rowOrder);
+    RowNumberWindow rowNumberWindow = new RowNumberWindow(rowNumberExpression, rowPartitions, rowOrder);
 
     AnalyticExpression sumExpression = (AnalyticExpression) CCJSqlParserUtil
         .parseExpression("SUM(salary) OVER (PARTITION BY dept ORDER BY change_date DESC)");
@@ -58,7 +57,8 @@ class WindowPlanBuilderTest {
   }
 
   /**
-   * Convert the partition expression list into an immutable collection of expressions.
+   * Convert the partition expression list into an immutable collection of
+   * expressions.
    *
    * @param analyticExpression
    *          analytic expression providing the partition list
@@ -73,7 +73,8 @@ class WindowPlanBuilderTest {
   }
 
   /**
-   * Convert the analytic expression order by elements into an immutable collection.
+   * Convert the analytic expression order by elements into an immutable
+   * collection.
    *
    * @param analyticExpression
    *          analytic expression providing ordering metadata
@@ -85,7 +86,8 @@ class WindowPlanBuilderTest {
   }
 
   /**
-   * Retrieve the analytic argument expression handled by the supplied analytic descriptor.
+   * Retrieve the analytic argument expression handled by the supplied analytic
+   * descriptor.
    *
    * @param analyticExpression
    *          analytic expression defining the argument
