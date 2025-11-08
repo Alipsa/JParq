@@ -50,7 +50,6 @@ public class LeadTest {
         ORDER BY wt ASC, model ASC
         """;
 
-    List<Double> weights = new ArrayList<>();
     List<Double> nextHorsepower = new ArrayList<>();
     List<Double> horsepower = new ArrayList<>();
     List<Double> horsepowerDifferences = new ArrayList<>();
@@ -58,7 +57,6 @@ public class LeadTest {
     jparqSql.query(sql, rs -> {
       try {
         while (rs.next()) {
-          weights.add(rs.getDouble("wt"));
           horsepower.add(rs.getDouble("hp"));
           nextHorsepower.add(rs.getDouble("next_hp"));
           horsepowerDifferences.add(rs.getDouble("hp_diff"));
