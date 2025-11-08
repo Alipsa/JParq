@@ -2,6 +2,7 @@ package se.alipsa.jparq;
 
 import java.sql.Types;
 import java.util.List;
+import java.util.Locale;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
@@ -135,29 +136,58 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     }
     Expression expression = expressions.get(index);
     if (expression instanceof AnalyticExpression analytic) {
-      String functionName = analytic.getName();
-      if (functionName != null) {
-        if ("ROW_NUMBER".equalsIgnoreCase(functionName) || "RANK".equalsIgnoreCase(functionName)
-            || "DENSE_RANK".equalsIgnoreCase(functionName) || "NTILE".equalsIgnoreCase(functionName)) {
-          return Types.BIGINT;
-        }
-        if ("PERCENT_RANK".equalsIgnoreCase(functionName) || "CUME_DIST".equalsIgnoreCase(functionName)) {
-          return Types.DOUBLE;
-        }
-        if ("LAG".equalsIgnoreCase(functionName)) {
-          Expression argument = analytic.getExpression();
-          if (argument instanceof Column lagColumn) {
-            String columnName = lagColumn.getColumnName();
-            Schema.Field baseField = schema.getField(columnName);
-            if (columnName != null && baseField != null) {
-              return mapSchemaToJdbcType(nonNullSchema(schema.getField(columnName).schema()));
-            }
-          }
-          return Types.OTHER;
-        }
-      }
+      return resolveAnalyticFunctionType(analytic);
     }
     return Types.OTHER;
+  }
+
+  /**
+   * Resolve the JDBC type returned by an analytic window function.
+   *
+   * @param analytic
+   *          the analytic expression describing the computed column
+   * @return the JDBC type reported for the analytic function
+   */
+  private int resolveAnalyticFunctionType(AnalyticExpression analytic) {
+    String functionName = analytic.getName();
+    if (functionName == null) {
+      return Types.OTHER;
+    }
+    String normalizedFunction = functionName.toUpperCase(Locale.ROOT);
+    return switch (normalizedFunction) {
+      case "ROW_NUMBER", "RANK", "DENSE_RANK", "NTILE" -> Types.BIGINT;
+      case "PERCENT_RANK", "CUME_DIST" -> Types.DOUBLE;
+      case "LAG" -> resolveLagResultType(analytic);
+      default -> Types.OTHER;
+    };
+  }
+
+  /**
+   * Resolve the JDBC type for a {@code LAG} analytic function based on the
+   * referenced column.
+   *
+   * @param analytic
+   *          the analytic expression describing the {@code LAG} function
+   * @return the JDBC type of the referenced column, or {@link Types#OTHER} when
+   *         it cannot be determined
+   */
+  private int resolveLagResultType(AnalyticExpression analytic) {
+    if (schema == null) {
+      return Types.OTHER;
+    }
+    Expression argument = analytic.getExpression();
+    if (!(argument instanceof Column lagColumn)) {
+      return Types.OTHER;
+    }
+    String columnName = lagColumn.getColumnName();
+    if (columnName == null) {
+      return Types.OTHER;
+    }
+    Schema.Field baseField = schema.getField(columnName);
+    if (baseField == null) {
+      return Types.OTHER;
+    }
+    return mapSchemaToJdbcType(nonNullSchema(baseField.schema()));
   }
 
   /**
