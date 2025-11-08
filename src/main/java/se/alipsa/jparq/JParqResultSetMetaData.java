@@ -157,21 +157,21 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     return switch (normalizedFunction) {
       case "ROW_NUMBER", "RANK", "DENSE_RANK", "NTILE" -> Types.BIGINT;
       case "PERCENT_RANK", "CUME_DIST" -> Types.DOUBLE;
-      case "LAG" -> resolveLagResultType(analytic);
+      case "LAG", "LEAD" -> resolveNavigationResultType(analytic);
       default -> Types.OTHER;
     };
   }
 
   /**
-   * Resolve the JDBC type for a {@code LAG} analytic function based on the
-   * referenced column.
+   * Resolve the JDBC type for navigation analytic functions such as
+   * {@code LAG} and {@code LEAD} based on the referenced column.
    *
    * @param analytic
-   *          the analytic expression describing the {@code LAG} function
+   *          the analytic expression describing the navigation function
    * @return the JDBC type of the referenced column, or {@link Types#OTHER} when
    *         it cannot be determined
    */
-  private int resolveLagResultType(AnalyticExpression analytic) {
+  private int resolveNavigationResultType(AnalyticExpression analytic) {
     if (schema == null) {
       return Types.OTHER;
     }
