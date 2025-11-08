@@ -21,6 +21,7 @@ public final class WindowPlan {
   private final List<MinWindow> minWindows;
   private final List<MaxWindow> maxWindows;
   private final List<LagWindow> lagWindows;
+  private final List<LeadWindow> leadWindows;
 
   private WindowPlan(Builder builder) {
     this.rowNumberWindows = immutableList(builder.rowNumberWindows);
@@ -35,6 +36,7 @@ public final class WindowPlan {
     this.minWindows = immutableList(builder.minWindows);
     this.maxWindows = immutableList(builder.maxWindows);
     this.lagWindows = immutableList(builder.lagWindows);
+    this.leadWindows = immutableList(builder.leadWindows);
   }
 
   /**
@@ -70,7 +72,7 @@ public final class WindowPlan {
     return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
         && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && countWindows.isEmpty()
         && sumWindows.isEmpty() && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty()
-        && lagWindows.isEmpty();
+        && lagWindows.isEmpty() && leadWindows.isEmpty();
   }
 
   /**
@@ -182,6 +184,15 @@ public final class WindowPlan {
   }
 
   /**
+   * Retrieve LEAD analytic expression descriptors.
+   *
+   * @return immutable list of {@link LeadWindow} instances
+   */
+  public List<LeadWindow> leadWindows() {
+    return leadWindows;
+  }
+
+  /**
    * Builder for assembling immutable {@link WindowPlan} instances.
    */
   public static final class Builder {
@@ -198,6 +209,7 @@ public final class WindowPlan {
     private List<MinWindow> minWindows;
     private List<MaxWindow> maxWindows;
     private List<LagWindow> lagWindows;
+    private List<LeadWindow> leadWindows;
 
     private Builder() {
       // Prevent external instantiation.
@@ -344,6 +356,18 @@ public final class WindowPlan {
      */
     public Builder lagWindows(List<LagWindow> lagWindows) {
       this.lagWindows = copyOrNull(lagWindows);
+      return this;
+    }
+
+    /**
+     * Provide the LEAD windows to include in the resulting plan.
+     *
+     * @param leadWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder leadWindows(List<LeadWindow> leadWindows) {
+      this.leadWindows = copyOrNull(leadWindows);
       return this;
     }
 

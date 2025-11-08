@@ -35,6 +35,18 @@ class JParqResultSetMetaDataTest {
     assertEquals(Types.DOUBLE, metaData.getColumnType(1), "LAG should report the referenced column type");
   }
 
+  @Test
+  void leadFunctionUsesReferencedColumnType() {
+    Schema schema = schemaWithField();
+    Column column = new Column();
+    column.setColumnName("value");
+    AnalyticExpression leadExpression = analyticExpression("LEAD", column);
+    JParqResultSetMetaData metaData = createMetadataWithExpression(schema, List.of("lead_value"),
+        Collections.singletonList(null), List.of(leadExpression));
+
+    assertEquals(Types.DOUBLE, metaData.getColumnType(1), "LEAD should report the referenced column type");
+  }
+
   /**
    * Create an Avro schema containing a single double field named {@code value}.
    *

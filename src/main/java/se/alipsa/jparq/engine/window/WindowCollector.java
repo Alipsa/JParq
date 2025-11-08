@@ -21,6 +21,7 @@ final class WindowCollector {
   private final List<MinWindow> minWindows = new ArrayList<>();
   private final List<MaxWindow> maxWindows = new ArrayList<>();
   private final List<LagWindow> lagWindows = new ArrayList<>();
+  private final List<LeadWindow> leadWindows = new ArrayList<>();
 
   /**
    * Create an immutable {@link WindowPlan} snapshot from the collected analytic
@@ -30,12 +31,13 @@ final class WindowCollector {
    *         expressions
    */
   WindowPlan toWindowPlan() {
-    return WindowPlan.builder().rowNumberWindows(List.copyOf(rowNumberWindows)).rankWindows(List.copyOf(rankWindows))
-        .denseRankWindows(List.copyOf(denseRankWindows)).percentRankWindows(List.copyOf(percentRankWindows))
-        .cumeDistWindows(List.copyOf(cumeDistWindows)).ntileWindows(List.copyOf(ntileWindows))
-        .countWindows(List.copyOf(countWindows)).sumWindows(List.copyOf(sumWindows)).avgWindows(List.copyOf(avgWindows))
-        .minWindows(List.copyOf(minWindows)).maxWindows(List.copyOf(maxWindows)).lagWindows(List.copyOf(lagWindows))
-        .build();
+    return WindowPlan.builder().rowNumberWindows(List.copyOf(rowNumberWindows))
+        .rankWindows(List.copyOf(rankWindows)).denseRankWindows(List.copyOf(denseRankWindows))
+        .percentRankWindows(List.copyOf(percentRankWindows)).cumeDistWindows(List.copyOf(cumeDistWindows))
+        .ntileWindows(List.copyOf(ntileWindows)).countWindows(List.copyOf(countWindows))
+        .sumWindows(List.copyOf(sumWindows)).avgWindows(List.copyOf(avgWindows))
+        .minWindows(List.copyOf(minWindows)).maxWindows(List.copyOf(maxWindows))
+        .lagWindows(List.copyOf(lagWindows)).leadWindows(List.copyOf(leadWindows)).build();
   }
 
   /**
@@ -46,9 +48,9 @@ final class WindowCollector {
    */
   boolean isEmpty() {
     return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
-        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && countWindows.isEmpty()
-        && sumWindows.isEmpty() && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty()
-        && lagWindows.isEmpty();
+        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty()
+        && countWindows.isEmpty() && sumWindows.isEmpty() && avgWindows.isEmpty()
+        && minWindows.isEmpty() && maxWindows.isEmpty() && lagWindows.isEmpty() && leadWindows.isEmpty();
   }
 
   /**
@@ -169,5 +171,15 @@ final class WindowCollector {
    */
   void addLagWindow(LagWindow window) {
     lagWindows.add(window);
+  }
+
+  /**
+   * Register a {@link LeadWindow} for later inclusion in a plan snapshot.
+   *
+   * @param window
+   *          the window definition to retain
+   */
+  void addLeadWindow(LeadWindow window) {
+    leadWindows.add(window);
   }
 }
