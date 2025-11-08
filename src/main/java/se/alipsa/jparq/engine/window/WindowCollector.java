@@ -20,6 +20,7 @@ final class WindowCollector {
   private final List<AvgWindow> avgWindows = new ArrayList<>();
   private final List<MinWindow> minWindows = new ArrayList<>();
   private final List<MaxWindow> maxWindows = new ArrayList<>();
+  private final List<LagWindow> lagWindows = new ArrayList<>();
 
   /**
    * Create an immutable {@link WindowPlan} snapshot from the collected analytic
@@ -33,7 +34,8 @@ final class WindowCollector {
         .denseRankWindows(List.copyOf(denseRankWindows)).percentRankWindows(List.copyOf(percentRankWindows))
         .cumeDistWindows(List.copyOf(cumeDistWindows)).ntileWindows(List.copyOf(ntileWindows))
         .countWindows(List.copyOf(countWindows)).sumWindows(List.copyOf(sumWindows)).avgWindows(List.copyOf(avgWindows))
-        .minWindows(List.copyOf(minWindows)).maxWindows(List.copyOf(maxWindows)).build();
+        .minWindows(List.copyOf(minWindows)).maxWindows(List.copyOf(maxWindows)).lagWindows(List.copyOf(lagWindows))
+        .build();
   }
 
   /**
@@ -45,7 +47,8 @@ final class WindowCollector {
   boolean isEmpty() {
     return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
         && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && countWindows.isEmpty()
-        && sumWindows.isEmpty() && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty();
+        && sumWindows.isEmpty() && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty()
+        && lagWindows.isEmpty();
   }
 
   /**
@@ -156,5 +159,15 @@ final class WindowCollector {
    */
   void addMaxWindow(MaxWindow window) {
     maxWindows.add(window);
+  }
+
+  /**
+   * Register a {@link LagWindow} for later inclusion in a plan snapshot.
+   *
+   * @param window
+   *          the window definition to retain
+   */
+  void addLagWindow(LagWindow window) {
+    lagWindows.add(window);
   }
 }

@@ -57,4 +57,35 @@ class WindowStateBuilderTest {
     Assertions.assertThrows(IllegalArgumentException.class, () -> state.rank(expression, record),
         "Rank lookup should fail when no values are present");
   }
+
+  /**
+   * Verify that configured LAG results are captured by the builder.
+   *
+   * @throws JSQLParserException
+   *           if analytic expressions cannot be parsed
+   */
+  @Test
+  void builderCapturesLagValues() throws JSQLParserException {
+    AnalyticExpression expression = (AnalyticExpression) CCJSqlParserUtil
+        .parseExpression("LAG(salary, 1, 0) OVER (ORDER BY salary)");
+
+    Schema schema = SchemaBuilder.record("Employee").fields().requiredDouble("salary").endRecord();
+    GenericRecord record = new GenericData.Record(schema);
+    record.put("salary", 1000.0);
+
+    IdentityHashMap<GenericRecord, Object> lagMap = new IdentityHashMap<>();
+    lagMap.put(record, 900.0);
+
+    Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lagState = new IdentityHashMap<>();
+    lagState.put(expression, lagMap);
+
+    WindowState state = WindowState.builder().lagValues(lagState).build();
+
+    lagState.clear();
+
+    Assertions.assertFalse(state.isEmpty(), "Expected state to contain configured values");
+    Assertions.assertEquals(900.0, state.lag(expression, record));
+    Assertions.assertThrows(IllegalArgumentException.class, () -> state.max(expression, record),
+        "MAX lookup should fail when no values are present");
+  }
 }
