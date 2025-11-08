@@ -31,13 +31,12 @@ final class WindowCollector {
    *         expressions
    */
   WindowPlan toWindowPlan() {
-    return WindowPlan.builder().rowNumberWindows(List.copyOf(rowNumberWindows))
-        .rankWindows(List.copyOf(rankWindows)).denseRankWindows(List.copyOf(denseRankWindows))
-        .percentRankWindows(List.copyOf(percentRankWindows)).cumeDistWindows(List.copyOf(cumeDistWindows))
-        .ntileWindows(List.copyOf(ntileWindows)).countWindows(List.copyOf(countWindows))
-        .sumWindows(List.copyOf(sumWindows)).avgWindows(List.copyOf(avgWindows))
-        .minWindows(List.copyOf(minWindows)).maxWindows(List.copyOf(maxWindows))
-        .lagWindows(List.copyOf(lagWindows)).leadWindows(List.copyOf(leadWindows)).build();
+    return WindowPlan.builder().rowNumberWindows(List.copyOf(rowNumberWindows)).rankWindows(List.copyOf(rankWindows))
+        .denseRankWindows(List.copyOf(denseRankWindows)).percentRankWindows(List.copyOf(percentRankWindows))
+        .cumeDistWindows(List.copyOf(cumeDistWindows)).ntileWindows(List.copyOf(ntileWindows))
+        .countWindows(List.copyOf(countWindows)).sumWindows(List.copyOf(sumWindows)).avgWindows(List.copyOf(avgWindows))
+        .minWindows(List.copyOf(minWindows)).maxWindows(List.copyOf(maxWindows)).lagWindows(List.copyOf(lagWindows))
+        .leadWindows(List.copyOf(leadWindows)).build();
   }
 
   /**
@@ -48,9 +47,9 @@ final class WindowCollector {
    */
   boolean isEmpty() {
     return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
-        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty()
-        && countWindows.isEmpty() && sumWindows.isEmpty() && avgWindows.isEmpty()
-        && minWindows.isEmpty() && maxWindows.isEmpty() && lagWindows.isEmpty() && leadWindows.isEmpty();
+        && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && countWindows.isEmpty()
+        && sumWindows.isEmpty() && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty()
+        && lagWindows.isEmpty() && leadWindows.isEmpty();
   }
 
   /**

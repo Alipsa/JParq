@@ -1,4 +1,4 @@
-package se.alipsa.jparq.engine.window;
+package jparq.window;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -10,6 +10,9 @@ import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.statement.select.OrderByElement;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.engine.window.RowNumberWindow;
+import se.alipsa.jparq.engine.window.SumWindow;
+import se.alipsa.jparq.engine.window.WindowPlan;
 
 /**
  * Tests for verifying the {@link WindowPlan.Builder} behavior.

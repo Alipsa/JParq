@@ -1919,30 +1919,22 @@ public final class WindowFunctions {
     try {
       decimalValue = offsetValue instanceof BigDecimal bd ? bd : new BigDecimal(offsetValue.toString());
     } catch (NumberFormatException e) {
-      String message = String.format(
-          "%s offset expression produced a non-numeric value for expression %s: %s",
-          functionName,
-          expression,
-          offsetValue);
+      String message = String.format("%s offset expression produced a non-numeric value for expression %s: %s",
+          functionName, expression, offsetValue);
       throw new IllegalArgumentException(message, e);
     }
     long offset;
     try {
       offset = decimalValue.longValueExact();
     } catch (ArithmeticException e) {
-      String message = String.format(
-          "%s offset expression must resolve to an integer value for expression %s: %s",
-          functionName,
-          expression,
-          offsetValue);
+      String message = String.format("%s offset expression must resolve to an integer value for expression %s: %s",
+          functionName, expression, offsetValue);
       throw new IllegalArgumentException(message, e);
     }
     if (offset <= 0L) {
       String message = String.format(
-          "%s offset expression must evaluate to a strictly positive integer for expression %s: %s",
-          functionName,
-          expression,
-          offsetValue);
+          "%s offset expression must evaluate to a strictly positive integer for expression %s: %s", functionName,
+          expression, offsetValue);
       throw new IllegalArgumentException(message);
     }
     return offset;

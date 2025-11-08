@@ -1,4 +1,4 @@
-package se.alipsa.jparq.engine.window;
+package jparq.window;
 
 import java.util.IdentityHashMap;
 import java.util.Map;
@@ -11,6 +11,7 @@ import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.engine.window.WindowState;
 
 /**
  * Tests for verifying the {@link WindowState.Builder} behavior.

@@ -14,7 +14,17 @@ public final class RowNumberWindow {
   private final List<Expression> partitionExpressions;
   private final List<OrderByElement> orderByElements;
 
-  RowNumberWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
+  /**
+   * Constructor.
+   *
+   * @param expression
+   *          the analytic expression
+   * @param partitionExpressions
+   *          expressions defining the PARTITION BY clause
+   * @param orderByElements
+   *          ORDER BY elements defining the ordering within each partition
+   */
+  public RowNumberWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
       List<OrderByElement> orderByElements) {
     this.expression = expression;
     this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;

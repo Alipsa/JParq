@@ -18,8 +18,24 @@ public final class SumWindow {
   private final boolean distinct;
   private final WindowElement windowElement;
 
-  SumWindow(AnalyticExpression expression, List<Expression> partitionExpressions, List<OrderByElement> orderByElements,
-      Expression argument, boolean distinct, WindowElement windowElement) {
+  /**
+   * Constructor.
+   *
+   * @param expression
+   *          the analytic expression
+   * @param partitionExpressions
+   *          expressions defining the PARTITION BY clause
+   * @param orderByElements
+   *          ORDER BY elements defining the ordering within each partition
+   * @param argument
+   *          the argument expression evaluated by the SUM function
+   * @param distinct
+   *          whether DISTINCT or UNIQUE modifiers were present
+   * @param windowElement
+   *          the window frame specification associated with this SUM window
+   */
+  public SumWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
+      List<OrderByElement> orderByElements, Expression argument, boolean distinct, WindowElement windowElement) {
     this.expression = expression;
     this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
     this.orderByElements = orderByElements == null ? List.of() : orderByElements;

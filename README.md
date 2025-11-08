@@ -140,21 +140,12 @@ The following SQL statements are supported:
   -  Aggregate window functions
     - SUM, AVG, MIN, MAX, COUNT
   - Analytic Value/Navigation Functions
-    -  LAG,
+    -  LAG, LEAD
 
 ## Roadmap: Might be implemented in the future
 - Windowing
   - Analytic Value/Navigation Functions
-    -  LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
-- Support for variable assignment and use within SQL scripts.
-  - @variable_name syntax to define a variable that exists for the duration of the connection
-    - Example (direct assignment, connection scope):
-      declare @myVar INT = 10;
-      SELECT * FROM myTable WHERE myColumn > @myVar;
-      SELECT * FROM anotherTable LIMIT @myVar;
-- TEMPORARY TABLES will not be supported, you need to use CTE's instead.
-
-
+    -  FIRST_VALUE, LAST_VALUE, NTH_VALUE
 - Advanced GROUP BY constructs. SqlParser.parseGroupBy only collects a flat list of grouping expressions; there is no handling for SQL-standard GROUPING SETS, ROLLUP, or CUBE elements.
 
 - JOIN ... USING syntax. The join parser rejects both forms, which the SQL standard includes for read-only queries.
@@ -169,28 +160,38 @@ The following SQL statements are supported:
     - In contrast, a standard JOIN ... ON retains both instances of the join column (e.g., TableA.column_name and TableB.column_name), requiring you to alias one of them if you want a clean final output.
     - The USING clause is standard and valid with all types of cross-product joins (inner, left, right, full).
 
-- FROM-clause table constructors and lateral items. parseFromItem accepts only base tables or plain subqueries; it throws for any other construct, leaving out SQL-standard features such as VALUES table constructors, LATERAL derived tables, TABLE/UNNEST functions, and TABLESAMPLE.
-- Support value tables construction relevant to read-only operations. Examples of value table constructors include:
-  - VALUES (1, 'A'), (2, 'B'), (3, 'C')
-  - SELECT * FROM (VALUES (1, 'A'), (2, 'B')) AS t(id, name)
-  - These constructs allow you to create inline tables of literal values without needing to reference existing database tables.
-  - Value table constructors are useful for testing, temporary data sets, or when you need a quick set of values for joins or comparisons within a query.
-  - The SQL standard defines the syntax and semantics for value table constructors, making them a recognized feature for read-only queries.
-- Standard Substitute for Temp Tables: It acts as the SQL standard replacement for temporary tables in contexts where creating and populating physical temp tables (which are write operations) would be forbidden. This allows users to test data, create lookup lists, and structure complex query logic without violating the read-only constraint.
-- Facilitates Complex Joins: It enables the client application to cleanly pass a small, dynamic list of values to the database to be joined or filtered against large, existing tables.
-- SELECT t.customer_name, lookup.category_name
-  FROM Customers t
-  JOIN (
-  VALUES (1, 'Premium'),
-  (2, 'Standard')
-  ) AS lookup (customer_type_id, category_name)  -- VALUES creates the lookup data
-  ON t.customer_type_id = lookup.customer_type_id;
+- FROM-clause table constructors and lateral items. parseFromItem accepts only base tables or plain subqueries; it throws for any other construct, leaving out SQL-standard features such as 
+- VALUES table constructors
+- LATERAL derived tables
+- TABLE/UNNEST functions
+- TABLESAMPLE.
 
 - Qualified wildcard projections (table.*). The projection parser raises an error when encountering a qualified asterisk, so row-source-specific wildcards from the standard are unavailable.
 
 - Complete set-operation coverage. While UNION/INTERSECT/EXCEPT are supported, the parser rejects SQL-standard variants like INTERSECT ALL, EXCEPT ALL, and any nesting of set operations, so those result-set combinations remain unsupported.
 
 - Standard row-limiting syntax (FETCH FIRST / OFFSET … FETCH). The limit handler inspects only the non-standard LIMIT clause, leaving the SQL-standard FETCH clause unimplemented.
+
+- UNNEST
+- ARRAY
+- 
+- Support for variable assignment and use within SQL scripts.
+  - @variable_name syntax to define a variable that exists for the duration of the connection
+    - Example (direct assignment, connection scope):
+      declare @myVar INT = 10;
+      SELECT * FROM myTable WHERE myColumn > @myVar;
+      SELECT * FROM anotherTable LIMIT @myVar;
+
+## Out of scope (will not be supported)
+- Data modification statements (INSERT, UPDATE, DELETE, MERGE)
+- Transaction control (COMMIT, ROLLBACK, SAVEPOINT)
+- Data definition statements (CREATE, ALTER, DROP, TRUNCATE)
+- User management and security (GRANT, REVOKE, CREATE USER, etc.)
+- Stored procedures and functions (CREATE PROCEDURE, CREATE FUNCTION)
+- Triggers (CREATE TRIGGER, DROP TRIGGER)
+- Advanced indexing and optimization hints
+- Full-text search capabilities
+- TEMPORARY TABLES, you need to use CTE's instead.
 
 #### String functions support details
 ##### Character Length and Position

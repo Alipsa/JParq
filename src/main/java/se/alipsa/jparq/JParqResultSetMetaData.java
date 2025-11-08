@@ -163,8 +163,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   }
 
   /**
-   * Resolve the JDBC type for navigation analytic functions such as
-   * {@code LAG} and {@code LEAD} based on the referenced column.
+   * Resolve the JDBC type for navigation analytic functions such as {@code LAG}
+   * and {@code LEAD} based on the referenced column.
    *
    * @param analytic
    *          the analytic expression describing the navigation function
