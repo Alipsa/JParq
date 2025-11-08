@@ -17,9 +17,8 @@ public final class LagWindow {
   private final Expression offsetExpression;
   private final Expression defaultExpression;
 
-  LagWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
-      List<OrderByElement> orderByElements, Expression valueExpression, Expression offsetExpression,
-      Expression defaultExpression) {
+  LagWindow(AnalyticExpression expression, List<Expression> partitionExpressions, List<OrderByElement> orderByElements,
+      Expression valueExpression, Expression offsetExpression, Expression defaultExpression) {
     this.expression = expression;
     this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
     this.orderByElements = orderByElements == null ? List.of() : orderByElements;
@@ -67,14 +66,16 @@ public final class LagWindow {
   /**
    * Retrieve the offset expression evaluated by the LAG function.
    *
-   * @return the expression describing how many rows to look back (may be {@code null})
+   * @return the expression describing how many rows to look back (may be
+   *         {@code null})
    */
   public Expression offsetExpression() {
     return offsetExpression;
   }
 
   /**
-   * Retrieve the default expression evaluated when the offset is outside the partition.
+   * Retrieve the default expression evaluated when the offset is outside the
+   * partition.
    *
    * @return the default expression or {@code null} when none was provided
    */

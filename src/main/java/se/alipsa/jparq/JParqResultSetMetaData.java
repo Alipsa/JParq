@@ -2,6 +2,8 @@ package se.alipsa.jparq;
 
 import java.sql.Types;
 import java.util.List;
+import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
@@ -142,14 +144,12 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
           return Types.DOUBLE;
         }
         if ("LAG".equalsIgnoreCase(functionName)) {
-          net.sf.jsqlparser.expression.Expression argument = analytic.getExpression();
-          if (argument instanceof net.sf.jsqlparser.schema.Column lagColumn) {
+          Expression argument = analytic.getExpression();
+          if (argument instanceof Column lagColumn) {
             String columnName = lagColumn.getColumnName();
-            if (columnName != null) {
-              Schema.Field baseField = schema.getField(columnName);
-              if (baseField != null) {
-                return mapSchemaToJdbcType(nonNullSchema(baseField.schema()));
-              }
+            Schema.Field baseField = schema.getField(columnName);
+            if (columnName != null && baseField != null) {
+              return mapSchemaToJdbcType(nonNullSchema(schema.getField(columnName).schema()));
             }
           }
           return Types.OTHER;
@@ -160,7 +160,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   }
 
   /**
-   * Resolve a non-null schema from a field, unwrapping optional unions when necessary.
+   * Resolve a non-null schema from a field, unwrapping optional unions when
+   * necessary.
    *
    * @param fieldSchema
    *          the schema associated with a column
@@ -170,8 +171,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     if (fieldSchema == null || fieldSchema.getType() != Schema.Type.UNION) {
       return fieldSchema;
     }
-    return fieldSchema.getTypes().stream().filter(t -> t.getType() != Schema.Type.NULL).findFirst()
-        .orElse(fieldSchema);
+    return fieldSchema.getTypes().stream().filter(t -> t.getType() != Schema.Type.NULL).findFirst().orElse(fieldSchema);
   }
 
   /**

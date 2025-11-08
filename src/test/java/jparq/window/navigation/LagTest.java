@@ -76,15 +76,13 @@ public class LagTest {
 
     int camaroIndex = models.indexOf("Camaro Z28");
     assertEquals(2, camaroIndex, "Camaro must be third after ordering by qsec");
-    assertEquals(15.0, previousMpg.get(camaroIndex), DELTA,
-        "Lag must return Maserati Bora mpg for the Camaro Z28");
+    assertEquals(15.0, previousMpg.get(camaroIndex), DELTA, "Lag must return Maserati Bora mpg for the Camaro Z28");
     assertEquals(-1.7, mpgDifferences.get(camaroIndex), DELTA,
         "Difference must reflect the drop from the Maserati Bora");
 
     int dusterIndex = models.indexOf("Duster 360");
     assertEquals(4, dusterIndex, "Duster 360 must appear fifth by qsec ordering");
-    assertEquals(19.7, previousMpg.get(dusterIndex), DELTA,
-        "Lag must return Ferrari Dino mpg for the Duster 360");
+    assertEquals(19.7, previousMpg.get(dusterIndex), DELTA, "Lag must return Ferrari Dino mpg for the Duster 360");
     assertEquals(-5.4, mpgDifferences.get(dusterIndex), DELTA,
         "Difference must reflect the drop from the Ferrari Dino");
   }
@@ -113,8 +111,7 @@ public class LagTest {
           double current = rs.getDouble("mpg");
 
           if (!previousByCylinder.containsKey(cyl)) {
-            assertEquals(-1.0, previous, DELTA,
-                "First row in each cylinder partition must use the default value");
+            assertEquals(-1.0, previous, DELTA, "First row in each cylinder partition must use the default value");
           } else {
             assertEquals(previousByCylinder.get(cyl), previous, DELTA,
                 "LAG must reference the preceding row within the partition");

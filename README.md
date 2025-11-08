@@ -6,8 +6,7 @@
 JParq is a JDBC driver for Apache Parquet files. It treats a directory as a database and every `.parquet` file in that
 directory as a table. The table name is the filename without the `.parquet` extension. JParq uses Apache Arrow and Apache
 Parquet for efficient columnar reads and jsqlparser to parse SQL statements. It aims to be 100% compliant with the
-read part of the SQL standard. There are a few common extensions supported as well e.g. LIMIT, easy creation of
-temp tables and variables support.
+read part of the SQL standard. There are a few common extensions supported as well e.g. LIMIT and variables support.
 
 > **Note**
 > The majority of the code was created in collaboration with (vibe coded with) ChatGPT 5 Codex with Copilot and 
@@ -140,29 +139,52 @@ The following SQL statements are supported:
     - ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE
   -  Aggregate window functions
     - SUM, AVG, MIN, MAX, COUNT
+  - Analytic Value/Navigation Functions
+    -  LAG,
 
 ## Roadmap: Might be implemented in the future
 - Windowing
   - Analytic Value/Navigation Functions
-    -  LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
-- Support # syntax for creating temporary tables within the current statement
-- Support ## syntax for creating temporary tables that persist for the duration of the connection. CREATE TEMPORARY TABLE is a synonym for this.
-- Support for variable assignment and use within SQL scripts. 
-  - @variable_name syntax to define a variable that exists for the duration of the statement and @@variable_name for connection-scoped variables.
-    - Example 1 (separate assignment, statement scope):
-      declare @myVar INT;
-      set @myVar = 10;
+    -  LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
+- Support for variable assignment and use within SQL scripts.
+  - @variable_name syntax to define a variable that exists for the duration of the connection
+    - Example (direct assignment, connection scope):
+      declare @myVar INT = 10;
       SELECT * FROM myTable WHERE myColumn > @myVar;
-    - Example 2 (direct assignment, connection scope):
-      declare @@myVar INT = 10;
-      SELECT * FROM myTable WHERE myColumn > @@myVar;
-      SELECT * FROM anotherTable LIMIT @@myVar;
+      SELECT * FROM anotherTable LIMIT @myVar;
+- TEMPORARY TABLES will not be supported, you need to use CTE's instead.
+
 
 - Advanced GROUP BY constructs. SqlParser.parseGroupBy only collects a flat list of grouping expressions; there is no handling for SQL-standard GROUPING SETS, ROLLUP, or CUBE elements.
 
 - JOIN ... USING syntax. The join parser rejects both forms, which the SQL standard includes for read-only queries.
+  - The JOIN ... USING clause is part of the SQL:1999 standard and subsequent revisions.
+  - Instead of specifying a full join condition with ON, you simply list the common column name(s) inside the parentheses of USING.
+  - Syntax: SELECT ...
+    FROM TableA [INNER | LEFT | RIGHT | FULL] JOIN TableB
+    USING (column_name_1 [, column_name_2, ...])
+  - Equivalence: The expression JOIN TableB USING (column_name) is logically equivalent to the more verbose JOIN TableB ON TableA.column_name = TableB.column_name.
+  - The most distinctive feature of JOIN ... USING, according to the standard, is how it handles the result columns:
+    - The common join column (column_name) appears only once in the final result set. 
+    - In contrast, a standard JOIN ... ON retains both instances of the join column (e.g., TableA.column_name and TableB.column_name), requiring you to alias one of them if you want a clean final output.
+    - The USING clause is standard and valid with all types of cross-product joins (inner, left, right, full).
 
 - FROM-clause table constructors and lateral items. parseFromItem accepts only base tables or plain subqueries; it throws for any other construct, leaving out SQL-standard features such as VALUES table constructors, LATERAL derived tables, TABLE/UNNEST functions, and TABLESAMPLE.
+- Support value tables construction relevant to read-only operations. Examples of value table constructors include:
+  - VALUES (1, 'A'), (2, 'B'), (3, 'C')
+  - SELECT * FROM (VALUES (1, 'A'), (2, 'B')) AS t(id, name)
+  - These constructs allow you to create inline tables of literal values without needing to reference existing database tables.
+  - Value table constructors are useful for testing, temporary data sets, or when you need a quick set of values for joins or comparisons within a query.
+  - The SQL standard defines the syntax and semantics for value table constructors, making them a recognized feature for read-only queries.
+- Standard Substitute for Temp Tables: It acts as the SQL standard replacement for temporary tables in contexts where creating and populating physical temp tables (which are write operations) would be forbidden. This allows users to test data, create lookup lists, and structure complex query logic without violating the read-only constraint.
+- Facilitates Complex Joins: It enables the client application to cleanly pass a small, dynamic list of values to the database to be joined or filtered against large, existing tables.
+- SELECT t.customer_name, lookup.category_name
+  FROM Customers t
+  JOIN (
+  VALUES (1, 'Premium'),
+  (2, 'Standard')
+  ) AS lookup (customer_type_id, category_name)  -- VALUES creates the lookup data
+  ON t.customer_type_id = lookup.customer_type_id;
 
 - Qualified wildcard projections (table.*). The projection parser raises an error when encountering a qualified asterisk, so row-source-specific wildcards from the standard are unavailable.
 
