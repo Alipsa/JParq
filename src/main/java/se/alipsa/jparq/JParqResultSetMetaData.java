@@ -2,6 +2,7 @@ package se.alipsa.jparq;
 
 import java.sql.Types;
 import java.util.List;
+import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.LogicalTypes;
@@ -16,7 +17,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   private final List<String> labels; // projection labels (aliases if present)
   private final List<String> physicalNames; // underlying physical column names (null for computed)
   private final String tableName;
-  private final List<net.sf.jsqlparser.expression.Expression> expressions;
+  private final List<Expression> expressions;
 
   /**
    * Constructor: labels (aliases) + physical names (null entries allowed).
@@ -33,7 +34,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
    *          parsed SELECT-list expressions corresponding to {@code labels}
    */
   public JParqResultSetMetaData(Schema schema, List<String> labels, List<String> physicalNames, String tableName,
-      List<net.sf.jsqlparser.expression.Expression> expressions) {
+      List<Expression> expressions) {
     this.schema = schema;
     this.labels = labels;
     this.physicalNames = physicalNames;
@@ -132,8 +133,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     if (index < 0 || index >= expressions.size()) {
       return Types.OTHER;
     }
-    net.sf.jsqlparser.expression.Expression expression = expressions.get(index);
-    if (expression instanceof net.sf.jsqlparser.expression.AnalyticExpression analytic) {
+    Expression expression = expressions.get(index);
+    if (expression instanceof AnalyticExpression analytic) {
       String functionName = analytic.getName();
       if (functionName != null) {
         if ("ROW_NUMBER".equalsIgnoreCase(functionName) || "RANK".equalsIgnoreCase(functionName)
