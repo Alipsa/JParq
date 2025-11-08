@@ -47,14 +47,13 @@ class JParqResultSetMetaDataTest {
   }
 
   /**
-   * Construct an analytic expression with the supplied name and optional
-   * argument expression.
+   * Construct an analytic expression with the supplied name and optional argument
+   * expression.
    *
    * @param name
    *          the function name
    * @param expression
-   *          the argument supplied to the analytic function (may be
-   *          {@code null})
+   *          the argument supplied to the analytic function (may be {@code null})
    * @return the configured analytic expression
    */
   private AnalyticExpression analyticExpression(String name, Expression expression) {
