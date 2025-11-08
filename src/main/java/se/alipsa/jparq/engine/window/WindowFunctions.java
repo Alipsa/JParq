@@ -1853,9 +1853,9 @@ public final class WindowFunctions {
           "LAG offset expression must resolve to an integer value for expression " + expression + ": " + offsetValue,
           e);
     }
-    if (offset < 0L) {
+    if (offset <= 0L) {
       throw new IllegalArgumentException(
-          "LAG offset expression must evaluate to a non-negative integer for expression " + expression + ": "
+          "LAG offset expression must evaluate to a strictly positive integer for expression " + expression + ": "
               + offsetValue);
     }
     return offset;
