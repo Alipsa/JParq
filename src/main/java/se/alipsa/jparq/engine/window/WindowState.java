@@ -25,6 +25,7 @@ public final class WindowState {
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> avgValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> minValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> maxValues;
+  private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lagValues;
 
   private WindowState(Builder builder) {
     this.rowNumberValues = immutableMap(builder.rowNumberValues);
@@ -38,6 +39,7 @@ public final class WindowState {
     this.avgValues = immutableMap(builder.avgValues);
     this.minValues = immutableMap(builder.minValues);
     this.maxValues = immutableMap(builder.maxValues);
+    this.lagValues = immutableMap(builder.lagValues);
   }
 
   /**
@@ -84,7 +86,7 @@ public final class WindowState {
   public boolean isEmpty() {
     return rowNumberValues.isEmpty() && rankValues.isEmpty() && denseRankValues.isEmpty() && percentRankValues.isEmpty()
         && cumeDistValues.isEmpty() && ntileValues.isEmpty() && countValues.isEmpty() && sumValues.isEmpty()
-        && avgValues.isEmpty() && minValues.isEmpty() && maxValues.isEmpty();
+        && avgValues.isEmpty() && minValues.isEmpty() && maxValues.isEmpty() && lagValues.isEmpty();
   }
 
   /**
@@ -319,6 +321,26 @@ public final class WindowState {
   }
 
   /**
+   * Obtain the precomputed LAG value for the supplied expression and record.
+   *
+   * @param expression
+   *          the analytic expression
+   * @param record
+   *          the current record
+   * @return the computed lagged value (may be {@code null})
+   */
+  public Object lag(AnalyticExpression expression, GenericRecord record) {
+    IdentityHashMap<GenericRecord, Object> values = lagValues.get(expression);
+    if (values == null) {
+      throw new IllegalArgumentException("No LAG values available for expression: " + expression);
+    }
+    if (!values.containsKey(record)) {
+      throw new IllegalArgumentException("No LAG value computed for record: " + record);
+    }
+    return values.get(record);
+  }
+
+  /**
    * Builder for assembling immutable {@link WindowState} instances.
    */
   public static final class Builder {
@@ -334,6 +356,7 @@ public final class WindowState {
     private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> avgValues;
     private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> minValues;
     private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> maxValues;
+    private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lagValues;
 
     private Builder() {
       // Prevent external instantiation.
@@ -469,6 +492,18 @@ public final class WindowState {
      */
     public Builder maxValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> maxValues) {
       this.maxValues = copyMap(maxValues);
+      return this;
+    }
+
+    /**
+     * Provide precomputed LAG results for the window state.
+     *
+     * @param lagValues
+     *          values keyed by analytic expression, may be {@code null}
+     * @return this builder for chaining
+     */
+    public Builder lagValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lagValues) {
+      this.lagValues = copyMap(lagValues);
       return this;
     }
 

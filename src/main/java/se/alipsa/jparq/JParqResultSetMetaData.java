@@ -81,19 +81,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
         ? field.schema().getTypes().stream().filter(t -> t.getType() != Schema.Type.NULL).findFirst()
             .orElse(field.schema())
         : field.schema();
-    return switch (s.getType()) {
-      case STRING, ENUM -> Types.VARCHAR;
-      case INT -> (LogicalTypes.date().equals(s.getLogicalType()) ? Types.DATE : Types.INTEGER);
-      case LONG -> (s.getLogicalType() instanceof LogicalTypes.TimestampMillis
-          || s.getLogicalType() instanceof LogicalTypes.TimestampMicros ? Types.TIMESTAMP : Types.BIGINT);
-      case FLOAT -> Types.REAL;
-      case DOUBLE -> Types.DOUBLE;
-      case BOOLEAN -> Types.BOOLEAN;
-      case BYTES, FIXED -> (s.getLogicalType() instanceof LogicalTypes.Decimal ? Types.DECIMAL : Types.BINARY);
-      case RECORD -> Types.STRUCT;
-      case ARRAY -> Types.ARRAY;
-      default -> Types.OTHER;
-    };
+    return mapSchemaToJdbcType(s);
   }
 
   @Override
@@ -153,8 +141,63 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
         if ("PERCENT_RANK".equalsIgnoreCase(functionName) || "CUME_DIST".equalsIgnoreCase(functionName)) {
           return Types.DOUBLE;
         }
+        if ("LAG".equalsIgnoreCase(functionName)) {
+          net.sf.jsqlparser.expression.Expression argument = analytic.getExpression();
+          if (argument instanceof net.sf.jsqlparser.schema.Column lagColumn) {
+            String columnName = lagColumn.getColumnName();
+            if (columnName != null) {
+              Schema.Field baseField = schema.getField(columnName);
+              if (baseField != null) {
+                return mapSchemaToJdbcType(nonNullSchema(baseField.schema()));
+              }
+            }
+          }
+          return Types.OTHER;
+        }
       }
     }
     return Types.OTHER;
+  }
+
+  /**
+   * Resolve a non-null schema from a field, unwrapping optional unions when necessary.
+   *
+   * @param fieldSchema
+   *          the schema associated with a column
+   * @return the underlying non-null schema
+   */
+  private Schema nonNullSchema(Schema fieldSchema) {
+    if (fieldSchema == null || fieldSchema.getType() != Schema.Type.UNION) {
+      return fieldSchema;
+    }
+    return fieldSchema.getTypes().stream().filter(t -> t.getType() != Schema.Type.NULL).findFirst()
+        .orElse(fieldSchema);
+  }
+
+  /**
+   * Map an Avro schema type to the corresponding JDBC type.
+   *
+   * @param schema
+   *          the schema describing the value
+   * @return the JDBC type constant matching {@code schema}
+   */
+  private int mapSchemaToJdbcType(Schema schema) {
+    Schema base = nonNullSchema(schema);
+    if (base == null) {
+      return Types.OTHER;
+    }
+    return switch (base.getType()) {
+      case STRING, ENUM -> Types.VARCHAR;
+      case INT -> (LogicalTypes.date().equals(base.getLogicalType()) ? Types.DATE : Types.INTEGER);
+      case LONG -> (base.getLogicalType() instanceof LogicalTypes.TimestampMillis
+          || base.getLogicalType() instanceof LogicalTypes.TimestampMicros ? Types.TIMESTAMP : Types.BIGINT);
+      case FLOAT -> Types.REAL;
+      case DOUBLE -> Types.DOUBLE;
+      case BOOLEAN -> Types.BOOLEAN;
+      case BYTES, FIXED -> (base.getLogicalType() instanceof LogicalTypes.Decimal ? Types.DECIMAL : Types.BINARY);
+      case RECORD -> Types.STRUCT;
+      case ARRAY -> Types.ARRAY;
+      default -> Types.OTHER;
+    };
   }
 }

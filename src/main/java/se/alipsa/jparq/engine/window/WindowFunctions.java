@@ -91,7 +91,8 @@ public final class WindowFunctions {
     if (!"ROW_NUMBER".equalsIgnoreCase(name) && !"RANK".equalsIgnoreCase(name) && !"DENSE_RANK".equalsIgnoreCase(name)
         && !"PERCENT_RANK".equalsIgnoreCase(name) && !"CUME_DIST".equalsIgnoreCase(name)
         && !"NTILE".equalsIgnoreCase(name) && !"COUNT".equalsIgnoreCase(name) && !"SUM".equalsIgnoreCase(name)
-        && !"AVG".equalsIgnoreCase(name) && !"MIN".equalsIgnoreCase(name) && !"MAX".equalsIgnoreCase(name)) {
+        && !"AVG".equalsIgnoreCase(name) && !"MIN".equalsIgnoreCase(name) && !"MAX".equalsIgnoreCase(name)
+        && !"LAG".equalsIgnoreCase(name)) {
       return;
     }
     if ((analytic.isDistinct() || analytic.isUnique()) && !"COUNT".equalsIgnoreCase(name)) {
@@ -214,6 +215,20 @@ public final class WindowFunctions {
           analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
       return;
     }
+    if ("LAG".equalsIgnoreCase(name)) {
+      Expression valueExpression = analytic.getExpression();
+      if (valueExpression == null) {
+        throw new IllegalArgumentException("LAG requires at least one argument expression: " + analytic);
+      }
+      if (orderElements.isEmpty()) {
+        throw new IllegalArgumentException("LAG requires an ORDER BY clause: " + analytic);
+      }
+      Expression offsetExpression = analytic.getOffset();
+      Expression defaultExpression = analytic.getDefaultValue();
+      collector.addLagWindow(new LagWindow(analytic, List.copyOf(partitions), orderElements, valueExpression,
+          offsetExpression, defaultExpression));
+      return;
+    }
     log.debug("Unsupported analytic expression encountered: {}", analytic);
   }
 
@@ -311,10 +326,16 @@ public final class WindowFunctions {
       IdentityHashMap<GenericRecord, Object> values = computeMax(window, records, evaluator);
       maxValues.put(window.expression(), values);
     }
+    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lagValues;
+    lagValues = new IdentityHashMap<>();
+    for (LagWindow window : plan.lagWindows()) {
+      IdentityHashMap<GenericRecord, Object> values = computeLag(window, records, evaluator);
+      lagValues.put(window.expression(), values);
+    }
     return WindowState.builder().rowNumberValues(rowNumberValues).rankValues(rankValues)
         .denseRankValues(denseRankValues).percentRankValues(percentRankValues).cumeDistValues(cumeDistValues)
         .ntileValues(ntileValues).countValues(countValues).sumValues(sumValues).avgValues(avgValues)
-        .minValues(minValues).maxValues(maxValues).build();
+        .minValues(minValues).maxValues(maxValues).lagValues(lagValues).build();
   }
 
   private static IdentityHashMap<GenericRecord, Long> computeRowNumbers(RowNumberWindow window,
@@ -1397,6 +1418,63 @@ public final class WindowFunctions {
     }
   }
 
+  private static IdentityHashMap<GenericRecord, Object> computeLag(LagWindow window, List<GenericRecord> records,
+      ValueExpressionEvaluator evaluator) {
+    List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
+        evaluator);
+
+    IdentityHashMap<GenericRecord, Object> values = new IdentityHashMap<>();
+    if (contexts.isEmpty()) {
+      return values;
+    }
+
+    List<Object> argumentValues = new ArrayList<>(contexts.size());
+    List<Long> offsets = new ArrayList<>(contexts.size());
+    List<Object> defaultValues = new ArrayList<>(contexts.size());
+    boolean hasOffset = window.offsetExpression() != null;
+    boolean hasDefault = window.defaultExpression() != null;
+
+    for (RowContext context : contexts) {
+      GenericRecord record = context.record();
+      argumentValues.add(evaluator.eval(window.valueExpression(), record));
+      Object offsetValue = hasOffset ? evaluator.eval(window.offsetExpression(), record) : null;
+      offsets.add(resolveLagOffset(offsetValue, window.expression()));
+      defaultValues.add(hasDefault ? evaluator.eval(window.defaultExpression(), record) : null);
+    }
+
+    int index = 0;
+    final int totalContexts = contexts.size();
+    while (index < totalContexts) {
+      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionStart = index;
+      int partitionEnd = index;
+      while (partitionEnd < totalContexts
+          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+        partitionEnd++;
+      }
+
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        long offset = offsets.get(i);
+        Object result;
+        if (offset == 0L) {
+          result = argumentValues.get(i);
+        } else {
+          long candidateIndex = i - offset;
+          if (candidateIndex < partitionStart) {
+            result = defaultValues.get(i);
+          } else {
+            result = argumentValues.get((int) candidateIndex);
+          }
+        }
+        values.put(contexts.get(i).record(), result);
+      }
+
+      index = partitionEnd;
+    }
+
+    return values;
+  }
+
   private static void computeRangeSum(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
       int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
     WindowOffset offset = element.getOffset();
@@ -1754,6 +1832,33 @@ public final class WindowFunctions {
       return li.compareTo(ri);
     }
     return left.toString().compareTo(right.toString());
+  }
+
+  private static long resolveLagOffset(Object offsetValue, AnalyticExpression expression) {
+    if (offsetValue == null) {
+      return 1L;
+    }
+    BigDecimal decimalValue;
+    try {
+      decimalValue = offsetValue instanceof BigDecimal bd ? bd : new BigDecimal(offsetValue.toString());
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException(
+          "LAG offset expression produced a non-numeric value for expression " + expression + ": " + offsetValue, e);
+    }
+    long offset;
+    try {
+      offset = decimalValue.longValueExact();
+    } catch (ArithmeticException e) {
+      throw new IllegalArgumentException(
+          "LAG offset expression must resolve to an integer value for expression " + expression + ": " + offsetValue,
+          e);
+    }
+    if (offset < 0L) {
+      throw new IllegalArgumentException(
+          "LAG offset expression must evaluate to a non-negative integer for expression " + expression + ": "
+              + offsetValue);
+    }
+    return offset;
   }
 
   private static long resolvePositiveBucketCount(Object bucketValue, AnalyticExpression expression) {

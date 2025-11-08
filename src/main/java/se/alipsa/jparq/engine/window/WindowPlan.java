@@ -20,6 +20,7 @@ public final class WindowPlan {
   private final List<AvgWindow> avgWindows;
   private final List<MinWindow> minWindows;
   private final List<MaxWindow> maxWindows;
+  private final List<LagWindow> lagWindows;
 
   private WindowPlan(Builder builder) {
     this.rowNumberWindows = immutableList(builder.rowNumberWindows);
@@ -33,6 +34,7 @@ public final class WindowPlan {
     this.avgWindows = immutableList(builder.avgWindows);
     this.minWindows = immutableList(builder.minWindows);
     this.maxWindows = immutableList(builder.maxWindows);
+    this.lagWindows = immutableList(builder.lagWindows);
   }
 
   /**
@@ -67,7 +69,8 @@ public final class WindowPlan {
   public boolean isEmpty() {
     return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
         && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && countWindows.isEmpty()
-        && sumWindows.isEmpty() && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty();
+        && sumWindows.isEmpty() && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty()
+        && lagWindows.isEmpty();
   }
 
   /**
@@ -170,6 +173,15 @@ public final class WindowPlan {
   }
 
   /**
+   * Retrieve LAG analytic expression descriptors.
+   *
+   * @return immutable list of {@link LagWindow} instances
+   */
+  public List<LagWindow> lagWindows() {
+    return lagWindows;
+  }
+
+  /**
    * Builder for assembling immutable {@link WindowPlan} instances.
    */
   public static final class Builder {
@@ -185,6 +197,7 @@ public final class WindowPlan {
     private List<AvgWindow> avgWindows;
     private List<MinWindow> minWindows;
     private List<MaxWindow> maxWindows;
+    private List<LagWindow> lagWindows;
 
     private Builder() {
       // Prevent external instantiation.
@@ -319,6 +332,18 @@ public final class WindowPlan {
      */
     public Builder maxWindows(List<MaxWindow> maxWindows) {
       this.maxWindows = copyOrNull(maxWindows);
+      return this;
+    }
+
+    /**
+     * Provide the LAG windows to include in the resulting plan.
+     *
+     * @param lagWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder lagWindows(List<LagWindow> lagWindows) {
+      this.lagWindows = copyOrNull(lagWindows);
       return this;
     }
 
