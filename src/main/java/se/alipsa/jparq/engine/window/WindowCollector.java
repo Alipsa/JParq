@@ -22,6 +22,7 @@ final class WindowCollector {
   private final List<MaxWindow> maxWindows = new ArrayList<>();
   private final List<LagWindow> lagWindows = new ArrayList<>();
   private final List<LeadWindow> leadWindows = new ArrayList<>();
+  private final List<NthValueWindow> nthValueWindows = new ArrayList<>();
   private final List<FirstValueWindow> firstValueWindows = new ArrayList<>();
   private final List<LastValueWindow> lastValueWindows = new ArrayList<>();
 
@@ -38,7 +39,8 @@ final class WindowCollector {
         .cumeDistWindows(List.copyOf(cumeDistWindows)).ntileWindows(List.copyOf(ntileWindows))
         .countWindows(List.copyOf(countWindows)).sumWindows(List.copyOf(sumWindows)).avgWindows(List.copyOf(avgWindows))
         .minWindows(List.copyOf(minWindows)).maxWindows(List.copyOf(maxWindows)).lagWindows(List.copyOf(lagWindows))
-        .leadWindows(List.copyOf(leadWindows)).firstValueWindows(List.copyOf(firstValueWindows))
+        .leadWindows(List.copyOf(leadWindows)).nthValueWindows(List.copyOf(nthValueWindows))
+        .firstValueWindows(List.copyOf(firstValueWindows))
         .lastValueWindows(List.copyOf(lastValueWindows)).build();
   }
 
@@ -52,7 +54,8 @@ final class WindowCollector {
     return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
         && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && countWindows.isEmpty()
         && sumWindows.isEmpty() && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty()
-        && lagWindows.isEmpty() && leadWindows.isEmpty() && firstValueWindows.isEmpty() && lastValueWindows.isEmpty();
+        && lagWindows.isEmpty() && leadWindows.isEmpty() && nthValueWindows.isEmpty() && firstValueWindows.isEmpty()
+        && lastValueWindows.isEmpty();
   }
 
   /**
@@ -183,6 +186,16 @@ final class WindowCollector {
    */
   void addLeadWindow(LeadWindow window) {
     leadWindows.add(window);
+  }
+
+  /**
+   * Register an {@link NthValueWindow} for later inclusion in a plan snapshot.
+   *
+   * @param window
+   *          the window definition to retain
+   */
+  void addNthValueWindow(NthValueWindow window) {
+    nthValueWindows.add(window);
   }
 
   /**
