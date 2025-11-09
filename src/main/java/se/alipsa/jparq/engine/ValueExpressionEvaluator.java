@@ -309,6 +309,9 @@ public final class ValueExpressionEvaluator {
     if ("FIRST_VALUE".equalsIgnoreCase(name)) {
       return windowState.firstValue(analytic, record);
     }
+    if ("LAST_VALUE".equalsIgnoreCase(name)) {
+      return windowState.lastValue(analytic, record);
+    }
     throw new IllegalArgumentException("Unsupported analytic function: " + analytic);
   }
 

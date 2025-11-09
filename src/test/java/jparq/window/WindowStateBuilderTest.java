@@ -120,4 +120,35 @@ class WindowStateBuilderTest {
     Assertions.assertThrows(IllegalArgumentException.class, () -> state.lag(expression, record),
         "LAG lookup should fail when no values are present");
   }
+
+  /**
+   * Verify that configured LAST_VALUE results are captured by the builder.
+   *
+   * @throws JSQLParserException
+   *           if analytic expressions cannot be parsed
+   */
+  @Test
+  void builderCapturesLastValueValues() throws JSQLParserException {
+    AnalyticExpression expression = (AnalyticExpression) CCJSqlParserUtil
+        .parseExpression("LAST_VALUE(salary) OVER (ORDER BY salary)");
+
+    Schema schema = SchemaBuilder.record("Employee").fields().requiredDouble("salary").endRecord();
+    GenericRecord record = new GenericData.Record(schema);
+    record.put("salary", 800.0);
+
+    IdentityHashMap<GenericRecord, Object> lastValueMap = new IdentityHashMap<>();
+    lastValueMap.put(record, 750.0);
+
+    Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lastValueState = new IdentityHashMap<>();
+    lastValueState.put(expression, lastValueMap);
+
+    WindowState state = WindowState.builder().lastValueValues(lastValueState).build();
+
+    lastValueState.clear();
+
+    Assertions.assertFalse(state.isEmpty(), "Expected state to contain configured values");
+    Assertions.assertEquals(750.0, state.lastValue(expression, record));
+    Assertions.assertThrows(IllegalArgumentException.class, () -> state.firstValue(expression, record),
+        "FIRST_VALUE lookup should fail when no values are present");
+  }
 }

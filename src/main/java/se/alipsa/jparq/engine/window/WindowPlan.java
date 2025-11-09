@@ -23,6 +23,7 @@ public final class WindowPlan {
   private final List<LagWindow> lagWindows;
   private final List<LeadWindow> leadWindows;
   private final List<FirstValueWindow> firstValueWindows;
+  private final List<LastValueWindow> lastValueWindows;
 
   private WindowPlan(Builder builder) {
     this.rowNumberWindows = immutableList(builder.rowNumberWindows);
@@ -39,6 +40,7 @@ public final class WindowPlan {
     this.lagWindows = immutableList(builder.lagWindows);
     this.leadWindows = immutableList(builder.leadWindows);
     this.firstValueWindows = immutableList(builder.firstValueWindows);
+    this.lastValueWindows = immutableList(builder.lastValueWindows);
   }
 
   /**
@@ -74,7 +76,7 @@ public final class WindowPlan {
     return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
         && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && countWindows.isEmpty()
         && sumWindows.isEmpty() && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty()
-        && lagWindows.isEmpty() && leadWindows.isEmpty() && firstValueWindows.isEmpty();
+        && lagWindows.isEmpty() && leadWindows.isEmpty() && firstValueWindows.isEmpty() && lastValueWindows.isEmpty();
   }
 
   /**
@@ -204,6 +206,15 @@ public final class WindowPlan {
   }
 
   /**
+   * Retrieve LAST_VALUE analytic expression descriptors.
+   *
+   * @return immutable list of {@link LastValueWindow} instances
+   */
+  public List<LastValueWindow> lastValueWindows() {
+    return lastValueWindows;
+  }
+
+  /**
    * Builder for assembling immutable {@link WindowPlan} instances.
    */
   public static final class Builder {
@@ -222,6 +233,7 @@ public final class WindowPlan {
     private List<LagWindow> lagWindows;
     private List<LeadWindow> leadWindows;
     private List<FirstValueWindow> firstValueWindows;
+    private List<LastValueWindow> lastValueWindows;
 
     private Builder() {
       // Prevent external instantiation.
@@ -392,6 +404,18 @@ public final class WindowPlan {
      */
     public Builder firstValueWindows(List<FirstValueWindow> firstValueWindows) {
       this.firstValueWindows = copyOrNull(firstValueWindows);
+      return this;
+    }
+
+    /**
+     * Provide the LAST_VALUE windows to include in the resulting plan.
+     *
+     * @param lastValueWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder lastValueWindows(List<LastValueWindow> lastValueWindows) {
+      this.lastValueWindows = copyOrNull(lastValueWindows);
       return this;
     }
 

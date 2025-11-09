@@ -23,6 +23,7 @@ final class WindowCollector {
   private final List<LagWindow> lagWindows = new ArrayList<>();
   private final List<LeadWindow> leadWindows = new ArrayList<>();
   private final List<FirstValueWindow> firstValueWindows = new ArrayList<>();
+  private final List<LastValueWindow> lastValueWindows = new ArrayList<>();
 
   /**
    * Create an immutable {@link WindowPlan} snapshot from the collected analytic
@@ -37,7 +38,8 @@ final class WindowCollector {
         .cumeDistWindows(List.copyOf(cumeDistWindows)).ntileWindows(List.copyOf(ntileWindows))
         .countWindows(List.copyOf(countWindows)).sumWindows(List.copyOf(sumWindows)).avgWindows(List.copyOf(avgWindows))
         .minWindows(List.copyOf(minWindows)).maxWindows(List.copyOf(maxWindows)).lagWindows(List.copyOf(lagWindows))
-        .leadWindows(List.copyOf(leadWindows)).firstValueWindows(List.copyOf(firstValueWindows)).build();
+        .leadWindows(List.copyOf(leadWindows)).firstValueWindows(List.copyOf(firstValueWindows))
+        .lastValueWindows(List.copyOf(lastValueWindows)).build();
   }
 
   /**
@@ -50,7 +52,7 @@ final class WindowCollector {
     return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
         && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && countWindows.isEmpty()
         && sumWindows.isEmpty() && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty()
-        && lagWindows.isEmpty() && leadWindows.isEmpty() && firstValueWindows.isEmpty();
+        && lagWindows.isEmpty() && leadWindows.isEmpty() && firstValueWindows.isEmpty() && lastValueWindows.isEmpty();
   }
 
   /**
@@ -191,5 +193,15 @@ final class WindowCollector {
    */
   void addFirstValueWindow(FirstValueWindow window) {
     firstValueWindows.add(window);
+  }
+
+  /**
+   * Register a {@link LastValueWindow} for later inclusion in a plan snapshot.
+   *
+   * @param window
+   *          the window definition to retain
+   */
+  void addLastValueWindow(LastValueWindow window) {
+    lastValueWindows.add(window);
   }
 }

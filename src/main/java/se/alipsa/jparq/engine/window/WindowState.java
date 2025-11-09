@@ -28,6 +28,7 @@ public final class WindowState {
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lagValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> leadValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> firstValueValues;
+  private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lastValueValues;
 
   private WindowState(Builder builder) {
     this.rowNumberValues = immutableMap(builder.rowNumberValues);
@@ -44,6 +45,7 @@ public final class WindowState {
     this.lagValues = immutableMap(builder.lagValues);
     this.leadValues = immutableMap(builder.leadValues);
     this.firstValueValues = immutableMap(builder.firstValueValues);
+    this.lastValueValues = immutableMap(builder.lastValueValues);
   }
 
   /**
@@ -91,7 +93,7 @@ public final class WindowState {
     return rowNumberValues.isEmpty() && rankValues.isEmpty() && denseRankValues.isEmpty() && percentRankValues.isEmpty()
         && cumeDistValues.isEmpty() && ntileValues.isEmpty() && countValues.isEmpty() && sumValues.isEmpty()
         && avgValues.isEmpty() && minValues.isEmpty() && maxValues.isEmpty() && lagValues.isEmpty()
-        && leadValues.isEmpty() && firstValueValues.isEmpty();
+        && leadValues.isEmpty() && firstValueValues.isEmpty() && lastValueValues.isEmpty();
   }
 
   /**
@@ -387,6 +389,27 @@ public final class WindowState {
   }
 
   /**
+   * Obtain the precomputed LAST_VALUE result for the supplied expression and
+   * record.
+   *
+   * @param expression
+   *          the analytic expression
+   * @param record
+   *          the current record
+   * @return the computed last value (may be {@code null})
+   */
+  public Object lastValue(AnalyticExpression expression, GenericRecord record) {
+    IdentityHashMap<GenericRecord, Object> values = lastValueValues.get(expression);
+    if (values == null) {
+      throw new IllegalArgumentException("No LAST_VALUE values available for expression: " + expression);
+    }
+    if (!values.containsKey(record)) {
+      throw new IllegalArgumentException("No LAST_VALUE value computed for record: " + record);
+    }
+    return values.get(record);
+  }
+
+  /**
    * Builder for assembling immutable {@link WindowState} instances.
    */
   public static final class Builder {
@@ -405,6 +428,7 @@ public final class WindowState {
     private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lagValues;
     private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> leadValues;
     private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> firstValueValues;
+    private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lastValueValues;
 
     private Builder() {
       // Prevent external instantiation.
@@ -576,6 +600,18 @@ public final class WindowState {
      */
     public Builder firstValueValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> firstValueValues) {
       this.firstValueValues = copyMap(firstValueValues);
+      return this;
+    }
+
+    /**
+     * Provide precomputed LAST_VALUE results for the window state.
+     *
+     * @param lastValueValues
+     *          values keyed by analytic expression, may be {@code null}
+     * @return this builder for chaining
+     */
+    public Builder lastValueValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lastValueValues) {
+      this.lastValueValues = copyMap(lastValueValues);
       return this;
     }
 
