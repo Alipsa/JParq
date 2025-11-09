@@ -1795,9 +1795,7 @@ public final class WindowFunctions {
 
   private static void computeDefaultRangeLastValue(List<RowContext> contexts, List<Object> argumentValues,
       int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
-    for (int i = partitionStart; i < partitionEnd; i++) {
-      values.put(contexts.get(i).record(), argumentValues.get(i));
-    }
+    computeCurrentRowRangeLastValue(contexts, argumentValues, partitionStart, partitionEnd, values);
   }
 
   private static void computeRangeLastValue(WindowElement element, List<RowContext> contexts,

@@ -8,9 +8,10 @@ import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
@@ -79,38 +80,61 @@ public class LastValueTest {
   }
 
   /**
-   * Verify that the default frame restricts LAST_VALUE to the current row.
+   * Verify that the default RANGE frame extends to include peers that share the
+   * same ordering keys.
    */
   @Test
-  void testLastValueDefaultFrameMatchesCurrentRow() {
+  void testLastValueDefaultRangeIncludesPeers() {
     String sql = """
-        SELECT model,
-               wt,
-               LAST_VALUE(wt) OVER (
-                 PARTITION BY cyl
-                 ORDER BY wt ASC
-               ) AS current_last
+        SELECT cyl,
+               model,
+               LAST_VALUE(model) OVER (
+                 ORDER BY cyl ASC
+               ) AS last_model,
+               ROW_NUMBER() OVER (
+                 ORDER BY cyl ASC
+               ) AS seq
         FROM mtcars
-        ORDER BY cyl ASC, wt ASC, model ASC
+        ORDER BY cyl ASC, seq ASC
         """;
 
-    AtomicInteger processed = new AtomicInteger();
+    List<Integer> cylinders = new ArrayList<>();
+    List<String> models = new ArrayList<>();
+    List<String> lastModels = new ArrayList<>();
+    List<Integer> sequences = new ArrayList<>();
 
     jparqSql.query(sql, rs -> {
       try {
         while (rs.next()) {
-          double weight = rs.getDouble("wt");
-          double lastWeight = rs.getDouble("current_last");
-          assertEquals(weight, lastWeight, DELTA,
-              "Default window frame must cause LAST_VALUE to return the current row value");
-          processed.incrementAndGet();
+          cylinders.add(rs.getInt("cyl"));
+          models.add(rs.getString("model"));
+          lastModels.add(rs.getString("last_model"));
+          sequences.add(rs.getInt("seq"));
         }
       } catch (SQLException e) {
         throw new IllegalStateException(e);
       }
     });
 
-    assertEquals(32, processed.get(), "Expected to process all mtcars rows");
+    assertEquals(32, cylinders.size(), "Expected to process all mtcars rows");
+
+    Map<Integer, Integer> maxSequencePerCylinder = new HashMap<>();
+    Map<Integer, String> lastModelPerCylinder = new HashMap<>();
+    for (int i = 0; i < cylinders.size(); i++) {
+      int cyl = cylinders.get(i);
+      int sequence = sequences.get(i);
+      if (sequence >= maxSequencePerCylinder.getOrDefault(cyl, Integer.MIN_VALUE)) {
+        maxSequencePerCylinder.put(cyl, sequence);
+        lastModelPerCylinder.put(cyl, models.get(i));
+      }
+    }
+
+    for (int i = 0; i < cylinders.size(); i++) {
+      int cyl = cylinders.get(i);
+      String expectedLastModel = lastModelPerCylinder.get(cyl);
+      assertEquals(expectedLastModel, lastModels.get(i),
+          "Default RANGE frame must extend to the last peer within the ORDER BY group");
+    }
   }
 
   /**
