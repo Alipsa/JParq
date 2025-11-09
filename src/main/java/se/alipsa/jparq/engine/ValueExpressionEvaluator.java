@@ -306,6 +306,9 @@ public final class ValueExpressionEvaluator {
     if ("LEAD".equalsIgnoreCase(name)) {
       return windowState.lead(analytic, record);
     }
+    if ("FIRST_VALUE".equalsIgnoreCase(name)) {
+      return windowState.firstValue(analytic, record);
+    }
     throw new IllegalArgumentException("Unsupported analytic function: " + analytic);
   }
 

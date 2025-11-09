@@ -89,4 +89,35 @@ class WindowStateBuilderTest {
     Assertions.assertThrows(IllegalArgumentException.class, () -> state.max(expression, record),
         "MAX lookup should fail when no values are present");
   }
+
+  /**
+   * Verify that configured FIRST_VALUE results are captured by the builder.
+   *
+   * @throws JSQLParserException
+   *           if analytic expressions cannot be parsed
+   */
+  @Test
+  void builderCapturesFirstValueValues() throws JSQLParserException {
+    AnalyticExpression expression = (AnalyticExpression) CCJSqlParserUtil
+        .parseExpression("FIRST_VALUE(salary) OVER (ORDER BY salary)");
+
+    Schema schema = SchemaBuilder.record("Employee").fields().requiredDouble("salary").endRecord();
+    GenericRecord record = new GenericData.Record(schema);
+    record.put("salary", 1200.0);
+
+    IdentityHashMap<GenericRecord, Object> firstValueMap = new IdentityHashMap<>();
+    firstValueMap.put(record, 1500.0);
+
+    Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> firstValueState = new IdentityHashMap<>();
+    firstValueState.put(expression, firstValueMap);
+
+    WindowState state = WindowState.builder().firstValueValues(firstValueState).build();
+
+    firstValueState.clear();
+
+    Assertions.assertFalse(state.isEmpty(), "Expected state to contain configured values");
+    Assertions.assertEquals(1500.0, state.firstValue(expression, record));
+    Assertions.assertThrows(IllegalArgumentException.class, () -> state.lag(expression, record),
+        "LAG lookup should fail when no values are present");
+  }
 }
