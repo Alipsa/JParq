@@ -12,6 +12,7 @@ import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.*;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
+import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
@@ -282,9 +283,13 @@ public final class SqlParser {
    * @param commonTableExpression
    *          the referenced common table expression when the table originates
    *          from a CTE definition (may be {@code null})
+   * @param usingColumns
+   *          list of column names supplied via a {@code USING} clause that
+   *          reference this table (empty when no {@code USING} clause is
+   *          present)
    */
   public record TableReference(String tableName, String tableAlias, JoinType joinType, Expression joinCondition,
-      Select subquery, String subquerySql, CommonTableExpression commonTableExpression) {
+      Select subquery, String subquerySql, CommonTableExpression commonTableExpression, List<String> usingColumns) {
   }
 
   /**
@@ -493,7 +498,7 @@ public final class SqlParser {
     List<Expression> expressions = projection.expressions();
 
     if (projection.selectAll()) {
-      if (fromInfo.innerSelect() != null) {
+      if (fromInfo.innerSelect() != null && (tableRefs == null || tableRefs.size() <= 1)) {
         labels = fromInfo.innerSelect().labels();
         physicalCols = fromInfo.innerSelect().columnNames();
         expressions = fromInfo.innerSelect().expressions();
@@ -1203,7 +1208,7 @@ public final class SqlParser {
     return List.copyOf(expressions);
   }
 
-  private record JoinInfo(FromInfo table, Expression condition, JoinType joinType) {
+  private record JoinInfo(FromInfo table, Expression condition, JoinType joinType, List<String> usingColumns) {
   }
 
   private static List<JoinInfo> parseJoins(List<Join> joins, List<CommonTableExpression> ctes,
@@ -1215,9 +1220,6 @@ public final class SqlParser {
     for (Join join : joins) {
       if (join.isNatural()) {
         throw new IllegalArgumentException("NATURAL JOIN is not supported");
-      }
-      if (join.getUsingColumns() != null && !join.getUsingColumns().isEmpty()) {
-        throw new IllegalArgumentException("JOIN ... USING (...) is not supported");
       }
       JoinType joinType;
       if (join.isFull()) {
@@ -1234,6 +1236,9 @@ public final class SqlParser {
       if (joinType == JoinType.CROSS && join.getOnExpressions() != null && !join.getOnExpressions().isEmpty()) {
         throw new IllegalArgumentException("CROSS JOIN cannot specify an ON condition");
       }
+      if (joinType == JoinType.CROSS && join.getUsingColumns() != null && !join.getUsingColumns().isEmpty()) {
+        throw new IllegalArgumentException("CROSS JOIN cannot specify a USING clause");
+      }
       if (join.isOuter() && joinType != JoinType.LEFT_OUTER && joinType != JoinType.RIGHT_OUTER
           && joinType != JoinType.FULL_OUTER) {
         throw new IllegalArgumentException("Unsupported outer join type");
@@ -1245,7 +1250,11 @@ public final class SqlParser {
           condition = combineExpressions(condition, on);
         }
       }
-      joinInfos.add(new JoinInfo(info, condition, joinType));
+      List<String> usingColumns = parseUsingColumns(join);
+      if (!usingColumns.isEmpty() && condition != null) {
+        throw new IllegalArgumentException("JOIN cannot specify both USING and ON clauses");
+      }
+      joinInfos.add(new JoinInfo(info, condition, joinType, usingColumns));
     }
     return List.copyOf(joinInfos);
   }
@@ -1253,15 +1262,80 @@ public final class SqlParser {
   private static List<TableReference> buildTableReferences(FromInfo base, List<JoinInfo> joins) {
     List<TableReference> refs = new ArrayList<>();
     refs.add(new TableReference(base.tableName(), base.tableAlias(), JoinType.BASE, null, base.innerSelect(),
-        base.subquerySql(), base.commonTableExpression()));
+        base.subquerySql(), base.commonTableExpression(), List.of()));
     if (joins != null) {
       for (JoinInfo join : joins) {
         FromInfo info = join.table();
-        refs.add(new TableReference(info.tableName(), info.tableAlias(), join.joinType(), join.condition(),
-            info.innerSelect(), info.subquerySql(), info.commonTableExpression()));
+        Expression usingCondition = buildUsingCondition(join.usingColumns(), info);
+        Expression combinedCondition = combineExpressions(join.condition(), usingCondition);
+        refs.add(new TableReference(info.tableName(), info.tableAlias(), join.joinType(), combinedCondition,
+            info.innerSelect(), info.subquerySql(), info.commonTableExpression(), join.usingColumns()));
       }
     }
     return List.copyOf(refs);
+  }
+
+  /**
+   * Build an {@code ON} expression equivalent for a {@code USING} clause by
+   * comparing identically named columns between the accumulated join input and
+   * the new join participant.
+   *
+   * @param usingColumns
+   *          the column names supplied via {@code USING}
+   * @param join
+   *          metadata describing the right-hand table of the join
+   * @return an equality expression that enforces the {@code USING} semantics, or
+   *         {@code null} when no {@code USING} columns are present
+   */
+  private static Expression buildUsingCondition(List<String> usingColumns, FromInfo join) {
+    if (usingColumns == null || usingColumns.isEmpty()) {
+      return null;
+    }
+    String rightQualifier = join.tableAlias();
+    if (rightQualifier == null || rightQualifier.isBlank()) {
+      rightQualifier = join.tableName();
+    }
+    Expression combined = null;
+    for (String columnName : usingColumns) {
+      if (columnName == null || columnName.isBlank()) {
+        continue;
+      }
+      Column leftColumn = new Column();
+      leftColumn.setColumnName(columnName);
+
+      Column rightColumn = new Column();
+      if (rightQualifier != null && !rightQualifier.isBlank()) {
+        Table table = new Table();
+        table.setName(rightQualifier);
+        rightColumn.setTable(table);
+      }
+      rightColumn.setColumnName(columnName);
+
+      EqualsTo equals = new EqualsTo(leftColumn, rightColumn);
+      combined = combineExpressions(combined, equals);
+    }
+    return combined;
+  }
+
+  /**
+   * Extract column names from a {@code USING} clause definition.
+   *
+   * @param join
+   *          the join definition parsed by JSqlParser
+   * @return immutable list of column names referenced by {@code USING}
+   */
+  private static List<String> parseUsingColumns(Join join) {
+    if (join == null || join.getUsingColumns() == null || join.getUsingColumns().isEmpty()) {
+      return List.of();
+    }
+    List<String> columns = new ArrayList<>(join.getUsingColumns().size());
+    for (Column column : join.getUsingColumns()) {
+      if (column == null || column.getColumnName() == null) {
+        continue;
+      }
+      columns.add(column.getColumnName());
+    }
+    return List.copyOf(columns);
   }
 
   private static List<String> qualifiers(List<TableReference> tableRefs) {
