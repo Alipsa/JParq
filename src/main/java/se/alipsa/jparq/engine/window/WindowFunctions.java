@@ -93,8 +93,8 @@ public final class WindowFunctions {
         && !"PERCENT_RANK".equalsIgnoreCase(name) && !"CUME_DIST".equalsIgnoreCase(name)
         && !"NTILE".equalsIgnoreCase(name) && !"COUNT".equalsIgnoreCase(name) && !"SUM".equalsIgnoreCase(name)
         && !"AVG".equalsIgnoreCase(name) && !"MIN".equalsIgnoreCase(name) && !"MAX".equalsIgnoreCase(name)
-        && !"LAG".equalsIgnoreCase(name) && !"LEAD".equalsIgnoreCase(name) && !"FIRST_VALUE".equalsIgnoreCase(name)
-        && !"LAST_VALUE".equalsIgnoreCase(name)) {
+        && !"LAG".equalsIgnoreCase(name) && !"LEAD".equalsIgnoreCase(name) && !"NTH_VALUE".equalsIgnoreCase(name)
+        && !"FIRST_VALUE".equalsIgnoreCase(name) && !"LAST_VALUE".equalsIgnoreCase(name)) {
       return;
     }
     if ((analytic.isDistinct() || analytic.isUnique()) && !"COUNT".equalsIgnoreCase(name)) {
@@ -245,6 +245,25 @@ public final class WindowFunctions {
           offsetExpression, defaultExpression));
       return;
     }
+    if ("NTH_VALUE".equalsIgnoreCase(name)) {
+      Expression valueExpression = analytic.getExpression();
+      if (valueExpression == null) {
+        throw new IllegalArgumentException("NTH_VALUE requires an argument expression: " + analytic);
+      }
+      Expression nthExpression = analytic.getOffset();
+      if (nthExpression == null) {
+        throw new IllegalArgumentException("NTH_VALUE requires a position argument: " + analytic);
+      }
+      if (analytic.getDefaultValue() != null) {
+        throw new IllegalArgumentException("NTH_VALUE does not support a default argument: " + analytic);
+      }
+      if (orderElements.isEmpty()) {
+        throw new IllegalArgumentException("NTH_VALUE requires an ORDER BY clause: " + analytic);
+      }
+      collector.addNthValueWindow(new NthValueWindow(analytic, List.copyOf(partitions), orderElements, valueExpression,
+          nthExpression, analytic.getWindowElement()));
+      return;
+    }
     if ("FIRST_VALUE".equalsIgnoreCase(name)) {
       Expression valueExpression = analytic.getExpression();
       if (valueExpression == null) {
@@ -378,6 +397,12 @@ public final class WindowFunctions {
       IdentityHashMap<GenericRecord, Object> values = computeLead(window, records, evaluator);
       leadValues.put(window.expression(), values);
     }
+    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> nthValueValues;
+    nthValueValues = new IdentityHashMap<>();
+    for (NthValueWindow window : plan.nthValueWindows()) {
+      IdentityHashMap<GenericRecord, Object> values = computeNthValue(window, records, evaluator);
+      nthValueValues.put(window.expression(), values);
+    }
     IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> firstValueValues;
     firstValueValues = new IdentityHashMap<>();
     for (FirstValueWindow window : plan.firstValueWindows()) {
@@ -394,7 +419,7 @@ public final class WindowFunctions {
         .denseRankValues(denseRankValues).percentRankValues(percentRankValues).cumeDistValues(cumeDistValues)
         .ntileValues(ntileValues).countValues(countValues).sumValues(sumValues).avgValues(avgValues)
         .minValues(minValues).maxValues(maxValues).lagValues(lagValues).leadValues(leadValues)
-        .firstValueValues(firstValueValues).lastValueValues(lastValueValues).build();
+        .nthValueValues(nthValueValues).firstValueValues(firstValueValues).lastValueValues(lastValueValues).build();
   }
 
   private static IdentityHashMap<GenericRecord, Long> computeRowNumbers(RowNumberWindow window,
@@ -1589,6 +1614,255 @@ public final class WindowFunctions {
     }
 
     return values;
+  }
+
+  private static IdentityHashMap<GenericRecord, Object> computeNthValue(NthValueWindow window,
+      List<GenericRecord> records, ValueExpressionEvaluator evaluator) {
+    List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
+        evaluator);
+
+    IdentityHashMap<GenericRecord, Object> values = new IdentityHashMap<>();
+    if (contexts.isEmpty()) {
+      return values;
+    }
+
+    List<Object> argumentValues = new ArrayList<>(contexts.size());
+    List<Long> nthPositions = new ArrayList<>(contexts.size());
+    for (RowContext context : contexts) {
+      GenericRecord record = context.record();
+      argumentValues.add(evaluator.eval(window.valueExpression(), record));
+      Object rawNth = evaluator.eval(window.nthExpression(), record);
+      nthPositions.add(resolveNthPosition(rawNth, window.expression()));
+    }
+
+    int index = 0;
+    final int totalContexts = contexts.size();
+    while (index < totalContexts) {
+      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionStart = index;
+      int partitionEnd = index;
+      while (partitionEnd < totalContexts
+          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+        partitionEnd++;
+      }
+
+      applyNthValueForPartition(window, contexts, argumentValues, nthPositions, partitionStart, partitionEnd, values);
+      index = partitionEnd;
+    }
+
+    return values;
+  }
+
+  private static void applyNthValueForPartition(NthValueWindow window, List<RowContext> contexts,
+      List<Object> argumentValues, List<Long> nthPositions, int partitionStart, int partitionEnd,
+      IdentityHashMap<GenericRecord, Object> values) {
+    if (partitionStart >= partitionEnd) {
+      return;
+    }
+    WindowElement element = window.windowElement();
+    if (element == null) {
+      computeDefaultRangeNthValue(contexts, argumentValues, nthPositions, partitionStart, partitionEnd, values);
+      return;
+    }
+    if (element.getType() == WindowElement.Type.RANGE) {
+      computeRangeNthValue(element, contexts, argumentValues, nthPositions, partitionStart, partitionEnd, values);
+      return;
+    }
+    if (element.getType() == WindowElement.Type.ROWS) {
+      computeRowsNthValue(element, contexts, argumentValues, nthPositions, partitionStart, partitionEnd, values);
+      return;
+    }
+    throw new IllegalArgumentException("Unsupported window frame type for NTH_VALUE: " + element);
+  }
+
+  private static void computeDefaultRangeNthValue(List<RowContext> contexts, List<Object> argumentValues,
+      List<Long> nthPositions, int partitionStart, int partitionEnd,
+      IdentityHashMap<GenericRecord, Object> values) {
+    OrderGroupBoundaries boundaries = computeOrderGroupBoundaries(contexts, partitionStart, partitionEnd);
+    int partitionSize = partitionEnd - partitionStart;
+    for (int i = 0; i < partitionSize; i++) {
+      int absoluteIndex = partitionStart + i;
+      Object result = nthValueFromRelativeFrame(argumentValues, nthPositions.get(absoluteIndex), partitionStart, 0,
+          boundaries.groupEndExclusive()[i]);
+      values.put(contexts.get(absoluteIndex).record(), result);
+    }
+  }
+
+  private static void computePartitionWideNthValue(List<RowContext> contexts, List<Object> argumentValues,
+      List<Long> nthPositions, int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    int partitionSize = partitionEnd - partitionStart;
+    for (int i = partitionStart; i < partitionEnd; i++) {
+      Object result = nthValueFromRelativeFrame(argumentValues, nthPositions.get(i), partitionStart, 0, partitionSize);
+      values.put(contexts.get(i).record(), result);
+    }
+  }
+
+  private static void computeCurrentRowRangeNthValue(List<RowContext> contexts, List<Object> argumentValues,
+      List<Long> nthPositions, int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    OrderGroupBoundaries boundaries = computeOrderGroupBoundaries(contexts, partitionStart, partitionEnd);
+    int partitionSize = partitionEnd - partitionStart;
+    for (int i = 0; i < partitionSize; i++) {
+      int absoluteIndex = partitionStart + i;
+      int groupStart = boundaries.groupStarts()[i];
+      int groupEndExclusive = boundaries.groupEndExclusive()[i];
+      Object result =
+          nthValueFromRelativeFrame(
+              argumentValues,
+              nthPositions.get(absoluteIndex),
+              partitionStart,
+              groupStart,
+              groupEndExclusive);
+      values.put(contexts.get(absoluteIndex).record(), result);
+    }
+  }
+
+  private static void computeCurrentRowFollowingNthValue(List<RowContext> contexts, List<Object> argumentValues,
+      List<Long> nthPositions, int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    OrderGroupBoundaries boundaries = computeOrderGroupBoundaries(contexts, partitionStart, partitionEnd);
+    int partitionSize = partitionEnd - partitionStart;
+    for (int i = 0; i < partitionSize; i++) {
+      int absoluteIndex = partitionStart + i;
+      int groupStart = boundaries.groupStarts()[i];
+      Object result =
+          nthValueFromRelativeFrame(
+              argumentValues,
+              nthPositions.get(absoluteIndex),
+              partitionStart,
+              groupStart,
+              partitionSize);
+      values.put(contexts.get(absoluteIndex).record(), result);
+    }
+  }
+
+  private static void computeRangeNthValue(
+      WindowElement element,
+      List<RowContext> contexts,
+      List<Object> argumentValues,
+      List<Long> nthPositions,
+      int partitionStart,
+      int partitionEnd,
+      IdentityHashMap<GenericRecord, Object> values) {
+    WindowOffset offset = element.getOffset();
+    WindowRange range = element.getRange();
+    if (offset != null) {
+      if (offset.getExpression() != null) {
+        throw new IllegalArgumentException("Unsupported RANGE frame specification for NTH_VALUE: " + element);
+      }
+      WindowOffset.Type type = offset.getType();
+      if (type == WindowOffset.Type.PRECEDING || type == WindowOffset.Type.CURRENT) {
+        computeDefaultRangeNthValue(contexts, argumentValues, nthPositions, partitionStart, partitionEnd, values);
+        return;
+      }
+      if (type == WindowOffset.Type.FOLLOWING) {
+        computePartitionWideNthValue(contexts, argumentValues, nthPositions, partitionStart, partitionEnd, values);
+        return;
+      }
+      throw new IllegalArgumentException("Unsupported RANGE frame specification for NTH_VALUE: " + element);
+    }
+    if (range == null) {
+      computeDefaultRangeNthValue(contexts, argumentValues, nthPositions, partitionStart, partitionEnd, values);
+      return;
+    }
+    FrameBoundary start = rangeBoundary(range.getStart(), true);
+    FrameBoundary end = rangeBoundary(range.getEnd(), false);
+    if (start.type() == FrameBoundType.UNBOUNDED_PRECEDING && end.type() == FrameBoundType.CURRENT_ROW) {
+      computeDefaultRangeNthValue(contexts, argumentValues, nthPositions, partitionStart, partitionEnd, values);
+      return;
+    }
+    if (start.type() == FrameBoundType.UNBOUNDED_PRECEDING && end.type() == FrameBoundType.UNBOUNDED_FOLLOWING) {
+      computePartitionWideNthValue(contexts, argumentValues, nthPositions, partitionStart, partitionEnd, values);
+      return;
+    }
+    if (start.type() == FrameBoundType.CURRENT_ROW && end.type() == FrameBoundType.CURRENT_ROW) {
+      computeCurrentRowRangeNthValue(contexts, argumentValues, nthPositions, partitionStart, partitionEnd, values);
+      return;
+    }
+    if (start.type() == FrameBoundType.CURRENT_ROW && end.type() == FrameBoundType.UNBOUNDED_FOLLOWING) {
+      computeCurrentRowFollowingNthValue(contexts, argumentValues, nthPositions, partitionStart, partitionEnd, values);
+      return;
+    }
+    throw new IllegalArgumentException("Unsupported RANGE frame boundaries for NTH_VALUE: " + element);
+  }
+
+  private static void computeRowsNthValue(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
+      List<Long> nthPositions, int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    FrameSpecification spec = rowsFrameSpecification(element);
+    int partitionSize = partitionEnd - partitionStart;
+    for (int i = 0; i < partitionSize; i++) {
+      int absoluteIndex = partitionStart + i;
+      int startIndex = resolveRowsStartIndex(spec.start(), i, partitionSize);
+      int endIndex = resolveRowsEndIndex(spec.end(), i, partitionSize);
+      if (startIndex > endIndex || startIndex >= partitionSize || endIndex < 0) {
+        values.put(contexts.get(absoluteIndex).record(), null);
+        continue;
+      }
+      int boundedStart = Math.max(0, startIndex);
+      int boundedEnd = Math.min(partitionSize - 1, endIndex);
+      Object result = nthValueFromRelativeFrame(argumentValues, nthPositions.get(absoluteIndex), partitionStart,
+          boundedStart, boundedEnd + 1);
+      values.put(contexts.get(absoluteIndex).record(), result);
+    }
+  }
+
+  private static Object nthValueFromRelativeFrame(List<Object> argumentValues, Long nth, int partitionStart,
+      int frameStartRelative, int frameEndExclusiveRelative) {
+    if (nth == null) {
+      return null;
+    }
+    if (nth <= 0L) {
+      return null;
+    }
+    if (nth > Integer.MAX_VALUE) {
+      return null;
+    }
+    int frameLength = frameEndExclusiveRelative - frameStartRelative;
+    if (frameLength <= 0) {
+      return null;
+    }
+    long zeroBased = nth - 1L;
+    if (zeroBased >= frameLength) {
+      return null;
+    }
+    int candidateRelative;
+    try {
+      candidateRelative = Math.addExact(frameStartRelative, safeLongToInt(zeroBased));
+    } catch (ArithmeticException e) {
+      return null;
+    }
+    if (candidateRelative < frameStartRelative || candidateRelative >= frameEndExclusiveRelative) {
+      return null;
+    }
+    return argumentValues.get(partitionStart + candidateRelative);
+  }
+
+  private static Long resolveNthPosition(Object nthValue, AnalyticExpression expression) {
+    if (nthValue == null) {
+      return null;
+    }
+    BigDecimal decimalValue;
+    try {
+      decimalValue = nthValue instanceof BigDecimal bd ? bd : new BigDecimal(nthValue.toString());
+    } catch (NumberFormatException e) {
+      String message = String.format("NTH_VALUE position expression produced a non-numeric value for expression %s: %s",
+          expression, nthValue);
+      throw new IllegalArgumentException(message, e);
+    }
+    long position;
+    try {
+      position = decimalValue.longValueExact();
+    } catch (ArithmeticException e) {
+      String message = String.format(
+          "NTH_VALUE position expression must resolve to an integer value for expression %s: %s", expression,
+          nthValue);
+      throw new IllegalArgumentException(message, e);
+    }
+    if (position <= 0L) {
+      String message = String.format(
+          "NTH_VALUE position expression must evaluate to a strictly positive integer for expression %s: %s",
+          expression, nthValue);
+      throw new IllegalArgumentException(message);
+    }
+    return position;
   }
 
   private static IdentityHashMap<GenericRecord, Object> computeFirstValue(FirstValueWindow window,

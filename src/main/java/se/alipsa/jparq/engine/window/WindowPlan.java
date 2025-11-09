@@ -22,6 +22,7 @@ public final class WindowPlan {
   private final List<MaxWindow> maxWindows;
   private final List<LagWindow> lagWindows;
   private final List<LeadWindow> leadWindows;
+  private final List<NthValueWindow> nthValueWindows;
   private final List<FirstValueWindow> firstValueWindows;
   private final List<LastValueWindow> lastValueWindows;
 
@@ -39,6 +40,7 @@ public final class WindowPlan {
     this.maxWindows = immutableList(builder.maxWindows);
     this.lagWindows = immutableList(builder.lagWindows);
     this.leadWindows = immutableList(builder.leadWindows);
+    this.nthValueWindows = immutableList(builder.nthValueWindows);
     this.firstValueWindows = immutableList(builder.firstValueWindows);
     this.lastValueWindows = immutableList(builder.lastValueWindows);
   }
@@ -76,7 +78,8 @@ public final class WindowPlan {
     return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
         && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && countWindows.isEmpty()
         && sumWindows.isEmpty() && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty()
-        && lagWindows.isEmpty() && leadWindows.isEmpty() && firstValueWindows.isEmpty() && lastValueWindows.isEmpty();
+        && lagWindows.isEmpty() && leadWindows.isEmpty() && nthValueWindows.isEmpty() && firstValueWindows.isEmpty()
+        && lastValueWindows.isEmpty();
   }
 
   /**
@@ -197,6 +200,15 @@ public final class WindowPlan {
   }
 
   /**
+   * Retrieve NTH_VALUE analytic expression descriptors.
+   *
+   * @return immutable list of {@link NthValueWindow} instances
+   */
+  public List<NthValueWindow> nthValueWindows() {
+    return nthValueWindows;
+  }
+
+  /**
    * Retrieve FIRST_VALUE analytic expression descriptors.
    *
    * @return immutable list of {@link FirstValueWindow} instances
@@ -232,6 +244,7 @@ public final class WindowPlan {
     private List<MaxWindow> maxWindows;
     private List<LagWindow> lagWindows;
     private List<LeadWindow> leadWindows;
+    private List<NthValueWindow> nthValueWindows;
     private List<FirstValueWindow> firstValueWindows;
     private List<LastValueWindow> lastValueWindows;
 
@@ -392,6 +405,18 @@ public final class WindowPlan {
      */
     public Builder leadWindows(List<LeadWindow> leadWindows) {
       this.leadWindows = copyOrNull(leadWindows);
+      return this;
+    }
+
+    /**
+     * Provide the NTH_VALUE windows to include in the resulting plan.
+     *
+     * @param nthValueWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder nthValueWindows(List<NthValueWindow> nthValueWindows) {
+      this.nthValueWindows = copyOrNull(nthValueWindows);
       return this;
     }
 
