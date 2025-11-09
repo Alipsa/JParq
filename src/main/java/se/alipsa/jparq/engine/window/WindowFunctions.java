@@ -6,6 +6,7 @@ import java.nio.ByteBuffer;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Arrays;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -1640,6 +1641,9 @@ public final class WindowFunctions {
     WindowOffset offset = element.getOffset();
     WindowRange range = element.getRange();
     if (offset != null) {
+      if (offset.getExpression() != null) {
+        throw new IllegalArgumentException("Unsupported RANGE frame specification for FIRST_VALUE: " + element);
+      }
       WindowOffset.Type type = offset.getType();
       if (type == WindowOffset.Type.PRECEDING || type == WindowOffset.Type.CURRENT) {
         computeDefaultRangeFirstValue(contexts, argumentValues, partitionStart, partitionEnd, values);
@@ -1953,8 +1957,16 @@ public final class WindowFunctions {
       return List.of();
     }
     List<Object> values = new ArrayList<>(expressions.size());
+    boolean containsNull = false;
     for (Expression expression : expressions) {
-      values.add(evaluator.eval(expression, record));
+      Object value = evaluator.eval(expression, record);
+      values.add(value);
+      if (value == null) {
+        containsNull = true;
+      }
+    }
+    if (containsNull) {
+      return Collections.unmodifiableList(values);
     }
     return List.copyOf(values);
   }

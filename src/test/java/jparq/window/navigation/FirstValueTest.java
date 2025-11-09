@@ -2,6 +2,8 @@ package jparq.window.navigation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -110,5 +112,41 @@ public class FirstValueTest {
     });
 
     assertEquals(32, rowCount.get(), "Expected to process all mtcars rows");
+  }
+
+  /**
+   * Ensure that unsupported RANGE offsets such as numeric PRECEDING values are rejected.
+   */
+  @Test
+  void testFirstValueRangeOffsetWithExpressionIsRejected() {
+    String sql = """
+        SELECT FIRST_VALUE(mpg) OVER (
+                 PARTITION BY cyl
+                 ORDER BY mpg DESC
+                 RANGE 5 PRECEDING
+               )
+        FROM mtcars
+        """;
+
+    RuntimeException ex = assertThrows(RuntimeException.class,
+        () -> jparqSql.query(sql, rs -> {
+          throw new IllegalStateException("Result handler should not be invoked when planning fails");
+        }),
+        "FIRST_VALUE must reject RANGE frames with numeric offsets");
+    assertNotNull(ex.getMessage(), "Exception message should be populated");
+    Throwable cause = ex.getCause();
+    assertNotNull(cause, "Wrapped exception must be present");
+    boolean illegalArgumentFound = false;
+    StringBuilder chain = new StringBuilder(ex.getClass().getName());
+    while (cause != null) {
+      chain.append(" -> ").append(cause.getClass().getName());
+      if (cause instanceof IllegalArgumentException) {
+        illegalArgumentFound = true;
+        break;
+      }
+      cause = cause.getCause();
+    }
+    assertTrue(illegalArgumentFound,
+        () -> "FIRST_VALUE must signal unsupported RANGE offsets with IllegalArgumentException; cause chain: " + chain);
   }
 }
