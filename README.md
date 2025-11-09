@@ -140,26 +140,15 @@ The following SQL statements are supported:
   -  Aggregate window functions
     - SUM, AVG, MIN, MAX, COUNT
   - Analytic Value/Navigation Functions
-    -  LAG, LEAD
+    -  LAG, LEAD, FIRST_VALUE
 
 ## Roadmap: Might be implemented in the future
 - Windowing
   - Analytic Value/Navigation Functions
-    -  FIRST_VALUE, LAST_VALUE, NTH_VALUE
+    -  LAST_VALUE, NTH_VALUE
 - Advanced GROUP BY constructs. SqlParser.parseGroupBy only collects a flat list of grouping expressions; there is no handling for SQL-standard GROUPING SETS, ROLLUP, or CUBE elements.
 
-- JOIN ... USING syntax. The join parser rejects both forms, which the SQL standard includes for read-only queries.
-  - The JOIN ... USING clause is part of the SQL:1999 standard and subsequent revisions.
-  - Instead of specifying a full join condition with ON, you simply list the common column name(s) inside the parentheses of USING.
-  - Syntax: SELECT ...
-    FROM TableA [INNER | LEFT | RIGHT | FULL] JOIN TableB
-    USING (column_name_1 [, column_name_2, ...])
-  - Equivalence: The expression JOIN TableB USING (column_name) is logically equivalent to the more verbose JOIN TableB ON TableA.column_name = TableB.column_name.
-  - The most distinctive feature of JOIN ... USING, according to the standard, is how it handles the result columns:
-    - The common join column (column_name) appears only once in the final result set. 
-    - In contrast, a standard JOIN ... ON retains both instances of the join column (e.g., TableA.column_name and TableB.column_name), requiring you to alias one of them if you want a clean final output.
-    - The USING clause is standard and valid with all types of cross-product joins (inner, left, right, full).
-
+- JOIN ... USING syntax. (JoinUsing.md)
 - FROM-clause table constructors and lateral items. parseFromItem accepts only base tables or plain subqueries; it throws for any other construct, leaving out SQL-standard features such as 
 - VALUES table constructors
 - LATERAL derived tables

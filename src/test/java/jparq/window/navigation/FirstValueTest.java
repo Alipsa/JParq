@@ -18,7 +18,8 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
 /**
- * Integration tests covering the SQL standard FIRST_VALUE window navigation function.
+ * Integration tests covering the SQL standard FIRST_VALUE window navigation
+ * function.
  */
 public class FirstValueTest {
 
@@ -79,7 +80,8 @@ public class FirstValueTest {
   }
 
   /**
-   * Verify that FIRST_VALUE respects ROWS frame specifications that start at the current row.
+   * Verify that FIRST_VALUE respects ROWS frame specifications that start at the
+   * current row.
    */
   @Test
   void testFirstValueWithRowsFrameRespectsCurrentRow() {
@@ -115,7 +117,8 @@ public class FirstValueTest {
   }
 
   /**
-   * Ensure that unsupported RANGE offsets such as numeric PRECEDING values are rejected.
+   * Ensure that unsupported RANGE offsets such as numeric PRECEDING values are
+   * rejected.
    */
   @Test
   void testFirstValueRangeOffsetWithExpressionIsRejected() {
@@ -128,11 +131,9 @@ public class FirstValueTest {
         FROM mtcars
         """;
 
-    RuntimeException ex = assertThrows(RuntimeException.class,
-        () -> jparqSql.query(sql, rs -> {
-          throw new IllegalStateException("Result handler should not be invoked when planning fails");
-        }),
-        "FIRST_VALUE must reject RANGE frames with numeric offsets");
+    RuntimeException ex = assertThrows(RuntimeException.class, () -> jparqSql.query(sql, rs -> {
+      throw new IllegalStateException("Result handler should not be invoked when planning fails");
+    }), "FIRST_VALUE must reject RANGE frames with numeric offsets");
     assertNotNull(ex.getMessage(), "Exception message should be populated");
     Throwable cause = ex.getCause();
     assertNotNull(cause, "Wrapped exception must be present");

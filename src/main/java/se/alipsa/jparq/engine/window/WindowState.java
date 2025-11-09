@@ -366,7 +366,8 @@ public final class WindowState {
   }
 
   /**
-   * Obtain the precomputed FIRST_VALUE result for the supplied expression and record.
+   * Obtain the precomputed FIRST_VALUE result for the supplied expression and
+   * record.
    *
    * @param expression
    *          the analytic expression

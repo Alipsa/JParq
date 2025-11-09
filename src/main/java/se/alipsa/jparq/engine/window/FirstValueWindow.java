@@ -70,16 +70,19 @@ public final class FirstValueWindow {
   /**
    * Retrieve the value expression evaluated by the FIRST_VALUE function.
    *
-   * @return the expression supplying the value to retrieve from the first row of the frame
+   * @return the expression supplying the value to retrieve from the first row of
+   *         the frame
    */
   public Expression valueExpression() {
     return valueExpression;
   }
 
   /**
-   * Retrieve the window frame specification associated with this FIRST_VALUE window.
+   * Retrieve the window frame specification associated with this FIRST_VALUE
+   * window.
    *
-   * @return the {@link WindowElement} describing the requested frame, or {@code null} when the default applies
+   * @return the {@link WindowElement} describing the requested frame, or
+   *         {@code null} when the default applies
    */
   public WindowElement windowElement() {
     return windowElement;

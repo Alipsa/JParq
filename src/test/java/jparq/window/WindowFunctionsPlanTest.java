@@ -27,9 +27,8 @@ class WindowFunctionsPlanTest {
         CCJSqlParserUtil.parseExpression("SUM(salary) OVER (PARTITION BY dept ORDER BY change_date DESC)"),
         CCJSqlParserUtil.parseExpression("COUNT(*) OVER (PARTITION BY dept)"),
         CCJSqlParserUtil.parseExpression("LAG(salary, 1, 0) OVER (PARTITION BY dept ORDER BY change_date DESC)"),
-        CCJSqlParserUtil.parseExpression(
-            "FIRST_VALUE(salary) OVER (PARTITION BY dept ORDER BY change_date DESC "
-                + "ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"));
+        CCJSqlParserUtil.parseExpression("FIRST_VALUE(salary) OVER (PARTITION BY dept ORDER BY change_date DESC "
+            + "ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"));
 
     WindowPlan plan = WindowFunctions.plan(expressions);
 
