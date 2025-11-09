@@ -285,8 +285,7 @@ public final class SqlParser {
    *          from a CTE definition (may be {@code null})
    * @param usingColumns
    *          list of column names supplied via a {@code USING} clause that
-   *          reference this table (empty when no {@code USING} clause is
-   *          present)
+   *          reference this table (empty when no {@code USING} clause is present)
    */
   public record TableReference(String tableName, String tableAlias, JoinType joinType, Expression joinCondition,
       Select subquery, String subquerySql, CommonTableExpression commonTableExpression, List<String> usingColumns) {

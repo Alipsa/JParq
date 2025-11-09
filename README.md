@@ -130,7 +130,7 @@ The following SQL statements are supported:
   - support aggregation functions and case statements in the `GROUP BY` and `SELECT` clause
 - exists support
 - any and all support
-- INNER, LEFT, RIGHT, FULL, CROSS, and Self Join support
+- Join support: INNER, LEFT, RIGHT, FULL, CROSS, and Self Join, join ... using syntax
 - union and union all support
 - intersect and except support
 - CTE (Common Table Expressions) support
@@ -148,7 +148,6 @@ The following SQL statements are supported:
     -  LAST_VALUE, NTH_VALUE
 - Advanced GROUP BY constructs. SqlParser.parseGroupBy only collects a flat list of grouping expressions; there is no handling for SQL-standard GROUPING SETS, ROLLUP, or CUBE elements.
 
-- JOIN ... USING syntax. (JoinUsing.md)
 - FROM-clause table constructors and lateral items. parseFromItem accepts only base tables or plain subqueries; it throws for any other construct, leaving out SQL-standard features such as 
 - VALUES table constructors
 - LATERAL derived tables

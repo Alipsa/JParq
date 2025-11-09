@@ -179,8 +179,8 @@ public final class JoinRecordReader implements RecordReader {
   }
 
   /**
-   * Describes a {@code USING} column and the table that contributes the
-   * canonical value retained in the join output.
+   * Describes a {@code USING} column and the table that contributes the canonical
+   * value retained in the join output.
    */
   private static final class UsingColumnInfo {
 
@@ -244,8 +244,7 @@ public final class JoinRecordReader implements RecordReader {
             String ownerField = resolveFieldName(tables.get(ownerIndex).schema(), usingColumn);
             if (ownerField == null) {
               throw new IllegalArgumentException(
-                  "USING column '" + usingColumn + "' missing from table '" + tables.get(ownerIndex).tableName()
-                      + "'");
+                  "USING column '" + usingColumn + "' missing from table '" + tables.get(ownerIndex).tableName() + "'");
             }
             info = new UsingColumnInfo(ownerField, ownerIndex);
             byNormalized.put(normalized, info);
@@ -417,8 +416,7 @@ public final class JoinRecordReader implements RecordReader {
     for (String canonical : usingMetadata.order()) {
       UsingFieldState state = usingFieldStates.get(canonical);
       if (state != null && state.field() != null && state.ownerIndex() >= 0 && state.ownerField() != null) {
-        FieldMapping mapping = new FieldMapping(state.ownerIndex(), state.ownerField(), canonical,
-            state.alternates());
+        FieldMapping mapping = new FieldMapping(state.ownerIndex(), state.ownerField(), canonical, state.alternates());
         orderedMappings.add(mapping);
         orderedFields.add(state.field());
       }
@@ -458,8 +456,8 @@ public final class JoinRecordReader implements RecordReader {
   }
 
   /**
-   * Register qualifier-to-canonical mappings so expression evaluators can
-   * resolve column references originating from individual join inputs.
+   * Register qualifier-to-canonical mappings so expression evaluators can resolve
+   * column references originating from individual join inputs.
    *
    * @param qualifierMap
    *          accumulator receiving qualifier mappings

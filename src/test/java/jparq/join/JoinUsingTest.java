@@ -51,8 +51,10 @@ class JoinUsingTest {
         ResultSetMetaData meta = rs.getMetaData();
         Assertions.assertEquals(4, meta.getColumnCount(), "USING should collapse duplicate join columns");
         Assertions.assertEquals("department", meta.getColumnLabel(1), "Joined column should appear first");
-        Assertions.assertEquals("id", meta.getColumnLabel(2), "Left table columns should include id after USING column");
-        Assertions.assertEquals("employee", meta.getColumnLabel(3), "Employee column should follow id for the left table");
+        Assertions.assertEquals("id", meta.getColumnLabel(2),
+            "Left table columns should include id after USING column");
+        Assertions.assertEquals("employee", meta.getColumnLabel(3),
+            "Employee column should follow id for the left table");
         Assertions.assertEquals("department_name", meta.getColumnLabel(4),
             "Right table columns should appear after left table columns");
 
@@ -95,12 +97,10 @@ class JoinUsingTest {
       try {
         ResultSetMetaData meta = rs.getMetaData();
         Assertions.assertEquals(3, meta.getColumnCount(), "USING should keep a single department column");
-        Assertions.assertEquals("department", meta.getColumnLabel(1),
-            "Merged USING column should lead the projection");
+        Assertions.assertEquals("department", meta.getColumnLabel(1), "Merged USING column should lead the projection");
         Assertions.assertEquals("department_name", meta.getColumnLabel(2),
             "Left table columns should follow the USING column");
-        Assertions.assertEquals("employee", meta.getColumnLabel(3),
-            "Right table column should trail left columns");
+        Assertions.assertEquals("employee", meta.getColumnLabel(3), "Right table column should trail left columns");
 
         boolean foundHr = false;
         boolean foundNull = false;
@@ -145,8 +145,7 @@ class JoinUsingTest {
 
     jparqSql.query(sql, rs -> {
       try {
-        Assertions.assertFalse(rs.next(),
-            "Rows with NULL join keys must not match under USING semantics");
+        Assertions.assertFalse(rs.next(), "Rows with NULL join keys must not match under USING semantics");
       } catch (SQLException e) {
         Assertions.fail(e);
       }
@@ -155,8 +154,8 @@ class JoinUsingTest {
 
   /**
    * Ensure {@code RIGHT JOIN ... USING} coalesces the merged column from the
-   * preserved right-hand row when the owner table does not contribute a
-   * matching record.
+   * preserved right-hand row when the owner table does not contribute a matching
+   * record.
    */
   @Test
   void rightJoinUsingCoalescesRightKey() {
