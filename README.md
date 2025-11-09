@@ -140,12 +140,12 @@ The following SQL statements are supported:
   -  Aggregate window functions
     - SUM, AVG, MIN, MAX, COUNT
   - Analytic Value/Navigation Functions
-    -  LAG, LEAD, FIRST_VALUE
+    -  LAG, LEAD, FIRST_VALUE, LAST_VALUE
 
 ## Roadmap: Might be implemented in the future
 - Windowing
   - Analytic Value/Navigation Functions
-    -  LAST_VALUE, NTH_VALUE
+    -  NTH_VALUE
 - Advanced GROUP BY constructs. SqlParser.parseGroupBy only collects a flat list of grouping expressions; there is no handling for SQL-standard GROUPING SETS, ROLLUP, or CUBE elements.
 
 - FROM-clause table constructors and lateral items. parseFromItem accepts only base tables or plain subqueries; it throws for any other construct, leaving out SQL-standard features such as 
