@@ -706,7 +706,7 @@ class JParqPreparedStatement implements PreparedStatement {
       if (cteResult != null) {
         String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
         tables.add(new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), cteResult.schema(), cteResult.rows(),
-            ref.joinType(), ref.joinCondition()));
+            ref.joinType(), ref.joinCondition(), ref.usingColumns()));
         continue;
       }
       if (ref.subquery() != null) {
@@ -746,7 +746,7 @@ class JParqPreparedStatement implements PreparedStatement {
         throw new SQLException("Failed to read data for table " + tableName, e);
       }
       tables.add(new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), tableSchema, rows, ref.joinType(),
-          ref.joinCondition()));
+          ref.joinCondition(), ref.usingColumns()));
     }
     try {
       return new JoinRecordReader(tables);
@@ -817,7 +817,7 @@ class JParqPreparedStatement implements PreparedStatement {
       rows.add(record);
     }
     return new JoinRecordReader.JoinTable(ref.tableName(), ref.tableAlias(), schema, rows, ref.joinType(),
-        ref.joinCondition());
+        ref.joinCondition(), ref.usingColumns());
   }
 
   /**
@@ -854,7 +854,7 @@ class JParqPreparedStatement implements PreparedStatement {
       }
       String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
       return new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), schema, rows, ref.joinType(),
-          ref.joinCondition());
+          ref.joinCondition(), ref.usingColumns());
     } catch (SQLException e) {
       throw new SQLException("Failed to execute subquery for join: " + sql, e);
     }
