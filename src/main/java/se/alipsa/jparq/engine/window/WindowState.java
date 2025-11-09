@@ -27,6 +27,7 @@ public final class WindowState {
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> maxValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lagValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> leadValues;
+  private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> nthValueValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> firstValueValues;
   private final Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lastValueValues;
 
@@ -44,6 +45,7 @@ public final class WindowState {
     this.maxValues = immutableMap(builder.maxValues);
     this.lagValues = immutableMap(builder.lagValues);
     this.leadValues = immutableMap(builder.leadValues);
+    this.nthValueValues = immutableMap(builder.nthValueValues);
     this.firstValueValues = immutableMap(builder.firstValueValues);
     this.lastValueValues = immutableMap(builder.lastValueValues);
   }
@@ -93,7 +95,7 @@ public final class WindowState {
     return rowNumberValues.isEmpty() && rankValues.isEmpty() && denseRankValues.isEmpty() && percentRankValues.isEmpty()
         && cumeDistValues.isEmpty() && ntileValues.isEmpty() && countValues.isEmpty() && sumValues.isEmpty()
         && avgValues.isEmpty() && minValues.isEmpty() && maxValues.isEmpty() && lagValues.isEmpty()
-        && leadValues.isEmpty() && firstValueValues.isEmpty() && lastValueValues.isEmpty();
+        && leadValues.isEmpty() && nthValueValues.isEmpty() && firstValueValues.isEmpty() && lastValueValues.isEmpty();
   }
 
   /**
@@ -368,6 +370,27 @@ public final class WindowState {
   }
 
   /**
+   * Obtain the precomputed NTH_VALUE result for the supplied expression and
+   * record.
+   *
+   * @param expression
+   *          the analytic expression
+   * @param record
+   *          the current record
+   * @return the computed NTH_VALUE result (may be {@code null})
+   */
+  public Object nthValue(AnalyticExpression expression, GenericRecord record) {
+    IdentityHashMap<GenericRecord, Object> values = nthValueValues.get(expression);
+    if (values == null) {
+      throw new IllegalArgumentException("No NTH_VALUE values available for expression: " + expression);
+    }
+    if (!values.containsKey(record)) {
+      throw new IllegalArgumentException("No NTH_VALUE value computed for record: " + record);
+    }
+    return values.get(record);
+  }
+
+  /**
    * Obtain the precomputed FIRST_VALUE result for the supplied expression and
    * record.
    *
@@ -427,6 +450,7 @@ public final class WindowState {
     private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> maxValues;
     private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lagValues;
     private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> leadValues;
+    private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> nthValueValues;
     private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> firstValueValues;
     private Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lastValueValues;
 
@@ -588,6 +612,18 @@ public final class WindowState {
      */
     public Builder leadValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> leadValues) {
       this.leadValues = copyMap(leadValues);
+      return this;
+    }
+
+    /**
+     * Provide precomputed NTH_VALUE results for the window state.
+     *
+     * @param nthValueValues
+     *          values keyed by analytic expression, may be {@code null}
+     * @return this builder for chaining
+     */
+    public Builder nthValueValues(Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> nthValueValues) {
+      this.nthValueValues = copyMap(nthValueValues);
       return this;
     }
 

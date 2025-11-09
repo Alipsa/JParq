@@ -140,19 +140,19 @@ The following SQL statements are supported:
   -  Aggregate window functions
     - SUM, AVG, MIN, MAX, COUNT
   - Analytic Value/Navigation Functions
-    -  LAG, LEAD, FIRST_VALUE, LAST_VALUE
+    -  LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
 
 ## Roadmap: Might be implemented in the future
-- Windowing
-  - Analytic Value/Navigation Functions
-    -  NTH_VALUE
-- Advanced GROUP BY constructs i.e: GROUPING SETS, ROLLUP, and CUBE elements.
+- Advanced GROUP BY constructs i.e:
+  - GROUPING SETS
+  - ROLLUP
+  - CUBE
 
 - FROM-clause table constructors and lateral items. parseFromItem accepts only base tables or plain subqueries; it throws for any other construct, leaving out SQL-standard features such as 
-- VALUES table constructors
-- LATERAL derived tables
-- TABLE/UNNEST functions
-- TABLESAMPLE.
+  - VALUES table constructors
+  - LATERAL derived tables
+  - TABLE/UNNEST functions
+  - TABLESAMPLE.
 
 - Qualified wildcard projections (table.*). The projection parser raises an error when encountering a qualified asterisk, so row-source-specific wildcards from the standard are unavailable.
 
@@ -162,6 +162,7 @@ The following SQL statements are supported:
 
 - UNNEST
 - ARRAY
+
 ### Non standard extensions
 - Support for variable assignment and use within SQL scripts.
   - @variable_name syntax to define a variable that exists for the duration of the connection
