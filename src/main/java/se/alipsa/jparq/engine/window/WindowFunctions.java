@@ -93,7 +93,8 @@ public final class WindowFunctions {
         && !"PERCENT_RANK".equalsIgnoreCase(name) && !"CUME_DIST".equalsIgnoreCase(name)
         && !"NTILE".equalsIgnoreCase(name) && !"COUNT".equalsIgnoreCase(name) && !"SUM".equalsIgnoreCase(name)
         && !"AVG".equalsIgnoreCase(name) && !"MIN".equalsIgnoreCase(name) && !"MAX".equalsIgnoreCase(name)
-        && !"LAG".equalsIgnoreCase(name) && !"LEAD".equalsIgnoreCase(name) && !"FIRST_VALUE".equalsIgnoreCase(name)) {
+        && !"LAG".equalsIgnoreCase(name) && !"LEAD".equalsIgnoreCase(name) && !"FIRST_VALUE".equalsIgnoreCase(name)
+        && !"LAST_VALUE".equalsIgnoreCase(name)) {
       return;
     }
     if ((analytic.isDistinct() || analytic.isUnique()) && !"COUNT".equalsIgnoreCase(name)) {
@@ -256,6 +257,18 @@ public final class WindowFunctions {
           valueExpression, analytic.getWindowElement()));
       return;
     }
+    if ("LAST_VALUE".equalsIgnoreCase(name)) {
+      Expression valueExpression = analytic.getExpression();
+      if (valueExpression == null) {
+        throw new IllegalArgumentException("LAST_VALUE requires an argument expression: " + analytic);
+      }
+      if (orderElements.isEmpty()) {
+        throw new IllegalArgumentException("LAST_VALUE requires an ORDER BY clause: " + analytic);
+      }
+      collector.addLastValueWindow(new LastValueWindow(analytic, List.copyOf(partitions), orderElements,
+          valueExpression, analytic.getWindowElement()));
+      return;
+    }
     log.debug("Unsupported analytic expression encountered: {}", analytic);
   }
 
@@ -371,11 +384,17 @@ public final class WindowFunctions {
       IdentityHashMap<GenericRecord, Object> values = computeFirstValue(window, records, evaluator);
       firstValueValues.put(window.expression(), values);
     }
+    IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> lastValueValues;
+    lastValueValues = new IdentityHashMap<>();
+    for (LastValueWindow window : plan.lastValueWindows()) {
+      IdentityHashMap<GenericRecord, Object> values = computeLastValue(window, records, evaluator);
+      lastValueValues.put(window.expression(), values);
+    }
     return WindowState.builder().rowNumberValues(rowNumberValues).rankValues(rankValues)
         .denseRankValues(denseRankValues).percentRankValues(percentRankValues).cumeDistValues(cumeDistValues)
         .ntileValues(ntileValues).countValues(countValues).sumValues(sumValues).avgValues(avgValues)
         .minValues(minValues).maxValues(maxValues).lagValues(lagValues).leadValues(leadValues)
-        .firstValueValues(firstValueValues).build();
+        .firstValueValues(firstValueValues).lastValueValues(lastValueValues).build();
   }
 
   private static IdentityHashMap<GenericRecord, Long> computeRowNumbers(RowNumberWindow window,
@@ -1715,6 +1734,160 @@ public final class WindowFunctions {
       }
       int boundedStart = Math.max(0, startIndex);
       Object result = argumentValues.get(partitionStart + boundedStart);
+      values.put(contexts.get(absoluteIndex).record(), result);
+    }
+  }
+
+  private static IdentityHashMap<GenericRecord, Object> computeLastValue(LastValueWindow window,
+      List<GenericRecord> records, ValueExpressionEvaluator evaluator) {
+    List<RowContext> contexts = buildSortedContexts(window.partitionExpressions(), window.orderByElements(), records,
+        evaluator);
+
+    IdentityHashMap<GenericRecord, Object> values = new IdentityHashMap<>();
+    if (contexts.isEmpty()) {
+      return values;
+    }
+
+    List<Object> argumentValues = new ArrayList<>(contexts.size());
+    for (RowContext context : contexts) {
+      argumentValues.add(evaluator.eval(window.valueExpression(), context.record()));
+    }
+
+    int index = 0;
+    final int totalContexts = contexts.size();
+    while (index < totalContexts) {
+      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionStart = index;
+      int partitionEnd = index;
+      while (partitionEnd < totalContexts
+          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+        partitionEnd++;
+      }
+
+      applyLastValueForPartition(window, contexts, argumentValues, partitionStart, partitionEnd, values);
+      index = partitionEnd;
+    }
+
+    return values;
+  }
+
+  private static void applyLastValueForPartition(LastValueWindow window, List<RowContext> contexts,
+      List<Object> argumentValues, int partitionStart, int partitionEnd,
+      IdentityHashMap<GenericRecord, Object> values) {
+    if (partitionStart >= partitionEnd) {
+      return;
+    }
+    WindowElement element = window.windowElement();
+    if (element == null) {
+      computeDefaultRangeLastValue(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    if (element.getType() == WindowElement.Type.RANGE) {
+      computeRangeLastValue(element, contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    if (element.getType() == WindowElement.Type.ROWS) {
+      computeRowsLastValue(element, contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    throw new IllegalArgumentException("Unsupported window frame type for LAST_VALUE: " + element);
+  }
+
+  private static void computeDefaultRangeLastValue(List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    computeCurrentRowRangeLastValue(contexts, argumentValues, partitionStart, partitionEnd, values);
+  }
+
+  private static void computeRangeLastValue(WindowElement element, List<RowContext> contexts,
+      List<Object> argumentValues, int partitionStart, int partitionEnd,
+      IdentityHashMap<GenericRecord, Object> values) {
+    WindowOffset offset = element.getOffset();
+    WindowRange range = element.getRange();
+    if (offset != null) {
+      if (offset.getExpression() != null) {
+        throw new IllegalArgumentException("Unsupported RANGE frame specification for LAST_VALUE: " + element);
+      }
+      WindowOffset.Type type = offset.getType();
+      if (type == WindowOffset.Type.PRECEDING || type == WindowOffset.Type.CURRENT) {
+        computeDefaultRangeLastValue(contexts, argumentValues, partitionStart, partitionEnd, values);
+        return;
+      }
+      if (type == WindowOffset.Type.FOLLOWING) {
+        Object last = argumentValues.get(partitionEnd - 1);
+        for (int i = partitionStart; i < partitionEnd; i++) {
+          values.put(contexts.get(i).record(), last);
+        }
+        return;
+      }
+      throw new IllegalArgumentException("Unsupported RANGE frame specification for LAST_VALUE: " + element);
+    }
+    if (range == null) {
+      computeDefaultRangeLastValue(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    FrameBoundary start = rangeBoundary(range.getStart(), true);
+    FrameBoundary end = rangeBoundary(range.getEnd(), false);
+    if (start.type() == FrameBoundType.UNBOUNDED_PRECEDING && end.type() == FrameBoundType.CURRENT_ROW) {
+      computeDefaultRangeLastValue(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    if (start.type() == FrameBoundType.UNBOUNDED_PRECEDING && end.type() == FrameBoundType.UNBOUNDED_FOLLOWING) {
+      Object last = argumentValues.get(partitionEnd - 1);
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        values.put(contexts.get(i).record(), last);
+      }
+      return;
+    }
+    if (start.type() == FrameBoundType.CURRENT_ROW && end.type() == FrameBoundType.CURRENT_ROW) {
+      computeCurrentRowRangeLastValue(contexts, argumentValues, partitionStart, partitionEnd, values);
+      return;
+    }
+    if (start.type() == FrameBoundType.CURRENT_ROW && end.type() == FrameBoundType.UNBOUNDED_FOLLOWING) {
+      Object last = argumentValues.get(partitionEnd - 1);
+      for (int i = partitionStart; i < partitionEnd; i++) {
+        values.put(contexts.get(i).record(), last);
+      }
+      return;
+    }
+    throw new IllegalArgumentException("Unsupported RANGE frame boundaries for LAST_VALUE: " + element);
+  }
+
+  private static void computeCurrentRowRangeLastValue(List<RowContext> contexts, List<Object> argumentValues,
+      int partitionStart, int partitionEnd, IdentityHashMap<GenericRecord, Object> values) {
+    OrderGroupBoundaries boundaries = computeOrderGroupBoundaries(contexts, partitionStart, partitionEnd);
+    int partitionSize = partitionEnd - partitionStart;
+    for (int i = 0; i < partitionSize; i++) {
+      int absoluteIndex = partitionStart + i;
+      int groupStart = boundaries.groupStarts()[i];
+      int groupEndExclusive = boundaries.groupEndExclusive()[i];
+      if (groupStart >= groupEndExclusive) {
+        values.put(contexts.get(absoluteIndex).record(), null);
+      } else {
+        Object result = argumentValues.get(partitionStart + groupEndExclusive - 1);
+        values.put(contexts.get(absoluteIndex).record(), result);
+      }
+    }
+  }
+
+  private static void computeRowsLastValue(WindowElement element, List<RowContext> contexts,
+      List<Object> argumentValues, int partitionStart, int partitionEnd,
+      IdentityHashMap<GenericRecord, Object> values) {
+    FrameSpecification spec = rowsFrameSpecification(element);
+    int partitionSize = partitionEnd - partitionStart;
+    for (int i = 0; i < partitionSize; i++) {
+      int absoluteIndex = partitionStart + i;
+      int startIndex = resolveRowsStartIndex(spec.start(), i, partitionSize);
+      int endIndex = resolveRowsEndIndex(spec.end(), i, partitionSize);
+      if (startIndex > endIndex || startIndex >= partitionSize || endIndex < 0) {
+        values.put(contexts.get(absoluteIndex).record(), null);
+        continue;
+      }
+      int boundedEnd = Math.min(partitionSize - 1, endIndex);
+      if (boundedEnd < 0) {
+        values.put(contexts.get(absoluteIndex).record(), null);
+        continue;
+      }
+      Object result = argumentValues.get(partitionStart + boundedEnd);
       values.put(contexts.get(absoluteIndex).record(), result);
     }
   }
