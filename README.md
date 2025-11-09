@@ -146,7 +146,7 @@ The following SQL statements are supported:
 - Windowing
   - Analytic Value/Navigation Functions
     -  NTH_VALUE
-- Advanced GROUP BY constructs. SqlParser.parseGroupBy only collects a flat list of grouping expressions; there is no handling for SQL-standard GROUPING SETS, ROLLUP, or CUBE elements.
+- Advanced GROUP BY constructs i.e: GROUPING SETS, ROLLUP, and CUBE elements.
 
 - FROM-clause table constructors and lateral items. parseFromItem accepts only base tables or plain subqueries; it throws for any other construct, leaving out SQL-standard features such as 
 - VALUES table constructors
