@@ -1,6 +1,16 @@
 # Version history
 
-### 0.8.0. in progress
+### 0.9.0 (2025-11-09)
+- Add support for Windowing functions i.e
+  - Ranking functions
+    - ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE
+  -  Aggregate window functions
+  - SUM, AVG, MIN, MAX, COUNT
+  - Analytic Value/Navigation Functions
+    -  LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
+- Add support for JOIN USING clause
+
+### 0.8.0 (2025-11-02)
 - Add support for CTE (Common Table Expressions)
 
 ### 0.7.0 (2025-11-02)
