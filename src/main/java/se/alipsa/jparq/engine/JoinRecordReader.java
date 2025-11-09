@@ -482,7 +482,7 @@ public final class JoinRecordReader implements RecordReader {
       if (normalizedQualifier == null) {
         continue;
       }
-      if (!includeTableQualifier && normalizedQualifier != null && normalizedQualifier.equals(normalizedTableName)) {
+      if (!includeTableQualifier && normalizedQualifier.equals(normalizedTableName)) {
         continue;
       }
       qualifierMap.computeIfAbsent(normalizedQualifier, k -> new LinkedHashMap<>()).put(lookupKey, canonical);
