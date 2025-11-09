@@ -99,7 +99,83 @@ public final class JoinRecordReader implements RecordReader {
    * @param targetField
    *          canonical field name in the joined schema
    */
-  private record FieldMapping(int tableIndex, String sourceField, String targetField) {
+  private record FieldMapping(int tableIndex, String sourceField, String targetField,
+      List<AlternateSource> alternates) {
+
+    FieldMapping {
+      alternates = alternates == null ? List.of() : List.copyOf(alternates);
+    }
+
+    Object resolveValue(List<GenericRecord> assignments) {
+      Object primary = read(assignments, tableIndex, sourceField);
+      if (primary != null || hasRecord(assignments, tableIndex)) {
+        return primary;
+      }
+      for (AlternateSource alternate : alternates) {
+        Object candidate = read(assignments, alternate.tableIndex(), alternate.sourceField());
+        if (candidate != null || hasRecord(assignments, alternate.tableIndex())) {
+          return candidate;
+        }
+      }
+      return null;
+    }
+
+    private static Object read(List<GenericRecord> assignments, int index, String field) {
+      if (index < 0 || index >= assignments.size()) {
+        return null;
+      }
+      GenericRecord record = assignments.get(index);
+      if (record == null) {
+        return null;
+      }
+      return record.get(field);
+    }
+
+    private static boolean hasRecord(List<GenericRecord> assignments, int index) {
+      return index >= 0 && index < assignments.size() && assignments.get(index) != null;
+    }
+  }
+
+  private record AlternateSource(int tableIndex, String sourceField) {
+  }
+
+  private static final class UsingFieldState {
+
+    private Schema.Field field;
+    private int ownerIndex = -1;
+    private String ownerField;
+    private final List<AlternateSource> alternates = new ArrayList<>();
+
+    void registerField(Schema.Field candidate, boolean owner) {
+      if (owner || field == null) {
+        field = candidate;
+      }
+    }
+
+    void setOwner(int index, String fieldName) {
+      ownerIndex = index;
+      ownerField = fieldName;
+    }
+
+    void addAlternate(int index, String fieldName) {
+      alternates.add(new AlternateSource(index, fieldName));
+    }
+
+    Schema.Field field() {
+      return field;
+    }
+
+    int ownerIndex() {
+      return ownerIndex;
+    }
+
+    String ownerField() {
+      return ownerField;
+    }
+
+    List<AlternateSource> alternates() {
+      return List.copyOf(alternates);
+    }
   }
 
   /**
@@ -260,8 +336,7 @@ public final class JoinRecordReader implements RecordReader {
 
   private static SchemaContext buildSchema(List<JoinTable> tables, List<FieldMapping> mappings,
       UsingMetadata usingMetadata) {
-    Map<String, Schema.Field> usingFieldDefinitions = new LinkedHashMap<>();
-    Map<String, FieldMapping> usingFieldMappings = new LinkedHashMap<>();
+    Map<String, UsingFieldState> usingFieldStates = new LinkedHashMap<>();
     List<Schema.Field> otherFields = new ArrayList<>();
     Set<String> usedNames = new HashSet<>();
     Map<String, Integer> columnCounts = computeColumnCounts(tables, usingMetadata);
@@ -298,7 +373,6 @@ public final class JoinRecordReader implements RecordReader {
         UsingColumnInfo usingInfo = usingMetadata.lookup(tableIndex, name);
         boolean usingColumn = usingInfo != null;
         boolean owner = usingColumn && usingInfo.isOwner(tableIndex);
-        boolean suppress = usingColumn && !owner;
         String canonical;
         if (usingColumn) {
           canonical = usingInfo.canonicalName();
@@ -309,19 +383,26 @@ public final class JoinRecordReader implements RecordReader {
         String lookupKey = name.toLowerCase(Locale.ROOT);
         registerQualifierMappings(qualifierMap, qualifiers, includeTableQualifier, normalizedTableName, lookupKey,
             canonical);
-        if (suppress) {
-          continue;
-        }
-        if (!usedNames.add(canonical)) {
-          throw new IllegalArgumentException("Duplicate column name '" + canonical + "' in join schema");
-        }
-        Schema.Field newField = new Schema.Field(canonical, field.schema(), field.doc(), field.defaultVal());
-        FieldMapping mapping = new FieldMapping(tableIndex, name, canonical);
         if (usingColumn) {
-          usingFieldDefinitions.putIfAbsent(canonical, newField);
-          usingFieldMappings.put(canonical, mapping);
+          UsingFieldState state = usingFieldStates.computeIfAbsent(canonical, key -> new UsingFieldState());
+          Schema.Field newField = new Schema.Field(canonical, field.schema(), field.doc(), field.defaultVal());
+          state.registerField(newField, owner);
+          if (owner) {
+            if (!usedNames.add(canonical)) {
+              throw new IllegalArgumentException("Duplicate column name '" + canonical + "' in join schema");
+            }
+            state.setOwner(tableIndex, name);
+          } else {
+            state.addAlternate(tableIndex, name);
+          }
           unqualifiedMap.putIfAbsent(lookupKey, canonical);
+          continue;
         } else {
+          if (!usedNames.add(canonical)) {
+            throw new IllegalArgumentException("Duplicate column name '" + canonical + "' in join schema");
+          }
+          Schema.Field newField = new Schema.Field(canonical, field.schema(), field.doc(), field.defaultVal());
+          FieldMapping mapping = new FieldMapping(tableIndex, name, canonical, List.of());
           otherFields.add(newField);
           mappings.add(mapping);
           boolean duplicate = columnCounts.getOrDefault(name, 0) > 1;
@@ -334,11 +415,12 @@ public final class JoinRecordReader implements RecordReader {
     List<FieldMapping> orderedMappings = new ArrayList<>();
     List<Schema.Field> orderedFields = new ArrayList<>();
     for (String canonical : usingMetadata.order()) {
-      FieldMapping mapping = usingFieldMappings.get(canonical);
-      Schema.Field field = usingFieldDefinitions.get(canonical);
-      if (mapping != null && field != null) {
+      UsingFieldState state = usingFieldStates.get(canonical);
+      if (state != null && state.field() != null && state.ownerIndex() >= 0 && state.ownerField() != null) {
+        FieldMapping mapping = new FieldMapping(state.ownerIndex(), state.ownerField(), canonical,
+            state.alternates());
         orderedMappings.add(mapping);
-        orderedFields.add(field);
+        orderedFields.add(state.field());
       }
     }
     orderedMappings.addAll(mappings);
@@ -447,9 +529,7 @@ public final class JoinRecordReader implements RecordReader {
       Schema schema) {
     GenericData.Record record = new GenericData.Record(schema);
     for (FieldMapping mapping : mappings) {
-      GenericRecord source = mapping.tableIndex() < assignments.size() ? assignments.get(mapping.tableIndex()) : null;
-      Object value = source == null ? null : source.get(mapping.sourceField());
-      record.put(mapping.targetField(), value);
+      record.put(mapping.targetField(), mapping.resolveValue(assignments));
     }
     return record;
   }
@@ -714,6 +794,9 @@ public final class JoinRecordReader implements RecordReader {
       }
       Object leftValue = owner.get(info.canonicalName());
       Object rightValue = row.get(field.name());
+      if (leftValue == null || rightValue == null) {
+        return false;
+      }
       if (!Objects.equals(leftValue, rightValue)) {
         return false;
       }

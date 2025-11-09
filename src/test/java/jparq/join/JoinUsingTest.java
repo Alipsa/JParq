@@ -121,4 +121,76 @@ class JoinUsingTest {
       }
     });
   }
+
+  /**
+   * Confirm that {@code NULL} values never satisfy {@code USING} equality,
+   * preventing joins from matching rows that only share {@code NULL}
+   * placeholders.
+   */
+  @Test
+  void nullValuesDoNotMatchUsingJoin() {
+    String sql = """
+        SELECT *
+        FROM (
+          SELECT CASE WHEN id = 1 THEN NULL END AS department
+          FROM departments
+          WHERE id = 1
+        ) d1
+        INNER JOIN (
+          SELECT CASE WHEN id = 1 THEN NULL END AS department
+          FROM departments
+          WHERE id = 1
+        ) d2 USING (department)
+        """;
+
+    jparqSql.query(sql, rs -> {
+      try {
+        Assertions.assertFalse(rs.next(),
+            "Rows with NULL join keys must not match under USING semantics");
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+  }
+
+  /**
+   * Ensure {@code RIGHT JOIN ... USING} coalesces the merged column from the
+   * preserved right-hand row when the owner table does not contribute a
+   * matching record.
+   */
+  @Test
+  void rightJoinUsingCoalescesRightKey() {
+    String sql = """
+        SELECT *
+        FROM (
+          SELECT employee, department
+          FROM employee_department
+          WHERE department <> 2
+        ) ed
+        RIGHT JOIN (
+          SELECT id AS department, department AS department_name
+          FROM departments
+        ) d USING (department)
+        ORDER BY department, employee
+        """;
+
+    jparqSql.query(sql, rs -> {
+      try {
+        boolean preservedRightRow = false;
+        while (rs.next()) {
+          Number key = (Number) rs.getObject("department");
+          Object employee = rs.getObject("employee");
+          if (employee == null) {
+            preservedRightRow = true;
+            Assertions.assertNotNull(key,
+                "RIGHT JOIN should retain the USING column value when the owner table is absent");
+          }
+        }
+        Assertions.assertTrue(preservedRightRow,
+            "RIGHT JOIN must surface rows from the preserved side even without a matching owner");
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+  }
 }
