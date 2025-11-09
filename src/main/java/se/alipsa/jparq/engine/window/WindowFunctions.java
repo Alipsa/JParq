@@ -1823,7 +1823,12 @@ public final class WindowFunctions {
     if (zeroBased >= frameLength) {
       return null;
     }
-    int candidateRelative = frameStartRelative + safeLongToInt(zeroBased);
+    int candidateRelative;
+    try {
+      candidateRelative = Math.addExact(frameStartRelative, safeLongToInt(zeroBased));
+    } catch (ArithmeticException e) {
+      return null;
+    }
     if (candidateRelative < frameStartRelative || candidateRelative >= frameEndExclusiveRelative) {
       return null;
     }
