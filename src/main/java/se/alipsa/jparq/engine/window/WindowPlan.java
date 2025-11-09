@@ -22,6 +22,7 @@ public final class WindowPlan {
   private final List<MaxWindow> maxWindows;
   private final List<LagWindow> lagWindows;
   private final List<LeadWindow> leadWindows;
+  private final List<FirstValueWindow> firstValueWindows;
 
   private WindowPlan(Builder builder) {
     this.rowNumberWindows = immutableList(builder.rowNumberWindows);
@@ -37,6 +38,7 @@ public final class WindowPlan {
     this.maxWindows = immutableList(builder.maxWindows);
     this.lagWindows = immutableList(builder.lagWindows);
     this.leadWindows = immutableList(builder.leadWindows);
+    this.firstValueWindows = immutableList(builder.firstValueWindows);
   }
 
   /**
@@ -72,7 +74,7 @@ public final class WindowPlan {
     return rowNumberWindows.isEmpty() && rankWindows.isEmpty() && denseRankWindows.isEmpty()
         && percentRankWindows.isEmpty() && cumeDistWindows.isEmpty() && ntileWindows.isEmpty() && countWindows.isEmpty()
         && sumWindows.isEmpty() && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty()
-        && lagWindows.isEmpty() && leadWindows.isEmpty();
+        && lagWindows.isEmpty() && leadWindows.isEmpty() && firstValueWindows.isEmpty();
   }
 
   /**
@@ -193,6 +195,15 @@ public final class WindowPlan {
   }
 
   /**
+   * Retrieve FIRST_VALUE analytic expression descriptors.
+   *
+   * @return immutable list of {@link FirstValueWindow} instances
+   */
+  public List<FirstValueWindow> firstValueWindows() {
+    return firstValueWindows;
+  }
+
+  /**
    * Builder for assembling immutable {@link WindowPlan} instances.
    */
   public static final class Builder {
@@ -210,6 +221,7 @@ public final class WindowPlan {
     private List<MaxWindow> maxWindows;
     private List<LagWindow> lagWindows;
     private List<LeadWindow> leadWindows;
+    private List<FirstValueWindow> firstValueWindows;
 
     private Builder() {
       // Prevent external instantiation.
@@ -368,6 +380,18 @@ public final class WindowPlan {
      */
     public Builder leadWindows(List<LeadWindow> leadWindows) {
       this.leadWindows = copyOrNull(leadWindows);
+      return this;
+    }
+
+    /**
+     * Provide the FIRST_VALUE windows to include in the resulting plan.
+     *
+     * @param firstValueWindows
+     *          the windows to capture, may be {@code null}
+     * @return this builder instance for chaining
+     */
+    public Builder firstValueWindows(List<FirstValueWindow> firstValueWindows) {
+      this.firstValueWindows = copyOrNull(firstValueWindows);
       return this;
     }
 

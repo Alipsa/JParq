@@ -10,6 +10,7 @@ import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.statement.select.OrderByElement;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.engine.window.FirstValueWindow;
 import se.alipsa.jparq.engine.window.RowNumberWindow;
 import se.alipsa.jparq.engine.window.SumWindow;
 import se.alipsa.jparq.engine.window.WindowPlan;
@@ -51,12 +52,21 @@ class WindowPlanBuilderTest {
     SumWindow sumWindow = new SumWindow(sumExpression, sumPartitions, sumOrder, sumArgument,
         sumExpression.isDistinct() || sumExpression.isUnique(), sumExpression.getWindowElement());
 
+    AnalyticExpression firstValueExpression = (AnalyticExpression) CCJSqlParserUtil
+        .parseExpression("FIRST_VALUE(salary) OVER (PARTITION BY dept ORDER BY change_date DESC)");
+    List<Expression> firstValuePartitions = partitionExpressions(firstValueExpression);
+    List<OrderByElement> firstValueOrder = orderByElements(firstValueExpression);
+    Expression firstValueArgument = analyticArgument(firstValueExpression);
+    FirstValueWindow firstValueWindow = new FirstValueWindow(firstValueExpression, firstValuePartitions,
+        firstValueOrder, firstValueArgument, firstValueExpression.getWindowElement());
+
     WindowPlan plan = WindowPlan.builder().rowNumberWindows(List.of(rowNumberWindow)).sumWindows(List.of(sumWindow))
-        .build();
+        .firstValueWindows(List.of(firstValueWindow)).build();
 
     Assertions.assertFalse(plan.isEmpty(), "Expected plan to contain configured windows");
     Assertions.assertEquals(1, plan.rowNumberWindows().size(), "Unexpected ROW_NUMBER window count");
     Assertions.assertEquals(1, plan.sumWindows().size(), "Unexpected SUM window count");
+    Assertions.assertEquals(1, plan.firstValueWindows().size(), "Unexpected FIRST_VALUE window count");
   }
 
   /**

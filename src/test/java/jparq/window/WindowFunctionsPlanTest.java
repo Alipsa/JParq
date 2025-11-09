@@ -26,7 +26,10 @@ class WindowFunctionsPlanTest {
         CCJSqlParserUtil.parseExpression("ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC)"),
         CCJSqlParserUtil.parseExpression("SUM(salary) OVER (PARTITION BY dept ORDER BY change_date DESC)"),
         CCJSqlParserUtil.parseExpression("COUNT(*) OVER (PARTITION BY dept)"),
-        CCJSqlParserUtil.parseExpression("LAG(salary, 1, 0) OVER (PARTITION BY dept ORDER BY change_date DESC)"));
+        CCJSqlParserUtil.parseExpression("LAG(salary, 1, 0) OVER (PARTITION BY dept ORDER BY change_date DESC)"),
+        CCJSqlParserUtil.parseExpression(
+            "FIRST_VALUE(salary) OVER (PARTITION BY dept ORDER BY change_date DESC "
+                + "ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"));
 
     WindowPlan plan = WindowFunctions.plan(expressions);
 
@@ -35,6 +38,7 @@ class WindowFunctionsPlanTest {
     Assertions.assertEquals(1, plan.sumWindows().size(), "Expected one SUM analytic definition");
     Assertions.assertEquals(1, plan.countWindows().size(), "Expected one COUNT analytic definition");
     Assertions.assertEquals(1, plan.lagWindows().size(), "Expected one LAG analytic definition");
+    Assertions.assertEquals(1, plan.firstValueWindows().size(), "Expected one FIRST_VALUE analytic definition");
     Assertions.assertTrue(plan.rankWindows().isEmpty(), "No RANK windows should be present");
     Assertions.assertTrue(plan.avgWindows().isEmpty(), "No AVG windows should be present");
   }
