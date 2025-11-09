@@ -162,7 +162,7 @@ The following SQL statements are supported:
 
 - UNNEST
 - ARRAY
-- 
+### Non standard extensions
 - Support for variable assignment and use within SQL scripts.
   - @variable_name syntax to define a variable that exists for the duration of the connection
     - Example (direct assignment, connection scope):
