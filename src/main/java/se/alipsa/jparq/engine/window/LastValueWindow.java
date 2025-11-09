@@ -34,8 +34,8 @@ public final class LastValueWindow {
   public LastValueWindow(AnalyticExpression expression, List<Expression> partitionExpressions,
       List<OrderByElement> orderByElements, Expression valueExpression, WindowElement windowElement) {
     this.expression = expression;
-    this.partitionExpressions = partitionExpressions == null ? List.of() : List.copyOf(partitionExpressions);
-    this.orderByElements = orderByElements == null ? List.of() : List.copyOf(orderByElements);
+    this.partitionExpressions = partitionExpressions == null ? List.of() : partitionExpressions;
+    this.orderByElements = orderByElements == null ? List.of() : orderByElements;
     this.valueExpression = valueExpression;
     this.windowElement = windowElement;
   }
