@@ -1250,15 +1250,13 @@ public final class SqlParser {
       if (groupingSetElements != null && !groupingSetElements.isEmpty()) {
         throw new IllegalArgumentException("ROLLUP cannot be combined with GROUPING SETS");
       }
-      List<Integer> combinedOrder = new ArrayList<>(baseGrouping);
-      combinedOrder.addAll(rollupOrder);
-      if (combinedOrder.isEmpty()) {
+      if (rollupOrder.isEmpty() && baseGrouping.isEmpty()) {
         throw new IllegalArgumentException("ROLLUP requires at least one grouping expression");
       }
-      for (int size = combinedOrder.size(); size >= 0; size--) {
-        List<Integer> indexes = new ArrayList<>();
+      for (int size = rollupOrder.size(); size >= 0; size--) {
+        List<Integer> indexes = new ArrayList<>(baseGrouping);
         for (int i = 0; i < size; i++) {
-          indexes.add(combinedOrder.get(i));
+          indexes.add(rollupOrder.get(i));
         }
         groupingSets.add(List.copyOf(indexes));
       }

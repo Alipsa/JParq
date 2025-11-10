@@ -79,6 +79,51 @@ public class RollupTest {
   }
 
   @Test
+  void testRollupWithBaseGroupingColumns() {
+    MtcarsHpSums.Aggregates sums = MtcarsHpSums.compute(jparqSql);
+
+    List<ResultRow> actual = new ArrayList<>();
+    jparqSql.query("SELECT cyl, gear, SUM(hp) AS total_hp, GROUPING(cyl) AS g_cyl, GROUPING(gear) AS g_gear "
+        + "FROM mtcars GROUP BY cyl, ROLLUP (gear) ORDER BY cyl, gear", rs -> {
+          try {
+            while (rs.next()) {
+              Integer cyl = (Integer) rs.getObject("cyl");
+              Integer gear = (Integer) rs.getObject("gear");
+              double totalHp = rs.getDouble("total_hp");
+              int groupingCyl = rs.getInt("g_cyl");
+              int groupingGear = rs.getInt("g_gear");
+              actual.add(new ResultRow(cyl, gear, totalHp, groupingCyl, groupingGear));
+            }
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
+
+    List<ResultRow> expected = new ArrayList<>();
+    TreeSet<Integer> cylOrder = new TreeSet<>(sums.detailSums().keySet());
+    for (Integer cyl : cylOrder) {
+      Map<Integer, Double> gearMap = sums.detailSums().get(cyl);
+      TreeSet<Integer> gearOrder = new TreeSet<>(gearMap.keySet());
+      for (Integer gear : gearOrder) {
+        expected.add(new ResultRow(cyl, gear, gearMap.get(gear), 0, 0));
+      }
+      expected.add(new ResultRow(cyl, null, sums.cylinderTotals().get(cyl), 0, 1));
+    }
+
+    assertEquals(expected.size(), actual.size(), "Unexpected row count when grouping with base columns");
+    for (int i = 0; i < expected.size(); i++) {
+      ResultRow exp = expected.get(i);
+      ResultRow act = actual.get(i);
+      assertNotNull(act.cyl(), "Base grouping column should not be null");
+      assertEquals(0, act.groupingCyl(), "GROUPING(cyl) should be 0 when cyl is a base grouping column");
+      assertEquals(exp.cyl(), act.cyl(), "Cylinder mismatch at row " + i);
+      assertEquals(exp.gear(), act.gear(), "Gear mismatch at row " + i);
+      assertEquals(exp.totalHp(), act.totalHp(), 1e-9, "Total HP mismatch at row " + i);
+      assertEquals(exp.groupingGear(), act.groupingGear(), "GROUPING(gear) mismatch at row " + i);
+    }
+  }
+
+  @Test
   void testRollupGroupingFilter() {
     MtcarsHpSums.Aggregates sums = MtcarsHpSums.compute(jparqSql);
 
