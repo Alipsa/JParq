@@ -1206,33 +1206,75 @@ public final class SqlParser {
     List<Expression> expressions = new ArrayList<>();
     List<Integer> baseGrouping = new ArrayList<>();
     List<Integer> rollupOrder = new ArrayList<>();
+    List<Integer> cubeOrder = new ArrayList<>();
     boolean encounteredRollup = false;
+    boolean encounteredCube = false;
 
     ExpressionList<?> expressionList = groupBy.getGroupByExpressionList();
     if (expressionList != null && !expressionList.isEmpty()) {
       for (Expression expr : expressionList) {
-        if (expr instanceof Function func && "ROLLUP".equalsIgnoreCase(func.getName())) {
-          if (encounteredRollup) {
-            throw new IllegalArgumentException("Multiple ROLLUP clauses in GROUP BY are not supported");
-          }
-          encounteredRollup = true;
-          ExpressionList<?> parameters = func.getParameters();
-          if (parameters == null || parameters.isEmpty()) {
-            throw new IllegalArgumentException("ROLLUP requires at least one grouping expression");
-          }
-          if (!allowedQualifiers.isEmpty()) {
-            for (Object paramObj : parameters) {
-              stripQualifier((Expression) paramObj, allowedQualifiers);
+        if (expr instanceof Function func) {
+          String name = func.getName();
+          if ("ROLLUP".equalsIgnoreCase(name)) {
+            if (encounteredRollup) {
+              throw new IllegalArgumentException("Multiple ROLLUP clauses in GROUP BY are not supported");
             }
-          }
-          for (Object paramObj : parameters) {
-            Expression param = (Expression) paramObj;
-            int index = registerGroupingExpression(param, expressions, indexByExpression);
-            rollupOrder.add(index);
+            if (encounteredCube) {
+              throw new IllegalArgumentException("ROLLUP cannot be combined with CUBE in GROUP BY");
+            }
+            encounteredRollup = true;
+            ExpressionList<?> parameters = func.getParameters();
+            if (parameters == null || parameters.isEmpty()) {
+              throw new IllegalArgumentException("ROLLUP requires at least one grouping expression");
+            }
+            if (!allowedQualifiers.isEmpty()) {
+              for (Object paramObj : parameters) {
+                stripQualifier((Expression) paramObj, allowedQualifiers);
+              }
+            }
+            for (Object paramObj : parameters) {
+              Expression param = (Expression) paramObj;
+              int index = registerGroupingExpression(param, expressions, indexByExpression);
+              rollupOrder.add(index);
+            }
+          } else if ("CUBE".equalsIgnoreCase(name)) {
+            if (encounteredCube) {
+              throw new IllegalArgumentException("Multiple CUBE clauses in GROUP BY are not supported");
+            }
+            if (encounteredRollup) {
+              throw new IllegalArgumentException("CUBE cannot be combined with ROLLUP in GROUP BY");
+            }
+            encounteredCube = true;
+            ExpressionList<?> parameters = func.getParameters();
+            if (parameters == null || parameters.isEmpty()) {
+              throw new IllegalArgumentException("CUBE requires at least one grouping expression");
+            }
+            if (!allowedQualifiers.isEmpty()) {
+              for (Object paramObj : parameters) {
+                stripQualifier((Expression) paramObj, allowedQualifiers);
+              }
+            }
+            for (Object paramObj : parameters) {
+              Expression param = (Expression) paramObj;
+              int index = registerGroupingExpression(param, expressions, indexByExpression);
+              cubeOrder.add(index);
+            }
+          } else {
+            if (encounteredRollup || encounteredCube) {
+              throw new IllegalArgumentException(
+                  "Special grouping elements such as ROLLUP or CUBE must be the last items in GROUP BY");
+            }
+            Expression processed = expr;
+            if (!allowedQualifiers.isEmpty()) {
+              stripQualifier(processed, allowedQualifiers);
+            }
+            int index = registerGroupingExpression(processed, expressions, indexByExpression);
+            baseGrouping.add(index);
           }
         } else {
-          if (encounteredRollup) {
-            throw new IllegalArgumentException("ROLLUP must be the last element in the GROUP BY clause");
+          if (encounteredRollup || encounteredCube) {
+            throw new IllegalArgumentException(
+                "Special grouping elements such as ROLLUP or CUBE must be the last items in GROUP BY");
           }
           Expression processed = expr;
           if (!allowedQualifiers.isEmpty()) {
@@ -1257,6 +1299,11 @@ public final class SqlParser {
         }
         groupingSets.add(List.copyOf(indexes));
       }
+    } else if (encounteredCube) {
+      if (groupingSetElements != null && !groupingSetElements.isEmpty()) {
+        throw new IllegalArgumentException("CUBE cannot be combined with GROUPING SETS");
+      }
+      generateCubeGroupingSets(groupingSets, new ArrayList<>(baseGrouping), cubeOrder, 0);
     } else if (groupingSetElements != null && !groupingSetElements.isEmpty()) {
       for (ExpressionList<Expression> groupingSet : groupingSetElements) {
         List<Integer> indexes = new ArrayList<>(baseGrouping);
@@ -1293,6 +1340,19 @@ public final class SqlParser {
     expressions.add(expression);
     indexByExpression.put(key, index);
     return index;
+  }
+
+  private static void generateCubeGroupingSets(List<List<Integer>> target, List<Integer> current,
+      List<Integer> cubeOrder, int position) {
+    if (position == cubeOrder.size()) {
+      target.add(List.copyOf(current));
+      return;
+    }
+
+    current.add(cubeOrder.get(position));
+    generateCubeGroupingSets(target, current, cubeOrder, position + 1);
+    current.remove(current.size() - 1);
+    generateCubeGroupingSets(target, current, cubeOrder, position + 1);
   }
 
   private record GroupByInfo(List<Expression> expressions, List<List<Integer>> groupingSets) {
