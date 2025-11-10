@@ -27,8 +27,8 @@ public final class QualifiedWildcard implements SelectListItem {
    * @param qualifier
    *          the qualifier associated with the wildcard, e.g. {@code table}
    * @param sourcePosition
-   *          the position where the wildcard appears within the SQL text, may
-   *          be {@code null}
+   *          the position where the wildcard appears within the SQL text, may be
+   *          {@code null}
    */
   public QualifiedWildcard(String qualifier, SourcePosition sourcePosition) {
     if (qualifier == null) {
@@ -67,8 +67,7 @@ public final class QualifiedWildcard implements SelectListItem {
       return true;
     }
     if (obj instanceof QualifiedWildcard other) {
-      return Objects.equals(qualifier, other.qualifier)
-          && Objects.equals(sourcePosition, other.sourcePosition);
+      return Objects.equals(qualifier, other.qualifier) && Objects.equals(sourcePosition, other.sourcePosition);
     }
     return false;
   }

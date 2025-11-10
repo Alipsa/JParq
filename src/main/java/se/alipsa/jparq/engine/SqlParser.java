@@ -117,9 +117,9 @@ public final class SqlParser {
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
       int limit, int offset, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct,
       List<String> innerDistinctColumns, List<Expression> expressions, List<QualifiedWildcard> qualifiedWildcards,
-      List<Expression> groupByExpressions,
-      List<List<Integer>> groupingSets, Expression having, int preLimit, int preOffset, List<OrderKey> preOrderBy,
-      List<TableReference> tableReferences, List<CommonTableExpression> commonTableExpressions) implements Query {
+      List<Expression> groupByExpressions, List<List<Integer>> groupingSets, Expression having, int preLimit,
+      int preOffset, List<OrderKey> preOrderBy, List<TableReference> tableReferences,
+      List<CommonTableExpression> commonTableExpressions) implements Query {
 
     /**
      * returns "*" if no explicit projection.
@@ -475,8 +475,8 @@ public final class SqlParser {
     FromInfo fromInfo = parseFromItem(ps.getFromItem(), ctes, cteLookup, allowQualifiedWildcards);
     List<JoinInfo> joinInfos = parseJoins(ps.getJoins(), ctes, cteLookup, allowQualifiedWildcards);
     List<TableReference> tableRefs = buildTableReferences(fromInfo, joinInfos);
-    final Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo,
-        tableRefs, allowQualifiedWildcards);
+    final Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo, tableRefs,
+        allowQualifiedWildcards);
 
     Expression whereExpr = ps.getWhere();
     if (tableRefs.size() == 1) {
@@ -576,8 +576,8 @@ public final class SqlParser {
 
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
         offset, orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, wildcardCopy,
-        groupByInfo.expressions(),
-        groupByInfo.groupingSets(), combinedHaving, preLimit, preOffset, preOrderCopy, tableRefs, List.copyOf(ctes));
+        groupByInfo.expressions(), groupByInfo.groupingSets(), combinedHaving, preLimit, preOffset, preOrderCopy,
+        tableRefs, List.copyOf(ctes));
   }
 
   /**

@@ -32,8 +32,7 @@ class AstTest {
     List<QualifiedWildcard> wildcards = select.qualifiedWildcards();
 
     assertEquals(1, wildcards.size(), "Expected a single qualified wildcard entry");
-    assertEquals("schema.table", wildcards.getFirst().qualifier(),
-        "Schema-qualified table name should be preserved");
+    assertEquals("schema.table", wildcards.getFirst().qualifier(), "Schema-qualified table name should be preserved");
   }
 
   @Test

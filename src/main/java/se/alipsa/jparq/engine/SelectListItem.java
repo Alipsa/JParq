@@ -11,7 +11,8 @@ public interface SelectListItem {
   /**
    * Provides the source position for the select item when available.
    *
-   * @return an {@link Optional} describing the position, or {@link Optional#empty()} when unavailable
+   * @return an {@link Optional} describing the position, or
+   *         {@link Optional#empty()} when unavailable
    */
   Optional<SourcePosition> sourcePosition();
 }
