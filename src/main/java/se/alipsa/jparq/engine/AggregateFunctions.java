@@ -1243,8 +1243,6 @@ public final class AggregateFunctions {
     }
   }
 
-  
-
   private abstract static class AggregateAccumulator {
     final AggregateSpec spec;
     Class<?> observedType;
