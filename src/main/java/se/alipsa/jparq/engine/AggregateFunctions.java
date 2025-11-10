@@ -1156,15 +1156,18 @@ public final class AggregateFunctions {
   }
 
   /**
-   * Create an immutable list from the supplied values while preserving any null elements.
+   * Create an immutable list from the supplied values while preserving any null
+   * elements.
+   *
    * <p>
-   * {@link List#copyOf(Collection)} rejects null entries, but GROUPING SETS require nulls to represent
-   * suppressed grouping expressions. This method ensures the returned list is immutable yet retains
-   * those null placeholders.
+   * {@link List#copyOf(Collection)} rejects null entries, but GROUPING SETS
+   * require nulls to represent suppressed grouping expressions. This method
+   * ensures the returned list is immutable yet retains those null placeholders.
    *
    * @param values
    *          source list, which must be non-null but may contain null elements
-   * @return an immutable list containing the same elements, including nulls, as {@code values}
+   * @return an immutable list containing the same elements, including nulls, as
+   *         {@code values}
    */
   private static <T> List<T> immutableListAllowingNulls(List<T> values) {
     Objects.requireNonNull(values, "values");

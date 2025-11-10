@@ -57,17 +57,17 @@ ORDER BY
 
 ### Example Output (Partial)
 
-| cyl | gear | Total_HP | Group_Level |
-| :---: | :---: | :---: | :--- |
-| 4 | 3 | 109 | Detail Subtotal |
-| 4 | 4 | 487 | Detail Subtotal |
-| 4 | 5 | 113 | Detail Subtotal |
-| **4** | **NULL** | **709** | **CYLINDER TOTAL** |
-| 6 | 3 | 243 | Detail Subtotal |
-| 6 | 4 | 120 | Detail Subtotal |
-| **6** | **NULL** | **538** | **CYLINDER TOTAL** |
-| ... | ... | ... | ... |
-| **NULL**| **NULL**| **4329** | **GRAND TOTAL** |
+|   cyl    |   gear   | Total_HP | Group_Level        |
+|:--------:|:--------:|:--------:|:-------------------|
+|    4     |    3     |   109    | Detail Subtotal    |
+|    4     |    4     |   487    | Detail Subtotal    |
+|    4     |    5     |   113    | Detail Subtotal    |
+|  **4**   | **NULL** | **709**  | **CYLINDER TOTAL** |
+|    6     |    3     |   243    | Detail Subtotal    |
+|    6     |    4     |   120    | Detail Subtotal    |
+|  **6**   | **NULL** | **538**  | **CYLINDER TOTAL** |
+|   ...    |   ...    |   ...    | ...                |
+| **NULL** | **NULL** | **4329** | **GRAND TOTAL**    |
 
 -----
 
@@ -88,7 +88,7 @@ ORDER BY
 
   * Create tests to verify the functionality in a test class called **`jparq.group.RollupTest`**.
   * Tests must cover:
-      * Simple `ROLLUP(A, B)` and verification of the $N+1$ result levels.
+      * Simple `ROLLUP(A, B)` and verification of the N+1 result levels.
       * Correct calculation of totals/subtotals.
       * Correct output of the `GROUPING(column)` function across all rows.
   * Adhere to all coding standards (Checkstyle, PMD, Spotless).
