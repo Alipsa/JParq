@@ -97,6 +97,62 @@ public class CubeTest {
   }
 
   @Test
+  void testCubeIgnoresDuplicateDimensions() {
+    MtcarsHpSums.Aggregates sums = MtcarsHpSums.compute(jparqSql);
+
+    List<ResultRow> actual = new ArrayList<>();
+    jparqSql.query("SELECT cyl, gear, SUM(hp) AS total_hp, GROUPING(cyl) AS g_cyl, GROUPING(gear) AS g_gear "
+        + "FROM mtcars GROUP BY cyl, CUBE(cyl, gear) ORDER BY cyl, gear", rs -> {
+          try {
+            while (rs.next()) {
+              Integer cyl = (Integer) rs.getObject("cyl");
+              Integer gear = (Integer) rs.getObject("gear");
+              double totalHp = rs.getDouble("total_hp");
+              int groupingCyl = rs.getInt("g_cyl");
+              int groupingGear = rs.getInt("g_gear");
+              actual.add(new ResultRow(cyl, gear, totalHp, groupingCyl, groupingGear));
+            }
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
+
+    int detailRowCount = sums.detailSums().values().stream().mapToInt(Map::size).sum();
+    int cylinderTotalCount = sums.cylinderTotals().size();
+    assertEquals(detailRowCount + cylinderTotalCount, actual.size(),
+        "Duplicate cube dimensions should not introduce extra rows");
+
+    Set<String> seenDetailKeys = new HashSet<>();
+    Set<Integer> seenCylinderTotals = new HashSet<>();
+
+    actual.forEach(row -> {
+      assertEquals(0, row.groupingCyl(), "GROUPING(cyl) should remain 0 when specified as a base column");
+      if (row.gear() == null) {
+        assertEquals(1, row.groupingGear(), "Cylinder totals should have GROUPING(gear) = 1");
+        assertTrue(seenCylinderTotals.add(row.cyl()),
+            "Duplicate cylinder total encountered for cyl = " + row.cyl());
+        Double expected = sums.cylinderTotals().get(row.cyl());
+        assertNotNull(expected, "Unexpected cylinder value in CUBE totals: " + row.cyl());
+        assertEquals(expected, row.totalHp(), 1e-9, "Cylinder total mismatch for cyl = " + row.cyl());
+      } else {
+        assertEquals(0, row.groupingGear(), "Detail rows should have GROUPING(gear) = 0");
+        Map<Integer, Double> gearTotals = sums.detailSums().get(row.cyl());
+        assertNotNull(gearTotals, "Unexpected cylinder value in detail rows: " + row.cyl());
+        Double expected = gearTotals.get(row.gear());
+        assertNotNull(expected,
+            "Unexpected gear value in detail rows: cyl = " + row.cyl() + ", gear = " + row.gear());
+        assertTrue(seenDetailKeys.add(row.cyl() + ":" + row.gear()),
+            "Duplicate detail row for cyl = " + row.cyl() + ", gear = " + row.gear());
+        assertEquals(expected, row.totalHp(), 1e-9,
+            "Detail total mismatch for cyl = " + row.cyl() + ", gear = " + row.gear());
+      }
+    });
+
+    assertEquals(detailRowCount, seenDetailKeys.size(), "Expected one detail row per cyl/gear combination");
+    assertEquals(cylinderTotalCount, seenCylinderTotals.size(), "Expected one total per cylinder");
+  }
+
+  @Test
   void testCubeGroupingFilters() {
     MtcarsHpSums.Aggregates sums = MtcarsHpSums.compute(jparqSql);
 

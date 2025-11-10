@@ -1303,7 +1303,8 @@ public final class SqlParser {
       if (groupingSetElements != null && !groupingSetElements.isEmpty()) {
         throw new IllegalArgumentException("CUBE cannot be combined with GROUPING SETS");
       }
-      generateCubeGroupingSets(groupingSets, new ArrayList<>(baseGrouping), cubeOrder, 0);
+      List<Integer> cubeDimensions = resolveCubeDimensions(baseGrouping, cubeOrder);
+      generateCubeGroupingSets(groupingSets, new ArrayList<>(baseGrouping), cubeDimensions, 0);
     } else if (groupingSetElements != null && !groupingSetElements.isEmpty()) {
       for (ExpressionList<Expression> groupingSet : groupingSetElements) {
         List<Integer> indexes = new ArrayList<>(baseGrouping);
@@ -1340,6 +1341,21 @@ public final class SqlParser {
     expressions.add(expression);
     indexByExpression.put(key, index);
     return index;
+  }
+
+  private static List<Integer> resolveCubeDimensions(List<Integer> baseGrouping, List<Integer> cubeOrder) {
+    if (cubeOrder.isEmpty()) {
+      return List.of();
+    }
+    Set<Integer> baseIndexes = Set.copyOf(baseGrouping);
+    LinkedHashSet<Integer> filtered = new LinkedHashSet<>();
+    for (Integer index : cubeOrder) {
+      if (index == null || baseIndexes.contains(index)) {
+        continue;
+      }
+      filtered.add(index);
+    }
+    return List.copyOf(filtered);
   }
 
   private static void generateCubeGroupingSets(List<List<Integer>> target, List<Integer> current,
