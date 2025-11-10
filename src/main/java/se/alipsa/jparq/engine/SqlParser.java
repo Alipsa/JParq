@@ -16,6 +16,8 @@ import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import net.sf.jsqlparser.parser.SimpleNode;
+import net.sf.jsqlparser.parser.Token;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.*;
@@ -87,6 +89,9 @@ public final class SqlParser {
    *          SELECT (empty if not applicable)
    * @param expressions
    *          the normalized SELECT expressions in projection order
+   * @param qualifiedWildcards
+   *          qualified wildcard entries encountered in the SELECT list (empty if
+   *          none)
    * @param groupByExpressions
    *          expressions that participate in the GROUP BY clause (empty if no
    *          grouping)
@@ -111,7 +116,8 @@ public final class SqlParser {
    */
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
       int limit, int offset, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct,
-      List<String> innerDistinctColumns, List<Expression> expressions, List<Expression> groupByExpressions,
+      List<String> innerDistinctColumns, List<Expression> expressions, List<QualifiedWildcard> qualifiedWildcards,
+      List<Expression> groupByExpressions,
       List<List<Integer>> groupingSets, Expression having, int preLimit, int preOffset, List<OrderKey> preOrderBy,
       List<TableReference> tableReferences, List<CommonTableExpression> commonTableExpressions) implements Query {
 
@@ -312,6 +318,26 @@ public final class SqlParser {
   }
 
   /**
+   * Parse a simple SELECT statement while allowing qualified wildcard projections
+   * to remain in the AST. This helper is intended for analysis scenarios where
+   * the caller needs access to the raw projection items prior to expansion.
+   *
+   * @param sql
+   *          the SQL string, optionally containing {@code --} line comments or
+   *          {@code /* ... *&#47;} block comments
+   * @return the parsed {@link Select} representation including any qualified
+   *         wildcard entries
+   */
+  @SuppressWarnings("PMD.AvoidLiteralsInIfCondition")
+  public static Select parseSelectAllowQualifiedWildcards(String sql) {
+    Query query = parseQuery(sql, true);
+    if (query instanceof Select sel) {
+      return sel;
+    }
+    throw new IllegalArgumentException("SQL statement does not represent a single SELECT query: " + sql);
+  }
+
+  /**
    * Parse a SQL query producing either a plain SELECT or a set operation based
    * query.
    *
@@ -321,33 +347,38 @@ public final class SqlParser {
    * @return a parsed {@link Query} representation
    */
   public static Query parseQuery(String sql) {
+    return parseQuery(sql, false);
+  }
+
+  private static Query parseQuery(String sql, boolean allowQualifiedWildcards) {
     try {
       String normalizedSql = stripSqlComments(sql);
       net.sf.jsqlparser.statement.select.Select stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
           .parse(normalizedSql);
-      List<CommonTableExpression> ctes = parseWithItems(stmt.getWithItemsList());
+      List<CommonTableExpression> ctes = parseWithItems(stmt.getWithItemsList(), allowQualifiedWildcards);
       Map<String, CommonTableExpression> cteLookup = buildCteLookup(ctes);
-      return parseSelectStatement(stmt, ctes, cteLookup);
+      return parseSelectStatement(stmt, ctes, cteLookup, allowQualifiedWildcards);
     } catch (Exception e) {
       throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
     }
   }
 
   private static Query parseSelectStatement(net.sf.jsqlparser.statement.select.Select stmt,
-      List<CommonTableExpression> ctes, Map<String, CommonTableExpression> cteLookup) {
+      List<CommonTableExpression> ctes, Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
     if (stmt instanceof ParenthesedSelect parenthesed) {
-      return parseSelectStatement(parenthesed.getSelect(), ctes, cteLookup);
+      return parseSelectStatement(parenthesed.getSelect(), ctes, cteLookup, allowQualifiedWildcards);
     }
     if (stmt instanceof SetOperationList setList) {
-      return parseSetOperationList(setList, ctes, cteLookup);
+      return parseSetOperationList(setList, ctes, cteLookup, allowQualifiedWildcards);
     }
     if (stmt instanceof PlainSelect plain) {
-      return parsePlainSelect(plain, ctes, cteLookup);
+      return parsePlainSelect(plain, ctes, cteLookup, allowQualifiedWildcards);
     }
     throw new IllegalArgumentException("Unsupported SELECT statement: " + stmt);
   }
 
-  private static List<CommonTableExpression> parseWithItems(List<WithItem<?>> withItems) {
+  private static List<CommonTableExpression> parseWithItems(List<WithItem<?>> withItems,
+      boolean allowQualifiedWildcards) {
     if (withItems == null || withItems.isEmpty()) {
       return List.of();
     }
@@ -363,7 +394,7 @@ public final class SqlParser {
       }
       List<CommonTableExpression> available = List.copyOf(prior);
       Map<String, CommonTableExpression> availableLookup = buildCteLookup(available);
-      Query query = parseSelectStatement(select.getSelect(), available, availableLookup);
+      Query query = parseSelectStatement(select.getSelect(), available, availableLookup, allowQualifiedWildcards);
       List<String> columnAliases = parseCteColumns(item.getWithItemList());
       String sql = select.toString();
       String name = item.getUnquotedAliasName();
@@ -440,11 +471,12 @@ public final class SqlParser {
   }
 
   private static Select parsePlainSelect(PlainSelect ps, List<CommonTableExpression> ctes,
-      Map<String, CommonTableExpression> cteLookup) {
-    FromInfo fromInfo = parseFromItem(ps.getFromItem(), ctes, cteLookup);
-    List<JoinInfo> joinInfos = parseJoins(ps.getJoins(), ctes, cteLookup);
+      Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
+    FromInfo fromInfo = parseFromItem(ps.getFromItem(), ctes, cteLookup, allowQualifiedWildcards);
+    List<JoinInfo> joinInfos = parseJoins(ps.getJoins(), ctes, cteLookup, allowQualifiedWildcards);
     List<TableReference> tableRefs = buildTableReferences(fromInfo, joinInfos);
-    final Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo, tableRefs);
+    final Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo,
+        tableRefs, allowQualifiedWildcards);
 
     Expression whereExpr = ps.getWhere();
     if (tableRefs.size() == 1) {
@@ -537,12 +569,14 @@ public final class SqlParser {
     List<OrderKey> orderCopy = List.copyOf(orderKeys);
     List<OrderKey> preOrderCopy = List.copyOf(preOrderBy);
     List<Expression> expressionCopy = List.copyOf(expressions);
+    List<QualifiedWildcard> wildcardCopy = List.copyOf(projection.qualifiedWildcards());
     List<String> innerDistinctCols = innerDistinct && inner != null ? List.copyOf(inner.columnNames()) : List.of();
 
     GroupByInfo groupByInfo = parseGroupBy(ps.getGroupBy(), tableRefs);
 
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
-        offset, orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, groupByInfo.expressions(),
+        offset, orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, wildcardCopy,
+        groupByInfo.expressions(),
         groupByInfo.groupingSets(), combinedHaving, preLimit, preOffset, preOrderCopy, tableRefs, List.copyOf(ctes));
   }
 
@@ -554,7 +588,7 @@ public final class SqlParser {
    * @return a normalized {@link SetQuery} describing the components and modifiers
    */
   private static SetQuery parseSetOperationList(SetOperationList list, List<CommonTableExpression> ctes,
-      Map<String, CommonTableExpression> cteLookup) {
+      Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
     List<net.sf.jsqlparser.statement.select.Select> selects = list.getSelects();
     List<SetOperation> operations = list.getOperations();
     if (selects == null || selects.isEmpty()) {
@@ -567,7 +601,7 @@ public final class SqlParser {
       if (plain == null) {
         throw new IllegalArgumentException("Unsupported set operation component: " + body);
       }
-      Select parsed = parsePlainSelect(plain, ctes, cteLookup);
+      Select parsed = parsePlainSelect(plain, ctes, cteLookup, allowQualifiedWildcards);
       SetOperator operator = SetOperator.FIRST;
       if (i > 0) {
         SetOperation op = operations.get(i - 1);
@@ -694,7 +728,7 @@ public final class SqlParser {
    * Internal record to hold the projection (SELECT list) results.
    */
   private record Projection(List<String> labels, List<String> physicalCols, List<Expression> expressions,
-      boolean selectAll) {
+      List<QualifiedWildcard> qualifiedWildcards, boolean selectAll) {
   }
 
   /**
@@ -702,7 +736,7 @@ public final class SqlParser {
    * name/alias.
    */
   private static FromInfo parseFromItem(FromItem fromItem, List<CommonTableExpression> ctes,
-      Map<String, CommonTableExpression> cteLookup) {
+      Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
     if (fromItem instanceof Table t) {
       String tableName = t.getName();
       String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
@@ -733,7 +767,7 @@ public final class SqlParser {
       if (innerPlain == null) {
         throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
       }
-      Select innerSelect = parsePlainSelect(innerPlain, ctes, cteLookup);
+      Select innerSelect = parsePlainSelect(innerPlain, ctes, cteLookup, allowQualifiedWildcards);
       String alias = sub.getAlias() != null ? sub.getAlias().getName() : innerSelect.tableAlias();
       if (alias == null) {
         alias = innerSelect.table();
@@ -772,24 +806,31 @@ public final class SqlParser {
    * names.
    */
   private static Projection parseProjectionList(List<SelectItem<?>> selectItems, FromInfo fromInfo,
-      List<TableReference> tableRefs) {
+      List<TableReference> tableRefs, boolean allowQualifiedWildcards) {
     List<String> labels = new ArrayList<>();
     List<String> physicalCols = new ArrayList<>();
     List<Expression> expressions = new ArrayList<>();
+    List<QualifiedWildcard> qualifiedWildcards = new ArrayList<>();
 
     boolean selectAll = false;
     for (SelectItem<?> item : selectItems) {
-      final String text = item.toString().trim();
+      String text = item.toString().trim();
+      Expression expr = item.getExpression();
 
-      if ("*".equals(text)) {
+      if (expr instanceof AllTableColumns tableColumns) {
+        String qualifier = resolveQualifiedWildcardQualifier(tableColumns, text);
+        SourcePosition position = extractSourcePosition(item);
+        qualifiedWildcards.add(new QualifiedWildcard(qualifier, position));
+        if (!allowQualifiedWildcards) {
+          throw new IllegalArgumentException("Qualified * (table.*) not supported yet: " + text);
+        }
+        continue;
+      }
+      if (expr instanceof AllColumns) {
         selectAll = true;
         break;
       }
-      if (text.endsWith(".*")) {
-        throw new IllegalArgumentException("Qualified * (table.*) not supported yet: " + text);
-      }
 
-      final Expression expr = item.getExpression();
       if (tableRefs.size() == 1) {
         stripQualifier(expr, qualifiers(tableRefs));
       }
@@ -831,7 +872,60 @@ public final class SqlParser {
       expressions = List.of();
     }
 
-    return new Projection(labels, physicalCols, expressions, selectAll);
+    return new Projection(labels, physicalCols, expressions, List.copyOf(qualifiedWildcards), selectAll);
+  }
+
+  private static String resolveQualifiedWildcardQualifier(AllTableColumns tableColumns, String originalText) {
+    if (tableColumns == null) {
+      throw new IllegalArgumentException("Qualified wildcard is missing table reference: " + originalText);
+    }
+    Table table = tableColumns.getTable();
+    if (table != null) {
+      Alias alias = table.getAlias();
+      if (alias != null && alias.getName() != null && !alias.getName().isBlank()) {
+        return alias.getName().trim();
+      }
+      String fqn = table.getFullyQualifiedName();
+      if (fqn != null && !fqn.isBlank()) {
+        return fqn.trim();
+      }
+      String name = table.getName();
+      if (name != null && !name.isBlank()) {
+        return name.trim();
+      }
+    }
+    String text = tableColumns.toString();
+    if (text != null) {
+      String trimmed = text.trim();
+      if (trimmed.endsWith(".*")) {
+        String qualifier = trimmed.substring(0, trimmed.length() - 2).trim();
+        if (!qualifier.isEmpty()) {
+          return qualifier;
+        }
+      }
+      if (!trimmed.isEmpty() && !".*".equals(trimmed)) {
+        return trimmed;
+      }
+    }
+    throw new IllegalArgumentException("Qualified wildcard is missing a qualifier: " + originalText);
+  }
+
+  private static SourcePosition extractSourcePosition(SelectItem<?> item) {
+    if (item == null) {
+      return null;
+    }
+    SimpleNode node = item.getASTNode();
+    if (node != null) {
+      Token token = node.jjtGetFirstToken();
+      if (token != null) {
+        int line = token.beginLine;
+        int column = token.beginColumn;
+        if (line > 0 && column > 0) {
+          return new SourcePosition(line, column);
+        }
+      }
+    }
+    return null;
   }
 
   private static Expression combineExpressions(Expression left, Expression right) {
@@ -1378,7 +1472,7 @@ public final class SqlParser {
   }
 
   private static List<JoinInfo> parseJoins(List<Join> joins, List<CommonTableExpression> ctes,
-      Map<String, CommonTableExpression> cteLookup) {
+      Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
     if (joins == null || joins.isEmpty()) {
       return List.of();
     }
@@ -1409,7 +1503,7 @@ public final class SqlParser {
           && joinType != JoinType.FULL_OUTER) {
         throw new IllegalArgumentException("Unsupported outer join type");
       }
-      FromInfo info = parseFromItem(join.getRightItem(), ctes, cteLookup);
+      FromInfo info = parseFromItem(join.getRightItem(), ctes, cteLookup, allowQualifiedWildcards);
       Expression condition = null;
       if (join.getOnExpressions() != null) {
         for (Expression on : join.getOnExpressions()) {
