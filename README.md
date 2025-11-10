@@ -144,10 +144,11 @@ The following SQL statements are supported:
 - Advanced GROUP BY constructs i.e:
   - GROUPING SETS
   - ROLLUP
+  - CUBE
 
 ## Roadmap: Might be implemented in the future
-- Advanced GROUP BY constructs i.e:
-  - CUBE
+
+- Qualified wildcard projections (table.*). The projection parser raises an error when encountering a qualified asterisk, so row-source-specific wildcards from the standard are unavailable.
 
 - ARRAY constructor function
 
@@ -156,10 +157,6 @@ The following SQL statements are supported:
   - VALUES table constructors
   - LATERAL derived tables
   - TABLE value functions
-
-  - TABLESAMPLE.
-
-- Qualified wildcard projections (table.*). The projection parser raises an error when encountering a qualified asterisk, so row-source-specific wildcards from the standard are unavailable.
 
 - Complete set-operation coverage.
   - INTERSECT ALL
@@ -176,6 +173,7 @@ The following SQL statements are supported:
       SELECT * FROM myTable WHERE myColumn > @myVar;
       SELECT * FROM anotherTable LIMIT @myVar;
 - PIVOT and UNPIVOT operators.
+- TABLESAMPLE clause for sampling rows from a table.
 
 ## Out of scope (will not be supported)
 - Data modification statements (INSERT, UPDATE, DELETE, MERGE)

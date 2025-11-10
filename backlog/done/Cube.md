@@ -58,18 +58,18 @@ ORDER BY
 
 ### Example Output (Partial)
 
-| cyl | gear | Total\_HP | Group\_Level |
-| :---: | :---: | :---: | :--- |
-| 4 | 3 | 109 | Detail Subtotal |
-| ... | ... | ... | ... |
-| **4** | **NULL** | **709** | **CYLINDER TOTAL** |
-| 6 | 3 | 243 | Detail Subtotal |
-| ... | ... | ... | ... |
-| **6** | **NULL** | **538** | **CYLINDER TOTAL** |
-| **NULL** | 3 | 2517 | GEAR TOTAL |
-| **NULL** | 4 | 597 | GEAR TOTAL |
-| **NULL** | 5 | 1215 | GEAR TOTAL |
-| **NULL**| **NULL**| **4329** | **GRAND TOTAL** |
+|   cyl    |   gear   | Total\_HP | Group\_Level       |
+|:--------:|:--------:|:---------:|:-------------------|
+|    4     |    3     |    109    | Detail Subtotal    |
+|   ...    |   ...    |    ...    | ...                |
+|  **4**   | **NULL** |  **709**  | **CYLINDER TOTAL** |
+|    6     |    3     |    243    | Detail Subtotal    |
+|   ...    |   ...    |    ...    | ...                |
+|  **6**   | **NULL** |  **538**  | **CYLINDER TOTAL** |
+| **NULL** |    3     |   2517    | GEAR TOTAL         |
+| **NULL** |    4     |    597    | GEAR TOTAL         |
+| **NULL** |    5     |   1215    | GEAR TOTAL         |
+| **NULL** | **NULL** | **4329**  | **GRAND TOTAL**    |
 
 -----
 

@@ -42,8 +42,8 @@ public class CubeTest {
     MtcarsHpSums.Aggregates sums = MtcarsHpSums.compute(jparqSql);
 
     Map<Integer, Double> gearTotals = new HashMap<>();
-    sums.detailSums().values().forEach(gearMap ->
-        gearMap.forEach((gear, total) -> gearTotals.merge(gear, total, Double::sum)));
+    sums.detailSums().values()
+        .forEach(gearMap -> gearMap.forEach((gear, total) -> gearTotals.merge(gear, total, Double::sum)));
 
     List<ResultRow> actual = new ArrayList<>();
     jparqSql.query("SELECT cyl, gear, SUM(hp) AS total_hp, GROUPING(cyl) AS g_cyl, GROUPING(gear) AS g_gear "
@@ -129,8 +129,7 @@ public class CubeTest {
       assertEquals(0, row.groupingCyl(), "GROUPING(cyl) should remain 0 when specified as a base column");
       if (row.gear() == null) {
         assertEquals(1, row.groupingGear(), "Cylinder totals should have GROUPING(gear) = 1");
-        assertTrue(seenCylinderTotals.add(row.cyl()),
-            "Duplicate cylinder total encountered for cyl = " + row.cyl());
+        assertTrue(seenCylinderTotals.add(row.cyl()), "Duplicate cylinder total encountered for cyl = " + row.cyl());
         Double expected = sums.cylinderTotals().get(row.cyl());
         assertNotNull(expected, "Unexpected cylinder value in CUBE totals: " + row.cyl());
         assertEquals(expected, row.totalHp(), 1e-9, "Cylinder total mismatch for cyl = " + row.cyl());
@@ -139,8 +138,7 @@ public class CubeTest {
         Map<Integer, Double> gearTotals = sums.detailSums().get(row.cyl());
         assertNotNull(gearTotals, "Unexpected cylinder value in detail rows: " + row.cyl());
         Double expected = gearTotals.get(row.gear());
-        assertNotNull(expected,
-            "Unexpected gear value in detail rows: cyl = " + row.cyl() + ", gear = " + row.gear());
+        assertNotNull(expected, "Unexpected gear value in detail rows: cyl = " + row.cyl() + ", gear = " + row.gear());
         assertTrue(seenDetailKeys.add(row.cyl() + ":" + row.gear()),
             "Duplicate detail row for cyl = " + row.cyl() + ", gear = " + row.gear());
         assertEquals(expected, row.totalHp(), 1e-9,
@@ -157,8 +155,8 @@ public class CubeTest {
     MtcarsHpSums.Aggregates sums = MtcarsHpSums.compute(jparqSql);
 
     Map<Integer, Double> gearTotals = new HashMap<>();
-    sums.detailSums().values().forEach(gearMap ->
-        gearMap.forEach((gear, total) -> gearTotals.merge(gear, total, Double::sum)));
+    sums.detailSums().values()
+        .forEach(gearMap -> gearMap.forEach((gear, total) -> gearTotals.merge(gear, total, Double::sum)));
 
     List<Double> grandTotals = new ArrayList<>();
     jparqSql.query("SELECT SUM(hp) AS total_hp FROM mtcars GROUP BY CUBE (cyl, gear) "
@@ -207,8 +205,7 @@ public class CubeTest {
             fail(e);
           }
         });
-    assertEquals(gearTotals.size(), actualGearTotals.size(),
-        "CUBE HAVING filter should emit one total per gear");
+    assertEquals(gearTotals.size(), actualGearTotals.size(), "CUBE HAVING filter should emit one total per gear");
     gearTotals.forEach((gear, total) -> {
       assertTrue(actualGearTotals.containsKey(gear), "Missing gear total for gear = " + gear);
       assertEquals(total, actualGearTotals.get(gear), 1e-9, "Gear total mismatch for gear = " + gear);
