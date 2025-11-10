@@ -1197,7 +1197,7 @@ public final class AggregateFunctions {
       for (AggregateAccumulator accumulator : accumulators) {
         values.add(accumulator.result());
       }
-      return Collections.unmodifiableList(values);
+      return List.copyOf(values);
     }
   }
 
