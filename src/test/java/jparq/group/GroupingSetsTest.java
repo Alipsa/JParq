@@ -38,10 +38,8 @@ public class GroupingSetsTest {
     HpSums sums = computeHpSums();
 
     List<ResultRow> actual = new ArrayList<>();
-    jparqSql.query(
-        "SELECT cyl, gear, SUM(hp) AS total_hp, GROUPING(cyl) AS g_cyl, GROUPING(gear) AS g_gear "
-            + "FROM mtcars GROUP BY GROUPING SETS ((cyl, gear), (cyl), ()) ORDER BY cyl, gear",
-        rs -> {
+    jparqSql.query("SELECT cyl, gear, SUM(hp) AS total_hp, GROUPING(cyl) AS g_cyl, GROUPING(gear) AS g_gear "
+        + "FROM mtcars GROUP BY GROUPING SETS ((cyl, gear), (cyl), ()) ORDER BY cyl, gear", rs -> {
           try {
             while (rs.next()) {
               Integer cyl = (Integer) rs.getObject("cyl");
@@ -85,8 +83,7 @@ public class GroupingSetsTest {
     HpSums sums = computeHpSums();
 
     List<Double> grandTotals = new ArrayList<>();
-    jparqSql.query(
-        "SELECT SUM(hp) AS total_hp FROM mtcars GROUP BY GROUPING SETS ((cyl), ()) HAVING GROUPING(cyl) = 1",
+    jparqSql.query("SELECT SUM(hp) AS total_hp FROM mtcars GROUP BY GROUPING SETS ((cyl), ()) HAVING GROUPING(cyl) = 1",
         rs -> {
           try {
             while (rs.next()) {
@@ -123,14 +120,17 @@ public class GroupingSetsTest {
   }
 
   /**
-   * Compute horsepower sums grouped by cylinder and gear for validating grouping set results.
+   * Compute horsepower sums grouped by cylinder and gear for validating grouping
+   * set results.
    *
    * @return aggregated horsepower data for the mtcars dataset
    */
   private static HpSums computeHpSums() {
     Map<Integer, Map<Integer, Double>> detail = new HashMap<>();
     Map<Integer, Double> cylTotals = new HashMap<>();
-    double[] total = new double[] {0.0};
+    double[] total = new double[]{
+        0.0
+    };
     jparqSql.query("SELECT cyl, gear, hp FROM mtcars", rs -> {
       try {
         while (rs.next()) {

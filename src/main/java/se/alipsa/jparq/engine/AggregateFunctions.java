@@ -99,7 +99,7 @@ public final class AggregateFunctions {
    *          expressions that participate in the GROUP BY clause
    * @param groupingSets
    *          grouping sets derived from the GROUP BY clause
-  */
+   */
   public record AggregatePlan(List<AggregateSpec> specs, List<ResultColumn> resultColumns,
       List<GroupExpression> groupExpressions, List<GroupingSet> groupingSets) {
     /**
@@ -160,7 +160,7 @@ public final class AggregateFunctions {
    * @param expressionText
    *          textual representation of the GROUPING() expression for error
    *          reporting
-  */
+   */
   public record ResultColumn(String label, ColumnKind kind, int aggregateIndex, int groupIndex,
       List<Integer> groupingIndexes, String expressionText) {
     /**
@@ -278,7 +278,8 @@ public final class AggregateFunctions {
     }
 
     /**
-     * Determine whether the grouping set includes the specified grouping expression.
+     * Determine whether the grouping set includes the specified grouping
+     * expression.
      *
      * @param index
      *          grouping expression index to check
@@ -433,8 +434,7 @@ public final class AggregateFunctions {
         }
         if (isGroupingFunction(func)) {
           List<Integer> groupingIndexes = groupingArgumentIndexes(func, groupIndexByText);
-          resultColumns.add(
-              new ResultColumn(label, ColumnKind.GROUPING, -1, -1, groupingIndexes, func.toString()));
+          resultColumns.add(new ResultColumn(label, ColumnKind.GROUPING, -1, -1, groupingIndexes, func.toString()));
           continue;
         }
       }
@@ -558,8 +558,7 @@ public final class AggregateFunctions {
   }
 
   /**
-   * Create {@link GroupingSet} instances from the parsed grouping set
-   * definition.
+   * Create {@link GroupingSet} instances from the parsed grouping set definition.
    *
    * @param rawGroupingSets
    *          grouping set definitions expressed as expression indexes
@@ -640,8 +639,7 @@ public final class AggregateFunctions {
         }
       }
       if (match == null) {
-        throw new IllegalArgumentException(
-            "GROUPING argument '" + argument + "' must appear in the GROUP BY clause");
+        throw new IllegalArgumentException("GROUPING argument '" + argument + "' must appear in the GROUP BY clause");
       }
       indexes.add(match);
     }
@@ -1871,4 +1869,3 @@ public final class AggregateFunctions {
   }
 
 }
-

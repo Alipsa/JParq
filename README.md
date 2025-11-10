@@ -141,27 +141,32 @@ The following SQL statements are supported:
     - SUM, AVG, MIN, MAX, COUNT
   - Analytic Value/Navigation Functions
     -  LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
+- Advanced GROUP BY constructs i.e:
+  - GROUPING SETS
 
 ## Roadmap: Might be implemented in the future
 - Advanced GROUP BY constructs i.e:
-  - GROUPING SETS
   - ROLLUP
   - CUBE
 
-- FROM-clause table constructors and lateral items. parseFromItem accepts only base tables or plain subqueries; it throws for any other construct, leaving out SQL-standard features such as 
+- ARRAY constructor function
+
+- Derived Tables i.e. FROM-clause table constructors and lateral items. parseFromItem accepts only base tables or plain subqueries; it throws for any other construct, leaving out SQL-standard features such as 
+  - UNNEST functions
   - VALUES table constructors
   - LATERAL derived tables
-  - TABLE/UNNEST functions
+  - TABLE value functions
+
   - TABLESAMPLE.
 
 - Qualified wildcard projections (table.*). The projection parser raises an error when encountering a qualified asterisk, so row-source-specific wildcards from the standard are unavailable.
 
-- Complete set-operation coverage. While UNION/INTERSECT/EXCEPT are supported, the parser rejects SQL-standard variants like INTERSECT ALL, EXCEPT ALL, and any nesting of set operations, so those result-set combinations remain unsupported.
-
+- Complete set-operation coverage.
+  - INTERSECT ALL
+  - EXCEPT ALL, 
+  - nesting of set operations
+  
 - Standard row-limiting syntax (FETCH FIRST / OFFSET … FETCH). The limit handler inspects only the non-standard LIMIT clause, leaving the SQL-standard FETCH clause unimplemented.
-
-- UNNEST
-- ARRAY
 
 ### Non standard extensions
 - Support for variable assignment and use within SQL scripts.
@@ -170,6 +175,7 @@ The following SQL statements are supported:
       declare @myVar INT = 10;
       SELECT * FROM myTable WHERE myColumn > @myVar;
       SELECT * FROM anotherTable LIMIT @myVar;
+- PIVOT and UNPIVOT operators.
 
 ## Out of scope (will not be supported)
 - Data modification statements (INSERT, UPDATE, DELETE, MERGE)
@@ -180,7 +186,7 @@ The following SQL statements are supported:
 - Triggers (CREATE TRIGGER, DROP TRIGGER)
 - Advanced indexing and optimization hints
 - Full-text search capabilities
-- TEMPORARY TABLES, you need to use CTE's instead.
+- TEMPORARY TABLES, you need to use CTE's or value tables instead.
 
 #### String functions support details
 ##### Character Length and Position
