@@ -1205,22 +1205,64 @@ public final class SqlParser {
     Map<String, Integer> indexByExpression = new LinkedHashMap<>();
     List<Expression> expressions = new ArrayList<>();
     List<Integer> baseGrouping = new ArrayList<>();
+    List<Integer> rollupOrder = new ArrayList<>();
+    boolean encounteredRollup = false;
 
     ExpressionList<?> expressionList = groupBy.getGroupByExpressionList();
     if (expressionList != null && !expressionList.isEmpty()) {
       for (Expression expr : expressionList) {
-        Expression processed = expr;
-        if (!allowedQualifiers.isEmpty()) {
-          stripQualifier(processed, allowedQualifiers);
+        if (expr instanceof Function func && "ROLLUP".equalsIgnoreCase(func.getName())) {
+          if (encounteredRollup) {
+            throw new IllegalArgumentException("Multiple ROLLUP clauses in GROUP BY are not supported");
+          }
+          encounteredRollup = true;
+          ExpressionList<?> parameters = func.getParameters();
+          if (parameters == null || parameters.isEmpty()) {
+            throw new IllegalArgumentException("ROLLUP requires at least one grouping expression");
+          }
+          if (!allowedQualifiers.isEmpty()) {
+            for (Object paramObj : parameters) {
+              stripQualifier((Expression) paramObj, allowedQualifiers);
+            }
+          }
+          for (Object paramObj : parameters) {
+            Expression param = (Expression) paramObj;
+            int index = registerGroupingExpression(param, expressions, indexByExpression);
+            rollupOrder.add(index);
+          }
+        } else {
+          if (encounteredRollup) {
+            throw new IllegalArgumentException("ROLLUP must be the last element in the GROUP BY clause");
+          }
+          Expression processed = expr;
+          if (!allowedQualifiers.isEmpty()) {
+            stripQualifier(processed, allowedQualifiers);
+          }
+          int index = registerGroupingExpression(processed, expressions, indexByExpression);
+          baseGrouping.add(index);
         }
-        int index = registerGroupingExpression(processed, expressions, indexByExpression);
-        baseGrouping.add(index);
       }
     }
 
     List<List<Integer>> groupingSets = new ArrayList<>();
     List<ExpressionList<Expression>> groupingSetElements = groupBy.getGroupingSets();
-    if (groupingSetElements != null && !groupingSetElements.isEmpty()) {
+    if (encounteredRollup) {
+      if (groupingSetElements != null && !groupingSetElements.isEmpty()) {
+        throw new IllegalArgumentException("ROLLUP cannot be combined with GROUPING SETS");
+      }
+      List<Integer> combinedOrder = new ArrayList<>(baseGrouping);
+      combinedOrder.addAll(rollupOrder);
+      if (combinedOrder.isEmpty()) {
+        throw new IllegalArgumentException("ROLLUP requires at least one grouping expression");
+      }
+      for (int size = combinedOrder.size(); size >= 0; size--) {
+        List<Integer> indexes = new ArrayList<>();
+        for (int i = 0; i < size; i++) {
+          indexes.add(combinedOrder.get(i));
+        }
+        groupingSets.add(List.copyOf(indexes));
+      }
+    } else if (groupingSetElements != null && !groupingSetElements.isEmpty()) {
       for (ExpressionList<Expression> groupingSet : groupingSetElements) {
         List<Integer> indexes = new ArrayList<>(baseGrouping);
         if (groupingSet != null && !groupingSet.isEmpty()) {

@@ -19,14 +19,14 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
-/** Tests verifying GROUPING SETS support and GROUPING() semantics. */
-public class GroupingSetsTest {
+/** Tests verifying support for GROUP BY ROLLUP and related GROUPING() semantics. */
+public class RollupTest {
 
   private static JParqSql jparqSql;
 
   @BeforeAll
   static void setup() throws URISyntaxException {
-    URL mtcarsUrl = GroupingSetsTest.class.getResource("/mtcars.parquet");
+    URL mtcarsUrl = RollupTest.class.getResource("/mtcars.parquet");
     assertNotNull(mtcarsUrl, "mtcars.parquet must be available on the classpath");
     Path mtcarsPath = Paths.get(mtcarsUrl.toURI());
     Path dir = mtcarsPath.getParent();
@@ -34,12 +34,12 @@ public class GroupingSetsTest {
   }
 
   @Test
-  void testGroupingSetsAggregates() {
+  void testRollupGeneratesHierarchicalTotals() {
     MtcarsHpSums.Aggregates sums = MtcarsHpSums.compute(jparqSql);
 
     List<ResultRow> actual = new ArrayList<>();
     jparqSql.query("SELECT cyl, gear, SUM(hp) AS total_hp, GROUPING(cyl) AS g_cyl, GROUPING(gear) AS g_gear "
-        + "FROM mtcars GROUP BY GROUPING SETS ((cyl, gear), (cyl), ()) ORDER BY cyl, gear", rs -> {
+        + "FROM mtcars GROUP BY ROLLUP (cyl, gear) ORDER BY cyl, gear", rs -> {
           try {
             while (rs.next()) {
               Integer cyl = (Integer) rs.getObject("cyl");
@@ -66,7 +66,7 @@ public class GroupingSetsTest {
     }
     expected.add(new ResultRow(null, null, sums.grandTotal(), 1, 1));
 
-    assertEquals(expected.size(), actual.size(), "Unexpected number of rows from GROUPING SETS query");
+    assertEquals(expected.size(), actual.size(), "Unexpected number of rows from ROLLUP query");
     for (int i = 0; i < expected.size(); i++) {
       ResultRow exp = expected.get(i);
       ResultRow act = actual.get(i);
@@ -79,45 +79,43 @@ public class GroupingSetsTest {
   }
 
   @Test
-  void testGroupingFunctionInHaving() {
+  void testRollupGroupingFilter() {
     MtcarsHpSums.Aggregates sums = MtcarsHpSums.compute(jparqSql);
 
     List<Double> grandTotals = new ArrayList<>();
-    jparqSql.query("SELECT SUM(hp) AS total_hp FROM mtcars GROUP BY GROUPING SETS ((cyl), ()) HAVING GROUPING(cyl) = 1",
-        rs -> {
-          try {
-            while (rs.next()) {
-              grandTotals.add(rs.getDouble("total_hp"));
-            }
-          } catch (SQLException e) {
-            fail(e);
-          }
-        });
+    jparqSql.query("SELECT SUM(hp) AS total_hp FROM mtcars GROUP BY ROLLUP (cyl) HAVING GROUPING(cyl) = 1", rs -> {
+      try {
+        while (rs.next()) {
+          grandTotals.add(rs.getDouble("total_hp"));
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
     assertEquals(1, grandTotals.size(), "HAVING GROUPING(cyl) = 1 should return only the grand total");
     assertEquals(sums.grandTotal(), grandTotals.getFirst(), 1e-9, "Grand total mismatch");
 
-    Map<Integer, Double> actualCylTotals = new HashMap<>();
-    jparqSql.query(
-        "SELECT cyl, SUM(hp) AS total_hp FROM mtcars GROUP BY GROUPING SETS ((cyl), ()) HAVING GROUPING(cyl) = 0",
-        rs -> {
-          try {
-            while (rs.next()) {
-              Integer cyl = (Integer) rs.getObject("cyl");
-              double totalHp = rs.getDouble("total_hp");
-              actualCylTotals.put(cyl, totalHp);
-            }
-          } catch (SQLException e) {
-            fail(e);
-          }
-        });
+    Map<Integer, Double> cylinderTotals = new HashMap<>();
+    jparqSql.query("SELECT cyl, SUM(hp) AS total_hp FROM mtcars GROUP BY ROLLUP (cyl) HAVING GROUPING(cyl) = 0", rs -> {
+      try {
+        while (rs.next()) {
+          Integer cyl = (Integer) rs.getObject("cyl");
+          double totalHp = rs.getDouble("total_hp");
+          cylinderTotals.put(cyl, totalHp);
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
 
-    assertEquals(sums.cylinderTotals().size(), actualCylTotals.size(),
+    assertEquals(sums.cylinderTotals().size(), cylinderTotals.size(),
         "HAVING GROUPING(cyl) = 0 should emit one row per cylinder");
     sums.cylinderTotals().forEach((cyl, total) -> {
-      assertTrue(actualCylTotals.containsKey(cyl), "Missing cylinder total for cyl = " + cyl);
-      assertEquals(total, actualCylTotals.get(cyl), 1e-9, "Cylinder total mismatch for cyl = " + cyl);
+      assertTrue(cylinderTotals.containsKey(cyl), "Missing cylinder total for cyl = " + cyl);
+      assertEquals(total, cylinderTotals.get(cyl), 1e-9, "Cylinder total mismatch for cyl = " + cyl);
     });
   }
+
   private record ResultRow(Integer cyl, Integer gear, double totalHp, int groupingCyl, int groupingGear) {
   }
 }
