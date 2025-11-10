@@ -8,7 +8,8 @@ import java.util.Map;
 import se.alipsa.jparq.JParqSql;
 
 /**
- * Utility for computing horsepower aggregates from the mtcars dataset used in grouping tests.
+ * Utility for computing horsepower aggregates from the mtcars dataset used in
+ * grouping tests.
  */
 final class MtcarsHpSums {
 

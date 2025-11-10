@@ -143,10 +143,10 @@ The following SQL statements are supported:
     -  LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
 - Advanced GROUP BY constructs i.e:
   - GROUPING SETS
+  - ROLLUP
 
 ## Roadmap: Might be implemented in the future
 - Advanced GROUP BY constructs i.e:
-  - ROLLUP
   - CUBE
 
 - ARRAY constructor function

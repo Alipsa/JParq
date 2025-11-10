@@ -19,7 +19,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
-/** Tests verifying support for GROUP BY ROLLUP and related GROUPING() semantics. */
+/**
+ * Tests verifying support for GROUP BY ROLLUP and related GROUPING() semantics.
+ */
 public class RollupTest {
 
   private static JParqSql jparqSql;
