@@ -3,6 +3,7 @@ package se.alipsa.jparq.engine;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -89,6 +90,8 @@ public final class SqlParser {
    * @param groupByExpressions
    *          expressions that participate in the GROUP BY clause (empty if no
    *          grouping)
+   * @param groupingSets
+   *          grouping set definitions referencing group expressions by index
    * @param having
    *          the HAVING expression (may be {@code null})
    * @param preLimit
@@ -109,8 +112,8 @@ public final class SqlParser {
   public record Select(List<String> labels, List<String> columnNames, String table, String tableAlias, Expression where,
       int limit, int offset, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct,
       List<String> innerDistinctColumns, List<Expression> expressions, List<Expression> groupByExpressions,
-      Expression having, int preLimit, int preOffset, List<OrderKey> preOrderBy, List<TableReference> tableReferences,
-      List<CommonTableExpression> commonTableExpressions) implements Query {
+      List<List<Integer>> groupingSets, Expression having, int preLimit, int preOffset, List<OrderKey> preOrderBy,
+      List<TableReference> tableReferences, List<CommonTableExpression> commonTableExpressions) implements Query {
 
     /**
      * returns "*" if no explicit projection.
@@ -522,8 +525,6 @@ public final class SqlParser {
       stripQualifier(havingExpr, qualifiers(tableRefs));
     }
 
-    List<Expression> groupByExpressions = parseGroupBy(ps.getGroupBy(), tableRefs);
-
     Expression joinCondition = combineJoinConditions(joinInfos, tableRefs);
     Expression combinedWhere = combineExpressions(
         combineExpressions(fromInfo.innerSelect() == null ? null : fromInfo.innerSelect().where(), joinCondition),
@@ -538,9 +539,11 @@ public final class SqlParser {
     List<Expression> expressionCopy = List.copyOf(expressions);
     List<String> innerDistinctCols = innerDistinct && inner != null ? List.copyOf(inner.columnNames()) : List.of();
 
+    GroupByInfo groupByInfo = parseGroupBy(ps.getGroupBy(), tableRefs);
+
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
-        offset, orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, groupByExpressions,
-        combinedHaving, preLimit, preOffset, preOrderCopy, tableRefs, List.copyOf(ctes));
+        offset, orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, groupByInfo.expressions(),
+        groupByInfo.groupingSets(), combinedHaving, preLimit, preOffset, preOrderCopy, tableRefs, List.copyOf(ctes));
   }
 
   /**
@@ -1192,19 +1195,70 @@ public final class SqlParser {
     return Set.copyOf(columns);
   }
 
-  private static List<Expression> parseGroupBy(GroupByElement groupBy, List<TableReference> tableRefs) {
-    ExpressionList<?> expressionList = groupBy == null ? null : groupBy.getGroupByExpressionList();
-    if (expressionList == null || expressionList.isEmpty()) {
-      return List.of();
+  private static GroupByInfo parseGroupBy(GroupByElement groupBy, List<TableReference> tableRefs) {
+    if (groupBy == null) {
+      return new GroupByInfo(List.of(), List.of());
     }
-    List<Expression> expressions = new ArrayList<>(expressionList.size());
-    for (Expression expr : expressionList) {
-      if (tableRefs.size() == 1) {
-        stripQualifier(expr, qualifiers(tableRefs));
+
+    List<String> allowedQualifiers = tableRefs.size() == 1 ? qualifiers(tableRefs) : List.of();
+
+    Map<String, Integer> indexByExpression = new LinkedHashMap<>();
+    List<Expression> expressions = new ArrayList<>();
+    List<Integer> baseGrouping = new ArrayList<>();
+
+    ExpressionList<?> expressionList = groupBy.getGroupByExpressionList();
+    if (expressionList != null && !expressionList.isEmpty()) {
+      for (Expression expr : expressionList) {
+        Expression processed = expr;
+        if (!allowedQualifiers.isEmpty()) {
+          stripQualifier(processed, allowedQualifiers);
+        }
+        int index = registerGroupingExpression(processed, expressions, indexByExpression);
+        baseGrouping.add(index);
       }
-      expressions.add(expr);
     }
-    return List.copyOf(expressions);
+
+    List<List<Integer>> groupingSets = new ArrayList<>();
+    List<ExpressionList<Expression>> groupingSetElements = groupBy.getGroupingSets();
+    if (groupingSetElements != null && !groupingSetElements.isEmpty()) {
+      for (ExpressionList<Expression> groupingSet : groupingSetElements) {
+        List<Integer> indexes = new ArrayList<>(baseGrouping);
+        if (groupingSet != null && !groupingSet.isEmpty()) {
+          for (Expression expr : groupingSet) {
+            Expression processed = expr;
+            if (!allowedQualifiers.isEmpty()) {
+              stripQualifier(processed, allowedQualifiers);
+            }
+            int index = registerGroupingExpression(processed, expressions, indexByExpression);
+            indexes.add(index);
+          }
+        }
+        groupingSets.add(List.copyOf(indexes));
+      }
+    } else if (!baseGrouping.isEmpty()) {
+      groupingSets.add(List.copyOf(baseGrouping));
+    }
+
+    return new GroupByInfo(List.copyOf(expressions), List.copyOf(groupingSets));
+  }
+
+  private static int registerGroupingExpression(Expression expression, List<Expression> expressions,
+      Map<String, Integer> indexByExpression) {
+    String key = expression == null ? null : expression.toString();
+    if (key == null) {
+      throw new IllegalArgumentException("GROUP BY expression cannot be null");
+    }
+    Integer existing = indexByExpression.get(key);
+    if (existing != null) {
+      return existing;
+    }
+    int index = expressions.size();
+    expressions.add(expression);
+    indexByExpression.put(key, index);
+    return index;
+  }
+
+  private record GroupByInfo(List<Expression> expressions, List<List<Integer>> groupingSets) {
   }
 
   private record JoinInfo(FromInfo table, Expression condition, JoinType joinType, List<String> usingColumns) {

@@ -11,13 +11,16 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.Expression;
@@ -94,9 +97,11 @@ public final class AggregateFunctions {
    *          column is a grouping expression or aggregate function
    * @param groupExpressions
    *          expressions that participate in the GROUP BY clause
-   */
+   * @param groupingSets
+   *          grouping sets derived from the GROUP BY clause
+  */
   public record AggregatePlan(List<AggregateSpec> specs, List<ResultColumn> resultColumns,
-      List<GroupExpression> groupExpressions) {
+      List<GroupExpression> groupExpressions, List<GroupingSet> groupingSets) {
     /**
      * Canonical constructor validating the provided collections.
      *
@@ -108,14 +113,18 @@ public final class AggregateFunctions {
      *          column is a grouping expression or aggregate function
      * @param groupExpressions
      *          expressions that participate in the GROUP BY clause
+     * @param groupingSets
+     *          grouping sets derived from the GROUP BY clause
      */
     public AggregatePlan {
       Objects.requireNonNull(specs, "specs");
       Objects.requireNonNull(resultColumns, "resultColumns");
       Objects.requireNonNull(groupExpressions, "groupExpressions");
+      Objects.requireNonNull(groupingSets, "groupingSets");
       specs = List.copyOf(specs);
       resultColumns = List.copyOf(resultColumns);
       groupExpressions = List.copyOf(groupExpressions);
+      groupingSets = List.copyOf(groupingSets);
     }
 
     /**
@@ -144,8 +153,16 @@ public final class AggregateFunctions {
    *          index into the {@link GroupExpression} list describing the grouping
    *          value used for this column, or {@code -1} when the column is an
    *          aggregate
-   */
-  public record ResultColumn(String label, int aggregateIndex, int groupIndex) {
+   * @param kind
+   *          origin of the column within the aggregate plan
+   * @param groupingIndexes
+   *          grouping expression indexes referenced by a GROUPING() invocation
+   * @param expressionText
+   *          textual representation of the GROUPING() expression for error
+   *          reporting
+  */
+  public record ResultColumn(String label, ColumnKind kind, int aggregateIndex, int groupIndex,
+      List<Integer> groupingIndexes, String expressionText) {
     /**
      * Canonical constructor normalising the provided column metadata.
      *
@@ -158,11 +175,36 @@ public final class AggregateFunctions {
      *          index into the {@link GroupExpression} list describing the grouping
      *          value used for this column, or {@code -1} when the column is an
      *          aggregate
+     * @param kind
+     *          origin of the column within the aggregate plan
+     * @param groupingIndexes
+     *          grouping expression indexes referenced by a GROUPING() invocation
+     * @param expressionText
+     *          textual representation of the GROUPING() expression for error
+     *          reporting
      */
     public ResultColumn {
       Objects.requireNonNull(label, "label");
-      if (aggregateIndex < 0 && groupIndex < 0) {
-        throw new IllegalArgumentException("Result column must be aggregate or group expression");
+      Objects.requireNonNull(kind, "kind");
+      groupingIndexes = groupingIndexes == null ? List.of() : List.copyOf(groupingIndexes);
+      expressionText = expressionText == null ? "" : expressionText;
+      switch (kind) {
+        case AGGREGATE -> {
+          if (aggregateIndex < 0) {
+            throw new IllegalArgumentException("Aggregate result column requires a valid aggregate index");
+          }
+        }
+        case GROUP -> {
+          if (groupIndex < 0) {
+            throw new IllegalArgumentException("Group expression column requires a valid group index");
+          }
+        }
+        case GROUPING -> {
+          if (groupingIndexes.isEmpty()) {
+            throw new IllegalArgumentException("GROUPING function requires at least one argument");
+          }
+        }
+        default -> throw new IllegalArgumentException("Unsupported result column kind: " + kind);
       }
     }
 
@@ -172,7 +214,78 @@ public final class AggregateFunctions {
      * @return {@code true} when the column is sourced from an aggregate
      */
     public boolean isAggregate() {
-      return aggregateIndex >= 0;
+      return kind == ColumnKind.AGGREGATE;
+    }
+
+    /**
+     * Determine if the column represents a grouping function.
+     *
+     * @return {@code true} when the column originates from GROUPING()
+     */
+    public boolean isGrouping() {
+      return kind == ColumnKind.GROUPING;
+    }
+
+    /**
+     * Determine if the column represents a grouping expression value.
+     *
+     * @return {@code true} when the column provides a grouping expression value
+     */
+    public boolean isGroup() {
+      return kind == ColumnKind.GROUP;
+    }
+  }
+
+  /**
+   * Enumeration describing the origin of a result column in an aggregate query.
+   */
+  public enum ColumnKind {
+    /** Column originates from an aggregate function. */
+    AGGREGATE,
+    /** Column represents a grouping expression value. */
+    GROUP,
+    /** Column returns the output of a GROUPING() function. */
+    GROUPING
+  }
+
+  /**
+   * Definition of a grouping set.
+   */
+  public static final class GroupingSet {
+
+    private final List<Integer> indexes;
+    private final Set<Integer> indexSet;
+
+    /**
+     * Create a grouping set based on the supplied grouping expression indexes.
+     *
+     * @param indexes
+     *          grouping expression indexes that participate in the set
+     */
+    public GroupingSet(List<Integer> indexes) {
+      Objects.requireNonNull(indexes, "indexes");
+      this.indexes = List.copyOf(indexes);
+      indexSet = Set.copyOf(this.indexes);
+    }
+
+    /**
+     * Retrieve the grouping expression indexes included in this grouping set.
+     *
+     * @return immutable list of grouping expression indexes
+     */
+    public List<Integer> indexes() {
+      return indexes;
+    }
+
+    /**
+     * Determine whether the grouping set includes the specified grouping expression.
+     *
+     * @param index
+     *          grouping expression index to check
+     * @return {@code true} if the expression participates in the grouping set
+     */
+    public boolean contains(int index) {
+      return indexSet.contains(index);
     }
   }
 
@@ -290,20 +403,14 @@ public final class AggregateFunctions {
       return null;
     }
 
-    List<GroupExpression> groupExpressions = buildGroupExpressions(select.groupByExpressions());
-    Map<String, Integer> groupIndexByText = new HashMap<>();
-    for (int i = 0; i < groupExpressions.size(); i++) {
-      Expression expression = groupExpressions.get(i).expression();
-      for (String key : expressionKeys(expression)) {
-        if (key != null) {
-          groupIndexByText.putIfAbsent(key, i);
-        }
-      }
-    }
-
-    boolean hasGroupBy = !groupExpressions.isEmpty();
     boolean containsAggregate = expressions.stream()
         .anyMatch(expr -> expr instanceof Function func && AggregateType.from(func.getName()) != null);
+    List<GroupExpression> groupExpressions = buildGroupExpressions(select.groupByExpressions());
+    Map<String, Integer> groupIndexByText = groupIndexLookup(groupExpressions);
+    List<GroupingSet> groupingSets = buildGroupingSets(select.groupingSets(), groupExpressions.size(),
+        containsAggregate);
+
+    boolean hasGroupBy = !groupExpressions.isEmpty() || !groupingSets.isEmpty();
     if (!hasGroupBy && !containsAggregate) {
       return null;
     }
@@ -321,7 +428,13 @@ public final class AggregateFunctions {
         if (spec != null) {
           int aggIndex = specs.size();
           specs.add(spec);
-          resultColumns.add(new ResultColumn(label, aggIndex, -1));
+          resultColumns.add(new ResultColumn(label, ColumnKind.AGGREGATE, aggIndex, -1, List.of(), null));
+          continue;
+        }
+        if (isGroupingFunction(func)) {
+          List<Integer> groupingIndexes = groupingArgumentIndexes(func, groupIndexByText);
+          resultColumns.add(
+              new ResultColumn(label, ColumnKind.GROUPING, -1, -1, groupingIndexes, func.toString()));
           continue;
         }
       }
@@ -344,7 +457,7 @@ public final class AggregateFunctions {
         throw new IllegalArgumentException(
             "SELECT expression '" + expr + "' must appear in the GROUP BY clause when aggregates are present");
       }
-      resultColumns.add(new ResultColumn(label, -1, groupIndex));
+      resultColumns.add(new ResultColumn(label, ColumnKind.GROUP, -1, groupIndex, List.of(), null));
     }
 
     Expression having = select.having();
@@ -357,7 +470,7 @@ public final class AggregateFunctions {
       }
     }
 
-    return new AggregatePlan(specs, resultColumns, groupExpressions);
+    return new AggregatePlan(specs, resultColumns, groupExpressions, groupingSets);
   }
 
   /**
@@ -379,7 +492,7 @@ public final class AggregateFunctions {
     if (expression == null) {
       return List.of();
     }
-    java.util.Set<String> keys = new java.util.LinkedHashSet<>();
+    Set<String> keys = new LinkedHashSet<>();
     String rendered = expression.toString();
     addIfNotBlank(keys, rendered);
     if (expression instanceof Column column) {
@@ -421,6 +534,118 @@ public final class AggregateFunctions {
     }
 
     return new AggregateSpec(type, args, label, countStar);
+  }
+
+  /**
+   * Build a lookup map associating normalized group expression text with the
+   * index of the expression in the GROUP BY clause.
+   *
+   * @param groupExpressions
+   *          grouping expressions defined for the SELECT
+   * @return immutable lookup map from expression text to index
+   */
+  private static Map<String, Integer> groupIndexLookup(List<GroupExpression> groupExpressions) {
+    Map<String, Integer> lookup = new HashMap<>();
+    for (int i = 0; i < groupExpressions.size(); i++) {
+      Expression expression = groupExpressions.get(i).expression();
+      for (String key : expressionKeys(expression)) {
+        if (key != null) {
+          lookup.putIfAbsent(key, i);
+        }
+      }
+    }
+    return lookup;
+  }
+
+  /**
+   * Create {@link GroupingSet} instances from the parsed grouping set
+   * definition.
+   *
+   * @param rawGroupingSets
+   *          grouping set definitions expressed as expression indexes
+   * @param expressionCount
+   *          number of grouping expressions available in the SELECT
+   * @param containsAggregate
+   *          {@code true} when the SELECT list contains aggregate expressions
+   * @return immutable list of grouping sets
+   */
+  private static List<GroupingSet> buildGroupingSets(List<List<Integer>> rawGroupingSets, int expressionCount,
+      boolean containsAggregate) {
+    List<List<Integer>> groupingSets = rawGroupingSets == null ? List.of() : rawGroupingSets;
+    if (groupingSets.isEmpty()) {
+      if (expressionCount == 0) {
+        return containsAggregate ? List.of(new GroupingSet(List.of())) : List.of();
+      }
+      List<Integer> indexes = new ArrayList<>(expressionCount);
+      for (int i = 0; i < expressionCount; i++) {
+        indexes.add(i);
+      }
+      return List.of(new GroupingSet(indexes));
+    }
+    List<GroupingSet> result = new ArrayList<>(groupingSets.size());
+    for (List<Integer> groupingSet : groupingSets) {
+      List<Integer> indexes = new ArrayList<>();
+      if (groupingSet != null) {
+        for (Integer idx : groupingSet) {
+          if (idx == null) {
+            throw new IllegalArgumentException("Grouping set index cannot be null");
+          }
+          if (idx < 0 || idx >= expressionCount) {
+            throw new IllegalArgumentException("Grouping set index " + idx + " is out of bounds");
+          }
+          indexes.add(idx);
+        }
+      }
+      result.add(new GroupingSet(indexes));
+    }
+    return List.copyOf(result);
+  }
+
+  /**
+   * Determine whether a function represents the SQL GROUPING function.
+   *
+   * @param func
+   *          function expression to test
+   * @return {@code true} if the function is GROUPING, otherwise {@code false}
+   */
+  private static boolean isGroupingFunction(Function func) {
+    return func != null && "GROUPING".equalsIgnoreCase(func.getName());
+  }
+
+  /**
+   * Resolve the grouping expression indexes referenced by a GROUPING function
+   * invocation.
+   *
+   * @param func
+   *          GROUPING function expression
+   * @param groupIndexByText
+   *          lookup of grouping expression indexes by normalized text
+   * @return immutable list of grouping expression indexes
+   */
+  private static List<Integer> groupingArgumentIndexes(Function func, Map<String, Integer> groupIndexByText) {
+    ExpressionList<?> parameters = func.getParameters();
+    if (parameters == null || parameters.isEmpty()) {
+      throw new IllegalArgumentException("GROUPING function requires at least one argument");
+    }
+    List<Integer> indexes = new ArrayList<>(parameters.size());
+    for (Expression argument : parameters) {
+      Integer match = null;
+      for (String key : expressionKeys(argument)) {
+        if (key == null) {
+          continue;
+        }
+        match = groupIndexByText.get(key);
+        if (match != null) {
+          break;
+        }
+      }
+      if (match == null) {
+        throw new IllegalArgumentException(
+            "GROUPING argument '" + argument + "' must appear in the GROUP BY clause");
+      }
+      indexes.add(match);
+    }
+    return List.copyOf(indexes);
   }
 
   private static String labelFor(List<String> labels, int index, Expression expr) {
@@ -526,7 +751,7 @@ public final class AggregateFunctions {
    * @param rendered
    *          the expression rendered as text, may be {@code null}
    */
-  private static void addIfNotBlank(java.util.Set<String> keys, String rendered) {
+  private static void addIfNotBlank(Set<String> keys, String rendered) {
     if (rendered != null && !rendered.isBlank()) {
       keys.add(rendered);
     }
@@ -543,7 +768,7 @@ public final class AggregateFunctions {
    * @param table
    *          the table reference that may contribute qualifiers
    */
-  private static void addTableQualifiers(java.util.Set<String> keys, String columnName, Table table) {
+  private static void addTableQualifiers(Set<String> keys, String columnName, Table table) {
     if (table == null) {
       return;
     }
@@ -563,7 +788,7 @@ public final class AggregateFunctions {
    * @param columnName
    *          the normalized column name, never {@code null}
    */
-  private static void addQualifiedIfPresent(java.util.Set<String> keys, String qualifier, String columnName) {
+  private static void addQualifiedIfPresent(Set<String> keys, String qualifier, String columnName) {
     if (qualifier != null) {
       keys.add(qualifier + "." + columnName);
     }
@@ -629,6 +854,7 @@ public final class AggregateFunctions {
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping)
       throws IOException {
     List<GroupExpression> groupExpressions = plan.groupExpressions();
+    List<GroupingSet> groupingSets = plan.groupingSets();
     List<GroupTypeTracker> groupTrackers = new ArrayList<>(groupExpressions.size());
     for (int i = 0; i < groupExpressions.size(); i++) {
       groupTrackers.add(new GroupTypeTracker());
@@ -662,13 +888,18 @@ public final class AggregateFunctions {
         boolean matches = residual == null || whereEval.eval(residual, rec);
         if (matches) {
           List<Object> groupValues = evaluateGroupValues(groupExpressions, valueEval, rec, groupTrackers);
-          GroupKey key = new GroupKey(groupValues);
-          GroupState state = states.get(key);
-          if (state == null) {
-            state = new GroupState(groupValues, plan.specs());
-            states.put(key, state);
+          for (int setIndex = 0; setIndex < groupingSets.size(); setIndex++) {
+            GroupingSet groupingSet = groupingSets.get(setIndex);
+            List<Object> keyValues = keyValuesForGroupingSet(groupValues, groupingSet);
+            GroupKey key = new GroupKey(setIndex, keyValues);
+            GroupState state = states.get(key);
+            if (state == null) {
+              List<Object> projected = projectGroupValuesForSet(groupValues, groupingSet, groupExpressions.size());
+              state = new GroupState(projected, plan.specs(), setIndex);
+              states.put(key, state);
+            }
+            state.add(valueEval, rec);
           }
-          state.add(valueEval, rec);
         }
 
         rec = autoClose.read();
@@ -676,8 +907,10 @@ public final class AggregateFunctions {
     }
 
     if (states.isEmpty() && groupExpressions.isEmpty()) {
-      GroupState state = new GroupState(List.of(), plan.specs());
-      states.put(new GroupKey(List.of()), state);
+      for (int i = 0; i < groupingSets.size(); i++) {
+        GroupState state = new GroupState(List.of(), plan.specs(), i);
+        states.put(new GroupKey(i, List.of()), state);
+      }
     }
 
     boolean[] aggregateTypeObserved = new boolean[aggregateCount];
@@ -700,12 +933,12 @@ public final class AggregateFunctions {
 
     for (GroupState state : states.values()) {
       List<Object> aggregateValues = state.results();
-      List<Object> row = buildRow(plan, state.groupValues(), aggregateValues);
+      List<Object> row = buildRow(plan, state, aggregateValues);
       Map<String, Object> labelLookup = buildLabelLookup(plan, row, state.groupValues());
       boolean include = true;
       if (normalizedHaving != null) {
         HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues, labelLookup, subqueryExecutor,
-            outerQualifiers);
+            outerQualifiers, state.groupingSetIndex());
         include = evaluator.eval(normalizedHaving);
       }
       if (include) {
@@ -721,6 +954,8 @@ public final class AggregateFunctions {
     for (ResultColumn column : plan.resultColumns()) {
       if (column.isAggregate()) {
         columnSqlTypes.add(aggregateSqlTypes[column.aggregateIndex()]);
+      } else if (column.isGrouping()) {
+        columnSqlTypes.add(Types.INTEGER);
       } else {
         columnSqlTypes.add(groupSqlTypes.isEmpty() ? Types.OTHER : groupSqlTypes.get(column.groupIndex()));
       }
@@ -770,6 +1005,8 @@ public final class AggregateFunctions {
         AggregateSpec spec = plan.specs().get(column.aggregateIndex());
         registerOrderKey(mapping, spec.label(), i);
         registerOrderKey(mapping, aggregateExpressionText(spec), i);
+      } else if (column.isGrouping()) {
+        registerOrderKey(mapping, column.expressionText(), i);
       } else {
         GroupExpression group = plan.groupExpressions().get(column.groupIndex());
         registerOrderKey(mapping, group.label(), i);
@@ -811,16 +1048,93 @@ public final class AggregateFunctions {
     return values;
   }
 
-  private static List<Object> buildRow(AggregatePlan plan, List<Object> groupValues, List<Object> aggregateValues) {
+  /**
+   * Extract the subset of grouping values that participate in a grouping set to
+   * form a key.
+   *
+   * @param groupValues
+   *          evaluated grouping expression values for a record
+   * @param groupingSet
+   *          grouping set definition
+   * @return values in key order for the grouping set
+   */
+  private static List<Object> keyValuesForGroupingSet(List<Object> groupValues, GroupingSet groupingSet) {
+    if (groupingSet.indexes().isEmpty()) {
+      return List.of();
+    }
+    List<Object> values = new ArrayList<>(groupingSet.indexes().size());
+    for (Integer index : groupingSet.indexes()) {
+      values.add(groupValues.get(index));
+    }
+    return values;
+  }
+
+  /**
+   * Produce the grouping values that should appear in the result row for a
+   * specific grouping set, inserting {@code null} for suppressed expressions.
+   *
+   * @param groupValues
+   *          evaluated grouping expression values for the record
+   * @param groupingSet
+   *          grouping set definition being processed
+   * @param expressionCount
+   *          total number of grouping expressions in the SELECT
+   * @return list of values aligned with the grouping expressions
+   */
+  private static List<Object> projectGroupValuesForSet(List<Object> groupValues, GroupingSet groupingSet,
+      int expressionCount) {
+    if (expressionCount == 0) {
+      return List.of();
+    }
+    List<Object> projected = new ArrayList<>(expressionCount);
+    for (int i = 0; i < expressionCount; i++) {
+      projected.add(groupingSet.contains(i) ? groupValues.get(i) : null);
+    }
+    return projected;
+  }
+
+  /**
+   * Compute the integer value produced by a GROUPING function for the specified
+   * grouping set.
+   *
+   * @param plan
+   *          aggregate plan describing grouping sets
+   * @param groupingSetIndex
+   *          index of the grouping set currently being processed
+   * @param groupingIndexes
+   *          grouping expression indexes referenced by the GROUPING function
+   * @return integer bitmask describing which expressions are aggregated
+   */
+  private static int groupingValue(AggregatePlan plan, int groupingSetIndex, List<Integer> groupingIndexes) {
+    if (groupingIndexes.isEmpty()) {
+      return 0;
+    }
+    if (groupingSetIndex < 0 || groupingSetIndex >= plan.groupingSets().size()) {
+      throw new IllegalArgumentException("Grouping set index out of bounds: " + groupingSetIndex);
+    }
+    GroupingSet groupingSet = plan.groupingSets().get(groupingSetIndex);
+    int value = 0;
+    for (Integer index : groupingIndexes) {
+      value <<= 1;
+      if (!groupingSet.contains(index)) {
+        value |= 1;
+      }
+    }
+    return value;
+  }
+
+  private static List<Object> buildRow(AggregatePlan plan, GroupState state, List<Object> aggregateValues) {
     List<Object> row = new ArrayList<>(plan.resultColumns().size());
     for (ResultColumn column : plan.resultColumns()) {
       if (column.isAggregate()) {
         row.add(aggregateValues.get(column.aggregateIndex()));
+      } else if (column.isGrouping()) {
+        row.add(groupingValue(plan, state.groupingSetIndex(), column.groupingIndexes()));
       } else {
-        row.add(groupValues.get(column.groupIndex()));
+        row.add(state.groupValues().get(column.groupIndex()));
       }
     }
-    return List.copyOf(row);
+    return Collections.unmodifiableList(row);
   }
 
   private static Map<String, Object> buildLabelLookup(AggregatePlan plan, List<Object> rowValues,
@@ -846,9 +1160,11 @@ public final class AggregateFunctions {
   private static final class GroupState {
     private final List<Object> groupValues;
     private final AggregateAccumulator[] accumulators;
+    private final int groupingSetIndex;
 
-    GroupState(List<Object> groupValues, List<AggregateSpec> specs) {
+    GroupState(List<Object> groupValues, List<AggregateSpec> specs, int groupingSetIndex) {
       this.groupValues = List.copyOf(groupValues);
+      this.groupingSetIndex = groupingSetIndex;
       this.accumulators = new AggregateAccumulator[specs.size()];
       for (int i = 0; i < specs.size(); i++) {
         this.accumulators[i] = AggregateAccumulator.create(specs.get(i));
@@ -863,6 +1179,10 @@ public final class AggregateFunctions {
 
     List<Object> groupValues() {
       return groupValues;
+    }
+
+    int groupingSetIndex() {
+      return groupingSetIndex;
     }
 
     AggregateAccumulator accumulator(int index) {
@@ -882,12 +1202,14 @@ public final class AggregateFunctions {
   }
 
   private static final class GroupKey {
+    private final int groupingSetIndex;
     private final List<Object> values;
     private final int hash;
 
-    GroupKey(List<Object> values) {
+    GroupKey(int groupingSetIndex, List<Object> values) {
+      this.groupingSetIndex = groupingSetIndex;
       this.values = List.copyOf(values);
-      this.hash = this.values.hashCode();
+      this.hash = 31 * groupingSetIndex + this.values.hashCode();
     }
 
     @Override
@@ -898,7 +1220,7 @@ public final class AggregateFunctions {
       if (!(obj instanceof GroupKey other)) {
         return false;
       }
-      return values.equals(other.values);
+      return groupingSetIndex == other.groupingSetIndex && values.equals(other.values);
     }
 
     @Override
@@ -918,328 +1240,6 @@ public final class AggregateFunctions {
 
     int sqlType() {
       return sqlTypeForClass(observedType);
-    }
-  }
-
-  private static final class HavingEvaluator {
-    private final AggregatePlan plan;
-    private final List<Object> aggregateValues;
-    private final SubqueryExecutor subqueryExecutor;
-    private final Map<String, Object> labelLookup;
-    private final List<String> correlatedQualifiers;
-
-    HavingEvaluator(AggregatePlan plan, List<Object> aggregateValues, Map<String, Object> labelLookup,
-        SubqueryExecutor subqueryExecutor, List<String> correlatedQualifiers) {
-      this.plan = plan;
-      this.aggregateValues = aggregateValues;
-      this.labelLookup = Map.copyOf(labelLookup);
-      this.subqueryExecutor = subqueryExecutor;
-      this.correlatedQualifiers = correlatedQualifiers == null ? List.of() : List.copyOf(correlatedQualifiers);
-    }
-
-    boolean eval(Expression expression) {
-      Expression expr = ExpressionEvaluator.unwrapParenthesis(expression);
-      if (expr == null) {
-        return true;
-      }
-      if (expr instanceof AndExpression and) {
-        return eval(and.getLeftExpression()) && eval(and.getRightExpression());
-      }
-      if (expr instanceof OrExpression or) {
-        return eval(or.getLeftExpression()) || eval(or.getRightExpression());
-      }
-      if (expr instanceof NotExpression not) {
-        return !eval(not.getExpression());
-      }
-      if (expr instanceof IsNullExpression isNull) {
-        Object operand = value(isNull.getLeftExpression());
-        boolean isNullVal = operand == null;
-        return isNull.isNot() != isNullVal;
-      }
-      if (expr instanceof Between between) {
-        Object val = value(between.getLeftExpression());
-        Object low = value(between.getBetweenExpressionStart());
-        Object high = value(between.getBetweenExpressionEnd());
-        if (val == null || low == null || high == null) {
-          return false;
-        }
-        int cmpLow = ExpressionEvaluator.typedCompare(val, low);
-        int cmpHigh = ExpressionEvaluator.typedCompare(val, high);
-        boolean in = cmpLow >= 0 && cmpHigh <= 0;
-        return between.isNot() != in;
-      }
-      if (expr instanceof InExpression in) {
-        return evalIn(in);
-      }
-      if (expr instanceof ExistsExpression exists) {
-        return evalExists(exists);
-      }
-      if (expr instanceof EqualsTo eq) {
-        return compare(eq.getLeftExpression(), eq.getRightExpression()) == 0;
-      }
-      if (expr instanceof GreaterThan gt) {
-        return compare(gt.getLeftExpression(), gt.getRightExpression()) > 0;
-      }
-      if (expr instanceof GreaterThanEquals ge) {
-        return compare(ge.getLeftExpression(), ge.getRightExpression()) >= 0;
-      }
-      if (expr instanceof MinorThan lt) {
-        return compare(lt.getLeftExpression(), lt.getRightExpression()) < 0;
-      }
-      if (expr instanceof MinorThanEquals le) {
-        return compare(le.getLeftExpression(), le.getRightExpression()) <= 0;
-      }
-      if (expr instanceof SimilarToExpression) {
-        throw new IllegalArgumentException("SIMILAR TO is not supported in HAVING clauses");
-      }
-      if (expr instanceof LikeExpression like) {
-        return evalLike(like);
-      }
-      if (expr instanceof BinaryExpression be) {
-        return evalBinary(be);
-      }
-      throw new IllegalArgumentException("Unsupported HAVING expression: " + expr);
-    }
-
-    private boolean evalIn(InExpression in) {
-      Object leftVal = value(in.getLeftExpression());
-      if (leftVal == null) {
-        return false;
-      }
-      Expression right = in.getRightExpression();
-      if (right instanceof ExpressionList<?> list) {
-        boolean found = false;
-        for (Expression e : list) {
-          Object candidate = value(e);
-          if (candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
-            found = true;
-            break;
-          }
-        }
-        return in.isNot() != found;
-      }
-      if (right instanceof Select subSelect) {
-        if (subqueryExecutor == null) {
-          throw new IllegalStateException("IN subqueries require a subquery executor");
-        }
-        List<Object> subqueryValues = subqueryExecutor.execute(subSelect).firstColumnValues();
-        boolean found = false;
-        for (Object candidate : subqueryValues) {
-          if (candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
-            found = true;
-            break;
-          }
-        }
-        return in.isNot() != found;
-      }
-      throw new IllegalArgumentException("Unsupported IN expression in HAVING clause: " + in);
-    }
-
-    private boolean evalExists(ExistsExpression exists) {
-      if (subqueryExecutor == null) {
-        throw new IllegalStateException("EXISTS subqueries require a subquery executor");
-      }
-      if (!(exists.getRightExpression() instanceof Select subSelect)) {
-        throw new IllegalArgumentException("EXISTS requires a subquery");
-      }
-      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, correlatedQualifiers,
-          this::aliasValue);
-      SubqueryExecutor.SubqueryResult result = rewritten.correlated()
-          ? subqueryExecutor.executeRaw(rewritten.sql())
-          : subqueryExecutor.execute(subSelect);
-      boolean hasRows = !result.rows().isEmpty();
-      return exists.isNot() != hasRows;
-    }
-
-    private boolean evalLike(LikeExpression like) {
-      Object left = value(like.getLeftExpression());
-      Object right = value(like.getRightExpression());
-      if (left == null || right == null) {
-        return false;
-      }
-      String leftText = left.toString();
-      String pattern = right.toString();
-      LikeExpression.KeyWord keyWord = like.getLikeKeyWord();
-      LikeExpression.KeyWord effective = keyWord == null ? LikeExpression.KeyWord.LIKE : keyWord;
-      Character escapeChar = null;
-      if (like.getEscape() != null) {
-        Object escapeVal = value(like.getEscape());
-        if (escapeVal != null) {
-          String escape = escapeVal.toString();
-          if (!escape.isEmpty()) {
-            if (escape.length() != 1) {
-              throw new IllegalArgumentException("LIKE escape clause must be a single character");
-            }
-            escapeChar = escape.charAt(0);
-          }
-        }
-      }
-      boolean matches;
-      if (effective == LikeExpression.KeyWord.SIMILAR_TO) {
-        matches = StringExpressions.similarTo(leftText, pattern, escapeChar);
-      } else {
-        boolean caseInsensitive = effective == LikeExpression.KeyWord.ILIKE;
-        matches = StringExpressions.like(leftText, pattern, caseInsensitive, escapeChar);
-      }
-      return like.isNot() != matches;
-    }
-
-    private boolean evalBinary(BinaryExpression be) {
-      String op = be.getStringExpression();
-      int cmp = compare(be.getLeftExpression(), be.getRightExpression());
-      return switch (op) {
-        case "=" -> cmp == 0;
-        case "<" -> cmp < 0;
-        case ">" -> cmp > 0;
-        case "<=" -> cmp <= 0;
-        case ">=" -> cmp >= 0;
-        case "<>", "!=" -> cmp != 0;
-        default -> throw new IllegalArgumentException("Unsupported operator in HAVING clause: " + op);
-      };
-    }
-
-    private int compare(Expression left, Expression right) {
-      Object leftVal = value(left);
-      Object rightVal = value(right);
-      if (leftVal == null || rightVal == null) {
-        return -1;
-      }
-      return ExpressionEvaluator.typedCompare(leftVal, rightVal);
-    }
-
-    private Object value(Expression expression) {
-      Expression expr = ExpressionEvaluator.unwrapParenthesis(expression);
-      if (expr instanceof Select subSelect) {
-        return evaluateScalarSubquery(subSelect);
-      }
-      if (expr instanceof SignedExpression signed) {
-        Object inner = value(signed.getExpression());
-        if (inner == null) {
-          return null;
-        }
-        BigDecimal numeric = toBigDecimal(inner);
-        return signed.getSign() == '-' ? numeric.negate() : numeric;
-      }
-      if (expr instanceof Addition add) {
-        return arithmetic(add.getLeftExpression(), add.getRightExpression(), Operation.ADD);
-      }
-      if (expr instanceof Subtraction sub) {
-        return arithmetic(sub.getLeftExpression(), sub.getRightExpression(), Operation.SUB);
-      }
-      if (expr instanceof Multiplication mul) {
-        return arithmetic(mul.getLeftExpression(), mul.getRightExpression(), Operation.MUL);
-      }
-      if (expr instanceof Division div) {
-        return arithmetic(div.getLeftExpression(), div.getRightExpression(), Operation.DIV);
-      }
-      if (expr instanceof Modulo mod) {
-        return arithmetic(mod.getLeftExpression(), mod.getRightExpression(), Operation.MOD);
-      }
-      if (expr instanceof Function func) {
-        return aggregateValue(func);
-      }
-      if (expr instanceof Column col) {
-        return aliasValue(col.getColumnName());
-      }
-      return LiteralConverter.toLiteral(expr);
-    }
-
-    private Object arithmetic(Expression left, Expression right, Operation op) {
-      Object leftVal = value(left);
-      Object rightVal = value(right);
-      if (leftVal == null || rightVal == null) {
-        return null;
-      }
-      BigDecimal leftNum = toBigDecimal(leftVal);
-      BigDecimal rightNum = toBigDecimal(rightVal);
-      return switch (op) {
-        case ADD -> leftNum.add(rightNum);
-        case SUB -> leftNum.subtract(rightNum);
-        case MUL -> leftNum.multiply(rightNum);
-        case DIV -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.divide(rightNum, MathContext.DECIMAL64);
-        case MOD -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.remainder(rightNum);
-      };
-    }
-
-    private Object evaluateScalarSubquery(Select subSelect) {
-      if (subqueryExecutor == null) {
-        throw new IllegalStateException("Scalar subqueries require a subquery executor");
-      }
-      SubqueryExecutor.SubqueryResult result = subqueryExecutor.execute(subSelect);
-      if (result.rows().isEmpty()) {
-        return null;
-      }
-      if (result.rows().size() > 1) {
-        throw new IllegalArgumentException("Scalar subquery returned more than one row");
-      }
-      List<Object> row = result.rows().getFirst();
-      if (row.isEmpty()) {
-        return null;
-      }
-      if (row.size() > 1) {
-        throw new IllegalArgumentException("Scalar subquery returned more than one column");
-      }
-      return row.getFirst();
-    }
-
-    private Object aggregateValue(Function func) {
-      AggregateType type = AggregateType.from(func.getName());
-      if (type == null) {
-        throw new IllegalArgumentException("Unsupported function in HAVING clause: " + func.getName());
-      }
-      for (int i = 0; i < plan.specs().size(); i++) {
-        AggregateSpec spec = plan.specs().get(i);
-        if (spec.type() != type) {
-          continue;
-        }
-        if (spec.countStar() != (type == AggregateType.COUNT && func.isAllColumns())) {
-          continue;
-        }
-        if (!spec.countStar()) {
-          ExpressionList<?> params = func.getParameters();
-          if (params == null || params.size() != spec.arguments().size()) {
-            continue;
-          }
-          boolean matches = true;
-          for (int j = 0; j < spec.arguments().size(); j++) {
-            Expression expected = spec.arguments().get(j);
-            Expression actual = params.get(j);
-            if (!expected.toString().equals(actual.toString())) {
-              matches = false;
-              break;
-            }
-          }
-          if (!matches) {
-            continue;
-          }
-        }
-        return aggregateValues.get(i);
-      }
-      throw new IllegalArgumentException("HAVING references aggregate not present in SELECT: " + func);
-    }
-
-    private Object aliasValue(String name) {
-      if (name == null) {
-        return null;
-      }
-      return labelLookup.get(name.toLowerCase(Locale.ROOT));
-    }
-
-    private BigDecimal toBigDecimal(Object value) {
-      if (value instanceof BigDecimal bd) {
-        return bd;
-      }
-      if (value instanceof Number num) {
-        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
-          return BigDecimal.valueOf(num.longValue());
-        }
-        return BigDecimal.valueOf(num.doubleValue());
-      }
-      return new BigDecimal(value.toString());
-    }
-
-    private enum Operation {
-      ADD, SUB, MUL, DIV, MOD
     }
   }
 
@@ -1535,4 +1535,340 @@ public final class AggregateFunctions {
     }
     return Types.OTHER;
   }
+
+  private static final class HavingEvaluator {
+    private final AggregatePlan plan;
+    private final List<Object> aggregateValues;
+    private final SubqueryExecutor subqueryExecutor;
+    private final Map<String, Object> labelLookup;
+    private final List<String> correlatedQualifiers;
+    private final int groupingSetIndex;
+    private final Map<String, Integer> groupIndexLookup;
+
+    HavingEvaluator(AggregatePlan plan, List<Object> aggregateValues, Map<String, Object> labelLookup,
+        SubqueryExecutor subqueryExecutor, List<String> correlatedQualifiers, int groupingSetIndex) {
+      this.plan = plan;
+      this.aggregateValues = aggregateValues;
+      this.labelLookup = Collections.unmodifiableMap(new HashMap<>(labelLookup));
+      this.subqueryExecutor = subqueryExecutor;
+      this.correlatedQualifiers = correlatedQualifiers == null ? List.of() : List.copyOf(correlatedQualifiers);
+      this.groupingSetIndex = groupingSetIndex;
+      this.groupIndexLookup = groupIndexLookup(plan.groupExpressions());
+    }
+
+    boolean eval(Expression expression) {
+      Expression expr = ExpressionEvaluator.unwrapParenthesis(expression);
+      if (expr == null) {
+        return true;
+      }
+      if (expr instanceof AndExpression and) {
+        return eval(and.getLeftExpression()) && eval(and.getRightExpression());
+      }
+      if (expr instanceof OrExpression or) {
+        return eval(or.getLeftExpression()) || eval(or.getRightExpression());
+      }
+      if (expr instanceof NotExpression not) {
+        return !eval(not.getExpression());
+      }
+      if (expr instanceof IsNullExpression isNull) {
+        Object operand = value(isNull.getLeftExpression());
+        boolean isNullVal = operand == null;
+        return isNull.isNot() != isNullVal;
+      }
+      if (expr instanceof Between between) {
+        Object val = value(between.getLeftExpression());
+        Object low = value(between.getBetweenExpressionStart());
+        Object high = value(between.getBetweenExpressionEnd());
+        if (val == null || low == null || high == null) {
+          return false;
+        }
+        int cmpLow = ExpressionEvaluator.typedCompare(val, low);
+        int cmpHigh = ExpressionEvaluator.typedCompare(val, high);
+        boolean in = cmpLow >= 0 && cmpHigh <= 0;
+        return between.isNot() != in;
+      }
+      if (expr instanceof InExpression in) {
+        return evalIn(in);
+      }
+      if (expr instanceof ExistsExpression exists) {
+        return evalExists(exists);
+      }
+      if (expr instanceof EqualsTo eq) {
+        return compare(eq.getLeftExpression(), eq.getRightExpression()) == 0;
+      }
+      if (expr instanceof GreaterThan gt) {
+        return compare(gt.getLeftExpression(), gt.getRightExpression()) > 0;
+      }
+      if (expr instanceof GreaterThanEquals ge) {
+        return compare(ge.getLeftExpression(), ge.getRightExpression()) >= 0;
+      }
+      if (expr instanceof MinorThan lt) {
+        return compare(lt.getLeftExpression(), lt.getRightExpression()) < 0;
+      }
+      if (expr instanceof MinorThanEquals le) {
+        return compare(le.getLeftExpression(), le.getRightExpression()) <= 0;
+      }
+      if (expr instanceof SimilarToExpression) {
+        throw new IllegalArgumentException("SIMILAR TO is not supported in HAVING clauses");
+      }
+      if (expr instanceof LikeExpression like) {
+        return evalLike(like);
+      }
+      if (expr instanceof BinaryExpression be) {
+        return evalBinary(be);
+      }
+      throw new IllegalArgumentException("Unsupported HAVING expression: " + expr);
+    }
+
+    private boolean evalIn(InExpression in) {
+      Object leftVal = value(in.getLeftExpression());
+      if (leftVal == null) {
+        return false;
+      }
+      Expression right = in.getRightExpression();
+      if (right instanceof ExpressionList<?> list) {
+        boolean found = false;
+        for (Expression e : list) {
+          Object candidate = value(e);
+          if (candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
+            found = true;
+            break;
+          }
+        }
+        return in.isNot() != found;
+      }
+      if (right instanceof Select subSelect) {
+        if (subqueryExecutor == null) {
+          throw new IllegalStateException("IN subqueries require a subquery executor");
+        }
+        List<Object> subqueryValues = subqueryExecutor.execute(subSelect).firstColumnValues();
+        boolean found = false;
+        for (Object candidate : subqueryValues) {
+          if (candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
+            found = true;
+            break;
+          }
+        }
+        return in.isNot() != found;
+      }
+      throw new IllegalArgumentException("Unsupported IN expression in HAVING clause: " + in);
+    }
+
+    private boolean evalExists(ExistsExpression exists) {
+      if (subqueryExecutor == null) {
+        throw new IllegalStateException("EXISTS subqueries require a subquery executor");
+      }
+      if (!(exists.getRightExpression() instanceof Select subSelect)) {
+        throw new IllegalArgumentException("EXISTS requires a subquery");
+      }
+      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, correlatedQualifiers,
+          this::aliasValue);
+      SubqueryExecutor.SubqueryResult result = rewritten.correlated()
+          ? subqueryExecutor.executeRaw(rewritten.sql())
+          : subqueryExecutor.execute(subSelect);
+      boolean hasRows = !result.rows().isEmpty();
+      return exists.isNot() != hasRows;
+    }
+
+    private boolean evalLike(LikeExpression like) {
+      Object left = value(like.getLeftExpression());
+      Object right = value(like.getRightExpression());
+      if (left == null || right == null) {
+        return false;
+      }
+      String leftText = left.toString();
+      String pattern = right.toString();
+      LikeExpression.KeyWord keyWord = like.getLikeKeyWord();
+      LikeExpression.KeyWord effective = keyWord == null ? LikeExpression.KeyWord.LIKE : keyWord;
+      Character escapeChar = null;
+      if (like.getEscape() != null) {
+        Object escapeVal = value(like.getEscape());
+        if (escapeVal != null) {
+          String escape = escapeVal.toString();
+          if (!escape.isEmpty()) {
+            if (escape.length() != 1) {
+              throw new IllegalArgumentException("LIKE escape clause must be a single character");
+            }
+            escapeChar = escape.charAt(0);
+          }
+        }
+      }
+      boolean matches;
+      if (effective == LikeExpression.KeyWord.SIMILAR_TO) {
+        matches = StringExpressions.similarTo(leftText, pattern, escapeChar);
+      } else {
+        boolean caseInsensitive = effective == LikeExpression.KeyWord.ILIKE;
+        matches = StringExpressions.like(leftText, pattern, caseInsensitive, escapeChar);
+      }
+      return like.isNot() != matches;
+    }
+
+    private boolean evalBinary(BinaryExpression be) {
+      String op = be.getStringExpression();
+      int cmp = compare(be.getLeftExpression(), be.getRightExpression());
+      return switch (op) {
+        case "=" -> cmp == 0;
+        case "<" -> cmp < 0;
+        case ">" -> cmp > 0;
+        case "<=" -> cmp <= 0;
+        case ">=" -> cmp >= 0;
+        case "<>", "!=" -> cmp != 0;
+        default -> throw new IllegalArgumentException("Unsupported operator in HAVING clause: " + op);
+      };
+    }
+
+    private int compare(Expression left, Expression right) {
+      Object leftVal = value(left);
+      Object rightVal = value(right);
+      if (leftVal == null || rightVal == null) {
+        return -1;
+      }
+      return ExpressionEvaluator.typedCompare(leftVal, rightVal);
+    }
+
+    private Object value(Expression expression) {
+      Expression expr = ExpressionEvaluator.unwrapParenthesis(expression);
+      if (expr instanceof Select subSelect) {
+        return evaluateScalarSubquery(subSelect);
+      }
+      if (expr instanceof SignedExpression signed) {
+        Object inner = value(signed.getExpression());
+        if (inner == null) {
+          return null;
+        }
+        BigDecimal numeric = toBigDecimal(inner);
+        return signed.getSign() == '-' ? numeric.negate() : numeric;
+      }
+      if (expr instanceof Addition add) {
+        return arithmetic(add.getLeftExpression(), add.getRightExpression(), Operation.ADD);
+      }
+      if (expr instanceof Subtraction sub) {
+        return arithmetic(sub.getLeftExpression(), sub.getRightExpression(), Operation.SUB);
+      }
+      if (expr instanceof Multiplication mul) {
+        return arithmetic(mul.getLeftExpression(), mul.getRightExpression(), Operation.MUL);
+      }
+      if (expr instanceof Division div) {
+        return arithmetic(div.getLeftExpression(), div.getRightExpression(), Operation.DIV);
+      }
+      if (expr instanceof Modulo mod) {
+        return arithmetic(mod.getLeftExpression(), mod.getRightExpression(), Operation.MOD);
+      }
+      if (expr instanceof Function func) {
+        if (isGroupingFunction(func)) {
+          return grouping(func);
+        }
+        return aggregateValue(func);
+      }
+      if (expr instanceof Column col) {
+        return aliasValue(col.getColumnName());
+      }
+      return LiteralConverter.toLiteral(expr);
+    }
+
+    private Object arithmetic(Expression left, Expression right, Operation op) {
+      Object leftVal = value(left);
+      Object rightVal = value(right);
+      if (leftVal == null || rightVal == null) {
+        return null;
+      }
+      BigDecimal leftNum = toBigDecimal(leftVal);
+      BigDecimal rightNum = toBigDecimal(rightVal);
+      return switch (op) {
+        case ADD -> leftNum.add(rightNum);
+        case SUB -> leftNum.subtract(rightNum);
+        case MUL -> leftNum.multiply(rightNum);
+        case DIV -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.divide(rightNum, MathContext.DECIMAL64);
+        case MOD -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.remainder(rightNum);
+      };
+    }
+
+    private Object evaluateScalarSubquery(Select subSelect) {
+      if (subqueryExecutor == null) {
+        throw new IllegalStateException("Scalar subqueries require a subquery executor");
+      }
+      SubqueryExecutor.SubqueryResult result = subqueryExecutor.execute(subSelect);
+      if (result.rows().isEmpty()) {
+        return null;
+      }
+      if (result.rows().size() > 1) {
+        throw new IllegalArgumentException("Scalar subquery returned more than one row");
+      }
+      List<Object> row = result.rows().getFirst();
+      if (row.isEmpty()) {
+        return null;
+      }
+      if (row.size() > 1) {
+        throw new IllegalArgumentException("Scalar subquery returned more than one column");
+      }
+      return row.getFirst();
+    }
+
+    private Object aggregateValue(Function func) {
+      AggregateType type = AggregateType.from(func.getName());
+      if (type == null) {
+        throw new IllegalArgumentException("Unsupported function in HAVING clause: " + func.getName());
+      }
+      for (int i = 0; i < plan.specs().size(); i++) {
+        AggregateSpec spec = plan.specs().get(i);
+        if (spec.type() != type) {
+          continue;
+        }
+        if (spec.countStar() != (type == AggregateType.COUNT && func.isAllColumns())) {
+          continue;
+        }
+        if (!spec.countStar()) {
+          ExpressionList<?> params = func.getParameters();
+          if (params == null || params.size() != spec.arguments().size()) {
+            continue;
+          }
+          boolean matches = true;
+          for (int j = 0; j < spec.arguments().size(); j++) {
+            Expression expected = spec.arguments().get(j);
+            Expression actual = params.get(j);
+            if (!expected.toString().equals(actual.toString())) {
+              matches = false;
+              break;
+            }
+          }
+          if (!matches) {
+            continue;
+          }
+        }
+        return aggregateValues.get(i);
+      }
+      throw new IllegalArgumentException("HAVING references aggregate not present in SELECT: " + func);
+    }
+
+    private Object grouping(Function func) {
+      List<Integer> indexes = groupingArgumentIndexes(func, groupIndexLookup);
+      return groupingValue(plan, groupingSetIndex, indexes);
+    }
+
+    private Object aliasValue(String name) {
+      if (name == null) {
+        return null;
+      }
+      return labelLookup.get(name.toLowerCase(Locale.ROOT));
+    }
+
+    private BigDecimal toBigDecimal(Object value) {
+      if (value instanceof BigDecimal bd) {
+        return bd;
+      }
+      if (value instanceof Number num) {
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+          return BigDecimal.valueOf(num.longValue());
+        }
+        return BigDecimal.valueOf(num.doubleValue());
+      }
+      return new BigDecimal(value.toString());
+    }
+
+    private enum Operation {
+      ADD, SUB, MUL, DIV, MOD
+    }
+  }
+
 }
+
