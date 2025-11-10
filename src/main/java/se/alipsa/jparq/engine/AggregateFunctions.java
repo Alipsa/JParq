@@ -1134,7 +1134,7 @@ public final class AggregateFunctions {
         row.add(state.groupValues().get(column.groupIndex()));
       }
     }
-    return Collections.unmodifiableList(new ArrayList<>(row));
+    return Collections.unmodifiableList(row);
   }
 
   private static Map<String, Object> buildLabelLookup(AggregatePlan plan, List<Object> rowValues,
