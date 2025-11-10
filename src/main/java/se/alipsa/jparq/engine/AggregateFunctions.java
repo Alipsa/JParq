@@ -1208,7 +1208,7 @@ public final class AggregateFunctions {
 
     GroupKey(int groupingSetIndex, List<Object> values) {
       this.groupingSetIndex = groupingSetIndex;
-      this.values = Collections.unmodifiableList(new ArrayList<>(values));
+      this.values = List.copyOf(values);
       this.hash = 31 * groupingSetIndex + this.values.hashCode();
     }
 
