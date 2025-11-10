@@ -1155,13 +1155,29 @@ public final class AggregateFunctions {
     return map;
   }
 
+  /**
+   * Create an immutable list from the supplied values while preserving any null elements.
+   * <p>
+   * {@link List#copyOf(Collection)} rejects null entries, but GROUPING SETS require nulls to represent
+   * suppressed grouping expressions. This method ensures the returned list is immutable yet retains
+   * those null placeholders.
+   *
+   * @param values
+   *          source list, which must be non-null but may contain null elements
+   * @return an immutable list containing the same elements, including nulls, as {@code values}
+   */
+  private static <T> List<T> immutableListAllowingNulls(List<T> values) {
+    Objects.requireNonNull(values, "values");
+    return Collections.unmodifiableList(new ArrayList<>(values));
+  }
+
   private static final class GroupState {
     private final List<Object> groupValues;
     private final AggregateAccumulator[] accumulators;
     private final int groupingSetIndex;
 
     GroupState(List<Object> groupValues, List<AggregateSpec> specs, int groupingSetIndex) {
-      this.groupValues = List.copyOf(groupValues);
+      this.groupValues = immutableListAllowingNulls(groupValues);
       this.groupingSetIndex = groupingSetIndex;
       this.accumulators = new AggregateAccumulator[specs.size()];
       for (int i = 0; i < specs.size(); i++) {
@@ -1195,7 +1211,7 @@ public final class AggregateFunctions {
       for (AggregateAccumulator accumulator : accumulators) {
         values.add(accumulator.result());
       }
-      return List.copyOf(values);
+      return immutableListAllowingNulls(values);
     }
   }
 
@@ -1206,7 +1222,7 @@ public final class AggregateFunctions {
 
     GroupKey(int groupingSetIndex, List<Object> values) {
       this.groupingSetIndex = groupingSetIndex;
-      this.values = List.copyOf(values);
+      this.values = immutableListAllowingNulls(values);
       this.hash = 31 * groupingSetIndex + this.values.hashCode();
     }
 
