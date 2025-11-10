@@ -15,7 +15,6 @@ import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
-import net.sf.jsqlparser.parser.ASTNodeAccess;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.parser.SimpleNode;
 import net.sf.jsqlparser.parser.Token;
@@ -819,7 +818,7 @@ public final class SqlParser {
       Expression expr = item.getExpression();
 
       if (expr instanceof AllTableColumns tableColumns) {
-        String qualifier = resolveQualifiedWildcardQualifier(tableColumns);
+        String qualifier = resolveQualifiedWildcardQualifier(tableColumns, text);
         SourcePosition position = extractSourcePosition(item);
         qualifiedWildcards.add(new QualifiedWildcard(qualifier, position));
         if (!allowQualifiedWildcards) {
@@ -871,53 +870,58 @@ public final class SqlParser {
       labels = List.of();
       physicalCols = List.of();
       expressions = List.of();
-      qualifiedWildcards = new ArrayList<>();
     }
 
     return new Projection(labels, physicalCols, expressions, List.copyOf(qualifiedWildcards), selectAll);
   }
 
-  private static String resolveQualifiedWildcardQualifier(AllTableColumns tableColumns) {
+  private static String resolveQualifiedWildcardQualifier(AllTableColumns tableColumns, String originalText) {
     if (tableColumns == null) {
-      return "";
+      throw new IllegalArgumentException("Qualified wildcard is missing table reference: " + originalText);
     }
     Table table = tableColumns.getTable();
     if (table != null) {
       Alias alias = table.getAlias();
       if (alias != null && alias.getName() != null && !alias.getName().isBlank()) {
-        return alias.getName();
+        return alias.getName().trim();
       }
       String fqn = table.getFullyQualifiedName();
       if (fqn != null && !fqn.isBlank()) {
-        return fqn;
+        return fqn.trim();
       }
       String name = table.getName();
       if (name != null && !name.isBlank()) {
-        return name;
+        return name.trim();
       }
     }
     String text = tableColumns.toString();
-    if (text == null) {
-      return "";
+    if (text != null) {
+      String trimmed = text.trim();
+      if (trimmed.endsWith(".*")) {
+        String qualifier = trimmed.substring(0, trimmed.length() - 2).trim();
+        if (!qualifier.isEmpty()) {
+          return qualifier;
+        }
+      }
+      if (!trimmed.isEmpty() && !".*".equals(trimmed)) {
+        return trimmed;
+      }
     }
-    String trimmed = text.trim();
-    if (trimmed.endsWith(".*")) {
-      return trimmed.substring(0, trimmed.length() - 2);
-    }
-    return trimmed;
+    throw new IllegalArgumentException("Qualified wildcard is missing a qualifier: " + originalText);
   }
 
   private static SourcePosition extractSourcePosition(SelectItem<?> item) {
-    if (item instanceof ASTNodeAccess access) {
-      SimpleNode node = access.getASTNode();
-      if (node != null) {
-        Token token = node.jjtGetFirstToken();
-        if (token != null) {
-          int line = token.beginLine;
-          int column = token.beginColumn;
-          if (line > 0 && column > 0) {
-            return new SourcePosition(line, column);
-          }
+    if (item == null) {
+      return null;
+    }
+    SimpleNode node = item.getASTNode();
+    if (node != null) {
+      Token token = node.jjtGetFirstToken();
+      if (token != null) {
+        int line = token.beginLine;
+        int column = token.beginColumn;
+        if (line > 0 && column > 0) {
+          return new SourcePosition(line, column);
         }
       }
     }
