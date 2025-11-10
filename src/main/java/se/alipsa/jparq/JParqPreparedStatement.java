@@ -145,6 +145,10 @@ class JParqPreparedStatement implements PreparedStatement {
         tmpJoinQuery = false;
       } else {
         tmpSelect = (SqlParser.Select) query;
+        if (!tmpSelect.qualifiedWildcards().isEmpty()) {
+          throw new SQLException("Qualified wildcard projections are not supported yet: "
+              + tmpSelect.qualifiedWildcards());
+        }
         tmpSetOperation = false;
         tmpTableRefs = tmpSelect.tableReferences();
         tmpJoinQuery = tmpSelect.hasMultipleTables();

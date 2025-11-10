@@ -14,7 +14,7 @@ class AstTest {
 
   @Test
   void parsesAliasQualifiedWildcard() {
-    SqlParser.Select select = SqlParser.parseSelect("SELECT t.* FROM T t");
+    SqlParser.Select select = SqlParser.parseSelectAllowQualifiedWildcards("SELECT t.* FROM T t");
 
     List<QualifiedWildcard> wildcards = select.qualifiedWildcards();
 
@@ -24,7 +24,7 @@ class AstTest {
 
   @Test
   void parsesSchemaQualifiedWildcard() {
-    SqlParser.Select select = SqlParser.parseSelect("SELECT schema.table.* FROM schema.table");
+    SqlParser.Select select = SqlParser.parseSelectAllowQualifiedWildcards("SELECT schema.table.* FROM schema.table");
 
     List<QualifiedWildcard> wildcards = select.qualifiedWildcards();
 
@@ -36,7 +36,7 @@ class AstTest {
   @Test
   void parsesWildcardAlongsideExpressions() {
     SqlParser.Select select = SqlParser
-        .parseSelect("SELECT m.*, t.x FROM mtcars m JOIN t ON t.id = m.id");
+        .parseSelectAllowQualifiedWildcards("SELECT m.*, t.x FROM mtcars m JOIN t ON t.id = m.id");
 
     List<QualifiedWildcard> wildcards = select.qualifiedWildcards();
 
