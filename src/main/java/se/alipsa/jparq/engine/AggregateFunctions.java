@@ -1163,7 +1163,7 @@ public final class AggregateFunctions {
     private final int groupingSetIndex;
 
     GroupState(List<Object> groupValues, List<AggregateSpec> specs, int groupingSetIndex) {
-      this.groupValues = Collections.unmodifiableList(new ArrayList<>(groupValues));
+      this.groupValues = List.copyOf(groupValues);
       this.groupingSetIndex = groupingSetIndex;
       this.accumulators = new AggregateAccumulator[specs.size()];
       for (int i = 0; i < specs.size(); i++) {
