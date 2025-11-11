@@ -9,13 +9,13 @@ public final class IdentifierUtil {
   }
 
   /**
-   * Remove common quote characters surrounding an identifier while preserving
-   * the inner value.
+   * Remove common quote characters surrounding an identifier while preserving the
+   * inner value.
    *
    * @param identifier
    *          identifier text that may include leading and trailing quotes
-   * @return the identifier without enclosing quotes; {@code null} when the
-   *         input is {@code null}
+   * @return the identifier without enclosing quotes; {@code null} when the input
+   *         is {@code null}
    */
   public static String sanitizeIdentifier(String identifier) {
     if (identifier == null) {
@@ -36,4 +36,3 @@ public final class IdentifierUtil {
     return trimmed;
   }
 }
-

@@ -112,9 +112,8 @@ public class QualifiedWildcardExecutionTest {
     assertEquals(employeeSnapshot.labels(), labels.subList(0, employeeSize),
         "Employee columns should be emitted before the joined department columns");
     assertEquals(employeeSize + departmentSize, labels.size(),
-        () -> "Projection size mismatch. Employee columns: " + employeeSnapshot.labels()
-            + ", Department columns: " + departmentSnapshot.labels()
-            + ", Projection labels: " + labels);
+        () -> "Projection size mismatch. Employee columns: " + employeeSnapshot.labels() + ", Department columns: "
+            + departmentSnapshot.labels() + ", Projection labels: " + labels);
     assertEquals(departmentSnapshot.labels(), labels.subList(employeeSize, employeeSize + departmentSize),
         "Department wildcard expansion should retain the department column order");
     assertTrue(projectionSnapshot.rowCount() > 0, "Join query should return rows");
