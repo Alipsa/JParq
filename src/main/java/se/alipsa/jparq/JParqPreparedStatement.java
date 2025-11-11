@@ -56,6 +56,7 @@ import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
+import se.alipsa.jparq.engine.IdentifierUtil;
 import se.alipsa.jparq.engine.InMemoryRecordReader;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
@@ -64,6 +65,7 @@ import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
+import se.alipsa.jparq.engine.SqlParser.QualifiedExpansionColumn;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.window.AvgWindow;
 import se.alipsa.jparq.engine.window.CumeDistWindow;
@@ -88,7 +90,7 @@ class JParqPreparedStatement implements PreparedStatement {
   private final JParqStatement stmt;
 
   // --- Query Plan Fields (calculated in constructor) ---
-  private final SqlParser.Select parsedSelect;
+  private SqlParser.Select parsedSelect;
   private final SqlParser.SetQuery parsedSetQuery;
   private final Configuration conf;
   private final Optional<FilterPredicate> parquetPredicate;
@@ -148,11 +150,12 @@ class JParqPreparedStatement implements PreparedStatement {
         tmpSetOperation = false;
         tmpTableRefs = tmpSelect.tableReferences();
         tmpJoinQuery = tmpSelect.hasMultipleTables();
-        final var aggregatePlan = AggregateFunctions.plan(tmpSelect);
 
         SqlParser.TableReference baseRef = tmpTableRefs.isEmpty() ? null : tmpTableRefs.getFirst();
         boolean baseIsCte = baseRef != null && (baseRef.commonTableExpression() != null
             || resolveCteResultByName(baseRef.tableName(), tmpCteResults) != null);
+
+        AggregateFunctions.AggregatePlan aggregatePlan = null;
 
         if (tmpJoinQuery) {
           tmpResidual = tmpSelect.where();
@@ -165,6 +168,12 @@ class JParqPreparedStatement implements PreparedStatement {
           }
           tmpBaseCteResult = resolved;
           tmpFileAvro = resolved.schema();
+          if (!tmpSelect.qualifiedWildcards().isEmpty()) {
+            Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
+                baseRef, tmpFileAvro);
+            tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
+          }
+          aggregatePlan = AggregateFunctions.plan(tmpSelect);
           tmpResidual = tmpSelect.where();
           tmpPredicate = Optional.empty();
         } else {
@@ -186,6 +195,16 @@ class JParqPreparedStatement implements PreparedStatement {
 
           tmpFileAvro = avro;
 
+          if (!tmpSelect.qualifiedWildcards().isEmpty()) {
+            if (tmpFileAvro == null) {
+              throw new SQLException("Unable to resolve schema for qualified wildcard projection");
+            }
+            Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
+                baseRef, tmpFileAvro);
+            tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
+          }
+
+          aggregatePlan = AggregateFunctions.plan(tmpSelect);
           configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf);
 
           if (!tmpSelect.distinct() && tmpFileAvro != null && tmpSelect.where() != null) {
@@ -749,10 +768,131 @@ class JParqPreparedStatement implements PreparedStatement {
           ref.joinCondition(), ref.usingColumns()));
     }
     try {
-      return new JoinRecordReader(tables);
+      JoinRecordReader joinReader = new JoinRecordReader(tables);
+      expandJoinQualifiedWildcards(joinReader);
+      return joinReader;
     } catch (IllegalArgumentException e) {
       throw new SQLException("Failed to build join reader", e);
     }
+  }
+
+  private void expandJoinQualifiedWildcards(JoinRecordReader joinReader) throws SQLException {
+    if (joinReader == null) {
+      return;
+    }
+    if (parsedSelect == null || parsedSelect.qualifiedWildcards().isEmpty()) {
+      return;
+    }
+    Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForJoin(joinReader);
+    if (qualifierColumns.isEmpty()) {
+      throw new SQLException(
+          "Unable to resolve columns for qualified wildcard projections: " + parsedSelect.qualifiedWildcards());
+    }
+    try {
+      parsedSelect = SqlParser.expandQualifiedWildcards(parsedSelect, qualifierColumns);
+    } catch (IllegalArgumentException e) {
+      throw new SQLException("Failed to expand qualified wildcard projections", e);
+    }
+  }
+
+  private Map<String, List<QualifiedExpansionColumn>> buildQualifierColumnsForJoin(JoinRecordReader joinReader) {
+    Map<String, List<QualifiedExpansionColumn>> mapping = new LinkedHashMap<>();
+    if (joinReader == null) {
+      return mapping;
+    }
+    Map<String, Map<String, String>> qualifierMapping = joinReader.qualifierColumnMapping();
+    List<String> columnOrder = joinReader.columnNames();
+    Map<String, String> canonicalLabels = joinReader.canonicalLabels();
+    if (qualifierMapping == null || qualifierMapping.isEmpty() || columnOrder == null || columnOrder.isEmpty()) {
+      return mapping;
+    }
+    if (tableReferences != null) {
+      for (SqlParser.TableReference ref : tableReferences) {
+        addQualifierColumns(mapping, ref.tableAlias(), qualifierMapping, columnOrder, canonicalLabels);
+        addQualifierColumns(mapping, ref.tableName(), qualifierMapping, columnOrder, canonicalLabels);
+      }
+    }
+    return mapping;
+  }
+
+  private static void addQualifierColumns(Map<String, List<QualifiedExpansionColumn>> target, String qualifier,
+      Map<String, Map<String, String>> qualifierMapping, List<String> columnOrder,
+      Map<String, String> canonicalLabels) {
+    if (qualifier == null || qualifier.isBlank()) {
+      return;
+    }
+    String trimmed = qualifier.trim();
+    if (trimmed.isEmpty()) {
+      return;
+    }
+    String sanitized = IdentifierUtil.sanitizeIdentifier(trimmed);
+    Map<String, String> columns = qualifierMapping.get(sanitized.toLowerCase(Locale.ROOT));
+    if ((columns == null || columns.isEmpty()) && !sanitized.equals(trimmed)) {
+      columns = qualifierMapping.get(trimmed.toLowerCase(Locale.ROOT));
+    }
+    if (columns == null || columns.isEmpty()) {
+      return;
+    }
+    LinkedHashSet<String> canonical = new LinkedHashSet<>(columns.values());
+    List<QualifiedExpansionColumn> ordered = new ArrayList<>();
+    for (String columnName : columnOrder) {
+      if (canonical.contains(columnName)) {
+        String label = canonicalLabels.getOrDefault(columnName, columnName);
+        ordered.add(new QualifiedExpansionColumn(label, columnName));
+      }
+    }
+    if (!ordered.isEmpty()) {
+      target.putIfAbsent(sanitized, List.copyOf(ordered));
+      if (!sanitized.equals(trimmed)) {
+        target.putIfAbsent(trimmed, List.copyOf(ordered));
+      }
+    }
+  }
+
+  private static Map<String, List<QualifiedExpansionColumn>> buildQualifierColumnsForSchema(SqlParser.Select select,
+      SqlParser.TableReference baseRef, Schema schema) {
+    if (schema == null) {
+      return Map.of();
+    }
+    List<String> columns = schemaColumnNames(schema);
+    List<QualifiedExpansionColumn> projections = new ArrayList<>(columns.size());
+    for (String column : columns) {
+      projections.add(new QualifiedExpansionColumn(column, column));
+    }
+    List<QualifiedExpansionColumn> immutable = List.copyOf(projections);
+    Map<String, List<QualifiedExpansionColumn>> mapping = new LinkedHashMap<>();
+    addSchemaQualifier(mapping, baseRef != null ? baseRef.tableAlias() : null, immutable);
+    addSchemaQualifier(mapping, baseRef != null ? baseRef.tableName() : null, immutable);
+    addSchemaQualifier(mapping, select.tableAlias(), immutable);
+    addSchemaQualifier(mapping, select.table(), immutable);
+    return mapping;
+  }
+
+  private static void addSchemaQualifier(Map<String, List<QualifiedExpansionColumn>> mapping, String qualifier,
+      List<QualifiedExpansionColumn> columns) {
+    if (qualifier == null || qualifier.isBlank()) {
+      return;
+    }
+    String trimmed = qualifier.trim();
+    if (trimmed.isEmpty()) {
+      return;
+    }
+    mapping.putIfAbsent(trimmed, columns);
+    String sanitized = IdentifierUtil.sanitizeIdentifier(trimmed);
+    if (!sanitized.equals(trimmed)) {
+      mapping.putIfAbsent(sanitized, columns);
+    }
+  }
+
+  private static List<String> schemaColumnNames(Schema schema) {
+    if (schema == null) {
+      return List.of();
+    }
+    List<String> names = new ArrayList<>(schema.getFields().size());
+    for (Schema.Field field : schema.getFields()) {
+      names.add(field.name());
+    }
+    return List.copyOf(names);
   }
 
   /**

@@ -1,5 +1,11 @@
 **Please add support for Qualified Wildcard Projections (e.g., `TableName.*` or `Alias.*`), aligning with the SQL Standard.**
 
+Since the full implementation is too complex a task, some incremental steps has already been taken i.e:
+- Task 1 — Add an AST node for qualified wildcard
+- Task 2 — Teach the parser to recognize ident.*
+You will now complete the implementation.
+We will use the qualifiedWildcard branch for this work. Once the full feature is done and tested, it will be merged into main.
+
 Qualified wildcard projection is a fundamental SQL feature that allows a user to select all columns belonging to a specific table, view, or alias without explicitly listing every column name. This is crucial for maintaining clarity, simplifying join queries, and insulating queries from future schema changes in other (unselected) tables.
 
 -----
@@ -75,7 +81,7 @@ JOIN
 
 ### 3\. Testing Requirements
 
-* Create tests to verify the functionality in a test class called **`jparq.projection.QualifiedWildcardTest`**.
+* Create tests to verify the functionality.
 * Tests must verify:
   * Simple `Alias.*` projection returns all columns from the aliased table.
   * Projection combines a qualified wildcard (`t1.*`) with specific columns from other tables (`t2.col`).

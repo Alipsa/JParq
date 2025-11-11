@@ -33,6 +33,7 @@ public final class JoinRecordReader implements RecordReader {
   private final List<String> columnNames;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
+  private final Map<String, String> canonicalLabels;
   private final List<JoinTable> joinTables;
   private final List<FieldMapping> fieldMappings;
   private final ExpressionEvaluator evaluator;
@@ -299,7 +300,7 @@ public final class JoinRecordReader implements RecordReader {
   }
 
   private record SchemaContext(Schema schema, Map<String, Map<String, String>> qualifierMapping,
-      Map<String, String> unqualifiedMapping) {
+      Map<String, String> unqualifiedMapping, Map<String, String> canonicalLabels) {
   }
 
   /**
@@ -329,6 +330,7 @@ public final class JoinRecordReader implements RecordReader {
     this.evaluator = new ExpressionEvaluator(schema, null, List.of(), qualifierColumnMapping, unqualifiedColumnMapping);
     this.tableCount = joinTables.size();
     this.usingMetadata = metadata;
+    this.canonicalLabels = context.canonicalLabels();
     this.resultRows = computeResultRows();
     this.resultIndex = 0;
   }
@@ -341,6 +343,7 @@ public final class JoinRecordReader implements RecordReader {
     Map<String, Integer> columnCounts = computeColumnCounts(tables, usingMetadata);
     Map<String, Map<String, String>> qualifierMap = new LinkedHashMap<>();
     Map<String, String> unqualifiedMap = new LinkedHashMap<>();
+    Map<String, String> canonicalLabels = new LinkedHashMap<>();
     Set<String> reservedTableQualifiers = new HashSet<>();
     Map<String, Integer> aliaslessTableCounts = new HashMap<>();
     for (int tableIndex = 0; tableIndex < tables.size(); tableIndex++) {
@@ -371,18 +374,20 @@ public final class JoinRecordReader implements RecordReader {
         String name = field.name();
         UsingColumnInfo usingInfo = usingMetadata.lookup(tableIndex, name);
         boolean usingColumn = usingInfo != null;
-        boolean owner = usingColumn && usingInfo.isOwner(tableIndex);
+        boolean duplicate = columnCounts.getOrDefault(name, 0) > 1;
         String canonical;
         if (usingColumn) {
           canonical = usingInfo.canonicalName();
         } else {
-          boolean duplicate = columnCounts.getOrDefault(name, 0) > 1;
           canonical = duplicate ? qualifierPrefix + "__" + name : name;
         }
+        String label = (!usingColumn && duplicate) ? name : canonical;
+        canonicalLabels.putIfAbsent(canonical, label);
         String lookupKey = name.toLowerCase(Locale.ROOT);
         registerQualifierMappings(qualifierMap, qualifiers, includeTableQualifier, normalizedTableName, lookupKey,
             canonical);
         if (usingColumn) {
+          final boolean owner = usingInfo.isOwner(tableIndex);
           UsingFieldState state = usingFieldStates.computeIfAbsent(canonical, key -> new UsingFieldState());
           Schema.Field newField = new Schema.Field(canonical, field.schema(), field.doc(), field.defaultVal());
           state.registerField(newField, owner);
@@ -404,7 +409,6 @@ public final class JoinRecordReader implements RecordReader {
           FieldMapping mapping = new FieldMapping(tableIndex, name, canonical, List.of());
           otherFields.add(newField);
           mappings.add(mapping);
-          boolean duplicate = columnCounts.getOrDefault(name, 0) > 1;
           if (!duplicate) {
             unqualifiedMap.put(lookupKey, canonical);
           }
@@ -427,7 +431,7 @@ public final class JoinRecordReader implements RecordReader {
     mappings.addAll(orderedMappings);
     Schema joinSchema = Schema.createRecord("join_record", null, null, false);
     joinSchema.setFields(orderedFields);
-    return new SchemaContext(joinSchema, qualifierMap, unqualifiedMap);
+    return new SchemaContext(joinSchema, qualifierMap, unqualifiedMap, Map.copyOf(canonicalLabels));
   }
 
   /**
@@ -488,27 +492,40 @@ public final class JoinRecordReader implements RecordReader {
   }
 
   private static String qualifierPrefix(JoinTable table, int index) {
-    if (table.alias() != null && !table.alias().isBlank()) {
-      return table.alias();
+    String alias = IdentifierUtil.sanitizeIdentifier(table.alias());
+    if (alias != null && !alias.isBlank()) {
+      return alias;
     }
-    if (table.tableName() != null && !table.tableName().isBlank()) {
-      return table.tableName();
+    String tableName = IdentifierUtil.sanitizeIdentifier(table.tableName());
+    if (tableName != null && !tableName.isBlank()) {
+      return tableName;
     }
     return "t" + index;
   }
 
   private static Set<String> qualifierSet(JoinTable table, int index) {
     Set<String> qualifiers = new LinkedHashSet<>();
-    if (table.tableName() != null && !table.tableName().isBlank()) {
-      qualifiers.add(table.tableName());
-    }
-    if (table.alias() != null && !table.alias().isBlank()) {
-      qualifiers.add(table.alias());
-    }
+    addQualifierVariant(qualifiers, table.tableName());
+    addQualifierVariant(qualifiers, table.alias());
     if (qualifiers.isEmpty()) {
       qualifiers.add("t" + index);
     }
     return qualifiers;
+  }
+
+  private static void addQualifierVariant(Set<String> qualifiers, String candidate) {
+    if (candidate == null) {
+      return;
+    }
+    String trimmed = candidate.trim();
+    if (trimmed.isEmpty()) {
+      return;
+    }
+    qualifiers.add(trimmed);
+    String sanitized = IdentifierUtil.sanitizeIdentifier(trimmed);
+    if (!sanitized.equals(trimmed)) {
+      qualifiers.add(sanitized);
+    }
   }
 
   private static String normalize(String qualifier) {
@@ -570,6 +587,16 @@ public final class JoinRecordReader implements RecordReader {
    */
   public Map<String, String> unqualifiedColumnMapping() {
     return Map.copyOf(unqualifiedColumnMapping);
+  }
+
+  /**
+   * Retrieve the display labels associated with canonical column names.
+   *
+   * @return immutable mapping of canonical column names to their corresponding
+   *         labels
+   */
+  public Map<String, String> canonicalLabels() {
+    return Map.copyOf(canonicalLabels);
   }
 
   @Override
