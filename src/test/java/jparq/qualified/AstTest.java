@@ -27,8 +27,7 @@ class AstTest {
   @Test
   @DisplayName("Parser retains quoted identifier qualified wildcards")
   void parsesQuotedQualifiedWildcard() {
-    SqlParser.Select select = SqlParser
-        .parseSelectAllowQualifiedWildcards("SELECT \"My Table\".* FROM \"My Table\"");
+    SqlParser.Select select = SqlParser.parseSelectAllowQualifiedWildcards("SELECT \"My Table\".* FROM \"My Table\"");
 
     List<QualifiedWildcard> wildcards = select.qualifiedWildcards();
 
