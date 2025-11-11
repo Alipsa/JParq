@@ -122,8 +122,7 @@ public final class SqlParser {
       int limit, int offset, List<OrderKey> orderBy, boolean distinct, boolean innerDistinct,
       List<String> innerDistinctColumns, List<Expression> expressions, List<Integer> expressionOrder,
       List<QualifiedWildcard> qualifiedWildcards, List<Expression> groupByExpressions, List<List<Integer>> groupingSets,
-      Expression having, int preLimit,
-      int preOffset, List<OrderKey> preOrderBy, List<TableReference> tableReferences,
+      Expression having, int preLimit, int preOffset, List<OrderKey> preOrderBy, List<TableReference> tableReferences,
       List<CommonTableExpression> commonTableExpressions) implements Query {
 
     /**
@@ -583,29 +582,10 @@ public final class SqlParser {
 
     GroupByInfo groupByInfo = parseGroupBy(ps.getGroupBy(), tableRefs);
 
-    return new Select(
-        labelsCopy,
-        physicalCopy,
-        fromInfo.tableName(),
-        fromInfo.tableAlias(),
-        combinedWhere,
-        limit,
-        offset,
-        orderCopy,
-        distinct,
-        innerDistinct,
-        innerDistinctCols,
-        expressionCopy,
-        expressionOrderCopy,
-        wildcardCopy,
-        groupByInfo.expressions(),
-        groupByInfo.groupingSets(),
-        combinedHaving,
-        preLimit,
-        preOffset,
-        preOrderCopy,
-        tableRefs,
-        List.copyOf(ctes));
+    return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
+        offset, orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, expressionOrderCopy,
+        wildcardCopy, groupByInfo.expressions(), groupByInfo.groupingSets(), combinedHaving, preLimit, preOffset,
+        preOrderCopy, tableRefs, List.copyOf(ctes));
   }
 
   /**
@@ -927,8 +907,8 @@ public final class SqlParser {
      * @param label
      *          column label that should appear in the result set metadata
      * @param physicalName
-     *          canonical physical column name used when accessing the
-     *          underlying schema
+     *          canonical physical column name used when accessing the underlying
+     *          schema
      */
     public QualifiedExpansionColumn {
       if (physicalName == null || physicalName.isBlank()) {

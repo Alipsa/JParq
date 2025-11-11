@@ -11,7 +11,7 @@ import se.alipsa.jparq.engine.QualifiedWildcard;
 import se.alipsa.jparq.engine.SqlParser;
 
 /** Tests focused on the parser behaviour for qualified wildcard projections. */
-class AstTest {
+class ParseQualifiedWildcardTest {
 
   @Test
   @DisplayName("Parser retains alias-qualified wildcard projections")

@@ -20,7 +20,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
-/** Integration tests verifying qualified wildcard projections behave as expected. */
+/**
+ * Integration tests verifying qualified wildcard projections behave as
+ * expected.
+ */
 public class QualifiedWildcardExecutionTest {
 
   private static JParqSql mtcarsSql;
@@ -122,7 +125,7 @@ public class QualifiedWildcardExecutionTest {
     assertFalse(projectionColumns.isEmpty(), "Projection should expose columns");
     assertEquals(employeeColumns, projectionColumns.subList(0, employeeColumns.size()),
         "Wildcard expansion should honour the employee column order");
-    assertEquals("department", projectionColumns.get(projectionColumns.size() - 1),
+    assertEquals("department", projectionColumns.getLast(),
         "Additional columns should follow the expanded wildcard projection");
     assertTrue(rowCount.get() > 0, "Join query should return rows");
   }

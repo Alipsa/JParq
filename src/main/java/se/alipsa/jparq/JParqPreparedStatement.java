@@ -784,8 +784,8 @@ class JParqPreparedStatement implements PreparedStatement {
     }
     Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForJoin(joinReader);
     if (qualifierColumns.isEmpty()) {
-      throw new SQLException("Unable to resolve columns for qualified wildcard projections: "
-          + parsedSelect.qualifiedWildcards());
+      throw new SQLException(
+          "Unable to resolve columns for qualified wildcard projections: " + parsedSelect.qualifiedWildcards());
     }
     try {
       parsedSelect = SqlParser.expandQualifiedWildcards(parsedSelect, qualifierColumns);
