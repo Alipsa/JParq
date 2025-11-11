@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -20,7 +21,7 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
 /** Integration tests verifying qualified wildcard projections behave as expected. */
-class QualifiedWildcardExecutionTest {
+public class QualifiedWildcardExecutionTest {
 
   private static JParqSql mtcarsSql;
   private static JParqSql acmeSql;
@@ -123,7 +124,7 @@ class QualifiedWildcardExecutionTest {
         "Wildcard expansion should honour the employee column order");
     assertEquals("department", projectionColumns.get(projectionColumns.size() - 1),
         "Additional columns should follow the expanded wildcard projection");
-    assertFalse(rowCount.get() == 0, "Join query should return rows");
+    assertTrue(rowCount.get() > 0, "Join query should return rows");
   }
 
   @Test

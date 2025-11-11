@@ -157,7 +157,6 @@ class JParqPreparedStatement implements PreparedStatement {
         AggregateFunctions.AggregatePlan aggregatePlan = null;
 
         if (tmpJoinQuery) {
-          aggregatePlan = AggregateFunctions.plan(tmpSelect);
           tmpResidual = tmpSelect.where();
         } else if (baseIsCte) {
           CteResult resolved = baseRef.commonTableExpression() != null
