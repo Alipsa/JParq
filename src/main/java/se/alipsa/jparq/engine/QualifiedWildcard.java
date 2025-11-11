@@ -10,6 +10,7 @@ import java.util.Optional;
 public final class QualifiedWildcard implements SelectListItem {
   private final String qualifier;
   private final SourcePosition sourcePosition;
+  private final int selectListIndex;
 
   /**
    * Create a qualified wildcard without source position information.
@@ -18,7 +19,7 @@ public final class QualifiedWildcard implements SelectListItem {
    *          the qualifier associated with the wildcard, e.g. {@code table}
    */
   public QualifiedWildcard(String qualifier) {
-    this(qualifier, null);
+    this(qualifier, null, -1);
   }
 
   /**
@@ -31,6 +32,23 @@ public final class QualifiedWildcard implements SelectListItem {
    *          {@code null}
    */
   public QualifiedWildcard(String qualifier, SourcePosition sourcePosition) {
+    this(qualifier, sourcePosition, -1);
+  }
+
+  /**
+   * Create a qualified wildcard that captures the originating source position
+   * together with the index within the SELECT list.
+   *
+   * @param qualifier
+   *          the qualifier associated with the wildcard, e.g. {@code table}
+   * @param sourcePosition
+   *          the position where the wildcard appears within the SQL text, may be
+   *          {@code null}
+   * @param selectListIndex
+   *          zero-based index describing where in the SELECT list this wildcard
+   *          appeared. Use {@code -1} when the index is unknown
+   */
+  public QualifiedWildcard(String qualifier, SourcePosition sourcePosition, int selectListIndex) {
     if (qualifier == null) {
       throw new IllegalArgumentException("Qualifier must not be null");
     }
@@ -40,6 +58,7 @@ public final class QualifiedWildcard implements SelectListItem {
     }
     this.qualifier = trimmed;
     this.sourcePosition = sourcePosition;
+    this.selectListIndex = selectListIndex;
   }
 
   /**
@@ -56,9 +75,19 @@ public final class QualifiedWildcard implements SelectListItem {
     return Optional.ofNullable(sourcePosition);
   }
 
+  /**
+   * Retrieve the zero-based index describing where the wildcard appeared in the
+   * SELECT list.
+   *
+   * @return the index within the SELECT list, or {@code -1} when unavailable
+   */
+  public int selectListIndex() {
+    return selectListIndex;
+  }
+
   @Override
   public int hashCode() {
-    return Objects.hash(qualifier, sourcePosition);
+    return Objects.hash(qualifier, sourcePosition, selectListIndex);
   }
 
   @Override
@@ -67,7 +96,8 @@ public final class QualifiedWildcard implements SelectListItem {
       return true;
     }
     if (obj instanceof QualifiedWildcard other) {
-      return Objects.equals(qualifier, other.qualifier) && Objects.equals(sourcePosition, other.sourcePosition);
+      return Objects.equals(qualifier, other.qualifier) && Objects.equals(sourcePosition, other.sourcePosition)
+          && selectListIndex == other.selectListIndex;
     }
     return false;
   }
