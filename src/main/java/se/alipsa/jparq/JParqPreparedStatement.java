@@ -56,6 +56,7 @@ import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
+import se.alipsa.jparq.engine.IdentifierUtil;
 import se.alipsa.jparq.engine.InMemoryRecordReader;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
@@ -801,24 +802,34 @@ class JParqPreparedStatement implements PreparedStatement {
     }
     Map<String, Map<String, String>> qualifierMapping = joinReader.qualifierColumnMapping();
     List<String> columnOrder = joinReader.columnNames();
+    Map<String, String> canonicalLabels = joinReader.canonicalLabels();
     if (qualifierMapping == null || qualifierMapping.isEmpty() || columnOrder == null || columnOrder.isEmpty()) {
       return mapping;
     }
     if (tableReferences != null) {
       for (SqlParser.TableReference ref : tableReferences) {
-        addQualifierColumns(mapping, ref.tableAlias(), qualifierMapping, columnOrder);
-        addQualifierColumns(mapping, ref.tableName(), qualifierMapping, columnOrder);
+        addQualifierColumns(mapping, ref.tableAlias(), qualifierMapping, columnOrder, canonicalLabels);
+        addQualifierColumns(mapping, ref.tableName(), qualifierMapping, columnOrder, canonicalLabels);
       }
     }
     return mapping;
   }
 
   private static void addQualifierColumns(Map<String, List<QualifiedExpansionColumn>> target, String qualifier,
-      Map<String, Map<String, String>> qualifierMapping, List<String> columnOrder) {
+      Map<String, Map<String, String>> qualifierMapping, List<String> columnOrder,
+      Map<String, String> canonicalLabels) {
     if (qualifier == null || qualifier.isBlank()) {
       return;
     }
-    Map<String, String> columns = qualifierMapping.get(qualifier.toLowerCase(Locale.ROOT));
+    String trimmed = qualifier.trim();
+    if (trimmed.isEmpty()) {
+      return;
+    }
+    String sanitized = IdentifierUtil.sanitizeIdentifier(trimmed);
+    Map<String, String> columns = qualifierMapping.get(sanitized.toLowerCase(Locale.ROOT));
+    if ((columns == null || columns.isEmpty()) && !sanitized.equals(trimmed)) {
+      columns = qualifierMapping.get(trimmed.toLowerCase(Locale.ROOT));
+    }
     if (columns == null || columns.isEmpty()) {
       return;
     }
@@ -826,16 +837,15 @@ class JParqPreparedStatement implements PreparedStatement {
     List<QualifiedExpansionColumn> ordered = new ArrayList<>();
     for (String columnName : columnOrder) {
       if (canonical.contains(columnName)) {
-        String label = columnName;
-        int delimiter = columnName.indexOf("__");
-        if (delimiter >= 0 && delimiter + 2 < columnName.length()) {
-          label = columnName.substring(delimiter + 2);
-        }
+        String label = canonicalLabels.getOrDefault(columnName, columnName);
         ordered.add(new QualifiedExpansionColumn(label, columnName));
       }
     }
     if (!ordered.isEmpty()) {
-      target.putIfAbsent(qualifier, List.copyOf(ordered));
+      target.putIfAbsent(sanitized, List.copyOf(ordered));
+      if (!sanitized.equals(trimmed)) {
+        target.putIfAbsent(trimmed, List.copyOf(ordered));
+      }
     }
   }
 
@@ -863,7 +873,15 @@ class JParqPreparedStatement implements PreparedStatement {
     if (qualifier == null || qualifier.isBlank()) {
       return;
     }
-    mapping.putIfAbsent(qualifier, columns);
+    String trimmed = qualifier.trim();
+    if (trimmed.isEmpty()) {
+      return;
+    }
+    mapping.putIfAbsent(trimmed, columns);
+    String sanitized = IdentifierUtil.sanitizeIdentifier(trimmed);
+    if (!sanitized.equals(trimmed)) {
+      mapping.putIfAbsent(sanitized, columns);
+    }
   }
 
   private static List<String> schemaColumnNames(Schema schema) {
