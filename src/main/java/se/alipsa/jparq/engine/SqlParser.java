@@ -883,15 +883,15 @@ public final class SqlParser {
     if (table != null) {
       Alias alias = table.getAlias();
       if (alias != null && alias.getName() != null && !alias.getName().isBlank()) {
-        return alias.getName().trim();
+        return stripCompositeIdentifierQuotes(alias.getName());
       }
       String fqn = table.getFullyQualifiedName();
       if (fqn != null && !fqn.isBlank()) {
-        return fqn.trim();
+        return stripCompositeIdentifierQuotes(fqn);
       }
       String name = table.getName();
       if (name != null && !name.isBlank()) {
-        return name.trim();
+        return stripCompositeIdentifierQuotes(name);
       }
     }
     String text = tableColumns.toString();
@@ -900,14 +900,85 @@ public final class SqlParser {
       if (trimmed.endsWith(".*")) {
         String qualifier = trimmed.substring(0, trimmed.length() - 2).trim();
         if (!qualifier.isEmpty()) {
-          return qualifier;
+          return stripCompositeIdentifierQuotes(qualifier);
         }
       }
       if (!trimmed.isEmpty() && !".*".equals(trimmed)) {
-        return trimmed;
+        return stripCompositeIdentifierQuotes(trimmed);
       }
     }
     throw new IllegalArgumentException("Qualified wildcard is missing a qualifier: " + originalText);
+  }
+
+  private static String stripCompositeIdentifierQuotes(String identifier) {
+    if (identifier == null) {
+      return null;
+    }
+    String trimmed = identifier.trim();
+    if (trimmed.isEmpty()) {
+      return trimmed;
+    }
+    StringBuilder result = new StringBuilder();
+    StringBuilder segment = new StringBuilder();
+    boolean inDoubleQuote = false;
+    boolean inBacktick = false;
+    boolean inBracket = false;
+    for (int i = 0; i < trimmed.length(); i++) {
+      char ch = trimmed.charAt(i);
+      if (ch == '"' && !inBacktick && !inBracket) {
+        inDoubleQuote = !inDoubleQuote;
+        segment.append(ch);
+        continue;
+      }
+      if (ch == '`' && !inDoubleQuote && !inBracket) {
+        inBacktick = !inBacktick;
+        segment.append(ch);
+        continue;
+      }
+      if (ch == '[' && !inDoubleQuote && !inBacktick && !inBracket) {
+        inBracket = true;
+        segment.append(ch);
+        continue;
+      }
+      if (ch == ']' && inBracket) {
+        inBracket = false;
+        segment.append(ch);
+        continue;
+      }
+      if (ch == '.' && !inDoubleQuote && !inBacktick && !inBracket) {
+        appendIdentifierSegment(result, segment);
+        result.append('.');
+        segment.setLength(0);
+      } else {
+        segment.append(ch);
+      }
+    }
+    appendIdentifierSegment(result, segment);
+    return result.toString();
+  }
+
+  private static void appendIdentifierSegment(StringBuilder target, StringBuilder segment) {
+    String part = segment.toString().trim();
+    if (part.isEmpty()) {
+      return;
+    }
+    target.append(stripIdentifierQuotes(part));
+  }
+
+  private static String stripIdentifierQuotes(String identifier) {
+    if (identifier == null) {
+      return null;
+    }
+    String trimmed = identifier.trim();
+    if (trimmed.length() >= 2) {
+      if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("`") && trimmed.endsWith("`"))) {
+        return trimmed.substring(1, trimmed.length() - 1);
+      }
+      if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+        return trimmed.substring(1, trimmed.length() - 1);
+      }
+    }
+    return trimmed;
   }
 
   private static SourcePosition extractSourcePosition(SelectItem<?> item) {

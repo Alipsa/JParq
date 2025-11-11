@@ -25,6 +25,19 @@ class AstTest {
   }
 
   @Test
+  @DisplayName("Parser retains quoted identifier qualified wildcards")
+  void parsesQuotedQualifiedWildcard() {
+    SqlParser.Select select = SqlParser
+        .parseSelectAllowQualifiedWildcards("SELECT \"My Table\".* FROM \"My Table\"");
+
+    List<QualifiedWildcard> wildcards = select.qualifiedWildcards();
+
+    assertEquals(1, wildcards.size(), "Expected a single qualified wildcard entry");
+    assertEquals("My Table", wildcards.getFirst().qualifier(),
+        "Quoted identifier should preserve the unquoted qualifier");
+  }
+
+  @Test
   @DisplayName("Parser captures schema-qualified wildcard projections")
   void parsesSchemaQualifiedWildcard() {
     SqlParser.Select select = SqlParser.parseSelectAllowQualifiedWildcards("SELECT schema.table.* FROM schema.table");
