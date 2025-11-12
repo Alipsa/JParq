@@ -150,6 +150,9 @@ class ArrayConstructorTest {
           return labels.size();
         case "getColumnLabel":
         case "getColumnName":
+          if (args == null || args.length == 0) {
+            throw new SQLException(name + " called with insufficient arguments");
+          }
           int column = ((Integer) args[0]) - 1;
           return labels.get(column);
         case "getColumnType":
