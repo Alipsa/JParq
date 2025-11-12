@@ -1,5 +1,10 @@
 # Version history
 
+### 0.10.0 (2025-11-12)
+- Add support for grouping sets, rollup, and cube in the GROUP BY clause
+- Add support for qualified wildcards (table.*) in SELECT statements
+- Add support for the ARRAY constructor function to create array literals
+
 ### 0.9.0 (2025-11-09)
 - Add support for Windowing functions i.e:
    - Ranking functions
