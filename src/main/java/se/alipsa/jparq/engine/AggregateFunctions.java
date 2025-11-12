@@ -1538,6 +1538,9 @@ public final class AggregateFunctions {
     if (cls == Boolean.class) {
       return Types.BOOLEAN;
     }
+    if (List.class.isAssignableFrom(cls)) {
+      return Types.ARRAY;
+    }
     if (cls == String.class || CharSequence.class.isAssignableFrom(cls)) {
       return Types.VARCHAR;
     }
