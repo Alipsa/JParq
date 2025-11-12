@@ -3,9 +3,9 @@ package jparq;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
-import java.math.BigDecimal;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
+import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -15,6 +15,8 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.List;
+import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
@@ -22,8 +24,6 @@ import org.apache.avro.generic.GenericRecord;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import net.sf.jsqlparser.expression.Expression;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
@@ -92,21 +92,21 @@ class ArrayConstructorTest {
           if (args != null && args.length == 1 && ((Class<?>) args[0]).isInstance(proxy)) {
             return proxy;
           }
-          throw new SQLException("Not a wrapper for "
-              + (args == null ? "" : args[0]));
+          throw new SQLException("Not a wrapper for " + (args == null ? "" : args[0]));
         default:
           return defaultValue(method.getReturnType());
       }
     };
-    return (PreparedStatement) Proxy.newProxyInstance(
-        PreparedStatement.class.getClassLoader(),
-        new Class<?>[]{ PreparedStatement.class },
-        handler);
+    return (PreparedStatement) Proxy.newProxyInstance(PreparedStatement.class.getClassLoader(), new Class<?>[]{
+        PreparedStatement.class
+    }, handler);
   }
 
   private static ResultSet createResultSet(List<String> labels, List<List<Object>> rows) {
     ResultSetMetaData metaData = createMetaData(labels);
-    int[] index = new int[]{ -1 };
+    int[] index = new int[]{
+        -1
+    };
     InvocationHandler handler = (proxy, method, args) -> {
       String name = method.getName();
       switch (name) {
@@ -133,16 +133,14 @@ class ArrayConstructorTest {
           if (args != null && args.length == 1 && ((Class<?>) args[0]).isInstance(proxy)) {
             return proxy;
           }
-          throw new SQLException("Not a wrapper for "
-              + (args == null ? "" : args[0]));
+          throw new SQLException("Not a wrapper for " + (args == null ? "" : args[0]));
         default:
           return defaultValue(method.getReturnType());
       }
     };
-    return (ResultSet) Proxy.newProxyInstance(
-        ResultSet.class.getClassLoader(),
-        new Class<?>[]{ ResultSet.class },
-        handler);
+    return (ResultSet) Proxy.newProxyInstance(ResultSet.class.getClassLoader(), new Class<?>[]{
+        ResultSet.class
+    }, handler);
   }
 
   private static ResultSetMetaData createMetaData(List<String> labels) {
@@ -166,16 +164,14 @@ class ArrayConstructorTest {
           if (args != null && args.length == 1 && ((Class<?>) args[0]).isInstance(proxy)) {
             return proxy;
           }
-          throw new SQLException("Not a wrapper for "
-              + (args == null ? "" : args[0]));
+          throw new SQLException("Not a wrapper for " + (args == null ? "" : args[0]));
         default:
           return defaultValue(method.getReturnType());
       }
     };
-    return (ResultSetMetaData) Proxy.newProxyInstance(
-        ResultSetMetaData.class.getClassLoader(),
-        new Class<?>[]{ ResultSetMetaData.class },
-        handler);
+    return (ResultSetMetaData) Proxy.newProxyInstance(ResultSetMetaData.class.getClassLoader(), new Class<?>[]{
+        ResultSetMetaData.class
+    }, handler);
   }
 
   private static Object defaultValue(Class<?> returnType) {

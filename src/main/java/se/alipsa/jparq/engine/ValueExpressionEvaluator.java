@@ -350,8 +350,7 @@ public final class ValueExpressionEvaluator {
     return homogenizeArrayValues(values);
   }
 
-  private List<Object> executeArraySubquery(net.sf.jsqlparser.statement.select.Select subSelect,
-      GenericRecord record) {
+  private List<Object> executeArraySubquery(net.sf.jsqlparser.statement.select.Select subSelect, GenericRecord record) {
     if (subqueryExecutor == null) {
       throw new IllegalStateException("ARRAY subqueries require a subquery executor");
     }
@@ -456,14 +455,7 @@ public final class ValueExpressionEvaluator {
   }
 
   private enum NumericType {
-    NONE,
-    BYTE,
-    SHORT,
-    INTEGER,
-    LONG,
-    FLOAT,
-    DOUBLE,
-    BIG_DECIMAL;
+    NONE, BYTE, SHORT, INTEGER, LONG, FLOAT, DOUBLE, BIG_DECIMAL;
 
     static NumericType of(Number value) {
       if (value instanceof BigDecimal) {

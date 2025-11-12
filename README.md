@@ -106,6 +106,7 @@ The following SQL statements are supported:
   - coalesce (The COALESCE() function returns the first non-null value in a list.)
   - String functions (all SQL standard string function supported)
   - Numeric functions (abs, ceil, floor, round, sqrt, truncate, mod, power, exp, log, rand, sign, sin, cos, tan, asin, acos, atan, atan2, degrees, radians)
+  - ARRAY constructor function
 - comments (line --) and block (/* */)
 - Subquery support
   - In the SELECT Clause : Used to return a single value or a set of values. e.g.
@@ -148,8 +149,6 @@ The following SQL statements are supported:
   - CUBE
 
 ## Roadmap: Might be implemented in the future
-
-- ARRAY constructor function
 
 - Derived Tables i.e. FROM-clause table constructors and lateral items. parseFromItem accepts only base tables or plain subqueries; it throws for any other construct, leaving out SQL-standard features such as 
   - UNNEST functions

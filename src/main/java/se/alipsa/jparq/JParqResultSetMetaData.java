@@ -142,8 +142,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     if (expression instanceof ArrayConstructor) {
       return Types.ARRAY;
     }
-    if (expression instanceof net.sf.jsqlparser.expression.Function func
-        && func.getName() != null
+    if (expression instanceof net.sf.jsqlparser.expression.Function func && func.getName() != null
         && "ARRAY".equalsIgnoreCase(func.getName())) {
       return Types.ARRAY;
     }
