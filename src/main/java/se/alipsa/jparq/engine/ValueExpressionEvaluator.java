@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.regex.Pattern;
 import net.sf.jsqlparser.expression.AnalyticExpression;
+import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.CollateExpression;
@@ -238,6 +239,9 @@ public final class ValueExpressionEvaluator {
     if (expression instanceof CollateExpression collate) {
       return evalInternal(collate.getLeftExpression(), record);
     }
+    if (expression instanceof ArrayConstructor array) {
+      return evaluateArrayConstructor(array, record);
+    }
     if (expression instanceof LikeExpression like) {
       return evaluateLike(like, record);
     }
@@ -316,6 +320,188 @@ public final class ValueExpressionEvaluator {
       return windowState.lastValue(analytic, record);
     }
     throw new IllegalArgumentException("Unsupported analytic function: " + analytic);
+  }
+
+  private Object evaluateArrayConstructor(ArrayConstructor array, GenericRecord record) {
+    ExpressionList<? extends Expression> expressionItems = array.getExpressions();
+    if (expressionItems == null || expressionItems.isEmpty()) {
+      return List.of();
+    }
+    List<Object> values = new ArrayList<>(expressionItems.size());
+    for (Expression element : expressionItems) {
+      values.add(evalInternal(element, record));
+    }
+    return homogenizeArrayValues(values);
+  }
+
+  private Object evaluateArrayFunction(Function func, GenericRecord record) {
+    ExpressionList<? extends Expression> parameterExpressions = func.getParameters();
+    if (parameterExpressions == null || parameterExpressions.isEmpty()) {
+      return List.of();
+    }
+    Expression first = parameterExpressions.getFirst();
+    if (first instanceof net.sf.jsqlparser.statement.select.Select select) {
+      return homogenizeArrayValues(executeArraySubquery(select, record));
+    }
+    List<Object> values = new ArrayList<>(parameterExpressions.size());
+    for (Expression element : parameterExpressions) {
+      values.add(evalInternal(element, record));
+    }
+    return homogenizeArrayValues(values);
+  }
+
+  private List<Object> executeArraySubquery(net.sf.jsqlparser.statement.select.Select subSelect,
+      GenericRecord record) {
+    if (subqueryExecutor == null) {
+      throw new IllegalStateException("ARRAY subqueries require a subquery executor");
+    }
+    CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
+        column -> resolveColumnValue(column, record));
+    SubqueryExecutor.SubqueryResult result = rewritten.correlated()
+        ? subqueryExecutor.executeRaw(rewritten.sql())
+        : subqueryExecutor.execute(subSelect);
+    if (result.columnLabels().isEmpty()) {
+      return List.of();
+    }
+    if (result.columnLabels().size() > 1) {
+      throw new IllegalArgumentException("ARRAY subquery must return exactly one column: " + subSelect);
+    }
+    return result.firstColumnValues();
+  }
+
+  private List<Object> homogenizeArrayValues(List<Object> values) {
+    if (values == null || values.isEmpty()) {
+      return List.of();
+    }
+    NumericType numericTarget = NumericType.NONE;
+    Class<?> objectTarget = null;
+    for (Object value : values) {
+      if (value == null) {
+        continue;
+      }
+      if (value instanceof Number number) {
+        numericTarget = NumericType.promote(numericTarget, NumericType.of(number));
+        continue;
+      }
+      if (value instanceof CharSequence) {
+        objectTarget = determineObjectTarget(objectTarget, String.class);
+        continue;
+      }
+      if (value instanceof List<?>) {
+        objectTarget = determineObjectTarget(objectTarget, List.class);
+        continue;
+      }
+      objectTarget = determineObjectTarget(objectTarget, value.getClass());
+    }
+    if (numericTarget != NumericType.NONE) {
+      return convertNumericValues(values, numericTarget);
+    }
+    if (objectTarget == null) {
+      return List.copyOf(values);
+    }
+    List<Object> coerced = new ArrayList<>(values.size());
+    for (Object value : values) {
+      if (value == null) {
+        coerced.add(null);
+        continue;
+      }
+      if (objectTarget == String.class) {
+        coerced.add(value.toString());
+        continue;
+      }
+      if (objectTarget == List.class) {
+        if (value instanceof List<?>) {
+          coerced.add(value);
+          continue;
+        }
+        throw new IllegalArgumentException("ARRAY elements must all be lists or scalars of the same type");
+      }
+      if (!objectTarget.equals(value.getClass())) {
+        throw new IllegalArgumentException("ARRAY elements must share a common type; found " + objectTarget.getName()
+            + " and " + value.getClass().getName());
+      }
+      coerced.add(value);
+    }
+    return List.copyOf(coerced);
+  }
+
+  private Class<?> determineObjectTarget(Class<?> current, Class<?> candidate) {
+    if (current == null || current == candidate) {
+      return candidate;
+    }
+    throw new IllegalArgumentException(
+        "ARRAY elements must share a common type; found " + current.getName() + " and " + candidate.getName());
+  }
+
+  private List<Object> convertNumericValues(List<Object> values, NumericType target) {
+    List<Object> converted = new ArrayList<>(values.size());
+    for (Object value : values) {
+      if (value == null) {
+        converted.add(null);
+        continue;
+      }
+      Number number = (Number) value;
+      converted.add(switch (target) {
+        case BIG_DECIMAL -> toBigDecimal(number);
+        case DOUBLE -> number.doubleValue();
+        case FLOAT -> number.floatValue();
+        case LONG -> number.longValue();
+        case INTEGER -> number.intValue();
+        case SHORT -> number.shortValue();
+        case BYTE -> number.byteValue();
+        case NONE -> number;
+      });
+    }
+    return List.copyOf(converted);
+  }
+
+  private enum NumericType {
+    NONE,
+    BYTE,
+    SHORT,
+    INTEGER,
+    LONG,
+    FLOAT,
+    DOUBLE,
+    BIG_DECIMAL;
+
+    static NumericType of(Number value) {
+      if (value instanceof BigDecimal) {
+        return BIG_DECIMAL;
+      }
+      if (value instanceof Double) {
+        return DOUBLE;
+      }
+      if (value instanceof Float) {
+        return FLOAT;
+      }
+      if (value instanceof Long) {
+        return LONG;
+      }
+      if (value instanceof Integer) {
+        return INTEGER;
+      }
+      if (value instanceof Short) {
+        return SHORT;
+      }
+      if (value instanceof Byte) {
+        return BYTE;
+      }
+      if (value instanceof java.math.BigInteger) {
+        return BIG_DECIMAL;
+      }
+      return DOUBLE;
+    }
+
+    static NumericType promote(NumericType current, NumericType candidate) {
+      if (candidate == null || candidate == NONE) {
+        return current;
+      }
+      if (current == NONE) {
+        return candidate;
+      }
+      return values()[Math.max(current.ordinal(), candidate.ordinal())];
+    }
   }
 
   private Object evaluateScalarSubquery(net.sf.jsqlparser.statement.select.Select subSelect, GenericRecord record) {
@@ -434,6 +620,7 @@ public final class ValueExpressionEvaluator {
       case "JSON_QUERY" -> evaluateJsonQuery(func, record);
       case "JSON_OBJECT" -> JsonExpressions.jsonObject(positionalArgs(func, record));
       case "JSON_ARRAY" -> JsonExpressions.jsonArray(positionalArgs(func, record));
+      case "ARRAY" -> evaluateArrayFunction(func, record);
       case "ABS", "CEIL", "CEILING", "FLOOR", "ROUND", "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW", "EXP", "LOG",
           "LOG10", "RAND", "RANDOM", "SIGN", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN", "ATAN2", "DEGREES",
           "RADIANS" ->

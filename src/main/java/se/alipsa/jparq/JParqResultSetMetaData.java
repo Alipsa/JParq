@@ -4,6 +4,7 @@ import java.sql.Types;
 import java.util.List;
 import java.util.Locale;
 import net.sf.jsqlparser.expression.AnalyticExpression;
+import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.LogicalTypes;
@@ -137,6 +138,14 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     Expression expression = expressions.get(index);
     if (expression instanceof AnalyticExpression analytic) {
       return resolveAnalyticFunctionType(analytic);
+    }
+    if (expression instanceof ArrayConstructor) {
+      return Types.ARRAY;
+    }
+    if (expression instanceof net.sf.jsqlparser.expression.Function func
+        && func.getName() != null
+        && "ARRAY".equalsIgnoreCase(func.getName())) {
+      return Types.ARRAY;
     }
     return Types.OTHER;
   }
