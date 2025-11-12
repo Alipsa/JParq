@@ -114,6 +114,9 @@ class ArrayConstructorTest {
           index[0]++;
           return index[0] < rows.size();
         case "getObject":
+          if (args == null || args.length < 1) {
+            throw new SQLException("getObject called with insufficient arguments");
+          }
           int column = ((Integer) args[0]) - 1;
           return rows.get(index[0]).get(column);
         case "getMetaData":
