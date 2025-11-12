@@ -47,6 +47,11 @@
       <artifactId>parquet-avro</artifactId>
       <version>${parquet.version}</version>
     </dependency>
+    <dependency> <!-- needed for metadata -->
+      <groupId>org.apache.parquet</groupId>
+      <artifactId>parquet-variant</artifactId>
+      <version>${parquet.version}</version>
+    </dependency>
     <dependency>
       <groupId>org.apache.parquet</groupId>
       <artifactId>parquet-hadoop</artifactId>

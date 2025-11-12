@@ -1,18 +1,32 @@
 package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqResultSetMetaData;
 
-/** Tests for {@link JParqResultSetMetaData}. */
+/**
+ * Tests for {@link JParqResultSetMetaData}.
+ */
 class JParqResultSetMetaDataTest {
 
   @Test
@@ -45,6 +59,40 @@ class JParqResultSetMetaDataTest {
         Collections.singletonList(null), List.of(leadExpression));
 
     assertEquals(Types.DOUBLE, metaData.getColumnType(1), "LEAD should report the referenced column type");
+  }
+
+  @Test
+  void listMetaData() throws URISyntaxException, SQLException {
+    URL acmesUrl = JParqResultSetMetaDataTest.class.getResource("/acme");
+    Assertions.assertNotNull(acmesUrl, "acme must be on the test classpath (src/test/resources)");
+    Path acmePath = Paths.get(acmesUrl.toURI());
+    String jdbcUrl = "jdbc:jparq:" + acmePath.toAbsolutePath();
+    try (Connection conn = DriverManager.getConnection(jdbcUrl)) {
+      DatabaseMetaData metaData = conn.getMetaData();
+      ResultSet tables = metaData.getTables(null, null, null, null);
+      List<String> tableNames = new ArrayList<>();
+      while (tables.next()) {
+        String table = tables.getString("TABLE_NAME");
+        tableNames.add(table);
+      }
+      tables.close();
+      assertTrue(tableNames.contains("employees"));
+      assertTrue(tableNames.contains("departments"));
+      assertTrue(tableNames.contains("employee_department"));
+      assertTrue(tableNames.contains("salary"));
+
+      ResultSet columns = metaData.getColumns(null, null, "employees", null);
+      List<String> columnNames = new ArrayList<>();
+      while (columns.next()) {
+        String column = columns.getString("COLUMN_NAME");
+        columnNames.add(column);
+      }
+      columns.close();
+      assertTrue(columnNames.contains("id"));
+      assertTrue(columnNames.contains("first_name"));
+      assertTrue(columnNames.contains("last_name"));
+    }
+
   }
 
   /**
