@@ -165,6 +165,12 @@ The following SQL statements are supported:
   
 - Standard row-limiting syntax (FETCH FIRST / OFFSET … FETCH). The limit handler inspects only the non-standard LIMIT clause, leaving the SQL-standard FETCH clause unimplemented.
 
+- In JParqDatabaseMetaData, type information is always String for columns. This should be available in the parquet schema for:
+  - DATA_TYPE
+  - TYPE_NAME
+  - COLUMN_SIZE
+- Support for INFORMATION_SCHEMA.COLUMNS and INFORMATION_SCHEMA.TABLES use JParqDatabaseMetaData
+
 ### Non standard extensions
 - Support for variable assignment and use within SQL scripts.
   - @variable_name syntax to define a variable that exists for the duration of the connection

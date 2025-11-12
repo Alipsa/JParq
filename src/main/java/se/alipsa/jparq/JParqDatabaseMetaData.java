@@ -44,7 +44,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getDatabaseProductVersion() {
-    return "0.1";
+    return "0.9.0";
   }
 
   @Override
@@ -54,7 +54,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getDriverVersion() {
-    return "0.1";
+    return "0.9.0";
   }
 
   @Override
@@ -64,7 +64,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public int getDriverMinorVersion() {
-    return 1;
+    return 9;
   }
 
   @Override
@@ -96,7 +96,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         }
         if (tableNamePattern == null || base.matches(JParqUtil.sqlLikeToRegex(tableNamePattern))) {
           rows.add(new Object[]{
-              null, null, base, "TABLE"
+              catalog, schemaPattern, base, "TABLE"
           });
         }
       }
@@ -139,8 +139,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
               continue;
             }
             rows.add(new Object[]{
-                null, // TABLE_CAT
-                null, // TABLE_SCHEM
+                catalog, // TABLE_CAT
+                schemaPattern, // TABLE_SCHEM
                 table, // TABLE_NAME
                 col, // COLUMN_NAME
                 java.sql.Types.VARCHAR, // DATA_TYPE (simplified for now)
