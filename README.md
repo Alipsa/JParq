@@ -165,10 +165,37 @@ The following SQL statements are supported:
   
 - Standard row-limiting syntax (FETCH FIRST / OFFSET … FETCH). The limit handler inspects only the non-standard LIMIT clause, leaving the SQL-standard FETCH clause unimplemented.
 
-- In JParqDatabaseMetaData, type information is always String for columns. This should be available in the parquet schema for:
-  - DATA_TYPE
-  - TYPE_NAME
-  - COLUMN_SIZE
+- In JParqDatabaseMetaData
+  - type information is always String for columns. This should be available in the parquet schema for:
+    - DATA_TYPE
+    - TYPE_NAME
+    - COLUMN_SIZE
+  - The getTables() method should return rows composed of the following columns:
+  
+    | Column Name               | Type   | Description                                                                                    |
+    |---------------------------|--------|------------------------------------------------------------------------------------------------|
+    | TABLE_CAT                 | String | The catalog name (may be null).                                                                |
+    | TABLE_SCHEM               | String | The schema name (may be null).                                                                 |
+    | TABLE_NAME                | String | The table name.                                                                                |
+    | TABLE_TYPE                | String | "The type of object, typically one of: ""TABLE"", ""VIEW"", ""SYSTEM TABLE"", ""ALIAS"", etc." |
+    | REMARKS                   | String | Explanatory comments or descriptions for the table (may be null).                              |
+    | TYPE_CAT                  | String | "The catalog of the object type (rarely used, may be null)."                                   |
+    | TYPE_SCHEM                | String | "The schema of the object type (rarely used, may be null)."                                    |
+    | TYPE_NAME                 | String | "The name of the object type (rarely used, may be null)."                                      |
+    | SELF_REFERENCING_COL_NAME | String | Name of the designated self-referencing column (mostly null).                                  |
+    | REF_GENERATION            | String | Specifies how values in the self-referencing column are created (mostly null).                 |
+  
+  - The getColumns() method should return rows composed of the following columns 
+    - TABLE_NAME
+    - TABLE_TYPE
+    - COLUMN_NAME
+    - ORDINAL_POSITION
+    - IS_NULLABLE
+    - DATA_TYPE
+    - CHARACTER_MAXIMUM_LENGTH
+    - NUMERIC_PRECISION
+    - NUMERIC_SCALE
+    - COLLATION_NAME
 - Support for INFORMATION_SCHEMA.COLUMNS and INFORMATION_SCHEMA.TABLES use JParqDatabaseMetaData
 
 ### Non standard extensions
