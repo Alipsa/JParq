@@ -87,6 +87,7 @@ public class JParqExample {
 The following SQL statements are supported:
 - `SELECT` with support for
   - `*` to select all columns
+  - Qualified wildcard projections (table.*).
   - alias support for columns and tables
   - Support computed expressions with aliases (e.g. SELECT mpg*2 AS double_mpg)
   - `CASE` support
@@ -147,8 +148,6 @@ The following SQL statements are supported:
   - CUBE
 
 ## Roadmap: Might be implemented in the future
-
-- Qualified wildcard projections (table.*). The projection parser raises an error when encountering a qualified asterisk, so row-source-specific wildcards from the standard are unavailable.
 
 - ARRAY constructor function
 

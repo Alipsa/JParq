@@ -1,10 +1,15 @@
 package jparq.usage;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import jparq.join.CrossJoinTest;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -22,14 +27,9 @@ public class AcmeTest {
   }
 
   /**
-   * Current result: this is wrong (e_i_d, first_name and last_name, id 3 returned twice):
-   * e__id	first_name	last_name	salary
-   * 1	[B@343edb43	[B@22cd740d	165000
-   * 2	[B@5c077437	[B@1d480945	180000
-   * 3	[B@5f6e2d6c	[B@164a4790	130000
-   * 3	[B@710b3fa2	[B@2c5412e7	140000
-   * 4	[B@2ff5f4c	[B@464dfe44	195000
-   * 5	[B@6e932f00	[B@62dccb1f	230000
+   * Expected result: id first_name last_name salary 2 Karin Pettersson 180000 4
+   * Arne Larsson 195000 5 Sixten Svensson 230000 3 Tage Lundström 140000 1 Per
+   * Andersson 165000
    */
   @Test
   void testClassicSubQuery() {
@@ -45,5 +45,28 @@ public class AcmeTest {
                     s2.employee = s.employee
             );
         """;
+    List<Integer> ids = new ArrayList<>();
+    Map<String, Double> salaries = new LinkedHashMap<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          Integer id = rs.getInt("id");
+          ids.add(id);
+          String firstName = rs.getString("first_name");
+          String lastName = rs.getString("last_name");
+          Double salary = rs.getDouble("salary");
+          System.out.printf("%s %s %s %s%n", id, firstName, lastName, salary);
+          salaries.put(firstName + " " + lastName, salary);
+        }
+        assertEquals(5, ids.size(), "Expected 5 distinct employee ids");
+        assertEquals(180000, salaries.get("Karin Pettersson"));
+        assertEquals(195000, salaries.get("Arne Larsson"));
+        assertEquals(230000, salaries.get("Sixten Svensson"));
+        assertEquals(140000, salaries.get("Tage Lundström"));
+        assertEquals(165000, salaries.get("Per Andersson"));
+      } catch (Exception e) {
+        Assertions.fail(e);
+      }
+    });
   }
 }

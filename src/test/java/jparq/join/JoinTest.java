@@ -98,7 +98,7 @@ public class JoinTest {
           // System.out.printf("%s %s: %.2f%n", firstName, lastName, salary);
           rowCount++;
         }
-        Assertions.assertEquals(6, rowCount, "Expected 6 rows from join");
+        Assertions.assertEquals(5, rowCount, "Expected 5 rows from join");
         Assertions.assertEquals(180000.0, salaries.get("Karin Pettersson"), delta, "Karin Pettersson's latest salary");
         Assertions.assertEquals(165000.0, salaries.get("Per Andersson"), delta, "Per Andersson's latest salary");
       } catch (Exception e) {
