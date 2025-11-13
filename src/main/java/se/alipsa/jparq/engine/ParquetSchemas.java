@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -90,17 +91,17 @@ public final class ParquetSchemas {
     if (schema == null) {
       return null;
     }
-    return normalizeSchema(schema, null, binaryStringFields == null ? Set.of() : binaryStringFields);
+    return normalizeSchema(schema, null, binaryStringFields == null ? Set.of() : binaryStringFields,
+        new IdentityHashMap<>());
   }
 
-  private static Schema normalizeSchema(Schema schema, String path, Set<String> binaryStringFields) {
+  private static Schema normalizeSchema(
+      Schema schema, String path, Set<String> binaryStringFields, Map<Schema, Schema> cache) {
     return switch (schema.getType()) {
-      case RECORD -> normalizeRecord(schema, path, binaryStringFields);
-      case ARRAY -> copyProps(schema,
-          Schema.createArray(normalizeSchema(schema.getElementType(), elementPath(path), binaryStringFields)));
-      case MAP -> copyProps(schema,
-          Schema.createMap(normalizeSchema(schema.getValueType(), mapValuePath(path), binaryStringFields)));
-      case UNION -> normalizeUnion(schema, path, binaryStringFields);
+      case RECORD -> normalizeRecord(schema, path, binaryStringFields, cache);
+      case ARRAY -> normalizeArray(schema, path, binaryStringFields, cache);
+      case MAP -> normalizeMap(schema, path, binaryStringFields, cache);
+      case UNION -> normalizeUnion(schema, path, binaryStringFields, cache);
       case FIXED, BYTES -> shouldPromoteToString(schema, path, binaryStringFields)
           ? copyProps(schema, Schema.create(Schema.Type.STRING))
           : schema;
@@ -108,36 +109,73 @@ public final class ParquetSchemas {
     };
   }
 
-  private static Schema normalizeRecord(Schema schema, String path, Set<String> binaryStringFields) {
+  private static Schema normalizeArray(
+      Schema schema, String path, Set<String> binaryStringFields, Map<Schema, Schema> cache) {
+    Schema cached = cache.get(schema);
+    if (cached != null) {
+      return cached;
+    }
+    Schema normalizedElement = normalizeSchema(schema.getElementType(), elementPath(path), binaryStringFields, cache);
+    Schema array = copyProps(schema, Schema.createArray(normalizedElement));
+    cache.put(schema, array);
+    return array;
+  }
+
+  private static Schema normalizeMap(
+      Schema schema, String path, Set<String> binaryStringFields, Map<Schema, Schema> cache) {
+    Schema cached = cache.get(schema);
+    if (cached != null) {
+      return cached;
+    }
+    Schema normalizedValue = normalizeSchema(schema.getValueType(), mapValuePath(path), binaryStringFields, cache);
+    Schema map = copyProps(schema, Schema.createMap(normalizedValue));
+    cache.put(schema, map);
+    return map;
+  }
+
+  private static Schema normalizeRecord(
+      Schema schema, String path, Set<String> binaryStringFields, Map<Schema, Schema> cache) {
+    Schema cached = cache.get(schema);
+    if (cached != null) {
+      return cached;
+    }
+    Schema record = Schema.createRecord(schema.getName(), schema.getDoc(), schema.getNamespace(), schema.isError());
+    cache.put(schema, record);
     List<Schema.Field> fields = new ArrayList<>();
     for (Schema.Field field : schema.getFields()) {
       String fieldPath = appendPath(path, field.name());
-      Schema normalized = normalizeSchema(field.schema(), fieldPath, binaryStringFields);
+      Schema normalized = normalizeSchema(field.schema(), fieldPath, binaryStringFields, cache);
       Schema.Field newField =
           new Schema.Field(field.name(), normalized, field.doc(), field.defaultVal(), field.order());
       copyFieldProps(field, newField);
       fields.add(newField);
     }
-    Schema record = Schema.createRecord(schema.getName(), schema.getDoc(), schema.getNamespace(), schema.isError());
     record.setFields(fields);
     copyProps(schema, record);
     copyAliases(schema, record);
     return record;
   }
 
-  private static Schema normalizeUnion(Schema schema, String path, Set<String> binaryStringFields) {
+  private static Schema normalizeUnion(
+      Schema schema, String path, Set<String> binaryStringFields, Map<Schema, Schema> cache) {
+    Schema cached = cache.get(schema);
+    if (cached != null) {
+      return cached;
+    }
     List<Schema> types = new ArrayList<>();
     boolean changed = false;
     for (Schema member : schema.getTypes()) {
-      Schema normalized = normalizeSchema(member, path, binaryStringFields);
+      Schema normalized = normalizeSchema(member, path, binaryStringFields, cache);
       types.add(normalized);
       changed |= normalized != member;
     }
     if (!changed) {
+      cache.put(schema, schema);
       return schema;
     }
     Schema union = Schema.createUnion(types);
     copyProps(schema, union);
+    cache.put(schema, union);
     return union;
   }
 
