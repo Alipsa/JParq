@@ -438,8 +438,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
         if (LogicalTypes.date().equals(base.getLogicalType())) {
           yield Date.class.getName();
         }
-        if (base.getLogicalType() instanceof LogicalTypes.TimeMillis
-            || base.getLogicalType() instanceof LogicalTypes.TimeMicros) {
+        if (base.getLogicalType() instanceof LogicalTypes.TimeMillis) {
           yield Time.class.getName();
         }
         yield Integer.class.getName();
@@ -449,8 +448,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
             || base.getLogicalType() instanceof LogicalTypes.TimestampMicros) {
           yield Timestamp.class.getName();
         }
-        if (base.getLogicalType() instanceof LogicalTypes.TimeMicros
-            || base.getLogicalType() instanceof LogicalTypes.TimeMillis) {
+        if (base.getLogicalType() instanceof LogicalTypes.TimeMicros) {
           yield Time.class.getName();
         }
         yield Long.class.getName();
