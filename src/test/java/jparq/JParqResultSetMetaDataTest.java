@@ -38,6 +38,25 @@ class JParqResultSetMetaDataTest {
   }
 
   @Test
+  void columnClassNameMatchesSchemaType() throws SQLException {
+    Schema schema = schemaWithField();
+    JParqResultSetMetaData metaData = createMetadataWithExpression(schema, List.of("value"),
+        Collections.singletonList("value"), Collections.emptyList());
+
+    assertEquals(Double.class.getName(), metaData.getColumnClassName(1),
+        "Double schema fields should map to java.lang.Double");
+  }
+
+  @Test
+  void rowNumberFunctionClassNameMatchesBigIntType() throws SQLException {
+    JParqResultSetMetaData metaData = createMetadataWithExpression(schemaWithField(), List.of("row_number"),
+        Collections.singletonList(null), List.of(analyticExpression("ROW_NUMBER", null)));
+
+    assertEquals(Long.class.getName(), metaData.getColumnClassName(1),
+        "ROW_NUMBER should be reported as java.lang.Long");
+  }
+
+  @Test
   void lagFunctionUsesReferencedColumnType() {
     Schema schema = schemaWithField();
     Column column = new Column();
@@ -47,6 +66,19 @@ class JParqResultSetMetaDataTest {
         Collections.singletonList(null), List.of(lagExpression));
 
     assertEquals(Types.DOUBLE, metaData.getColumnType(1), "LAG should report the referenced column type");
+  }
+
+  @Test
+  void lagFunctionUsesReferencedColumnClassName() throws SQLException {
+    Schema schema = schemaWithField();
+    Column column = new Column();
+    column.setColumnName("value");
+    AnalyticExpression lagExpression = analyticExpression("LAG", column);
+    JParqResultSetMetaData metaData = createMetadataWithExpression(schema, List.of("lag_value"),
+        Collections.singletonList(null), List.of(lagExpression));
+
+    assertEquals(Double.class.getName(), metaData.getColumnClassName(1),
+        "LAG should report the referenced column class name");
   }
 
   @Test

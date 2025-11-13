@@ -1,5 +1,9 @@
 package se.alipsa.jparq;
 
+import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Time;
+import java.sql.Timestamp;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -132,6 +136,25 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     return java.sql.JDBCType.valueOf(getColumnType(column)).getName();
   }
 
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public String getColumnClassName(int column) {
+    Schema.Field field = resolveField(column);
+    if (field != null) {
+      String className = mapSchemaToJavaClassName(field.schema());
+      if (className != null) {
+        return className;
+      }
+    }
+    String computedClassName = resolveComputedColumnClassName(column);
+    if (computedClassName != null) {
+      return computedClassName;
+    }
+    return mapJdbcTypeToClassName(getColumnType(column));
+  }
+
   @Override
   public int isNullable(int column) {
     return columnNullableUnknown;
@@ -193,6 +216,28 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     return Types.OTHER;
   }
 
+  private String resolveComputedColumnClassName(int column) {
+    if (expressions == null || expressions.isEmpty()) {
+      return null;
+    }
+    int index = column - 1;
+    if (index < 0 || index >= expressions.size()) {
+      return null;
+    }
+    Expression expression = expressions.get(index);
+    if (expression instanceof AnalyticExpression analytic) {
+      return resolveAnalyticFunctionClassName(analytic);
+    }
+    if (expression instanceof ArrayConstructor) {
+      return List.class.getName();
+    }
+    if (expression instanceof net.sf.jsqlparser.expression.Function func && func.getName() != null
+        && "ARRAY".equalsIgnoreCase(func.getName())) {
+      return List.class.getName();
+    }
+    return null;
+  }
+
   /**
    * Resolve the JDBC type returned by an analytic window function.
    *
@@ -211,6 +256,20 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
       case "PERCENT_RANK", "CUME_DIST" -> Types.DOUBLE;
       case "LAG", "LEAD" -> resolveNavigationResultType(analytic);
       default -> Types.OTHER;
+    };
+  }
+
+  private String resolveAnalyticFunctionClassName(AnalyticExpression analytic) {
+    String functionName = analytic.getName();
+    if (functionName == null) {
+      return null;
+    }
+    String normalizedFunction = functionName.toUpperCase(Locale.ROOT);
+    return switch (normalizedFunction) {
+      case "ROW_NUMBER", "RANK", "DENSE_RANK", "NTILE" -> Long.class.getName();
+      case "PERCENT_RANK", "CUME_DIST" -> Double.class.getName();
+      case "LAG", "LEAD" -> resolveNavigationResultClassName(analytic);
+      default -> null;
     };
   }
 
@@ -240,6 +299,25 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
       return Types.OTHER;
     }
     return mapSchemaToJdbcType(nonNullSchema(baseField.schema()));
+  }
+
+  private String resolveNavigationResultClassName(AnalyticExpression analytic) {
+    if (schema == null) {
+      return null;
+    }
+    Expression argument = analytic.getExpression();
+    if (!(argument instanceof Column lagColumn)) {
+      return null;
+    }
+    String columnName = lagColumn.getColumnName();
+    if (columnName == null) {
+      return null;
+    }
+    Schema.Field baseField = lookupFieldByName(columnName);
+    if (baseField == null) {
+      return null;
+    }
+    return mapSchemaToJavaClassName(baseField.schema());
   }
 
   private Schema.Field lookupFieldByName(String name) {
@@ -330,6 +408,71 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
       case RECORD -> Types.STRUCT;
       case ARRAY -> Types.ARRAY;
       default -> Types.OTHER;
+    };
+  }
+
+  private String mapSchemaToJavaClassName(Schema schema) {
+    Schema base = nonNullSchema(schema);
+    if (base == null) {
+      return Object.class.getName();
+    }
+    return switch (base.getType()) {
+      case STRING, ENUM -> String.class.getName();
+      case INT -> {
+        if (LogicalTypes.date().equals(base.getLogicalType())) {
+          yield Date.class.getName();
+        }
+        if (base.getLogicalType() instanceof LogicalTypes.TimeMillis
+            || base.getLogicalType() instanceof LogicalTypes.TimeMicros) {
+          yield Time.class.getName();
+        }
+        yield Integer.class.getName();
+      }
+      case LONG -> {
+        if (base.getLogicalType() instanceof LogicalTypes.TimestampMillis
+            || base.getLogicalType() instanceof LogicalTypes.TimestampMicros) {
+          yield Timestamp.class.getName();
+        }
+        if (base.getLogicalType() instanceof LogicalTypes.TimeMicros
+            || base.getLogicalType() instanceof LogicalTypes.TimeMillis) {
+          yield Time.class.getName();
+        }
+        yield Long.class.getName();
+      }
+      case FLOAT -> Float.class.getName();
+      case DOUBLE -> Double.class.getName();
+      case BOOLEAN -> Boolean.class.getName();
+      case BYTES, FIXED -> (base.getLogicalType() instanceof LogicalTypes.Decimal)
+          ? BigDecimal.class.getName()
+          : byte[].class.getName();
+      case RECORD -> String.class.getName();
+      case ARRAY -> Object[].class.getName();
+      case MAP -> Map.class.getName();
+      default -> Object.class.getName();
+    };
+  }
+
+  private String mapJdbcTypeToClassName(int jdbcType) {
+    return switch (jdbcType) {
+      case Types.BIT, Types.BOOLEAN -> Boolean.class.getName();
+      case Types.TINYINT -> Byte.class.getName();
+      case Types.SMALLINT -> Short.class.getName();
+      case Types.INTEGER -> Integer.class.getName();
+      case Types.BIGINT -> Long.class.getName();
+      case Types.REAL -> Float.class.getName();
+      case Types.FLOAT, Types.DOUBLE -> Double.class.getName();
+      case Types.NUMERIC, Types.DECIMAL -> BigDecimal.class.getName();
+      case Types.CHAR, Types.VARCHAR, Types.LONGVARCHAR, Types.NCHAR, Types.NVARCHAR, Types.LONGNVARCHAR -> String.class
+          .getName();
+      case Types.DATE -> Date.class.getName();
+      case Types.TIME, Types.TIME_WITH_TIMEZONE -> Time.class.getName();
+      case Types.TIMESTAMP, Types.TIMESTAMP_WITH_TIMEZONE -> Timestamp.class.getName();
+      case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY -> byte[].class.getName();
+      case Types.ARRAY -> List.class.getName();
+      case Types.CLOB, Types.NCLOB -> java.sql.Clob.class.getName();
+      case Types.BLOB -> java.sql.Blob.class.getName();
+      case Types.STRUCT -> Map.class.getName();
+      default -> Object.class.getName();
     };
   }
 
