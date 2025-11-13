@@ -3,8 +3,10 @@ package se.alipsa.jparq;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.Expression;
@@ -23,6 +25,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   private final List<String> canonicalNames; // canonical column names used for schema lookup
   private final String tableName;
   private final List<Expression> expressions;
+  private final Map<String, Integer> caseInsensitiveColumnIndex;
+  private final Map<String, Schema.Field> schemaFieldLookup;
 
   /**
    * Constructor: labels (aliases) + physical names (null entries allowed).
@@ -51,6 +55,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
         : Collections.unmodifiableList(new ArrayList<>(canonicalNames));
     this.tableName = tableName;
     this.expressions = expressions == null ? List.of() : List.copyOf(expressions);
+    this.caseInsensitiveColumnIndex = ColumnNameLookup.buildCaseInsensitiveIndex(
+        this.labels.size(), this.canonicalNames, this.physicalNames, this.labels);
+    this.schemaFieldLookup = schema == null ? Map.of() : buildSchemaFieldLookup(schema);
   }
 
   @Override
@@ -145,40 +152,15 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
       return null;
     }
     String canonical = canonicalName(column);
-    if (canonical != null) {
-      Schema.Field field = schema.getField(canonical);
-      if (field != null) {
-        return field;
-      }
+    Schema.Field field = fieldBySchemaName(canonical);
+    if (field != null) {
+      return field;
     }
-    int index = column - 1;
-    if (physicalNames != null && index >= 0 && index < physicalNames.size()) {
-      String physical = physicalNames.get(index);
-      if (physical != null) {
-        Schema.Field field = schema.getField(physical);
-        if (field != null) {
-          return field;
-        }
-      }
-    }
-    return schema.getField(getColumnLabel(column));
+    return fieldBySchemaName(getColumnLabel(column));
   }
 
   private String canonicalName(int column) {
-    int index = column - 1;
-    if (index < 0) {
-      return null;
-    }
-    if (canonicalNames != null && index < canonicalNames.size()) {
-      return canonicalNames.get(index);
-    }
-    if (physicalNames != null && index < physicalNames.size()) {
-      return physicalNames.get(index);
-    }
-    if (index < labels.size()) {
-      return labels.get(index);
-    }
-    return null;
+    return ColumnNameLookup.canonicalName(canonicalNames, physicalNames, labels, column);
   }
 
   /**
@@ -264,34 +246,44 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     if (schema == null || name == null) {
       return null;
     }
-    Schema.Field direct = schema.getField(name);
+    Schema.Field direct = fieldBySchemaName(name);
     if (direct != null) {
       return direct;
     }
-    if (canonicalNames != null) {
-      for (int i = 0; i < canonicalNames.size(); i++) {
-        String canonical = canonicalNames.get(i);
-        if (canonical != null && canonical.equalsIgnoreCase(name)) {
-          Schema.Field field = schema.getField(canonical);
-          if (field != null) {
-            return field;
-          }
-        }
+    Integer columnIndex = caseInsensitiveColumnIndex.get(ColumnNameLookup.normalizeKey(name));
+    if (columnIndex == null) {
+      return null;
+    }
+    String canonical = canonicalName(columnIndex);
+    if (canonical == null) {
+      return null;
+    }
+    return fieldBySchemaName(canonical);
+  }
+
+  private Schema.Field fieldBySchemaName(String name) {
+    if (schema == null || name == null) {
+      return null;
+    }
+    Schema.Field field = schemaFieldLookup.get(ColumnNameLookup.normalizeKey(name));
+    if (field != null) {
+      return field;
+    }
+    return schema.getField(name);
+  }
+
+  private Map<String, Schema.Field> buildSchemaFieldLookup(Schema sourceSchema) {
+    if (sourceSchema == null) {
+      return Map.of();
+    }
+    Map<String, Schema.Field> map = new LinkedHashMap<>();
+    for (Schema.Field field : sourceSchema.getFields()) {
+      String key = ColumnNameLookup.normalizeKey(field.name());
+      if (!key.isEmpty()) {
+        map.putIfAbsent(key, field);
       }
     }
-    for (int i = 0; i < labels.size(); i++) {
-      String label = labels.get(i);
-      if (label != null && label.equalsIgnoreCase(name)) {
-        String canonical = canonicalName(i + 1);
-        if (canonical != null) {
-          Schema.Field field = schema.getField(canonical);
-          if (field != null) {
-            return field;
-          }
-        }
-      }
-    }
-    return null;
+    return Collections.unmodifiableMap(map);
   }
 
   /**

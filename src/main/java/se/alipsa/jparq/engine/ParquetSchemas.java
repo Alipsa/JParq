@@ -64,7 +64,7 @@ public final class ParquetSchemas {
   }
 
   /**
-   * Normalise the supplied schema so that textual data encoded as binary with
+   * Normalize the supplied schema so that textual data encoded as binary with
    * UTF-8 semantics surface as {@link Schema.Type#STRING}.
    *
    * @param schema
@@ -77,7 +77,7 @@ public final class ParquetSchemas {
   }
 
   /**
-   * Normalise the supplied schema using the provided hint set.
+   * Normalize the supplied schema using the provided hint set.
    *
    * @param schema
    *          the schema to normalise (may be {@code null})
@@ -262,10 +262,8 @@ public final class ParquetSchemas {
       }
       return;
     }
-    if (!type.isPrimitive()) {
-      for (Type child : type.asGroupType().getFields()) {
-        collectAnnotatedStringFields(child, currentPath, target);
-      }
+    for (Type child : type.asGroupType().getFields()) {
+      collectAnnotatedStringFields(child, currentPath, target);
     }
   }
 

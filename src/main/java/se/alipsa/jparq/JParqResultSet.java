@@ -666,6 +666,17 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
+   * Resolve the canonical column name used internally for schema lookups.
+   *
+   * @param index
+   *          1-based column index requested by the caller
+   * @return the canonical column name when known, otherwise {@code null}
+   */
+  private String canonicalColumnName(int index) {
+    return ColumnNameLookup.canonicalName(canonicalColumnNames, physicalColumnOrder, columnOrder, index);
+  }
+
+  /**
    * Determine the columns participating in DISTINCT evaluation for the supplied
    * select statement.
    *
@@ -863,30 +874,6 @@ public class JParqResultSet extends ResultSetAdapter {
     var normalized = ParquetSchemas.normalizeStringTypes(schema);
     return new JParqResultSetMetaData(normalized, columnOrder, physicalColumnOrder, canonicalColumnNames, tableName,
         selectExpressions);
-  }
-
-  /**
-   * Resolve the canonical column name used internally for schema lookups.
-   *
-   * @param index
-   *          1-based column index requested by the caller
-   * @return the canonical column name when known, otherwise {@code null}
-   */
-  private String canonicalColumnName(int index) {
-    int position = index - 1;
-    if (position < 0) {
-      return null;
-    }
-    if (canonicalColumnNames != null && position < canonicalColumnNames.size()) {
-      return canonicalColumnNames.get(position);
-    }
-    if (physicalColumnOrder != null && position < physicalColumnOrder.size()) {
-      return physicalColumnOrder.get(position);
-    }
-    if (position < columnOrder.size()) {
-      return columnOrder.get(position);
-    }
-    return null;
   }
 
   @SuppressWarnings("PMD.EmptyCatchBlock")
