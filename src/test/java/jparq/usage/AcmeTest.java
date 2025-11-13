@@ -6,6 +6,7 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.sql.ResultSetMetaData;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -32,13 +33,9 @@ public class AcmeTest {
    * Andersson 165000
    *
    * <p>
-   * However, on my Mac the result of this is:
-   * e__id	first_name	last_name	salary
-   * 1	[B@2ba21449	[B@1c5b9581	165000
-   * 2	[B@6aa6e512	[B@519da453	180000
-   * 3	[B@11aad47c	[B@7dfee05a	140000
-   * 4	[B@20ad0482	[B@1c2e83f8	195000
-   * 5	[B@5b60bd35	[B@51967a33	230000
+   * Historically some environments surfaced Parquet string columns as binary
+   * data, producing metadata such as {@code e__id} and {@code [B@...}
+   * representations instead of human readable values.
    */
   @Test
   void testClassicSubQuery() {
@@ -58,18 +55,27 @@ public class AcmeTest {
     Map<String, Double> salaries = new LinkedHashMap<>();
     jparqSql.query(sql, rs -> {
       try {
+        ResultSetMetaData metaData = rs.getMetaData();
+        List<String> columnNames = new ArrayList<>();
+        List<String> columnTypes = new ArrayList<>();
         Map<String, String> headers = new LinkedHashMap<>();
-        for (int i = 1; i <= rs.getMetaData().getColumnCount(); i++) {
-          headers.put(rs.getMetaData().getColumnName(i), rs.getMetaData().getColumnTypeName(i));
+        for (int i = 1; i <= metaData.getColumnCount(); i++) {
+          String name = metaData.getColumnName(i);
+          String type = metaData.getColumnTypeName(i);
+          columnNames.add(name);
+          columnTypes.add(type);
+          headers.put(name, type);
         }
-        System.out.println("Headers (name -> type): " + headers);
+        assertEquals(List.of("id", "first_name", "last_name", "salary"), columnNames,
+            "Column names should match the underlying table schema");
+        assertEquals(List.of("INTEGER", "VARCHAR", "VARCHAR", "DOUBLE"), columnTypes,
+            "Column JDBC types should match the expected Avro mappings");
         while (rs.next()) {
           Integer id = rs.getInt("id");
           ids.add(id);
           String firstName = rs.getString("first_name");
           String lastName = rs.getString("last_name");
           Double salary = rs.getDouble("salary");
-          System.out.printf("%s %s %s %s%n", id, firstName, lastName, salary);
           salaries.put(firstName + " " + lastName, salary);
         }
         assertEquals(5, ids.size(), "Expected 5 distinct employee ids");

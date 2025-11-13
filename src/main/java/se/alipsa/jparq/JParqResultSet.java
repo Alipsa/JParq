@@ -31,6 +31,7 @@ import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.JoinRecordReader;
+import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.QueryProcessor;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
@@ -61,6 +62,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private final QueryProcessor qp;
   private GenericRecord current;
   private final List<String> columnOrder;
+  private final List<String> canonicalColumnNames;
   private final String tableName;
   private final List<Expression> selectExpressions;
   private final SubqueryExecutor subqueryExecutor;
@@ -157,13 +159,15 @@ public class JParqResultSet extends ResultSetAdapter {
     List<String> labels = (columnOrder != null ? new ArrayList<>(columnOrder) : new ArrayList<>());
     List<String> canonicalPhysical = canonicalizeProjection(select, physicalColumnOrder, qualifierMapping,
         unqualifiedMapping);
-    List<String> requestedColumns = canonicalPhysical != null ? canonicalPhysical : select.columns();
-    List<String> physical = canonicalPhysical;
+    List<String> canonicalLookup = canonicalPhysical == null ? null : List.copyOf(canonicalPhysical);
+    List<String> requestedColumns = canonicalLookup != null ? canonicalLookup : select.columns();
+    List<String> physical = physicalColumnOrder == null ? null : List.copyOf(physicalColumnOrder);
 
     AggregateFunctions.AggregatePlan aggregatePlan = AggregateFunctions.plan(select);
     if (aggregatePlan != null) {
       labels = new ArrayList<>(aggregatePlan.labels());
       physical = null;
+      canonicalLookup = null;
       try {
         AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan,
             effectiveResidual, select.having(), select.orderBy(), subqueryExecutor, queryQualifiers,
@@ -175,6 +179,7 @@ public class JParqResultSet extends ResultSetAdapter {
       }
       this.columnOrder = labels;
       this.physicalColumnOrder = physical;
+      this.canonicalColumnNames = canonicalLookup;
       this.aggregateQuery = true;
       this.aggregateOnRow = false;
       this.aggregateRowIndex = -1;
@@ -187,6 +192,7 @@ public class JParqResultSet extends ResultSetAdapter {
 
     this.columnOrder = labels;
     this.physicalColumnOrder = physical;
+    this.canonicalColumnNames = canonicalLookup;
     this.aggregateQuery = false;
     this.aggregateRows = null;
     this.aggregateSqlTypes = null;
@@ -434,6 +440,7 @@ public class JParqResultSet extends ResultSetAdapter {
     this.qualifierColumnMapping = Map.of();
     this.unqualifiedColumnMapping = Map.of();
     this.columnOrder = new ArrayList<>(columnLabels);
+    this.canonicalColumnNames = null;
     this.physicalColumnOrder = null;
     this.aggregateQuery = true;
     this.aggregateRows = rows == null ? new ArrayList<>() : new ArrayList<>(rows);
@@ -524,13 +531,11 @@ public class JParqResultSet extends ResultSetAdapter {
     String lookupName = projectedName;
     var field = current.getSchema().getField(lookupName);
 
-    // If not found, fall back to the physical column name from metadata
+    // If not found, fall back to the canonical column name used for schema lookups
     if (field == null) {
-      // Contract: ResultSetMetaData#getColumnName(idx) should return the *physical*
-      // name.
-      String physical = getMetaData().getColumnName(idx);
-      if (physical != null && !physical.equals(lookupName)) {
-        lookupName = physical;
+      String canonical = canonicalColumnName(idx);
+      if (canonical != null && !canonical.equals(lookupName)) {
+        lookupName = canonical;
         field = current.getSchema().getField(lookupName);
       }
     }
@@ -545,7 +550,8 @@ public class JParqResultSet extends ResultSetAdapter {
       throw new SQLException("Unknown column in current schema: " + projectedName);
     }
 
-    Object raw = AvroCoercions.unwrap(current.get(lookupName), field.schema());
+    Object rawValue = current.get(lookupName);
+    Object raw = AvroCoercions.unwrap(rawValue, field.schema());
     lastWasNull = (raw == null);
     return raw;
   }
@@ -854,8 +860,33 @@ public class JParqResultSet extends ResultSetAdapter {
       return new AggregateResultSetMetaData(columnOrder, types, tableName);
     }
     var schema = (current == null) ? null : current.getSchema();
-    return new JParqResultSetMetaData(schema, columnOrder, physicalColumnOrder, tableName, selectExpressions);
+    var normalized = ParquetSchemas.normalizeStringTypes(schema);
+    return new JParqResultSetMetaData(normalized, columnOrder, physicalColumnOrder, canonicalColumnNames, tableName,
+        selectExpressions);
+  }
 
+  /**
+   * Resolve the canonical column name used internally for schema lookups.
+   *
+   * @param index
+   *          1-based column index requested by the caller
+   * @return the canonical column name when known, otherwise {@code null}
+   */
+  private String canonicalColumnName(int index) {
+    int position = index - 1;
+    if (position < 0) {
+      return null;
+    }
+    if (canonicalColumnNames != null && position < canonicalColumnNames.size()) {
+      return canonicalColumnNames.get(position);
+    }
+    if (physicalColumnOrder != null && position < physicalColumnOrder.size()) {
+      return physicalColumnOrder.get(position);
+    }
+    if (position < columnOrder.size()) {
+      return columnOrder.get(position);
+    }
+    return null;
   }
 
   @SuppressWarnings("PMD.EmptyCatchBlock")

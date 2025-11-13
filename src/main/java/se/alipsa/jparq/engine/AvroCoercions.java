@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -165,6 +166,18 @@ public final class AvroCoercions {
     Schema effective = effectiveSchema(s);
     switch (effective.getType()) {
       case STRING:
+        if (v instanceof CharSequence) {
+          return v.toString();
+        }
+        if (v instanceof ByteBuffer byteBuffer) {
+          ByteBuffer duplicate = byteBuffer.duplicate();
+          byte[] bytes = new byte[duplicate.remaining()];
+          duplicate.get(bytes);
+          return new String(bytes, StandardCharsets.UTF_8);
+        }
+        if (v instanceof byte[] byteArray) {
+          return new String(byteArray, StandardCharsets.UTF_8);
+        }
         return v.toString();
       case INT:
         if (LogicalTypes.date().equals(effective.getLogicalType())) {

@@ -1,6 +1,8 @@
 package se.alipsa.jparq;
 
 import java.sql.Types;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import net.sf.jsqlparser.expression.AnalyticExpression;
@@ -18,6 +20,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   private final Schema schema; // may be null if empty file
   private final List<String> labels; // projection labels (aliases if present)
   private final List<String> physicalNames; // underlying physical column names (null for computed)
+  private final List<String> canonicalNames; // canonical column names used for schema lookup
   private final String tableName;
   private final List<Expression> expressions;
 
@@ -30,16 +33,22 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
    *          the column labels (aliases)
    * @param physicalNames
    *          the underlying physical column names (null for computed)
+   * @param canonicalNames
+   *          canonical column names used internally for schema lookups (may be
+   *          {@code null})
    * @param tableName
    *          the table name
    * @param expressions
    *          parsed SELECT-list expressions corresponding to {@code labels}
    */
-  public JParqResultSetMetaData(Schema schema, List<String> labels, List<String> physicalNames, String tableName,
-      List<Expression> expressions) {
+  public JParqResultSetMetaData(Schema schema, List<String> labels, List<String> physicalNames,
+      List<String> canonicalNames, String tableName, List<Expression> expressions) {
     this.schema = schema;
-    this.labels = labels;
-    this.physicalNames = physicalNames;
+    this.labels = labels == null ? List.of() : List.copyOf(labels);
+    this.physicalNames = physicalNames == null ? null
+        : Collections.unmodifiableList(new ArrayList<>(physicalNames));
+    this.canonicalNames = canonicalNames == null ? null
+        : Collections.unmodifiableList(new ArrayList<>(canonicalNames));
     this.tableName = tableName;
     this.expressions = expressions == null ? List.of() : List.copyOf(expressions);
   }
@@ -56,19 +65,41 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
 
   @Override
   public String getColumnName(int column) {
-    int i = column - 1;
-    if (physicalNames != null && i < physicalNames.size()) {
-      String phys = physicalNames.get(i);
+    String expressionName = resolveExpressionColumnName(column);
+    if (expressionName != null && !expressionName.isBlank()) {
+      return expressionName;
+    }
+    int index = column - 1;
+    if (physicalNames != null && index >= 0 && index < physicalNames.size()) {
+      String phys = physicalNames.get(index);
       if (phys != null && !phys.isBlank()) {
-        return phys; // prefer physical name when known
+        return phys;
       }
     }
-    return getColumnLabel(column); // fallback
+    if (index >= 0 && index < labels.size()) {
+      return labels.get(index);
+    }
+    return "column_" + column;
   }
 
   @Override
   public String getTableName(int column) {
     return tableName;
+  }
+
+  private String resolveExpressionColumnName(int column) {
+    if (expressions == null || expressions.isEmpty()) {
+      return null;
+    }
+    int index = column - 1;
+    if (index < 0 || index >= expressions.size()) {
+      return null;
+    }
+    Expression expression = expressions.get(index);
+    if (expression instanceof Column columnExpression) {
+      return columnExpression.getColumnName();
+    }
+    return null;
   }
 
   @Override
@@ -100,9 +131,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   }
 
   /**
-   * Resolve the Avro schema field associated with the supplied column index. The
-   * physical column name is preferred, falling back to the projected label when
-   * the column originates from an expression.
+   * Resolve the Avro schema field associated with the supplied column index.
+   * Canonical column names are preferred to ensure consistent lookups when joins
+   * introduce disambiguated field names.
    *
    * @param column
    *          the 1-based column index from the result set
@@ -110,13 +141,44 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
    *         computed
    */
   private Schema.Field resolveField(int column) {
-    // Prefer physical name for schema lookup; fall back to label if needed
-    String name = getColumnName(column);
-    Schema.Field field = schema.getField(name);
-    if (field != null) {
-      return field;
+    if (schema == null) {
+      return null;
+    }
+    String canonical = canonicalName(column);
+    if (canonical != null) {
+      Schema.Field field = schema.getField(canonical);
+      if (field != null) {
+        return field;
+      }
+    }
+    int index = column - 1;
+    if (physicalNames != null && index >= 0 && index < physicalNames.size()) {
+      String physical = physicalNames.get(index);
+      if (physical != null) {
+        Schema.Field field = schema.getField(physical);
+        if (field != null) {
+          return field;
+        }
+      }
     }
     return schema.getField(getColumnLabel(column));
+  }
+
+  private String canonicalName(int column) {
+    int index = column - 1;
+    if (index < 0) {
+      return null;
+    }
+    if (canonicalNames != null && index < canonicalNames.size()) {
+      return canonicalNames.get(index);
+    }
+    if (physicalNames != null && index < physicalNames.size()) {
+      return physicalNames.get(index);
+    }
+    if (index < labels.size()) {
+      return labels.get(index);
+    }
+    return null;
   }
 
   /**
@@ -191,11 +253,45 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     if (columnName == null) {
       return Types.OTHER;
     }
-    Schema.Field baseField = schema.getField(columnName);
+    Schema.Field baseField = lookupFieldByName(columnName);
     if (baseField == null) {
       return Types.OTHER;
     }
     return mapSchemaToJdbcType(nonNullSchema(baseField.schema()));
+  }
+
+  private Schema.Field lookupFieldByName(String name) {
+    if (schema == null || name == null) {
+      return null;
+    }
+    Schema.Field direct = schema.getField(name);
+    if (direct != null) {
+      return direct;
+    }
+    if (canonicalNames != null) {
+      for (int i = 0; i < canonicalNames.size(); i++) {
+        String canonical = canonicalNames.get(i);
+        if (canonical != null && canonical.equalsIgnoreCase(name)) {
+          Schema.Field field = schema.getField(canonical);
+          if (field != null) {
+            return field;
+          }
+        }
+      }
+    }
+    for (int i = 0; i < labels.size(); i++) {
+      String label = labels.get(i);
+      if (label != null && label.equalsIgnoreCase(name)) {
+        String canonical = canonicalName(i + 1);
+        if (canonical != null) {
+          Schema.Field field = schema.getField(canonical);
+          if (field != null) {
+            return field;
+          }
+        }
+      }
+    }
+    return null;
   }
 
   /**
@@ -233,10 +329,41 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
       case FLOAT -> Types.REAL;
       case DOUBLE -> Types.DOUBLE;
       case BOOLEAN -> Types.BOOLEAN;
-      case BYTES, FIXED -> (base.getLogicalType() instanceof LogicalTypes.Decimal ? Types.DECIMAL : Types.BINARY);
+      case BYTES, FIXED -> {
+        if (base.getLogicalType() instanceof LogicalTypes.Decimal) {
+          yield Types.DECIMAL;
+        }
+        yield isUtf8String(base) ? Types.VARCHAR : Types.BINARY;
+      }
       case RECORD -> Types.STRUCT;
       case ARRAY -> Types.ARRAY;
       default -> Types.OTHER;
     };
+  }
+
+  private boolean isUtf8String(Schema schema) {
+    if (schema == null) {
+      return false;
+    }
+    if (schema.getLogicalType() instanceof LogicalTypes.Decimal) {
+      return false;
+    }
+    String logicalType = schema.getProp("logicalType");
+    if (logicalType != null && "decimal".equalsIgnoreCase(logicalType)) {
+      return false;
+    }
+    if (logicalType != null && "string".equalsIgnoreCase(logicalType)) {
+      return true;
+    }
+    String originalType = schema.getProp("originalType");
+    if (originalType != null && "UTF8".equalsIgnoreCase(originalType)) {
+      return true;
+    }
+    String convertedType = schema.getProp("convertedType");
+    if (convertedType != null && "UTF8".equalsIgnoreCase(convertedType)) {
+      return true;
+    }
+    Object javaString = schema.getObjectProp("avro.java.string");
+    return javaString != null;
   }
 }
