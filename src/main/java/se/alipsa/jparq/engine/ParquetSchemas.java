@@ -17,7 +17,6 @@ import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.util.HadoopInputFile;
 import org.apache.parquet.schema.LogicalTypeAnnotation;
 import org.apache.parquet.schema.MessageType;
-import org.apache.parquet.schema.OriginalType;
 import org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName;
 import org.apache.parquet.schema.Type;
 
@@ -255,9 +254,7 @@ public final class ParquetSchemas {
     }
     String currentPath = appendPath(parentPath, type.getName());
     if (type.isPrimitive()) {
-      if (type.asPrimitiveType().getPrimitiveTypeName() == PrimitiveTypeName.BINARY
-          && (OriginalType.UTF8.equals(type.getOriginalType())
-              || type.getLogicalTypeAnnotation() instanceof LogicalTypeAnnotation.StringLogicalTypeAnnotation)) {
+      if (isStringAnnotatedBinary(type)) {
         target.add(currentPath);
       }
       return;
@@ -265,6 +262,26 @@ public final class ParquetSchemas {
     for (Type child : type.asGroupType().getFields()) {
       collectAnnotatedStringFields(child, currentPath, target);
     }
+  }
+
+  /**
+   * Determine whether the supplied Parquet type encodes textual data using the
+   * UTF-8 string logical type.
+   *
+   * @param type
+   *          the Parquet type to inspect (may be {@code null})
+   * @return {@code true} if the type is a binary primitive annotated with the
+   *         {@link LogicalTypeAnnotation.StringLogicalTypeAnnotation}
+   */
+  static boolean isStringAnnotatedBinary(Type type) {
+    if (type == null || !type.isPrimitive()) {
+      return false;
+    }
+    if (type.asPrimitiveType().getPrimitiveTypeName() != PrimitiveTypeName.BINARY) {
+      return false;
+    }
+    LogicalTypeAnnotation logicalType = type.getLogicalTypeAnnotation();
+    return logicalType instanceof LogicalTypeAnnotation.StringLogicalTypeAnnotation;
   }
 
   private static Set<String> parseColumnTypeHints(MessageType schema, Map<String, String> metadata) {
