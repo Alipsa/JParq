@@ -6,7 +6,8 @@
 import se.alipsa.jparq.JParqSql
 import se.alipsa.matrix.core.Matrix
 
-jparqSql = new JParqSql('jdbc:jparq:/Users/pernyf/project/JParq/src/test/resources/acme')
+String userDir = System.getProperty("user.dir")
+jparqSql = new JParqSql("jdbc:jparq:${userDir}/src/test/resources/acme")
 
  String sql = """
   select e.*, s.salary from employees e join salary s on e.id = s.employee

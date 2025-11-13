@@ -59,6 +59,11 @@ public class AcmeTest {
     Map<String, Double> salaries = new LinkedHashMap<>();
     jparqSql.query(sql, rs -> {
       try {
+        Map<String, String> headers = new LinkedHashMap<>();
+        for (int i = 1; i <= rs.getMetaData().getColumnCount(); i++) {
+          headers.put(rs.getMetaData().getColumnName(i), rs.getMetaData().getColumnTypeName(i));
+        }
+        System.out.println("Headers (name -> type): " + headers);
         while (rs.next()) {
           Integer id = rs.getInt("id");
           ids.add(id);
