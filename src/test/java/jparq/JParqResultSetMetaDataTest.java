@@ -138,6 +138,7 @@ class JParqResultSetMetaDataTest {
    */
   private JParqResultSetMetaData createMetadataWithExpression(Schema schema, List<String> labels,
       List<String> physicalNames, List<Expression> expressions) {
-    return new JParqResultSetMetaData(schema, labels, physicalNames, "test", expressions);
+    List<String> canonical = physicalNames;
+    return new JParqResultSetMetaData(schema, labels, physicalNames, canonical, "test", expressions);
   }
 }
