@@ -143,7 +143,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   public String getColumnClassName(int column) {
     Schema.Field field = resolveField(column);
     if (field != null) {
-      String className = mapSchemaToJavaClassName(field.schema());
+      Schema fieldSchema = nonNullSchema(field.schema());
+      String className = mapSchemaToJavaClassName(fieldSchema);
       if (className != null) {
         return className;
       }
@@ -195,14 +196,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
    * @return the resolved {@link java.sql.Types JDBC type}
    */
   private int resolveComputedColumnType(int column) {
-    if (expressions == null || expressions.isEmpty()) {
+    Expression expression = expressionAtColumn(column);
+    if (expression == null) {
       return Types.OTHER;
     }
-    int index = column - 1;
-    if (index < 0 || index >= expressions.size()) {
-      return Types.OTHER;
-    }
-    Expression expression = expressions.get(index);
     if (expression instanceof AnalyticExpression analytic) {
       return resolveAnalyticFunctionType(analytic);
     }
@@ -217,14 +214,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   }
 
   private String resolveComputedColumnClassName(int column) {
-    if (expressions == null || expressions.isEmpty()) {
+    Expression expression = expressionAtColumn(column);
+    if (expression == null) {
       return null;
     }
-    int index = column - 1;
-    if (index < 0 || index >= expressions.size()) {
-      return null;
-    }
-    Expression expression = expressions.get(index);
     if (expression instanceof AnalyticExpression analytic) {
       return resolveAnalyticFunctionClassName(analytic);
     }
@@ -236,6 +229,17 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
       return List.class.getName();
     }
     return null;
+  }
+
+  private Expression expressionAtColumn(int column) {
+    if (expressions == null || expressions.isEmpty()) {
+      return null;
+    }
+    int index = column - 1;
+    if (index < 0 || index >= expressions.size()) {
+      return null;
+    }
+    return expressions.get(index);
   }
 
   /**
@@ -317,7 +321,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     if (baseField == null) {
       return null;
     }
-    return mapSchemaToJavaClassName(baseField.schema());
+    return mapSchemaToJavaClassName(nonNullSchema(baseField.schema()));
   }
 
   private Schema.Field lookupFieldByName(String name) {
@@ -411,6 +415,18 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     };
   }
 
+  /**
+   * Map an Avro schema to the fully qualified Java class name representing
+   * values for that schema.
+   *
+   * <p>The mapping mirrors {@link #mapSchemaToJdbcType(Schema)} to keep reported
+   * JDBC types and Java classes aligned when falling back from schema-based
+   * resolution.</p>
+   *
+   * @param schema
+   *          the schema describing the value
+   * @return the fully qualified Java class name representing {@code schema}
+   */
   private String mapSchemaToJavaClassName(Schema schema) {
     Schema base = nonNullSchema(schema);
     if (base == null) {
@@ -445,8 +461,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
       case BYTES, FIXED -> (base.getLogicalType() instanceof LogicalTypes.Decimal)
           ? BigDecimal.class.getName()
           : byte[].class.getName();
-      case RECORD -> String.class.getName();
-      case ARRAY -> Object[].class.getName();
+      case RECORD -> Map.class.getName();
+      case ARRAY -> List.class.getName();
       case MAP -> Map.class.getName();
       default -> Object.class.getName();
     };
