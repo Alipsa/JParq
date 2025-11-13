@@ -53,14 +53,12 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
       List<String> canonicalNames, String tableName, List<Expression> expressions) {
     this.schema = schema;
     this.labels = labels == null ? List.of() : List.copyOf(labels);
-    this.physicalNames = physicalNames == null ? null
-        : Collections.unmodifiableList(new ArrayList<>(physicalNames));
-    this.canonicalNames = canonicalNames == null ? null
-        : Collections.unmodifiableList(new ArrayList<>(canonicalNames));
+    this.physicalNames = physicalNames == null ? null : Collections.unmodifiableList(new ArrayList<>(physicalNames));
+    this.canonicalNames = canonicalNames == null ? null : Collections.unmodifiableList(new ArrayList<>(canonicalNames));
     this.tableName = tableName;
     this.expressions = expressions == null ? List.of() : List.copyOf(expressions);
-    this.caseInsensitiveColumnIndex = ColumnNameLookup.buildCaseInsensitiveIndex(
-        this.labels.size(), this.canonicalNames, this.physicalNames, this.labels);
+    this.caseInsensitiveColumnIndex = ColumnNameLookup.buildCaseInsensitiveIndex(this.labels.size(),
+        this.canonicalNames, this.physicalNames, this.labels);
     this.schemaFieldLookup = schema == null ? Map.of() : buildSchemaFieldLookup(schema);
   }
 
@@ -416,12 +414,14 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   }
 
   /**
-   * Map an Avro schema to the fully qualified Java class name representing
-   * values for that schema.
+   * Map an Avro schema to the fully qualified Java class name representing values
+   * for that schema.
    *
-   * <p>The mapping mirrors {@link #mapSchemaToJdbcType(Schema)} to keep reported
+   * <p>
+   * The mapping mirrors {@link #mapSchemaToJdbcType(Schema)} to keep reported
    * JDBC types and Java classes aligned when falling back from schema-based
-   * resolution.</p>
+   * resolution.
+   * </p>
    *
    * @param schema
    *          the schema describing the value
@@ -456,9 +456,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
       case FLOAT -> Float.class.getName();
       case DOUBLE -> Double.class.getName();
       case BOOLEAN -> Boolean.class.getName();
-      case BYTES, FIXED -> (base.getLogicalType() instanceof LogicalTypes.Decimal)
-          ? BigDecimal.class.getName()
-          : byte[].class.getName();
+      case BYTES, FIXED ->
+        (base.getLogicalType() instanceof LogicalTypes.Decimal) ? BigDecimal.class.getName() : byte[].class.getName();
       case RECORD -> Map.class.getName();
       case ARRAY -> List.class.getName();
       case MAP -> Map.class.getName();
@@ -476,8 +475,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
       case Types.REAL -> Float.class.getName();
       case Types.FLOAT, Types.DOUBLE -> Double.class.getName();
       case Types.NUMERIC, Types.DECIMAL -> BigDecimal.class.getName();
-      case Types.CHAR, Types.VARCHAR, Types.LONGVARCHAR, Types.NCHAR, Types.NVARCHAR, Types.LONGNVARCHAR -> String.class
-          .getName();
+      case Types.CHAR, Types.VARCHAR, Types.LONGVARCHAR, Types.NCHAR, Types.NVARCHAR, Types.LONGNVARCHAR ->
+        String.class.getName();
       case Types.DATE -> Date.class.getName();
       case Types.TIME, Types.TIME_WITH_TIMEZONE -> Time.class.getName();
       case Types.TIMESTAMP, Types.TIMESTAMP_WITH_TIMEZONE -> Timestamp.class.getName();

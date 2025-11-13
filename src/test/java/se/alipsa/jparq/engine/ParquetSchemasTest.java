@@ -16,13 +16,12 @@ import org.junit.jupiter.api.Test;
 class ParquetSchemasTest {
 
   /**
-   * Ensures that binary primitives annotated with the Parquet string logical
-   * type are recognised as textual fields.
+   * Ensures that binary primitives annotated with the Parquet string logical type
+   * are recognised as textual fields.
    */
   @Test
   void stringLogicalTypeAnnotationMarksBinaryFieldsAsText() {
-    Type binaryString = Types.optional(PrimitiveTypeName.BINARY).as(LogicalTypeAnnotation.stringType())
-        .named("text");
+    Type binaryString = Types.optional(PrimitiveTypeName.BINARY).as(LogicalTypeAnnotation.stringType()).named("text");
     assertTrue(ParquetSchemas.isStringAnnotatedBinary(binaryString),
         "String logical type annotation should mark the field as text");
   }

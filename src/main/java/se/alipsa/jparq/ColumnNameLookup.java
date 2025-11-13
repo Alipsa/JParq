@@ -7,7 +7,8 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Utility helpers for resolving column names within result set metadata and data access paths.
+ * Utility helpers for resolving column names within result set metadata and
+ * data access paths.
  */
 final class ColumnNameLookup {
 
@@ -18,22 +19,23 @@ final class ColumnNameLookup {
    * Resolve the canonical column name for the supplied column index.
    *
    * <p>
-   * Canonical names are preferred when provided, followed by the underlying physical column names and finally the
-   * projected labels exposed to the caller.
+   * Canonical names are preferred when provided, followed by the underlying
+   * physical column names and finally the projected labels exposed to the caller.
    * </p>
    *
    * @param canonicalNames
    *          canonical column names describing the schema (may be {@code null})
    * @param physicalNames
-   *          physical column names mapped to the source table (may be {@code null})
+   *          physical column names mapped to the source table (may be
+   *          {@code null})
    * @param labels
    *          projection labels (aliases) exposed to callers (may be {@code null})
    * @param column
    *          the 1-based column index
    * @return the canonical column name when available, otherwise {@code null}
    */
-  static String canonicalName(
-      List<String> canonicalNames, List<String> physicalNames, List<String> labels, int column) {
+  static String canonicalName(List<String> canonicalNames, List<String> physicalNames, List<String> labels,
+      int column) {
     int index = column - 1;
     if (index < 0) {
       return null;
@@ -57,13 +59,15 @@ final class ColumnNameLookup {
    * @param canonicalNames
    *          canonical column names describing the schema (may be {@code null})
    * @param physicalNames
-   *          physical column names mapped to the source table (may be {@code null})
+   *          physical column names mapped to the source table (may be
+   *          {@code null})
    * @param labels
    *          projection labels (aliases) exposed to callers (may be {@code null})
-   * @return an immutable map associating lower-cased column names to their 1-based column index
+   * @return an immutable map associating lower-cased column names to their
+   *         1-based column index
    */
-  static Map<String, Integer> buildCaseInsensitiveIndex(
-      int columnCount, List<String> canonicalNames, List<String> physicalNames, List<String> labels) {
+  static Map<String, Integer> buildCaseInsensitiveIndex(int columnCount, List<String> canonicalNames,
+      List<String> physicalNames, List<String> labels) {
     if (columnCount <= 0) {
       return Map.of();
     }
@@ -82,7 +86,8 @@ final class ColumnNameLookup {
    *
    * @param name
    *          the column name to normalize (may be {@code null})
-   * @return the normalized key, or an empty string when {@code name} is {@code null} or blank
+   * @return the normalized key, or an empty string when {@code name} is
+   *         {@code null} or blank
    */
   static String normalizeKey(String name) {
     if (name == null) {
