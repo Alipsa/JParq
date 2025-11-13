@@ -11,25 +11,38 @@ import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import jparq.usage.AcmeTest;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqResultSetMetaData;
+import se.alipsa.jparq.JParqSql;
 
 /**
  * Tests for {@link JParqResultSetMetaData}.
  */
 class JParqResultSetMetaDataTest {
+
+  static String jdbcUrl;
+  @BeforeAll
+  static void setup() throws URISyntaxException {
+    URL acmesUrl = AcmeTest.class.getResource("/acme");
+    Assertions.assertNotNull(acmesUrl, "acme must be on the test classpath (src/test/resources)");
+    Path acmePath = Paths.get(acmesUrl.toURI());
+    jdbcUrl = "jdbc:jparq:" + acmePath.toAbsolutePath();
+  }
 
   @Test
   void rowNumberFunctionReportsBigIntType() {
@@ -249,5 +262,27 @@ class JParqResultSetMetaDataTest {
       List<String> physicalNames, List<Expression> expressions) {
     List<String> canonical = physicalNames;
     return new JParqResultSetMetaData(schema, labels, physicalNames, canonical, "test", expressions);
+  }
+
+  @Test
+  void resultSetMetaDataTest() throws SQLException {
+    JParqSql jparqSql = new JParqSql(jdbcUrl);
+    jparqSql.query("select id, first_name, last_name from employees", rs -> {
+      try {
+        ResultSetMetaData rsm = rs.getMetaData();
+        printRsMetaData(rsm);
+        assertEquals("INTEGER", rsm.getColumnTypeName(1));
+        assertEquals("VARCHAR", rsm.getColumnTypeName(2));
+        assertEquals("VARCHAR", rsm.getColumnTypeName(3));
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+    });
+  }
+
+  void printRsMetaData(ResultSetMetaData rs) throws SQLException {
+    for (int j = 0; j < rs.getColumnCount(); j++) {
+      System.out.println(rs.getColumnName(j + 1) + " " + rs.getColumnTypeName(j + 1));
+    }
   }
 }

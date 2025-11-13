@@ -45,6 +45,7 @@ Always work with **Java 21** and **Maven ≥ 3.9.9**; the Maven Enforcer plugin 
 ## 4. Coding & testing expectations
 - **Tests are mandatory** for every behavioral change. Follow the existing naming convention (`FeatureTest`, `*FunctionsTest`, etc.) and place suites beside related features. Prefer parameterized JUnit 6 tests where practical.
 - **Javadoc is required** on all public classes and methods. Include descriptions, `@param`, `@return`, and `@throws` as appropriate. Checkstyle enforces this strictly.
+ note that private methods, including private utility methods, do not require Javadoc.
 - **Style compliance:** obey Checkstyle, PMD, and Spotless. Use the existing helper methods/classes rather than duplicating logic (e.g., reuse `JParqSql` for query helpers).
 - Pay attention to the design principles of low coupling, high cohesion, clarity and DRY (don't repeat yourself).
 - **Logging:** tests configure SLF4J Simple via `simplelogger.properties`. Use SLF4J APIs; avoid `System.out` in production code.

@@ -49,7 +49,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getDriverName() {
-    return "JParq JDBC";
+    return "se.alipsa.jparq.JParqDriver";
   }
 
   @Override

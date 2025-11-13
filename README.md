@@ -164,10 +164,6 @@ The following SQL statements are supported:
 - Standard row-limiting syntax (FETCH FIRST / OFFSET … FETCH). The limit handler inspects only the non-standard LIMIT clause, leaving the SQL-standard FETCH clause unimplemented.
 
 - In JParqDatabaseMetaData
-  - type information is always String for columns. This should be available in the parquet schema for:
-    - DATA_TYPE
-    - TYPE_NAME
-    - COLUMN_SIZE
   - The getTables() method should return rows composed of the following columns:
   
     | Column Name               | Type   | Description                                                                                    |
@@ -194,6 +190,9 @@ The following SQL statements are supported:
     - NUMERIC_PRECISION
     - NUMERIC_SCALE
     - COLLATION_NAME
+  - The DATA_TYPE in getColumns() should map to int value for standard SQL types as defined in java.sql.Types, they are always VARCHAR right now.
+  - TYPE_NAME in getColumns() should return standard SQL type names (e.g., "INTEGER", "VARCHAR", "DECIMAL"). Extract the type mapping in JParqResultSetMetaData to a utility class that can be used by meta data classes to improve maintainability.
+  - Modify jparq.JParqDatabaseMetaDataTest.databaseMetaDataTest() to validate the enhanced metadata information and create additional tests in that class if needed to ensure the functionality is properly tested.
 - Support for INFORMATION_SCHEMA.COLUMNS and INFORMATION_SCHEMA.TABLES use JParqDatabaseMetaData
 
 ### Non standard extensions
