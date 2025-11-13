@@ -30,6 +30,15 @@ public class AcmeTest {
    * Expected result: id first_name last_name salary 2 Karin Pettersson 180000 4
    * Arne Larsson 195000 5 Sixten Svensson 230000 3 Tage Lundström 140000 1 Per
    * Andersson 165000
+   *
+   * <p>
+   * However, on my Mac the result of this is:
+   * e__id	first_name	last_name	salary
+   * 1	[B@2ba21449	[B@1c5b9581	165000
+   * 2	[B@6aa6e512	[B@519da453	180000
+   * 3	[B@11aad47c	[B@7dfee05a	140000
+   * 4	[B@20ad0482	[B@1c2e83f8	195000
+   * 5	[B@5b60bd35	[B@51967a33	230000
    */
   @Test
   void testClassicSubQuery() {
