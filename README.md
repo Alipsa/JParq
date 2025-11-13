@@ -1,4 +1,4 @@
-[![Maven Central](https://maven-badges.herokuapp.com/maven-central/se.alipsa/jparq/badge.svg)](https://maven-badges.herokuapp.com/maven-central/se.alipsa/jparq)
+[![Maven Central](https://img.shields.io/maven-central/v/se.alipsa/jparq)](https://mvnrepository.com/artifact/se.alipsa/jparq)
 [![javadoc](https://javadoc.io/badge2/se.alipsa/jparq/javadoc.svg)](https://javadoc.io/doc/se.alipsa/jparq)
 
 # JParq

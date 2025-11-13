@@ -58,6 +58,7 @@ public class AcmeTest {
         ResultSetMetaData metaData = rs.getMetaData();
         List<String> columnNames = new ArrayList<>();
         List<String> columnTypes = new ArrayList<>();
+        List<String> columnClassNames = new ArrayList<>();
         Map<String, String> headers = new LinkedHashMap<>();
         for (int i = 1; i <= metaData.getColumnCount(); i++) {
           String name = metaData.getColumnName(i);
@@ -65,15 +66,19 @@ public class AcmeTest {
           columnNames.add(name);
           columnTypes.add(type);
           headers.put(name, type);
+          columnClassNames.add(metaData.getColumnClassName(i));
         }
         assertEquals(List.of("id", "first_name", "last_name", "salary"), columnNames,
             "Column names should match the underlying table schema");
         assertEquals(List.of("INTEGER", "VARCHAR", "VARCHAR", "DOUBLE"), columnTypes,
             "Column JDBC types should match the expected Avro mappings");
+        assertEquals(List.of("java.lang.Integer", "java.lang.String", "java.lang.String", "java.lang.Double"), columnClassNames,
+            "Column class names should match the expected Java types for the JDBC types");
         while (rs.next()) {
           Integer id = rs.getInt("id");
           ids.add(id);
-          String firstName = rs.getString("first_name");
+          Object firstName = rs.getObject("first_name");
+          assertEquals(String.class, firstName.getClass(), "If the underlying class is String, getObject should return String");
           String lastName = rs.getString("last_name");
           Double salary = rs.getDouble("salary");
           salaries.put(firstName + " " + lastName, salary);
