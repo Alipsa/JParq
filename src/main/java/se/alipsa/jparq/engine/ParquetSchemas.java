@@ -17,7 +17,6 @@ import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.util.HadoopInputFile;
 import org.apache.parquet.schema.LogicalTypeAnnotation;
 import org.apache.parquet.schema.MessageType;
-import org.apache.parquet.schema.OriginalType;
 import org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName;
 import org.apache.parquet.schema.Type;
 
@@ -95,22 +94,24 @@ public final class ParquetSchemas {
         new IdentityHashMap<>());
   }
 
-  private static Schema normalizeSchema(
-      Schema schema, String path, Set<String> binaryStringFields, Map<Schema, Schema> cache) {
+  private static Schema normalizeSchema(Schema schema, String path, Set<String> binaryStringFields,
+      Map<Schema, Schema> cache) {
     return switch (schema.getType()) {
       case RECORD -> normalizeRecord(schema, path, binaryStringFields, cache);
       case ARRAY -> normalizeArray(schema, path, binaryStringFields, cache);
       case MAP -> normalizeMap(schema, path, binaryStringFields, cache);
       case UNION -> normalizeUnion(schema, path, binaryStringFields, cache);
-      case FIXED, BYTES -> shouldPromoteToString(schema, path, binaryStringFields)
-          ? copyProps(schema, Schema.create(Schema.Type.STRING))
-          : schema;
+      case FIXED,
+          BYTES ->
+        shouldPromoteToString(schema, path, binaryStringFields)
+            ? copyProps(schema, Schema.create(Schema.Type.STRING))
+            : schema;
       default -> schema;
     };
   }
 
-  private static Schema normalizeArray(
-      Schema schema, String path, Set<String> binaryStringFields, Map<Schema, Schema> cache) {
+  private static Schema normalizeArray(Schema schema, String path, Set<String> binaryStringFields,
+      Map<Schema, Schema> cache) {
     Schema cached = cache.get(schema);
     if (cached != null) {
       return cached;
@@ -121,8 +122,8 @@ public final class ParquetSchemas {
     return array;
   }
 
-  private static Schema normalizeMap(
-      Schema schema, String path, Set<String> binaryStringFields, Map<Schema, Schema> cache) {
+  private static Schema normalizeMap(Schema schema, String path, Set<String> binaryStringFields,
+      Map<Schema, Schema> cache) {
     Schema cached = cache.get(schema);
     if (cached != null) {
       return cached;
@@ -133,8 +134,8 @@ public final class ParquetSchemas {
     return map;
   }
 
-  private static Schema normalizeRecord(
-      Schema schema, String path, Set<String> binaryStringFields, Map<Schema, Schema> cache) {
+  private static Schema normalizeRecord(Schema schema, String path, Set<String> binaryStringFields,
+      Map<Schema, Schema> cache) {
     Schema cached = cache.get(schema);
     if (cached != null) {
       return cached;
@@ -145,8 +146,8 @@ public final class ParquetSchemas {
     for (Schema.Field field : schema.getFields()) {
       String fieldPath = appendPath(path, field.name());
       Schema normalized = normalizeSchema(field.schema(), fieldPath, binaryStringFields, cache);
-      Schema.Field newField =
-          new Schema.Field(field.name(), normalized, field.doc(), field.defaultVal(), field.order());
+      Schema.Field newField = new Schema.Field(field.name(), normalized, field.doc(), field.defaultVal(),
+          field.order());
       copyFieldProps(field, newField);
       fields.add(newField);
     }
@@ -156,8 +157,8 @@ public final class ParquetSchemas {
     return record;
   }
 
-  private static Schema normalizeUnion(
-      Schema schema, String path, Set<String> binaryStringFields, Map<Schema, Schema> cache) {
+  private static Schema normalizeUnion(Schema schema, String path, Set<String> binaryStringFields,
+      Map<Schema, Schema> cache) {
     Schema cached = cache.get(schema);
     if (cached != null) {
       return cached;
@@ -255,9 +256,7 @@ public final class ParquetSchemas {
     }
     String currentPath = appendPath(parentPath, type.getName());
     if (type.isPrimitive()) {
-      if (type.asPrimitiveType().getPrimitiveTypeName() == PrimitiveTypeName.BINARY
-          && (OriginalType.UTF8.equals(type.getOriginalType())
-              || type.getLogicalTypeAnnotation() instanceof LogicalTypeAnnotation.StringLogicalTypeAnnotation)) {
+      if (isStringAnnotatedBinary(type)) {
         target.add(currentPath);
       }
       return;
@@ -267,15 +266,35 @@ public final class ParquetSchemas {
     }
   }
 
+  /**
+   * Determine whether the supplied Parquet type encodes textual data using the
+   * UTF-8 string logical type.
+   *
+   * @param type
+   *          the Parquet type to inspect (may be {@code null})
+   * @return {@code true} if the type is a binary primitive annotated with the
+   *         {@link LogicalTypeAnnotation.StringLogicalTypeAnnotation}
+   */
+  static boolean isStringAnnotatedBinary(Type type) {
+    if (type == null || !type.isPrimitive()) {
+      return false;
+    }
+    if (type.asPrimitiveType().getPrimitiveTypeName() != PrimitiveTypeName.BINARY) {
+      return false;
+    }
+    LogicalTypeAnnotation logicalType = type.getLogicalTypeAnnotation();
+    return logicalType instanceof LogicalTypeAnnotation.StringLogicalTypeAnnotation;
+  }
+
   private static Set<String> parseColumnTypeHints(MessageType schema, Map<String, String> metadata) {
     if (schema == null || metadata == null || metadata.isEmpty()) {
       return Set.of();
     }
     List<Type> fields = schema.getFields();
     List<String> hints = metadata.entrySet().stream()
-        .filter(entry -> entry.getKey() != null && entry.getKey().endsWith(".columnTypes"))
-        .map(Map.Entry::getValue).filter(value -> value != null && !value.isBlank())
-        .findFirst().map(ParquetSchemas::splitTypeHints).orElse(List.of());
+        .filter(entry -> entry.getKey() != null && entry.getKey().endsWith(".columnTypes")).map(Map.Entry::getValue)
+        .filter(value -> value != null && !value.isBlank()).findFirst().map(ParquetSchemas::splitTypeHints)
+        .orElse(List.of());
     if (hints.isEmpty() || hints.size() != fields.size()) {
       return Set.of();
     }
@@ -289,10 +308,7 @@ public final class ParquetSchemas {
   }
 
   private static List<String> splitTypeHints(String value) {
-    return List.of(value.split(","))
-        .stream()
-        .map(String::trim)
-        .filter(token -> !token.isEmpty())
+    return List.of(value.split(",")).stream().map(String::trim).filter(token -> !token.isEmpty())
         .collect(Collectors.toList());
   }
 

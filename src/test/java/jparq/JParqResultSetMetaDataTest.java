@@ -16,7 +16,9 @@ import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import net.sf.jsqlparser.expression.AnalyticExpression;
+import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
@@ -38,6 +40,25 @@ class JParqResultSetMetaDataTest {
   }
 
   @Test
+  void columnClassNameMatchesSchemaType() {
+    Schema schema = schemaWithField();
+    JParqResultSetMetaData metaData = createMetadataWithExpression(schema, List.of("value"),
+        Collections.singletonList("value"), Collections.emptyList());
+
+    assertEquals(Double.class.getName(), metaData.getColumnClassName(1),
+        "Double schema fields should map to java.lang.Double");
+  }
+
+  @Test
+  void rowNumberFunctionClassNameMatchesBigIntType() {
+    JParqResultSetMetaData metaData = createMetadataWithExpression(schemaWithField(), List.of("row_number"),
+        Collections.singletonList(null), List.of(analyticExpression("ROW_NUMBER", null)));
+
+    assertEquals(Long.class.getName(), metaData.getColumnClassName(1),
+        "ROW_NUMBER should be reported as java.lang.Long");
+  }
+
+  @Test
   void lagFunctionUsesReferencedColumnType() {
     Schema schema = schemaWithField();
     Column column = new Column();
@@ -47,6 +68,60 @@ class JParqResultSetMetaDataTest {
         Collections.singletonList(null), List.of(lagExpression));
 
     assertEquals(Types.DOUBLE, metaData.getColumnType(1), "LAG should report the referenced column type");
+  }
+
+  @Test
+  void lagFunctionUsesReferencedColumnClassName() {
+    Schema schema = schemaWithField();
+    Column column = new Column();
+    column.setColumnName("value");
+    AnalyticExpression lagExpression = analyticExpression("LAG", column);
+    JParqResultSetMetaData metaData = createMetadataWithExpression(schema, List.of("lag_value"),
+        Collections.singletonList(null), List.of(lagExpression));
+
+    assertEquals(Double.class.getName(), metaData.getColumnClassName(1),
+        "LAG should report the referenced column class name");
+  }
+
+  @Test
+  void nullableSchemaFieldsUnwrapUnionForClassName() {
+    Schema schema = schemaWithNullableField();
+    JParqResultSetMetaData metaData = createMetadataWithExpression(schema, List.of("optional"),
+        Collections.singletonList("optional"), Collections.emptyList());
+
+    assertEquals(Integer.class.getName(), metaData.getColumnClassName(1),
+        "Nullable union should map to the non-null field type");
+  }
+
+  @Test
+  void arraySchemaFieldsReportListClass() {
+    Schema schema = schemaWithArrayField();
+    JParqResultSetMetaData metaData = createMetadataWithExpression(schema, List.of("entries"),
+        Collections.singletonList("entries"), Collections.emptyList());
+
+    assertEquals(List.class.getName(), metaData.getColumnClassName(1),
+        "Array schema fields should report java.util.List");
+  }
+
+  @Test
+  void recordSchemaFieldsReportMapClass() {
+    Schema schema = schemaWithRecordField();
+    JParqResultSetMetaData metaData = createMetadataWithExpression(schema, List.of("child"),
+        Collections.singletonList("child"), Collections.emptyList());
+
+    assertEquals(Map.class.getName(), metaData.getColumnClassName(1),
+        "Nested record schema fields should report java.util.Map");
+  }
+
+  @Test
+  void computedArrayExpressionsReportListClass() {
+    Schema schema = schemaWithField();
+    ArrayConstructor arrayConstructor = new ArrayConstructor();
+    JParqResultSetMetaData metaData = createMetadataWithExpression(schema, List.of("computed_array"),
+        Collections.singletonList(null), List.of(arrayConstructor));
+
+    assertEquals(List.class.getName(), metaData.getColumnClassName(1),
+        "Computed array expressions should report java.util.List");
   }
 
   @Test
@@ -103,6 +178,40 @@ class JParqResultSetMetaDataTest {
   private Schema schemaWithField() {
     String schemaJson = "{\"type\":\"record\",\"name\":\"Test\",\"fields\":["
         + "{\"name\":\"value\",\"type\":\"double\"}]}";
+    return new Schema.Parser().parse(schemaJson);
+  }
+
+  /**
+   * Create a schema containing a nullable integer field.
+   *
+   * @return the schema used for nullable field tests
+   */
+  private Schema schemaWithNullableField() {
+    String schemaJson = "{\"type\":\"record\",\"name\":\"NullableTest\",\"fields\":["
+        + "{\"name\":\"optional\",\"type\":[\"null\",\"int\"],\"default\":null}]}";
+    return new Schema.Parser().parse(schemaJson);
+  }
+
+  /**
+   * Create a schema containing an array of strings field.
+   *
+   * @return the schema used for array field tests
+   */
+  private Schema schemaWithArrayField() {
+    String schemaJson = "{\"type\":\"record\",\"name\":\"ArrayTest\",\"fields\":["
+        + "{\"name\":\"entries\",\"type\":{\"type\":\"array\",\"items\":\"string\"}}]}";
+    return new Schema.Parser().parse(schemaJson);
+  }
+
+  /**
+   * Create a schema containing a nested record field.
+   *
+   * @return the schema used for nested record tests
+   */
+  private Schema schemaWithRecordField() {
+    String schemaJson = "{\"type\":\"record\",\"name\":\"RecordTest\",\"fields\":["
+        + "{\"name\":\"child\",\"type\":{\"type\":\"record\",\"name\":\"Child\","
+        + "\"fields\":[{\"name\":\"identifier\",\"type\":\"long\"}]}}]}";
     return new Schema.Parser().parse(schemaJson);
   }
 

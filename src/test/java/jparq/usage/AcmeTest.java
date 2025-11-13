@@ -72,13 +72,14 @@ public class AcmeTest {
             "Column names should match the underlying table schema");
         assertEquals(List.of("INTEGER", "VARCHAR", "VARCHAR", "DOUBLE"), columnTypes,
             "Column JDBC types should match the expected Avro mappings");
-        assertEquals(List.of("java.lang.Integer", "java.lang.String", "java.lang.String", "java.lang.Double"), columnClassNames,
-            "Column class names should match the expected Java types for the JDBC types");
+        assertEquals(List.of("java.lang.Integer", "java.lang.String", "java.lang.String", "java.lang.Double"),
+            columnClassNames, "Column class names should match the expected Java types for the JDBC types");
         while (rs.next()) {
           Integer id = rs.getInt("id");
           ids.add(id);
           Object firstName = rs.getObject("first_name");
-          assertEquals(String.class, firstName.getClass(), "If the underlying class is String, getObject should return String");
+          assertEquals(String.class, firstName.getClass(),
+              "If the underlying class is String, getObject should return String");
           String lastName = rs.getString("last_name");
           Double salary = rs.getDouble("salary");
           salaries.put(firstName + " " + lastName, salary);
