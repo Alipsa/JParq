@@ -83,8 +83,7 @@ public class IntersectAllTest {
     List<Integer> distinctValues = collectInts(String.format(Locale.ROOT, base, "INTERSECT"));
     assertEquals(List.of(5, 5), allValues,
         "INTERSECT ALL should preserve duplicate intersections present in both inputs");
-    assertEquals(List.of(5), distinctValues,
-        "INTERSECT should deduplicate the intersection result");
+    assertEquals(List.of(5), distinctValues, "INTERSECT should deduplicate the intersection result");
   }
 
   /**
@@ -107,8 +106,8 @@ public class IntersectAllTest {
   }
 
   /**
-   * Execute the provided SQL and collect the integer values from the first
-   * column of the result set.
+   * Execute the provided SQL and collect the integer values from the first column
+   * of the result set.
    *
    * @param sql
    *          the SQL to execute

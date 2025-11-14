@@ -135,6 +135,12 @@ The following SQL statements are supported:
 - Join support: INNER, LEFT, RIGHT, FULL, CROSS, and Self Join, join ... using syntax
 - union and union all support
 - intersect and except support
+- - Complete set-operation coverage.
+  - EXCEPT
+  - INTERSECT
+  - INTERSECT ALL
+  - EXCEPT ALL
+  - nesting of set operations
 - CTE (Common Table Expressions) support
 - Windowing
   - Ranking functions
@@ -149,11 +155,6 @@ The following SQL statements are supported:
   - CUBE
 - Derived Tables: UNNEST with or without a table wrapper, LATERAL derived tables, VALUES table constructors
 ## Roadmap: Might be implemented in the future
-
-- Complete set-operation coverage.
-  - INTERSECT ALL
-  - EXCEPT ALL, 
-  - nesting of set operations
   
 - Standard row-limiting syntax (FETCH FIRST / OFFSET … FETCH). The limit handler inspects only the non-standard LIMIT clause, leaving the SQL-standard FETCH clause unimplemented.
 
