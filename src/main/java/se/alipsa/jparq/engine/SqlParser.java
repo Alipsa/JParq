@@ -252,7 +252,8 @@ public final class SqlParser {
    *          {@code true} when the from item is marked as {@code LATERAL}
    */
   private record FromInfo(String tableName, String tableAlias, Map<String, String> columnMapping, Select innerSelect,
-      String subquerySql, CommonTableExpression commonTableExpression, UnnestDefinition unnest, boolean lateral) {
+      String subquerySql, CommonTableExpression commonTableExpression, ValueTableDefinition valueTable,
+      UnnestDefinition unnest, boolean lateral) {
   }
 
   /**
@@ -300,6 +301,9 @@ public final class SqlParser {
    * @param usingColumns
    *          list of column names supplied via a {@code USING} clause that
    *          reference this table (empty when no {@code USING} clause is present)
+   * @param valueTable
+   *          metadata describing an inline {@code VALUES} table constructor
+   *          backing this reference when applicable (may be {@code null})
    * @param unnest
    *          metadata describing an {@code UNNEST} table function associated with
    *          this reference (may be {@code null})
@@ -309,7 +313,30 @@ public final class SqlParser {
    */
   public record TableReference(String tableName, String tableAlias, JoinType joinType, Expression joinCondition,
       Select subquery, String subquerySql, CommonTableExpression commonTableExpression, List<String> usingColumns,
-      UnnestDefinition unnest, boolean lateral) {
+      ValueTableDefinition valueTable, UnnestDefinition unnest, boolean lateral) {
+  }
+
+  /**
+   * Representation of a {@code VALUES} table constructor discovered in the
+   * {@code FROM} clause or as a stand-alone query.
+   *
+   * @param rows
+   *          ordered collection of row expressions supplied to the constructor;
+   *          each inner list represents a single row
+   * @param columnNames
+   *          physical column names exposed by the value table in projection
+   *          order
+   */
+  public record ValueTableDefinition(List<List<Expression>> rows, List<String> columnNames) {
+
+    /**
+     * Create defensive copies of the supplied row and column metadata.
+     */
+    public ValueTableDefinition {
+      rows = rows == null ? List.of()
+          : rows.stream().map(row -> row == null ? List.<Expression>of() : List.copyOf(row)).toList();
+      columnNames = columnNames == null ? List.of() : List.copyOf(columnNames);
+    }
   }
 
   /**
@@ -406,6 +433,9 @@ public final class SqlParser {
     }
     if (stmt instanceof PlainSelect plain) {
       return parsePlainSelect(plain, ctes, cteLookup, allowQualifiedWildcards);
+    }
+    if (stmt instanceof Values values) {
+      return parseValuesSelect(values, ctes, cteLookup, allowQualifiedWildcards);
     }
     throw new IllegalArgumentException("Unsupported SELECT statement: " + stmt);
   }
@@ -617,6 +647,46 @@ public final class SqlParser {
         preOrderCopy, tableRefs, List.copyOf(ctes));
   }
 
+  private static Select parseValuesSelect(Values values, List<CommonTableExpression> ctes,
+      Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
+    if (values == null) {
+      throw new IllegalArgumentException("VALUES statement cannot be null");
+    }
+    FromInfo fromInfo = parseFromItem(values, ctes, cteLookup, allowQualifiedWildcards);
+    if (fromInfo.valueTable() == null) {
+      throw new IllegalArgumentException("VALUES statement did not produce a value table definition: " + values);
+    }
+    List<TableReference> tableRefs = buildTableReferences(fromInfo, List.of());
+    List<String> columnNames = fromInfo.valueTable().columnNames();
+    if (columnNames.isEmpty()) {
+      throw new IllegalArgumentException(
+          "VALUES statement must produce at least one column but produced zero: " + values);
+    }
+    List<String> labels = new ArrayList<>(columnNames);
+    List<Expression> expressions = new ArrayList<>(columnNames.size());
+    List<Integer> expressionOrder = new ArrayList<>(columnNames.size());
+    for (int i = 0; i < columnNames.size(); i++) {
+      String columnName = columnNames.get(i);
+      Column column = new Column();
+      column.setColumnName(columnName);
+      String qualifier = fromInfo.tableAlias();
+      if (qualifier != null && !qualifier.isBlank()) {
+        Table table = new Table();
+        table.setName(qualifier);
+        column.setTable(table);
+      }
+      expressions.add(column);
+      expressionOrder.add(i);
+    }
+    List<String> labelCopy = List.copyOf(labels);
+    List<String> columnCopy = List.copyOf(columnNames);
+    List<Expression> expressionCopy = List.copyOf(expressions);
+    List<Integer> orderCopy = List.copyOf(expressionOrder);
+    return new Select(labelCopy, columnCopy, fromInfo.tableName(), fromInfo.tableAlias(), null, -1, 0, List.of(), false,
+        false, List.of(), expressionCopy, orderCopy, List.of(), List.of(), List.of(), null, -1, 0, List.of(), tableRefs,
+        List.copyOf(ctes));
+  }
+
   /**
    * Parse a {@link SetOperationList} into a {@link SetQuery} representation.
    *
@@ -634,11 +704,10 @@ public final class SqlParser {
     List<SetComponent> components = new ArrayList<>();
     for (int i = 0; i < selects.size(); i++) {
       net.sf.jsqlparser.statement.select.Select body = selects.get(i);
-      PlainSelect plain = unwrapPlainSelect(body);
-      if (plain == null) {
+      Query component = parseSelectStatement(body, ctes, cteLookup, allowQualifiedWildcards);
+      if (!(component instanceof Select parsed)) {
         throw new IllegalArgumentException("Unsupported set operation component: " + body);
       }
-      Select parsed = parsePlainSelect(plain, ctes, cteLookup, allowQualifiedWildcards);
       SetOperator operator = SetOperator.FIRST;
       if (i > 0) {
         SetOperation op = operations.get(i - 1);
@@ -664,30 +733,6 @@ public final class SqlParser {
     int limit = extractLimit(list.getLimit());
     int offset = extractOffset(list.getOffset());
     return new SetQuery(List.copyOf(components), orderBy, limit, offset, List.copyOf(ctes));
-  }
-
-  /**
-   * Resolve the innermost {@link PlainSelect} contained within a SELECT body.
-   *
-   * @param select
-   *          select body potentially wrapped in parentheses
-   * @return the contained {@link PlainSelect}
-   */
-  private static PlainSelect unwrapPlainSelect(net.sf.jsqlparser.statement.select.Select select) {
-    if (select == null) {
-      return null;
-    }
-    if (select instanceof SetOperationList) {
-      throw new IllegalArgumentException("Nested set operations are not supported");
-    }
-    if (select instanceof ParenthesedSelect parenthesed) {
-      net.sf.jsqlparser.statement.select.Select inner = parenthesed.getSelect();
-      return unwrapPlainSelect(inner);
-    }
-    if (select instanceof PlainSelect plain) {
-      return plain;
-    }
-    return null;
   }
 
   /**
@@ -803,7 +848,12 @@ public final class SqlParser {
           }
         }
       }
-      return new FromInfo(tableName, tableAlias, mapping, innerSelect, null, cte, null, lateral);
+      return new FromInfo(tableName, tableAlias, mapping, innerSelect, null, cte, null, null, lateral);
+    }
+    if (fromItem instanceof ParenthesedFromItem parenthesed) {
+      FromItem inner = parenthesed.getFromItem();
+      FromInfo innerInfo = parseFromItem(inner, ctes, cteLookup, allowQualifiedWildcards, lateral);
+      return applyAlias(innerInfo, parenthesed.getAlias());
     }
     if (fromItem instanceof LateralSubSelect lateralSub) {
       lateral = true;
@@ -819,6 +869,9 @@ public final class SqlParser {
     if (fromItem instanceof TableFunction tableFunction) {
       boolean tableFunctionLateral = lateral || "lateral".equalsIgnoreCase(tableFunction.getPrefix());
       return parseTableFunction(tableFunction, tableFunctionLateral);
+    }
+    if (fromItem instanceof Values valuesItem) {
+      return parseValuesFromItem(valuesItem, lateral);
     }
     throw new IllegalArgumentException("Unsupported FROM item: " + fromItem);
   }
@@ -839,7 +892,7 @@ public final class SqlParser {
     }
     Map<String, String> mapping = buildColumnMapping(innerSelect);
     String subquerySql = innerPlain.toString();
-    return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql, null, null, lateral);
+    return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql, null, null, null, lateral);
   }
 
   private static FromInfo parseTableFunction(TableFunction tableFunction, boolean lateral) {
@@ -872,7 +925,128 @@ public final class SqlParser {
     boolean withOrdinality = tableFunction.getWithClause() != null
         && "ORDINALITY".equalsIgnoreCase(tableFunction.getWithClause().trim());
     UnnestDefinition unnest = new UnnestDefinition(expression, withOrdinality, columnAliases);
-    return new FromInfo(null, aliasName, Map.of(), null, null, null, unnest, lateral);
+    return new FromInfo(null, aliasName, Map.of(), null, null, null, null, unnest, lateral);
+  }
+
+  private static FromInfo parseValuesFromItem(Values values, boolean lateral) {
+    ExpressionList<?> expressions = values.getExpressions();
+    if (expressions == null || expressions.isEmpty()) {
+      throw new IllegalArgumentException("VALUES constructor must specify at least one row: " + values);
+    }
+    List<?> exprList = expressions.getExpressions();
+    if (exprList == null || exprList.isEmpty()) {
+      throw new IllegalArgumentException("VALUES constructor must specify at least one row: " + values);
+    }
+    List<List<Expression>> rows = new ArrayList<>();
+    int columnCount = -1;
+    for (Object expression : exprList) {
+      List<Expression> row = new ArrayList<>();
+      if (expression instanceof ExpressionList<?> list) {
+        List<?> inner = list.getExpressions();
+        if (inner != null) {
+          for (Object element : inner) {
+            if (element instanceof Expression expr) {
+              row.add(expr);
+            }
+          }
+        }
+      } else if (expression instanceof Expression expr) {
+        row.add(expr);
+      }
+      if (row.isEmpty()) {
+        throw new IllegalArgumentException("VALUES row cannot be empty: " + expression);
+      }
+      if (columnCount < 0) {
+        columnCount = row.size();
+      } else if (columnCount != row.size()) {
+        throw new IllegalArgumentException("VALUES rows must all contain " + columnCount + " columns: " + values);
+      }
+      rows.add(List.copyOf(row));
+    }
+    if (columnCount < 0) {
+      throw new IllegalArgumentException("Failed to determine column count for VALUES constructor: " + values);
+    }
+    Alias aliasNode = values.getAlias();
+    String aliasName = aliasNode == null ? null : aliasNode.getName();
+    List<String> aliasColumns = extractAliasColumns(aliasNode);
+    if (!aliasColumns.isEmpty() && aliasColumns.size() != columnCount) {
+      throw new IllegalArgumentException("VALUES alias declares " + aliasColumns.size()
+          + " columns but constructor produces " + columnCount + " columns: " + values);
+    }
+    List<String> columnNames;
+    if (!aliasColumns.isEmpty()) {
+      columnNames = aliasColumns;
+    } else {
+      List<String> generated = new ArrayList<>(columnCount);
+      for (int i = 0; i < columnCount; i++) {
+        generated.add("column" + (i + 1));
+      }
+      columnNames = List.copyOf(generated);
+    }
+    Map<String, String> mapping = new LinkedHashMap<>();
+    for (String columnName : columnNames) {
+      mapping.put(columnName, columnName);
+    }
+    String tableName = (aliasName != null && !aliasName.isBlank()) ? aliasName : "values";
+    ValueTableDefinition valueTable = new ValueTableDefinition(rows, columnNames);
+    return new FromInfo(tableName, aliasName, Map.copyOf(mapping), null, null, null, valueTable, null, lateral);
+  }
+
+  private static FromInfo applyAlias(FromInfo info, Alias aliasNode) {
+    if (info == null || aliasNode == null) {
+      return info;
+    }
+    String aliasName = aliasNode.getName();
+    if (aliasName != null) {
+      aliasName = aliasName.trim();
+      if (aliasName.isEmpty()) {
+        aliasName = null;
+      }
+    }
+    Map<String, String> mapping = info.columnMapping() == null ? Map.of() : info.columnMapping();
+    ValueTableDefinition valueTable = info.valueTable();
+    List<String> aliasColumns = extractAliasColumns(aliasNode);
+    if (!aliasColumns.isEmpty()) {
+      if (valueTable != null) {
+        if (valueTable.columnNames().size() != aliasColumns.size()) {
+          throw new IllegalArgumentException("VALUES alias declares " + aliasColumns.size()
+              + " columns but constructor produces " + valueTable.columnNames().size() + " columns");
+        }
+        valueTable = new ValueTableDefinition(valueTable.rows(), aliasColumns);
+        Map<String, String> aliasMapping = new LinkedHashMap<>();
+        for (String columnName : aliasColumns) {
+          aliasMapping.put(columnName, columnName);
+        }
+        mapping = Map.copyOf(aliasMapping);
+      } else if (info.innerSelect() != null && info.innerSelect().columnNames() != null
+          && !info.innerSelect().columnNames().isEmpty()) {
+        List<String> physical = info.innerSelect().columnNames();
+        if (physical.size() != aliasColumns.size()) {
+          throw new IllegalArgumentException("Alias column count does not match derived table projection");
+        }
+        Map<String, String> aliasMapping = new LinkedHashMap<>();
+        for (int i = 0; i < aliasColumns.size(); i++) {
+          String aliasColumn = aliasColumns.get(i);
+          String physicalColumn = physical.get(i);
+          if (physicalColumn == null || physicalColumn.isBlank()) {
+            physicalColumn = aliasColumn;
+          }
+          aliasMapping.put(aliasColumn, physicalColumn);
+        }
+        mapping = Map.copyOf(aliasMapping);
+      } else {
+        Map<String, String> aliasMapping = new LinkedHashMap<>();
+        for (String columnName : aliasColumns) {
+          aliasMapping.put(columnName, columnName);
+        }
+        mapping = Map.copyOf(aliasMapping);
+      }
+    }
+
+    String tableName = aliasName != null ? aliasName : info.tableName();
+    String tableAlias = aliasName != null ? aliasName : info.tableAlias();
+    return new FromInfo(tableName, tableAlias, mapping, info.innerSelect(), info.subquerySql(),
+        info.commonTableExpression(), valueTable, info.unnest(), info.lateral());
   }
 
   private static List<String> extractAliasColumns(Alias alias) {
@@ -1873,15 +2047,15 @@ public final class SqlParser {
   private static List<TableReference> buildTableReferences(FromInfo base, List<JoinInfo> joins) {
     List<TableReference> refs = new ArrayList<>();
     refs.add(new TableReference(base.tableName(), base.tableAlias(), JoinType.BASE, null, base.innerSelect(),
-        base.subquerySql(), base.commonTableExpression(), List.of(), base.unnest(), base.lateral()));
+        base.subquerySql(), base.commonTableExpression(), List.of(), base.valueTable(), base.unnest(), base.lateral()));
     if (joins != null) {
       for (JoinInfo join : joins) {
         FromInfo info = join.table();
         Expression usingCondition = buildUsingCondition(join.usingColumns(), info);
         Expression combinedCondition = combineExpressions(join.condition(), usingCondition);
         refs.add(new TableReference(info.tableName(), info.tableAlias(), join.joinType(), combinedCondition,
-            info.innerSelect(), info.subquerySql(), info.commonTableExpression(), join.usingColumns(), info.unnest(),
-            info.lateral()));
+            info.innerSelect(), info.subquerySql(), info.commonTableExpression(), join.usingColumns(), info.valueTable(),
+            info.unnest(), info.lateral()));
       }
     }
     return List.copyOf(refs);
