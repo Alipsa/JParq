@@ -40,7 +40,7 @@ public class JParqConnection implements Connection {
    * @param props
    *          optional connection properties that refine behaviour
    * @throws SQLException
-   *           if the path is invalid or the connection cannot be initialised
+   *           if the path is invalid or the connection cannot be initialized
    */
   public JParqConnection(String url, Properties props) throws SQLException {
     Objects.requireNonNull(url, "url");

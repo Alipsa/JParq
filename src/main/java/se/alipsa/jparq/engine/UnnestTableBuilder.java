@@ -266,7 +266,7 @@ public final class UnnestTableBuilder {
      * @return the alias assigned to the ordinality column, defaulting to {@code ordinality} when unspecified
      */
     public String ordinalAlias() {
-      return ordinalAlias == null || ordinalAlias.isBlank() ? "ordinality" : ordinalAlias;
+      return ordinalAlias;
     }
   }
 }

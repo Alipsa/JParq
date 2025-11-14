@@ -800,13 +800,22 @@ class JParqPreparedStatement implements PreparedStatement {
     if (index == null || table == null) {
       return;
     }
-    registerQualifierIndex(index, table.tableName(), position);
-    registerQualifierIndex(index, table.alias(), position);
+    registerQualifierIndex(index, table.tableName(), position, false);
+    registerQualifierIndex(index, table.alias(), position, true);
   }
 
-  private static void registerQualifierIndex(Map<String, Integer> index, String qualifier, int position) {
+  private static void registerQualifierIndex(Map<String, Integer> index, String qualifier, int position,
+      boolean failOnConflict) {
     String normalized = JParqUtil.normalizeQualifier(qualifier);
-    if (normalized == null || index.containsKey(normalized)) {
+    if (normalized == null) {
+      return;
+    }
+    Integer existing = index.get(normalized);
+    if (existing != null) {
+      if (existing != position && failOnConflict) {
+        throw new IllegalStateException(
+            "Duplicate qualifier '" + qualifier + "' resolves to '" + normalized + "'");
+      }
       return;
     }
     index.put(normalized, position);
