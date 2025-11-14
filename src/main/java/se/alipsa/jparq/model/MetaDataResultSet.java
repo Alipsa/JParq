@@ -53,23 +53,34 @@ public class MetaDataResultSet extends ResultSetAdapter {
   }
 
   private Object getByLabel(String label) {
+    Object[] row = currentRow();
+    if (row == null) {
+      return recordAccess(null);
+    }
     for (int i = 0; i < headers.length; i++) {
       if (headers[i].equalsIgnoreCase(label)) {
-        return recordAccess(rows.get(idx)[i]);
+        if (i >= row.length) {
+          return recordAccess(null);
+        }
+        return recordAccess(row[i]);
       }
     }
     return recordAccess(null);
   }
 
   private Object getByIndex(int columnIndex) {
-    if (idx < 0 || idx >= rows.size()) {
-      return recordAccess(null);
-    }
-    Object[] row = rows.get(idx);
-    if (columnIndex <= 0 || columnIndex > row.length) {
+    Object[] row = currentRow();
+    if (row == null || columnIndex <= 0 || columnIndex > row.length) {
       return recordAccess(null);
     }
     return recordAccess(row[columnIndex - 1]);
+  }
+
+  private Object[] currentRow() {
+    if (idx < 0 || idx >= rows.size()) {
+      return null;
+    }
+    return rows.get(idx);
   }
 
   private Object recordAccess(Object value) {
