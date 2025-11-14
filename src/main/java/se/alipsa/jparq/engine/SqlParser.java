@@ -12,7 +12,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.*;
-import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
@@ -251,7 +250,7 @@ public final class SqlParser {
    *          textual SQL used to materialize the derived table
    */
   private record FromInfo(String tableName, String tableAlias, Map<String, String> columnMapping, Select innerSelect,
-      String subquerySql, CommonTableExpression commonTableExpression) {
+      String subquerySql, CommonTableExpression commonTableExpression, UnnestDefinition unnest) {
   }
 
   /**
@@ -299,9 +298,32 @@ public final class SqlParser {
    * @param usingColumns
    *          list of column names supplied via a {@code USING} clause that
    *          reference this table (empty when no {@code USING} clause is present)
+   * @param unnest
+   *          metadata describing an {@code UNNEST} table function associated with this reference (may be {@code null})
    */
   public record TableReference(String tableName, String tableAlias, JoinType joinType, Expression joinCondition,
-      Select subquery, String subquerySql, CommonTableExpression commonTableExpression, List<String> usingColumns) {
+      Select subquery, String subquerySql, CommonTableExpression commonTableExpression, List<String> usingColumns,
+      UnnestDefinition unnest) {
+  }
+
+  /**
+   * Representation of an {@code UNNEST} table function discovered in the {@code FROM} clause.
+   *
+   * @param expression
+   *          the array expression supplied to {@code UNNEST}
+   * @param withOrdinality
+   *          {@code true} when {@code WITH ORDINALITY} is requested
+   * @param columnAliases
+   *          optional list of column aliases defined alongside the table alias
+   */
+  public record UnnestDefinition(Expression expression, boolean withOrdinality, List<String> columnAliases) {
+
+    /**
+     * Create a defensive copy of the alias list when present.
+     */
+    public UnnestDefinition {
+      columnAliases = columnAliases == null ? List.of() : List.copyOf(columnAliases);
+    }
   }
 
   /**
@@ -768,7 +790,7 @@ public final class SqlParser {
           }
         }
       }
-      return new FromInfo(tableName, tableAlias, mapping, innerSelect, null, cte);
+      return new FromInfo(tableName, tableAlias, mapping, innerSelect, null, cte, null);
     }
     if (fromItem instanceof net.sf.jsqlparser.statement.select.Select sub) {
       PlainSelect innerPlain = sub.getPlainSelect();
@@ -782,9 +804,65 @@ public final class SqlParser {
       }
       Map<String, String> mapping = buildColumnMapping(innerSelect);
       String subquerySql = innerPlain.toString();
-      return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql, null);
+      return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql, null, null);
+    }
+    if (fromItem instanceof TableFunction tableFunction) {
+      return parseTableFunction(tableFunction);
     }
     throw new IllegalArgumentException("Unsupported FROM item: " + fromItem);
+  }
+
+  private static FromInfo parseTableFunction(TableFunction tableFunction) {
+    Function function = tableFunction.getFunction();
+    if (function == null || function.getName() == null) {
+      throw new IllegalArgumentException("Unsupported table function in FROM clause: " + tableFunction);
+    }
+    String name = function.getName();
+    if (!"unnest".equalsIgnoreCase(name)) {
+      throw new IllegalArgumentException("Only UNNEST table functions are supported: " + tableFunction);
+    }
+    ExpressionList<?> parameters = function.getParameters();
+    List<Expression> expressions = parameters == null ? List.of()
+        : parameters.stream().filter(Expression.class::isInstance).map(Expression.class::cast)
+            .collect(Collectors.toUnmodifiableList());
+    if (expressions.isEmpty()) {
+      throw new IllegalArgumentException("UNNEST requires an array expression: " + tableFunction);
+    }
+    if (expressions.size() != 1) {
+      throw new IllegalArgumentException("UNNEST accepts exactly one argument: " + tableFunction);
+    }
+    Expression expression = expressions.get(0);
+    Alias alias = tableFunction.getAlias();
+    String aliasName = alias == null ? null : alias.getName();
+    if (aliasName == null || aliasName.isBlank()) {
+      throw new IllegalArgumentException("UNNEST must specify a table alias: " + tableFunction);
+    }
+    List<String> columnAliases = extractAliasColumns(alias);
+    boolean withOrdinality = tableFunction.getWithClause() != null
+        && "ORDINALITY".equalsIgnoreCase(tableFunction.getWithClause().trim());
+    UnnestDefinition unnest = new UnnestDefinition(expression, withOrdinality, columnAliases);
+    return new FromInfo(null, aliasName, Map.of(), null, null, null, unnest);
+  }
+
+  private static List<String> extractAliasColumns(Alias alias) {
+    if (alias == null || alias.getAliasColumns() == null || alias.getAliasColumns().isEmpty()) {
+      return List.of();
+    }
+    List<String> columns = new ArrayList<>(alias.getAliasColumns().size());
+    for (Alias.AliasColumn column : alias.getAliasColumns()) {
+      if (column == null) {
+        continue;
+      }
+      String name = column.name;
+      if (name == null) {
+        continue;
+      }
+      String trimmed = name.trim();
+      if (!trimmed.isEmpty()) {
+        columns.add(trimmed);
+      }
+    }
+    return List.copyOf(columns);
   }
 
   private static Map<String, String> buildColumnMapping(Select select) {
@@ -1761,14 +1839,14 @@ public final class SqlParser {
   private static List<TableReference> buildTableReferences(FromInfo base, List<JoinInfo> joins) {
     List<TableReference> refs = new ArrayList<>();
     refs.add(new TableReference(base.tableName(), base.tableAlias(), JoinType.BASE, null, base.innerSelect(),
-        base.subquerySql(), base.commonTableExpression(), List.of()));
+        base.subquerySql(), base.commonTableExpression(), List.of(), base.unnest()));
     if (joins != null) {
       for (JoinInfo join : joins) {
         FromInfo info = join.table();
         Expression usingCondition = buildUsingCondition(join.usingColumns(), info);
         Expression combinedCondition = combineExpressions(join.condition(), usingCondition);
         refs.add(new TableReference(info.tableName(), info.tableAlias(), join.joinType(), combinedCondition,
-            info.innerSelect(), info.subquerySql(), info.commonTableExpression(), join.usingColumns()));
+            info.innerSelect(), info.subquerySql(), info.commonTableExpression(), join.usingColumns(), info.unnest()));
       }
     }
     return List.copyOf(refs);

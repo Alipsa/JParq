@@ -43,6 +43,22 @@ public final class JoinRecordReader implements RecordReader {
   private final UsingMetadata usingMetadata;
 
   /**
+   * Produces rows for correlated table functions based on the current join assignments.
+   */
+  @FunctionalInterface
+  public interface CorrelatedRowsSupplier {
+
+    /**
+     * Produce the rows contributed by a correlated table function for the supplied assignments.
+     *
+     * @param assignments
+     *          the current join assignments representing the left-hand side
+     * @return rows emitted by the correlated table function (never {@code null})
+     */
+    List<GenericRecord> rows(List<GenericRecord> assignments);
+  }
+
+  /**
    * Representation of a table participating in the join.
    *
    * @param tableName
@@ -58,11 +74,15 @@ public final class JoinRecordReader implements RecordReader {
    * @param joinCondition
    *          condition associated with the join (may be {@code null})
    * @param usingColumns
-   *          list of column names supplied via a {@code USING} clause for this
-   *          table (empty when {@code USING} is not used)
+   *          list of column names supplied via a {@code USING} clause for this table (empty when
+   *          {@code USING} is not used)
+   * @param correlatedRowsSupplier
+   *          supplier invoked to produce rows when the table originates from a correlated table function (may be
+   *          {@code null})
    */
   public record JoinTable(String tableName, String alias, Schema schema, List<GenericRecord> rows,
-      SqlParser.JoinType joinType, Expression joinCondition, List<String> usingColumns) {
+      SqlParser.JoinType joinType, Expression joinCondition, List<String> usingColumns,
+      CorrelatedRowsSupplier correlatedRowsSupplier) {
 
     /**
      * Validates mandatory state for the join table to guard against null elements.
@@ -87,6 +107,33 @@ public final class JoinRecordReader implements RecordReader {
     @Override
     public List<GenericRecord> rows() {
       return rows;
+    }
+
+    /**
+     * Determine whether this join table produces rows through a correlated evaluation strategy.
+     *
+     * @return {@code true} if the table depends on prior join assignments, otherwise {@code false}
+     */
+    public boolean isCorrelated() {
+      return correlatedRowsSupplier != null;
+    }
+
+    /**
+     * Resolve the rows that should participate in the join for the supplied left-hand assignments.
+     *
+     * @param assignments
+     *          the current left-hand assignments; may be empty when evaluating the base table
+     * @return rows emitted by the table for the provided assignments
+     */
+    public List<GenericRecord> rowsFor(List<GenericRecord> assignments) {
+      if (correlatedRowsSupplier == null) {
+        return rows;
+      }
+      List<GenericRecord> evaluated = correlatedRowsSupplier.rows(assignments);
+      if (evaluated == null || evaluated.isEmpty()) {
+        return List.of();
+      }
+      return List.copyOf(evaluated);
     }
   }
 
@@ -642,10 +689,11 @@ public final class JoinRecordReader implements RecordReader {
     }
     JoinTable base = joinTables.get(0);
     List<List<GenericRecord>> combinations = new ArrayList<>();
-    if (base.rows().isEmpty()) {
+    List<GenericRecord> baseRows = base.rowsFor(List.of());
+    if (baseRows.isEmpty()) {
       return combinations;
     }
-    for (GenericRecord row : base.rows()) {
+    for (GenericRecord row : baseRows) {
       List<GenericRecord> assignment = emptyAssignment();
       assignment.set(0, row);
       combinations.add(assignment);
@@ -669,15 +717,16 @@ public final class JoinRecordReader implements RecordReader {
     boolean cross = table.joinType() == SqlParser.JoinType.CROSS;
     for (List<GenericRecord> combo : leftCombos) {
       boolean matched = false;
+      List<GenericRecord> candidates = table.rowsFor(combo);
       if (cross) {
-        for (GenericRecord row : table.rows()) {
+        for (GenericRecord row : candidates) {
           List<GenericRecord> assignment = new ArrayList<>(combo);
           assignment.set(index, row);
           results.add(assignment);
         }
         continue;
       }
-      for (GenericRecord row : table.rows()) {
+      for (GenericRecord row : candidates) {
         List<GenericRecord> assignment = new ArrayList<>(combo);
         assignment.set(index, row);
         if (usingMatches(combo, row, index) && conditionMatches(table.joinCondition(), assignment)) {

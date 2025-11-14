@@ -4,6 +4,7 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.Map;
 import jparq.WhereTest;
@@ -148,5 +149,28 @@ public class JoinTest {
         Assertions.fail(e);
       }
     });
+  }
+
+  @Test
+  void testDuplicateQualifierAliasIsRejected() {
+    String sql = """
+        select *
+        from employees as e
+        join departments as e on true
+        """;
+    RuntimeException ex = Assertions.assertThrows(RuntimeException.class,
+        () -> jparqSql.query(sql, rs -> {
+          // No rows expected; exception should be thrown during planning.
+        }));
+    Throwable cause = ex.getCause();
+    Assertions.assertNotNull(cause, "A cause should be present for duplicate qualifier failure");
+    Assertions.assertTrue(cause instanceof SQLException,
+        "Expected a SQLException wrapper for duplicate qualifier detection but was " + cause);
+    Throwable root = cause.getCause();
+    Assertions.assertNotNull(root, "Duplicate qualifier error should retain the underlying cause");
+    Assertions.assertTrue(root instanceof IllegalStateException,
+        "Expected an IllegalStateException for duplicate qualifier detection but was " + root);
+    Assertions.assertTrue(root.getMessage().contains("Duplicate qualifier"),
+        "Duplicate qualifier message should be reported");
   }
 }
