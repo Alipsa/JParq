@@ -222,8 +222,9 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
    *          the Hadoop path to the Parquet file
    * @param conf
    *          the Hadoop configuration to use when accessing the file
-   * @return an immutable list of Java class names describing column types, or an
-   *         empty list when no hints are available
+   * @return an immutable list of Java class names describing column types (empty
+   *         strings indicate missing hints), or an empty list when no hints are
+   *         available
    * @throws SQLException
    *           if the Parquet metadata cannot be read
    */
@@ -242,17 +243,35 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       if (columnTypes == null || columnTypes.isBlank()) {
         return List.of();
       }
-      List<String> hints = new ArrayList<>();
-      for (String type : columnTypes.split(",")) {
-        String trimmed = type.trim();
-        if (!trimmed.isEmpty()) {
-          hints.add(trimmed);
-        }
-      }
+      List<String> hints = parseColumnTypeHints(columnTypes);
       return hints.isEmpty() ? List.of() : List.copyOf(hints);
     } catch (IOException e) {
       throw new SQLException("Failed to read column type hints", e);
     }
+  }
+
+  /**
+   * Parse a comma separated list of column type hints.
+   *
+   * <p>
+   * Empty entries are preserved to maintain positional alignment with the
+   * corresponding table columns.
+   *
+   * @param columnTypes
+   *          the comma separated list, may be {@code null}
+   * @return an ordered list of hints, potentially containing empty strings when
+   *         gaps are present
+   */
+  static List<String> parseColumnTypeHints(String columnTypes) {
+    if (columnTypes == null || columnTypes.isBlank()) {
+      return List.of();
+    }
+    String[] parts = columnTypes.split(",", -1);
+    List<String> hints = new ArrayList<>(parts.length);
+    for (String part : parts) {
+      hints.add(part.trim());
+    }
+    return hints.isEmpty() ? List.of() : List.copyOf(hints);
   }
 
   /**
