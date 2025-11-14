@@ -15,6 +15,7 @@ import net.sf.jsqlparser.JSQLParserException;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.AnyType;
 import net.sf.jsqlparser.expression.BinaryExpression;
+import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.NotExpression;
 import net.sf.jsqlparser.expression.Parenthesis;
@@ -167,6 +168,10 @@ public final class ExpressionEvaluator {
       } catch (JSQLParserException ignore) {
         // fall back to standard handlers below
       }
+    }
+
+    if (expr instanceof BooleanValue booleanValue) {
+      return booleanValue.getValue();
     }
 
     // Boolean connectives

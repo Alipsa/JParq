@@ -248,9 +248,11 @@ public final class SqlParser {
    *          derived table
    * @param subquerySql
    *          textual SQL used to materialize the derived table
+   * @param lateral
+   *          {@code true} when the from item is marked as {@code LATERAL}
    */
   private record FromInfo(String tableName, String tableAlias, Map<String, String> columnMapping, Select innerSelect,
-      String subquerySql, CommonTableExpression commonTableExpression, UnnestDefinition unnest) {
+      String subquerySql, CommonTableExpression commonTableExpression, UnnestDefinition unnest, boolean lateral) {
   }
 
   /**
@@ -301,10 +303,13 @@ public final class SqlParser {
    * @param unnest
    *          metadata describing an {@code UNNEST} table function associated with
    *          this reference (may be {@code null})
+   * @param lateral
+   *          {@code true} when the table reference originates from a
+   *          {@code LATERAL} clause
    */
   public record TableReference(String tableName, String tableAlias, JoinType joinType, Expression joinCondition,
       Select subquery, String subquerySql, CommonTableExpression commonTableExpression, List<String> usingColumns,
-      UnnestDefinition unnest) {
+      UnnestDefinition unnest, boolean lateral) {
   }
 
   /**
@@ -769,6 +774,12 @@ public final class SqlParser {
    */
   private static FromInfo parseFromItem(FromItem fromItem, List<CommonTableExpression> ctes,
       Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
+    return parseFromItem(fromItem, ctes, cteLookup, allowQualifiedWildcards, false);
+  }
+
+  private static FromInfo parseFromItem(FromItem fromItem, List<CommonTableExpression> ctes,
+      Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateralHint) {
+    boolean lateral = lateralHint;
     if (fromItem instanceof Table t) {
       String tableName = t.getName();
       String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
@@ -792,29 +803,46 @@ public final class SqlParser {
           }
         }
       }
-      return new FromInfo(tableName, tableAlias, mapping, innerSelect, null, cte, null);
+      return new FromInfo(tableName, tableAlias, mapping, innerSelect, null, cte, null, lateral);
     }
-    if (fromItem instanceof net.sf.jsqlparser.statement.select.Select sub) {
-      PlainSelect innerPlain = sub.getPlainSelect();
-      if (innerPlain == null) {
-        throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
-      }
-      Select innerSelect = parsePlainSelect(innerPlain, ctes, cteLookup, allowQualifiedWildcards);
-      String alias = sub.getAlias() != null ? sub.getAlias().getName() : innerSelect.tableAlias();
+      if (fromItem instanceof LateralSubSelect lateralSub) {
+        lateral = true;
+        PlainSelect innerPlain = lateralSub.getPlainSelect();
+        if (innerPlain == null) {
+          throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
+        }
+        Select innerSelect = parsePlainSelect(innerPlain, ctes, cteLookup, allowQualifiedWildcards);
+        Alias aliasNode = lateralSub.getAlias();
+      String alias = aliasNode != null ? aliasNode.getName() : innerSelect.tableAlias();
       if (alias == null) {
         alias = innerSelect.table();
       }
       Map<String, String> mapping = buildColumnMapping(innerSelect);
       String subquerySql = innerPlain.toString();
-      return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql, null, null);
+      return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql, null, null, lateral);
+    }
+      if (fromItem instanceof ParenthesedSelect sub) {
+        PlainSelect innerPlain = sub.getPlainSelect();
+        if (innerPlain == null) {
+          throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
+        }
+        Select innerSelect = parsePlainSelect(innerPlain, ctes, cteLookup, allowQualifiedWildcards);
+        String alias = sub.getAlias() != null ? sub.getAlias().getName() : innerSelect.tableAlias();
+      if (alias == null) {
+        alias = innerSelect.table();
+      }
+      Map<String, String> mapping = buildColumnMapping(innerSelect);
+      String subquerySql = innerPlain.toString();
+      return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql, null, null, lateral);
     }
     if (fromItem instanceof TableFunction tableFunction) {
-      return parseTableFunction(tableFunction);
+        boolean tableFunctionLateral = lateral || "lateral".equalsIgnoreCase(tableFunction.getPrefix());
+        return parseTableFunction(tableFunction, tableFunctionLateral);
     }
     throw new IllegalArgumentException("Unsupported FROM item: " + fromItem);
   }
 
-  private static FromInfo parseTableFunction(TableFunction tableFunction) {
+  private static FromInfo parseTableFunction(TableFunction tableFunction, boolean lateral) {
     Function function = tableFunction.getFunction();
     if (function == null || function.getName() == null) {
       throw new IllegalArgumentException("Unsupported table function in FROM clause: " + tableFunction);
@@ -844,7 +872,7 @@ public final class SqlParser {
     boolean withOrdinality = tableFunction.getWithClause() != null
         && "ORDINALITY".equalsIgnoreCase(tableFunction.getWithClause().trim());
     UnnestDefinition unnest = new UnnestDefinition(expression, withOrdinality, columnAliases);
-    return new FromInfo(null, aliasName, Map.of(), null, null, null, unnest);
+    return new FromInfo(null, aliasName, Map.of(), null, null, null, unnest, lateral);
   }
 
   private static List<String> extractAliasColumns(Alias alias) {
@@ -1521,8 +1549,6 @@ public final class SqlParser {
             boolean known = allowed.stream().anyMatch(name -> name.equalsIgnoreCase(q));
             if (known) {
               column.setTable(null);
-            } else {
-              throw new IllegalArgumentException("Unknown table qualifier '" + q + "'");
             }
           }
         }
@@ -1823,7 +1849,12 @@ public final class SqlParser {
           && joinType != JoinType.FULL_OUTER) {
         throw new IllegalArgumentException("Unsupported outer join type");
       }
-      FromInfo info = parseFromItem(join.getRightItem(), ctes, cteLookup, allowQualifiedWildcards);
+        FromItem rightItem = join.getRightItem();
+        boolean joinLateral = rightItem instanceof LateralSubSelect;
+        if (!joinLateral && rightItem instanceof TableFunction tableFunction) {
+          joinLateral = "lateral".equalsIgnoreCase(tableFunction.getPrefix());
+        }
+        FromInfo info = parseFromItem(rightItem, ctes, cteLookup, allowQualifiedWildcards, joinLateral);
       Expression condition = null;
       if (join.getOnExpressions() != null) {
         for (Expression on : join.getOnExpressions()) {
@@ -1842,14 +1873,15 @@ public final class SqlParser {
   private static List<TableReference> buildTableReferences(FromInfo base, List<JoinInfo> joins) {
     List<TableReference> refs = new ArrayList<>();
     refs.add(new TableReference(base.tableName(), base.tableAlias(), JoinType.BASE, null, base.innerSelect(),
-        base.subquerySql(), base.commonTableExpression(), List.of(), base.unnest()));
+        base.subquerySql(), base.commonTableExpression(), List.of(), base.unnest(), base.lateral()));
     if (joins != null) {
       for (JoinInfo join : joins) {
         FromInfo info = join.table();
         Expression usingCondition = buildUsingCondition(join.usingColumns(), info);
         Expression combinedCondition = combineExpressions(join.condition(), usingCondition);
         refs.add(new TableReference(info.tableName(), info.tableAlias(), join.joinType(), combinedCondition,
-            info.innerSelect(), info.subquerySql(), info.commonTableExpression(), join.usingColumns(), info.unnest()));
+            info.innerSelect(), info.subquerySql(), info.commonTableExpression(), join.usingColumns(), info.unnest(),
+            info.lateral()));
       }
     }
     return List.copyOf(refs);
