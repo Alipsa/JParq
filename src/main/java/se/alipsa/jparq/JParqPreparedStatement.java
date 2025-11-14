@@ -328,7 +328,7 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Execute a SQL set operation (UNION, INTERSECT, INTERSECT ALL, EXCEPT, EXCEPT ALL) by
+   * Execute a SQL set operation (UNION, UNION ALL, INTERSECT, INTERSECT ALL, EXCEPT, EXCEPT ALL) by
    * delegating to the individual component SELECT statements and materializing
    * the combined result.
    *
