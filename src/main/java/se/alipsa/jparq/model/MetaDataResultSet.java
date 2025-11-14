@@ -6,9 +6,10 @@ import java.util.List;
 
 /** Very small in-memory ResultSet implementation for metadata tables. */
 public class MetaDataResultSet extends ResultSetAdapter {
-  int idx = -1;
-  String[] headers;
-  List<Object[]> rows;
+  private int idx = -1;
+  private final String[] headers;
+  private final List<Object[]> rows;
+  private boolean lastWasNull;
 
   /**
    * Constructor for MetaDataResultSet.
@@ -31,12 +32,14 @@ public class MetaDataResultSet extends ResultSetAdapter {
 
   @Override
   public String getString(String columnLabel) {
-    return String.valueOf(getByLabel(columnLabel));
+    Object value = getByLabel(columnLabel);
+    return value == null ? null : value.toString();
   }
 
   @Override
   public String getString(int columnIndex) {
-    return String.valueOf(rows.get(idx)[columnIndex - 1]);
+    Object value = getByIndex(columnIndex);
+    return value == null ? null : value.toString();
   }
 
   @Override
@@ -44,13 +47,85 @@ public class MetaDataResultSet extends ResultSetAdapter {
     return getByLabel(columnLabel);
   }
 
+  @Override
+  public Object getObject(int columnIndex) {
+    return getByIndex(columnIndex);
+  }
+
   private Object getByLabel(String label) {
     for (int i = 0; i < headers.length; i++) {
       if (headers[i].equalsIgnoreCase(label)) {
-        return rows.get(idx)[i];
+        return recordAccess(rows.get(idx)[i]);
       }
     }
-    return null;
+    return recordAccess(null);
+  }
+
+  private Object getByIndex(int columnIndex) {
+    if (idx < 0 || idx >= rows.size()) {
+      return recordAccess(null);
+    }
+    Object[] row = rows.get(idx);
+    if (columnIndex <= 0 || columnIndex > row.length) {
+      return recordAccess(null);
+    }
+    return recordAccess(row[columnIndex - 1]);
+  }
+
+  private Object recordAccess(Object value) {
+    lastWasNull = value == null;
+    return value;
+  }
+
+  @Override
+  public int getInt(String columnLabel) {
+    return toInt(getByLabel(columnLabel));
+  }
+
+  @Override
+  public int getInt(int columnIndex) {
+    return toInt(getByIndex(columnIndex));
+  }
+
+  private int toInt(Object value) {
+    if (value == null) {
+      return 0;
+    }
+    if (value instanceof Number number) {
+      return number.intValue();
+    }
+    if (value instanceof String str && !str.isEmpty()) {
+      return Integer.parseInt(str);
+    }
+    throw new NumberFormatException("Cannot convert value to int: " + value);
+  }
+
+  @Override
+  public long getLong(String columnLabel) {
+    return toLong(getByLabel(columnLabel));
+  }
+
+  @Override
+  public long getLong(int columnIndex) {
+    return toLong(getByIndex(columnIndex));
+  }
+
+  private long toLong(Object value) {
+    if (value == null) {
+      return 0L;
+    }
+    if (value instanceof Number number) {
+      return number.longValue();
+    }
+    if (value instanceof String str && !str.isEmpty()) {
+      return Long.parseLong(str);
+    }
+    throw new NumberFormatException("Cannot convert value to long: " + value);
+  }
+
+  @Override
+  public boolean wasNull() {
+    return lastWasNull;
   }
 
   @Override

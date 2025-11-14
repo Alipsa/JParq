@@ -1,18 +1,29 @@
 package se.alipsa.jparq;
 
 import java.io.File;
+import java.io.IOException;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
+import java.sql.JDBCType;
 import java.sql.ResultSet;
 import java.sql.RowIdLifetime;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.avro.AvroParquetReader;
+import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.ParquetReader;
+import org.apache.parquet.hadoop.metadata.ParquetMetadata;
 import org.apache.parquet.hadoop.util.HadoopInputFile;
+import org.apache.avro.LogicalTypes;
+import org.apache.avro.Schema;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.JParqUtil;
 
 /**
@@ -87,6 +98,19 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     File dir = conn.getBaseDir();
     File[] files = dir.listFiles((d, n) -> n.toLowerCase(Locale.ROOT).endsWith(".parquet"));
     List<Object[]> rows = new ArrayList<>();
+    Set<String> typeFilter = null;
+    if (types != null && types.length > 0) {
+      typeFilter = new LinkedHashSet<>();
+      for (String type : types) {
+        if (type != null) {
+          typeFilter.add(type.toUpperCase(Locale.ROOT));
+        }
+      }
+      if (typeFilter.isEmpty()) {
+        typeFilter = null;
+      }
+    }
+    String tableRegex = tableNamePattern == null ? null : JParqUtil.sqlLikeToRegex(tableNamePattern);
     if (files != null) {
       for (File f : files) {
         String base = f.getName();
@@ -94,15 +118,21 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         if (dot > 0) {
           base = base.substring(0, dot);
         }
-        if (tableNamePattern == null || base.matches(JParqUtil.sqlLikeToRegex(tableNamePattern))) {
-          rows.add(new Object[]{
-              catalog, schemaPattern, base, "TABLE"
-          });
+        if (tableRegex != null && !base.matches(tableRegex)) {
+          continue;
         }
+        String tableType = "TABLE";
+        if (typeFilter != null && !typeFilter.contains(tableType.toUpperCase(Locale.ROOT))) {
+          continue;
+        }
+        rows.add(new Object[]{
+            catalog, schemaPattern, base, tableType, null, null, null, null, null, null
+        });
       }
     }
     return JParqUtil.listResultSet(new String[]{
-        "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE"
+        "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE", "REMARKS", "TYPE_CAT", "TYPE_SCHEM", "TYPE_NAME",
+        "SELF_REFERENCING_COL_NAME", "REF_GENERATION"
     }, rows);
   }
 
@@ -112,7 +142,6 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       throws SQLException {
 
     List<Object[]> rows = new ArrayList<>();
-    // Reuse one Configuration
     org.apache.hadoop.conf.Configuration conf = new org.apache.hadoop.conf.Configuration(false);
 
     try (ResultSet tables = getTables(catalog, schemaPattern, tableNamePattern, new String[]{
@@ -121,9 +150,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       org.apache.hadoop.fs.Path hPath;
       while (tables.next()) {
         String table = tables.getString("TABLE_NAME");
+        String tableType = tables.getString("TABLE_TYPE");
         File file = conn.tableFile(table);
 
         hPath = new org.apache.hadoop.fs.Path(file.toURI());
+        List<String> columnTypeHints = readColumnTypeHints(hPath, conf);
         try (ParquetReader<GenericRecord> reader = AvroParquetReader
             .<GenericRecord>builder(HadoopInputFile.fromPath(hPath, conf)).build()) {
 
@@ -133,37 +164,160 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
           }
 
           int pos = 1;
-          for (org.apache.avro.Schema.Field f : rec.getSchema().getFields()) {
-            String col = f.name();
-            if (columnNamePattern != null && !col.matches(JParqUtil.sqlLikeToRegex(columnNamePattern))) {
+          int columnIndex = 0;
+          for (Schema.Field field : rec.getSchema().getFields()) {
+            int fieldIndex = columnIndex++;
+            String columnName = field.name();
+            if (columnNamePattern != null && !columnName.matches(JParqUtil.sqlLikeToRegex(columnNamePattern))) {
               continue;
             }
+            Schema baseSchema = JdbcTypeMapper.nonNullSchema(field.schema());
+            int jdbcType = JdbcTypeMapper.mapSchemaToJdbcType(field.schema());
+            if (!columnTypeHints.isEmpty() && fieldIndex < columnTypeHints.size()) {
+              int hintedType = JdbcTypeMapper.mapJavaClassNameToJdbcType(columnTypeHints.get(fieldIndex));
+              if (hintedType != Types.OTHER) {
+                jdbcType = hintedType;
+              }
+            }
+            String typeName = JDBCType.valueOf(jdbcType).getName();
+            String isNullable = JdbcTypeMapper.isNullable(field.schema()) ? "YES" : "NO";
+            Integer charMaxLength = resolveCharacterMaximumLength(jdbcType, baseSchema);
+            Integer numericPrecision = resolveNumericPrecision(jdbcType, baseSchema);
+            Integer numericScale = resolveNumericScale(jdbcType, baseSchema);
             rows.add(new Object[]{
-                catalog, // TABLE_CAT
-                schemaPattern, // TABLE_SCHEM
-                table, // TABLE_NAME
-                col, // COLUMN_NAME
-                java.sql.Types.VARCHAR, // DATA_TYPE (simplified for now)
-                "VARCHAR", // TYPE_NAME
-                pos++, // ORDINAL_POSITION
-                0, // COLUMN_SIZE (unknown)
-                null, // BUFFER_LENGTH (unused)
-                null // DECIMAL_DIGITS (unknown)
+                table,
+                tableType,
+                columnName,
+                pos++,
+                isNullable,
+                jdbcType,
+                typeName,
+                charMaxLength,
+                numericPrecision,
+                numericScale,
+                null
             });
           }
         } catch (Exception e) {
           throw new SQLException(e);
         }
       }
-    } catch (SQLException e) {
-      // Preserve original behavior surface (wrap/propagate)
-      throw e;
     }
 
     return JParqUtil.listResultSet(new String[]{
-        "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME", "DATA_TYPE", "TYPE_NAME", "ORDINAL_POSITION",
-        "COLUMN_SIZE", "BUFFER_LENGTH", "DECIMAL_DIGITS"
+        "TABLE_NAME", "TABLE_TYPE", "COLUMN_NAME", "ORDINAL_POSITION", "IS_NULLABLE", "DATA_TYPE", "TYPE_NAME",
+        "CHARACTER_MAXIMUM_LENGTH", "NUMERIC_PRECISION", "NUMERIC_SCALE", "COLLATION_NAME"
     }, rows);
+  }
+
+  /**
+   * Read column type hints from the Parquet file footer metadata.
+   *
+   * @param path
+   *          the Hadoop path to the Parquet file
+   * @param conf
+   *          the Hadoop configuration to use when accessing the file
+   * @return an immutable list of Java class names describing column types, or an
+   *         empty list when no hints are available
+   * @throws SQLException
+   *           if the Parquet metadata cannot be read
+   */
+  private List<String> readColumnTypeHints(org.apache.hadoop.fs.Path path,
+      org.apache.hadoop.conf.Configuration conf) throws SQLException {
+    try {
+      ParquetMetadata metadata = ParquetFileReader.readFooter(conf, path);
+      Map<String, String> kv = metadata.getFileMetaData().getKeyValueMetaData();
+      if (kv == null || kv.isEmpty()) {
+        return List.of();
+      }
+      String columnTypes = kv.get("matrix.columnTypes");
+      if (columnTypes == null) {
+        columnTypes = kv.get("columnTypes");
+      }
+      if (columnTypes == null || columnTypes.isBlank()) {
+        return List.of();
+      }
+      List<String> hints = new ArrayList<>();
+      for (String type : columnTypes.split(",")) {
+        String trimmed = type.trim();
+        if (!trimmed.isEmpty()) {
+          hints.add(trimmed);
+        }
+      }
+      return hints.isEmpty() ? List.of() : List.copyOf(hints);
+    } catch (IOException e) {
+      throw new SQLException("Failed to read column type hints", e);
+    }
+  }
+
+  /**
+   * Determine the character maximum length for string-based columns.
+   *
+   * @param jdbcType
+   *          the resolved JDBC type
+   * @param baseSchema
+   *          the non-null Avro schema representing the column (may be
+   *          {@code null})
+   * @return the maximum length when available, otherwise {@code null}
+   */
+  private Integer resolveCharacterMaximumLength(int jdbcType, Schema baseSchema) {
+    return switch (jdbcType) {
+      case Types.CHAR, Types.VARCHAR, Types.LONGVARCHAR, Types.NCHAR, Types.NVARCHAR, Types.LONGNVARCHAR -> {
+        if (baseSchema != null) {
+          Object maxLength = baseSchema.getObjectProp("maxLength");
+          if (maxLength instanceof Number number) {
+            yield number.intValue();
+          }
+        }
+        yield null;
+      }
+      default -> null;
+    };
+  }
+
+  /**
+   * Determine the numeric precision for a column.
+   *
+   * @param jdbcType
+   *          the resolved JDBC type
+   * @param baseSchema
+   *          the non-null Avro schema representing the column (may be
+   *          {@code null})
+   * @return the column precision, or {@code null} when unavailable
+   */
+  private Integer resolveNumericPrecision(int jdbcType, Schema baseSchema) {
+    if (baseSchema != null && baseSchema.getLogicalType() instanceof LogicalTypes.Decimal decimal) {
+      return decimal.getPrecision();
+    }
+    return switch (jdbcType) {
+      case Types.TINYINT -> 3;
+      case Types.SMALLINT -> 5;
+      case Types.INTEGER -> 10;
+      case Types.BIGINT -> 19;
+      case Types.REAL -> 7;
+      case Types.FLOAT, Types.DOUBLE -> 15;
+      default -> null;
+    };
+  }
+
+  /**
+   * Determine the numeric scale for a column.
+   *
+   * @param jdbcType
+   *          the resolved JDBC type
+   * @param baseSchema
+   *          the non-null Avro schema representing the column (may be
+   *          {@code null})
+   * @return the column scale, or {@code null} when unavailable
+   */
+  private Integer resolveNumericScale(int jdbcType, Schema baseSchema) {
+    if (baseSchema != null && baseSchema.getLogicalType() instanceof LogicalTypes.Decimal decimal) {
+      return decimal.getScale();
+    }
+    return switch (jdbcType) {
+      case Types.TINYINT, Types.SMALLINT, Types.INTEGER, Types.BIGINT -> 0;
+      default -> null;
+    };
   }
 
   // Boilerplate defaults for unimplemented metadata
