@@ -21,6 +21,7 @@ import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.ParquetReader;
 import org.apache.parquet.hadoop.metadata.ParquetMetadata;
 import org.apache.parquet.hadoop.util.HadoopInputFile;
+import org.apache.parquet.ParquetReadOptions;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
@@ -230,8 +231,9 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
    */
   private List<String> readColumnTypeHints(org.apache.hadoop.fs.Path path,
       org.apache.hadoop.conf.Configuration conf) throws SQLException {
-    try {
-      ParquetMetadata metadata = ParquetFileReader.readFooter(conf, path);
+    try (ParquetFileReader reader = ParquetFileReader.open(
+        HadoopInputFile.fromPath(path, conf), ParquetReadOptions.builder().build())) {
+      ParquetMetadata metadata = reader.getFooter();
       Map<String, String> kv = metadata.getFileMetaData().getKeyValueMetaData();
       if (kv == null || kv.isEmpty()) {
         return List.of();
