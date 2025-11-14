@@ -1,6 +1,9 @@
 # Version history
 
-### 0.11.0 in progress
+### 0.12.0 in progress
+- Additional Derived Tables support: LATERAL derived tables, VALUES table constructors
+
+### 0.11.0 2025-11-14
 - Add ARRAY constructor function support
 - Fix column names and types in ResultSetMetaData
 - Adhere JParqDatabaseMetaData specifications for getColumns and getTables methods to the JDBC standard

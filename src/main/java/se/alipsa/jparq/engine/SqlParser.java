@@ -324,8 +324,7 @@ public final class SqlParser {
    *          ordered collection of row expressions supplied to the constructor;
    *          each inner list represents a single row
    * @param columnNames
-   *          physical column names exposed by the value table in projection
-   *          order
+   *          physical column names exposed by the value table in projection order
    */
   public record ValueTableDefinition(List<List<Expression>> rows, List<String> columnNames) {
 
@@ -333,7 +332,8 @@ public final class SqlParser {
      * Create defensive copies of the supplied row and column metadata.
      */
     public ValueTableDefinition {
-      rows = rows == null ? List.of()
+      rows = rows == null
+          ? List.of()
           : rows.stream().map(row -> row == null ? List.<Expression>of() : List.copyOf(row)).toList();
       columnNames = columnNames == null ? List.of() : List.copyOf(columnNames);
     }
@@ -933,21 +933,14 @@ public final class SqlParser {
     if (expressions == null || expressions.isEmpty()) {
       throw new IllegalArgumentException("VALUES constructor must specify at least one row: " + values);
     }
-    List<?> exprList = expressions.getExpressions();
-    if (exprList == null || exprList.isEmpty()) {
-      throw new IllegalArgumentException("VALUES constructor must specify at least one row: " + values);
-    }
     List<List<Expression>> rows = new ArrayList<>();
     int columnCount = -1;
-    for (Object expression : exprList) {
+    for (Object expression : expressions) {
       List<Expression> row = new ArrayList<>();
       if (expression instanceof ExpressionList<?> list) {
-        List<?> inner = list.getExpressions();
-        if (inner != null) {
-          for (Object element : inner) {
-            if (element instanceof Expression expr) {
-              row.add(expr);
-            }
+        for (Object element : list) {
+          if (element instanceof Expression expr) {
+            row.add(expr);
           }
         }
       } else if (expression instanceof Expression expr) {
@@ -963,11 +956,7 @@ public final class SqlParser {
       }
       rows.add(List.copyOf(row));
     }
-    if (columnCount < 0) {
-      throw new IllegalArgumentException("Failed to determine column count for VALUES constructor: " + values);
-    }
     Alias aliasNode = values.getAlias();
-    String aliasName = aliasNode == null ? null : aliasNode.getName();
     List<String> aliasColumns = extractAliasColumns(aliasNode);
     if (!aliasColumns.isEmpty() && aliasColumns.size() != columnCount) {
       throw new IllegalArgumentException("VALUES alias declares " + aliasColumns.size()
@@ -987,6 +976,7 @@ public final class SqlParser {
     for (String columnName : columnNames) {
       mapping.put(columnName, columnName);
     }
+    String aliasName = aliasNode == null ? null : aliasNode.getName();
     String tableName = (aliasName != null && !aliasName.isBlank()) ? aliasName : "values";
     ValueTableDefinition valueTable = new ValueTableDefinition(rows, columnNames);
     return new FromInfo(tableName, aliasName, Map.copyOf(mapping), null, null, null, valueTable, null, lateral);
@@ -1842,12 +1832,11 @@ public final class SqlParser {
               throw new IllegalArgumentException("ROLLUP requires at least one grouping expression");
             }
             if (!allowedQualifiers.isEmpty()) {
-              for (Object paramObj : parameters) {
-                stripQualifier((Expression) paramObj, allowedQualifiers);
+              for (Expression paramObj : parameters) {
+                stripQualifier(paramObj, allowedQualifiers);
               }
             }
-            for (Object paramObj : parameters) {
-              Expression param = (Expression) paramObj;
+            for (Expression param : parameters) {
               int index = registerGroupingExpression(param, expressions, indexByExpression);
               rollupOrder.add(index);
             }
@@ -1864,12 +1853,11 @@ public final class SqlParser {
               throw new IllegalArgumentException("CUBE requires at least one grouping expression");
             }
             if (!allowedQualifiers.isEmpty()) {
-              for (Object paramObj : parameters) {
-                stripQualifier((Expression) paramObj, allowedQualifiers);
+              for (Expression paramObj : parameters) {
+                stripQualifier(paramObj, allowedQualifiers);
               }
             }
-            for (Object paramObj : parameters) {
-              Expression param = (Expression) paramObj;
+            for (Expression param : parameters) {
               int index = registerGroupingExpression(param, expressions, indexByExpression);
               cubeOrder.add(index);
             }
@@ -1878,11 +1866,10 @@ public final class SqlParser {
               throw new IllegalArgumentException(
                   "Special grouping elements such as ROLLUP or CUBE must be the last items in GROUP BY");
             }
-            Expression processed = expr;
             if (!allowedQualifiers.isEmpty()) {
-              stripQualifier(processed, allowedQualifiers);
+              stripQualifier(expr, allowedQualifiers);
             }
-            int index = registerGroupingExpression(processed, expressions, indexByExpression);
+            int index = registerGroupingExpression(expr, expressions, indexByExpression);
             baseGrouping.add(index);
           }
         } else {
@@ -1890,11 +1877,10 @@ public final class SqlParser {
             throw new IllegalArgumentException(
                 "Special grouping elements such as ROLLUP or CUBE must be the last items in GROUP BY");
           }
-          Expression processed = expr;
           if (!allowedQualifiers.isEmpty()) {
-            stripQualifier(processed, allowedQualifiers);
+            stripQualifier(expr, allowedQualifiers);
           }
-          int index = registerGroupingExpression(processed, expressions, indexByExpression);
+          int index = registerGroupingExpression(expr, expressions, indexByExpression);
           baseGrouping.add(index);
         }
       }
@@ -1924,11 +1910,10 @@ public final class SqlParser {
         List<Integer> indexes = new ArrayList<>(baseGrouping);
         if (groupingSet != null && !groupingSet.isEmpty()) {
           for (Expression expr : groupingSet) {
-            Expression processed = expr;
             if (!allowedQualifiers.isEmpty()) {
-              stripQualifier(processed, allowedQualifiers);
+              stripQualifier(expr, allowedQualifiers);
             }
-            int index = registerGroupingExpression(processed, expressions, indexByExpression);
+            int index = registerGroupingExpression(expr, expressions, indexByExpression);
             indexes.add(index);
           }
         }
@@ -1981,7 +1966,7 @@ public final class SqlParser {
 
     current.add(cubeOrder.get(position));
     generateCubeGroupingSets(target, current, cubeOrder, position + 1);
-    current.remove(current.size() - 1);
+    current.removeLast();
     generateCubeGroupingSets(target, current, cubeOrder, position + 1);
   }
 
@@ -2054,8 +2039,8 @@ public final class SqlParser {
         Expression usingCondition = buildUsingCondition(join.usingColumns(), info);
         Expression combinedCondition = combineExpressions(join.condition(), usingCondition);
         refs.add(new TableReference(info.tableName(), info.tableAlias(), join.joinType(), combinedCondition,
-            info.innerSelect(), info.subquerySql(), info.commonTableExpression(), join.usingColumns(), info.valueTable(),
-            info.unnest(), info.lateral()));
+            info.innerSelect(), info.subquerySql(), info.commonTableExpression(), join.usingColumns(),
+            info.valueTable(), info.unnest(), info.lateral()));
       }
     }
     return List.copyOf(refs);

@@ -71,9 +71,9 @@ import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.QualifiedExpansionColumn;
 import se.alipsa.jparq.engine.SqlParser.ValueTableDefinition;
-import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.UnnestTableBuilder;
+import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.window.AvgWindow;
 import se.alipsa.jparq.engine.window.CumeDistWindow;
 import se.alipsa.jparq.engine.window.DenseRankWindow;
@@ -1081,8 +1081,8 @@ class JParqPreparedStatement implements PreparedStatement {
     List<List<Object>> evaluatedRows = new ArrayList<>(valueTable.rows().size());
     for (List<Expression> expressions : valueTable.rows()) {
       if (expressions.size() != columnNames.size()) {
-        throw new SQLException("VALUES row has " + expressions.size()
-            + " expressions but expected " + columnNames.size() + " columns");
+        throw new SQLException(
+            "VALUES row has " + expressions.size() + " expressions but expected " + columnNames.size() + " columns");
       }
       List<Object> evaluated = new ArrayList<>(expressions.size());
       for (Expression expression : expressions) {
@@ -1226,7 +1226,8 @@ class JParqPreparedStatement implements PreparedStatement {
         || (left == ValueColumnType.INT && right == ValueColumnType.FLOAT)) {
       return ValueColumnType.FLOAT;
     }
-    // FLOAT combined with LONG widens to DOUBLE because LONG exceeds FLOAT precision.
+    // FLOAT combined with LONG widens to DOUBLE because LONG exceeds FLOAT
+    // precision.
     if (left == ValueColumnType.FLOAT || right == ValueColumnType.FLOAT) {
       return ValueColumnType.DOUBLE;
     }
@@ -1276,18 +1277,11 @@ class JParqPreparedStatement implements PreparedStatement {
     try {
       return switch (type) {
         case BOOLEAN -> (value instanceof Boolean bool) ? bool : Boolean.valueOf(value.toString());
-        case INT -> value instanceof Number num
-            ? Integer.valueOf(num.intValue())
-            : Integer.valueOf(value.toString());
-        case LONG -> value instanceof Number num
-            ? Long.valueOf(num.longValue())
-            : Long.valueOf(value.toString());
-        case FLOAT -> value instanceof Number num
-            ? Float.valueOf(num.floatValue())
-            : Float.valueOf(value.toString());
-        case DOUBLE -> value instanceof Number num
-            ? Double.valueOf(num.doubleValue())
-            : Double.valueOf(value.toString());
+        case INT -> value instanceof Number num ? Integer.valueOf(num.intValue()) : Integer.valueOf(value.toString());
+        case LONG -> value instanceof Number num ? Long.valueOf(num.longValue()) : Long.valueOf(value.toString());
+        case FLOAT -> value instanceof Number num ? Float.valueOf(num.floatValue()) : Float.valueOf(value.toString());
+        case DOUBLE ->
+          value instanceof Number num ? Double.valueOf(num.doubleValue()) : Double.valueOf(value.toString());
         case DECIMAL -> value instanceof BigDecimal bd ? bd : new BigDecimal(value.toString());
         case DATE, TIME, TIMESTAMP, BINARY -> value;
         case STRING -> value instanceof CharSequence ? value : value.toString();
@@ -1297,8 +1291,7 @@ class JParqPreparedStatement implements PreparedStatement {
     }
   }
 
-  private void registerValueTableResult(SqlParser.TableReference ref, CteResult result,
-      Map<String, CteResult> target) {
+  private void registerValueTableResult(SqlParser.TableReference ref, CteResult result, Map<String, CteResult> target) {
     if (ref == null || result == null || target == null) {
       return;
     }
@@ -1346,17 +1339,7 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   private enum ValueColumnType {
-    BOOLEAN,
-    INT,
-    LONG,
-    FLOAT,
-    DOUBLE,
-    DECIMAL,
-    DATE,
-    TIME,
-    TIMESTAMP,
-    STRING,
-    BINARY
+    BOOLEAN, INT, LONG, FLOAT, DOUBLE, DECIMAL, DATE, TIME, TIMESTAMP, STRING, BINARY
   }
 
   /**

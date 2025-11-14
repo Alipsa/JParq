@@ -71,7 +71,7 @@ The result set for that combination must contain MIN(12, 8) = 8 rows of `(8, 3)`
 
 ### 3\. Testing Requirements
 
-* Create tests to verify the functionality in a test class called **`jparq.set.IntersectAllTest`**.
+* Create tests to verify the functionality in a test class called **`jparq.setops.IntersectAllTest`**.
 * Tests must verify:
   * **Multiplicity:** A row that appears M times in Query 1 and N times in Query 2 appears MIN(M, N) times in the result.
   * **No Duplicates Removal:** Test that `INTERSECT ALL` output differs from the already implemented `INTERSECT` output when duplicates are present in the source data.
