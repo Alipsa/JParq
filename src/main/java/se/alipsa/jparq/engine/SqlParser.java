@@ -231,7 +231,9 @@ public final class SqlParser {
     /** INTERSECT using distinct semantics. */
     INTERSECT,
     /** EXCEPT using distinct semantics. */
-    EXCEPT
+    EXCEPT,
+    /** EXCEPT ALL preserving duplicates. */
+    EXCEPT_ALL
   }
 
   /**
@@ -719,10 +721,7 @@ public final class SqlParser {
           }
           operator = SetOperator.INTERSECT;
         } else if (op instanceof ExceptOp exceptOp) {
-          if (exceptOp.isAll()) {
-            throw new IllegalArgumentException("EXCEPT ALL is not supported");
-          }
-          operator = SetOperator.EXCEPT;
+          operator = exceptOp.isAll() ? SetOperator.EXCEPT_ALL : SetOperator.EXCEPT;
         } else {
           throw new IllegalArgumentException("Unsupported set operation: " + op);
         }

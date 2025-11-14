@@ -1,8 +1,6 @@
 package jparq.setops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -146,21 +144,4 @@ public class ExceptTest {
     });
   }
 
-  /**
-   * Ensure that EXCEPT ALL is rejected as it is not supported by the engine.
-   */
-  @Test
-  void exceptAllIsRejected() {
-    String sql = """
-        SELECT cyl FROM mtcars
-        EXCEPT ALL
-        SELECT cyl FROM mtcars
-        """;
-    RuntimeException ex = assertThrows(RuntimeException.class, () -> jparqSql.query(sql, rs -> {
-    }));
-    assertTrue(ex.getCause() instanceof SQLException, "Expected SQLException for EXCEPT ALL rejection");
-    Throwable root = ex.getCause().getCause();
-    assertTrue(root instanceof IllegalArgumentException, "Underlying cause should describe unsupported EXCEPT ALL");
-    assertTrue(root.getMessage().contains("EXCEPT ALL"), "Error message should mention EXCEPT ALL");
-  }
 }
