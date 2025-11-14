@@ -989,7 +989,7 @@ class JParqPreparedStatement implements PreparedStatement {
         Field.NULL_DEFAULT_VALUE));
     fields.add(new Field("department", Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), deptSchema)), null,
         Field.NULL_DEFAULT_VALUE));
-    String recordName = ref.tableAlias() != null && !ref.tableAlias().isBlank() ? ref.tableAlias() : ref.tableName();
+    String recordName = derivedRecordName(ref);
     Schema schema = Schema.createRecord(recordName, null, null, false);
     schema.setFields(fields);
     List<GenericRecord> rows = new ArrayList<>();
@@ -1327,7 +1327,7 @@ class JParqPreparedStatement implements PreparedStatement {
    */
   private Schema buildSubquerySchema(ResultSetMetaData meta, SqlParser.TableReference ref, List<String> fieldNames,
       List<Schema> valueSchemas) throws SQLException {
-    String recordName = ref.tableAlias() != null && !ref.tableAlias().isBlank() ? ref.tableAlias() : ref.tableName();
+    String recordName = derivedRecordName(ref);
     int columnCount = meta.getColumnCount();
     List<Field> fields = new ArrayList<>(columnCount);
     for (int i = 1; i <= columnCount; i++) {
@@ -1345,10 +1345,24 @@ class JParqPreparedStatement implements PreparedStatement {
       fieldNames.add(columnName);
       valueSchemas.add(valueSchema);
     }
-    String schemaName = recordName == null || recordName.isBlank() ? "derived" : recordName;
-    Schema schema = Schema.createRecord(schemaName, null, null, false);
+    Schema schema = Schema.createRecord(recordName, null, null, false);
     schema.setFields(fields);
     return schema;
+  }
+
+  private static String derivedRecordName(SqlParser.TableReference ref) {
+    if (ref == null) {
+      return "derived";
+    }
+    String alias = ref.tableAlias();
+    if (alias != null && !alias.isBlank()) {
+      return alias;
+    }
+    String name = ref.tableName();
+    if (name != null && !name.isBlank()) {
+      return name;
+    }
+    return "derived";
   }
 
   private Schema inferSubqueryColumnSchema(SqlParser.TableReference ref, int columnIndex) throws SQLException {
