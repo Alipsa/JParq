@@ -328,8 +328,9 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Execute a SQL set operation (UNION, INTERSECT, EXCEPT) by delegating to the
-   * individual component SELECT statements and materializing the combined result.
+   * Execute a SQL set operation (UNION, INTERSECT, EXCEPT, EXCEPT ALL) by
+   * delegating to the individual component SELECT statements and materializing
+   * the combined result.
    *
    * @return a {@link JParqResultSet} containing the materialized set operation
    *         result
@@ -395,7 +396,7 @@ class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Evaluate the list of set operation components honoring SQL operator
-   * precedence (INTERSECT before UNION/UNION ALL/EXCEPT).
+   * precedence (INTERSECT before UNION/UNION ALL/EXCEPT/EXCEPT ALL).
    *
    * @param components
    *          parsed set operation components in encounter order
@@ -450,7 +451,7 @@ class JParqPreparedStatement implements PreparedStatement {
   private int precedence(SqlParser.SetOperator operator) throws SQLException {
     return switch (operator) {
       case INTERSECT -> 2;
-      case UNION, UNION_ALL, EXCEPT -> 1;
+      case UNION, UNION_ALL, EXCEPT, EXCEPT_ALL -> 1;
       default -> throw new SQLException("Unsupported set operator: " + operator);
     };
   }
@@ -480,6 +481,7 @@ class JParqPreparedStatement implements PreparedStatement {
       }
       case INTERSECT -> intersectDistinct(left, right);
       case EXCEPT -> exceptDistinct(left, right);
+      case EXCEPT_ALL -> exceptAll(left, right);
       default -> throw new SQLException("Unsupported set operator: " + operator);
     };
   }
@@ -647,6 +649,43 @@ class JParqPreparedStatement implements PreparedStatement {
       }
     }
     return new ArrayList<>(ordered);
+  }
+
+  /**
+   * Compute the multiset difference between the accumulated rows and the
+   * provided incoming rows while preserving the encounter order from the left
+   * operand and respecting duplicate counts.
+   *
+   * @param accumulated
+   *          rows previously materialized
+   * @param incoming
+   *          rows produced by the current set operation component
+   * @return a list containing rows that remain after applying EXCEPT ALL
+   *         semantics
+   */
+  private List<List<Object>> exceptAll(List<List<Object>> accumulated, List<List<Object>> incoming) {
+    if (accumulated.isEmpty()) {
+      return new ArrayList<>();
+    }
+    if (incoming.isEmpty()) {
+      return new ArrayList<>(accumulated);
+    }
+    Map<List<Object>, Integer> remaining = new HashMap<>();
+    for (List<Object> row : incoming) {
+      remaining.merge(row, 1, Integer::sum);
+    }
+    List<List<Object>> result = new ArrayList<>();
+    for (List<Object> row : accumulated) {
+      Integer count = remaining.get(row);
+      if (count == null) {
+        result.add(row);
+      } else if (count == 1) {
+        remaining.remove(row);
+      } else {
+        remaining.put(row, count - 1);
+      }
+    }
+    return result;
   }
 
   /**
