@@ -299,7 +299,8 @@ public final class SqlParser {
    *          list of column names supplied via a {@code USING} clause that
    *          reference this table (empty when no {@code USING} clause is present)
    * @param unnest
-   *          metadata describing an {@code UNNEST} table function associated with this reference (may be {@code null})
+   *          metadata describing an {@code UNNEST} table function associated with
+   *          this reference (may be {@code null})
    */
   public record TableReference(String tableName, String tableAlias, JoinType joinType, Expression joinCondition,
       Select subquery, String subquerySql, CommonTableExpression commonTableExpression, List<String> usingColumns,
@@ -307,7 +308,8 @@ public final class SqlParser {
   }
 
   /**
-   * Representation of an {@code UNNEST} table function discovered in the {@code FROM} clause.
+   * Representation of an {@code UNNEST} table function discovered in the
+   * {@code FROM} clause.
    *
    * @param expression
    *          the array expression supplied to {@code UNNEST}
@@ -822,7 +824,8 @@ public final class SqlParser {
       throw new IllegalArgumentException("Only UNNEST table functions are supported: " + tableFunction);
     }
     ExpressionList<?> parameters = function.getParameters();
-    List<Expression> expressions = parameters == null ? List.of()
+    List<Expression> expressions = parameters == null
+        ? List.of()
         : parameters.stream().filter(Expression.class::isInstance).map(Expression.class::cast)
             .collect(Collectors.toUnmodifiableList());
     if (expressions.isEmpty()) {

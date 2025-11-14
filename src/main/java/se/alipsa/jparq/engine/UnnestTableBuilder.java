@@ -6,11 +6,11 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
-import net.sf.jsqlparser.expression.Expression;
-import net.sf.jsqlparser.schema.Column;
 import se.alipsa.jparq.engine.JoinRecordReader.CorrelatedRowsSupplier;
 import se.alipsa.jparq.engine.JoinRecordReader.JoinTable;
 import se.alipsa.jparq.engine.SqlParser.TableReference;
@@ -19,8 +19,8 @@ import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 
 /**
- * Builds {@link JoinTable} representations for {@code UNNEST} table functions, including support for
- * {@code WITH ORDINALITY} and arrays of records.
+ * Builds {@link JoinTable} representations for {@code UNNEST} table functions,
+ * including support for {@code WITH ORDINALITY} and arrays of records.
  */
 public final class UnnestTableBuilder {
 
@@ -28,15 +28,19 @@ public final class UnnestTableBuilder {
   }
 
   /**
-   * Construct a {@link JoinTable} representation for the supplied {@code UNNEST} table reference.
+   * Construct a {@link JoinTable} representation for the supplied {@code UNNEST}
+   * table reference.
    *
    * @param reference
    *          the table reference describing the {@code UNNEST} invocation
    * @param priorTables
-   *          tables that precede the {@code UNNEST} call and establish the correlation context
+   *          tables that precede the {@code UNNEST} call and establish the
+   *          correlation context
    * @param qualifierIndex
-   *          lookup of qualifier names to table positions used to resolve correlated column references
-   * @return a {@link JoinTable} that lazily evaluates the {@code UNNEST} operation
+   *          lookup of qualifier names to table positions used to resolve
+   *          correlated column references
+   * @return a {@link JoinTable} that lazily evaluates the {@code UNNEST}
+   *         operation
    * @throws SQLException
    *           if the {@code UNNEST} definition is invalid or cannot be resolved
    */
@@ -80,8 +84,8 @@ public final class UnnestTableBuilder {
     AliasPlan aliasPlan = AliasPlan.build(definition, elementSchema, arrayField.name());
 
     Schema unnestSchema = buildSchema(reference, elementSchema, aliasPlan);
-    CorrelatedRowsSupplier supplier = assignments -> evaluateAssignments(assignments, sourceIndex,
-        arrayField.name(), elementSchema, aliasPlan, unnestSchema);
+    CorrelatedRowsSupplier supplier = assignments -> evaluateAssignments(assignments, sourceIndex, arrayField.name(),
+        elementSchema, aliasPlan, unnestSchema);
 
     SqlParser.JoinType joinType = reference.joinType();
     if (joinType == SqlParser.JoinType.RIGHT_OUTER || joinType == SqlParser.JoinType.FULL_OUTER) {
@@ -143,8 +147,8 @@ public final class UnnestTableBuilder {
       List<Schema.Field> nestedFields = elementSchema.getFields();
       for (int i = 0; i < nestedFields.size(); i++) {
         Schema.Field nested = nestedFields.get(i);
-        fields.add(new Schema.Field(aliasPlan.elementAliases().get(i), nested.schema(), nested.doc(),
-            nested.defaultVal()));
+        fields.add(
+            new Schema.Field(aliasPlan.elementAliases().get(i), nested.schema(), nested.doc(), nested.defaultVal()));
       }
     } else {
       fields.add(new Schema.Field(aliasPlan.elementAliases().get(0), elementSchema, null, (Object) null));
@@ -260,10 +264,11 @@ public final class UnnestTableBuilder {
     }
 
     /**
-     * Determine the alias that should be used for the ordinality column when {@code WITH ORDINALITY} is
-     * present.
+     * Determine the alias that should be used for the ordinality column when
+     * {@code WITH ORDINALITY} is present.
      *
-     * @return the alias assigned to the ordinality column, defaulting to {@code ordinality} when unspecified
+     * @return the alias assigned to the ordinality column, defaulting to
+     *         {@code ordinality} when unspecified
      */
     public String ordinalAlias() {
       return ordinalAlias;

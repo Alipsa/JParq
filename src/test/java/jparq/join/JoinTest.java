@@ -158,10 +158,9 @@ public class JoinTest {
         from employees as e
         join departments as e on true
         """;
-    RuntimeException ex = Assertions.assertThrows(RuntimeException.class,
-        () -> jparqSql.query(sql, rs -> {
-          // No rows expected; exception should be thrown during planning.
-        }));
+    RuntimeException ex = Assertions.assertThrows(RuntimeException.class, () -> jparqSql.query(sql, rs -> {
+      // No rows expected; exception should be thrown during planning.
+    }));
     Throwable cause = ex.getCause();
     Assertions.assertNotNull(cause, "A cause should be present for duplicate qualifier failure");
     Assertions.assertTrue(cause instanceof SQLException,

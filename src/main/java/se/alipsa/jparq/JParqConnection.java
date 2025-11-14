@@ -36,7 +36,8 @@ public class JParqConnection implements Connection {
    * Create a new JParq connection for the supplied JDBC URL.
    *
    * @param url
-   *          the JDBC URL that points to the base directory containing Parquet files
+   *          the JDBC URL that points to the base directory containing Parquet
+   *          files
    * @param props
    *          optional connection properties that refine behaviour
    * @throws SQLException

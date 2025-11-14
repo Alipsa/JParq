@@ -4,6 +4,8 @@
 - Add ARRAY constructor function support
 - Fix column names and types in ResultSetMetaData
 - Adhere JParqDatabaseMetaData specifications for getColumns and getTables methods to the JDBC standard
+- Add support for derived tables
+  - UNNEST with and without ordinality
 
 ### 0.10.0 (2025-11-12)
 - Add support for grouping sets, rollup, and cube in the GROUP BY clause

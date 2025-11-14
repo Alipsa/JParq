@@ -21,7 +21,8 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
 /**
- * Integration tests verifying support for the standard {@code UNNEST} table function.
+ * Integration tests verifying support for the standard {@code UNNEST} table
+ * function.
  */
 class UnnestTest {
 
@@ -170,21 +171,12 @@ class UnnestTest {
   }
 
   private static Schema buildSchema() {
-    Schema reviewSchema = SchemaBuilder.record("review")
-        .namespace("jparq.derived")
-        .fields()
-        .requiredInt("rating")
-        .requiredString("user")
-        .endRecord();
+    Schema reviewSchema = SchemaBuilder.record("review").namespace("jparq.derived").fields().requiredInt("rating")
+        .requiredString("user").endRecord();
 
-    return SchemaBuilder.record("product")
-        .namespace("jparq.derived")
-        .fields()
-        .requiredInt("id")
-        .requiredString("name")
-        .name("tags").type().array().items().stringType().noDefault()
-        .name("reviews").type().array().items(reviewSchema).noDefault()
-        .endRecord();
+    return SchemaBuilder.record("product").namespace("jparq.derived").fields().requiredInt("id").requiredString("name")
+        .name("tags").type().array().items().stringType().noDefault().name("reviews").type().array().items(reviewSchema)
+        .noDefault().endRecord();
   }
 
   private static void writeProducts() throws IOException {
@@ -195,15 +187,11 @@ class UnnestTest {
 
     var outputFile = HadoopOutputFile.fromPath(parquetPath, conf);
 
-    try (var writer = AvroParquetWriter.<GenericRecord>builder(outputFile)
-        .withSchema(productSchema)
-        .withConf(conf)
-        .withCompressionCodec(CompressionCodecName.UNCOMPRESSED)
-        .build()) {
+    try (var writer = AvroParquetWriter.<GenericRecord>builder(outputFile).withSchema(productSchema).withConf(conf)
+        .withCompressionCodec(CompressionCodecName.UNCOMPRESSED).build()) {
       writer.write(buildProduct(1, "Alpha", List.of("Comfort", "Sport"),
           List.of(review(reviewSchema, 5, "Alex"), review(reviewSchema, 4, "Bert"))));
-      writer.write(buildProduct(2, "Beta", List.of("Family"),
-          List.of(review(reviewSchema, 3, "Chris"))));
+      writer.write(buildProduct(2, "Beta", List.of("Family"), List.of(review(reviewSchema, 3, "Chris"))));
       writer.write(buildProduct(3, "Gamma", List.of(),
           List.of(review(reviewSchema, 5, "Grace"), review(reviewSchema, 5, "Henry"))));
     }

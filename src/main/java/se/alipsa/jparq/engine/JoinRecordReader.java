@@ -43,13 +43,15 @@ public final class JoinRecordReader implements RecordReader {
   private final UsingMetadata usingMetadata;
 
   /**
-   * Produces rows for correlated table functions based on the current join assignments.
+   * Produces rows for correlated table functions based on the current join
+   * assignments.
    */
   @FunctionalInterface
   public interface CorrelatedRowsSupplier {
 
     /**
-     * Produce the rows contributed by a correlated table function for the supplied assignments.
+     * Produce the rows contributed by a correlated table function for the supplied
+     * assignments.
      *
      * @param assignments
      *          the current join assignments representing the left-hand side
@@ -74,11 +76,11 @@ public final class JoinRecordReader implements RecordReader {
    * @param joinCondition
    *          condition associated with the join (may be {@code null})
    * @param usingColumns
-   *          list of column names supplied via a {@code USING} clause for this table (empty when
-   *          {@code USING} is not used)
+   *          list of column names supplied via a {@code USING} clause for this
+   *          table (empty when {@code USING} is not used)
    * @param correlatedRowsSupplier
-   *          supplier invoked to produce rows when the table originates from a correlated table function (may be
-   *          {@code null})
+   *          supplier invoked to produce rows when the table originates from a
+   *          correlated table function (may be {@code null})
    */
   public record JoinTable(String tableName, String alias, Schema schema, List<GenericRecord> rows,
       SqlParser.JoinType joinType, Expression joinCondition, List<String> usingColumns,
@@ -110,19 +112,23 @@ public final class JoinRecordReader implements RecordReader {
     }
 
     /**
-     * Determine whether this join table produces rows through a correlated evaluation strategy.
+     * Determine whether this join table produces rows through a correlated
+     * evaluation strategy.
      *
-     * @return {@code true} if the table depends on prior join assignments, otherwise {@code false}
+     * @return {@code true} if the table depends on prior join assignments,
+     *         otherwise {@code false}
      */
     public boolean isCorrelated() {
       return correlatedRowsSupplier != null;
     }
 
     /**
-     * Resolve the rows that should participate in the join for the supplied left-hand assignments.
+     * Resolve the rows that should participate in the join for the supplied
+     * left-hand assignments.
      *
      * @param assignments
-     *          the current left-hand assignments; may be empty when evaluating the base table
+     *          the current left-hand assignments; may be empty when evaluating the
+     *          base table
      * @return rows emitted by the table for the provided assignments
      */
     public List<GenericRecord> rowsFor(List<GenericRecord> assignments) {

@@ -147,11 +147,10 @@ The following SQL statements are supported:
   - GROUPING SETS
   - ROLLUP
   - CUBE
-
+- Derived Tables: UNNEST
 ## Roadmap: Might be implemented in the future
 
-- Derived Tables i.e. FROM-clause table constructors and lateral items. parseFromItem accepts only base tables or plain subqueries; it throws for any other construct, leaving out SQL-standard features such as 
-  - UNNEST functions
+- Derived Tables i.e. FROM-clause table constructors and lateral items. parseFromItem accepts only base tables or plain subqueries; it throws for any other construct, leaving out SQL-standard features such as
   - VALUES table constructors
   - LATERAL derived tables
   - TABLE value functions

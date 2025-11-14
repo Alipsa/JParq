@@ -80,8 +80,8 @@ import se.alipsa.jparq.engine.window.RowNumberWindow;
 import se.alipsa.jparq.engine.window.SumWindow;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
-import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.helper.JParqUtil;
+import se.alipsa.jparq.helper.TemporalInterval;
 
 /** An implementation of the java.sql.PreparedStatement interface. */
 @SuppressWarnings({
@@ -813,8 +813,7 @@ class JParqPreparedStatement implements PreparedStatement {
     Integer existing = index.get(normalized);
     if (existing != null) {
       if (existing != position && failOnConflict) {
-        throw new IllegalStateException(
-            "Duplicate qualifier '" + qualifier + "' resolves to '" + normalized + "'");
+        throw new IllegalStateException("Duplicate qualifier '" + qualifier + "' resolves to '" + normalized + "'");
       }
       return;
     }
