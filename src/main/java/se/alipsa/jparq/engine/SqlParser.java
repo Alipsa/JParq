@@ -176,14 +176,16 @@ public final class SqlParser {
   /**
    * A single component participating in a SQL set operation query.
    *
-   * @param select
-   *          parsed representation of the component SELECT statement
+   * @param query
+   *          parsed representation of the component query. This can be a plain
+   *          {@link Select} statement or a nested {@link SetQuery} when
+   *          parentheses enforce grouping
    * @param operator
    *          operator used to combine this component with the previous one
    * @param sql
-   *          textual SQL used to execute the component SELECT statement
+   *          textual SQL used to execute the component query
    */
-  public record SetComponent(Select select, SetOperator operator, String sql) {
+  public record SetComponent(Query query, SetOperator operator, String sql) {
   }
 
   /**
@@ -709,9 +711,6 @@ public final class SqlParser {
     for (int i = 0; i < selects.size(); i++) {
       net.sf.jsqlparser.statement.select.Select body = selects.get(i);
       Query component = parseSelectStatement(body, ctes, cteLookup, allowQualifiedWildcards);
-      if (!(component instanceof Select parsed)) {
-        throw new IllegalArgumentException("Unsupported set operation component: " + body);
-      }
       SetOperator operator = SetOperator.FIRST;
       if (i > 0) {
         SetOperation op = operations.get(i - 1);
@@ -725,7 +724,7 @@ public final class SqlParser {
           throw new IllegalArgumentException("Unsupported set operation: " + op);
         }
       }
-      components.add(new SetComponent(parsed, operator, body.toString()));
+      components.add(new SetComponent(component, operator, body.toString()));
     }
     List<SetOrder> orderBy = parseSetOrderBy(list.getOrderByElements());
     int limit = extractLimit(list.getLimit());
