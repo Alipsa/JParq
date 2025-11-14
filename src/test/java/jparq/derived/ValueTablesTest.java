@@ -1,13 +1,9 @@
 package jparq.derived;
 
-import java.lang.reflect.Method;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -120,18 +116,21 @@ class ValueTablesTest {
   }
 
   @Test
-  void determineColumnTypeTreatsIntAndFloatAsFloat() {
-    try (Connection connection = DriverManager.getConnection(jdbcUrl);
-        PreparedStatement statement = connection.prepareStatement("VALUES (1)")) {
-      Method determineColumnType = statement.getClass().getDeclaredMethod("determineColumnType", List.class);
-      determineColumnType.setAccessible(true);
-      Object result = determineColumnType.invoke(statement, List.of(Float.valueOf(1.0f), Integer.valueOf(2)));
-      Assertions.assertTrue(result instanceof Enum<?>, "Expected enum ValueColumnType result");
-      Assertions.assertEquals("FLOAT", ((Enum<?>) result).name(),
-          "INT and FLOAT values should widen to FLOAT");
-    } catch (ReflectiveOperationException | SQLException e) {
-      Assertions.fail(e);
-    }
+  void valuesIntAndRealColumnReportsDouble() {
+    String sql = "VALUES (1), (CAST(2.5 AS REAL))";
+    jparqSql.query(sql, rs -> {
+      try {
+        ResultSetMetaData meta = rs.getMetaData();
+        Assertions.assertEquals(Double.class.getName(), meta.getColumnClassName(1),
+            "INT and REAL values should widen to Double column class");
+        Assertions.assertTrue(rs.next(), "First VALUES row should be available");
+        Assertions.assertEquals(1.0d, rs.getDouble(1));
+        Assertions.assertTrue(rs.next(), "Second VALUES row should be available");
+        Assertions.assertEquals(2.5d, rs.getDouble(1));
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
   }
 
   @Test

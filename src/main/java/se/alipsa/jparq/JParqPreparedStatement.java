@@ -1081,8 +1081,8 @@ class JParqPreparedStatement implements PreparedStatement {
     List<List<Object>> evaluatedRows = new ArrayList<>(valueTable.rows().size());
     for (List<Expression> expressions : valueTable.rows()) {
       if (expressions.size() != columnNames.size()) {
-        throw new SQLException("VALUES row produced " + expressions.size() + " columns but table definition provides "
-            + columnNames.size());
+        throw new SQLException("VALUES row has " + expressions.size()
+            + " expressions but expected " + columnNames.size() + " columns");
       }
       List<Object> evaluated = new ArrayList<>(expressions.size());
       for (Expression expression : expressions) {
@@ -1226,6 +1226,7 @@ class JParqPreparedStatement implements PreparedStatement {
         || (left == ValueColumnType.INT && right == ValueColumnType.FLOAT)) {
       return ValueColumnType.FLOAT;
     }
+    // FLOAT combined with LONG widens to DOUBLE because LONG exceeds FLOAT precision.
     if (left == ValueColumnType.FLOAT || right == ValueColumnType.FLOAT) {
       return ValueColumnType.DOUBLE;
     }
@@ -1275,10 +1276,18 @@ class JParqPreparedStatement implements PreparedStatement {
     try {
       return switch (type) {
         case BOOLEAN -> (value instanceof Boolean bool) ? bool : Boolean.valueOf(value.toString());
-        case INT -> value instanceof Number num ? Integer.valueOf(num.intValue()) : Integer.valueOf(value.toString());
-        case LONG -> value instanceof Number num ? Long.valueOf(num.longValue()) : Long.valueOf(value.toString());
-        case FLOAT -> value instanceof Number num ? Float.valueOf(num.floatValue()) : Float.valueOf(value.toString());
-        case DOUBLE -> value instanceof Number num ? Double.valueOf(num.doubleValue()) : Double.valueOf(value.toString());
+        case INT -> value instanceof Number num
+            ? Integer.valueOf(num.intValue())
+            : Integer.valueOf(value.toString());
+        case LONG -> value instanceof Number num
+            ? Long.valueOf(num.longValue())
+            : Long.valueOf(value.toString());
+        case FLOAT -> value instanceof Number num
+            ? Float.valueOf(num.floatValue())
+            : Float.valueOf(value.toString());
+        case DOUBLE -> value instanceof Number num
+            ? Double.valueOf(num.doubleValue())
+            : Double.valueOf(value.toString());
         case DECIMAL -> value instanceof BigDecimal bd ? bd : new BigDecimal(value.toString());
         case DATE, TIME, TIMESTAMP, BINARY -> value;
         case STRING -> value instanceof CharSequence ? value : value.toString();
