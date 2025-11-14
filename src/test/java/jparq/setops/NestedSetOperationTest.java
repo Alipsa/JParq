@@ -14,15 +14,16 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
 /**
- * Tests covering nested SQL set operation semantics, including parentheses driven
- * evaluation order and mixed ALL/DISTINCT modifiers.
+ * Tests covering nested SQL set operation semantics, including parentheses
+ * driven evaluation order and mixed ALL/DISTINCT modifiers.
  */
 public class NestedSetOperationTest {
 
   private static JParqSql jparqSql;
 
   /**
-   * Configure the shared {@link JParqSql} instance backed by the test Parquet dataset.
+   * Configure the shared {@link JParqSql} instance backed by the test Parquet
+   * dataset.
    *
    * @throws URISyntaxException
    *           if the dataset path cannot be resolved
@@ -39,8 +40,8 @@ public class NestedSetOperationTest {
   }
 
   /**
-   * Verify that parentheses can override the default INTERSECT precedence by forcing a UNION
-   * operation to execute before applying the INTERSECT.
+   * Verify that parentheses can override the default INTERSECT precedence by
+   * forcing a UNION operation to execute before applying the INTERSECT.
    */
   @Test
   void parenthesesOverridePrecedence() {
@@ -60,8 +61,7 @@ public class NestedSetOperationTest {
         while (rs.next()) {
           values.add(rs.getInt(1));
         }
-        assertEquals(List.of(8), values,
-            "Parentheses should force the UNION to complete before INTERSECT is applied");
+        assertEquals(List.of(8), values, "Parentheses should force the UNION to complete before INTERSECT is applied");
       } catch (SQLException e) {
         throw new RuntimeException(e);
       }
@@ -69,8 +69,8 @@ public class NestedSetOperationTest {
   }
 
   /**
-   * Ensure nested parentheses across multiple set operations are evaluated from the innermost
-   * expression outward.
+   * Ensure nested parentheses across multiple set operations are evaluated from
+   * the innermost expression outward.
    */
   @Test
   void multiLevelNestingIsHonored() {
@@ -107,8 +107,9 @@ public class NestedSetOperationTest {
   }
 
   /**
-   * Validate that nested set operations can mix ALL and DISTINCT semantics by combining UNION ALL
-   * and EXCEPT while respecting parenthesized evaluation order.
+   * Validate that nested set operations can mix ALL and DISTINCT semantics by
+   * combining UNION ALL and EXCEPT while respecting parenthesized evaluation
+   * order.
    */
   @Test
   void mixedAllAndDistinctOperationsAreSupported() {
@@ -140,4 +141,3 @@ public class NestedSetOperationTest {
     });
   }
 }
-
