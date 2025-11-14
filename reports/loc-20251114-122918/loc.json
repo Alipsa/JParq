@@ -1,0 +1,20 @@
+{"header" : {
+  "cloc_url"           : "github.com/AlDanial/cloc",
+  "cloc_version"       : "1.98",
+  "n_files"            : 154,
+  "n_lines"            : 36644,},
+"Java" :{
+  "nFiles": 152,
+  "blank": 3558,
+  "comment": 5434,
+  "code": 27443},
+"Groovy" :{
+  "nFiles": 2,
+  "blank": 18,
+  "comment": 51,
+  "code": 140},
+"SUM": {
+  "blank": 3576,
+  "comment": 5485,
+  "code": 27583,
+  "nFiles": 154} }
