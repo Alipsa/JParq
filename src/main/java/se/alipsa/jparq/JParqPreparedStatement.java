@@ -70,6 +70,8 @@ import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.QualifiedExpansionColumn;
+import se.alipsa.jparq.engine.SqlParser.ValueTableDefinition;
+import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.UnnestTableBuilder;
 import se.alipsa.jparq.engine.window.AvgWindow;
@@ -108,6 +110,7 @@ class JParqPreparedStatement implements PreparedStatement {
   private final List<SqlParser.TableReference> tableReferences;
   private final boolean setOperationQuery;
   private final Map<String, CteResult> cteResults;
+  private final Map<String, CteResult> valueTableResults;
   private final CteResult baseCteResult;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
@@ -130,6 +133,7 @@ class JParqPreparedStatement implements PreparedStatement {
     File tmpFile = null;
     CteResult tmpBaseCteResult = null;
     Map<String, CteResult> tmpCteResults;
+    Map<String, CteResult> tmpValueTables = new LinkedHashMap<>();
 
     // --- QUERY PLANNING PHASE (Expensive CPU Work) ---
     try {
@@ -166,6 +170,19 @@ class JParqPreparedStatement implements PreparedStatement {
 
         if (tmpJoinQuery) {
           tmpResidual = tmpSelect.where();
+        } else if (baseRef != null && baseRef.valueTable() != null) {
+          CteResult resolved = materializeValueTable(baseRef.valueTable(), deriveValueTableName(baseRef));
+          tmpBaseCteResult = resolved;
+          tmpFileAvro = resolved.schema();
+          registerValueTableResult(baseRef, resolved, tmpValueTables);
+          if (!tmpSelect.qualifiedWildcards().isEmpty()) {
+            Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
+                baseRef, tmpFileAvro);
+            tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
+          }
+          aggregatePlan = AggregateFunctions.plan(tmpSelect);
+          tmpResidual = tmpSelect.where();
+          tmpPredicate = Optional.empty();
         } else if (baseIsCte) {
           CteResult resolved = baseRef.commonTableExpression() != null
               ? resolveCteResult(baseRef.commonTableExpression(), tmpCteResults)
@@ -238,6 +255,7 @@ class JParqPreparedStatement implements PreparedStatement {
     this.path = tmpPath;
     this.file = tmpFile;
     this.cteResults = tmpCteResults;
+    this.valueTableResults = tmpValueTables;
     this.baseCteResult = tmpBaseCteResult;
   }
 
@@ -733,6 +751,19 @@ class JParqPreparedStatement implements PreparedStatement {
         registerQualifierIndexes(qualifierIndex, unnestTable, tables.size() - 1);
         continue;
       }
+      if (ref.valueTable() != null) {
+        CteResult valueResult = resolveValueTable(ref);
+        if (valueResult == null) {
+          valueResult = materializeValueTable(ref.valueTable(), deriveValueTableName(ref));
+          registerValueTableResult(ref, valueResult, valueTableResults);
+        }
+        String tableName = deriveValueTableName(ref);
+        JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(tableName, ref.tableAlias(),
+            valueResult.schema(), valueResult.rows(), ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
+        tables.add(table);
+        registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
+        continue;
+      }
       CteResult cteResult = null;
       if (ref.commonTableExpression() != null) {
         cteResult = resolveCteResult(ref.commonTableExpression(), cteResults);
@@ -1033,6 +1064,284 @@ class JParqPreparedStatement implements PreparedStatement {
     String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
     return new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), data.schema(), data.rows(), ref.joinType(),
         ref.joinCondition(), ref.usingColumns(), null);
+  }
+
+  private CteResult materializeValueTable(ValueTableDefinition valueTable, String tableName) throws SQLException {
+    if (valueTable == null) {
+      throw new SQLException("Value table definition cannot be null");
+    }
+    List<String> columnNames = valueTable.columnNames();
+    if (columnNames == null || columnNames.isEmpty()) {
+      throw new SQLException("Value table must expose at least one column");
+    }
+    Schema literalSchema = Schema.createRecord("values_literal", null, null, false);
+    literalSchema.setFields(List.of());
+    GenericData.Record emptyRecord = new GenericData.Record(literalSchema);
+    ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(literalSchema);
+    List<List<Object>> evaluatedRows = new ArrayList<>(valueTable.rows().size());
+    for (List<Expression> expressions : valueTable.rows()) {
+      if (expressions.size() != columnNames.size()) {
+        throw new SQLException("VALUES row produced " + expressions.size() + " columns but table definition provides "
+            + columnNames.size());
+      }
+      List<Object> evaluated = new ArrayList<>(expressions.size());
+      for (Expression expression : expressions) {
+        Object value = evaluator.eval(expression, emptyRecord);
+        evaluated.add(normalizeLiteralValue(value));
+      }
+      evaluatedRows.add(evaluated);
+    }
+
+    List<ValueColumnType> columnTypes = new ArrayList<>(columnNames.size());
+    List<Schema> valueSchemas = new ArrayList<>(columnNames.size());
+    for (int i = 0; i < columnNames.size(); i++) {
+      List<Object> columnValues = new ArrayList<>(evaluatedRows.size());
+      for (List<Object> row : evaluatedRows) {
+        columnValues.add(row.get(i));
+      }
+      ValueColumnType columnType = determineColumnType(columnValues);
+      columnTypes.add(columnType);
+      valueSchemas.add(schemaForColumnType(columnType, columnValues));
+    }
+
+    List<Field> fields = new ArrayList<>(columnNames.size());
+    for (int i = 0; i < columnNames.size(); i++) {
+      Schema valueSchema = valueSchemas.get(i);
+      Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
+      fields.add(new Field(columnNames.get(i), union, null, Field.NULL_DEFAULT_VALUE));
+    }
+
+    String recordName = (tableName == null || tableName.isBlank()) ? "values" : tableName;
+    Schema schema = Schema.createRecord(recordName, null, null, false);
+    schema.setFields(fields);
+
+    List<GenericRecord> records = new ArrayList<>(evaluatedRows.size());
+    for (List<Object> row : evaluatedRows) {
+      GenericData.Record record = new GenericData.Record(schema);
+      for (int i = 0; i < columnNames.size(); i++) {
+        Object normalized = normalizeValueForType(row.get(i), columnTypes.get(i));
+        record.put(columnNames.get(i), toAvroValue(normalized, valueSchemas.get(i)));
+      }
+      records.add(record);
+    }
+    return new CteResult(schema, records);
+  }
+
+  private Object normalizeLiteralValue(Object value) {
+    if (value instanceof TemporalInterval interval) {
+      return interval.toString();
+    }
+    return value;
+  }
+
+  private ValueColumnType determineColumnType(List<Object> values) {
+    ValueColumnType type = null;
+    if (values != null) {
+      for (Object value : values) {
+        if (value == null) {
+          continue;
+        }
+        ValueColumnType candidate = classifyValueType(value);
+        if (type == null) {
+          type = candidate;
+        } else {
+          type = widenType(type, candidate);
+        }
+      }
+    }
+    return type == null ? ValueColumnType.STRING : type;
+  }
+
+  private ValueColumnType classifyValueType(Object value) {
+    if (value instanceof Boolean) {
+      return ValueColumnType.BOOLEAN;
+    }
+    if (value instanceof Byte || value instanceof Short || value instanceof Integer) {
+      return ValueColumnType.INT;
+    }
+    if (value instanceof Long) {
+      return ValueColumnType.LONG;
+    }
+    if (value instanceof Float) {
+      return ValueColumnType.FLOAT;
+    }
+    if (value instanceof Double) {
+      return ValueColumnType.DOUBLE;
+    }
+    if (value instanceof BigDecimal) {
+      return ValueColumnType.DECIMAL;
+    }
+    if (value instanceof Date) {
+      return ValueColumnType.DATE;
+    }
+    if (value instanceof Time) {
+      return ValueColumnType.TIME;
+    }
+    if (value instanceof Timestamp) {
+      return ValueColumnType.TIMESTAMP;
+    }
+    if (value instanceof byte[] || value instanceof ByteBuffer) {
+      return ValueColumnType.BINARY;
+    }
+    return ValueColumnType.STRING;
+  }
+
+  private ValueColumnType widenType(ValueColumnType current, ValueColumnType candidate) {
+    if (current == candidate) {
+      return current;
+    }
+    if (isNumeric(current) && isNumeric(candidate)) {
+      return widenNumericType(current, candidate);
+    }
+    if (current == ValueColumnType.STRING || candidate == ValueColumnType.STRING) {
+      return ValueColumnType.STRING;
+    }
+    if ((current == ValueColumnType.TIMESTAMP && candidate == ValueColumnType.DATE)
+        || (current == ValueColumnType.DATE && candidate == ValueColumnType.TIMESTAMP)
+        || (current == ValueColumnType.TIMESTAMP && candidate == ValueColumnType.TIME)
+        || (current == ValueColumnType.TIME && candidate == ValueColumnType.TIMESTAMP)
+        || (current == ValueColumnType.DATE && candidate == ValueColumnType.TIME)
+        || (current == ValueColumnType.TIME && candidate == ValueColumnType.DATE)) {
+      return ValueColumnType.TIMESTAMP;
+    }
+    return ValueColumnType.STRING;
+  }
+
+  private boolean isNumeric(ValueColumnType type) {
+    return switch (type) {
+      case INT, LONG, FLOAT, DOUBLE, DECIMAL -> true;
+      default -> false;
+    };
+  }
+
+  private ValueColumnType widenNumericType(ValueColumnType left, ValueColumnType right) {
+    if (left == ValueColumnType.DECIMAL || right == ValueColumnType.DECIMAL) {
+      return ValueColumnType.DECIMAL;
+    }
+    if (left == ValueColumnType.DOUBLE || right == ValueColumnType.DOUBLE) {
+      return ValueColumnType.DOUBLE;
+    }
+    if (left == ValueColumnType.FLOAT && right == ValueColumnType.FLOAT) {
+      return ValueColumnType.FLOAT;
+    }
+    if (left == ValueColumnType.FLOAT || right == ValueColumnType.FLOAT) {
+      return ValueColumnType.DOUBLE;
+    }
+    if (left == ValueColumnType.LONG || right == ValueColumnType.LONG) {
+      return ValueColumnType.LONG;
+    }
+    return ValueColumnType.INT;
+  }
+
+  private Schema schemaForColumnType(ValueColumnType type, List<Object> values) {
+    return switch (type) {
+      case BOOLEAN -> Schema.create(Schema.Type.BOOLEAN);
+      case INT -> Schema.create(Schema.Type.INT);
+      case LONG -> Schema.create(Schema.Type.LONG);
+      case FLOAT -> Schema.create(Schema.Type.FLOAT);
+      case DOUBLE -> Schema.create(Schema.Type.DOUBLE);
+      case DECIMAL -> decimalSchemaForValues(values);
+      case DATE -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
+      case TIME -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
+      case TIMESTAMP -> LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
+      case BINARY -> Schema.create(Schema.Type.BYTES);
+      case STRING -> Schema.create(Schema.Type.STRING);
+    };
+  }
+
+  private Schema decimalSchemaForValues(List<Object> values) {
+    int precision = 1;
+    int scale = 0;
+    if (values != null) {
+      for (Object value : values) {
+        if (value == null) {
+          continue;
+        }
+        BigDecimal decimal = value instanceof BigDecimal bd ? bd : new BigDecimal(value.toString());
+        precision = Math.max(precision, decimal.precision());
+        scale = Math.max(scale, Math.max(decimal.scale(), 0));
+      }
+    }
+    LogicalType logicalType = LogicalTypes.decimal(Math.max(precision, 1), Math.max(scale, 0));
+    return logicalType.addToSchema(Schema.create(Schema.Type.BYTES));
+  }
+
+  private Object normalizeValueForType(Object value, ValueColumnType type) {
+    if (value == null) {
+      return null;
+    }
+    return switch (type) {
+      case BOOLEAN -> (value instanceof Boolean bool) ? bool : Boolean.valueOf(value.toString());
+      case INT -> value instanceof Number num ? Integer.valueOf(num.intValue()) : Integer.valueOf(value.toString());
+      case LONG -> value instanceof Number num ? Long.valueOf(num.longValue()) : Long.valueOf(value.toString());
+      case FLOAT -> value instanceof Number num ? Float.valueOf(num.floatValue()) : Float.valueOf(value.toString());
+      case DOUBLE -> value instanceof Number num ? Double.valueOf(num.doubleValue()) : Double.valueOf(value.toString());
+      case DECIMAL -> value instanceof BigDecimal bd ? bd : new BigDecimal(value.toString());
+      case DATE, TIME, TIMESTAMP, BINARY -> value;
+      case STRING -> value instanceof CharSequence ? value : value.toString();
+    };
+  }
+
+  private void registerValueTableResult(SqlParser.TableReference ref, CteResult result,
+      Map<String, CteResult> target) {
+    if (ref == null || result == null || target == null) {
+      return;
+    }
+    String aliasKey = normalizeCteKey(ref.tableAlias());
+    if (aliasKey != null) {
+      target.put(aliasKey, result);
+    }
+    String tableKey = normalizeCteKey(ref.tableName());
+    if (tableKey != null) {
+      target.putIfAbsent(tableKey, result);
+    }
+  }
+
+  private CteResult resolveValueTable(SqlParser.TableReference ref) {
+    if (ref == null || valueTableResults == null || valueTableResults.isEmpty()) {
+      return null;
+    }
+    String aliasKey = normalizeCteKey(ref.tableAlias());
+    if (aliasKey != null) {
+      CteResult result = valueTableResults.get(aliasKey);
+      if (result != null) {
+        return result;
+      }
+    }
+    String tableKey = normalizeCteKey(ref.tableName());
+    if (tableKey != null) {
+      return valueTableResults.get(tableKey);
+    }
+    return null;
+  }
+
+  private String deriveValueTableName(SqlParser.TableReference ref) {
+    if (ref == null) {
+      return "values";
+    }
+    String alias = ref.tableAlias();
+    if (alias != null && !alias.isBlank()) {
+      return alias;
+    }
+    String name = ref.tableName();
+    if (name != null && !name.isBlank()) {
+      return name;
+    }
+    return "values";
+  }
+
+  private enum ValueColumnType {
+    BOOLEAN,
+    INT,
+    LONG,
+    FLOAT,
+    DOUBLE,
+    DECIMAL,
+    DATE,
+    TIME,
+    TIMESTAMP,
+    STRING,
+    BINARY
   }
 
   /**
@@ -1430,6 +1739,10 @@ class JParqPreparedStatement implements PreparedStatement {
   private Schema schemaForTableReference(SqlParser.TableReference ref) throws SQLException {
     if (ref == null) {
       return null;
+    }
+    CteResult valueResult = resolveValueTable(ref);
+    if (valueResult != null) {
+      return valueResult.schema();
     }
     if (ref.commonTableExpression() != null) {
       CteResult result = resolveCteResult(ref.commonTableExpression(), cteResults);
