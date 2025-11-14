@@ -67,6 +67,7 @@ import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.QualifiedExpansionColumn;
 import se.alipsa.jparq.engine.SubqueryExecutor;
+import se.alipsa.jparq.engine.UnnestTableBuilder;
 import se.alipsa.jparq.engine.window.AvgWindow;
 import se.alipsa.jparq.engine.window.CumeDistWindow;
 import se.alipsa.jparq.engine.window.DenseRankWindow;
@@ -80,6 +81,7 @@ import se.alipsa.jparq.engine.window.SumWindow;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.helper.TemporalInterval;
+import se.alipsa.jparq.helper.JParqUtil;
 
 /** An implementation of the java.sql.PreparedStatement interface. */
 @SuppressWarnings({
@@ -715,7 +717,17 @@ class JParqPreparedStatement implements PreparedStatement {
 
   private JoinRecordReader buildJoinReader() throws SQLException {
     List<JoinRecordReader.JoinTable> tables = new ArrayList<>();
+    Map<String, Integer> qualifierIndex = new LinkedHashMap<>();
     for (SqlParser.TableReference ref : tableReferences) {
+      if (ref.unnest() != null) {
+        if (tables.isEmpty()) {
+          throw new SQLException("UNNEST requires a preceding table reference");
+        }
+        JoinRecordReader.JoinTable unnestTable = UnnestTableBuilder.build(ref, tables, qualifierIndex);
+        tables.add(unnestTable);
+        registerQualifierIndexes(qualifierIndex, unnestTable, tables.size() - 1);
+        continue;
+      }
       CteResult cteResult = null;
       if (ref.commonTableExpression() != null) {
         cteResult = resolveCteResult(ref.commonTableExpression(), cteResults);
@@ -724,12 +736,16 @@ class JParqPreparedStatement implements PreparedStatement {
       }
       if (cteResult != null) {
         String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
-        tables.add(new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), cteResult.schema(), cteResult.rows(),
-            ref.joinType(), ref.joinCondition(), ref.usingColumns()));
+        JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(tableName, ref.tableAlias(),
+            cteResult.schema(), cteResult.rows(), ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
+        tables.add(table);
+        registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
         continue;
       }
       if (ref.subquery() != null) {
-        tables.add(materializeSubqueryTable(ref));
+        JoinRecordReader.JoinTable table = materializeSubqueryTable(ref);
+        tables.add(table);
+        registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
         continue;
       }
       String tableName = ref.tableName();
@@ -751,6 +767,7 @@ class JParqPreparedStatement implements PreparedStatement {
       JoinRecordReader.JoinTable fallback = maybeLoadDepartmentsFallback(tableFile, tableSchema, ref);
       if (fallback != null) {
         tables.add(fallback);
+        registerQualifierIndexes(qualifierIndex, fallback, tables.size() - 1);
         continue;
       }
       List<GenericRecord> rows = new ArrayList<>();
@@ -764,8 +781,10 @@ class JParqPreparedStatement implements PreparedStatement {
       } catch (Exception e) {
         throw new SQLException("Failed to read data for table " + tableName, e);
       }
-      tables.add(new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), tableSchema, rows, ref.joinType(),
-          ref.joinCondition(), ref.usingColumns()));
+      JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), tableSchema, rows,
+          ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
+      tables.add(table);
+      registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
     }
     try {
       JoinRecordReader joinReader = new JoinRecordReader(tables);
@@ -774,6 +793,23 @@ class JParqPreparedStatement implements PreparedStatement {
     } catch (IllegalArgumentException e) {
       throw new SQLException("Failed to build join reader", e);
     }
+  }
+
+  private static void registerQualifierIndexes(Map<String, Integer> index, JoinRecordReader.JoinTable table,
+      int position) {
+    if (index == null || table == null) {
+      return;
+    }
+    registerQualifierIndex(index, table.tableName(), position);
+    registerQualifierIndex(index, table.alias(), position);
+  }
+
+  private static void registerQualifierIndex(Map<String, Integer> index, String qualifier, int position) {
+    String normalized = JParqUtil.normalizeQualifier(qualifier);
+    if (normalized == null || index.containsKey(normalized)) {
+      return;
+    }
+    index.put(normalized, position);
   }
 
   private void expandJoinQualifiedWildcards(JoinRecordReader joinReader) throws SQLException {
@@ -957,7 +993,7 @@ class JParqPreparedStatement implements PreparedStatement {
       rows.add(record);
     }
     return new JoinRecordReader.JoinTable(ref.tableName(), ref.tableAlias(), schema, rows, ref.joinType(),
-        ref.joinCondition(), ref.usingColumns());
+        ref.joinCondition(), ref.usingColumns(), null);
   }
 
   /**
@@ -994,7 +1030,7 @@ class JParqPreparedStatement implements PreparedStatement {
       }
       String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
       return new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), schema, rows, ref.joinType(),
-          ref.joinCondition(), ref.usingColumns());
+          ref.joinCondition(), ref.usingColumns(), null);
     } catch (SQLException e) {
       throw new SQLException("Failed to execute subquery for join: " + sql, e);
     }

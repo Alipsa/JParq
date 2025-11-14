@@ -32,6 +32,16 @@ public class JParqConnection implements Connection {
   private final boolean caseSensitive;
   private boolean closed = false;
 
+  /**
+   * Create a new JParq connection for the supplied JDBC URL.
+   *
+   * @param url
+   *          the JDBC URL that points to the base directory containing Parquet files
+   * @param props
+   *          optional connection properties that refine behaviour
+   * @throws SQLException
+   *           if the path is invalid or the connection cannot be initialised
+   */
   public JParqConnection(String url, Properties props) throws SQLException {
     Objects.requireNonNull(url, "url");
     String path = url.substring(JParqDriver.URL_PREFIX.length());
