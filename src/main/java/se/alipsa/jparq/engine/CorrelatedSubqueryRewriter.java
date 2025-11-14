@@ -50,7 +50,7 @@ public final class CorrelatedSubqueryRewriter {
    *          qualified column references that were replaced when rewriting the
    *          sub query
    */
-  public static record Result(String sql, boolean correlated, Set<String> correlatedColumns,
+  public record Result(String sql, boolean correlated, Set<String> correlatedColumns,
       Set<QualifiedColumn> correlatedReferences) {
   }
 
@@ -63,7 +63,7 @@ public final class CorrelatedSubqueryRewriter {
    * @param column
    *          column name referenced from the outer query
    */
-  public static record QualifiedColumn(String qualifier, String column) {
+  public record QualifiedColumn(String qualifier, String column) {
   }
 
   /**
