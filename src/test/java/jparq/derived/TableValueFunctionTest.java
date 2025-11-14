@@ -21,7 +21,8 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
 /**
- * Integration tests verifying support for {@code TABLE()} wrapped table value functions.
+ * Integration tests verifying support for {@code TABLE()} wrapped table value
+ * functions.
  */
 class TableValueFunctionTest {
 
@@ -30,9 +31,11 @@ class TableValueFunctionTest {
   private static Schema vehicleSchema;
 
   /**
-   * Create a temporary dataset with an array column used for {@code UNNEST} evaluation.
+   * Create a temporary dataset with an array column used for {@code UNNEST}
+   * evaluation.
    *
-   * @throws IOException if the test data cannot be created
+   * @throws IOException
+   *           if the test data cannot be created
    */
   @BeforeAll
   static void setUp() throws IOException {
@@ -45,7 +48,8 @@ class TableValueFunctionTest {
   /**
    * Remove all files created for the test dataset.
    *
-   * @throws IOException if removing the files fails
+   * @throws IOException
+   *           if removing the files fails
    */
   @AfterAll
   static void tearDown() throws IOException {
@@ -64,7 +68,8 @@ class TableValueFunctionTest {
   }
 
   /**
-   * Verify that {@code TABLE(UNNEST(...))} can be parsed and executed through the LATERAL pipeline.
+   * Verify that {@code TABLE(UNNEST(...))} can be parsed and executed through the
+   * LATERAL pipeline.
    */
   @Test
   void tableWrapperUnnestLateral() {

@@ -1,7 +1,10 @@
 # Version history
 
 ### 0.12.0 in progress
-- Additional Derived Tables support: LATERAL derived tables, VALUES table constructors
+- Additional Derived Tables support: 
+  - LATERAL derived tables
+  - VALUES table constructors
+  - Support TABLE wrapper for UNNEST table functions
 
 ### 0.11.0 2025-11-14
 - Add ARRAY constructor function support
