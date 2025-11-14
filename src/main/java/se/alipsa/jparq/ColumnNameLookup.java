@@ -10,7 +10,7 @@ import java.util.Map;
  * Utility helpers for resolving column names within result set metadata and
  * data access paths.
  */
-final class ColumnNameLookup {
+public final class ColumnNameLookup {
 
   private ColumnNameLookup() {
   }
@@ -34,7 +34,7 @@ final class ColumnNameLookup {
    *          the 1-based column index
    * @return the canonical column name when available, otherwise {@code null}
    */
-  static String canonicalName(List<String> canonicalNames, List<String> physicalNames, List<String> labels,
+  public static String canonicalName(List<String> canonicalNames, List<String> physicalNames, List<String> labels,
       int column) {
     int index = column - 1;
     if (index < 0) {
@@ -66,7 +66,7 @@ final class ColumnNameLookup {
    * @return an immutable map associating lower-cased column names to their
    *         1-based column index
    */
-  static Map<String, Integer> buildCaseInsensitiveIndex(int columnCount, List<String> canonicalNames,
+  public static Map<String, Integer> buildCaseInsensitiveIndex(int columnCount, List<String> canonicalNames,
       List<String> physicalNames, List<String> labels) {
     if (columnCount <= 0) {
       return Map.of();

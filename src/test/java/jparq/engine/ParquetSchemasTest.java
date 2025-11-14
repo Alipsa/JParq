@@ -1,4 +1,4 @@
-package se.alipsa.jparq.engine;
+package jparq.engine;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -8,6 +8,7 @@ import org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName;
 import org.apache.parquet.schema.Type;
 import org.apache.parquet.schema.Types;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.engine.ParquetSchemas;
 
 /**
  * Tests for {@link ParquetSchemas} utility methods that inspect Parquet logical

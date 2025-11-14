@@ -275,7 +275,7 @@ public final class ParquetSchemas {
    * @return {@code true} if the type is a binary primitive annotated with the
    *         {@link LogicalTypeAnnotation.StringLogicalTypeAnnotation}
    */
-  static boolean isStringAnnotatedBinary(Type type) {
+  public static boolean isStringAnnotatedBinary(Type type) {
     if (type == null || !type.isPrimitive()) {
       return false;
     }

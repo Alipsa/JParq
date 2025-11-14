@@ -32,7 +32,7 @@ public class JParqConnection implements Connection {
   private final boolean caseSensitive;
   private boolean closed = false;
 
-  JParqConnection(String url, Properties props) throws SQLException {
+  public JParqConnection(String url, Properties props) throws SQLException {
     Objects.requireNonNull(url, "url");
     String path = url.substring(JParqDriver.URL_PREFIX.length());
     int q = path.indexOf('?');

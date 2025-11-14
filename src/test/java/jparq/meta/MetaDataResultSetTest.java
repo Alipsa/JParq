@@ -1,9 +1,10 @@
-package se.alipsa.jparq.model;
+package jparq.meta;
 
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.model.MetaDataResultSet;
 
 /** Tests for {@link MetaDataResultSet}. */
 public class MetaDataResultSetTest {

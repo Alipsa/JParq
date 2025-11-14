@@ -1,4 +1,4 @@
-package se.alipsa.jparq;
+package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.ColumnNameLookup;
 
 /**
  * Tests for {@link ColumnNameLookup}.

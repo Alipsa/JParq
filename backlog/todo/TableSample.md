@@ -1,12 +1,10 @@
-## 📝 Requirements Document: SQL `TABLESAMPLE` Clause
-
 **Please add support for the `TABLESAMPLE` clause, aligning with the SQL standard (specifically adopted by many vendors like SQL Server, Oracle, and PostgreSQL, based on early proposals).**
 
 The `TABLESAMPLE` clause is a standard-aligned feature used to efficiently retrieve a **random subset (a sample)** of rows from a table rather than scanning the entire table. This is crucial for initial data exploration, quick analytical checks, and developing models on large datasets where processing the full table is unnecessary or too time-consuming.
 
 -----
 
-## ⚙️ Key Characteristics According to the Standard
+## Key Characteristics According to the Standard
 
 `TABLESAMPLE` is used in the `FROM` clause immediately following the table name and must adhere to a specific sampling method.
 
@@ -32,7 +30,7 @@ FROM
 
 -----
 
-## 🏎️ Example using the `mtcars` Dataset
+## Example using the `mtcars` Dataset
 
 We will use `TABLESAMPLE` to retrieve a random subset of approximately $50\%$ of the cars, which is useful for quick statistical tests or validation.
 

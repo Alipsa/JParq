@@ -252,7 +252,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
    * @return an ordered list of hints, potentially containing empty strings when
    *         gaps are present
    */
-  static List<String> parseColumnTypeHints(String columnTypes) {
+  public static List<String> parseColumnTypeHints(String columnTypes) {
     if (columnTypes == null || columnTypes.isBlank()) {
       return List.of();
     }
