@@ -89,8 +89,8 @@ public final class UnnestTableBuilder {
     }
 
     String tableName = reference.tableAlias() != null ? reference.tableAlias() : "unnest";
-    return new JoinTable(tableName, reference.tableAlias(), unnestSchema, List.of(), joinType, null,
-        List.of(), supplier);
+    return new JoinTable(tableName, reference.tableAlias(), unnestSchema, List.of(), joinType,
+        reference.joinCondition(), reference.usingColumns(), supplier);
   }
 
   private static int resolveSourceIndex(Column column, String columnName, List<JoinTable> priorTables,

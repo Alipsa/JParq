@@ -82,6 +82,34 @@ class UnnestTest {
   }
 
   @Test
+  void unnestJoinFiltersOnCondition() {
+    String sql = """
+        SELECT
+            p.name,
+            tags.tag
+        FROM
+            products p
+            JOIN UNNEST(p.tags) AS tags(tag) ON tags.tag = 'Sport'
+        ORDER BY
+            p.name,
+            tags.tag
+        """;
+
+    List<String> filteredTags = new ArrayList<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          filteredTags.add(rs.getString("name") + ":" + rs.getString("tag"));
+        }
+      } catch (Exception e) {
+        throw new IllegalStateException("Failed to read filtered UNNEST results", e);
+      }
+    });
+
+    Assertions.assertEquals(List.of("Alpha:Sport"), filteredTags);
+  }
+
+  @Test
   void unnestWithOrdinality() {
     String sql = """
         SELECT
