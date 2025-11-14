@@ -677,7 +677,7 @@ class JParqPreparedStatement implements PreparedStatement {
     List<List<Object>> result = new ArrayList<>();
     for (List<Object> row : accumulated) {
       Integer count = remaining.get(row);
-      if (count == null || count == 0) {
+      if (count == null) {
         result.add(row);
       } else if (count == 1) {
         remaining.remove(row);
