@@ -1,9 +1,5 @@
 package se.alipsa.jparq;
 
-import java.math.BigDecimal;
-import java.sql.Date;
-import java.sql.Time;
-import java.sql.Timestamp;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -15,8 +11,8 @@ import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
-import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 
 /** An implementation of the java.sql.ResultSetMetaData interface. */
@@ -121,12 +117,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     if (field == null) {
       return resolveComputedColumnType(column);
     }
-
-    Schema s = field.schema().getType() == Schema.Type.UNION
-        ? field.schema().getTypes().stream().filter(t -> t.getType() != Schema.Type.NULL).findFirst()
-            .orElse(field.schema())
-        : field.schema();
-    return mapSchemaToJdbcType(s);
+    return JdbcTypeMapper.mapSchemaToJdbcType(field.schema());
   }
 
   @Override
@@ -141,8 +132,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   public String getColumnClassName(int column) {
     Schema.Field field = resolveField(column);
     if (field != null) {
-      Schema fieldSchema = nonNullSchema(field.schema());
-      String className = mapSchemaToJavaClassName(fieldSchema);
+      String className = JdbcTypeMapper.mapSchemaToJavaClassName(field.schema());
       if (className != null) {
         return className;
       }
@@ -151,7 +141,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     if (computedClassName != null) {
       return computedClassName;
     }
-    return mapJdbcTypeToClassName(getColumnType(column));
+    return JdbcTypeMapper.mapJdbcTypeToClassName(getColumnType(column));
   }
 
   @Override
@@ -300,7 +290,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     if (baseField == null) {
       return Types.OTHER;
     }
-    return mapSchemaToJdbcType(nonNullSchema(baseField.schema()));
+    return JdbcTypeMapper.mapSchemaToJdbcType(baseField.schema());
   }
 
   private String resolveNavigationResultClassName(AnalyticExpression analytic) {
@@ -319,7 +309,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     if (baseField == null) {
       return null;
     }
-    return mapSchemaToJavaClassName(nonNullSchema(baseField.schema()));
+    return JdbcTypeMapper.mapSchemaToJavaClassName(baseField.schema());
   }
 
   private Schema.Field lookupFieldByName(String name) {
@@ -366,152 +356,4 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     return Collections.unmodifiableMap(map);
   }
 
-  /**
-   * Resolve a non-null schema from a field, unwrapping optional unions when
-   * necessary.
-   *
-   * @param fieldSchema
-   *          the schema associated with a column
-   * @return the underlying non-null schema
-   */
-  private Schema nonNullSchema(Schema fieldSchema) {
-    if (fieldSchema == null || fieldSchema.getType() != Schema.Type.UNION) {
-      return fieldSchema;
-    }
-    return fieldSchema.getTypes().stream().filter(t -> t.getType() != Schema.Type.NULL).findFirst().orElse(fieldSchema);
-  }
-
-  /**
-   * Map an Avro schema type to the corresponding JDBC type.
-   *
-   * @param schema
-   *          the schema describing the value
-   * @return the JDBC type constant matching {@code schema}
-   */
-  private int mapSchemaToJdbcType(Schema schema) {
-    Schema base = nonNullSchema(schema);
-    if (base == null) {
-      return Types.OTHER;
-    }
-    return switch (base.getType()) {
-      case STRING, ENUM -> Types.VARCHAR;
-      case INT -> (LogicalTypes.date().equals(base.getLogicalType()) ? Types.DATE : Types.INTEGER);
-      case LONG -> (base.getLogicalType() instanceof LogicalTypes.TimestampMillis
-          || base.getLogicalType() instanceof LogicalTypes.TimestampMicros ? Types.TIMESTAMP : Types.BIGINT);
-      case FLOAT -> Types.REAL;
-      case DOUBLE -> Types.DOUBLE;
-      case BOOLEAN -> Types.BOOLEAN;
-      case BYTES, FIXED -> {
-        if (base.getLogicalType() instanceof LogicalTypes.Decimal) {
-          yield Types.DECIMAL;
-        }
-        yield isUtf8String(base) ? Types.VARCHAR : Types.BINARY;
-      }
-      case RECORD -> Types.STRUCT;
-      case ARRAY -> Types.ARRAY;
-      default -> Types.OTHER;
-    };
-  }
-
-  /**
-   * Map an Avro schema to the fully qualified Java class name representing values
-   * for that schema.
-   *
-   * <p>
-   * The mapping mirrors {@link #mapSchemaToJdbcType(Schema)} to keep reported
-   * JDBC types and Java classes aligned when falling back from schema-based
-   * resolution.
-   * </p>
-   *
-   * @param schema
-   *          the schema describing the value
-   * @return the fully qualified Java class name representing {@code schema}
-   */
-  private String mapSchemaToJavaClassName(Schema schema) {
-    Schema base = nonNullSchema(schema);
-    if (base == null) {
-      return Object.class.getName();
-    }
-    return switch (base.getType()) {
-      case STRING, ENUM -> String.class.getName();
-      case INT -> {
-        if (LogicalTypes.date().equals(base.getLogicalType())) {
-          yield Date.class.getName();
-        }
-        if (base.getLogicalType() instanceof LogicalTypes.TimeMillis) {
-          yield Time.class.getName();
-        }
-        yield Integer.class.getName();
-      }
-      case LONG -> {
-        if (base.getLogicalType() instanceof LogicalTypes.TimestampMillis
-            || base.getLogicalType() instanceof LogicalTypes.TimestampMicros) {
-          yield Timestamp.class.getName();
-        }
-        if (base.getLogicalType() instanceof LogicalTypes.TimeMicros) {
-          yield Time.class.getName();
-        }
-        yield Long.class.getName();
-      }
-      case FLOAT -> Float.class.getName();
-      case DOUBLE -> Double.class.getName();
-      case BOOLEAN -> Boolean.class.getName();
-      case BYTES, FIXED ->
-        (base.getLogicalType() instanceof LogicalTypes.Decimal) ? BigDecimal.class.getName() : byte[].class.getName();
-      case RECORD -> Map.class.getName();
-      case ARRAY -> List.class.getName();
-      case MAP -> Map.class.getName();
-      default -> Object.class.getName();
-    };
-  }
-
-  private String mapJdbcTypeToClassName(int jdbcType) {
-    return switch (jdbcType) {
-      case Types.BIT, Types.BOOLEAN -> Boolean.class.getName();
-      case Types.TINYINT -> Byte.class.getName();
-      case Types.SMALLINT -> Short.class.getName();
-      case Types.INTEGER -> Integer.class.getName();
-      case Types.BIGINT -> Long.class.getName();
-      case Types.REAL -> Float.class.getName();
-      case Types.FLOAT, Types.DOUBLE -> Double.class.getName();
-      case Types.NUMERIC, Types.DECIMAL -> BigDecimal.class.getName();
-      case Types.CHAR, Types.VARCHAR, Types.LONGVARCHAR, Types.NCHAR, Types.NVARCHAR, Types.LONGNVARCHAR ->
-        String.class.getName();
-      case Types.DATE -> Date.class.getName();
-      case Types.TIME, Types.TIME_WITH_TIMEZONE -> Time.class.getName();
-      case Types.TIMESTAMP, Types.TIMESTAMP_WITH_TIMEZONE -> Timestamp.class.getName();
-      case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY -> byte[].class.getName();
-      case Types.ARRAY -> List.class.getName();
-      case Types.CLOB, Types.NCLOB -> java.sql.Clob.class.getName();
-      case Types.BLOB -> java.sql.Blob.class.getName();
-      case Types.STRUCT -> Map.class.getName();
-      default -> Object.class.getName();
-    };
-  }
-
-  private boolean isUtf8String(Schema schema) {
-    if (schema == null) {
-      return false;
-    }
-    if (schema.getLogicalType() instanceof LogicalTypes.Decimal) {
-      return false;
-    }
-    String logicalType = schema.getProp("logicalType");
-    if (logicalType != null && "decimal".equalsIgnoreCase(logicalType)) {
-      return false;
-    }
-    if (logicalType != null && "string".equalsIgnoreCase(logicalType)) {
-      return true;
-    }
-    String originalType = schema.getProp("originalType");
-    if (originalType != null && "UTF8".equalsIgnoreCase(originalType)) {
-      return true;
-    }
-    String convertedType = schema.getProp("convertedType");
-    if (convertedType != null && "UTF8".equalsIgnoreCase(convertedType)) {
-      return true;
-    }
-    Object javaString = schema.getObjectProp("avro.java.string");
-    return javaString != null;
-  }
 }
