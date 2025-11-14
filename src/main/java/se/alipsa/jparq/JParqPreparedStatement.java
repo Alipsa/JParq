@@ -2176,7 +2176,7 @@ class JParqPreparedStatement implements PreparedStatement {
     }
     if (query instanceof SqlParser.SetQuery setQuery) {
       for (SqlParser.SetComponent component : setQuery.components()) {
-        if (component != null && queryReferencesCte(component.select(), cteName)) {
+        if (component != null && queryReferencesCte(component.query(), cteName)) {
           return true;
         }
       }
