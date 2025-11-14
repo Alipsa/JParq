@@ -58,15 +58,12 @@ class JParqDatabaseMetaDataHintParsingTest {
       writer.write(record);
     }
 
-    JParqConnection connection = new JParqConnection("jdbc:jparq:" + tempDir.toUri().toString(), new Properties());
-    try {
+    try (JParqConnection connection = new JParqConnection("jdbc:jparq:" + tempDir.toUri().toString(), new Properties())) {
       DatabaseMetaData metaData = connection.getMetaData();
       try (ResultSet columns = metaData.getColumns(null, null, "hinted", null)) {
         Assertions.assertTrue(columns.next(), "No column metadata was returned");
         Assertions.assertEquals(Types.INTEGER, columns.getInt("DATA_TYPE"));
       }
-    } finally {
-      connection.close();
     }
   }
 }
