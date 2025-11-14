@@ -5,6 +5,10 @@
   - LATERAL derived tables
   - VALUES table constructors
   - Support TABLE wrapper for UNNEST table functions
+- Complete set-operation coverage.
+  - INTERSECT ALL
+  - EXCEPT ALL
+  - Support for nested set operations
 
 ### 0.11.0 2025-11-14
 - Add ARRAY constructor function support

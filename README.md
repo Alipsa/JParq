@@ -135,7 +135,7 @@ The following SQL statements are supported:
 - Join support: INNER, LEFT, RIGHT, FULL, CROSS, and Self Join, join ... using syntax
 - union and union all support
 - intersect and except support
-- - Complete set-operation coverage.
+- Complete set-operation coverage.
   - EXCEPT
   - INTERSECT
   - INTERSECT ALL
@@ -170,7 +170,7 @@ The following SQL statements are supported:
 - PIVOT and UNPIVOT operators.
 - TABLESAMPLE clause for sampling rows from a table.
 
-## Out of scope (will not be supported)
+## Out of scope (will not be supported, at least not in the foreseeable future)
 - Data modification statements (INSERT, UPDATE, DELETE, MERGE)
 - Transaction control (COMMIT, ROLLBACK, SAVEPOINT)
 - Data definition statements (CREATE, ALTER, DROP, TRUNCATE)
