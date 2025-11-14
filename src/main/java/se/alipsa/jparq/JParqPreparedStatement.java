@@ -40,6 +40,9 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.OrderByElement;
 import org.apache.avro.LogicalType;
 import org.apache.avro.LogicalTypes;
@@ -66,6 +69,7 @@ import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.QualifiedExpansionColumn;
+import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.UnnestTableBuilder;
 import se.alipsa.jparq.engine.window.AvgWindow;
@@ -81,6 +85,7 @@ import se.alipsa.jparq.engine.window.SumWindow;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.helper.JParqUtil;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /** An implementation of the java.sql.PreparedStatement interface. */
@@ -743,7 +748,9 @@ class JParqPreparedStatement implements PreparedStatement {
         continue;
       }
       if (ref.subquery() != null) {
-        JoinRecordReader.JoinTable table = materializeSubqueryTable(ref);
+        JoinRecordReader.JoinTable table = ref.lateral()
+            ? materializeLateralSubqueryTable(ref, tables, qualifierIndex)
+            : materializeSubqueryTable(ref);
         tables.add(table);
         registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
         continue;
@@ -982,7 +989,7 @@ class JParqPreparedStatement implements PreparedStatement {
         Field.NULL_DEFAULT_VALUE));
     fields.add(new Field("department", Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), deptSchema)), null,
         Field.NULL_DEFAULT_VALUE));
-    String recordName = ref.tableAlias() != null && !ref.tableAlias().isBlank() ? ref.tableAlias() : ref.tableName();
+    String recordName = derivedRecordName(ref);
     Schema schema = Schema.createRecord(recordName, null, null, false);
     schema.setFields(fields);
     List<GenericRecord> rows = new ArrayList<>();
@@ -1020,28 +1027,287 @@ class JParqPreparedStatement implements PreparedStatement {
     if (sql == null || sql.isBlank()) {
       throw new SQLException("Missing subquery SQL for derived table");
     }
+    List<String> fieldNames = new ArrayList<>();
+    List<Schema> valueSchemas = new ArrayList<>();
+    SubqueryTableData data = executeSubquery(sql, ref, null, fieldNames, valueSchemas);
+    String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
+    return new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), data.schema(), data.rows(), ref.joinType(),
+        ref.joinCondition(), ref.usingColumns(), null);
+  }
+
+  /**
+   * Build a {@link JoinRecordReader.JoinTable} backed by a correlated row supplier
+   * for a {@code LATERAL} derived table.
+   *
+   * @param ref
+   *          the table reference describing the derived table
+   * @param priorTables
+   *          tables that precede the lateral subquery and provide correlation
+   *          values
+   * @param qualifierIndex
+   *          mapping from normalized qualifier names to table indexes used during
+   *          join evaluation
+   * @return a join table capable of evaluating the lateral subquery per
+   *         assignment
+   * @throws SQLException
+   *           if the lateral definition cannot be parsed or executed
+   */
+  private JoinRecordReader.JoinTable materializeLateralSubqueryTable(SqlParser.TableReference ref,
+      List<JoinRecordReader.JoinTable> priorTables, Map<String, Integer> qualifierIndex) throws SQLException {
+    String sql = ref.subquerySql();
+    if (sql == null || sql.isBlank()) {
+      throw new SQLException("Missing subquery SQL for derived table");
+    }
+    if (priorTables == null || priorTables.isEmpty()) {
+      throw new SQLException("LATERAL derived tables require at least one preceding table");
+    }
+    net.sf.jsqlparser.statement.select.Select parsed;
+    try {
+      parsed = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil.parse(sql);
+    } catch (Exception e) {
+      throw new SQLException("Failed to parse LATERAL subquery", e);
+    }
+    List<String> qualifierNames = collectQualifiers(priorTables);
+    CorrelatedSubqueryRewriter.Result initial = CorrelatedSubqueryRewriter.rewrite(parsed, qualifierNames,
+        (qualifier, column) -> null);
+    List<String> fieldNames = new ArrayList<>();
+    List<Schema> valueSchemas = new ArrayList<>();
+    SubqueryTableData metadata = executeSubquery(initial.sql(), ref, null, fieldNames, valueSchemas);
+    Schema schema = metadata.schema();
+    Map<String, Map<String, String>> columnLookup = buildCorrelatedColumnLookup(priorTables);
+    JoinRecordReader.CorrelatedRowsSupplier supplier = assignments -> {
+      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(parsed, qualifierNames,
+          (qualifier, column) -> resolveCorrelatedValue(qualifier, column, assignments, priorTables, qualifierIndex,
+              columnLookup));
+      try {
+        return executeSubquery(rewritten.sql(), ref, schema, fieldNames, valueSchemas).rows();
+      } catch (SQLException e) {
+        throw new IllegalStateException("Failed to evaluate LATERAL subquery", e);
+      }
+    };
+    String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
+    return new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), schema, List.of(), ref.joinType(),
+        ref.joinCondition(), ref.usingColumns(), supplier);
+  }
+
+  /**
+   * Execute the supplied subquery and convert the result set into Avro records.
+   *
+   * @param sql
+   *          SQL text to execute
+   * @param ref
+   *          table reference describing the subquery
+   * @param schema
+   *          previously discovered schema or {@code null} to infer the schema
+   * @param fieldNames
+   *          mutable list receiving column names in projection order
+   * @param valueSchemas
+   *          mutable list receiving non-null Avro schemas for each column
+   * @return the materialised rows and schema information
+   * @throws SQLException
+   *           if the subquery execution fails
+   */
+  private SubqueryTableData executeSubquery(String sql, SqlParser.TableReference ref, Schema schema,
+      List<String> fieldNames, List<Schema> valueSchemas) throws SQLException {
+    if (sql == null || sql.isBlank()) {
+      throw new SQLException("Missing subquery SQL for derived table");
+    }
     try (PreparedStatement subStmt = stmt.getConn().prepareStatement(sql); ResultSet rs = subStmt.executeQuery()) {
       ResultSetMetaData meta = rs.getMetaData();
       int columnCount = meta.getColumnCount();
-      List<String> fieldNames = new ArrayList<>(columnCount);
-      List<Schema> valueSchemas = new ArrayList<>(columnCount);
-      Schema schema = buildSubquerySchema(meta, ref, fieldNames, valueSchemas);
+      Schema schemaToUse = schema;
+      if (schemaToUse == null) {
+        fieldNames.clear();
+        valueSchemas.clear();
+        schemaToUse = buildSubquerySchema(meta, ref, fieldNames, valueSchemas);
+      } else if (fieldNames.size() != columnCount || valueSchemas.size() != columnCount) {
+        throw new SQLException("LATERAL subquery column count mismatch");
+      }
       List<GenericRecord> rows = new ArrayList<>();
       while (rs.next()) {
-        GenericData.Record record = new GenericData.Record(schema);
+        GenericData.Record record = new GenericData.Record(schemaToUse);
         for (int i = 1; i <= columnCount; i++) {
           Object raw = rs.getObject(i);
-          Schema fieldSchema = valueSchemas.get(i - 1);
-          record.put(fieldNames.get(i - 1), toAvroValue(raw, fieldSchema));
+          record.put(fieldNames.get(i - 1), toAvroValue(raw, valueSchemas.get(i - 1)));
         }
         rows.add(record);
       }
-      String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
-      return new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), schema, rows, ref.joinType(),
-          ref.joinCondition(), ref.usingColumns(), null);
+      return new SubqueryTableData(schemaToUse, List.copyOf(rows));
     } catch (SQLException e) {
       throw new SQLException("Failed to execute subquery for join: " + sql, e);
     }
+  }
+
+  /**
+   * Collect table names and aliases that should be visible to correlated
+   * subqueries.
+   *
+   * @param tables
+   *          join tables that precede the correlated subquery
+   * @return immutable list of qualifier names
+   */
+  private static List<String> collectQualifiers(List<JoinRecordReader.JoinTable> tables) {
+    if (tables == null || tables.isEmpty()) {
+      return List.of();
+    }
+    List<String> qualifiers = new ArrayList<>();
+    for (JoinRecordReader.JoinTable table : tables) {
+      if (table.alias() != null && !table.alias().isBlank()) {
+        qualifiers.add(table.alias());
+      }
+      if (table.tableName() != null && !table.tableName().isBlank()) {
+        qualifiers.add(table.tableName());
+      }
+    }
+    return List.copyOf(qualifiers);
+  }
+
+  /**
+   * Construct a qualifier-aware lookup for column names used when resolving
+   * correlated references.
+   *
+   * @param tables
+   *          join tables that precede the correlated subquery
+   * @return immutable mapping from normalized qualifier to column name mapping
+   */
+  private static Map<String, Map<String, String>> buildCorrelatedColumnLookup(List<JoinRecordReader.JoinTable> tables) {
+    if (tables == null || tables.isEmpty()) {
+      return Map.of();
+    }
+    Map<String, Map<String, String>> lookup = new LinkedHashMap<>();
+    for (JoinRecordReader.JoinTable table : tables) {
+      Map<String, String> columns = new LinkedHashMap<>();
+      for (Schema.Field field : table.schema().getFields()) {
+        String normalized = normalizeColumnKey(field.name());
+        columns.putIfAbsent(normalized, field.name());
+      }
+      registerCorrelatedColumns(lookup, table.tableName(), columns);
+      registerCorrelatedColumns(lookup, table.alias(), columns);
+    }
+    return Map.copyOf(lookup);
+  }
+
+  /**
+   * Register column mappings for a qualifier when correlation is possible.
+   *
+   * @param lookup
+   *          accumulator receiving qualifier mappings
+   * @param qualifier
+   *          table name or alias to register
+   * @param columns
+   *          mapping of normalized column names to schema field names
+   */
+  private static void registerCorrelatedColumns(Map<String, Map<String, String>> lookup, String qualifier,
+      Map<String, String> columns) {
+    String normalized = JParqUtil.normalizeQualifier(qualifier);
+    if (normalized == null || lookup.containsKey(normalized)) {
+      return;
+    }
+    lookup.put(normalized, Map.copyOf(columns));
+  }
+
+  /**
+   * Resolve the value of a correlated column reference for the supplied
+   * assignments.
+   *
+   * @param qualifier
+   *          normalized qualifier associated with the column
+   * @param column
+   *          column identifier referenced from the outer query
+   * @param assignments
+   *          current join assignments representing the left-hand side
+   * @param priorTables
+   *          tables preceding the correlated subquery
+   * @param qualifierIndex
+   *          lookup from qualifier to join table index
+   * @param columnLookup
+   *          mapping from qualifier to column name lookup tables
+   * @return the correlated column value or {@code null} if unavailable
+   */
+  private Object resolveCorrelatedValue(String qualifier, String column, List<GenericRecord> assignments,
+      List<JoinRecordReader.JoinTable> priorTables, Map<String, Integer> qualifierIndex,
+      Map<String, Map<String, String>> columnLookup) {
+    if (column == null) {
+      return null;
+    }
+    String normalizedQualifier = qualifier;
+    Integer tableIndex = null;
+    if (normalizedQualifier != null && qualifierIndex != null) {
+      tableIndex = qualifierIndex.get(normalizedQualifier);
+    }
+    if (tableIndex == null && normalizedQualifier != null && priorTables != null) {
+      for (int i = 0; i < priorTables.size(); i++) {
+        JoinRecordReader.JoinTable table = priorTables.get(i);
+        if (normalizedQualifier.equals(JParqUtil.normalizeQualifier(table.alias()))
+            || normalizedQualifier.equals(JParqUtil.normalizeQualifier(table.tableName()))) {
+          tableIndex = i;
+          break;
+        }
+      }
+    }
+    if (tableIndex == null || assignments == null || tableIndex >= assignments.size()) {
+      return null;
+    }
+    GenericRecord record = assignments.get(tableIndex);
+    if (record == null) {
+      return null;
+    }
+    Map<String, String> mapping = normalizedQualifier == null ? Map.of()
+        : columnLookup.getOrDefault(normalizedQualifier, Map.of());
+    String normalizedColumn = normalizeColumnKey(column);
+    String fieldName = mapping.get(normalizedColumn);
+    if (fieldName == null) {
+      fieldName = findFieldName(record.getSchema(), normalizedColumn);
+    }
+    return fieldName == null ? null : record.get(fieldName);
+  }
+
+  /**
+   * Locate the schema field name matching the supplied normalized column
+   * identifier.
+   *
+   * @param schema
+   *          schema describing the table rows
+   * @param normalizedColumn
+   *          normalized column identifier
+   * @return the matching field name or {@code null}
+   */
+  private static String findFieldName(Schema schema, String normalizedColumn) {
+    if (schema == null || normalizedColumn == null) {
+      return null;
+    }
+    for (Schema.Field field : schema.getFields()) {
+      if (normalizedColumn.equals(normalizeColumnKey(field.name()))) {
+        return field.name();
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Normalize a column identifier for case-insensitive comparisons and lookup.
+   *
+   * @param column
+   *          column identifier provided by the SQL statement
+   * @return normalized column key or {@code null}
+   */
+  private static String normalizeColumnKey(String column) {
+    if (column == null) {
+      return null;
+    }
+    String normalized = JParqUtil.normalizeQualifier(column);
+    return normalized != null ? normalized : column.toLowerCase(Locale.ROOT);
+  }
+
+  /**
+   * Immutable representation of a materialised subquery result set.
+   *
+   * @param schema
+   *          Avro schema describing the rows
+   * @param rows
+   *          materialised rows produced by the subquery
+   */
+  private record SubqueryTableData(Schema schema, List<GenericRecord> rows) {
   }
 
   /**
@@ -1061,8 +1327,148 @@ class JParqPreparedStatement implements PreparedStatement {
    */
   private Schema buildSubquerySchema(ResultSetMetaData meta, SqlParser.TableReference ref, List<String> fieldNames,
       List<Schema> valueSchemas) throws SQLException {
-    String recordName = ref.tableAlias() != null && !ref.tableAlias().isBlank() ? ref.tableAlias() : ref.tableName();
-    return buildResultSchema(meta, recordName, fieldNames, valueSchemas, null);
+    String recordName = derivedRecordName(ref);
+    int columnCount = meta.getColumnCount();
+    List<Field> fields = new ArrayList<>(columnCount);
+    for (int i = 1; i <= columnCount; i++) {
+      String columnName = columnLabel(meta, i);
+      Schema valueSchema = columnSchema(meta, i);
+      if (ref != null && meta.getColumnType(i) == java.sql.Types.OTHER) {
+        Schema inferred = inferSubqueryColumnSchema(ref, i);
+        if (inferred != null) {
+          valueSchema = inferred;
+        }
+      }
+      Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
+      Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
+      fields.add(field);
+      fieldNames.add(columnName);
+      valueSchemas.add(valueSchema);
+    }
+    Schema schema = Schema.createRecord(recordName, null, null, false);
+    schema.setFields(fields);
+    return schema;
+  }
+
+  private static String derivedRecordName(SqlParser.TableReference ref) {
+    if (ref == null) {
+      return "derived";
+    }
+    String alias = ref.tableAlias();
+    if (alias != null && !alias.isBlank()) {
+      return alias;
+    }
+    String name = ref.tableName();
+    if (name != null && !name.isBlank()) {
+      return name;
+    }
+    return "derived";
+  }
+
+  private Schema inferSubqueryColumnSchema(SqlParser.TableReference ref, int columnIndex) throws SQLException {
+    if (ref == null || ref.subquery() == null) {
+      return null;
+    }
+    SqlParser.Select select = ref.subquery();
+    List<Expression> expressions = select.expressions();
+    if (expressions == null || columnIndex < 1 || columnIndex > expressions.size()) {
+      return null;
+    }
+    Expression projection = expressions.get(columnIndex - 1);
+    if (!(projection instanceof Column column)) {
+      return null;
+    }
+    String columnName = column.getColumnName();
+    if (columnName == null || columnName.isBlank()) {
+      return null;
+    }
+    Schema sourceSchema = resolveSchemaForColumn(select.tableReferences(), column.getTable());
+    if (sourceSchema == null) {
+      return null;
+    }
+    Schema.Field field = findFieldIgnoreCase(sourceSchema, columnName);
+    if (field == null) {
+      return null;
+    }
+    return JdbcTypeMapper.nonNullSchema(field.schema());
+  }
+
+  private Schema resolveSchemaForColumn(List<SqlParser.TableReference> tableRefs, Table qualifier) throws SQLException {
+    if (tableRefs == null || tableRefs.isEmpty()) {
+      return null;
+    }
+    String qualifierName = null;
+    if (qualifier != null) {
+      if (qualifier.getName() != null && !qualifier.getName().isBlank()) {
+        qualifierName = qualifier.getName();
+      } else if (qualifier.getFullyQualifiedName() != null && !qualifier.getFullyQualifiedName().isBlank()) {
+        qualifierName = qualifier.getFullyQualifiedName();
+      } else if (qualifier.getUnquotedName() != null && !qualifier.getUnquotedName().isBlank()) {
+        qualifierName = qualifier.getUnquotedName();
+      }
+    }
+    String normalizedQualifier = JParqUtil.normalizeQualifier(qualifierName);
+    SqlParser.TableReference match = null;
+    if (normalizedQualifier != null) {
+      for (SqlParser.TableReference candidate : tableRefs) {
+        if (normalizedQualifier.equals(JParqUtil.normalizeQualifier(candidate.tableAlias()))
+            || normalizedQualifier.equals(JParqUtil.normalizeQualifier(candidate.tableName()))) {
+          match = candidate;
+          break;
+        }
+      }
+    } else if (tableRefs.size() == 1) {
+      match = tableRefs.getFirst();
+    }
+    if (match == null) {
+      return null;
+    }
+    return schemaForTableReference(match);
+  }
+
+  private Schema schemaForTableReference(SqlParser.TableReference ref) throws SQLException {
+    if (ref == null) {
+      return null;
+    }
+    if (ref.commonTableExpression() != null) {
+      CteResult result = resolveCteResult(ref.commonTableExpression(), cteResults);
+      if (result != null) {
+        return result.schema();
+      }
+    }
+    if (ref.tableName() != null) {
+      CteResult cte = resolveCteResultByName(ref.tableName(), cteResults);
+      if (cte != null) {
+        return cte.schema();
+      }
+      File tableFile = stmt.getConn().tableFile(ref.tableName());
+      Path path = new Path(tableFile.toURI());
+      Configuration tableConf = new Configuration(false);
+      tableConf.setBoolean("parquet.filter.statistics.enabled", true);
+      tableConf.setBoolean("parquet.read.filter.columnindex.enabled", true);
+      tableConf.setBoolean("parquet.filter.dictionary.enabled", true);
+      try {
+        return ParquetSchemas.readAvroSchema(path, tableConf);
+      } catch (IOException e) {
+        throw new SQLException("Failed to read schema for table '" + ref.tableName() + "'", e);
+      }
+    }
+    return null;
+  }
+
+  private Schema.Field findFieldIgnoreCase(Schema schema, String columnName) {
+    if (schema == null || columnName == null) {
+      return null;
+    }
+    for (Schema.Field field : schema.getFields()) {
+      if (field.name().equals(columnName)) {
+        return field;
+      }
+      if (field.name().equalsIgnoreCase(columnName)) {
+        return field;
+      }
+    }
+    return null;
   }
 
   private Schema buildResultSchema(ResultSetMetaData meta, String recordName, List<String> fieldNames,
