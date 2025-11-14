@@ -45,8 +45,8 @@ public class JParqDatabaseMetaDataTest {
           "TABLE"
       })) {
         ResultSetMetaData tableMeta = tables.getMetaData();
-        List<String> expectedTableColumns = List.of("TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE",
-            "REMARKS", "TYPE_CAT", "TYPE_SCHEM", "TYPE_NAME", "SELF_REFERENCING_COL_NAME", "REF_GENERATION");
+        List<String> expectedTableColumns = List.of("TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE", "REMARKS",
+            "TYPE_CAT", "TYPE_SCHEM", "TYPE_NAME", "SELF_REFERENCING_COL_NAME", "REF_GENERATION");
         Assertions.assertEquals(expectedTableColumns.size(), tableMeta.getColumnCount());
         for (int i = 0; i < tableMeta.getColumnCount(); i++) {
           Assertions.assertEquals(expectedTableColumns.get(i), tableMeta.getColumnName(i + 1));
@@ -65,8 +65,8 @@ public class JParqDatabaseMetaDataTest {
       try (ResultSet columns = metaData.getColumns(null, null, "employees", null)) {
         ResultSetMetaData columnMeta = columns.getMetaData();
         List<String> expectedColumnHeaders = List.of("TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE",
-            "COLUMN_NAME", "ORDINAL_POSITION", "IS_NULLABLE", "DATA_TYPE", "TYPE_NAME",
-            "CHARACTER_MAXIMUM_LENGTH", "NUMERIC_PRECISION", "NUMERIC_SCALE", "COLLATION_NAME");
+            "COLUMN_NAME", "ORDINAL_POSITION", "IS_NULLABLE", "DATA_TYPE", "TYPE_NAME", "CHARACTER_MAXIMUM_LENGTH",
+            "NUMERIC_PRECISION", "NUMERIC_SCALE", "COLLATION_NAME");
         Assertions.assertEquals(expectedColumnHeaders.size(), columnMeta.getColumnCount());
         for (int i = 0; i < columnMeta.getColumnCount(); i++) {
           Assertions.assertEquals(expectedColumnHeaders.get(i), columnMeta.getColumnName(i + 1));
@@ -82,8 +82,8 @@ public class JParqDatabaseMetaDataTest {
           Integer charMax = integerOrNull(columns, "CHARACTER_MAXIMUM_LENGTH");
           Integer precision = integerOrNull(columns, "NUMERIC_PRECISION");
           Integer scale = integerOrNull(columns, "NUMERIC_SCALE");
-          columnsByName.put(name, new ColumnInfo(columns.getString("TABLE_TYPE"), ordinal, nullable, dataType,
-              typeName, charMax, precision, scale));
+          columnsByName.put(name, new ColumnInfo(columns.getString("TABLE_TYPE"), ordinal, nullable, dataType, typeName,
+              charMax, precision, scale));
         }
 
         Assertions.assertEquals(Set.of("id", "first_name", "last_name"), columnsByName.keySet());

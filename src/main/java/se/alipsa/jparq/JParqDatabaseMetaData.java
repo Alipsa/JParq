@@ -15,16 +15,16 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import org.apache.avro.LogicalTypes;
+import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.avro.AvroParquetReader;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.ParquetReader;
 import org.apache.parquet.hadoop.metadata.ParquetMetadata;
 import org.apache.parquet.hadoop.util.HadoopInputFile;
-import org.apache.avro.LogicalTypes;
-import org.apache.avro.Schema;
-import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.JParqUtil;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 
 /**
  * An implementation of the java.sql.DatabaseMetaData interface for parquet
@@ -187,19 +187,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
             Integer numericPrecision = resolveNumericPrecision(jdbcType, baseSchema);
             Integer numericScale = resolveNumericScale(jdbcType, baseSchema);
             rows.add(new Object[]{
-                tableCatalog,
-                tableSchema,
-                table,
-                tableType,
-                columnName,
-                pos++,
-                isNullable,
-                jdbcType,
-                typeName,
-                charMaxLength,
-                numericPrecision,
-                numericScale,
-                null
+                tableCatalog, tableSchema, table, tableType, columnName, pos++, isNullable, jdbcType, typeName,
+                charMaxLength, numericPrecision, numericScale, null
             });
           }
         } catch (Exception e) {
@@ -210,8 +199,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
     return JParqUtil.listResultSet(new String[]{
         "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE", "COLUMN_NAME", "ORDINAL_POSITION", "IS_NULLABLE",
-        "DATA_TYPE", "TYPE_NAME", "CHARACTER_MAXIMUM_LENGTH", "NUMERIC_PRECISION", "NUMERIC_SCALE",
-        "COLLATION_NAME"
+        "DATA_TYPE", "TYPE_NAME", "CHARACTER_MAXIMUM_LENGTH", "NUMERIC_PRECISION", "NUMERIC_SCALE", "COLLATION_NAME"
     }, rows);
   }
 
@@ -228,8 +216,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
    * @throws SQLException
    *           if the Parquet metadata cannot be read
    */
-  private List<String> readColumnTypeHints(org.apache.hadoop.fs.Path path,
-      org.apache.hadoop.conf.Configuration conf) throws SQLException {
+  private List<String> readColumnTypeHints(org.apache.hadoop.fs.Path path, org.apache.hadoop.conf.Configuration conf)
+      throws SQLException {
     try {
       ParquetMetadata metadata = ParquetFileReader.readFooter(conf, path);
       Map<String, String> kv = metadata.getFileMetaData().getKeyValueMetaData();

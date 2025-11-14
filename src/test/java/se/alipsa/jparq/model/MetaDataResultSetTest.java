@@ -9,14 +9,19 @@ import org.junit.jupiter.api.Test;
 public class MetaDataResultSetTest {
 
   /**
-   * Verifies that null rows are handled gracefully when accessed by index or column label.
+   * Verifies that null rows are handled gracefully when accessed by index or
+   * column label.
    */
   @Test
   public void testNullRowAccessIsSafe() {
-    String[] headers = {"A", "B"};
+    String[] headers = {
+        "A", "B"
+    };
     List<Object[]> rows = new ArrayList<>();
     rows.add(null);
-    rows.add(new Object[] {"value", "other"});
+    rows.add(new Object[]{
+        "value", "other"
+    });
 
     MetaDataResultSet resultSet = new MetaDataResultSet(headers, rows);
 

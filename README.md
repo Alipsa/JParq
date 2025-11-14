@@ -163,36 +163,6 @@ The following SQL statements are supported:
   
 - Standard row-limiting syntax (FETCH FIRST / OFFSET … FETCH). The limit handler inspects only the non-standard LIMIT clause, leaving the SQL-standard FETCH clause unimplemented.
 
-- In JParqDatabaseMetaData
-  - The getTables() method should return rows composed of the following columns:
-  
-    | Column Name               | Type   | Description                                                                                    |
-    |---------------------------|--------|------------------------------------------------------------------------------------------------|
-    | TABLE_CAT                 | String | The catalog name (may be null).                                                                |
-    | TABLE_SCHEM               | String | The schema name (may be null).                                                                 |
-    | TABLE_NAME                | String | The table name.                                                                                |
-    | TABLE_TYPE                | String | "The type of object, typically one of: ""TABLE"", ""VIEW"", ""SYSTEM TABLE"", ""ALIAS"", etc." |
-    | REMARKS                   | String | Explanatory comments or descriptions for the table (may be null).                              |
-    | TYPE_CAT                  | String | "The catalog of the object type (rarely used, may be null)."                                   |
-    | TYPE_SCHEM                | String | "The schema of the object type (rarely used, may be null)."                                    |
-    | TYPE_NAME                 | String | "The name of the object type (rarely used, may be null)."                                      |
-    | SELF_REFERENCING_COL_NAME | String | Name of the designated self-referencing column (mostly null).                                  |
-    | REF_GENERATION            | String | Specifies how values in the self-referencing column are created (mostly null).                 |
-  
-  - The getColumns() method should return rows composed of the following columns 
-    - TABLE_NAME
-    - TABLE_TYPE
-    - COLUMN_NAME
-    - ORDINAL_POSITION
-    - IS_NULLABLE
-    - DATA_TYPE
-    - CHARACTER_MAXIMUM_LENGTH
-    - NUMERIC_PRECISION
-    - NUMERIC_SCALE
-    - COLLATION_NAME
-  - The DATA_TYPE in getColumns() should map to int value for standard SQL types as defined in java.sql.Types, they are always VARCHAR right now.
-  - TYPE_NAME in getColumns() should return standard SQL type names (e.g., "INTEGER", "VARCHAR", "DECIMAL"). Extract the type mapping in JParqResultSetMetaData to a utility class that can be used by meta data classes to improve maintainability.
-  - Modify jparq.JParqDatabaseMetaDataTest.databaseMetaDataTest() to validate the enhanced metadata information and create additional tests in that class if needed to ensure the functionality is properly tested.
 - Support for INFORMATION_SCHEMA.COLUMNS and INFORMATION_SCHEMA.TABLES use JParqDatabaseMetaData
 
 ### Non standard extensions

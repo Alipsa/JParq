@@ -60,7 +60,8 @@ public final class JdbcTypeMapper {
     }
     return switch (base.getType()) {
       case STRING, ENUM -> Types.VARCHAR;
-      case INT -> (LogicalTypes.date().equals(base.getLogicalType()) ? Types.DATE
+      case INT -> (LogicalTypes.date().equals(base.getLogicalType())
+          ? Types.DATE
           : base.getLogicalType() instanceof LogicalTypes.TimeMillis ? Types.TIME : Types.INTEGER);
       case LONG -> {
         if (base.getLogicalType() instanceof LogicalTypes.TimestampMillis
@@ -89,8 +90,8 @@ public final class JdbcTypeMapper {
   }
 
   /**
-   * Map an Avro schema to the fully qualified Java class name representing
-   * values of that schema.
+   * Map an Avro schema to the fully qualified Java class name representing values
+   * of that schema.
    *
    * @param schema
    *          the schema describing the value
@@ -125,8 +126,8 @@ public final class JdbcTypeMapper {
       case FLOAT -> Float.class.getName();
       case DOUBLE -> Double.class.getName();
       case BOOLEAN -> Boolean.class.getName();
-      case BYTES, FIXED -> (base.getLogicalType() instanceof LogicalTypes.Decimal) ? BigDecimal.class.getName()
-          : byte[].class.getName();
+      case BYTES, FIXED ->
+        (base.getLogicalType() instanceof LogicalTypes.Decimal) ? BigDecimal.class.getName() : byte[].class.getName();
       case RECORD -> Map.class.getName();
       case ARRAY -> List.class.getName();
       case MAP -> Map.class.getName();
@@ -224,4 +225,3 @@ public final class JdbcTypeMapper {
     return javaString != null;
   }
 }
-
