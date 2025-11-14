@@ -817,8 +817,8 @@ public final class SqlParser {
       return parseSubSelect(innerPlain, aliasNode, ctes, cteLookup, allowQualifiedWildcards, lateral);
     }
     if (fromItem instanceof TableFunction tableFunction) {
-        boolean tableFunctionLateral = lateral || "lateral".equalsIgnoreCase(tableFunction.getPrefix());
-        return parseTableFunction(tableFunction, tableFunctionLateral);
+      boolean tableFunctionLateral = lateral || "lateral".equalsIgnoreCase(tableFunction.getPrefix());
+      return parseTableFunction(tableFunction, tableFunctionLateral);
     }
     throw new IllegalArgumentException("Unsupported FROM item: " + fromItem);
   }
@@ -1849,12 +1849,12 @@ public final class SqlParser {
           && joinType != JoinType.FULL_OUTER) {
         throw new IllegalArgumentException("Unsupported outer join type");
       }
-        FromItem rightItem = join.getRightItem();
-        boolean joinLateral = rightItem instanceof LateralSubSelect;
-        if (!joinLateral && rightItem instanceof TableFunction tableFunction) {
-          joinLateral = "lateral".equalsIgnoreCase(tableFunction.getPrefix());
-        }
-        FromInfo info = parseFromItem(rightItem, ctes, cteLookup, allowQualifiedWildcards, joinLateral);
+      FromItem rightItem = join.getRightItem();
+      boolean joinLateral = rightItem instanceof LateralSubSelect;
+      if (!joinLateral && rightItem instanceof TableFunction tableFunction) {
+        joinLateral = "lateral".equalsIgnoreCase(tableFunction.getPrefix());
+      }
+      FromInfo info = parseFromItem(rightItem, ctes, cteLookup, allowQualifiedWildcards, joinLateral);
       Expression condition = null;
       if (join.getOnExpressions() != null) {
         for (Expression on : join.getOnExpressions()) {

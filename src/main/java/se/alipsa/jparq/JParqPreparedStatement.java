@@ -59,6 +59,7 @@ import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
+import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.IdentifierUtil;
 import se.alipsa.jparq.engine.InMemoryRecordReader;
 import se.alipsa.jparq.engine.JoinRecordReader;
@@ -69,7 +70,6 @@ import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.QualifiedExpansionColumn;
-import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.UnnestTableBuilder;
 import se.alipsa.jparq.engine.window.AvgWindow;
@@ -1036,8 +1036,8 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Build a {@link JoinRecordReader.JoinTable} backed by a correlated row supplier
-   * for a {@code LATERAL} derived table.
+   * Build a {@link JoinRecordReader.JoinTable} backed by a correlated row
+   * supplier for a {@code LATERAL} derived table.
    *
    * @param ref
    *          the table reference describing the derived table
@@ -1252,7 +1252,8 @@ class JParqPreparedStatement implements PreparedStatement {
     if (record == null) {
       return null;
     }
-    Map<String, String> mapping = normalizedQualifier == null ? Map.of()
+    Map<String, String> mapping = normalizedQualifier == null
+        ? Map.of()
         : columnLookup.getOrDefault(normalizedQualifier, Map.of());
     String normalizedColumn = normalizeColumnKey(column);
     String fieldName = mapping.get(normalizedColumn);

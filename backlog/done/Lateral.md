@@ -32,6 +32,6 @@ The LATERAL clause is primarily used to:
 
 # Important!
 - Create test to verify the functionality in a test class called jparq.derived.LateralTest
-- Remember to also update javadocs (all classes and methods must have a description, all params must be listed and return and throws specified when appropriate) where needed.
+- Remember to also update javadocs (all public classes and methods must have a description, all params must be listed and return and throws specified when appropriate) where needed.
 - All tests must pass after the implementation using `mvn -Dspotless.check.skip=true test` to ensure that there is no regression.
 - Adhere to the coding standard defined in checkstyle.xml, pmd-ruleset.xml and spotless-formatting.xml and also pay attention to the design principles of low coupling, high cohesion, clarity and DRY (don't repeat yourself).

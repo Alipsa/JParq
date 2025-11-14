@@ -84,8 +84,7 @@ public final class CorrelatedSubqueryRewriter {
   public static Result rewrite(Select select, Collection<String> outerQualifiers,
       Function<String, Object> valueResolver) {
     Objects.requireNonNull(valueResolver, "valueResolver");
-    return rewrite(select, outerQualifiers,
-        (qualifier, column) -> valueResolver.apply(column));
+    return rewrite(select, outerQualifiers, (qualifier, column) -> valueResolver.apply(column));
   }
 
   /**
@@ -98,8 +97,8 @@ public final class CorrelatedSubqueryRewriter {
    * @param outerQualifiers
    *          names (table or alias) that belong to the outer query scope
    * @param valueResolver
-   *          function mapping a normalized qualifier and column name to the
-   *          value from the current outer row
+   *          function mapping a normalized qualifier and column name to the value
+   *          from the current outer row
    * @return a {@link Result} describing the rewritten SQL and correlated column
    *         usage
    */
@@ -111,8 +110,8 @@ public final class CorrelatedSubqueryRewriter {
       return new Result(select.toString(), false, Set.of(), Set.of());
     }
 
-    Set<String> normalized = outerQualifiers.stream().map(JParqUtil::normalizeQualifier)
-        .filter(Objects::nonNull).collect(Collectors.toUnmodifiableSet());
+    Set<String> normalized = outerQualifiers.stream().map(JParqUtil::normalizeQualifier).filter(Objects::nonNull)
+        .collect(Collectors.toUnmodifiableSet());
 
     if (normalized.isEmpty()) {
       return new Result(select.toString(), false, Set.of(), Set.of());
@@ -129,9 +128,7 @@ public final class CorrelatedSubqueryRewriter {
         Table table = column.getTable();
         if (table != null) {
           String[] candidates = {
-              table.getUnquotedName(),
-              table.getFullyQualifiedName(),
-              table.getName()
+              table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()
           };
           for (String candidate : candidates) {
             String normalizedCandidate = JParqUtil.normalizeQualifier(candidate);
