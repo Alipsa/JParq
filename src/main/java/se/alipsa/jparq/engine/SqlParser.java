@@ -900,11 +900,12 @@ public final class SqlParser {
     if (function == null || function.getName() == null) {
       throw new IllegalArgumentException("Unsupported table function in FROM clause: " + tableFunction);
     }
-    String name = function.getName();
+    Function effectiveFunction = unwrapTableWrapper(function, tableFunction);
+    String name = effectiveFunction.getName();
     if (!"unnest".equalsIgnoreCase(name)) {
       throw new IllegalArgumentException("Only UNNEST table functions are supported: " + tableFunction);
     }
-    ExpressionList<?> parameters = function.getParameters();
+    ExpressionList<?> parameters = effectiveFunction.getParameters();
     List<Expression> expressions = parameters == null
         ? List.of()
         : parameters.stream().filter(Expression.class::isInstance).map(Expression.class::cast)
@@ -926,6 +927,24 @@ public final class SqlParser {
         && "ORDINALITY".equalsIgnoreCase(tableFunction.getWithClause().trim());
     UnnestDefinition unnest = new UnnestDefinition(expression, withOrdinality, columnAliases);
     return new FromInfo(null, aliasName, Map.of(), null, null, null, null, unnest, lateral);
+  }
+
+  private static Function unwrapTableWrapper(Function function, TableFunction tableFunction) {
+    if (!"table".equalsIgnoreCase(function.getName())) {
+      return function;
+    }
+    ExpressionList<?> parameters = function.getParameters();
+    if (parameters == null || parameters.isEmpty()) {
+      throw new IllegalArgumentException("TABLE wrapper requires an inner function: " + tableFunction);
+    }
+    if (parameters.size() != 1) {
+      throw new IllegalArgumentException("TABLE wrapper accepts exactly one argument: " + tableFunction);
+    }
+    Object parameter = parameters.get(0);
+    if (!(parameter instanceof Function innerFunction)) {
+      throw new IllegalArgumentException("TABLE wrapper must contain a function call: " + tableFunction);
+    }
+    return innerFunction;
   }
 
   private static FromInfo parseValuesFromItem(Values values, boolean lateral) {
