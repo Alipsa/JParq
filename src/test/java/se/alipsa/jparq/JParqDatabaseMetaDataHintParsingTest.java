@@ -13,6 +13,7 @@ import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.parquet.avro.AvroParquetWriter;
 import org.apache.parquet.hadoop.ParquetWriter;
+import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -48,7 +49,8 @@ class JParqDatabaseMetaDataHintParsingTest {
 
     Schema schema = SchemaBuilder.record("HintedRecord").fields().requiredString("value").endRecord();
     Map<String, String> metadata = Map.of("matrix.columnTypes", "java.lang.Integer");
-    try (ParquetWriter<GenericRecord> writer = AvroParquetWriter.<GenericRecord>builder(hadoopPath).withConf(conf)
+    try (ParquetWriter<GenericRecord> writer =
+        AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(hadoopPath, conf)).withConf(conf)
         .withSchema(schema).withExtraMetaData(metadata).build()) {
       GenericRecord record = new GenericData.Record(schema);
       record.put("value", "42");
