@@ -93,14 +93,7 @@ public final class JoinRecordReader implements RecordReader {
       Objects.requireNonNull(rows, "rows");
       Objects.requireNonNull(joinType, "joinType");
       usingColumns = usingColumns == null ? List.of() : List.copyOf(usingColumns);
-      if (rows == null) {
-        rows = List.of();
-      } else {
-        rows = List.copyOf(rows);
-      }
-      if (correlatedRowsSupplier == null && rows.isEmpty()) {
-        rows = List.of();
-      }
+      rows = List.copyOf(rows);
       if (joinType == SqlParser.JoinType.BASE && joinCondition != null) {
         throw new IllegalArgumentException("The base table cannot specify a join condition");
       }
