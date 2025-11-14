@@ -147,11 +147,8 @@ The following SQL statements are supported:
   - GROUPING SETS
   - ROLLUP
   - CUBE
-- Derived Tables: UNNEST, LATERAL derived tables, VALUES table constructors
+- Derived Tables: UNNEST with or without a table wrapper, LATERAL derived tables, VALUES table constructors
 ## Roadmap: Might be implemented in the future
-
-- Derived Tables 
-  - TABLE value functions
 
 - Complete set-operation coverage.
   - INTERSECT ALL
