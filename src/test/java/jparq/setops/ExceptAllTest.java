@@ -64,8 +64,7 @@ public class ExceptAllTest {
         """;
     String left = "SELECT cyl, gear FROM mtcars";
     String right = subtractCte + "\nSELECT cyl, gear FROM subtract";
-    String differenceSql = subtractCte
-        + "\nSELECT cyl, gear FROM mtcars"
+    String differenceSql = subtractCte + "\nSELECT cyl, gear FROM mtcars"
         + "\nEXCEPT ALL\nSELECT cyl, gear FROM subtract";
     List<List<Integer>> leftRows = queryIntRows(left);
     List<List<Integer>> rightRows = queryIntRows(right);
@@ -78,8 +77,7 @@ public class ExceptAllTest {
     for (Map.Entry<List<Integer>, Long> entry : leftCounts.entrySet()) {
       List<Integer> key = entry.getKey();
       long expectedCount = Math.max(0, entry.getValue() - rightCounts.getOrDefault(key, 0L));
-      assertEquals(expectedCount, resultCounts.getOrDefault(key, 0L),
-          () -> "Unexpected multiplicity for row " + key);
+      assertEquals(expectedCount, resultCounts.getOrDefault(key, 0L), () -> "Unexpected multiplicity for row " + key);
     }
   }
 

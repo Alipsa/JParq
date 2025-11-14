@@ -652,9 +652,9 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Compute the multiset difference between the accumulated rows and the
-   * provided incoming rows while preserving the encounter order from the left
-   * operand and respecting duplicate counts.
+   * Compute the multiset difference between the accumulated rows and the provided
+   * incoming rows while preserving the encounter order from the left operand and
+   * respecting duplicate counts.
    *
    * @param accumulated
    *          rows previously materialized

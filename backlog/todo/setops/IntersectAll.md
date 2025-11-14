@@ -1,5 +1,3 @@
-## Requirements Document: SQL `INTERSECT ALL` Set Operator
-
 **Please add support for the `INTERSECT ALL` set operator, aligning with the SQL Standard (SQL:1999/2003 and later).**
 
 The `INTERSECT ALL` operator is a standard set operation that returns all matching rows from the two input queries, preserving duplicates. Unlike the basic `INTERSECT` (which is equivalent to `INTERSECT DISTINCT` and removes duplicates), `INTERSECT ALL` is required for advanced analytical and reporting tasks where the frequency of matching rows must be maintained.
