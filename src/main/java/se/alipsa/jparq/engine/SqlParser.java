@@ -230,6 +230,8 @@ public final class SqlParser {
     UNION_ALL,
     /** INTERSECT using distinct semantics. */
     INTERSECT,
+    /** INTERSECT preserving duplicates. */
+    INTERSECT_ALL,
     /** EXCEPT using distinct semantics. */
     EXCEPT,
     /** EXCEPT ALL preserving duplicates. */
@@ -716,10 +718,7 @@ public final class SqlParser {
         if (op instanceof UnionOp unionOp) {
           operator = unionOp.isAll() ? SetOperator.UNION_ALL : SetOperator.UNION;
         } else if (op instanceof IntersectOp intersectOp) {
-          if (intersectOp.isAll()) {
-            throw new IllegalArgumentException("INTERSECT ALL is not supported");
-          }
-          operator = SetOperator.INTERSECT;
+          operator = intersectOp.isAll() ? SetOperator.INTERSECT_ALL : SetOperator.INTERSECT;
         } else if (op instanceof ExceptOp exceptOp) {
           operator = exceptOp.isAll() ? SetOperator.EXCEPT_ALL : SetOperator.EXCEPT;
         } else {

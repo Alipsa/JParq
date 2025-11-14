@@ -328,7 +328,7 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Execute a SQL set operation (UNION, INTERSECT, EXCEPT, EXCEPT ALL) by
+   * Execute a SQL set operation (UNION, UNION ALL, INTERSECT, INTERSECT ALL, EXCEPT, EXCEPT ALL) by
    * delegating to the individual component SELECT statements and materializing
    * the combined result.
    *
@@ -450,7 +450,7 @@ class JParqPreparedStatement implements PreparedStatement {
    */
   private int precedence(SqlParser.SetOperator operator) throws SQLException {
     return switch (operator) {
-      case INTERSECT -> 2;
+      case INTERSECT, INTERSECT_ALL -> 2;
       case UNION, UNION_ALL, EXCEPT, EXCEPT_ALL -> 1;
       default -> throw new SQLException("Unsupported set operator: " + operator);
     };
@@ -480,6 +480,7 @@ class JParqPreparedStatement implements PreparedStatement {
         yield combined;
       }
       case INTERSECT -> intersectDistinct(left, right);
+      case INTERSECT_ALL -> intersectAll(left, right);
       case EXCEPT -> exceptDistinct(left, right);
       case EXCEPT_ALL -> exceptAll(left, right);
       default -> throw new SQLException("Unsupported set operator: " + operator);
@@ -619,6 +620,41 @@ class JParqPreparedStatement implements PreparedStatement {
       }
     }
     return new ArrayList<>(ordered);
+  }
+
+  /**
+   * Compute the multiset intersection between the accumulated rows and the
+   * provided incoming rows while preserving encounter order from the accumulated
+   * input and respecting duplicate counts.
+   *
+   * @param accumulated
+   *          rows previously materialized
+   * @param incoming
+   *          rows produced by the current set operation component
+   * @return a list containing rows that appear in both inputs according to
+   *         INTERSECT ALL semantics
+   */
+  private List<List<Object>> intersectAll(List<List<Object>> accumulated, List<List<Object>> incoming) {
+    if (accumulated.isEmpty() || incoming.isEmpty()) {
+      return new ArrayList<>();
+    }
+    Map<List<Object>, Integer> remaining = new HashMap<>();
+    for (List<Object> row : incoming) {
+      remaining.merge(row, 1, Integer::sum);
+    }
+    List<List<Object>> result = new ArrayList<>();
+    for (List<Object> row : accumulated) {
+      Integer count = remaining.get(row);
+      if (count != null && count > 0) {
+        result.add(row);
+        if (count == 1) {
+          remaining.remove(row);
+        } else {
+          remaining.put(row, count - 1);
+        }
+      }
+    }
+    return result;
   }
 
   /**

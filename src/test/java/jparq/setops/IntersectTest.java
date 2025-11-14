@@ -1,8 +1,6 @@
 package jparq.setops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -120,21 +118,4 @@ public class IntersectTest {
     });
   }
 
-  /**
-   * Ensure that INTERSECT ALL is rejected as it is not supported by the engine.
-   */
-  @Test
-  void intersectAllIsRejected() {
-    String sql = """
-        SELECT cyl FROM mtcars
-        INTERSECT ALL
-        SELECT cyl FROM mtcars
-        """;
-    RuntimeException ex = assertThrows(RuntimeException.class, () -> jparqSql.query(sql, rs -> {
-    }));
-    assertTrue(ex.getCause() instanceof SQLException, "Expected SQLException for INTERSECT ALL rejection");
-    Throwable root = ex.getCause().getCause();
-    assertTrue(root instanceof IllegalArgumentException, "Underlying cause should describe unsupported INTERSECT ALL");
-    assertTrue(root.getMessage().contains("INTERSECT ALL"), "Error message should mention INTERSECT ALL");
-  }
 }
