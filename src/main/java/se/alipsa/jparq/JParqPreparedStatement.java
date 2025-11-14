@@ -1196,12 +1196,10 @@ class JParqPreparedStatement implements PreparedStatement {
     if (current == ValueColumnType.STRING || candidate == ValueColumnType.STRING) {
       return ValueColumnType.STRING;
     }
-    if ((current == ValueColumnType.TIMESTAMP && candidate == ValueColumnType.DATE)
-        || (current == ValueColumnType.DATE && candidate == ValueColumnType.TIMESTAMP)
-        || (current == ValueColumnType.TIMESTAMP && candidate == ValueColumnType.TIME)
-        || (current == ValueColumnType.TIME && candidate == ValueColumnType.TIMESTAMP)
-        || (current == ValueColumnType.DATE && candidate == ValueColumnType.TIME)
-        || (current == ValueColumnType.TIME && candidate == ValueColumnType.DATE)) {
+    if ((current == ValueColumnType.TIMESTAMP
+        && (candidate == ValueColumnType.DATE || candidate == ValueColumnType.TIME))
+        || (candidate == ValueColumnType.TIMESTAMP
+            && (current == ValueColumnType.DATE || current == ValueColumnType.TIME))) {
       return ValueColumnType.TIMESTAMP;
     }
     return ValueColumnType.STRING;
@@ -1222,6 +1220,10 @@ class JParqPreparedStatement implements PreparedStatement {
       return ValueColumnType.DOUBLE;
     }
     if (left == ValueColumnType.FLOAT && right == ValueColumnType.FLOAT) {
+      return ValueColumnType.FLOAT;
+    }
+    if ((left == ValueColumnType.FLOAT && right == ValueColumnType.INT)
+        || (left == ValueColumnType.INT && right == ValueColumnType.FLOAT)) {
       return ValueColumnType.FLOAT;
     }
     if (left == ValueColumnType.FLOAT || right == ValueColumnType.FLOAT) {
@@ -1266,20 +1268,24 @@ class JParqPreparedStatement implements PreparedStatement {
     return logicalType.addToSchema(Schema.create(Schema.Type.BYTES));
   }
 
-  private Object normalizeValueForType(Object value, ValueColumnType type) {
+  private Object normalizeValueForType(Object value, ValueColumnType type) throws SQLException {
     if (value == null) {
       return null;
     }
-    return switch (type) {
-      case BOOLEAN -> (value instanceof Boolean bool) ? bool : Boolean.valueOf(value.toString());
-      case INT -> value instanceof Number num ? Integer.valueOf(num.intValue()) : Integer.valueOf(value.toString());
-      case LONG -> value instanceof Number num ? Long.valueOf(num.longValue()) : Long.valueOf(value.toString());
-      case FLOAT -> value instanceof Number num ? Float.valueOf(num.floatValue()) : Float.valueOf(value.toString());
-      case DOUBLE -> value instanceof Number num ? Double.valueOf(num.doubleValue()) : Double.valueOf(value.toString());
-      case DECIMAL -> value instanceof BigDecimal bd ? bd : new BigDecimal(value.toString());
-      case DATE, TIME, TIMESTAMP, BINARY -> value;
-      case STRING -> value instanceof CharSequence ? value : value.toString();
-    };
+    try {
+      return switch (type) {
+        case BOOLEAN -> (value instanceof Boolean bool) ? bool : Boolean.valueOf(value.toString());
+        case INT -> value instanceof Number num ? Integer.valueOf(num.intValue()) : Integer.valueOf(value.toString());
+        case LONG -> value instanceof Number num ? Long.valueOf(num.longValue()) : Long.valueOf(value.toString());
+        case FLOAT -> value instanceof Number num ? Float.valueOf(num.floatValue()) : Float.valueOf(value.toString());
+        case DOUBLE -> value instanceof Number num ? Double.valueOf(num.doubleValue()) : Double.valueOf(value.toString());
+        case DECIMAL -> value instanceof BigDecimal bd ? bd : new BigDecimal(value.toString());
+        case DATE, TIME, TIMESTAMP, BINARY -> value;
+        case STRING -> value instanceof CharSequence ? value : value.toString();
+      };
+    } catch (NumberFormatException | NullPointerException e) {
+      throw new SQLException("Failed to convert value '" + value + "' to type " + type, e);
+    }
   }
 
   private void registerValueTableResult(SqlParser.TableReference ref, CteResult result,
@@ -1292,7 +1298,7 @@ class JParqPreparedStatement implements PreparedStatement {
       target.put(aliasKey, result);
     }
     String tableKey = normalizeCteKey(ref.tableName());
-    if (tableKey != null) {
+    if (tableKey != null && (aliasKey == null || !aliasKey.equals(tableKey))) {
       target.putIfAbsent(tableKey, result);
     }
   }

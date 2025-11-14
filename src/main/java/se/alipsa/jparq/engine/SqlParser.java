@@ -659,7 +659,8 @@ public final class SqlParser {
     List<TableReference> tableRefs = buildTableReferences(fromInfo, List.of());
     List<String> columnNames = fromInfo.valueTable().columnNames();
     if (columnNames.isEmpty()) {
-      throw new IllegalArgumentException("VALUES statement must produce at least one column: " + values);
+      throw new IllegalArgumentException(
+          "VALUES statement must produce at least one column but produced zero: " + values);
     }
     List<String> labels = new ArrayList<>(columnNames);
     List<Expression> expressions = new ArrayList<>(columnNames.size());
@@ -870,8 +871,7 @@ public final class SqlParser {
       return parseTableFunction(tableFunction, tableFunctionLateral);
     }
     if (fromItem instanceof Values valuesItem) {
-      FromInfo info = parseValuesFromItem(valuesItem, lateral);
-      return applyAlias(info, valuesItem.getAlias());
+      return parseValuesFromItem(valuesItem, lateral);
     }
     throw new IllegalArgumentException("Unsupported FROM item: " + fromItem);
   }

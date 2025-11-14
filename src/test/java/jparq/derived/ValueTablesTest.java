@@ -1,9 +1,13 @@
 package jparq.derived;
 
+import java.lang.reflect.Method;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -19,6 +23,7 @@ import se.alipsa.jparq.JParqSql;
 class ValueTablesTest {
 
   private static JParqSql jparqSql;
+  private static String jdbcUrl;
 
   @BeforeAll
   static void setUp() throws URISyntaxException {
@@ -26,7 +31,8 @@ class ValueTablesTest {
     Assertions.assertNotNull(mtcarsUrl, "mtcars.parquet must be available on the classpath");
     Path mtcarsPath = Paths.get(mtcarsUrl.toURI());
     Path dataDirectory = mtcarsPath.getParent();
-    jparqSql = new JParqSql("jdbc:jparq:" + dataDirectory.toAbsolutePath());
+    jdbcUrl = "jdbc:jparq:" + dataDirectory.toAbsolutePath();
+    jparqSql = new JParqSql(jdbcUrl);
   }
 
   @Test
@@ -89,6 +95,57 @@ class ValueTablesTest {
           results.add(rs.getString("model") + ":" + rs.getString("category"));
         }
         Assertions.assertEquals(List.of("Camaro Z28:Performance", "Datsun 710:Economy", "Mazda RX4:Sport"), results);
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+  }
+
+  @Test
+  void valuesRealColumnReportsFloat() {
+    String sql = "VALUES (CAST(1.0 AS REAL)), (CAST(2.5 AS REAL))";
+    jparqSql.query(sql, rs -> {
+      try {
+        ResultSetMetaData meta = rs.getMetaData();
+        Assertions.assertEquals(Float.class.getName(), meta.getColumnClassName(1),
+            "REAL literals should report Float column class");
+        Assertions.assertTrue(rs.next(), "First VALUES row should be available");
+        Assertions.assertEquals(1.0f, rs.getFloat(1));
+        Assertions.assertTrue(rs.next(), "Second VALUES row should be available");
+        Assertions.assertEquals(2.5f, rs.getFloat(1));
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+  }
+
+  @Test
+  void determineColumnTypeTreatsIntAndFloatAsFloat() {
+    try (Connection connection = DriverManager.getConnection(jdbcUrl);
+        PreparedStatement statement = connection.prepareStatement("VALUES (1)")) {
+      Method determineColumnType = statement.getClass().getDeclaredMethod("determineColumnType", List.class);
+      determineColumnType.setAccessible(true);
+      Object result = determineColumnType.invoke(statement, List.of(Float.valueOf(1.0f), Integer.valueOf(2)));
+      Assertions.assertTrue(result instanceof Enum<?>, "Expected enum ValueColumnType result");
+      Assertions.assertEquals("FLOAT", ((Enum<?>) result).name(),
+          "INT and FLOAT values should widen to FLOAT");
+    } catch (ReflectiveOperationException | SQLException e) {
+      Assertions.fail(e);
+    }
+  }
+
+  @Test
+  void valuesDateAndTimeColumnFallbacksToString() {
+    String sql = "VALUES (DATE '2023-01-01'), (TIME '12:34:56')";
+    jparqSql.query(sql, rs -> {
+      try {
+        ResultSetMetaData meta = rs.getMetaData();
+        Assertions.assertEquals(String.class.getName(), meta.getColumnClassName(1),
+            "Mismatched DATE and TIME values should be exposed as Strings");
+        Assertions.assertTrue(rs.next());
+        Assertions.assertEquals("2023-01-01", rs.getString(1));
+        Assertions.assertTrue(rs.next());
+        Assertions.assertEquals("12:34:56", rs.getString(1));
       } catch (SQLException e) {
         Assertions.fail(e);
       }
