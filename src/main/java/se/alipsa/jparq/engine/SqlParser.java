@@ -805,41 +805,41 @@ public final class SqlParser {
       }
       return new FromInfo(tableName, tableAlias, mapping, innerSelect, null, cte, null, lateral);
     }
-      if (fromItem instanceof LateralSubSelect lateralSub) {
-        lateral = true;
-        PlainSelect innerPlain = lateralSub.getPlainSelect();
-        if (innerPlain == null) {
-          throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
-        }
-        Select innerSelect = parsePlainSelect(innerPlain, ctes, cteLookup, allowQualifiedWildcards);
-        Alias aliasNode = lateralSub.getAlias();
-      String alias = aliasNode != null ? aliasNode.getName() : innerSelect.tableAlias();
-      if (alias == null) {
-        alias = innerSelect.table();
-      }
-      Map<String, String> mapping = buildColumnMapping(innerSelect);
-      String subquerySql = innerPlain.toString();
-      return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql, null, null, lateral);
+    if (fromItem instanceof LateralSubSelect lateralSub) {
+      lateral = true;
+      PlainSelect innerPlain = lateralSub.getPlainSelect();
+      Alias aliasNode = lateralSub.getAlias();
+      return parseSubSelect(innerPlain, aliasNode, ctes, cteLookup, allowQualifiedWildcards, lateral);
     }
-      if (fromItem instanceof ParenthesedSelect sub) {
-        PlainSelect innerPlain = sub.getPlainSelect();
-        if (innerPlain == null) {
-          throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
-        }
-        Select innerSelect = parsePlainSelect(innerPlain, ctes, cteLookup, allowQualifiedWildcards);
-        String alias = sub.getAlias() != null ? sub.getAlias().getName() : innerSelect.tableAlias();
-      if (alias == null) {
-        alias = innerSelect.table();
-      }
-      Map<String, String> mapping = buildColumnMapping(innerSelect);
-      String subquerySql = innerPlain.toString();
-      return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql, null, null, lateral);
+    if (fromItem instanceof ParenthesedSelect sub) {
+      PlainSelect innerPlain = sub.getPlainSelect();
+      Alias aliasNode = sub.getAlias();
+      return parseSubSelect(innerPlain, aliasNode, ctes, cteLookup, allowQualifiedWildcards, lateral);
     }
     if (fromItem instanceof TableFunction tableFunction) {
         boolean tableFunctionLateral = lateral || "lateral".equalsIgnoreCase(tableFunction.getPrefix());
         return parseTableFunction(tableFunction, tableFunctionLateral);
     }
     throw new IllegalArgumentException("Unsupported FROM item: " + fromItem);
+  }
+
+  private static FromInfo parseSubSelect(PlainSelect innerPlain, Alias aliasNode, List<CommonTableExpression> ctes,
+      Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateral) {
+    if (innerPlain == null) {
+      throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
+    }
+    Select innerSelect = parsePlainSelect(innerPlain, ctes, cteLookup, allowQualifiedWildcards);
+    String alias = null;
+    if (aliasNode != null && aliasNode.getName() != null && !aliasNode.getName().isBlank()) {
+      alias = aliasNode.getName();
+    } else if (innerSelect.tableAlias() != null && !innerSelect.tableAlias().isBlank()) {
+      alias = innerSelect.tableAlias();
+    } else {
+      alias = innerSelect.table();
+    }
+    Map<String, String> mapping = buildColumnMapping(innerSelect);
+    String subquerySql = innerPlain.toString();
+    return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql, null, null, lateral);
   }
 
   private static FromInfo parseTableFunction(TableFunction tableFunction, boolean lateral) {
