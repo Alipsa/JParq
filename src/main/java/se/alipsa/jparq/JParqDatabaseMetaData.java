@@ -149,6 +149,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     })) {
       org.apache.hadoop.fs.Path hPath;
       while (tables.next()) {
+        String tableCatalog = tables.getString("TABLE_CAT");
+        String tableSchema = tables.getString("TABLE_SCHEM");
         String table = tables.getString("TABLE_NAME");
         String tableType = tables.getString("TABLE_TYPE");
         File file = conn.tableFile(table);
@@ -185,6 +187,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
             Integer numericPrecision = resolveNumericPrecision(jdbcType, baseSchema);
             Integer numericScale = resolveNumericScale(jdbcType, baseSchema);
             rows.add(new Object[]{
+                tableCatalog,
+                tableSchema,
                 table,
                 tableType,
                 columnName,
@@ -205,8 +209,9 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     }
 
     return JParqUtil.listResultSet(new String[]{
-        "TABLE_NAME", "TABLE_TYPE", "COLUMN_NAME", "ORDINAL_POSITION", "IS_NULLABLE", "DATA_TYPE", "TYPE_NAME",
-        "CHARACTER_MAXIMUM_LENGTH", "NUMERIC_PRECISION", "NUMERIC_SCALE", "COLLATION_NAME"
+        "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE", "COLUMN_NAME", "ORDINAL_POSITION", "IS_NULLABLE",
+        "DATA_TYPE", "TYPE_NAME", "CHARACTER_MAXIMUM_LENGTH", "NUMERIC_PRECISION", "NUMERIC_SCALE",
+        "COLLATION_NAME"
     }, rows);
   }
 

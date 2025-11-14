@@ -64,9 +64,9 @@ public class JParqDatabaseMetaDataTest {
 
       try (ResultSet columns = metaData.getColumns(null, null, "employees", null)) {
         ResultSetMetaData columnMeta = columns.getMetaData();
-        List<String> expectedColumnHeaders = List.of("TABLE_NAME", "TABLE_TYPE", "COLUMN_NAME", "ORDINAL_POSITION",
-            "IS_NULLABLE", "DATA_TYPE", "TYPE_NAME", "CHARACTER_MAXIMUM_LENGTH", "NUMERIC_PRECISION",
-            "NUMERIC_SCALE", "COLLATION_NAME");
+        List<String> expectedColumnHeaders = List.of("TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE",
+            "COLUMN_NAME", "ORDINAL_POSITION", "IS_NULLABLE", "DATA_TYPE", "TYPE_NAME",
+            "CHARACTER_MAXIMUM_LENGTH", "NUMERIC_PRECISION", "NUMERIC_SCALE", "COLLATION_NAME");
         Assertions.assertEquals(expectedColumnHeaders.size(), columnMeta.getColumnCount());
         for (int i = 0; i < columnMeta.getColumnCount(); i++) {
           Assertions.assertEquals(expectedColumnHeaders.get(i), columnMeta.getColumnName(i + 1));
