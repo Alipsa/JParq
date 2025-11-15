@@ -12,7 +12,6 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
-
 import jparq.WhereTest;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
