@@ -98,6 +98,8 @@ The following SQL statements are supported:
   - Null checks: `IS NULL`, `IS NOT NULL`
 - `ORDER BY` clause with multiple columns and `ASC`/`DESC` options
 - `OFFSET` and `LIMIT` support
+  - Also support the PostgreSQL shorthand `LIMIT n OFFSET m` syntax
+- Standard row-limiting syntax (FETCH FIRST / OFFSET … FETCH)
 - `DISTINCT` support
 - Functions support
   - Date functions
@@ -155,8 +157,6 @@ The following SQL statements are supported:
   - CUBE
 - Derived Tables: UNNEST with or without a table wrapper, LATERAL derived tables, VALUES table constructors
 ## Roadmap: Might be implemented in the future
-  
-- Standard row-limiting syntax (FETCH FIRST / OFFSET … FETCH). The limit handler inspects only the non-standard LIMIT clause, leaving the SQL-standard FETCH clause unimplemented.
 
 - Support for INFORMATION_SCHEMA.COLUMNS and INFORMATION_SCHEMA.TABLES use JParqDatabaseMetaData
 
