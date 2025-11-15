@@ -97,7 +97,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     return conn.isCaseSensitive();
   }
 
-  private static final List<String> TABLE_REMARK_KEYS = List.of("comment", "description", "parquet.schema.comment", "doc");
+  private static final List<String> TABLE_REMARK_KEYS = List.of("comment", "description", "parquet.schema.comment",
+      "doc");
 
   @Override
   public ResultSet getTables(String catalog, String schemaPattern, String tableNamePattern, String[] types)
@@ -230,8 +231,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
    * @throws SQLException
    *           if the Parquet metadata cannot be read
    */
-  private List<String> readColumnTypeHints(Path path, Configuration conf)
-      throws SQLException {
+  private List<String> readColumnTypeHints(Path path, Configuration conf) throws SQLException {
     try (ParquetFileReader reader = ParquetFileReader.open(HadoopInputFile.fromPath(path, conf),
         ParquetReadOptions.builder().build())) {
       ParquetMetadata metadata = reader.getFooter();

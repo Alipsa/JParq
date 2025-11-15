@@ -29,18 +29,17 @@ public final class InformationSchemaTables {
   }
 
   private static Schema buildSchema() {
-    return SchemaBuilder.record("information_schema_tables").namespace("se.alipsa.jparq.meta")
-        .fields()
+    return SchemaBuilder.record("information_schema_tables").namespace("se.alipsa.jparq.meta").fields()
         .name("TABLE_CATALOG").type().unionOf().nullType().and().stringType().endUnion().nullDefault()
-        .name("TABLE_SCHEMA").type().unionOf().nullType().and().stringType().endUnion().nullDefault()
-        .name("TABLE_NAME").type().unionOf().nullType().and().stringType().endUnion().nullDefault()
-        .name("TABLE_TYPE").type().unionOf().nullType().and().stringType().endUnion().nullDefault()
-        .name("REMARKS").type().unionOf().nullType().and().stringType().endUnion().nullDefault()
-        .endRecord();
+        .name("TABLE_SCHEMA").type().unionOf().nullType().and().stringType().endUnion().nullDefault().name("TABLE_NAME")
+        .type().unionOf().nullType().and().stringType().endUnion().nullDefault().name("TABLE_TYPE").type().unionOf()
+        .nullType().and().stringType().endUnion().nullDefault().name("REMARKS").type().unionOf().nullType().and()
+        .stringType().endUnion().nullDefault().endRecord();
   }
 
   /**
-   * Resolve whether the provided table reference targets the INFORMATION_SCHEMA.TABLES view.
+   * Resolve whether the provided table reference targets the
+   * INFORMATION_SCHEMA.TABLES view.
    *
    * @param schemaName
    *          schema portion of the identifier (may be {@code null})
@@ -73,11 +72,13 @@ public final class InformationSchemaTables {
   }
 
   /**
-   * Determine whether the supplied table reference corresponds to the information schema view.
+   * Determine whether the supplied table reference corresponds to the information
+   * schema view.
    *
    * @param tableName
    *          raw table identifier emitted by the SQL parser
-   * @return {@code true} when {@code tableName} represents INFORMATION_SCHEMA.TABLES
+   * @return {@code true} when {@code tableName} represents
+   *         INFORMATION_SCHEMA.TABLES
    */
   public static boolean matchesTableReference(String tableName) {
     String normalized = normalize(tableName);
@@ -85,7 +86,8 @@ public final class InformationSchemaTables {
   }
 
   /**
-   * Materialize the INFORMATION_SCHEMA.TABLES view by adapting the driver metadata rows to a virtual table.
+   * Materialize the INFORMATION_SCHEMA.TABLES view by adapting the driver
+   * metadata rows to a virtual table.
    *
    * @param connection
    *          active connection providing access to database metadata
@@ -115,7 +117,8 @@ public final class InformationSchemaTables {
   }
 
   /**
-   * Container describing the schema and rows backing the INFORMATION_SCHEMA.TABLES view.
+   * Container describing the schema and rows backing the
+   * INFORMATION_SCHEMA.TABLES view.
    *
    * @param schema
    *          Avro schema representing the view

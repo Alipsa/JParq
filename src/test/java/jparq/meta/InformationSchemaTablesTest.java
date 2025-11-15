@@ -184,7 +184,8 @@ public class InformationSchemaTablesTest {
   }
 
   /**
-   * Write a single row Parquet file with an optional {@code comment} metadata entry.
+   * Write a single row Parquet file with an optional {@code comment} metadata
+   * entry.
    *
    * @param file
    *          destination path for the Parquet file
@@ -200,7 +201,8 @@ public class InformationSchemaTablesTest {
   }
 
   /**
-   * Write a Parquet file with configurable metadata entries for remark extraction tests.
+   * Write a Parquet file with configurable metadata entries for remark extraction
+   * tests.
    *
    * @param file
    *          destination path for the Parquet file
@@ -232,7 +234,8 @@ public class InformationSchemaTablesTest {
   }
 
   /**
-   * Assert that the information schema view exposes the expected remark for a single table row.
+   * Assert that the information schema view exposes the expected remark for a
+   * single table row.
    *
    * @param sql
    *          SQL helper connected to the directory containing the Parquet files
@@ -242,8 +245,8 @@ public class InformationSchemaTablesTest {
    *          expected REMARKS column value
    */
   private void assertSingleRemarkRow(JParqSql sql, String tableName, String expectedRemark) {
-    sql.query(
-        "SELECT TABLE_NAME, REMARKS FROM information_schema.tables WHERE TABLE_NAME = '" + tableName + "'", rs -> {
+    sql.query("SELECT TABLE_NAME, REMARKS FROM information_schema.tables WHERE TABLE_NAME = '" + tableName + "'",
+        rs -> {
           try {
             assertTrue(rs.next(), () -> "expected a row for " + tableName);
             assertEquals(tableName, rs.getString("TABLE_NAME"));
