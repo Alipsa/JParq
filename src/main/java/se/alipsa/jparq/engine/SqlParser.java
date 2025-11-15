@@ -727,7 +727,7 @@ public final class SqlParser {
       components.add(new SetComponent(component, operator, body.toString()));
     }
     List<SetOrder> orderBy = parseSetOrderBy(list.getOrderByElements());
-    int limit = extractLimit(list.getLimit());
+    int limit = resolveLimit(list.getLimit(), list.getFetch());
     int offset = extractOffset(list.getOffset());
     return new SetQuery(List.copyOf(components), orderBy, limit, offset, List.copyOf(ctes));
   }
@@ -777,6 +777,45 @@ public final class SqlParser {
       return lv.getBigIntegerValue().intValue();
     }
     return Integer.parseInt(rowCountExpr.toString());
+  }
+
+  /**
+   * Extract the row-count from a FETCH clause.
+   *
+   * @param fetch
+   *          FETCH clause (may be {@code null})
+   * @return the requested number of rows, {@code -1} when not specified
+   */
+  private static int extractFetch(Fetch fetch) {
+    if (fetch == null) {
+      return -1;
+    }
+    Expression expression = fetch.getExpression();
+    if (expression == null) {
+      return 1;
+    }
+    if (expression instanceof LongValue lv) {
+      return lv.getBigIntegerValue().intValue();
+    }
+    return Integer.parseInt(expression.toString());
+  }
+
+  /**
+   * Resolve the effective LIMIT by combining SQL LIMIT and FETCH clauses.
+   *
+   * @param limit
+   *          LIMIT clause (may be {@code null})
+   * @param fetch
+   *          FETCH clause (may be {@code null})
+   * @return the effective limit, or {@code -1} when neither clause is specified
+   */
+  private static int resolveLimit(Limit limit, Fetch fetch) {
+    int limitValue = extractLimit(limit);
+    int fetchValue = extractFetch(fetch);
+    if (limitValue >= 0 && fetchValue >= 0) {
+      return Math.min(limitValue, fetchValue);
+    }
+    return limitValue >= 0 ? limitValue : fetchValue;
   }
 
   /**
@@ -1468,17 +1507,7 @@ public final class SqlParser {
 
   // LIMIT
   private static int computeLimit(PlainSelect ps) {
-    Limit lim = ps.getLimit();
-    if (lim != null && lim.getRowCount() != null) {
-      // NOTE: Using LongValue instead of String.toString() for robustness
-      Expression rowCountExpr = lim.getRowCount();
-      if (rowCountExpr instanceof LongValue lv) {
-        return lv.getBigIntegerValue().intValue();
-      }
-      // Fallback for non-LongValue expressions, though rare for LIMIT
-      return Integer.parseInt(rowCountExpr.toString());
-    }
-    return -1;
+    return resolveLimit(ps.getLimit(), ps.getFetch());
   }
 
   private static int computeOffset(PlainSelect ps) {
