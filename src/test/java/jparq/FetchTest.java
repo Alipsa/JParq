@@ -132,4 +132,3 @@ public class FetchTest {
     assertEquals(expected, actual, "FETCH NEXT should honor OFFSET semantics");
   }
 }
-

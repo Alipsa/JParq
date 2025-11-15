@@ -807,9 +807,9 @@ public final class SqlParser {
   }
 
   /**
-   * Resolve the effective LIMIT by combining SQL LIMIT and FETCH clauses.
-   * When both are supplied (which is non-standard), the more restrictive value
-   * is returned so that the result set never exceeds either clause.
+   * Resolve the effective LIMIT by combining SQL LIMIT and FETCH clauses. When
+   * both are supplied (which is non-standard), the more restrictive value is
+   * returned so that the result set never exceeds either clause.
    *
    * @param limit
    *          LIMIT clause (may be {@code null})
