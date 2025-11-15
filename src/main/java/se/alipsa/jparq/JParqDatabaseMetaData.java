@@ -96,7 +96,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     return conn.isCaseSensitive();
   }
 
-  private static final List<String> TABLE_REMARK_KEYS = List.of("comment", "description", "parquet.schema.comment");
+  private static final List<String> TABLE_REMARK_KEYS = List.of("comment", "description", "parquet.schema.comment", "doc");
 
   @Override
   public ResultSet getTables(String catalog, String schemaPattern, String tableNamePattern, String[] types)
@@ -273,9 +273,20 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         return null;
       }
       for (String key : TABLE_REMARK_KEYS) {
-        String remark = kv.get(key);
-        if (remark != null && !remark.isBlank()) {
-          return remark;
+        for (Map.Entry<String, String> entry : kv.entrySet()) {
+          String candidateKey = entry.getKey();
+          if (candidateKey == null) {
+            continue;
+          }
+          if (key.equalsIgnoreCase(candidateKey.trim())) {
+            String remark = entry.getValue();
+            if (remark != null) {
+              remark = remark.trim();
+            }
+            if (remark != null && !remark.isEmpty()) {
+              return remark;
+            }
+          }
         }
       }
       return null;

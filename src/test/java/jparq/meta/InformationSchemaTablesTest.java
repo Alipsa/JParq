@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.apache.avro.Schema;
@@ -74,15 +75,83 @@ public class InformationSchemaTablesTest {
     });
   }
 
+  @Test
+  void shouldQueryUppercaseQualifiedReference(@TempDir Path tempDir) throws Exception {
+    Path file = tempDir.resolve("upper_ref.parquet");
+    writeCommentedTable(file, "upper_ref", "Upper reference");
+    JParqSql sql = new JParqSql("jdbc:jparq:" + tempDir.toAbsolutePath());
+    sql.query("SELECT COUNT(*) AS c FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'upper_ref'", rs -> {
+      try {
+        assertTrue(rs.next(), "expected row for COUNT(*)");
+        assertEquals(1, rs.getInt(1));
+        assertFalse(rs.next(), "COUNT(*) should return a single row");
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void shouldReadRemarksCaseInsensitive(@TempDir Path tempDir) throws Exception {
+    Path file = tempDir.resolve("upper_comment.parquet");
+    writeTableWithMetadata(file, "upper_comment", null, Map.of("COMMENT", "Uppercase remark"));
+    JParqSql sql = new JParqSql("jdbc:jparq:" + tempDir.toAbsolutePath());
+    sql.query("SELECT TABLE_NAME, REMARKS FROM information_schema.tables WHERE TABLE_NAME = 'upper_comment'", rs -> {
+      try {
+        assertTrue(rs.next(), "expected a row for upper_comment");
+        assertEquals("upper_comment", rs.getString("TABLE_NAME"));
+        assertEquals("Uppercase remark", rs.getString("REMARKS"));
+        assertFalse(rs.next(), "only one table should be returned");
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  /**
+   * Write a single row Parquet file with an optional {@code comment} metadata entry.
+   *
+   * @param file
+   *          destination path for the Parquet file
+   * @param tableName
+   *          logical table name stored in the schema
+   * @param comment
+   *          optional descriptive comment stored in the file metadata
+   * @throws IOException
+   *           if the Parquet file cannot be written
+   */
   private void writeCommentedTable(Path file, String tableName, String comment) throws IOException {
+    writeTableWithMetadata(file, tableName, comment, Map.of());
+  }
+
+  /**
+   * Write a Parquet file with configurable metadata entries for remark extraction tests.
+   *
+   * @param file
+   *          destination path for the Parquet file
+   * @param tableName
+   *          logical table name stored in the schema
+   * @param comment
+   *          optional comment to attach, may be {@code null}
+   * @param metadata
+   *          extra metadata entries to persist alongside the comment
+   * @throws IOException
+   *           if the file cannot be written
+   */
+  private void writeTableWithMetadata(Path file, String tableName, String comment, Map<String, String> metadata)
+      throws IOException {
     Schema schema = SchemaBuilder.record(tableName).fields().requiredInt("id").endRecord();
     GenericRecord record = new GenericData.Record(schema);
     record.put("id", 1);
     Configuration conf = new Configuration(false);
+    Map<String, String> meta = metadata == null ? Map.of() : metadata;
+    if (comment != null && !comment.isBlank()) {
+      meta = new LinkedHashMap<>(meta);
+      meta.put("comment", comment);
+    }
     try (ParquetWriter<GenericRecord> writer = AvroParquetWriter
         .<GenericRecord>builder(new org.apache.hadoop.fs.Path(file.toUri())).withConf(conf)
-        .withCompressionCodec(CompressionCodecName.UNCOMPRESSED).withSchema(schema)
-        .withExtraMetaData(Map.of("comment", comment)).build()) {
+        .withCompressionCodec(CompressionCodecName.UNCOMPRESSED).withSchema(schema).withExtraMetaData(meta).build()) {
       writer.write(record);
     }
   }
