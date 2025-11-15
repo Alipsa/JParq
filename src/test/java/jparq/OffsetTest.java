@@ -1,4 +1,4 @@
-package jparq.engine;
+package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -18,13 +18,13 @@ import se.alipsa.jparq.JParqSql;
 /**
  * Integration tests verifying OFFSET semantics for simple and derived queries.
  */
-class SqlParserOffsetTest {
+class OffsetTest {
 
   private static JParqSql jparqSql;
 
   @BeforeAll
   static void setup() throws URISyntaxException {
-    URL mtcarsUrl = SqlParserOffsetTest.class.getResource("/mtcars.parquet");
+    URL mtcarsUrl = OffsetTest.class.getResource("/mtcars.parquet");
     if (mtcarsUrl == null) {
       throw new IllegalStateException("mtcars.parquet must be available on the classpath");
     }
