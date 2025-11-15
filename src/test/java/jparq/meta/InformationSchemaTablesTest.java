@@ -63,16 +63,7 @@ public class InformationSchemaTablesTest {
     Path file = tempDir.resolve("doc_table.parquet");
     writeCommentedTable(file, "doc_table", "Stores documentation friendly data");
     JParqSql sql = new JParqSql("jdbc:jparq:" + tempDir.toAbsolutePath());
-    sql.query("SELECT TABLE_NAME, REMARKS FROM information_schema.tables WHERE TABLE_NAME = 'doc_table'", rs -> {
-      try {
-        assertTrue(rs.next(), "expected a row for doc_table");
-        assertEquals("doc_table", rs.getString("TABLE_NAME"));
-        assertEquals("Stores documentation friendly data", rs.getString("REMARKS"));
-        assertFalse(rs.next(), "only one table should be returned");
-      } catch (SQLException e) {
-        fail(e);
-      }
-    });
+    assertSingleRemarkRow(sql, "doc_table", "Stores documentation friendly data");
   }
 
   @Test
@@ -96,16 +87,26 @@ public class InformationSchemaTablesTest {
     Path file = tempDir.resolve("upper_comment.parquet");
     writeTableWithMetadata(file, "upper_comment", null, Map.of("COMMENT", "Uppercase remark"));
     JParqSql sql = new JParqSql("jdbc:jparq:" + tempDir.toAbsolutePath());
-    sql.query("SELECT TABLE_NAME, REMARKS FROM information_schema.tables WHERE TABLE_NAME = 'upper_comment'", rs -> {
-      try {
-        assertTrue(rs.next(), "expected a row for upper_comment");
-        assertEquals("upper_comment", rs.getString("TABLE_NAME"));
-        assertEquals("Uppercase remark", rs.getString("REMARKS"));
-        assertFalse(rs.next(), "only one table should be returned");
-      } catch (SQLException e) {
-        fail(e);
-      }
-    });
+    assertSingleRemarkRow(sql, "upper_comment", "Uppercase remark");
+  }
+
+  @Test
+  void shouldReadDocMetadataKey(@TempDir Path tempDir) throws Exception {
+    Path file = tempDir.resolve("doc_comment.parquet");
+    writeTableWithMetadata(file, "doc_comment", null, Map.of("DoC", "Doc style remark"));
+    JParqSql sql = new JParqSql("jdbc:jparq:" + tempDir.toAbsolutePath());
+    assertSingleRemarkRow(sql, "doc_comment", "Doc style remark");
+  }
+
+  @Test
+  void shouldPrioritizeDescriptionOverDoc(@TempDir Path tempDir) throws Exception {
+    Path file = tempDir.resolve("description_comment.parquet");
+    Map<String, String> metadata = new LinkedHashMap<>();
+    metadata.put("DOC", "Doc fallback");
+    metadata.put("description", "Description remark");
+    writeTableWithMetadata(file, "description_comment", null, metadata);
+    JParqSql sql = new JParqSql("jdbc:jparq:" + tempDir.toAbsolutePath());
+    assertSingleRemarkRow(sql, "description_comment", "Description remark");
   }
 
   /**
@@ -154,5 +155,29 @@ public class InformationSchemaTablesTest {
         .withCompressionCodec(CompressionCodecName.UNCOMPRESSED).withSchema(schema).withExtraMetaData(meta).build()) {
       writer.write(record);
     }
+  }
+
+  /**
+   * Assert that the information schema view exposes the expected remark for a single table row.
+   *
+   * @param sql
+   *          SQL helper connected to the directory containing the Parquet files
+   * @param tableName
+   *          table identifier to query
+   * @param expectedRemark
+   *          expected REMARKS column value
+   */
+  private void assertSingleRemarkRow(JParqSql sql, String tableName, String expectedRemark) {
+    sql.query(
+        "SELECT TABLE_NAME, REMARKS FROM information_schema.tables WHERE TABLE_NAME = '" + tableName + "'", rs -> {
+          try {
+            assertTrue(rs.next(), () -> "expected a row for " + tableName);
+            assertEquals(tableName, rs.getString("TABLE_NAME"));
+            assertEquals(expectedRemark, rs.getString("REMARKS"));
+            assertFalse(rs.next(), "only one table should be returned");
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
   }
 }

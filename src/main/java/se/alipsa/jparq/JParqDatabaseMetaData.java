@@ -10,6 +10,7 @@ import java.sql.RowIdLifetime;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -269,30 +270,44 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         ParquetReadOptions.builder().build())) {
       ParquetMetadata metadata = reader.getFooter();
       Map<String, String> kv = metadata.getFileMetaData().getKeyValueMetaData();
-      if (kv == null || kv.isEmpty()) {
-        return null;
-      }
-      for (String key : TABLE_REMARK_KEYS) {
-        for (Map.Entry<String, String> entry : kv.entrySet()) {
-          String candidateKey = entry.getKey();
-          if (candidateKey == null) {
-            continue;
-          }
-          if (key.equalsIgnoreCase(candidateKey.trim())) {
-            String remark = entry.getValue();
-            if (remark != null) {
-              remark = remark.trim();
-            }
-            if (remark != null && !remark.isEmpty()) {
-              return remark;
-            }
-          }
-        }
-      }
-      return null;
+      return resolveTableRemark(kv);
     } catch (IOException e) {
       throw new SQLException("Failed to read table remarks for " + path.getName(), e);
     }
+  }
+
+  /**
+   * Attempt to find a supported remark entry from the supplied metadata map.
+   *
+   * @param metadata
+   *          parquet key-value metadata entries, may be {@code null}
+   * @return first matching remark value in priority order or {@code null} if no
+   *         supported entries exist
+   */
+  private static String resolveTableRemark(Map<String, String> metadata) {
+    if (metadata == null || metadata.isEmpty()) {
+      return null;
+    }
+    Map<String, String> normalized = new LinkedHashMap<>();
+    for (Map.Entry<String, String> entry : metadata.entrySet()) {
+      String key = entry.getKey();
+      if (key == null) {
+        continue;
+      }
+      String normalizedKey = key.trim().toLowerCase(Locale.ROOT);
+      normalized.putIfAbsent(normalizedKey, entry.getValue());
+    }
+    for (String remarkKey : TABLE_REMARK_KEYS) {
+      String remark = normalized.get(remarkKey);
+      if (remark == null) {
+        continue;
+      }
+      String trimmed = remark.trim();
+      if (!trimmed.isEmpty()) {
+        return trimmed;
+      }
+    }
+    return null;
   }
 
   /**
