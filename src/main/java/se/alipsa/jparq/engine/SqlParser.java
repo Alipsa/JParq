@@ -22,6 +22,7 @@ import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.*;
 import se.alipsa.jparq.helper.JParqUtil;
+import se.alipsa.jparq.meta.InformationSchemaTables;
 
 /**
  * Handles parsing the SQL and translates that into something that the parquet
@@ -872,6 +873,9 @@ public final class SqlParser {
     if (fromItem instanceof Table t) {
       String tableName = t.getName();
       String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
+      if (InformationSchemaTables.matchesQualifiedName(t.getSchemaName(), tableName, t.getFullyQualifiedName())) {
+        tableName = InformationSchemaTables.TABLE_IDENTIFIER;
+      }
       CommonTableExpression cte = resolveCommonTableExpression(t, cteLookup);
       Map<String, String> mapping = Map.of();
       Select innerSelect = null;

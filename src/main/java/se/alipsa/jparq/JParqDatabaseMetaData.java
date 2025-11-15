@@ -18,6 +18,8 @@ import java.util.Set;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
 import org.apache.parquet.ParquetReadOptions;
 import org.apache.parquet.avro.AvroParquetReader;
 import org.apache.parquet.hadoop.ParquetFileReader;
@@ -94,8 +96,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     return conn.isCaseSensitive();
   }
 
+  private static final List<String> TABLE_REMARK_KEYS = List.of("comment", "description", "parquet.schema.comment");
+
   @Override
-  public ResultSet getTables(String catalog, String schemaPattern, String tableNamePattern, String[] types) {
+  public ResultSet getTables(String catalog, String schemaPattern, String tableNamePattern, String[] types)
+      throws SQLException {
     File dir = conn.getBaseDir();
     File[] files = dir.listFiles((d, n) -> n.toLowerCase(Locale.ROOT).endsWith(".parquet"));
     List<Object[]> rows = new ArrayList<>();
@@ -112,6 +117,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       }
     }
     String tableRegex = tableNamePattern == null ? null : JParqUtil.sqlLikeToRegex(tableNamePattern);
+    Configuration conf = new Configuration(false);
+    String effectiveCatalog = (catalog != null && !catalog.isBlank()) ? catalog : conn.getCatalog();
     if (files != null) {
       for (File f : files) {
         String base = f.getName();
@@ -126,8 +133,13 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         if (typeFilter != null && !typeFilter.contains(tableType.toUpperCase(Locale.ROOT))) {
           continue;
         }
+        String remarks = null;
+        Path path = new Path(f.toURI());
+        if (f.isFile()) {
+          remarks = readTableRemarks(path, conf);
+        }
         rows.add(new Object[]{
-            catalog, schemaPattern, base, tableType, null, null, null, null, null, null
+            effectiveCatalog, schemaPattern, base, tableType, remarks, null, null, null, null, null
         });
       }
     }
@@ -143,12 +155,12 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       throws SQLException {
 
     List<Object[]> rows = new ArrayList<>();
-    org.apache.hadoop.conf.Configuration conf = new org.apache.hadoop.conf.Configuration(false);
+    Configuration conf = new Configuration(false);
 
     try (ResultSet tables = getTables(catalog, schemaPattern, tableNamePattern, new String[]{
         "TABLE"
     })) {
-      org.apache.hadoop.fs.Path hPath;
+      Path hPath;
       while (tables.next()) {
         String tableCatalog = tables.getString("TABLE_CAT");
         String tableSchema = tables.getString("TABLE_SCHEM");
@@ -156,7 +168,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         String tableType = tables.getString("TABLE_TYPE");
         File file = conn.tableFile(table);
 
-        hPath = new org.apache.hadoop.fs.Path(file.toURI());
+        hPath = new Path(file.toURI());
         List<String> columnTypeHints = readColumnTypeHints(hPath, conf);
         try (ParquetReader<GenericRecord> reader = AvroParquetReader
             .<GenericRecord>builder(HadoopInputFile.fromPath(hPath, conf)).build()) {
@@ -217,7 +229,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
    * @throws SQLException
    *           if the Parquet metadata cannot be read
    */
-  private List<String> readColumnTypeHints(org.apache.hadoop.fs.Path path, org.apache.hadoop.conf.Configuration conf)
+  private List<String> readColumnTypeHints(Path path, Configuration conf)
       throws SQLException {
     try (ParquetFileReader reader = ParquetFileReader.open(HadoopInputFile.fromPath(path, conf),
         ParquetReadOptions.builder().build())) {
@@ -237,6 +249,38 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       return hints.isEmpty() ? List.of() : List.copyOf(hints);
     } catch (IOException e) {
       throw new SQLException("Failed to read column type hints", e);
+    }
+  }
+
+  /**
+   * Attempt to resolve a table level remark from the Parquet file metadata.
+   *
+   * @param path
+   *          Hadoop path that identifies the Parquet file
+   * @param conf
+   *          Hadoop configuration used to access the file system
+   * @return the resolved remark or {@code null} when no supported metadata entry
+   *         is present
+   * @throws SQLException
+   *           if the Parquet footer cannot be read
+   */
+  private String readTableRemarks(Path path, Configuration conf) throws SQLException {
+    try (ParquetFileReader reader = ParquetFileReader.open(HadoopInputFile.fromPath(path, conf),
+        ParquetReadOptions.builder().build())) {
+      ParquetMetadata metadata = reader.getFooter();
+      Map<String, String> kv = metadata.getFileMetaData().getKeyValueMetaData();
+      if (kv == null || kv.isEmpty()) {
+        return null;
+      }
+      for (String key : TABLE_REMARK_KEYS) {
+        String remark = kv.get(key);
+        if (remark != null && !remark.isBlank()) {
+          return remark;
+        }
+      }
+      return null;
+    } catch (IOException e) {
+      throw new SQLException("Failed to read table remarks for " + path.getName(), e);
     }
   }
 

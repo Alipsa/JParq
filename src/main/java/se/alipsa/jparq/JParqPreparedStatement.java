@@ -89,6 +89,7 @@ import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
+import se.alipsa.jparq.meta.InformationSchemaTables;
 
 /** An implementation of the java.sql.PreparedStatement interface. */
 @SuppressWarnings({
@@ -112,6 +113,7 @@ class JParqPreparedStatement implements PreparedStatement {
   private final Map<String, CteResult> cteResults;
   private final Map<String, CteResult> valueTableResults;
   private final CteResult baseCteResult;
+  private CteResult informationSchemaTablesResult;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
     this(stmt, sql, Map.of());
@@ -165,6 +167,8 @@ class JParqPreparedStatement implements PreparedStatement {
         SqlParser.TableReference baseRef = tmpTableRefs.isEmpty() ? null : tmpTableRefs.getFirst();
         boolean baseIsCte = baseRef != null && (baseRef.commonTableExpression() != null
             || resolveCteResultByName(baseRef.tableName(), tmpCteResults) != null);
+        boolean baseIsInformationSchema = baseRef != null
+            && InformationSchemaTables.matchesTableReference(baseRef.tableName());
 
         AggregateFunctions.AggregatePlan aggregatePlan = null;
 
@@ -190,6 +194,18 @@ class JParqPreparedStatement implements PreparedStatement {
           if (resolved == null) {
             throw new SQLException("CTE result not available for table '" + baseRef.tableName() + "'");
           }
+          tmpBaseCteResult = resolved;
+          tmpFileAvro = resolved.schema();
+          if (!tmpSelect.qualifiedWildcards().isEmpty()) {
+            Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
+                baseRef, tmpFileAvro);
+            tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
+          }
+          aggregatePlan = AggregateFunctions.plan(tmpSelect);
+          tmpResidual = tmpSelect.where();
+          tmpPredicate = Optional.empty();
+        } else if (baseIsInformationSchema) {
+          CteResult resolved = materializeInformationSchemaTables();
           tmpBaseCteResult = resolved;
           tmpFileAvro = resolved.schema();
           if (!tmpSelect.qualifiedWildcards().isEmpty()) {
@@ -839,6 +855,15 @@ class JParqPreparedStatement implements PreparedStatement {
         registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
         continue;
       }
+      if (InformationSchemaTables.matchesTableReference(ref.tableName())) {
+        CteResult infoResult = materializeInformationSchemaTables();
+        String infoName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
+        JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(infoName, ref.tableAlias(),
+            infoResult.schema(), infoResult.rows(), ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
+        tables.add(table);
+        registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
+        continue;
+      }
       CteResult cteResult = null;
       if (ref.commonTableExpression() != null) {
         cteResult = resolveCteResult(ref.commonTableExpression(), cteResults);
@@ -1200,6 +1225,21 @@ class JParqPreparedStatement implements PreparedStatement {
       records.add(record);
     }
     return new CteResult(schema, records);
+  }
+
+  /**
+   * Lazily materialize the INFORMATION_SCHEMA.TABLES view.
+   *
+   * @return cached {@link CteResult} containing the information schema rows
+   * @throws SQLException
+   *           if the metadata cannot be read
+   */
+  private CteResult materializeInformationSchemaTables() throws SQLException {
+    if (informationSchemaTablesResult == null) {
+      InformationSchemaTables.TableData data = InformationSchemaTables.load(stmt.getConn());
+      informationSchemaTablesResult = new CteResult(data.schema(), data.rows());
+    }
+    return informationSchemaTablesResult;
   }
 
   private Object normalizeLiteralValue(Object value) {
