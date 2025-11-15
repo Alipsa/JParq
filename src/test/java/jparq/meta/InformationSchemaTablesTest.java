@@ -34,6 +34,14 @@ public class InformationSchemaTablesTest {
 
   private static JParqSql resourceSql;
 
+  /**
+   * Initialize the reusable {@link JParqSql} instance that points to the Parquet
+   * files bundled with the test resources.
+   *
+   * @throws URISyntaxException
+   *           if the {@code mtcars.parquet} resource cannot be resolved to a
+   *           {@link java.nio.file.Path}
+   */
   @BeforeAll
   static void init() throws URISyntaxException {
     URL mtcarsUrl = InformationSchemaTablesTest.class.getResource("/mtcars.parquet");
@@ -42,6 +50,10 @@ public class InformationSchemaTablesTest {
     resourceSql = new JParqSql("jdbc:jparq:" + dir.toAbsolutePath());
   }
 
+  /**
+   * Ensure INFORMATION_SCHEMA.TABLES exposes all Parquet tables stored in the
+   * resource directory and that they surface as {@code BASE TABLE} entries.
+   */
   @Test
   void shouldListTablesFromInformationSchema() {
     List<String> tables = new ArrayList<>();
@@ -58,6 +70,15 @@ public class InformationSchemaTablesTest {
     assertTrue(tables.contains("mtcars"), "information_schema.tables must list mtcars");
   }
 
+  /**
+   * Verify that REMARKS values are populated when the Parquet footer contains a
+   * {@code comment} entry.
+   *
+   * @param tempDir
+   *          temporary directory used to create a dedicated Parquet file
+   * @throws Exception
+   *           if the Parquet file cannot be written or read
+   */
   @Test
   void shouldExposeRemarksWhenAvailable(@TempDir Path tempDir) throws Exception {
     Path file = tempDir.resolve("doc_table.parquet");
@@ -66,6 +87,15 @@ public class InformationSchemaTablesTest {
     assertSingleRemarkRow(sql, "doc_table", "Stores documentation friendly data");
   }
 
+  /**
+   * Confirm that uppercase fully qualified identifiers are normalized so the
+   * information schema view can be queried regardless of input casing.
+   *
+   * @param tempDir
+   *          directory that temporarily hosts the test Parquet file
+   * @throws Exception
+   *           if the Parquet file cannot be created
+   */
   @Test
   void shouldQueryUppercaseQualifiedReference(@TempDir Path tempDir) throws Exception {
     Path file = tempDir.resolve("upper_ref.parquet");
@@ -82,6 +112,15 @@ public class InformationSchemaTablesTest {
     });
   }
 
+  /**
+   * Validate that remark keys are matched irrespective of their casing so that
+   * uppercase entries still surface in the REMARKS column.
+   *
+   * @param tempDir
+   *          temporary directory populated with a single Parquet file
+   * @throws Exception
+   *           if the Parquet file cannot be written
+   */
   @Test
   void shouldReadRemarksCaseInsensitive(@TempDir Path tempDir) throws Exception {
     Path file = tempDir.resolve("upper_comment.parquet");
@@ -90,6 +129,15 @@ public class InformationSchemaTablesTest {
     assertSingleRemarkRow(sql, "upper_comment", "Uppercase remark");
   }
 
+  /**
+   * Ensure doc metadata keys are recognized, mirroring how several serializers
+   * expose table descriptions.
+   *
+   * @param tempDir
+   *          directory used for the temporary Parquet file
+   * @throws Exception
+   *           if the file cannot be written
+   */
   @Test
   void shouldReadDocMetadataKey(@TempDir Path tempDir) throws Exception {
     Path file = tempDir.resolve("doc_comment.parquet");
@@ -98,6 +146,15 @@ public class InformationSchemaTablesTest {
     assertSingleRemarkRow(sql, "doc_comment", "Doc style remark");
   }
 
+  /**
+   * Guarantee that {@code description} metadata entries take precedence over the
+   * {@code doc} fallback.
+   *
+   * @param tempDir
+   *          directory holding the generated Parquet file
+   * @throws Exception
+   *           if writing or querying the file fails
+   */
   @Test
   void shouldPrioritizeDescriptionOverDoc(@TempDir Path tempDir) throws Exception {
     Path file = tempDir.resolve("description_comment.parquet");
@@ -107,6 +164,23 @@ public class InformationSchemaTablesTest {
     writeTableWithMetadata(file, "description_comment", null, metadata);
     JParqSql sql = new JParqSql("jdbc:jparq:" + tempDir.toAbsolutePath());
     assertSingleRemarkRow(sql, "description_comment", "Description remark");
+  }
+
+  /**
+   * Confirm that {@code parquet.schema.comment} entries are treated as remarks,
+   * matching how schema aware tooling stores table descriptions.
+   *
+   * @param tempDir
+   *          directory that contains the generated Parquet test file
+   * @throws Exception
+   *           if the Parquet file or metadata cannot be written
+   */
+  @Test
+  void shouldReadParquetSchemaCommentKey(@TempDir Path tempDir) throws Exception {
+    Path file = tempDir.resolve("schema_comment.parquet");
+    writeTableWithMetadata(file, "schema_comment", null, Map.of("parquet.schema.comment", "Schema level comment"));
+    JParqSql sql = new JParqSql("jdbc:jparq:" + tempDir.toAbsolutePath());
+    assertSingleRemarkRow(sql, "schema_comment", "Schema level comment");
   }
 
   /**
