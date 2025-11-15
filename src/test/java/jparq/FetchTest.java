@@ -18,7 +18,7 @@ import se.alipsa.jparq.JParqSql;
 /** Tests for the SQL standard FETCH clause. */
 public class FetchTest {
 
-  private static JParqSql jparqSql;
+  static JParqSql jparqSql;
 
   @BeforeAll
   static void setup() throws URISyntaxException {

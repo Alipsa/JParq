@@ -785,6 +785,8 @@ public final class SqlParser {
    * @param fetch
    *          FETCH clause (may be {@code null})
    * @return the requested number of rows, {@code -1} when not specified
+   * @throws IllegalArgumentException
+   *           if the FETCH expression cannot be parsed to an integer value
    */
   private static int extractFetch(Fetch fetch) {
     if (fetch == null) {
@@ -797,11 +799,17 @@ public final class SqlParser {
     if (expression instanceof LongValue lv) {
       return lv.getBigIntegerValue().intValue();
     }
-    return Integer.parseInt(expression.toString());
+    try {
+      return Integer.parseInt(expression.toString());
+    } catch (NumberFormatException e) {
+      throw new IllegalArgumentException("Invalid FETCH value: '" + expression + "'", e);
+    }
   }
 
   /**
    * Resolve the effective LIMIT by combining SQL LIMIT and FETCH clauses.
+   * When both are supplied (which is non-standard), the more restrictive value
+   * is returned so that the result set never exceeds either clause.
    *
    * @param limit
    *          LIMIT clause (may be {@code null})
