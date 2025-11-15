@@ -28,6 +28,24 @@ These columns define the nature and constraints of the data stored in the column
 * **`NUMERIC_PRECISION`**: The precision for numeric data types (number of significant digits).
 * **`NUMERIC_SCALE`**: The scale for numeric data types (number of digits to the right of the decimal point).
 * **`DATETIME_PRECISION`**: The precision for datetime data types (e.g., number of fractional seconds).
+* **`REMARKS`**: User-defined comments or descriptions about the column.
+
+Remarks should be populated from the Parquet schema if available.
+  1. Metadata Key-Value Pairs (The Standard Way)
+     The standard and most common way to include descriptive information about columns and the file as a whole is by utilizing the Parquet file footer's key-value metadata map.
+  
+  Mechanism: Tools and libraries (like those used with Apache Spark, Hive, or certain specialized Parquet writers) write a custom key-value pair into the file's metadata where the key identifies the column and the value holds the description string.
+  
+  Example Convention: A common convention is to use a key structure like parquet.column.comment.column_name or to leverage external schema systems like Avro or Thrift.
+  
+  JDBC Relevance: This is how tools often map the non-standard REMARKS column from INFORMATION_SCHEMA—by reading and interpreting these metadata key-value pairs.
+  
+  2. Source Schema System Annotations
+     If the Parquet file was written using a specific schema system like Avro or Thrift, the descriptions are often inherited from the source schema definition:
+  
+  Avro: The Avro specification allows a doc field to be attached to every field definition. When Avro records are written to Parquet, the doc field (containing the description) is often preserved and transferred into the Parquet file's key-value metadata.
+  
+  Thrift: Similarly, Thrift allows for comments that can be extracted and mapped into the Parquet file's metadata.
 
 ### 3. Constraint and Ordering
 
