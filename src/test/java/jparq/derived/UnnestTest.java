@@ -170,6 +170,47 @@ class UnnestTest {
     Assertions.assertEquals(List.of("Alpha:Alex:5", "Gamma:Grace:5", "Gamma:Henry:5"), results);
   }
 
+  @Test
+  void unnestSupportsTableSample() {
+    String sql = """
+        SELECT
+            tags.tag
+        FROM
+            products p,
+            UNNEST(p.tags) AS tags(tag)
+            TABLESAMPLE SYSTEM (50 PERCENT)
+            REPEATABLE (5150)
+        ORDER BY
+            tags.tag
+        """;
+
+    List<String> first = new ArrayList<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          first.add(rs.getString("tag"));
+        }
+      } catch (Exception e) {
+        throw new IllegalStateException("Failed to read sampled UNNEST results", e);
+      }
+    });
+
+    List<String> second = new ArrayList<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          second.add(rs.getString("tag"));
+        }
+      } catch (Exception e) {
+        throw new IllegalStateException("Failed to read sampled UNNEST results", e);
+      }
+    });
+
+    Assertions.assertEquals(first, second, "REPEATABLE seed should stabilise UNNEST sampling");
+    Assertions.assertFalse(first.isEmpty(), "Sampling should retain at least one tag");
+    Assertions.assertTrue(first.size() <= 3, "Sampling should not exceed original UNNEST rows");
+  }
+
   private static Schema buildSchema() {
     Schema reviewSchema = SchemaBuilder.record("review").namespace("jparq.derived").fields().requiredInt("rating")
         .requiredString("user").endRecord();

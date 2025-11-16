@@ -984,17 +984,13 @@ public final class SqlParser {
       return applySample(info, tableSample);
     }
     if (fromItem instanceof TableFunction tableFunction) {
-      if (tableSample != null) {
-        throw new IllegalArgumentException("TABLESAMPLE is not supported for table functions: " + tableFunction);
-      }
       boolean tableFunctionLateral = lateral || "lateral".equalsIgnoreCase(tableFunction.getPrefix());
-      return parseTableFunction(tableFunction, tableFunctionLateral);
+      FromInfo info = parseTableFunction(tableFunction, tableFunctionLateral);
+      return applySample(info, tableSample);
     }
     if (fromItem instanceof Values valuesItem) {
-      if (tableSample != null) {
-        throw new IllegalArgumentException("TABLESAMPLE is not supported for VALUES constructors: " + valuesItem);
-      }
-      return parseValuesFromItem(valuesItem, lateral);
+      FromInfo info = parseValuesFromItem(valuesItem, lateral);
+      return applySample(info, tableSample);
     }
     throw new IllegalArgumentException("Unsupported FROM item: " + fromItem);
   }

@@ -90,6 +90,23 @@ public class TableSampleTest {
     Assertions.assertEquals(first, second, "REPEATABLE seed should stabilize ROW sampling");
   }
 
+  @Test
+  void testValuesConstructorCanBeSampled() {
+    String sql = """
+        SELECT value_column
+        FROM (
+          VALUES (1), (2), (3), (4)
+        ) AS v(value_column)
+        TABLESAMPLE SYSTEM (50 PERCENT)
+        REPEATABLE (123)
+        ORDER BY value_column
+        """;
+    List<Integer> first = fetchIntegers(sql, "value_column");
+    List<Integer> second = fetchIntegers(sql, "value_column");
+    Assertions.assertEquals(first, second, "REPEATABLE seed should stabilise VALUES sampling");
+    Assertions.assertEquals(2, first.size(), "50% sampling should emit half the VALUES rows");
+  }
+
   private static List<String> fetchModels(String sql) {
     List<String> models = new ArrayList<>();
     jparqSql.query(sql, rs -> {
@@ -102,5 +119,19 @@ public class TableSampleTest {
       }
     });
     return models;
+  }
+
+  private static List<Integer> fetchIntegers(String sql, String column) {
+    List<Integer> values = new ArrayList<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          values.add(rs.getInt(column));
+        }
+      } catch (SQLException e) {
+        Assertions.fail(e);
+      }
+    });
+    return values;
   }
 }
