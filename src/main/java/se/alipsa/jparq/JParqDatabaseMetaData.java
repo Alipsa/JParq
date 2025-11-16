@@ -99,6 +99,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   private static final List<String> TABLE_REMARK_KEYS = List.of("comment", "description", "parquet.schema.comment",
       "doc");
+  private static final List<String> COLUMN_REMARK_PREFIXES = List.of("parquet.column.comment.", "column.comment.",
+      "parquet.column.description.", "column.description.", "parquet.column.doc.", "column.doc.");
 
   @Override
   public ResultSet getTables(String catalog, String schemaPattern, String tableNamePattern, String[] types)
@@ -171,7 +173,9 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         File file = conn.tableFile(table);
 
         hPath = new Path(file.toURI());
-        List<String> columnTypeHints = readColumnTypeHints(hPath, conf);
+        ColumnMetadata columnMetadata = readColumnMetadata(hPath, conf);
+        List<String> columnTypeHints = columnMetadata.columnTypeHints();
+        Map<String, String> columnRemarks = columnMetadata.columnRemarks();
         try (ParquetReader<GenericRecord> reader = AvroParquetReader
             .<GenericRecord>builder(HadoopInputFile.fromPath(hPath, conf)).build()) {
 
@@ -201,9 +205,12 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
             Integer charMaxLength = resolveCharacterMaximumLength(jdbcType, baseSchema);
             Integer numericPrecision = resolveNumericPrecision(jdbcType, baseSchema);
             Integer numericScale = resolveNumericScale(jdbcType, baseSchema);
+            Integer datetimePrecision = resolveDatetimePrecision(jdbcType, baseSchema);
+            String columnDefault = resolveColumnDefault(field);
+            String columnRemark = resolveColumnRemark(field, columnRemarks);
             rows.add(new Object[]{
                 tableCatalog, tableSchema, table, tableType, columnName, pos++, isNullable, jdbcType, typeName,
-                charMaxLength, numericPrecision, numericScale, null
+                charMaxLength, numericPrecision, numericScale, null, columnDefault, datetimePrecision, columnRemark
             });
           }
         } catch (Exception e) {
@@ -214,43 +221,150 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
     return JParqUtil.listResultSet(new String[]{
         "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE", "COLUMN_NAME", "ORDINAL_POSITION", "IS_NULLABLE",
-        "DATA_TYPE", "TYPE_NAME", "CHARACTER_MAXIMUM_LENGTH", "NUMERIC_PRECISION", "NUMERIC_SCALE", "COLLATION_NAME"
+        "DATA_TYPE", "TYPE_NAME", "CHARACTER_MAXIMUM_LENGTH", "NUMERIC_PRECISION", "NUMERIC_SCALE", "COLLATION_NAME",
+        "COLUMN_DEF", "DATETIME_PRECISION", "REMARKS"
     }, rows);
   }
 
   /**
-   * Read column type hints from the Parquet file footer metadata.
+   * Read column metadata (type hints and remarks) from the Parquet file footer.
    *
    * @param path
    *          the Hadoop path to the Parquet file
    * @param conf
    *          the Hadoop configuration to use when accessing the file
-   * @return an immutable list of Java class names describing column types (empty
-   *         strings indicate missing hints), or an empty list when no hints are
-   *         available
+   * @return immutable column metadata with optional hints and remarks
    * @throws SQLException
    *           if the Parquet metadata cannot be read
    */
-  private List<String> readColumnTypeHints(Path path, Configuration conf) throws SQLException {
+  private ColumnMetadata readColumnMetadata(Path path, Configuration conf) throws SQLException {
     try (ParquetFileReader reader = ParquetFileReader.open(HadoopInputFile.fromPath(path, conf),
         ParquetReadOptions.builder().build())) {
       ParquetMetadata metadata = reader.getFooter();
       Map<String, String> kv = metadata.getFileMetaData().getKeyValueMetaData();
-      if (kv == null || kv.isEmpty()) {
-        return List.of();
+      List<String> hints = List.of();
+      if (kv != null && !kv.isEmpty()) {
+        String columnTypes = kv.get("matrix.columnTypes");
+        if (columnTypes == null) {
+          columnTypes = kv.get("columnTypes");
+        }
+        if (columnTypes != null && !columnTypes.isBlank()) {
+          List<String> parsedHints = parseColumnTypeHints(columnTypes);
+          if (!parsedHints.isEmpty()) {
+            hints = List.copyOf(parsedHints);
+          }
+        }
       }
-      String columnTypes = kv.get("matrix.columnTypes");
-      if (columnTypes == null) {
-        columnTypes = kv.get("columnTypes");
-      }
-      if (columnTypes == null || columnTypes.isBlank()) {
-        return List.of();
-      }
-      List<String> hints = parseColumnTypeHints(columnTypes);
-      return hints.isEmpty() ? List.of() : List.copyOf(hints);
+      Map<String, String> columnRemarks = resolveColumnRemarks(kv);
+      return new ColumnMetadata(hints, columnRemarks);
     } catch (IOException e) {
-      throw new SQLException("Failed to read column type hints", e);
+      throw new SQLException("Failed to read column metadata", e);
     }
+  }
+
+  /**
+   * Immutable container for column metadata resolved from the Parquet footer.
+   *
+   * @param columnTypeHints
+   *          optional list of column type hints
+   * @param columnRemarks
+   *          optional mapping from column name to remark
+   */
+  private record ColumnMetadata(List<String> columnTypeHints, Map<String, String> columnRemarks) {
+
+    private ColumnMetadata {
+      columnTypeHints = columnTypeHints == null || columnTypeHints.isEmpty() ? List.of()
+          : List.copyOf(columnTypeHints);
+      columnRemarks = columnRemarks == null || columnRemarks.isEmpty() ? Map.of()
+          : Map.copyOf(columnRemarks);
+    }
+  }
+
+  /**
+   * Extract column-level remark entries from the Parquet metadata map.
+   *
+   * @param metadata
+   *          raw key-value metadata entries (may be {@code null})
+   * @return normalized mapping from lowercase column names to remark strings
+   */
+  private Map<String, String> resolveColumnRemarks(Map<String, String> metadata) {
+    if (metadata == null || metadata.isEmpty()) {
+      return Map.of();
+    }
+    Map<String, String> remarks = new LinkedHashMap<>();
+    for (Map.Entry<String, String> entry : metadata.entrySet()) {
+      String key = entry.getKey();
+      if (key == null) {
+        continue;
+      }
+      String normalizedKey = key.trim().toLowerCase(Locale.ROOT);
+      for (String prefix : COLUMN_REMARK_PREFIXES) {
+        if (!normalizedKey.startsWith(prefix)) {
+          continue;
+        }
+        String columnKey = normalizedKey.substring(prefix.length());
+        if (columnKey.contains(".")) {
+          columnKey = columnKey.substring(columnKey.lastIndexOf('.') + 1);
+        }
+        String trimmedColumn = columnKey.trim();
+        if (trimmedColumn.isEmpty()) {
+          continue;
+        }
+        String value = entry.getValue();
+        if (value == null) {
+          continue;
+        }
+        String trimmedValue = value.trim();
+        if (!trimmedValue.isEmpty()) {
+          remarks.putIfAbsent(trimmedColumn, trimmedValue);
+        }
+      }
+    }
+    if (remarks.isEmpty()) {
+      return Map.of();
+    }
+    Map<String, String> normalized = new LinkedHashMap<>();
+    for (Map.Entry<String, String> entry : remarks.entrySet()) {
+      normalized.put(entry.getKey().toLowerCase(Locale.ROOT), entry.getValue());
+    }
+    return Map.copyOf(normalized);
+  }
+
+  /**
+   * Determine the remark for the supplied column field.
+   *
+   * @param field
+   *          Avro field describing the column (may be {@code null})
+   * @param remarksByColumn
+   *          pre-resolved metadata driven remarks keyed by column name
+   * @return trimmed remark string or {@code null} when unavailable
+   */
+  private String resolveColumnRemark(Schema.Field field, Map<String, String> remarksByColumn) {
+    if (field == null) {
+      return null;
+    }
+    if (remarksByColumn != null && !remarksByColumn.isEmpty()) {
+      String name = field.name();
+      if (name != null) {
+        String remark = remarksByColumn.get(name.trim().toLowerCase(Locale.ROOT));
+        if (remark != null && !remark.isBlank()) {
+          return remark;
+        }
+      }
+    }
+    String doc = field.doc();
+    if (doc != null && !doc.isBlank()) {
+      return doc.trim();
+    }
+    String comment = field.getProp("comment");
+    if (comment != null && !comment.isBlank()) {
+      return comment.trim();
+    }
+    String description = field.getProp("description");
+    if (description != null && !description.isBlank()) {
+      return description.trim();
+    }
+    return null;
   }
 
   /**
@@ -402,6 +516,60 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       case Types.TINYINT, Types.SMALLINT, Types.INTEGER, Types.BIGINT -> 0;
       default -> null;
     };
+  }
+
+  /**
+   * Determine the datetime precision for time-based logical types.
+   *
+   * @param jdbcType
+   *          resolved JDBC type
+   * @param baseSchema
+   *          non-null Avro schema backing the column
+   * @return precision expressed in fractional digits or {@code null}
+   */
+  private Integer resolveDatetimePrecision(int jdbcType, Schema baseSchema) {
+    if (baseSchema == null) {
+      return null;
+    }
+    return switch (jdbcType) {
+      case Types.TIMESTAMP, Types.TIMESTAMP_WITH_TIMEZONE -> {
+        if (baseSchema.getLogicalType() instanceof LogicalTypes.TimestampMicros) {
+          yield 6;
+        }
+        if (baseSchema.getLogicalType() instanceof LogicalTypes.TimestampMillis) {
+          yield 3;
+        }
+        yield null;
+      }
+      case Types.TIME, Types.TIME_WITH_TIMEZONE -> {
+        if (baseSchema.getLogicalType() instanceof LogicalTypes.TimeMicros) {
+          yield 6;
+        }
+        if (baseSchema.getLogicalType() instanceof LogicalTypes.TimeMillis) {
+          yield 3;
+        }
+        yield null;
+      }
+      default -> null;
+    };
+  }
+
+  /**
+   * Resolve the default value defined for a column.
+   *
+   * @param field
+   *          Avro field describing the column (may be {@code null})
+   * @return textual representation of the default or {@code null}
+   */
+  private String resolveColumnDefault(Schema.Field field) {
+    if (field == null) {
+      return null;
+    }
+    Object defaultValue = field.defaultVal();
+    if (defaultValue == null || defaultValue == Schema.Field.NULL_DEFAULT_VALUE) {
+      return null;
+    }
+    return defaultValue.toString();
   }
 
   // Boilerplate defaults for unimplemented metadata
