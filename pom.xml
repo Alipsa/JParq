@@ -264,6 +264,7 @@
         <configuration>
           <redirectTestOutputToFile>false</redirectTestOutputToFile>
           <useFile>false</useFile>
+          <skipTests>false</skipTests>
           <systemPropertyVariables>
             <org.slf4j.simpleLogger.defaultLogLevel>info</org.slf4j.simpleLogger.defaultLogLevel>
             <org.slf4j.simpleLogger.log.jparq.PredicatePushdownPerfFS>debug</org.slf4j.simpleLogger.log.jparq.PredicatePushdownPerfFS>

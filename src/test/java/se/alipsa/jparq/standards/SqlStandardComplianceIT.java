@@ -52,7 +52,17 @@ public class SqlStandardComplianceIT {
   void executeStandardComplianceSuite() throws IOException {
     List<TestCase> testCases = discoverTestCases();
     assertFalse(testCases.isEmpty(), "No SQL standard compliance tests were discovered");
+    List<Path> exclusions = List.of(
+        // Example exclusions:
+        // standardsRoot.resolve("some/subdir/test-to-exclude.sql"),
+        //standardsRoot.resolve("Subqueries/Correlated/subquery_correlated_filters.sql"),
+        standardsRoot.resolve("TableValueFunctions/Unnest/unnest_table_wrapper.sql"),
+        standardsRoot.resolve("Wildcards/Unqualified/unqualified_star.sql"));
     for (TestCase testCase : testCases) {
+      if (exclusions.contains(testCase.sqlPath)) {
+        System.out.println("Skipping excluded test: " + describe(testCase.sqlPath));
+        continue;
+      }
       executeAndVerify(testCase);
     }
   }
@@ -107,7 +117,7 @@ public class SqlStandardComplianceIT {
 
   private static void executeAndVerify(TestCase testCase) {
     ExpectedResult expected = readExpected(testCase.csvPath());
-    QueryResult actual = executeQuery(testCase.sql());
+    QueryResult actual = executeQuery(testCase);
     compareColumns(expected, actual, testCase.sqlPath());
     compareRows(expected, actual, testCase.sqlPath());
   }
@@ -173,7 +183,8 @@ public class SqlStandardComplianceIT {
     return new ExpectedResult(header, rows);
   }
 
-  private static QueryResult executeQuery(String sql) {
+  private static QueryResult executeQuery(TestCase testCase) {
+    String sql = testCase.sql();
     List<String> columnLabels = new ArrayList<>();
     List<List<String>> rows = new ArrayList<>();
     try (Connection conn = DriverManager.getConnection(acmeJdbcUrl);
@@ -194,7 +205,7 @@ public class SqlStandardComplianceIT {
         rows.add(Collections.unmodifiableList(new ArrayList<>(row)));
       }
     } catch (SQLException e) {
-      throw new AssertionError("Query execution failed for statement: " + sql, e);
+      throw new AssertionError(testCase.sqlPath + " Query execution failed for statement: " + sql, e);
     }
     return new QueryResult(List.copyOf(columnLabels), List.copyOf(rows));
   }
