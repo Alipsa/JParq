@@ -292,7 +292,7 @@
               <goal>verify</goal>
             </goals>
             <configuration>
-              <testFailureIgnore>true</testFailureIgnore>
+              <testFailureIgnore>false</testFailureIgnore>
             </configuration>
           </execution>
         </executions>
