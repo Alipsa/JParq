@@ -100,7 +100,8 @@ public final class UnnestTableBuilder {
         reference.joinCondition(), reference.usingColumns(), effectiveSupplier);
   }
 
-  private static CorrelatedRowsSupplier applyTableSample(CorrelatedRowsSupplier supplier, TableSampleDefinition sample) {
+  private static CorrelatedRowsSupplier applyTableSample(CorrelatedRowsSupplier supplier,
+      TableSampleDefinition sample) {
     if (supplier == null || sample == null) {
       return supplier;
     }

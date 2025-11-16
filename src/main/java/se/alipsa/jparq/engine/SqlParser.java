@@ -337,17 +337,14 @@ public final class SqlParser {
    * @param method
    *          sampling method requested by the query
    * @param valueType
-   *          indicates whether the sampling argument represents a percentage or
-   *          a fixed row count
+   *          indicates whether the sampling argument represents a percentage or a
+   *          fixed row count
    * @param value
    *          numeric value supplied to {@code TABLESAMPLE}
    * @param repeatableSeed
    *          optional seed requested through {@code REPEATABLE}
    */
-  public record TableSampleDefinition(
-      SampleMethod method,
-      SampleValueType valueType,
-      double value,
+  public record TableSampleDefinition(SampleMethod method, SampleValueType valueType, double value,
       Long repeatableSeed) {
 
     /**
@@ -1009,10 +1006,9 @@ public final class SqlParser {
     }
     double value = argument.doubleValue();
     String unit = sampleClause.getPercentageUnit();
-    TableSampleDefinition.SampleValueType valueType =
-        "ROWS".equalsIgnoreCase(unit)
-            ? TableSampleDefinition.SampleValueType.ROWS
-            : TableSampleDefinition.SampleValueType.PERCENTAGE;
+    TableSampleDefinition.SampleValueType valueType = "ROWS".equalsIgnoreCase(unit)
+        ? TableSampleDefinition.SampleValueType.ROWS
+        : TableSampleDefinition.SampleValueType.PERCENTAGE;
     if (valueType == TableSampleDefinition.SampleValueType.PERCENTAGE && value > 100D) {
       value = 100D;
     }
@@ -1037,16 +1033,8 @@ public final class SqlParser {
     if (info == null || tableSample == null) {
       return info;
     }
-    return new FromInfo(
-        info.tableName(),
-        info.tableAlias(),
-        info.columnMapping(),
-        info.innerSelect(),
-        info.subquerySql(),
-        info.commonTableExpression(),
-        info.valueTable(),
-        info.unnest(),
-        info.lateral(),
+    return new FromInfo(info.tableName(), info.tableAlias(), info.columnMapping(), info.innerSelect(),
+        info.subquerySql(), info.commonTableExpression(), info.valueTable(), info.unnest(), info.lateral(),
         tableSample);
   }
 

@@ -12,8 +12,8 @@ import se.alipsa.jparq.engine.SqlParser.TableSampleDefinition.SampleMethod;
 import se.alipsa.jparq.engine.SqlParser.TableSampleDefinition.SampleValueType;
 
 /**
- * {@link RecordReader} decorator that enforces {@code TABLESAMPLE} semantics for
- * both percentage and row-count sampling strategies.
+ * {@link RecordReader} decorator that enforces {@code TABLESAMPLE} semantics
+ * for both percentage and row-count sampling strategies.
  */
 public final class SamplingRecordReader implements RecordReader {
 

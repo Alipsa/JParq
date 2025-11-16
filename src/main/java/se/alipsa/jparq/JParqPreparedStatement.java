@@ -68,11 +68,11 @@ import se.alipsa.jparq.engine.ParquetRecordReaderAdapter;
 import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.RecordReader;
+import se.alipsa.jparq.engine.SamplingRecordReader;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.QualifiedExpansionColumn;
 import se.alipsa.jparq.engine.SqlParser.ValueTableDefinition;
 import se.alipsa.jparq.engine.SubqueryExecutor;
-import se.alipsa.jparq.engine.SamplingRecordReader;
 import se.alipsa.jparq.engine.UnnestTableBuilder;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.window.AvgWindow;
@@ -296,8 +296,9 @@ class JParqPreparedStatement implements PreparedStatement {
     }
     RecordReader reader;
     String resultTableName;
-    SqlParser.TableReference baseRef =
-        (tableReferences == null || tableReferences.isEmpty()) ? null : tableReferences.get(0);
+    SqlParser.TableReference baseRef = (tableReferences == null || tableReferences.isEmpty())
+        ? null
+        : tableReferences.get(0);
     try {
       if (joinQuery) {
         JoinRecordReader joinReader = buildJoinReader();
@@ -334,15 +335,8 @@ class JParqPreparedStatement implements PreparedStatement {
     // Create the result set, passing reader, select plan, residual filter,
     // plus projection labels and physical names (for metadata & value lookups)
     SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
-    JParqResultSet rs =
-        new JParqResultSet(
-            reader,
-            parsedSelect,
-            resultTableName,
-            residualExpression,
-            labels,
-            physical,
-            subqueryExecutor);
+    JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, residualExpression, labels, physical,
+        subqueryExecutor);
 
     stmt.setCurrentRs(rs);
     return rs;
@@ -364,8 +358,8 @@ class JParqPreparedStatement implements PreparedStatement {
     return new JParqPreparedStatement(stmt, sql, cteResults);
   }
 
-  private RecordReader applyTableSample(
-      SqlParser.TableSampleDefinition sample, RecordReader reader) throws SQLException {
+  private RecordReader applyTableSample(SqlParser.TableSampleDefinition sample, RecordReader reader)
+      throws SQLException {
     if (sample == null || reader == null) {
       return reader;
     }
@@ -1594,7 +1588,8 @@ class JParqPreparedStatement implements PreparedStatement {
         throw new IllegalStateException("Failed to evaluate LATERAL subquery", e);
       }
     };
-    JoinRecordReader.CorrelatedRowsSupplier effectiveSupplier = ref.tableSample() == null ? supplier
+    JoinRecordReader.CorrelatedRowsSupplier effectiveSupplier = ref.tableSample() == null
+        ? supplier
         : assignments -> applySampleUnchecked(ref.tableSample(), supplier.rows(assignments));
     String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
     return new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), schema, List.of(), ref.joinType(),

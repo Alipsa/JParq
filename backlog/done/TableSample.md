@@ -63,6 +63,10 @@ ORDER BY
 -----
 
 ## 📝 Implementation Requirements
+- Extend the parser layerUpdate SqlParser.FromInfo/TableReference to include a TableSampleDefinition that captures the sampling method (SYSTEM/BERNOULLI), percentage vs. row-count, and optional REPEATABLE seed. 
+- Parse this metadata from each FromItem/Join (using JSqlParser’s TableSample node) so it flows through buildTableReferences(...) into the query plan objects.
+- Apply sampling during executionIntroduce a SamplingRecordReader (or equivalent hook inside QueryProcessor) that wraps the base RecordReader and enforces SYSTEM/Bernoulli semantics using the parsed percentage/count and seed, ensuring deterministic results for REPEATABLE. 
+- Integrate this wrapper wherever a reader is created for a TableReference so single-table scans and joins all honor sampling instructions. 
 
 ### 1\. Syntax Parsing
 
