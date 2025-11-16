@@ -103,7 +103,7 @@ public class TableSampleTest {
         """;
     List<Integer> first = fetchIntegers(sql, "value_column");
     List<Integer> second = fetchIntegers(sql, "value_column");
-    Assertions.assertEquals(first, second, "REPEATABLE seed should stabilise VALUES sampling");
+    Assertions.assertEquals(first, second, "REPEATABLE seed should stabilize VALUES sampling");
     Assertions.assertEquals(2, first.size(), "50% sampling should emit half the VALUES rows");
   }
 
