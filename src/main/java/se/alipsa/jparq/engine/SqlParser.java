@@ -371,7 +371,7 @@ public final class SqlParser {
     }
 
     /**
-     * Normalise optional elements and guard against invalid values.
+     * Normalize optional elements and guard against invalid values.
      */
     public TableSampleDefinition {
       method = method == null ? SampleMethod.SYSTEM : method;
