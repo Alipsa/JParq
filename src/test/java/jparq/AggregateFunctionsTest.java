@@ -189,24 +189,21 @@ public class AggregateFunctionsTest {
 
     assertFalse(expectedCounts.isEmpty(), "Baseline grouping query should produce results");
 
-    jparqSql.query(
-        "SELECT COALESCE(gear, 0) AS grp, COUNT(*) AS cnt FROM mtcars GROUP BY COALESCE(gear, 0)", rs -> {
-          try {
-            int rows = 0;
-            while (rs.next()) {
-              rows++;
-              int groupValue = rs.getInt("grp");
-              long count = rs.getLong("cnt");
-              Long expected = expectedCounts.get(groupValue);
-              assertNotNull(expected, "Unexpected group value returned: " + groupValue);
-              assertEquals(expected.longValue(), count,
-                  "Functional GROUP BY expression should match base grouping counts");
-            }
-            assertEquals(expectedCounts.size(), rows,
-                "COALESCE-based grouping should yield the same number of buckets");
-          } catch (SQLException e) {
-            fail(e);
-          }
-        });
+    jparqSql.query("SELECT COALESCE(gear, 0) AS grp, COUNT(*) AS cnt FROM mtcars GROUP BY COALESCE(gear, 0)", rs -> {
+      try {
+        int rows = 0;
+        while (rs.next()) {
+          rows++;
+          int groupValue = rs.getInt("grp");
+          long count = rs.getLong("cnt");
+          Long expected = expectedCounts.get(groupValue);
+          assertNotNull(expected, "Unexpected group value returned: " + groupValue);
+          assertEquals(expected.longValue(), count, "Functional GROUP BY expression should match base grouping counts");
+        }
+        assertEquals(expectedCounts.size(), rows, "COALESCE-based grouping should yield the same number of buckets");
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
   }
 }

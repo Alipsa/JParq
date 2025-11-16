@@ -129,7 +129,8 @@ public class PredicatePushdownPerfFS {
     // Non-regression: pushdown shouldn’t be meaningfully slower locally.
     // (On bigger datasets / cold cache you’ll typically see << 1.0)
     double ratio = (double) tWithSchema / (double) tNoSchema;
-    double epsilon = 1.00; // Allow up to 100% tolerance to survive constrained CI hosts where noise dominates timings
+    double epsilon = 1.00; // Allow up to 100% tolerance to survive constrained CI hosts where noise
+                           // dominates timings
     assertTrue(tWithSchema <= tNoSchema * (1.0 + epsilon), "Expected pushdown not to be meaningfully slower. ratio="
         + ratio + " noSchema=" + tNoSchema + "ns withSchema=" + tWithSchema + "ns");
   }
