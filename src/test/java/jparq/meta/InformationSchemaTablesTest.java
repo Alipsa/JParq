@@ -24,6 +24,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.avro.AvroParquetWriter;
 import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
+import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -226,8 +227,9 @@ public class InformationSchemaTablesTest {
       meta = new LinkedHashMap<>(meta);
       meta.put("comment", comment);
     }
+    var outputPath = new org.apache.hadoop.fs.Path(file.toUri());
     try (ParquetWriter<GenericRecord> writer = AvroParquetWriter
-        .<GenericRecord>builder(new org.apache.hadoop.fs.Path(file.toUri())).withConf(conf)
+        .<GenericRecord>builder(HadoopOutputFile.fromPath(outputPath, conf)).withConf(conf)
         .withCompressionCodec(CompressionCodecName.UNCOMPRESSED).withSchema(schema).withExtraMetaData(meta).build()) {
       writer.write(record);
     }

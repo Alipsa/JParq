@@ -17,6 +17,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.avro.AvroParquetWriter;
 import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
+import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import se.alipsa.jparq.JParqSql;
@@ -143,8 +144,9 @@ public class InformationSchemaColumnsTest {
       throws IOException {
     Configuration conf = new Configuration(false);
     Map<String, String> meta = metadata == null ? Map.of() : metadata;
+    var outputPath = new org.apache.hadoop.fs.Path(file.toUri());
     try (ParquetWriter<GenericRecord> writer = AvroParquetWriter
-        .<GenericRecord>builder(new org.apache.hadoop.fs.Path(file.toUri())).withConf(conf)
+        .<GenericRecord>builder(HadoopOutputFile.fromPath(outputPath, conf)).withConf(conf)
         .withCompressionCodec(CompressionCodecName.UNCOMPRESSED).withSchema(schema).withExtraMetaData(meta).build()) {
       for (GenericRecord row : rows) {
         writer.write(row);
