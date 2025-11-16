@@ -89,6 +89,7 @@ import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
+import se.alipsa.jparq.meta.InformationSchemaColumns;
 import se.alipsa.jparq.meta.InformationSchemaTables;
 
 /** An implementation of the java.sql.PreparedStatement interface. */
@@ -114,6 +115,7 @@ class JParqPreparedStatement implements PreparedStatement {
   private final Map<String, CteResult> valueTableResults;
   private final CteResult baseCteResult;
   private CteResult informationSchemaTablesResult;
+  private CteResult informationSchemaColumnsResult;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
     this(stmt, sql, Map.of());
@@ -167,8 +169,10 @@ class JParqPreparedStatement implements PreparedStatement {
         SqlParser.TableReference baseRef = tmpTableRefs.isEmpty() ? null : tmpTableRefs.getFirst();
         boolean baseIsCte = baseRef != null && (baseRef.commonTableExpression() != null
             || resolveCteResultByName(baseRef.tableName(), tmpCteResults) != null);
-        boolean baseIsInformationSchema = baseRef != null
+        boolean baseIsInformationSchemaTables = baseRef != null
             && InformationSchemaTables.matchesTableReference(baseRef.tableName());
+        boolean baseIsInformationSchemaColumns = baseRef != null
+            && InformationSchemaColumns.matchesTableReference(baseRef.tableName());
 
         AggregateFunctions.AggregatePlan aggregatePlan = null;
 
@@ -204,8 +208,9 @@ class JParqPreparedStatement implements PreparedStatement {
           aggregatePlan = AggregateFunctions.plan(tmpSelect);
           tmpResidual = tmpSelect.where();
           tmpPredicate = Optional.empty();
-        } else if (baseIsInformationSchema) {
-          CteResult resolved = materializeInformationSchemaTables();
+        } else if (baseIsInformationSchemaTables || baseIsInformationSchemaColumns) {
+          CteResult resolved = baseIsInformationSchemaTables ? materializeInformationSchemaTables()
+              : materializeInformationSchemaColumns();
           tmpBaseCteResult = resolved;
           tmpFileAvro = resolved.schema();
           if (!tmpSelect.qualifiedWildcards().isEmpty()) {
@@ -864,6 +869,15 @@ class JParqPreparedStatement implements PreparedStatement {
         registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
         continue;
       }
+      if (InformationSchemaColumns.matchesTableReference(ref.tableName())) {
+        CteResult infoResult = materializeInformationSchemaColumns();
+        String infoName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
+        JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(infoName, ref.tableAlias(),
+            infoResult.schema(), infoResult.rows(), ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
+        tables.add(table);
+        registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
+        continue;
+      }
       CteResult cteResult = null;
       if (ref.commonTableExpression() != null) {
         cteResult = resolveCteResult(ref.commonTableExpression(), cteResults);
@@ -1240,6 +1254,21 @@ class JParqPreparedStatement implements PreparedStatement {
       informationSchemaTablesResult = new CteResult(data.schema(), data.rows());
     }
     return informationSchemaTablesResult;
+  }
+
+  /**
+   * Lazily materialize the INFORMATION_SCHEMA.COLUMNS view.
+   *
+   * @return cached {@link CteResult} containing the information schema rows
+   * @throws SQLException
+   *           if the metadata cannot be read
+   */
+  private CteResult materializeInformationSchemaColumns() throws SQLException {
+    if (informationSchemaColumnsResult == null) {
+      InformationSchemaColumns.TableData data = InformationSchemaColumns.load(stmt.getConn());
+      informationSchemaColumnsResult = new CteResult(data.schema(), data.rows());
+    }
+    return informationSchemaColumnsResult;
   }
 
   private Object normalizeLiteralValue(Object value) {

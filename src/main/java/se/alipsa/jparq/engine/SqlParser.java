@@ -22,6 +22,7 @@ import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.*;
 import se.alipsa.jparq.helper.JParqUtil;
+import se.alipsa.jparq.meta.InformationSchemaColumns;
 import se.alipsa.jparq.meta.InformationSchemaTables;
 
 /**
@@ -875,6 +876,9 @@ public final class SqlParser {
       String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
       if (InformationSchemaTables.matchesQualifiedName(t.getSchemaName(), tableName, t.getFullyQualifiedName())) {
         tableName = InformationSchemaTables.TABLE_IDENTIFIER;
+      } else if (
+          InformationSchemaColumns.matchesQualifiedName(t.getSchemaName(), tableName, t.getFullyQualifiedName())) {
+        tableName = InformationSchemaColumns.TABLE_IDENTIFIER;
       }
       CommonTableExpression cte = resolveCommonTableExpression(t, cteLookup);
       Map<String, String> mapping = Map.of();
