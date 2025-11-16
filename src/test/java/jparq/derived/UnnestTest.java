@@ -206,7 +206,7 @@ class UnnestTest {
       }
     });
 
-    Assertions.assertEquals(first, second, "REPEATABLE seed should stabilise UNNEST sampling");
+    Assertions.assertEquals(first, second, "REPEATABLE seed should stabilize UNNEST sampling");
     Assertions.assertFalse(first.isEmpty(), "Sampling should retain at least one tag");
     Assertions.assertTrue(first.size() <= 3, "Sampling should not exceed original UNNEST rows");
   }
