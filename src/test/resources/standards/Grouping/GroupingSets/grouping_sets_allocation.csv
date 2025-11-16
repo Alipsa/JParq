@@ -1,0 +1,8 @@
+department,first_name,department_group,name_group,total_salary,sort_key
+HR,NULL,0,1,270000,HR
+IT,NULL,0,1,475000,IT
+Sales,NULL,0,1,195000,Sales
+NULL,Arne,1,0,195000,Arne
+NULL,Per,1,0,475000,Per
+NULL,Tage,1,0,270000,Tage
+NULL,NULL,1,1,940000,TOTAL

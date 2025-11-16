@@ -1,0 +1,7 @@
+department,employee,department_group,employee_group,total_salary
+1,1,0,0,475000
+1,2,0,0,180000
+1,NULL,0,1,655000
+NULL,1,1,0,475000
+NULL,2,1,0,180000
+NULL,NULL,1,1,655000
