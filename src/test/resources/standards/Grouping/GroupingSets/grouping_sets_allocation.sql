@@ -4,8 +4,7 @@ SELECT d.department,
        e.first_name,
        GROUPING(d.department) AS department_group,
        GROUPING(e.first_name) AS name_group,
-       SUM(s.salary) AS total_salary,
-       COALESCE(d.department, e.first_name, 'TOTAL') AS sort_key
+       SUM(s.salary) AS total_salary
 FROM employees e
 JOIN employee_department ed ON e.id = ed.employee
 JOIN departments d ON d.id = ed.department
@@ -18,4 +17,5 @@ GROUP BY GROUPING SETS (
 )
 ORDER BY department_group,
          name_group,
-         sort_key;
+         d.department,
+         e.first_name;

@@ -12,6 +12,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
@@ -169,5 +171,42 @@ public class AggregateFunctionsTest {
         fail(e);
       }
     });
+  }
+
+  @Test
+  void testGroupByExpressionMatching() {
+    Map<Integer, Long> expectedCounts = new LinkedHashMap<>();
+
+    jparqSql.query("SELECT gear AS grp, COUNT(*) AS cnt FROM mtcars GROUP BY gear", rs -> {
+      try {
+        while (rs.next()) {
+          expectedCounts.put(rs.getInt("grp"), rs.getLong("cnt"));
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    assertFalse(expectedCounts.isEmpty(), "Baseline grouping query should produce results");
+
+    jparqSql.query(
+        "SELECT COALESCE(gear, 0) AS grp, COUNT(*) AS cnt FROM mtcars GROUP BY COALESCE(gear, 0)", rs -> {
+          try {
+            int rows = 0;
+            while (rs.next()) {
+              rows++;
+              int groupValue = rs.getInt("grp");
+              long count = rs.getLong("cnt");
+              Long expected = expectedCounts.get(groupValue);
+              assertNotNull(expected, "Unexpected group value returned: " + groupValue);
+              assertEquals(expected.longValue(), count,
+                  "Functional GROUP BY expression should match base grouping counts");
+            }
+            assertEquals(expectedCounts.size(), rows,
+                "COALESCE-based grouping should yield the same number of buckets");
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
   }
 }

@@ -8,13 +8,14 @@ dept_b(department_id) AS (
 ),
 dept_c(department_id) AS (
   SELECT * FROM (VALUES (1), (3))
-)
-SELECT department_id
-FROM (
+),
+dept_intersection AS (
   SELECT department_id FROM dept_a
   INTERSECT ALL
   SELECT department_id FROM dept_b
 )
+SELECT department_id
+FROM dept_intersection
 EXCEPT ALL
 SELECT department_id FROM dept_c
 ORDER BY department_id;
