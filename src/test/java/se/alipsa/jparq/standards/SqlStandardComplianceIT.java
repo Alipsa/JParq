@@ -11,8 +11,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -20,27 +24,29 @@ import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import se.alipsa.jparq.JParqSql;
 
 /**
- * Executes the SQL standard compliance suite described under {@code src/test/resources/standards}.
+ * Executes the SQL standard compliance suite described under
+ * {@code src/test/resources/standards}.
  *
  * <p>
- * The suite is data driven: every {@code .sql} file in the hierarchy is executed and compared against the
- * sibling {@code .csv} file that contains the expected result set.
+ * The suite is data driven: every {@code .sql} file in the hierarchy is
+ * executed and compared against the sibling {@code .csv} file that contains the
+ * expected result set.
  * </p>
  */
 public class SqlStandardComplianceIT {
 
-  private static final Path STANDARDS_ROOT = locateStandardsRoot();
-  private static final JParqSql ACME_SQL = new JParqSql("jdbc:jparq:" + locateAcmeRoot().toAbsolutePath());
+  private static Path standardsRoot;
+  private static String acmeJdbcUrl;
 
   /**
    * Discovers, executes and validates every SQL standard compliance test case.
    *
    * @throws IOException
-   *     if the test data cannot be read
+   *           if the test data cannot be read
    */
   @Test
   void executeStandardComplianceSuite() throws IOException {
@@ -51,10 +57,23 @@ public class SqlStandardComplianceIT {
     }
   }
 
+  /**
+   * Initializes required resources before any tests execute.
+   *
+   * @throws IllegalStateException
+   *           if either the standards hierarchy or the ACME dataset cannot be
+   *           resolved
+   */
+  @BeforeAll
+  static void setUpSuite() {
+    standardsRoot = locateStandardsRoot();
+    Path acmeRoot = locateAcmeRoot();
+    acmeJdbcUrl = "jdbc:jparq:" + acmeRoot.toAbsolutePath();
+  }
+
   private static List<TestCase> discoverTestCases() throws IOException {
-    try (Stream<Path> stream = Files.walk(STANDARDS_ROOT)) {
-      return stream.filter(Files::isRegularFile)
-          .filter(path -> path.getFileName().toString().endsWith(".sql"))
+    try (Stream<Path> stream = Files.walk(standardsRoot)) {
+      return stream.filter(Files::isRegularFile).filter(path -> path.getFileName().toString().endsWith(".sql"))
           .map(SqlStandardComplianceIT::createTestCase)
           .sorted(Comparator.comparing(testCase -> testCase.sqlPath().toString()))
           .collect(Collectors.toCollection(ArrayList::new));
@@ -70,15 +89,19 @@ public class SqlStandardComplianceIT {
     try {
       sql = Files.readString(sqlPath, StandardCharsets.UTF_8);
     } catch (IOException e) {
-      throw new IllegalStateException("Unable to read SQL file: " + sqlPath, e);
+      fail("Unable to read SQL file: " + sqlPath, e);
+      return new TestCase(sqlPath, csvPath, "");
     }
     return new TestCase(sqlPath, csvPath, sql);
   }
 
   private static Path replaceExtension(Path sqlPath, String newExtension) {
     String fileName = sqlPath.getFileName().toString();
-    int idx = fileName.lastIndexOf('.') + 1;
-    String updatedName = fileName.substring(0, idx) + newExtension.substring(1);
+    int idx = fileName.lastIndexOf('.');
+    if (idx == -1) {
+      throw new IllegalArgumentException("SQL file must have an extension: " + sqlPath);
+    }
+    String updatedName = fileName.substring(0, idx) + newExtension;
     return sqlPath.resolveSibling(updatedName);
   }
 
@@ -97,17 +120,21 @@ public class SqlStandardComplianceIT {
     for (int i = 0; i < expected.columns().size(); i++) {
       String expectedName = expected.columns().get(i);
       String actualName = actual.columns().get(i);
+      if (expectedName == null || actualName == null) {
+        fail("Column metadata is missing for " + describe(sqlPath) + " at position " + (i + 1) + ": expected name '"
+            + expectedName + "', actual '" + actualName + "'");
+      }
       if (!Objects.equals(expectedName, actualName)) {
-        fail("Column name mismatch for " + describe(sqlPath) + " at position " + (i + 1) + ": expected '"
-            + expectedName + "' but received '" + actualName + "'");
+        fail("Column name mismatch for " + describe(sqlPath) + " at position " + (i + 1) + ": expected '" + expectedName
+            + "' but received '" + actualName + "'");
       }
     }
   }
 
   private static void compareRows(ExpectedResult expected, QueryResult actual, Path sqlPath) {
     if (expected.rows().size() != actual.rows().size()) {
-      fail("Row count mismatch for " + describe(sqlPath) + ": expected " + expected.rows().size()
-          + " but received " + actual.rows().size());
+      fail("Row count mismatch for " + describe(sqlPath) + ": expected " + expected.rows().size() + " but received "
+          + actual.rows().size());
     }
     for (int rowIndex = 0; rowIndex < expected.rows().size(); rowIndex++) {
       List<String> expectedRow = expected.rows().get(rowIndex);
@@ -119,8 +146,8 @@ public class SqlStandardComplianceIT {
         String expectedValue = normalizeExpected(expectedRow.get(colIndex));
         String actualValue = actualRow.get(colIndex);
         if (!Objects.equals(expectedValue, actualValue)) {
-          fail("Value mismatch for " + describe(sqlPath) + " at row " + (rowIndex + 1) + ", column "
-              + (colIndex + 1) + ": expected '" + expectedValue + "' but received '" + actualValue + "'");
+          fail("Value mismatch for " + describe(sqlPath) + " at row " + (rowIndex + 1) + ", column " + (colIndex + 1)
+              + ": expected '" + expectedValue + "' but received '" + actualValue + "'");
         }
       }
     }
@@ -133,10 +160,8 @@ public class SqlStandardComplianceIT {
     } catch (IOException e) {
       throw new IllegalStateException("Unable to read expected results file: " + csvPath, e);
     }
-    List<String> filtered = lines.stream()
-        .map(line -> line.replace("\uFEFF", ""))
-        .filter(line -> !line.trim().isEmpty())
-        .toList();
+    List<String> filtered = lines.stream().map(SqlStandardComplianceIT::stripLeadingBom)
+        .filter(line -> !line.trim().isEmpty()).toList();
     if (filtered.isEmpty()) {
       fail("Expected results file is empty: " + describe(csvPath));
     }
@@ -151,27 +176,27 @@ public class SqlStandardComplianceIT {
   private static QueryResult executeQuery(String sql) {
     List<String> columnLabels = new ArrayList<>();
     List<List<String>> rows = new ArrayList<>();
-    ACME_SQL.query(sql, rs -> {
-      try {
-        ResultSetMetaData meta = rs.getMetaData();
-        if (columnLabels.isEmpty()) {
-          for (int i = 1; i <= meta.getColumnCount(); i++) {
-            columnLabels.add(meta.getColumnLabel(i));
-          }
-        }
-        final int columnCount = columnLabels.size();
-        while (rs.next()) {
-          List<String> row = new ArrayList<>(columnCount);
-          for (int i = 1; i <= columnCount; i++) {
-            row.add(normalizeActualValue(rs.getObject(i)));
-          }
-          rows.add(Collections.unmodifiableList(row));
-        }
-      } catch (SQLException e) {
-        throw new AssertionError("Query execution failed", e);
+    try (Connection conn = DriverManager.getConnection(acmeJdbcUrl);
+        Statement stmt = conn.createStatement();
+        ResultSet rs = stmt.executeQuery(sql)) {
+      ResultSetMetaData meta = rs.getMetaData();
+      for (int i = 1; i <= meta.getColumnCount(); i++) {
+        columnLabels.add(meta.getColumnLabel(i));
       }
-    });
-    return new QueryResult(Collections.unmodifiableList(columnLabels), Collections.unmodifiableList(rows));
+      final int columnCount = columnLabels.size();
+      while (rs.next()) {
+        List<String> row = new ArrayList<>(columnCount);
+        for (int i = 1; i <= columnCount; i++) {
+          row.add(normalizeActualValue(rs.getObject(i)));
+        }
+        // Collections.unmodifiableList allows null values which occur in result sets;
+        // List.copyOf does not.
+        rows.add(Collections.unmodifiableList(new ArrayList<>(row)));
+      }
+    } catch (SQLException e) {
+      throw new AssertionError("Query execution failed for statement: " + sql, e);
+    }
+    return new QueryResult(List.copyOf(columnLabels), List.copyOf(rows));
   }
 
   private static String normalizeActualValue(Object value) {
@@ -191,10 +216,14 @@ public class SqlStandardComplianceIT {
       return bigDecimal.stripTrailingZeros().toPlainString();
     }
     if (value instanceof Double doubleValue) {
-      return BigDecimal.valueOf(doubleValue).stripTrailingZeros().toPlainString();
+      // Use String constructor to avoid binary to decimal rounding issues when
+      // normalizing.
+      return new BigDecimal(Double.toString(doubleValue)).stripTrailingZeros().toPlainString();
     }
     if (value instanceof Float floatValue) {
-      return BigDecimal.valueOf(floatValue.doubleValue()).stripTrailingZeros().toPlainString();
+      // Convert via String to prevent double rounding when converting float -> double
+      // -> BigDecimal.
+      return new BigDecimal(Float.toString(floatValue)).stripTrailingZeros().toPlainString();
     }
     if (value instanceof Number number) {
       return number.toString();
@@ -206,14 +235,30 @@ public class SqlStandardComplianceIT {
     List<String> values = new ArrayList<>();
     StringBuilder current = new StringBuilder();
     boolean inQuotes = false;
+    boolean expectingSeparator = false;
     for (int i = 0; i < line.length(); i++) {
       char ch = line.charAt(i);
+      if (expectingSeparator) {
+        if (ch == ',') {
+          values.add(current.toString());
+          current.setLength(0);
+          expectingSeparator = false;
+          continue;
+        }
+        if (Character.isWhitespace(ch)) {
+          continue;
+        }
+        throw new IllegalArgumentException("Malformed CSV line (expected comma after closing quote): " + line);
+      }
       if (ch == '"') {
         if (inQuotes && i + 1 < line.length() && line.charAt(i + 1) == '"') {
           current.append('"');
           i++;
         } else {
           inQuotes = !inQuotes;
+          if (!inQuotes) {
+            expectingSeparator = true;
+          }
         }
       } else if (ch == ',' && !inQuotes) {
         values.add(current.toString());
@@ -221,6 +266,9 @@ public class SqlStandardComplianceIT {
       } else {
         current.append(ch);
       }
+    }
+    if (inQuotes) {
+      throw new IllegalArgumentException("Malformed CSV line (missing closing quote): " + line);
     }
     values.add(current.toString());
     return values;
@@ -259,8 +307,25 @@ public class SqlStandardComplianceIT {
   }
 
   private static String describe(Path path) {
-    Path relative = STANDARDS_ROOT.relativize(path.toAbsolutePath());
-    return relative.toString().replace('\\', '/');
+    try {
+      Path relative = standardsRoot.relativize(path.toAbsolutePath());
+      return relative.toString().replace('\\', '/');
+    } catch (IllegalArgumentException e) {
+      throw new IllegalArgumentException("Path " + path.toAbsolutePath() + " is not under the standards root "
+          + standardsRoot.toAbsolutePath() + ". This may indicate a test misconfiguration.", e);
+    }
+  }
+
+  /**
+   * Removes a leading byte-order mark if present, without touching legitimate
+   * occurrences later in the line.
+   *
+   * @param line
+   *          the line to inspect
+   * @return the sanitized line
+   */
+  private static String stripLeadingBom(String line) {
+    return line.startsWith("\uFEFF") ? line.substring(1) : line;
   }
 
   private record TestCase(Path sqlPath, Path csvPath, String sql) {
