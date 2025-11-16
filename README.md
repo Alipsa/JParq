@@ -156,9 +156,9 @@ The following SQL statements are supported:
   - ROLLUP
   - CUBE
 - Derived Tables: UNNEST with or without a table wrapper, LATERAL derived tables, VALUES table constructors
-## Roadmap: Might be implemented in the future
+- INFORMATION_SCHEMA.COLUMNS and INFORMATION_SCHEMA.TABLES
 
-- Support for INFORMATION_SCHEMA.COLUMNS and INFORMATION_SCHEMA.TABLES use JParqDatabaseMetaData
+## Roadmap: Might be implemented in the future
 
 ### Non standard extensions
 - Support for variable assignment and use within SQL scripts.
