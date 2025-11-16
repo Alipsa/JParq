@@ -258,10 +258,13 @@ public final class SqlParser {
    *          textual SQL used to materialize the derived table
    * @param lateral
    *          {@code true} when the from item is marked as {@code LATERAL}
+   * @param tableSample
+   *          sampling metadata associated with the table reference (may be
+   *          {@code null})
    */
   private record FromInfo(String tableName, String tableAlias, Map<String, String> columnMapping, Select innerSelect,
       String subquerySql, CommonTableExpression commonTableExpression, ValueTableDefinition valueTable,
-      UnnestDefinition unnest, boolean lateral) {
+      UnnestDefinition unnest, boolean lateral, TableSampleDefinition tableSample) {
   }
 
   /**
@@ -318,10 +321,68 @@ public final class SqlParser {
    * @param lateral
    *          {@code true} when the table reference originates from a
    *          {@code LATERAL} clause
+   * @param tableSample
+   *          sampling metadata associated with the table reference (may be
+   *          {@code null})
    */
   public record TableReference(String tableName, String tableAlias, JoinType joinType, Expression joinCondition,
       Select subquery, String subquerySql, CommonTableExpression commonTableExpression, List<String> usingColumns,
-      ValueTableDefinition valueTable, UnnestDefinition unnest, boolean lateral) {
+      ValueTableDefinition valueTable, UnnestDefinition unnest, boolean lateral, TableSampleDefinition tableSample) {
+  }
+
+  /**
+   * Representation of a {@code TABLESAMPLE} clause discovered in the {@code FROM}
+   * list.
+   *
+   * @param method
+   *          sampling method requested by the query
+   * @param valueType
+   *          indicates whether the sampling argument represents a percentage or
+   *          a fixed row count
+   * @param value
+   *          numeric value supplied to {@code TABLESAMPLE}
+   * @param repeatableSeed
+   *          optional seed requested through {@code REPEATABLE}
+   */
+  public record TableSampleDefinition(
+      SampleMethod method,
+      SampleValueType valueType,
+      double value,
+      Long repeatableSeed) {
+
+    /**
+     * Supported sampling methods.
+     */
+    public enum SampleMethod {
+      /** System sampling selects rows using a deterministic stride. */
+      SYSTEM,
+      /** Bernoulli sampling evaluates each row independently. */
+      BERNOULLI
+    }
+
+    /**
+     * Indicates the semantics of the sampling argument.
+     */
+    public enum SampleValueType {
+      /** Sampling argument represents a percentage. */
+      PERCENTAGE,
+      /** Sampling argument represents a fixed row count. */
+      ROWS
+    }
+
+    /**
+     * Normalize optional elements and guard against invalid values.
+     */
+    public TableSampleDefinition {
+      method = method == null ? SampleMethod.SYSTEM : method;
+      valueType = valueType == null ? SampleValueType.PERCENTAGE : valueType;
+      if (Double.isNaN(value)) {
+        value = 0D;
+      }
+      if (value < 0D) {
+        throw new IllegalArgumentException("TABLESAMPLE value must be non-negative");
+      }
+    }
   }
 
   /**
@@ -871,6 +932,7 @@ public final class SqlParser {
   private static FromInfo parseFromItem(FromItem fromItem, List<CommonTableExpression> ctes,
       Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateralHint) {
     boolean lateral = lateralHint;
+    TableSampleDefinition tableSample = parseTableSample(fromItem);
     if (fromItem instanceof Table t) {
       String tableName = t.getName();
       String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
@@ -900,32 +962,92 @@ public final class SqlParser {
           }
         }
       }
-      return new FromInfo(tableName, tableAlias, mapping, innerSelect, null, cte, null, null, lateral);
+      return new FromInfo(tableName, tableAlias, mapping, innerSelect, null, cte, null, null, lateral, tableSample);
     }
     if (fromItem instanceof ParenthesedFromItem parenthesed) {
       FromItem inner = parenthesed.getFromItem();
       FromInfo innerInfo = parseFromItem(inner, ctes, cteLookup, allowQualifiedWildcards, lateral);
-      return applyAlias(innerInfo, parenthesed.getAlias());
+      FromInfo aliased = applyAlias(innerInfo, parenthesed.getAlias());
+      return applySample(aliased, tableSample);
     }
     if (fromItem instanceof LateralSubSelect lateralSub) {
       lateral = true;
       PlainSelect innerPlain = lateralSub.getPlainSelect();
       Alias aliasNode = lateralSub.getAlias();
-      return parseSubSelect(innerPlain, aliasNode, ctes, cteLookup, allowQualifiedWildcards, lateral);
+      FromInfo info = parseSubSelect(innerPlain, aliasNode, ctes, cteLookup, allowQualifiedWildcards, lateral);
+      return applySample(info, tableSample);
     }
     if (fromItem instanceof ParenthesedSelect sub) {
       PlainSelect innerPlain = sub.getPlainSelect();
       Alias aliasNode = sub.getAlias();
-      return parseSubSelect(innerPlain, aliasNode, ctes, cteLookup, allowQualifiedWildcards, lateral);
+      FromInfo info = parseSubSelect(innerPlain, aliasNode, ctes, cteLookup, allowQualifiedWildcards, lateral);
+      return applySample(info, tableSample);
     }
     if (fromItem instanceof TableFunction tableFunction) {
       boolean tableFunctionLateral = lateral || "lateral".equalsIgnoreCase(tableFunction.getPrefix());
-      return parseTableFunction(tableFunction, tableFunctionLateral);
+      FromInfo info = parseTableFunction(tableFunction, tableFunctionLateral);
+      return applySample(info, tableSample);
     }
     if (fromItem instanceof Values valuesItem) {
-      return parseValuesFromItem(valuesItem, lateral);
+      FromInfo info = parseValuesFromItem(valuesItem, lateral);
+      return applySample(info, tableSample);
     }
     throw new IllegalArgumentException("Unsupported FROM item: " + fromItem);
+  }
+
+  private static TableSampleDefinition parseTableSample(FromItem fromItem) {
+    if (fromItem == null) {
+      return null;
+    }
+    SampleClause sampleClause = fromItem.getSampleClause();
+    if (sampleClause == null) {
+      return null;
+    }
+    Number argument = sampleClause.getPercentageArgument();
+    if (argument == null) {
+      throw new IllegalArgumentException("TABLESAMPLE requires a numeric argument: " + fromItem);
+    }
+    double value = argument.doubleValue();
+    String unit = sampleClause.getPercentageUnit();
+    TableSampleDefinition.SampleValueType valueType =
+        "ROWS".equalsIgnoreCase(unit)
+            ? TableSampleDefinition.SampleValueType.ROWS
+            : TableSampleDefinition.SampleValueType.PERCENTAGE;
+    if (valueType == TableSampleDefinition.SampleValueType.PERCENTAGE && value > 100D) {
+      value = 100D;
+    }
+    TableSampleDefinition.SampleMethod method = mapSampleMethod(sampleClause.getMethod());
+    Number repeat = sampleClause.getRepeatArgument();
+    Long seed = repeat == null ? null : repeat.longValue();
+    return new TableSampleDefinition(method, valueType, value, seed);
+  }
+
+  private static TableSampleDefinition.SampleMethod mapSampleMethod(SampleClause.SampleMethod method) {
+    if (method == null) {
+      return TableSampleDefinition.SampleMethod.SYSTEM;
+    }
+    return switch (method) {
+      case BERNOULLI -> TableSampleDefinition.SampleMethod.BERNOULLI;
+      case SYSTEM, BLOCK -> TableSampleDefinition.SampleMethod.SYSTEM;
+      default -> TableSampleDefinition.SampleMethod.SYSTEM;
+    };
+  }
+
+  private static FromInfo applySample(FromInfo info, TableSampleDefinition tableSample) {
+    if (info == null || tableSample == null) {
+      return info;
+    }
+    return new FromInfo(
+        info.tableName(),
+        info.tableAlias(),
+        info.columnMapping(),
+        info.innerSelect(),
+        info.subquerySql(),
+        info.commonTableExpression(),
+        info.valueTable(),
+        info.unnest(),
+        info.lateral(),
+        tableSample);
   }
 
   private static FromInfo parseSubSelect(PlainSelect innerPlain, Alias aliasNode, List<CommonTableExpression> ctes,
@@ -944,7 +1066,7 @@ public final class SqlParser {
     }
     Map<String, String> mapping = buildColumnMapping(innerSelect);
     String subquerySql = innerPlain.toString();
-    return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql, null, null, null, lateral);
+    return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql, null, null, null, lateral, null);
   }
 
   private static FromInfo parseTableFunction(TableFunction tableFunction, boolean lateral) {
@@ -978,7 +1100,7 @@ public final class SqlParser {
     boolean withOrdinality = tableFunction.getWithClause() != null
         && "ORDINALITY".equalsIgnoreCase(tableFunction.getWithClause().trim());
     UnnestDefinition unnest = new UnnestDefinition(expression, withOrdinality, columnAliases);
-    return new FromInfo(null, aliasName, Map.of(), null, null, null, null, unnest, lateral);
+    return new FromInfo(null, aliasName, Map.of(), null, null, null, null, unnest, lateral, null);
   }
 
   private static Function unwrapTableWrapper(Function function, TableFunction tableFunction) {
@@ -1050,7 +1172,7 @@ public final class SqlParser {
     String aliasName = aliasNode == null ? null : aliasNode.getName();
     String tableName = (aliasName != null && !aliasName.isBlank()) ? aliasName : "values";
     ValueTableDefinition valueTable = new ValueTableDefinition(rows, columnNames);
-    return new FromInfo(tableName, aliasName, Map.copyOf(mapping), null, null, null, valueTable, null, lateral);
+    return new FromInfo(tableName, aliasName, Map.copyOf(mapping), null, null, null, valueTable, null, lateral, null);
   }
 
   private static FromInfo applyAlias(FromInfo info, Alias aliasNode) {
@@ -1107,7 +1229,7 @@ public final class SqlParser {
     String tableName = aliasName != null ? aliasName : info.tableName();
     String tableAlias = aliasName != null ? aliasName : info.tableAlias();
     return new FromInfo(tableName, tableAlias, mapping, info.innerSelect(), info.subquerySql(),
-        info.commonTableExpression(), valueTable, info.unnest(), info.lateral());
+        info.commonTableExpression(), valueTable, info.unnest(), info.lateral(), info.tableSample());
   }
 
   private static List<String> extractAliasColumns(Alias alias) {
@@ -2093,7 +2215,8 @@ public final class SqlParser {
   private static List<TableReference> buildTableReferences(FromInfo base, List<JoinInfo> joins) {
     List<TableReference> refs = new ArrayList<>();
     refs.add(new TableReference(base.tableName(), base.tableAlias(), JoinType.BASE, null, base.innerSelect(),
-        base.subquerySql(), base.commonTableExpression(), List.of(), base.valueTable(), base.unnest(), base.lateral()));
+        base.subquerySql(), base.commonTableExpression(), List.of(), base.valueTable(), base.unnest(), base.lateral(),
+        base.tableSample()));
     if (joins != null) {
       for (JoinInfo join : joins) {
         FromInfo info = join.table();
@@ -2101,7 +2224,7 @@ public final class SqlParser {
         Expression combinedCondition = combineExpressions(join.condition(), usingCondition);
         refs.add(new TableReference(info.tableName(), info.tableAlias(), join.joinType(), combinedCondition,
             info.innerSelect(), info.subquerySql(), info.commonTableExpression(), join.usingColumns(),
-            info.valueTable(), info.unnest(), info.lateral()));
+            info.valueTable(), info.unnest(), info.lateral(), info.tableSample()));
       }
     }
     return List.copyOf(refs);

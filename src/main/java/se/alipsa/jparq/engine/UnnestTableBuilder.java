@@ -1,5 +1,6 @@
 package se.alipsa.jparq.engine;
 
+import java.io.IOException;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -14,6 +15,7 @@ import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.JoinRecordReader.CorrelatedRowsSupplier;
 import se.alipsa.jparq.engine.JoinRecordReader.JoinTable;
 import se.alipsa.jparq.engine.SqlParser.TableReference;
+import se.alipsa.jparq.engine.SqlParser.TableSampleDefinition;
 import se.alipsa.jparq.engine.SqlParser.UnnestDefinition;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
@@ -86,6 +88,7 @@ public final class UnnestTableBuilder {
     Schema unnestSchema = buildSchema(reference, elementSchema, aliasPlan);
     CorrelatedRowsSupplier supplier = assignments -> evaluateAssignments(assignments, sourceIndex, arrayField.name(),
         elementSchema, aliasPlan, unnestSchema);
+    CorrelatedRowsSupplier effectiveSupplier = applyTableSample(supplier, reference.tableSample());
 
     SqlParser.JoinType joinType = reference.joinType();
     if (joinType == SqlParser.JoinType.RIGHT_OUTER || joinType == SqlParser.JoinType.FULL_OUTER) {
@@ -94,7 +97,25 @@ public final class UnnestTableBuilder {
 
     String tableName = reference.tableAlias() != null ? reference.tableAlias() : "unnest";
     return new JoinTable(tableName, reference.tableAlias(), unnestSchema, List.of(), joinType,
-        reference.joinCondition(), reference.usingColumns(), supplier);
+        reference.joinCondition(), reference.usingColumns(), effectiveSupplier);
+  }
+
+  private static CorrelatedRowsSupplier applyTableSample(CorrelatedRowsSupplier supplier, TableSampleDefinition sample) {
+    if (supplier == null || sample == null) {
+      return supplier;
+    }
+    return assignments -> sampleRows(supplier.rows(assignments), sample);
+  }
+
+  private static List<GenericRecord> sampleRows(List<GenericRecord> rows, TableSampleDefinition sample) {
+    if (rows == null || rows.isEmpty()) {
+      return List.of();
+    }
+    try {
+      return SamplingRecordReader.sampleRows(rows, sample);
+    } catch (IOException e) {
+      throw new IllegalStateException("Failed to apply TABLESAMPLE to UNNEST results", e);
+    }
   }
 
   private static int resolveSourceIndex(Column column, String columnName, List<JoinTable> priorTables,
