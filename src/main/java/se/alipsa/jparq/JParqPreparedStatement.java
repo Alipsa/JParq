@@ -72,6 +72,7 @@ import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.QualifiedExpansionColumn;
 import se.alipsa.jparq.engine.SqlParser.ValueTableDefinition;
 import se.alipsa.jparq.engine.SubqueryExecutor;
+import se.alipsa.jparq.engine.SamplingRecordReader;
 import se.alipsa.jparq.engine.UnnestTableBuilder;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.window.AvgWindow;
@@ -295,6 +296,8 @@ class JParqPreparedStatement implements PreparedStatement {
     }
     RecordReader reader;
     String resultTableName;
+    SqlParser.TableReference baseRef =
+        (tableReferences == null || tableReferences.isEmpty()) ? null : tableReferences.get(0);
     try {
       if (joinQuery) {
         JoinRecordReader joinReader = buildJoinReader();
@@ -315,6 +318,11 @@ class JParqPreparedStatement implements PreparedStatement {
         reader = new ParquetRecordReaderAdapter(parquetReader);
         resultTableName = file.getName();
       }
+      if (!joinQuery) {
+        reader = applyTableSample(baseRef == null ? null : baseRef.tableSample(), reader);
+      }
+    } catch (SQLException e) {
+      throw e;
     } catch (Exception e) {
       throw new SQLException("Failed to open parquet data source", e);
     }
@@ -326,8 +334,15 @@ class JParqPreparedStatement implements PreparedStatement {
     // Create the result set, passing reader, select plan, residual filter,
     // plus projection labels and physical names (for metadata & value lookups)
     SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
-    JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, residualExpression, labels, physical,
-        subqueryExecutor);
+    JParqResultSet rs =
+        new JParqResultSet(
+            reader,
+            parsedSelect,
+            resultTableName,
+            residualExpression,
+            labels,
+            physical,
+            subqueryExecutor);
 
     stmt.setCurrentRs(rs);
     return rs;
@@ -347,6 +362,18 @@ class JParqPreparedStatement implements PreparedStatement {
 
   private PreparedStatement prepareSubqueryStatement(String sql) throws SQLException {
     return new JParqPreparedStatement(stmt, sql, cteResults);
+  }
+
+  private RecordReader applyTableSample(
+      SqlParser.TableSampleDefinition sample, RecordReader reader) throws SQLException {
+    if (sample == null || reader == null) {
+      return reader;
+    }
+    try {
+      return SamplingRecordReader.wrap(reader, sample);
+    } catch (IOException e) {
+      throw new SQLException("Failed to apply TABLESAMPLE", e);
+    }
   }
 
   /**
@@ -855,8 +882,9 @@ class JParqPreparedStatement implements PreparedStatement {
           registerValueTableResult(ref, valueResult, valueTableResults);
         }
         String tableName = deriveValueTableName(ref);
+        List<GenericRecord> rows = applySampleToRows(ref.tableSample(), valueResult.rows());
         JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(tableName, ref.tableAlias(),
-            valueResult.schema(), valueResult.rows(), ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
+            valueResult.schema(), rows, ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
         tables.add(table);
         registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
         continue;
@@ -864,8 +892,9 @@ class JParqPreparedStatement implements PreparedStatement {
       if (InformationSchemaTables.matchesTableReference(ref.tableName())) {
         CteResult infoResult = materializeInformationSchemaTables();
         String infoName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
+        List<GenericRecord> rows = applySampleToRows(ref.tableSample(), infoResult.rows());
         JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(infoName, ref.tableAlias(),
-            infoResult.schema(), infoResult.rows(), ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
+            infoResult.schema(), rows, ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
         tables.add(table);
         registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
         continue;
@@ -873,8 +902,9 @@ class JParqPreparedStatement implements PreparedStatement {
       if (InformationSchemaColumns.matchesTableReference(ref.tableName())) {
         CteResult infoResult = materializeInformationSchemaColumns();
         String infoName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
+        List<GenericRecord> rows = applySampleToRows(ref.tableSample(), infoResult.rows());
         JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(infoName, ref.tableAlias(),
-            infoResult.schema(), infoResult.rows(), ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
+            infoResult.schema(), rows, ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
         tables.add(table);
         registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
         continue;
@@ -887,8 +917,9 @@ class JParqPreparedStatement implements PreparedStatement {
       }
       if (cteResult != null) {
         String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
+        List<GenericRecord> rows = applySampleToRows(ref.tableSample(), cteResult.rows());
         JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(tableName, ref.tableAlias(),
-            cteResult.schema(), cteResult.rows(), ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
+            cteResult.schema(), rows, ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
         tables.add(table);
         registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
         continue;
@@ -934,6 +965,7 @@ class JParqPreparedStatement implements PreparedStatement {
       } catch (Exception e) {
         throw new SQLException("Failed to read data for table " + tableName, e);
       }
+      rows = applySampleToRows(ref.tableSample(), rows);
       JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), tableSchema, rows,
           ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
       tables.add(table);
@@ -945,6 +977,29 @@ class JParqPreparedStatement implements PreparedStatement {
       return joinReader;
     } catch (IllegalArgumentException e) {
       throw new SQLException("Failed to build join reader", e);
+    }
+  }
+
+  private List<GenericRecord> applySampleToRows(SqlParser.TableSampleDefinition sample, List<GenericRecord> rows)
+      throws SQLException {
+    if (sample == null || rows == null || rows.isEmpty()) {
+      return rows;
+    }
+    try {
+      return SamplingRecordReader.sampleRows(rows, sample);
+    } catch (IOException e) {
+      throw new SQLException("Failed to apply TABLESAMPLE", e);
+    }
+  }
+
+  private List<GenericRecord> applySampleUnchecked(SqlParser.TableSampleDefinition sample, List<GenericRecord> rows) {
+    if (sample == null || rows == null || rows.isEmpty()) {
+      return rows;
+    }
+    try {
+      return SamplingRecordReader.sampleRows(rows, sample);
+    } catch (IOException e) {
+      throw new IllegalStateException("Failed to apply TABLESAMPLE", e);
     }
   }
 
@@ -1153,7 +1208,8 @@ class JParqPreparedStatement implements PreparedStatement {
       record.put("department", parts[1].isEmpty() ? null : parts[1]);
       rows.add(record);
     }
-    return new JoinRecordReader.JoinTable(ref.tableName(), ref.tableAlias(), schema, rows, ref.joinType(),
+    List<GenericRecord> sampledRows = applySampleToRows(ref.tableSample(), rows);
+    return new JoinRecordReader.JoinTable(ref.tableName(), ref.tableAlias(), schema, sampledRows, ref.joinType(),
         ref.joinCondition(), ref.usingColumns(), null);
   }
 
@@ -1177,7 +1233,8 @@ class JParqPreparedStatement implements PreparedStatement {
     List<Schema> valueSchemas = new ArrayList<>();
     SubqueryTableData data = executeSubquery(sql, ref, null, fieldNames, valueSchemas);
     String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
-    return new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), data.schema(), data.rows(), ref.joinType(),
+    List<GenericRecord> rows = applySampleToRows(ref.tableSample(), data.rows());
+    return new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), data.schema(), rows, ref.joinType(),
         ref.joinCondition(), ref.usingColumns(), null);
   }
 
@@ -1537,9 +1594,11 @@ class JParqPreparedStatement implements PreparedStatement {
         throw new IllegalStateException("Failed to evaluate LATERAL subquery", e);
       }
     };
+    JoinRecordReader.CorrelatedRowsSupplier effectiveSupplier = ref.tableSample() == null ? supplier
+        : assignments -> applySampleUnchecked(ref.tableSample(), supplier.rows(assignments));
     String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
     return new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), schema, List.of(), ref.joinType(),
-        ref.joinCondition(), ref.usingColumns(), supplier);
+        ref.joinCondition(), ref.usingColumns(), effectiveSupplier);
   }
 
   /**
