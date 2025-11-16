@@ -273,10 +273,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   private record ColumnMetadata(List<String> columnTypeHints, Map<String, String> columnRemarks) {
 
     private ColumnMetadata {
-      columnTypeHints = columnTypeHints == null || columnTypeHints.isEmpty() ? List.of()
-          : List.copyOf(columnTypeHints);
-      columnRemarks = columnRemarks == null || columnRemarks.isEmpty() ? Map.of()
-          : Map.copyOf(columnRemarks);
+      columnTypeHints = columnTypeHints == null || columnTypeHints.isEmpty() ? List.of() : List.copyOf(columnTypeHints);
+      columnRemarks = columnRemarks == null || columnRemarks.isEmpty() ? Map.of() : Map.copyOf(columnRemarks);
     }
   }
 

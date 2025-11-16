@@ -209,7 +209,8 @@ class JParqPreparedStatement implements PreparedStatement {
           tmpResidual = tmpSelect.where();
           tmpPredicate = Optional.empty();
         } else if (baseIsInformationSchemaTables || baseIsInformationSchemaColumns) {
-          CteResult resolved = baseIsInformationSchemaTables ? materializeInformationSchemaTables()
+          CteResult resolved = baseIsInformationSchemaTables
+              ? materializeInformationSchemaTables()
               : materializeInformationSchemaColumns();
           tmpBaseCteResult = resolved;
           tmpFileAvro = resolved.schema();

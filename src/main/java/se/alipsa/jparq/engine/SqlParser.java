@@ -876,8 +876,8 @@ public final class SqlParser {
       String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
       if (InformationSchemaTables.matchesQualifiedName(t.getSchemaName(), tableName, t.getFullyQualifiedName())) {
         tableName = InformationSchemaTables.TABLE_IDENTIFIER;
-      } else if (
-          InformationSchemaColumns.matchesQualifiedName(t.getSchemaName(), tableName, t.getFullyQualifiedName())) {
+      } else if (InformationSchemaColumns.matchesQualifiedName(t.getSchemaName(), tableName,
+          t.getFullyQualifiedName())) {
         tableName = InformationSchemaColumns.TABLE_IDENTIFIER;
       }
       CommonTableExpression cte = resolveCommonTableExpression(t, cteLookup);

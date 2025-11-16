@@ -36,9 +36,8 @@ public class InformationSchemaColumnsTest {
   @Test
   void shouldListColumnMetadata(@TempDir Path tempDir) throws Exception {
     Path file = tempDir.resolve("info_cols.parquet");
-    Schema schema = SchemaBuilder.record("info_cols").fields().name("id").doc("Identifier")
-        .type().intType().noDefault().name("name").type().unionOf().nullType().and().stringType().endUnion()
-        .nullDefault().endRecord();
+    Schema schema = SchemaBuilder.record("info_cols").fields().name("id").doc("Identifier").type().intType().noDefault()
+        .name("name").type().unionOf().nullType().and().stringType().endUnion().nullDefault().endRecord();
     writeTable(file, schema, List.of(record(schema, Map.of("id", 1, "name", "alpha"))), Map.of());
     JParqSql sql = new JParqSql("jdbc:jparq:" + tempDir.toAbsolutePath());
     List<String> columnNames = new ArrayList<>();
@@ -50,16 +49,16 @@ public class InformationSchemaColumnsTest {
         ORDER BY ORDINAL_POSITION
         """;
     sql.query(listColumnsQuery, rs -> {
-          try {
-            while (rs.next()) {
-              columnNames.add(rs.getString("COLUMN_NAME"));
-              dataTypes.add(rs.getString("DATA_TYPE"));
-              assertEquals(columnNames.size(), rs.getInt("ORDINAL_POSITION"));
-            }
-          } catch (SQLException e) {
-            throw new IllegalStateException(e);
-          }
-        });
+      try {
+        while (rs.next()) {
+          columnNames.add(rs.getString("COLUMN_NAME"));
+          dataTypes.add(rs.getString("DATA_TYPE"));
+          assertEquals(columnNames.size(), rs.getInt("ORDINAL_POSITION"));
+        }
+      } catch (SQLException e) {
+        throw new IllegalStateException(e);
+      }
+    });
     assertEquals(List.of("id", "name"), columnNames);
     assertEquals(List.of("INTEGER", "VARCHAR"), dataTypes);
   }
@@ -76,8 +75,8 @@ public class InformationSchemaColumnsTest {
   @Test
   void shouldExposeColumnRemarksFromMetadata(@TempDir Path tempDir) throws Exception {
     Path file = tempDir.resolve("doc_cols.parquet");
-    Schema schema = SchemaBuilder.record("doc_cols").fields().name("id").type().intType().noDefault()
-        .name("name").type().stringType().noDefault().endRecord();
+    Schema schema = SchemaBuilder.record("doc_cols").fields().name("id").type().intType().noDefault().name("name")
+        .type().stringType().noDefault().endRecord();
     writeTable(file, schema, List.of(record(schema, Map.of("id", 1, "name", "bravo"))),
         Map.of("parquet.column.comment.name", "Preferred name"));
     JParqSql sql = new JParqSql("jdbc:jparq:" + tempDir.toAbsolutePath());
@@ -87,14 +86,14 @@ public class InformationSchemaColumnsTest {
         WHERE TABLE_NAME = 'doc_cols' AND COLUMN_NAME = 'name'
         """;
     sql.query(remarkQuery, rs -> {
-          try {
-            assertTrue(rs.next(), "column row must exist");
-            assertEquals("name", rs.getString("COLUMN_NAME"));
-            assertEquals("Preferred name", rs.getString("REMARKS"));
-          } catch (SQLException e) {
-            throw new IllegalStateException(e);
-          }
-        });
+      try {
+        assertTrue(rs.next(), "column row must exist");
+        assertEquals("name", rs.getString("COLUMN_NAME"));
+        assertEquals("Preferred name", rs.getString("REMARKS"));
+      } catch (SQLException e) {
+        throw new IllegalStateException(e);
+      }
+    });
   }
 
   /**
@@ -120,14 +119,14 @@ public class InformationSchemaColumnsTest {
         WHERE TABLE_NAME = 'doc_fallback' AND COLUMN_NAME = 'notes'
         """;
     sql.query(fallbackQuery, rs -> {
-          try {
-            assertTrue(rs.next(), "column row must exist");
-            assertEquals("notes", rs.getString("COLUMN_NAME"));
-            assertEquals("Free form notes", rs.getString("REMARKS"));
-          } catch (SQLException e) {
-            throw new IllegalStateException(e);
-          }
-        });
+      try {
+        assertTrue(rs.next(), "column row must exist");
+        assertEquals("notes", rs.getString("COLUMN_NAME"));
+        assertEquals("Free form notes", rs.getString("REMARKS"));
+      } catch (SQLException e) {
+        throw new IllegalStateException(e);
+      }
+    });
   }
 
   private GenericRecord record(Schema schema, Map<String, Object> values) {
