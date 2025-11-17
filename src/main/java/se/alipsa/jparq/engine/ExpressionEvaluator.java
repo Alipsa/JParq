@@ -394,7 +394,7 @@ public final class ExpressionEvaluator {
       throw new IllegalArgumentException("EXISTS requires a subquery");
     }
     CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
-        column -> resolveColumnValue(column, rec));
+        (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
         : subqueryExecutor.execute(subSelect);
@@ -580,7 +580,7 @@ public final class ExpressionEvaluator {
     // as correlated column references must be resolved in the context of the
     // current row.
     CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
-        column -> resolveColumnValue(column, rec));
+        (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
 
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
@@ -620,18 +620,8 @@ public final class ExpressionEvaluator {
   private record Operand(Object value, Schema schemaOrNull) {
   }
 
-  private Object resolveColumnValue(String columnName, GenericRecord rec) {
-    if (columnName == null) {
-      return null;
-    }
-    String qualifier = null;
-    String name = columnName;
-    int dot = columnName.indexOf('.');
-    if (dot > 0) {
-      qualifier = columnName.substring(0, dot);
-      name = columnName.substring(dot + 1);
-    }
-    String canonical = canonicalFieldName(qualifier, name);
+  private Object resolveColumnValue(String qualifier, String columnName, GenericRecord rec) {
+    String canonical = canonicalFieldName(qualifier, columnName);
     return AvroCoercions.resolveColumnValue(canonical, rec, fieldSchemas, caseInsensitiveIndex);
   }
 
