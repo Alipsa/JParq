@@ -39,6 +39,8 @@ import org.junit.jupiter.api.Test;
  */
 public class SqlStandardComplianceIT {
 
+  private static final String CORRELATED_FILTERS_TEST = "Subqueries/Correlated/subquery_correlated_filters.sql";
+
   private static Path standardsRoot;
   private static String acmeJdbcUrl;
 
@@ -54,7 +56,6 @@ public class SqlStandardComplianceIT {
     assertFalse(testCases.isEmpty(), "No SQL standard compliance tests were discovered");
     List<Path> exclusions = List.of(
         // Example exclusions:
-        standardsRoot.resolve("Subqueries/Correlated/subquery_correlated_filters.sql"),
         standardsRoot.resolve("TableValueFunctions/Unnest/unnest_table_wrapper.sql"),
         standardsRoot.resolve("Wildcards/Unqualified/unqualified_star.sql"));
     for (TestCase testCase : testCases) {
@@ -78,6 +79,16 @@ public class SqlStandardComplianceIT {
     standardsRoot = locateStandardsRoot();
     Path acmeRoot = locateAcmeRoot();
     acmeJdbcUrl = "jdbc:jparq:" + acmeRoot.toAbsolutePath();
+  }
+
+  /**
+   * Executes only the correlated subquery scenario to verify qualifier-aware
+   * resolution paths produce the expected rows.
+   */
+  @Test
+  void executeCorrelatedFilterScenario() {
+    Path sqlPath = standardsRoot.resolve(CORRELATED_FILTERS_TEST);
+    executeAndVerify(createTestCase(sqlPath));
   }
 
   private static List<TestCase> discoverTestCases() throws IOException {

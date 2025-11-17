@@ -144,6 +144,62 @@ public class JParqResultSet extends ResultSetAdapter {
       qualifierMapping = joinReader.qualifierColumnMapping();
       unqualifiedMapping = joinReader.unqualifiedColumnMapping();
     }
+    Set<String> referencedColumns = new LinkedHashSet<>();
+    for (Expression expression : selectExpressions) {
+      referencedColumns.addAll(SqlParser.collectQualifiedColumns(expression, this.queryQualifiers));
+    }
+    referencedColumns.addAll(SqlParser.collectQualifiedColumns(residual, this.queryQualifiers));
+    referencedColumns.addAll(SqlParser.collectQualifiedColumns(select.having(), this.queryQualifiers));
+    final WindowPlan windowPlan = WindowFunctions.plan(selectExpressions);
+    collectWindowColumns(windowPlan, referencedColumns);
+    if (qualifierMapping.isEmpty() && physicalColumnOrder != null && !physicalColumnOrder.isEmpty()) {
+      Map<String, String> columnLookup = new HashMap<>();
+      for (String column : physicalColumnOrder) {
+        if (column != null && !column.isBlank()) {
+          columnLookup.put(column.toLowerCase(Locale.ROOT), column);
+        }
+      }
+      for (String column : referencedColumns) {
+        if (column != null && !column.isBlank()) {
+          columnLookup.putIfAbsent(column.toLowerCase(Locale.ROOT), column);
+        }
+      }
+      Map<String, Map<String, String>> normalized = new HashMap<>();
+      for (String qualifier : this.queryQualifiers) {
+        String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
+        if (normalizedQualifier != null && !normalizedQualifier.isEmpty()) {
+          normalized.put(normalizedQualifier, Map.copyOf(columnLookup));
+        }
+      }
+      if (!normalized.isEmpty()) {
+        qualifierMapping = Map.copyOf(normalized);
+      }
+      if (unqualifiedMapping.isEmpty() && !columnLookup.isEmpty()) {
+        unqualifiedMapping = Map.copyOf(columnLookup);
+      }
+    }
+    if (!qualifierMapping.isEmpty() && !referencedColumns.isEmpty()) {
+      Map<String, Map<String, String>> augmented = new HashMap<>();
+      for (Map.Entry<String, Map<String, String>> entry : qualifierMapping.entrySet()) {
+        Map<String, String> columns = new HashMap<>(entry.getValue());
+        for (String column : referencedColumns) {
+          if (column != null && !column.isBlank()) {
+            columns.putIfAbsent(column.toLowerCase(Locale.ROOT), column);
+          }
+        }
+        augmented.put(entry.getKey(), Map.copyOf(columns));
+      }
+      qualifierMapping = Map.copyOf(augmented);
+      if (qualifierMapping.size() == 1 && !referencedColumns.isEmpty()) {
+        Map<String, String> columns = new HashMap<>(unqualifiedMapping);
+        for (String column : referencedColumns) {
+          if (column != null && !column.isBlank()) {
+            columns.putIfAbsent(column.toLowerCase(Locale.ROOT), column);
+          }
+        }
+        unqualifiedMapping = Map.copyOf(columns);
+      }
+    }
     this.qualifierColumnMapping = qualifierMapping;
     this.unqualifiedColumnMapping = unqualifiedMapping;
     Set<String> availableQualifiers = new LinkedHashSet<>(this.qualifierColumnMapping.keySet());
@@ -198,7 +254,6 @@ public class JParqResultSet extends ResultSetAdapter {
     this.aggregateSqlTypes = null;
     this.windowState = WindowState.empty();
 
-    WindowPlan windowPlan = WindowFunctions.plan(selectExpressions);
     Map<String, Expression> orderByExpressions = extractOrderByExpressions(select);
 
     try {
@@ -244,142 +299,7 @@ public class JParqResultSet extends ResultSetAdapter {
       for (Expression expression : selectExpressions) {
         requiredColumns.addAll(SqlParser.collectQualifiedColumns(expression, queryQualifiers));
       }
-      if (windowPlan != null && !windowPlan.isEmpty()) {
-        for (RowNumberWindow window : windowPlan.rowNumberWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-        }
-        for (RankWindow window : windowPlan.rankWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-        }
-        for (DenseRankWindow window : windowPlan.denseRankWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-        }
-        for (PercentRankWindow window : windowPlan.percentRankWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-        }
-        for (CumeDistWindow window : windowPlan.cumeDistWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-        }
-        for (NtileWindow window : windowPlan.ntileWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-          Expression bucketExpression = window.bucketExpression();
-          if (bucketExpression != null) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(bucketExpression, queryQualifiers));
-          }
-        }
-        for (CountWindow window : windowPlan.countWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-          Expression argument = window.argument();
-          if (argument != null) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(argument, queryQualifiers));
-          }
-        }
-        for (SumWindow window : windowPlan.sumWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-          Expression argument = window.argument();
-          if (argument != null) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(argument, queryQualifiers));
-          }
-        }
-        for (AvgWindow window : windowPlan.avgWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-          Expression argument = window.argument();
-          if (argument != null) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(argument, queryQualifiers));
-          }
-        }
-        for (MaxWindow window : windowPlan.maxWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-          Expression argument = window.argument();
-          if (argument != null) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(argument, queryQualifiers));
-          }
-        }
-        for (MinWindow window : windowPlan.minWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-          Expression argument = window.argument();
-          if (argument != null) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(argument, queryQualifiers));
-          }
-        }
-      }
+      collectWindowColumns(windowPlan, requiredColumns);
       proj = new ArrayList<>(requiredColumns);
       if (this.columnOrder.isEmpty()) {
         this.columnOrder.addAll(proj); // keep mutable
@@ -674,6 +594,74 @@ public class JParqResultSet extends ResultSetAdapter {
    */
   private String canonicalColumnName(int index) {
     return ColumnNameLookup.canonicalName(canonicalColumnNames, physicalColumnOrder, columnOrder, index);
+  }
+
+  private void collectWindowColumns(WindowPlan windowPlan, Set<String> targetColumns) {
+    if (windowPlan == null || windowPlan.isEmpty() || targetColumns == null) {
+      return;
+    }
+    for (RowNumberWindow window : windowPlan.rowNumberWindows()) {
+      addWindowExpressions(targetColumns, window.partitionExpressions(), window.orderByElements());
+    }
+    for (RankWindow window : windowPlan.rankWindows()) {
+      addWindowExpressions(targetColumns, window.partitionExpressions(), window.orderByElements());
+    }
+    for (DenseRankWindow window : windowPlan.denseRankWindows()) {
+      addWindowExpressions(targetColumns, window.partitionExpressions(), window.orderByElements());
+    }
+    for (PercentRankWindow window : windowPlan.percentRankWindows()) {
+      addWindowExpressions(targetColumns, window.partitionExpressions(), window.orderByElements());
+    }
+    for (CumeDistWindow window : windowPlan.cumeDistWindows()) {
+      addWindowExpressions(targetColumns, window.partitionExpressions(), window.orderByElements());
+    }
+    for (NtileWindow window : windowPlan.ntileWindows()) {
+      addWindowExpressions(targetColumns, window.partitionExpressions(), window.orderByElements());
+      addExpressionColumns(targetColumns, window.bucketExpression());
+    }
+    for (CountWindow window : windowPlan.countWindows()) {
+      addWindowExpressions(targetColumns, window.partitionExpressions(), window.orderByElements());
+      addExpressionColumns(targetColumns, window.argument());
+    }
+    for (SumWindow window : windowPlan.sumWindows()) {
+      addWindowExpressions(targetColumns, window.partitionExpressions(), window.orderByElements());
+      addExpressionColumns(targetColumns, window.argument());
+    }
+    for (AvgWindow window : windowPlan.avgWindows()) {
+      addWindowExpressions(targetColumns, window.partitionExpressions(), window.orderByElements());
+      addExpressionColumns(targetColumns, window.argument());
+    }
+    for (MaxWindow window : windowPlan.maxWindows()) {
+      addWindowExpressions(targetColumns, window.partitionExpressions(), window.orderByElements());
+      addExpressionColumns(targetColumns, window.argument());
+    }
+    for (MinWindow window : windowPlan.minWindows()) {
+      addWindowExpressions(targetColumns, window.partitionExpressions(), window.orderByElements());
+      addExpressionColumns(targetColumns, window.argument());
+    }
+  }
+
+  private void addWindowExpressions(Set<String> targetColumns, List<Expression> partitions,
+      List<OrderByElement> orderByElements) {
+    if (partitions != null) {
+      for (Expression partition : partitions) {
+        addExpressionColumns(targetColumns, partition);
+      }
+    }
+    if (orderByElements != null) {
+      for (OrderByElement order : orderByElements) {
+        if (order != null) {
+          addExpressionColumns(targetColumns, order.getExpression());
+        }
+      }
+    }
+  }
+
+  private void addExpressionColumns(Set<String> targetColumns, Expression expression) {
+    if (expression == null || targetColumns == null) {
+      return;
+    }
+    targetColumns.addAll(SqlParser.collectQualifiedColumns(expression, queryQualifiers));
   }
 
   /**
