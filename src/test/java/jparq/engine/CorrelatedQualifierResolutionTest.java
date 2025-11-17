@@ -104,7 +104,7 @@ class CorrelatedQualifierResolutionTest {
   private static java.sql.PreparedStatement createPreparedStatement(
       Supplier<SubqueryExecutor.SubqueryResult> resultSupplier) {
     return (java.sql.PreparedStatement) Proxy.newProxyInstance(CorrelatedQualifierResolutionTest.class.getClassLoader(),
-        new Class<?>[] {
+        new Class<?>[]{
             java.sql.PreparedStatement.class
         }, (proxy, method, args) -> switch (method.getName()) {
           case "executeQuery" -> createResultSet(resultSupplier.get());
@@ -117,7 +117,7 @@ class CorrelatedQualifierResolutionTest {
 
   private static java.sql.ResultSet createResultSet(SubqueryExecutor.SubqueryResult result) {
     return (java.sql.ResultSet) Proxy.newProxyInstance(CorrelatedQualifierResolutionTest.class.getClassLoader(),
-        new Class<?>[] {
+        new Class<?>[]{
             java.sql.ResultSet.class
         }, new ResultSetInvocationHandler(result));
   }
@@ -156,9 +156,8 @@ class CorrelatedQualifierResolutionTest {
     }
 
     private java.sql.ResultSetMetaData createMetadata() {
-      return (java.sql.ResultSetMetaData) Proxy.newProxyInstance(
-          CorrelatedQualifierResolutionTest.class.getClassLoader(),
-          new Class<?>[] {
+      return (java.sql.ResultSetMetaData) Proxy
+          .newProxyInstance(CorrelatedQualifierResolutionTest.class.getClassLoader(), new Class<?>[]{
               java.sql.ResultSetMetaData.class
           }, (metaProxy, method, metaArgs) -> switch (method.getName()) {
             case "getColumnCount" -> labels.size();
