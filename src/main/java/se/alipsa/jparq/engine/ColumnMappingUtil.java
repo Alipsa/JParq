@@ -1,11 +1,9 @@
 package se.alipsa.jparq.engine;
 
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import se.alipsa.jparq.helper.JParqUtil;
 
 /**
@@ -54,26 +52,12 @@ public final class ColumnMappingUtil {
       if (insensitiveMatch != null) {
         return insensitiveMatch;
       }
-      String uniqueQualifierCandidate = resolveUniqueQualifierCandidate(normalizedColumn, qualifierColumnMapping);
-      if (uniqueQualifierCandidate != null) {
-        return uniqueQualifierCandidate;
-      }
-      Set<String> canonicalCandidates = new LinkedHashSet<>();
-      for (Map<String, String> mapping : qualifierColumnMapping.values()) {
-        String candidate = mapping.get(normalizedColumn);
-        if (candidate != null) {
-          canonicalCandidates.add(candidate);
-        }
-      }
-      if (canonicalCandidates.size() == 1) {
-        return canonicalCandidates.iterator().next();
-      }
-      if (!canonicalCandidates.isEmpty()) {
+      QualifierResolution resolution = resolveUniqueQualifierCandidate(normalizedColumn, qualifierColumnMapping);
+      if (resolution.ambiguous()) {
         throw new IllegalArgumentException("Ambiguous column reference '" + columnName + "'");
       }
-      String fallback = caseInsensitiveIndex.get(normalizedColumn);
-      if (fallback != null) {
-        return fallback;
+      if (resolution.canonical() != null) {
+        return resolution.canonical();
       }
       throw new IllegalArgumentException("Unknown column '" + columnName + "'");
     }
@@ -93,24 +77,25 @@ public final class ColumnMappingUtil {
    *          the normalized lookup key for the column
    * @param qualifierColumnMapping
    *          normalized qualifier mappings supplied by the reader
-   * @return the canonical column name if exactly one qualifier contains the
-   *         column; otherwise {@code null}
+   * @return a {@link QualifierResolution} containing the resolved canonical
+   *         column name when exactly one qualifier matches, along with an
+   *         ambiguity flag when multiple qualifiers define the column
    */
-  private static String resolveUniqueQualifierCandidate(String normalizedColumn,
+  private static QualifierResolution resolveUniqueQualifierCandidate(String normalizedColumn,
       Map<String, Map<String, String>> qualifierColumnMapping) {
     String candidate = null;
-    int matchCount = 0;
+    boolean ambiguous = false;
     for (Map<String, String> mapping : qualifierColumnMapping.values()) {
       String canonical = mapping.get(normalizedColumn);
       if (canonical != null) {
-        candidate = canonical;
-        matchCount++;
-        if (matchCount > 1) {
-          return null;
+        if (candidate != null && !candidate.equals(canonical)) {
+          ambiguous = true;
+          break;
         }
+        candidate = canonical;
       }
     }
-    return matchCount == 1 ? candidate : null;
+    return new QualifierResolution(candidate, ambiguous);
   }
 
   /**
@@ -242,6 +227,9 @@ public final class ColumnMappingUtil {
    */
   private static boolean hasQualifier(String qualifier) {
     return qualifier != null && !qualifier.isBlank();
+  }
+
+  private record QualifierResolution(String canonical, boolean ambiguous) {
   }
 
   /**

@@ -152,7 +152,7 @@ public class JParqResultSet extends ResultSetAdapter {
       qualifierSet.add(tableName);
     }
     if (qualifierSet.isEmpty()) {
-      qualifierSet.addAll(discoverQualifiers(selectExpressions));
+      qualifierSet.addAll(discoverQualifiersFromList(selectExpressions));
       qualifierSet.addAll(discoverQualifiers(residual));
       qualifierSet.addAll(discoverQualifiers(select.having()));
     }
@@ -540,7 +540,7 @@ public class JParqResultSet extends ResultSetAdapter {
     return raw;
   }
 
-  private static Set<String> discoverQualifiers(List<Expression> expressions) {
+  private static Set<String> discoverQualifiersFromList(List<Expression> expressions) {
     if (expressions == null || expressions.isEmpty()) {
       return Set.of();
     }
