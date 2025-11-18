@@ -106,16 +106,10 @@ public final class CorrelatedSubqueryRewriter {
       BiFunction<String, String, Object> valueResolver) {
     Objects.requireNonNull(select, "select");
     Objects.requireNonNull(valueResolver, "valueResolver");
-    if (outerQualifiers == null || outerQualifiers.isEmpty()) {
-      return new Result(select.toString(), false, Set.of(), Set.of());
-    }
-
-    Set<String> normalized = outerQualifiers.stream().map(JParqUtil::normalizeQualifier).filter(Objects::nonNull)
-        .collect(Collectors.toUnmodifiableSet());
-
-    if (normalized.isEmpty()) {
-      return new Result(select.toString(), false, Set.of(), Set.of());
-    }
+    Set<String> normalized = outerQualifiers == null
+        ? Set.of()
+        : outerQualifiers.stream().map(JParqUtil::normalizeQualifier).filter(Objects::nonNull)
+            .collect(Collectors.toUnmodifiableSet());
 
     StringBuilder buffer = new StringBuilder();
     AtomicBoolean correlated = new AtomicBoolean(false);
@@ -132,14 +126,22 @@ public final class CorrelatedSubqueryRewriter {
           };
           for (String candidate : candidates) {
             String normalizedCandidate = JParqUtil.normalizeQualifier(candidate);
-            if (normalizedCandidate != null && normalized.contains(normalizedCandidate)) {
-              final Object resolvedValue = valueResolver.apply(normalizedCandidate, column.getColumnName());
-              final String literal = toSqlLiteral(resolvedValue);
-              correlated.set(true);
-              correlatedColumns.add(column.getColumnName());
-              correlatedRefs.add(new QualifiedColumn(normalizedCandidate, column.getColumnName()));
-              getBuilder().append(literal);
-              return getBuilder();
+            boolean qualifierAllowed = normalized.isEmpty()
+                || (normalizedCandidate != null && normalized.contains(normalizedCandidate));
+            if (normalizedCandidate != null && qualifierAllowed) {
+              try {
+                final Object resolvedValue = valueResolver.apply(normalizedCandidate, column.getColumnName());
+                if (resolvedValue != null || normalized.contains(normalizedCandidate)) {
+                  final String literal = toSqlLiteral(resolvedValue);
+                  correlated.set(true);
+                  correlatedColumns.add(column.getColumnName());
+                  correlatedRefs.add(new QualifiedColumn(normalizedCandidate, column.getColumnName()));
+                  getBuilder().append(literal);
+                  return getBuilder();
+                }
+              } catch (IllegalArgumentException e) {
+                // Ignore and continue searching for applicable qualifiers.
+              }
             }
           }
         }

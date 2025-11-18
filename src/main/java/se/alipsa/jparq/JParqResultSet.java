@@ -66,6 +66,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private final String tableName;
   private final List<Expression> selectExpressions;
   private final SubqueryExecutor subqueryExecutor;
+  private final List<String> providedQualifiers;
   private final List<String> queryQualifiers;
   private ValueExpressionEvaluator projectionEvaluator;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
@@ -116,34 +117,55 @@ public class JParqResultSet extends ResultSetAdapter {
    *          the physical column names (may be null)
    * @param subqueryExecutor
    *          executor used to evaluate subqueries during row materialization
+   * @param explicitQualifiers
+   *          qualifier hints supplied by the caller; may be {@code null}
    * @throws SQLException
    *           if reading fails
-   */
+  */
   public JParqResultSet(RecordReader reader, SqlParser.Select select, String tableName, Expression residual,
-      List<String> columnOrder, // projection labels (aliases) or null
-      List<String> physicalColumnOrder, SubqueryExecutor subqueryExecutor) // physical names (may be null)
+      List<String> columnOrder, List<String> physicalColumnOrder, SubqueryExecutor subqueryExecutor,
+      List<String> explicitQualifiers)
       throws SQLException {
     this.tableName = tableName;
     this.selectExpressions = List.copyOf(select.expressions());
     this.subqueryExecutor = subqueryExecutor;
-    List<String> qualifiers = new ArrayList<>();
+    this.providedQualifiers = explicitQualifiers == null ? List.of() : List.copyOf(explicitQualifiers);
+    Set<String> qualifierSet = new LinkedHashSet<>();
+    qualifierSet.addAll(this.providedQualifiers);
     if (select.tableReferences() != null) {
       for (SqlParser.TableReference ref : select.tableReferences()) {
         if (ref.tableName() != null && !ref.tableName().isBlank()) {
-          qualifiers.add(ref.tableName());
+          qualifierSet.add(ref.tableName());
         }
         if (ref.tableAlias() != null && !ref.tableAlias().isBlank()) {
-          qualifiers.add(ref.tableAlias());
+          qualifierSet.add(ref.tableAlias());
         }
       }
     }
-    this.queryQualifiers = List.copyOf(qualifiers);
+    if (select.tableAlias() != null && !select.tableAlias().isBlank()) {
+      qualifierSet.add(select.tableAlias());
+    }
+    if (select.table() != null && !select.table().isBlank()) {
+      qualifierSet.add(select.table());
+    }
+    if (qualifierSet.isEmpty() && tableName != null && !tableName.isBlank()) {
+      qualifierSet.add(tableName);
+    }
+    if (qualifierSet.isEmpty()) {
+      qualifierSet.addAll(discoverQualifiers(selectExpressions));
+      qualifierSet.addAll(discoverQualifiers(residual));
+      qualifierSet.addAll(discoverQualifiers(select.having()));
+    }
     Map<String, Map<String, String>> qualifierMapping = Map.of();
     Map<String, String> unqualifiedMapping = Map.of();
     if (reader instanceof JoinRecordReader joinReader) {
       qualifierMapping = joinReader.qualifierColumnMapping();
       unqualifiedMapping = joinReader.unqualifiedColumnMapping();
     }
+    if (qualifierSet.isEmpty() && !qualifierMapping.isEmpty()) {
+      qualifierSet.addAll(qualifierMapping.keySet());
+    }
+    this.queryQualifiers = List.copyOf(qualifierSet);
     Set<String> referencedColumns = new LinkedHashSet<>();
     for (Expression expression : selectExpressions) {
       referencedColumns.addAll(SqlParser.collectQualifiedColumns(expression, this.queryQualifiers));
@@ -218,6 +240,47 @@ public class JParqResultSet extends ResultSetAdapter {
     List<String> canonicalLookup = canonicalPhysical == null ? null : List.copyOf(canonicalPhysical);
     List<String> requestedColumns = canonicalLookup != null ? canonicalLookup : select.columns();
     List<String> physical = physicalColumnOrder == null ? null : List.copyOf(physicalColumnOrder);
+
+    if (physical != null && columnOrder != null && !columnOrder.isEmpty() && physical.size() == columnOrder.size()) {
+      Map<String, String> aliasToPhysical = new HashMap<>();
+      for (int i = 0; i < columnOrder.size(); i++) {
+        String label = columnOrder.get(i);
+        String physicalName = physical.get(i);
+        if (label != null && physicalName != null && !label.isBlank() && !physicalName.isBlank()) {
+          aliasToPhysical.putIfAbsent(label.toLowerCase(Locale.ROOT), physicalName);
+        }
+      }
+      if (!aliasToPhysical.isEmpty()) {
+        if (!unqualifiedMapping.isEmpty()) {
+          Map<String, String> merged = new HashMap<>(unqualifiedMapping);
+          merged.putAll(aliasToPhysical);
+          unqualifiedMapping = Map.copyOf(merged);
+        } else {
+          unqualifiedMapping = Map.copyOf(aliasToPhysical);
+        }
+
+        if (qualifierMapping.isEmpty() && !this.queryQualifiers.isEmpty()) {
+          Map<String, Map<String, String>> augmented = new HashMap<>();
+          for (String qualifier : this.queryQualifiers) {
+            String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
+            if (normalizedQualifier != null) {
+              augmented.put(normalizedQualifier, Map.copyOf(aliasToPhysical));
+            }
+          }
+          if (!augmented.isEmpty()) {
+            qualifierMapping = Map.copyOf(augmented);
+          }
+        } else if (!qualifierMapping.isEmpty()) {
+          Map<String, Map<String, String>> augmented = new HashMap<>();
+          for (Map.Entry<String, Map<String, String>> entry : qualifierMapping.entrySet()) {
+            Map<String, String> columns = new HashMap<>(entry.getValue());
+            aliasToPhysical.forEach(columns::putIfAbsent);
+            augmented.put(entry.getKey(), Map.copyOf(columns));
+          }
+          qualifierMapping = Map.copyOf(augmented);
+        }
+      }
+    }
 
     AggregateFunctions.AggregatePlan aggregatePlan = AggregateFunctions.plan(select);
     if (aggregatePlan != null) {
@@ -356,6 +419,7 @@ public class JParqResultSet extends ResultSetAdapter {
     this.tableName = tableName;
     this.selectExpressions = List.of();
     this.subqueryExecutor = null;
+    this.providedQualifiers = List.of();
     this.queryQualifiers = List.of();
     this.qualifierColumnMapping = Map.of();
     this.unqualifiedColumnMapping = Map.of();
@@ -474,6 +538,43 @@ public class JParqResultSet extends ResultSetAdapter {
     Object raw = AvroCoercions.unwrap(rawValue, field.schema());
     lastWasNull = (raw == null);
     return raw;
+  }
+
+  private static Set<String> discoverQualifiers(List<Expression> expressions) {
+    if (expressions == null || expressions.isEmpty()) {
+      return Set.of();
+    }
+    Set<String> qualifiers = new LinkedHashSet<>();
+    for (Expression expression : expressions) {
+      qualifiers.addAll(discoverQualifiers(expression));
+    }
+    return qualifiers;
+  }
+
+  private static Set<String> discoverQualifiers(Expression expression) {
+    if (expression == null) {
+      return Set.of();
+    }
+    Set<String> qualifiers = new LinkedHashSet<>();
+    expression.accept(new ExpressionVisitorAdapter<Void>() {
+      @Override
+      public <S> Void visit(Column column, S context) {
+        Table table = column.getTable();
+        if (table != null) {
+          if (table.getUnquotedName() != null) {
+            qualifiers.add(table.getUnquotedName());
+          }
+          if (table.getFullyQualifiedName() != null) {
+            qualifiers.add(table.getFullyQualifiedName());
+          }
+          if (table.getName() != null) {
+            qualifiers.add(table.getName());
+          }
+        }
+        return super.visit(column, context);
+      }
+    });
+    return qualifiers;
   }
 
   private Expression projectionExpression(int idx) {

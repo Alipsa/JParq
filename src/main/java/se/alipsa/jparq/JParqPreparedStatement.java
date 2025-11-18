@@ -100,6 +100,7 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
 })
 class JParqPreparedStatement implements PreparedStatement {
   private final JParqStatement stmt;
+  private final String sqlText;
 
   // --- Query Plan Fields (calculated in constructor) ---
   private SqlParser.Select parsedSelect;
@@ -124,6 +125,7 @@ class JParqPreparedStatement implements PreparedStatement {
 
   JParqPreparedStatement(JParqStatement stmt, String sql, Map<String, CteResult> inheritedCtes) throws SQLException {
     this.stmt = stmt;
+    this.sqlText = sql;
 
     SqlParser.Select tmpSelect = null;
     SqlParser.SetQuery tmpSetQuery = null;
@@ -328,6 +330,84 @@ class JParqPreparedStatement implements PreparedStatement {
       throw new SQLException("Failed to open parquet data source", e);
     }
 
+    if (resultTableName == null || resultTableName.isBlank()) {
+      if (parsedSelect.tableAlias() != null && !parsedSelect.tableAlias().isBlank()) {
+        resultTableName = parsedSelect.tableAlias();
+      } else if (tableReferences != null && !tableReferences.isEmpty()) {
+        SqlParser.TableReference fallbackBaseRef = tableReferences.getFirst();
+        if (fallbackBaseRef.tableAlias() != null && !fallbackBaseRef.tableAlias().isBlank()) {
+          resultTableName = fallbackBaseRef.tableAlias();
+        } else {
+          resultTableName = fallbackBaseRef.tableName();
+        }
+      }
+    }
+
+    List<String> qualifierHints = new ArrayList<>();
+    if (tableReferences != null) {
+      for (SqlParser.TableReference reference : tableReferences) {
+        if (reference.tableName() != null && !reference.tableName().isBlank()) {
+          qualifierHints.add(reference.tableName());
+        }
+        if (reference.tableAlias() != null && !reference.tableAlias().isBlank()) {
+          qualifierHints.add(reference.tableAlias());
+        }
+      }
+    }
+    try {
+      SqlParser.Select parsed = SqlParser.parseSelect(sqlText);
+      List<SqlParser.TableReference> parsedRefs = parsed.tableReferences();
+      if (parsedRefs != null) {
+        for (SqlParser.TableReference ref : parsedRefs) {
+          if (ref.tableName() != null && !ref.tableName().isBlank()) {
+            qualifierHints.add(ref.tableName());
+          }
+          if (ref.tableAlias() != null && !ref.tableAlias().isBlank()) {
+            qualifierHints.add(ref.tableAlias());
+          }
+          if (resultTableName == null || resultTableName.isBlank()) {
+            if (ref.tableAlias() != null && !ref.tableAlias().isBlank()) {
+              resultTableName = ref.tableAlias();
+            } else if (ref.tableName() != null && !ref.tableName().isBlank()) {
+              resultTableName = ref.tableName();
+            }
+          }
+        }
+      }
+      if ((resultTableName == null || resultTableName.isBlank()) && parsed.tableAlias() != null
+          && !parsed.tableAlias().isBlank()) {
+        resultTableName = parsed.tableAlias();
+      }
+      if ((resultTableName == null || resultTableName.isBlank()) && parsed.table() != null
+          && !parsed.table().isBlank()) {
+        resultTableName = parsed.table();
+      }
+    } catch (Exception e) {
+      // Ignore and rely on earlier fallbacks
+    }
+    if (qualifierHints.isEmpty()) {
+      try {
+        SqlParser.Query parsed = SqlParser.parseQuery(sqlText);
+        if (parsed instanceof SqlParser.Select selectQuery && selectQuery.tableReferences() != null) {
+          for (SqlParser.TableReference ref : selectQuery.tableReferences()) {
+            if (ref.tableName() != null && !ref.tableName().isBlank()) {
+              qualifierHints.add(ref.tableName());
+            }
+            if (ref.tableAlias() != null && !ref.tableAlias().isBlank()) {
+              qualifierHints.add(ref.tableAlias());
+            }
+            if (resultTableName == null || resultTableName.isBlank()) {
+              resultTableName = ref.tableAlias() != null && !ref.tableAlias().isBlank()
+                  ? ref.tableAlias()
+                  : ref.tableName();
+            }
+          }
+        }
+      } catch (Exception e) {
+        // Ignore and rely on earlier fallbacks
+      }
+    }
+
     // Derive label/physical lists from the parsed SELECT
     // Convention from SqlParser: labels() empty => SELECT *
     final List<String> labels = parsedSelect.labels().isEmpty() ? null : parsedSelect.labels();
@@ -336,7 +416,7 @@ class JParqPreparedStatement implements PreparedStatement {
     // plus projection labels and physical names (for metadata & value lookups)
     SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
     JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, residualExpression, labels, physical,
-        subqueryExecutor);
+        subqueryExecutor, qualifierHints);
 
     stmt.setCurrentRs(rs);
     return rs;

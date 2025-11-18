@@ -42,7 +42,7 @@ public final class ColumnMappingUtil {
     String normalizedColumn = normalizeColumnKey(columnName);
     if (hasQualifier(qualifier)) {
       return resolveQualifiedReference(qualifier, columnName, normalizedColumn, qualifierColumnMapping,
-          caseInsensitiveIndex);
+          unqualifiedColumnMapping, caseInsensitiveIndex);
     }
 
     if (!qualifierColumnMapping.isEmpty()) {
@@ -260,7 +260,8 @@ public final class ColumnMappingUtil {
    * @return the canonical field name for the column
    */
   private static String resolveQualifiedReference(String qualifier, String columnName, String normalizedColumn,
-      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> caseInsensitiveIndex) {
+      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping,
+      Map<String, String> caseInsensitiveIndex) {
     String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
     if (normalizedQualifier == null) {
       throw new IllegalArgumentException("Unknown column '" + columnName + "' for qualifier '" + qualifier + "'");
@@ -268,6 +269,12 @@ public final class ColumnMappingUtil {
 
     Map<String, String> mapping = qualifierColumnMapping.get(normalizedQualifier);
     if (mapping == null || mapping.isEmpty()) {
+      if (unqualifiedColumnMapping != null && !unqualifiedColumnMapping.isEmpty()) {
+        String canonical = unqualifiedColumnMapping.get(normalizedColumn);
+        if (canonical != null) {
+          return canonical;
+        }
+      }
       String fallback = caseInsensitiveIndex.get(normalizedColumn);
       if (fallback != null) {
         return fallback;
@@ -278,6 +285,12 @@ public final class ColumnMappingUtil {
     String canonical = mapping.get(normalizedColumn);
     if (canonical != null) {
       return canonical;
+    }
+    if (unqualifiedColumnMapping != null && !unqualifiedColumnMapping.isEmpty()) {
+      String canonicalUnqualified = unqualifiedColumnMapping.get(normalizedColumn);
+      if (canonicalUnqualified != null) {
+        return canonicalUnqualified;
+      }
     }
     throw new IllegalArgumentException("Unknown column '" + columnName + "' for qualifier '" + qualifier + "'");
   }
