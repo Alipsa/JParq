@@ -236,8 +236,11 @@ The following SQL statements are supported:
 ### Build and test
 
 ```bash
-mvn -Dspotless.check.skip=true test
+mvn verify
 ```
+- To run without spotless, add -Dspotless.check.skip=true
+- To skip unit tests, add -DskipTests
+- To skip integration tests add -DskipITs=true
 
 This project uses Checkstyle, PMD, and Spotless. The checks run automatically as part of the Maven build. Use the
 `spotless:apply` goal before committing if you need to fix formatting issues.
