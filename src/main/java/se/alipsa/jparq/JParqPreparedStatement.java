@@ -100,6 +100,7 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
 })
 class JParqPreparedStatement implements PreparedStatement {
   private final JParqStatement stmt;
+  private final String sqlText;
 
   // --- Query Plan Fields (calculated in constructor) ---
   private SqlParser.Select parsedSelect;
@@ -115,6 +116,8 @@ class JParqPreparedStatement implements PreparedStatement {
   private final Map<String, CteResult> cteResults;
   private final Map<String, CteResult> valueTableResults;
   private final CteResult baseCteResult;
+  private final List<String> parsedQualifierHints;
+  private final String parsedResultTableNameHint;
   private CteResult informationSchemaTablesResult;
   private CteResult informationSchemaColumnsResult;
 
@@ -124,6 +127,7 @@ class JParqPreparedStatement implements PreparedStatement {
 
   JParqPreparedStatement(JParqStatement stmt, String sql, Map<String, CteResult> inheritedCtes) throws SQLException {
     this.stmt = stmt;
+    this.sqlText = sql;
 
     SqlParser.Select tmpSelect = null;
     SqlParser.SetQuery tmpSetQuery = null;
@@ -139,6 +143,8 @@ class JParqPreparedStatement implements PreparedStatement {
     CteResult tmpBaseCteResult = null;
     Map<String, CteResult> tmpCteResults;
     Map<String, CteResult> tmpValueTables = new LinkedHashMap<>();
+    List<String> tmpQualifierHints = new ArrayList<>();
+    String tmpQualifierTableName = null;
 
     // --- QUERY PLANNING PHASE (Expensive CPU Work) ---
     try {
@@ -166,6 +172,7 @@ class JParqPreparedStatement implements PreparedStatement {
         tmpSetOperation = false;
         tmpTableRefs = tmpSelect.tableReferences();
         tmpJoinQuery = tmpSelect.hasMultipleTables();
+        tmpQualifierTableName = collectQualifierHints(tmpSelect, tmpQualifierHints, null);
 
         SqlParser.TableReference baseRef = tmpTableRefs.isEmpty() ? null : tmpTableRefs.getFirst();
         boolean baseIsCte = baseRef != null && (baseRef.commonTableExpression() != null
@@ -267,6 +274,13 @@ class JParqPreparedStatement implements PreparedStatement {
       throw new SQLException("Failed to prepare query: " + sql, e);
     }
 
+    try {
+      SqlParser.Select qualifierSelect = SqlParser.parseSelect(sqlText);
+      tmpQualifierTableName = collectQualifierHints(qualifierSelect, tmpQualifierHints, tmpQualifierTableName);
+    } catch (Exception ignore) {
+      // Best-effort; rely on already derived hints when parsing fails
+    }
+
     this.parsedSelect = tmpSelect;
     this.parsedSetQuery = tmpSetQuery;
     this.setOperationQuery = tmpSetOperation;
@@ -280,6 +294,8 @@ class JParqPreparedStatement implements PreparedStatement {
     this.cteResults = tmpCteResults;
     this.valueTableResults = tmpValueTables;
     this.baseCteResult = tmpBaseCteResult;
+    this.parsedQualifierHints = List.copyOf(tmpQualifierHints);
+    this.parsedResultTableNameHint = tmpQualifierTableName;
   }
 
   /**
@@ -328,6 +344,37 @@ class JParqPreparedStatement implements PreparedStatement {
       throw new SQLException("Failed to open parquet data source", e);
     }
 
+    if (resultTableName == null || resultTableName.isBlank()) {
+      if (parsedSelect.tableAlias() != null && !parsedSelect.tableAlias().isBlank()) {
+        resultTableName = parsedSelect.tableAlias();
+      } else if (tableReferences != null && !tableReferences.isEmpty()) {
+        SqlParser.TableReference fallbackBaseRef = tableReferences.getFirst();
+        if (fallbackBaseRef.tableAlias() != null && !fallbackBaseRef.tableAlias().isBlank()) {
+          resultTableName = fallbackBaseRef.tableAlias();
+        } else {
+          resultTableName = fallbackBaseRef.tableName();
+        }
+      }
+    }
+
+    List<String> qualifierHints = new ArrayList<>(parsedQualifierHints);
+    resultTableName = collectQualifierHints(parsedSelect, qualifierHints, resultTableName);
+    if ((resultTableName == null || resultTableName.isBlank()) && parsedResultTableNameHint != null
+        && !parsedResultTableNameHint.isBlank()) {
+      resultTableName = parsedResultTableNameHint;
+    }
+    if (qualifierHints.isEmpty()) {
+      try {
+        SqlParser.Select parsedHints = SqlParser.parseSelect(sqlText);
+        resultTableName = collectQualifierHints(parsedHints, qualifierHints, resultTableName);
+      } catch (Exception ignore) {
+        // Best-effort; rely on previously derived hints if parsing fails
+      }
+    }
+    if (qualifierHints.isEmpty() && resultTableName != null && !resultTableName.isBlank()) {
+      qualifierHints.add(resultTableName);
+    }
+
     // Derive label/physical lists from the parsed SELECT
     // Convention from SqlParser: labels() empty => SELECT *
     final List<String> labels = parsedSelect.labels().isEmpty() ? null : parsedSelect.labels();
@@ -336,7 +383,7 @@ class JParqPreparedStatement implements PreparedStatement {
     // plus projection labels and physical names (for metadata & value lookups)
     SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
     JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, residualExpression, labels, physical,
-        subqueryExecutor);
+        subqueryExecutor, qualifierHints);
 
     stmt.setCurrentRs(rs);
     return rs;
@@ -367,6 +414,42 @@ class JParqPreparedStatement implements PreparedStatement {
       return SamplingRecordReader.wrap(reader, sample);
     } catch (IOException e) {
       throw new SQLException("Failed to apply TABLESAMPLE", e);
+    }
+  }
+
+  private String collectQualifierHints(SqlParser.Select select, List<String> qualifierHints, String currentTableName) {
+    if (select == null) {
+      return currentTableName;
+    }
+    List<SqlParser.TableReference> references = select.tableReferences();
+    if (references != null) {
+      for (SqlParser.TableReference reference : references) {
+        addQualifierHint(reference.tableName(), qualifierHints);
+        addQualifierHint(reference.tableAlias(), qualifierHints);
+        if ((currentTableName == null || currentTableName.isBlank()) && reference.tableAlias() != null
+            && !reference.tableAlias().isBlank()) {
+          currentTableName = reference.tableAlias();
+        } else if ((currentTableName == null || currentTableName.isBlank()) && reference.tableName() != null
+            && !reference.tableName().isBlank()) {
+          currentTableName = reference.tableName();
+        }
+      }
+    }
+
+    if ((currentTableName == null || currentTableName.isBlank()) && select.tableAlias() != null
+        && !select.tableAlias().isBlank()) {
+      currentTableName = select.tableAlias();
+    }
+    if ((currentTableName == null || currentTableName.isBlank()) && select.table() != null
+        && !select.table().isBlank()) {
+      currentTableName = select.table();
+    }
+    return currentTableName;
+  }
+
+  private static void addQualifierHint(String candidate, List<String> qualifierHints) {
+    if (candidate != null && !candidate.isBlank()) {
+      qualifierHints.add(candidate);
     }
   }
 

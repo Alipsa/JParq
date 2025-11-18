@@ -40,7 +40,7 @@ public final class ColumnMappingUtil {
     String normalizedColumn = normalizeColumnKey(columnName);
     if (hasQualifier(qualifier)) {
       return resolveQualifiedReference(qualifier, columnName, normalizedColumn, qualifierColumnMapping,
-          caseInsensitiveIndex);
+          unqualifiedColumnMapping, caseInsensitiveIndex);
     }
 
     if (!qualifierColumnMapping.isEmpty()) {
@@ -48,11 +48,54 @@ public final class ColumnMappingUtil {
       if (canonical != null) {
         return canonical;
       }
-      throw new IllegalArgumentException("Ambiguous column reference: " + columnName);
+      String insensitiveMatch = caseInsensitiveIndex.get(normalizedColumn);
+      if (insensitiveMatch != null) {
+        return insensitiveMatch;
+      }
+      QualifierResolution resolution = resolveUniqueQualifierCandidate(normalizedColumn, qualifierColumnMapping);
+      if (resolution.ambiguous()) {
+        throw new IllegalArgumentException("Ambiguous column reference '" + columnName + "'");
+      }
+      if (resolution.canonical() != null) {
+        return resolution.canonical();
+      }
+      throw new IllegalArgumentException("Unknown column '" + columnName + "'");
     }
 
     String canonical = caseInsensitiveIndex.get(normalizedColumn);
-    return canonical != null ? canonical : columnName;
+    if (canonical != null) {
+      return canonical;
+    }
+    throw new IllegalArgumentException("Unknown column '" + columnName + "'");
+  }
+
+  /**
+   * Resolve a column reference when the qualifier is omitted by identifying a
+   * single qualifier that defines the column.
+   *
+   * @param normalizedColumn
+   *          the normalized lookup key for the column
+   * @param qualifierColumnMapping
+   *          normalized qualifier mappings supplied by the reader
+   * @return a {@link QualifierResolution} containing the resolved canonical
+   *         column name when exactly one qualifier matches, along with an
+   *         ambiguity flag when multiple qualifiers define the column
+   */
+  private static QualifierResolution resolveUniqueQualifierCandidate(String normalizedColumn,
+      Map<String, Map<String, String>> qualifierColumnMapping) {
+    String candidate = null;
+    boolean ambiguous = false;
+    for (Map<String, String> mapping : qualifierColumnMapping.values()) {
+      String canonical = mapping.get(normalizedColumn);
+      if (canonical != null) {
+        if (candidate != null && !candidate.equals(canonical)) {
+          ambiguous = true;
+          break;
+        }
+        candidate = canonical;
+      }
+    }
+    return new QualifierResolution(candidate, ambiguous);
   }
 
   /**
@@ -186,6 +229,9 @@ public final class ColumnMappingUtil {
     return qualifier != null && !qualifier.isBlank();
   }
 
+  private record QualifierResolution(String canonical, boolean ambiguous) {
+  }
+
   /**
    * Resolve a column reference that includes a table qualifier.
    *
@@ -202,7 +248,8 @@ public final class ColumnMappingUtil {
    * @return the canonical field name for the column
    */
   private static String resolveQualifiedReference(String qualifier, String columnName, String normalizedColumn,
-      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> caseInsensitiveIndex) {
+      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping,
+      Map<String, String> caseInsensitiveIndex) {
     String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
     if (normalizedQualifier == null) {
       throw new IllegalArgumentException("Unknown column '" + columnName + "' for qualifier '" + qualifier + "'");
@@ -210,6 +257,12 @@ public final class ColumnMappingUtil {
 
     Map<String, String> mapping = qualifierColumnMapping.get(normalizedQualifier);
     if (mapping == null || mapping.isEmpty()) {
+      if (unqualifiedColumnMapping != null && !unqualifiedColumnMapping.isEmpty()) {
+        String canonical = unqualifiedColumnMapping.get(normalizedColumn);
+        if (canonical != null) {
+          return canonical;
+        }
+      }
       String fallback = caseInsensitiveIndex.get(normalizedColumn);
       if (fallback != null) {
         return fallback;
@@ -220,6 +273,12 @@ public final class ColumnMappingUtil {
     String canonical = mapping.get(normalizedColumn);
     if (canonical != null) {
       return canonical;
+    }
+    if (unqualifiedColumnMapping != null && !unqualifiedColumnMapping.isEmpty()) {
+      String canonicalUnqualified = unqualifiedColumnMapping.get(normalizedColumn);
+      if (canonicalUnqualified != null) {
+        return canonicalUnqualified;
+      }
     }
     throw new IllegalArgumentException("Unknown column '" + columnName + "' for qualifier '" + qualifier + "'");
   }
