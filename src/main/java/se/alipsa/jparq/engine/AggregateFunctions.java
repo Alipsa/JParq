@@ -23,11 +23,22 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.BinaryExpression;
+import net.sf.jsqlparser.expression.CaseExpression;
+import net.sf.jsqlparser.expression.CastExpression;
+import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.Function;
+import net.sf.jsqlparser.expression.JdbcNamedParameter;
+import net.sf.jsqlparser.expression.JdbcParameter;
 import net.sf.jsqlparser.expression.NotExpression;
+import net.sf.jsqlparser.expression.NullValue;
+import net.sf.jsqlparser.expression.Parenthesis;
 import net.sf.jsqlparser.expression.SignedExpression;
+import net.sf.jsqlparser.expression.StringValue;
+import net.sf.jsqlparser.expression.TimeValue;
+import net.sf.jsqlparser.expression.TimestampValue;
+import net.sf.jsqlparser.expression.WhenClause;
 import net.sf.jsqlparser.expression.operators.arithmetic.Addition;
 import net.sf.jsqlparser.expression.operators.arithmetic.Division;
 import net.sf.jsqlparser.expression.operators.arithmetic.Modulo;
@@ -396,7 +407,11 @@ public final class AggregateFunctions {
    * @param select
    *          parsed SELECT statement
    * @return aggregate plan for the SELECT list, or {@code null} when the query
-   *         should be handled by the non-aggregate execution path
+   *         should be handled by the non-aggregate execution path. The planner
+   *         validates SELECT expressions against the GROUP BY clause using
+   *         structural expression comparison so that functionally equivalent
+   *         constructs (for example {@code COALESCE} invocations) are accepted
+   *         even when they are formatted differently.
    */
   public static AggregatePlan plan(SqlParser.Select select) {
     List<Expression> expressions = select.expressions();
@@ -433,7 +448,7 @@ public final class AggregateFunctions {
           continue;
         }
         if (isGroupingFunction(func)) {
-          List<Integer> groupingIndexes = groupingArgumentIndexes(func, groupIndexByText);
+          List<Integer> groupingIndexes = groupingArgumentIndexes(func, groupIndexByText, groupExpressions);
           resultColumns.add(new ResultColumn(label, ColumnKind.GROUPING, -1, -1, groupingIndexes, func.toString()));
           continue;
         }
@@ -443,16 +458,7 @@ public final class AggregateFunctions {
         return null; // simple projection without grouping/aggregates
       }
 
-      Integer groupIndex = null;
-      for (String key : expressionKeys(expr)) {
-        if (key == null) {
-          continue;
-        }
-        groupIndex = groupIndexByText.get(key);
-        if (groupIndex != null) {
-          break;
-        }
-      }
+      Integer groupIndex = findGroupIndex(expr, groupIndexByText, groupExpressions);
       if (groupIndex == null) {
         throw new IllegalArgumentException(
             "SELECT expression '" + expr + "' must appear in the GROUP BY clause when aggregates are present");
@@ -619,31 +625,59 @@ public final class AggregateFunctions {
    *          GROUPING function expression
    * @param groupIndexByText
    *          lookup of grouping expression indexes by normalized text
+   * @param groupExpressions
+   *          expressions present in the GROUP BY clause used for structural
+   *          matching
    * @return immutable list of grouping expression indexes
    */
-  private static List<Integer> groupingArgumentIndexes(Function func, Map<String, Integer> groupIndexByText) {
+  private static List<Integer> groupingArgumentIndexes(Function func, Map<String, Integer> groupIndexByText,
+      List<GroupExpression> groupExpressions) {
     ExpressionList<?> parameters = func.getParameters();
     if (parameters == null || parameters.isEmpty()) {
       throw new IllegalArgumentException("GROUPING function requires at least one argument");
     }
     List<Integer> indexes = new ArrayList<>(parameters.size());
     for (Expression argument : parameters) {
-      Integer match = null;
-      for (String key : expressionKeys(argument)) {
-        if (key == null) {
-          continue;
-        }
-        match = groupIndexByText.get(key);
-        if (match != null) {
-          break;
-        }
-      }
+      Integer match = findGroupIndex(argument, groupIndexByText, groupExpressions);
       if (match == null) {
         throw new IllegalArgumentException("GROUPING argument '" + argument + "' must appear in the GROUP BY clause");
       }
       indexes.add(match);
     }
     return List.copyOf(indexes);
+  }
+
+  /**
+   * Locate the index of an expression within the GROUP BY clause.
+   *
+   * @param expression
+   *          expression to match
+   * @param groupIndexByText
+   *          lookup keyed by normalized expression text
+   * @param groupExpressions
+   *          expressions defined in the GROUP BY clause
+   * @return matching index or {@code null} when no match exists
+   */
+  private static Integer findGroupIndex(Expression expression, Map<String, Integer> groupIndexByText,
+      List<GroupExpression> groupExpressions) {
+    if (expression == null) {
+      return null;
+    }
+    for (String key : expressionKeys(expression)) {
+      if (key == null) {
+        continue;
+      }
+      Integer index = groupIndexByText.get(key);
+      if (index != null) {
+        return index;
+      }
+    }
+    for (int i = 0; i < groupExpressions.size(); i++) {
+      if (expressionsEquivalent(expression, groupExpressions.get(i).expression())) {
+        return i;
+      }
+    }
+    return null;
   }
 
   private static String labelFor(List<String> labels, int index, Expression expr) {
@@ -712,6 +746,176 @@ public final class AggregateFunctions {
       }
     }
     return false;
+  }
+
+  private static boolean expressionsEquivalent(Expression first, Expression second) {
+    if (first == second) {
+      return true;
+    }
+    if (first == null || second == null) {
+      return false;
+    }
+    if (!first.getClass().equals(second.getClass())) {
+      return false;
+    }
+    if (first instanceof Column leftColumn) {
+      return columnsEquivalent(leftColumn, (Column) second);
+    }
+    if (first instanceof Function leftFunction) {
+      return functionsEquivalent(leftFunction, (Function) second);
+    }
+    if (first instanceof BinaryExpression leftBinary) {
+      return binaryExpressionsEquivalent(leftBinary, (BinaryExpression) second);
+    }
+    if (first instanceof Between leftBetween) {
+      Between rightBetween = (Between) second;
+      return leftBetween.isNot() == rightBetween.isNot()
+          && expressionsEquivalent(leftBetween.getLeftExpression(), rightBetween.getLeftExpression())
+          && expressionsEquivalent(leftBetween.getBetweenExpressionStart(), rightBetween.getBetweenExpressionStart())
+          && expressionsEquivalent(leftBetween.getBetweenExpressionEnd(), rightBetween.getBetweenExpressionEnd());
+    }
+    if (first instanceof InExpression leftIn) {
+      InExpression rightIn = (InExpression) second;
+      if (leftIn.isNot() != rightIn.isNot()) {
+        return false;
+      }
+      if (!expressionsEquivalent(leftIn.getLeftExpression(), rightIn.getLeftExpression())) {
+        return false;
+      }
+      return expressionsEquivalent(leftIn.getRightExpression(), rightIn.getRightExpression());
+    }
+    if (first instanceof IsNullExpression leftIsNull) {
+      IsNullExpression rightIsNull = (IsNullExpression) second;
+      return leftIsNull.isNot() == rightIsNull.isNot()
+          && expressionsEquivalent(leftIsNull.getLeftExpression(), rightIsNull.getLeftExpression());
+    }
+    if (first instanceof CaseExpression leftCase) {
+      CaseExpression rightCase = (CaseExpression) second;
+      if (!expressionsEquivalent(leftCase.getSwitchExpression(), rightCase.getSwitchExpression())) {
+        return false;
+      }
+      Expression leftElse = leftCase.getElseExpression();
+      Expression rightElse = rightCase.getElseExpression();
+      if (!expressionsEquivalent(leftElse, rightElse)) {
+        return false;
+      }
+      List<WhenClause> leftClauses = leftCase.getWhenClauses();
+      List<WhenClause> rightClauses = rightCase.getWhenClauses();
+      if (leftClauses == null || rightClauses == null) {
+        return leftClauses == rightClauses;
+      }
+      if (leftClauses.size() != rightClauses.size()) {
+        return false;
+      }
+      for (int i = 0; i < leftClauses.size(); i++) {
+        if (!expressionsEquivalent(leftClauses.get(i), rightClauses.get(i))) {
+          return false;
+        }
+      }
+      return true;
+    }
+    if (first instanceof WhenClause leftWhen) {
+      WhenClause rightWhen = (WhenClause) second;
+      return expressionsEquivalent(leftWhen.getWhenExpression(), rightWhen.getWhenExpression())
+          && expressionsEquivalent(leftWhen.getThenExpression(), rightWhen.getThenExpression());
+    }
+    if (first instanceof SignedExpression leftSigned) {
+      SignedExpression rightSigned = (SignedExpression) second;
+      return leftSigned.getSign() == rightSigned.getSign()
+          && expressionsEquivalent(leftSigned.getExpression(), rightSigned.getExpression());
+    }
+    if (first instanceof NotExpression leftNot) {
+      return expressionsEquivalent(leftNot.getExpression(), ((NotExpression) second).getExpression());
+    }
+    if (first instanceof Parenthesis leftParenthesis) {
+      return expressionsEquivalent(leftParenthesis.getExpression(), ((Parenthesis) second).getExpression());
+    }
+    if (first instanceof CastExpression leftCast) {
+      CastExpression rightCast = (CastExpression) second;
+      if (!Objects.equals(String.valueOf(leftCast.getColDataType()), String.valueOf(rightCast.getColDataType()))) {
+        return false;
+      }
+      return expressionsEquivalent(leftCast.getLeftExpression(), rightCast.getLeftExpression());
+    }
+    if (first instanceof NullValue) {
+      return true;
+    }
+    if (first instanceof StringValue leftString) {
+      return Objects.equals(leftString.getValue(), ((StringValue) second).getValue());
+    }
+    if (first instanceof DateValue leftDate) {
+      return Objects.equals(leftDate.getValue(), ((DateValue) second).getValue());
+    }
+    if (first instanceof TimeValue leftTime) {
+      return Objects.equals(leftTime.getValue(), ((TimeValue) second).getValue());
+    }
+    if (first instanceof TimestampValue leftTimestamp) {
+      return Objects.equals(leftTimestamp.getValue(), ((TimestampValue) second).getValue());
+    }
+    if (first instanceof JdbcNamedParameter leftNamed) {
+      return Objects.equals(leftNamed.getName(), ((JdbcNamedParameter) second).getName());
+    }
+    if (first instanceof JdbcParameter leftParam) {
+      return Objects.equals(leftParam.getIndex(), ((JdbcParameter) second).getIndex());
+    }
+    return Objects.equals(first.toString(), second.toString());
+  }
+
+  private static boolean binaryExpressionsEquivalent(BinaryExpression left, BinaryExpression right) {
+    return expressionsEquivalent(left.getLeftExpression(), right.getLeftExpression())
+        && expressionsEquivalent(left.getRightExpression(), right.getRightExpression());
+  }
+
+  private static boolean columnsEquivalent(Column left, Column right) {
+    if (left == null || right == null) {
+      return left == right;
+    }
+    String leftName = JParqUtil.normalizeQualifier(left.getColumnName());
+    String rightName = JParqUtil.normalizeQualifier(right.getColumnName());
+    if (!Objects.equals(leftName, rightName)) {
+      return false;
+    }
+    return tablesEquivalent(left.getTable(), right.getTable());
+  }
+
+  private static boolean tablesEquivalent(Table left, Table right) {
+    if (left == right) {
+      return true;
+    }
+    if (left == null || right == null) {
+      return false;
+    }
+    if (!Objects.equals(tableAlias(left), tableAlias(right))) {
+      return false;
+    }
+    return Objects.equals(tableName(left), tableName(right));
+  }
+
+  private static boolean functionsEquivalent(Function left, Function right) {
+    if (!Objects.equals(normalizeFunctionName(left.getName()), normalizeFunctionName(right.getName()))) {
+      return false;
+    }
+    if (left.isAllColumns() != right.isAllColumns()) {
+      return false;
+    }
+    if (left.isDistinct() != right.isDistinct()) {
+      return false;
+    }
+    List<Expression> leftArgs = parameters(left);
+    List<Expression> rightArgs = parameters(right);
+    if (leftArgs.size() != rightArgs.size()) {
+      return false;
+    }
+    for (int i = 0; i < leftArgs.size(); i++) {
+      if (!expressionsEquivalent(leftArgs.get(i), rightArgs.get(i))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static String normalizeFunctionName(String name) {
+    return name == null ? null : name.toUpperCase(Locale.ROOT);
   }
 
   private static List<GroupExpression> buildGroupExpressions(List<Expression> groupByExpressions) {
@@ -1846,7 +2050,7 @@ public final class AggregateFunctions {
           for (int j = 0; j < spec.arguments().size(); j++) {
             Expression expected = spec.arguments().get(j);
             Expression actual = params.get(j);
-            if (!expected.toString().equals(actual.toString())) {
+            if (!expressionsEquivalent(expected, actual)) {
               matches = false;
               break;
             }
@@ -1861,7 +2065,7 @@ public final class AggregateFunctions {
     }
 
     private Object grouping(Function func) {
-      List<Integer> indexes = groupingArgumentIndexes(func, groupIndexLookup);
+      List<Integer> indexes = groupingArgumentIndexes(func, groupIndexLookup, plan.groupExpressions());
       return groupingValue(plan, groupingSetIndex, indexes);
     }
 

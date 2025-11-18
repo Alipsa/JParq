@@ -355,7 +355,7 @@ public final class ValueExpressionEvaluator {
       throw new IllegalStateException("ARRAY subqueries require a subquery executor");
     }
     CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
-        column -> resolveColumnValue(column, record));
+        (qualifier, column) -> resolveColumnValue(qualifier, column, record));
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
         : subqueryExecutor.execute(subSelect);
@@ -501,7 +501,7 @@ public final class ValueExpressionEvaluator {
       throw new IllegalStateException("Scalar subqueries require a subquery executor");
     }
     CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
-        column -> resolveColumnValue(column, record));
+        (qualifier, column) -> resolveColumnValue(qualifier, column, record));
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
         : subqueryExecutor.execute(subSelect);
@@ -1317,10 +1317,6 @@ public final class ValueExpressionEvaluator {
     String qualifier = column.getTable() == null ? null : column.getTable().getName();
     String name = column.getColumnName();
     return resolveColumnValue(qualifier, name, record);
-  }
-
-  private Object resolveColumnValue(String columnName, GenericRecord record) {
-    return resolveColumnValue(null, columnName, record);
   }
 
   private Object resolveColumnValue(String qualifier, String columnName, GenericRecord record) {

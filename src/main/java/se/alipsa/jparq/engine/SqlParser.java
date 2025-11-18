@@ -1909,25 +1909,28 @@ public final class SqlParser {
    * @return a set of column names that reference one of the qualifiers
    */
   public static Set<String> collectQualifiedColumns(Expression expr, List<String> qualifiers) {
-    if (expr == null || qualifiers == null || qualifiers.isEmpty()) {
+    if (expr == null) {
       return Set.of();
     }
-    Set<String> normalized = qualifiers.stream().map(JParqUtil::normalizeQualifier)
-        .filter(s -> s != null && !s.isEmpty()).collect(Collectors.toCollection(LinkedHashSet::new));
-    if (normalized.isEmpty()) {
-      return Set.of();
-    }
+    Set<String> normalized = qualifiers == null ? Set.of()
+        : qualifiers.stream().map(JParqUtil::normalizeQualifier).filter(s -> s != null && !s.isEmpty())
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+    boolean acceptAnyQualifier = normalized.isEmpty();
     Set<String> columns = new LinkedHashSet<>();
     expr.accept(new ExpressionVisitorAdapter<Void>() {
       @Override
       public <S> Void visit(Column column, S context) {
         Table table = column.getTable();
         if (table == null) {
-          if (normalized.size() == 1) {
+          if (acceptAnyQualifier || normalized.size() == 1) {
             columns.add(column.getColumnName());
           }
           return super.visit(column, context);
         } else {
+          if (acceptAnyQualifier) {
+            columns.add(column.getColumnName());
+            return super.visit(column, context);
+          }
           String[] candidates = {
               table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()
           };

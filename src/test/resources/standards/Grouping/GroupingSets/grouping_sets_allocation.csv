@@ -1,0 +1,8 @@
+department,first_name,department_group,name_group,total_salary
+HR,NULL,0,1,270000
+IT,NULL,0,1,475000
+Sales,NULL,0,1,195000
+NULL,Arne,1,0,195000
+NULL,Per,1,0,475000
+NULL,Tage,1,0,270000
+NULL,NULL,1,1,940000

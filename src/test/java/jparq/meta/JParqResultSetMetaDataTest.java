@@ -270,7 +270,6 @@ class JParqResultSetMetaDataTest {
     jparqSql.query("select id, first_name, last_name from employees", rs -> {
       try {
         ResultSetMetaData rsm = rs.getMetaData();
-        printRsMetaData(rsm);
         assertEquals("INTEGER", rsm.getColumnTypeName(1));
         assertEquals("VARCHAR", rsm.getColumnTypeName(2));
         assertEquals("VARCHAR", rsm.getColumnTypeName(3));
@@ -278,11 +277,5 @@ class JParqResultSetMetaDataTest {
         throw new RuntimeException(e);
       }
     });
-  }
-
-  void printRsMetaData(ResultSetMetaData rs) throws SQLException {
-    for (int j = 0; j < rs.getColumnCount(); j++) {
-      System.out.println(rs.getColumnName(j + 1) + " " + rs.getColumnTypeName(j + 1));
-    }
   }
 }
