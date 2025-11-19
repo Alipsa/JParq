@@ -732,8 +732,7 @@ public class JParqResultSet extends ResultSetAdapter {
     for (int i = 0; i < size; i++) {
       Expression expression = expressions.get(i);
       String label = labels.get(i);
-      final String physical = (physicalColumnOrder == null || physicalColumnOrder.isEmpty()
-          || i >= physicalColumnOrder.size()) ? null : physicalColumnOrder.get(i);
+      final String physical = getPhysicalColumnName(physicalColumnOrder, i);
       if (expression == null) {
         continue;
       }
@@ -750,6 +749,24 @@ public class JParqResultSet extends ResultSetAdapter {
       }
     }
     return mapping.isEmpty() ? Map.of() : Map.copyOf(mapping);
+  }
+
+  /**
+   * Retrieves the physical column name at the specified index from the order
+   * list.
+   *
+   * @param order
+   *          list of physical column names; may be {@code null}
+   * @param index
+   *          the zero-based index of the column to retrieve
+   * @return the physical column name at the given index, or {@code null} if the
+   *         order list is {@code null}, empty, or the index is out of bounds
+   */
+  private static String getPhysicalColumnName(List<String> order, int index) {
+    if (order == null || order.isEmpty() || index >= order.size()) {
+      return null;
+    }
+    return order.get(index);
   }
 
   /**
