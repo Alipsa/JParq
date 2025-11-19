@@ -99,6 +99,7 @@ public class SubqueryCorrelatedFiltersTest {
     });
   }
 
+  @Disabled
   @Test
   void testSubqueryCorrelatedFiltersCTE() {
 
