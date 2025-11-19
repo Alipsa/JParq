@@ -21,6 +21,7 @@ public class AggregateFunctionsEquivalenceTest {
     Expression negativeLike = CCJSqlParserUtil.parseExpression("col NOT LIKE 'a%'");
 
     assertTrue(equivalent(positiveLike, positiveLike));
+    assertTrue(equivalent(negativeLike, negativeLike));
     assertFalse(equivalent(positiveLike, negativeLike));
   }
 
@@ -30,6 +31,7 @@ public class AggregateFunctionsEquivalenceTest {
     Expression negativeSimilarTo = CCJSqlParserUtil.parseExpression("col NOT SIMILAR TO 'a%'");
 
     assertTrue(equivalent(positiveSimilarTo, positiveSimilarTo));
+    assertTrue(equivalent(negativeSimilarTo, negativeSimilarTo));
     assertFalse(equivalent(positiveSimilarTo, negativeSimilarTo));
   }
 
