@@ -33,18 +33,18 @@ public class SubqueryCorrelatedFiltersTest {
   void testExists() {
 
     jparqSql.query("""
-      SELECT
-      ed.employee AS employee_id,
-      ed.department AS department_id
-      FROM employee_department ed
+        SELECT
+        ed.employee AS employee_id,
+        ed.department AS department_id
+        FROM employee_department ed
 
-      WHERE EXISTS (
-        SELECT 1
-        FROM salary s
-        WHERE s.employee = ed.employee
-          AND s.salary >= 180000.0
-      )
-      """, rs -> {
+        WHERE EXISTS (
+          SELECT 1
+          FROM salary s
+          WHERE s.employee = ed.employee
+            AND s.salary >= 180000.0
+        )
+        """, rs -> {
       try {
         ResultSetMetaData md = rs.getMetaData();
         assertEquals(2, md.getColumnCount(), "Expected 2 columns");
@@ -67,22 +67,22 @@ public class SubqueryCorrelatedFiltersTest {
   void testSubqueryCorrelatedFilters() {
 
     jparqSql.query("""
-      SELECT derived.employee_id,
-               (SELECT d.department FROM departments d WHERE d.id = derived.department_id) AS department_name,
-               (SELECT COUNT(*) FROM salary s WHERE s.employee = derived.employee_id) AS salary_change_count
-      FROM (
-        SELECT ed.employee AS employee_id, ed.department AS department_id
-        FROM employee_department ed
-      ) AS derived
+        SELECT derived.employee_id,
+                 (SELECT d.department FROM departments d WHERE d.id = derived.department_id) AS department_name,
+                 (SELECT COUNT(*) FROM salary s WHERE s.employee = derived.employee_id) AS salary_change_count
+        FROM (
+          SELECT ed.employee AS employee_id, ed.department AS department_id
+          FROM employee_department ed
+        ) AS derived
 
-      WHERE EXISTS (
-        SELECT 1
-        FROM salary s
-        WHERE s.employee = derived.employee_id
-          AND s.salary >= 180000.0
-      )
-      ORDER BY derived.employee_id;
-      """, rs -> {
+        WHERE EXISTS (
+          SELECT 1
+          FROM salary s
+          WHERE s.employee = derived.employee_id
+            AND s.salary >= 180000.0
+        )
+        ORDER BY derived.employee_id;
+        """, rs -> {
       try {
         ResultSetMetaData md = rs.getMetaData();
         assertEquals(3, md.getColumnCount(), "Expected 3 columns");
@@ -103,21 +103,21 @@ public class SubqueryCorrelatedFiltersTest {
   void testSubqueryCorrelatedFiltersCTE() {
 
     jparqSql.query("""
-        WITH high_salary AS (
-          SELECT DISTINCT employee
-          FROM salary
-          WHERE salary >= 180000.0
-        )
-        SELECT derived.employee_id,
-               (SELECT d.department FROM departments d WHERE d.id = derived.department_id) AS department_name,
-               (SELECT COUNT(*) FROM salary s WHERE s.employee = derived.employee_id) AS salary_change_count
-        FROM (
-          SELECT ed.employee AS employee_id, ed.department AS department_id
-          FROM employee_department ed
-          JOIN high_salary hs ON hs.employee = ed.employee
-        ) AS derived
-        ORDER BY derived.employee_id;
-      """, rs -> {
+          WITH high_salary AS (
+            SELECT DISTINCT employee
+            FROM salary
+            WHERE salary >= 180000.0
+          )
+          SELECT derived.employee_id,
+                 (SELECT d.department FROM departments d WHERE d.id = derived.department_id) AS department_name,
+                 (SELECT COUNT(*) FROM salary s WHERE s.employee = derived.employee_id) AS salary_change_count
+          FROM (
+            SELECT ed.employee AS employee_id, ed.department AS department_id
+            FROM employee_department ed
+            JOIN high_salary hs ON hs.employee = ed.employee
+          ) AS derived
+          ORDER BY derived.employee_id;
+        """, rs -> {
       try {
         ResultSetMetaData md = rs.getMetaData();
         assertEquals(3, md.getColumnCount(), "Expected 3 columns");
@@ -139,27 +139,27 @@ public class SubqueryCorrelatedFiltersTest {
   void testSubqueryCorrelatedFiltersWithExist() {
 
     jparqSql.query("""
-        WITH high_salary AS (
-          SELECT DISTINCT employee
-          FROM salary
-          WHERE salary >= 180000.0
-        )
-        SELECT derived.employee_id,
-               (SELECT d.department FROM departments d WHERE d.id = derived.department_id) AS department_name,
-               (SELECT COUNT(*) FROM salary s WHERE s.employee = derived.employee_id) AS salary_change_count
-        FROM (
-          SELECT ed.employee AS employee_id, ed.department AS department_id
-          FROM employee_department ed
-          JOIN high_salary hs ON hs.employee = ed.employee
-        ) AS derived
-        WHERE EXISTS (
-          SELECT 1
-          FROM salary s
-          WHERE s.employee = derived.employee_id
-            AND s.salary >= 180000.0
-        )
-        ORDER BY derived.employee_id;
-      """, rs -> {
+          WITH high_salary AS (
+            SELECT DISTINCT employee
+            FROM salary
+            WHERE salary >= 180000.0
+          )
+          SELECT derived.employee_id,
+                 (SELECT d.department FROM departments d WHERE d.id = derived.department_id) AS department_name,
+                 (SELECT COUNT(*) FROM salary s WHERE s.employee = derived.employee_id) AS salary_change_count
+          FROM (
+            SELECT ed.employee AS employee_id, ed.department AS department_id
+            FROM employee_department ed
+            JOIN high_salary hs ON hs.employee = ed.employee
+          ) AS derived
+          WHERE EXISTS (
+            SELECT 1
+            FROM salary s
+            WHERE s.employee = derived.employee_id
+              AND s.salary >= 180000.0
+          )
+          ORDER BY derived.employee_id;
+        """, rs -> {
       try {
         ResultSetMetaData md = rs.getMetaData();
         assertEquals(3, md.getColumnCount(), "Expected 3 columns");
