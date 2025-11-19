@@ -11,7 +11,8 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.engine.AggregateFunctions;
 
 /**
- * Tests for the expression equivalence logic used when matching aggregate expressions.
+ * Tests for the expression equivalence logic used when matching aggregate
+ * expressions.
  */
 public class AggregateFunctionsEquivalenceTest {
 
@@ -37,9 +38,8 @@ public class AggregateFunctionsEquivalenceTest {
 
   private boolean equivalent(Expression first, Expression second)
       throws NoSuchMethodException, InvocationTargetException, IllegalAccessException {
-    Method method =
-        AggregateFunctions.class.getDeclaredMethod(
-            "expressionsEquivalent", Expression.class, Expression.class);
+    Method method = AggregateFunctions.class.getDeclaredMethod("expressionsEquivalent", Expression.class,
+        Expression.class);
     method.setAccessible(true);
     return (boolean) method.invoke(null, first, second);
   }
