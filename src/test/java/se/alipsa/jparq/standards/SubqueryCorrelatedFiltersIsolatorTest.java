@@ -67,7 +67,15 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
     });
   }
 
-  @Disabled
+  /**
+   * Expected result:
+   * <pre>
+   *   DEPARTMENT_NAME
+   *   IT
+   *   Sales
+   *   Sales
+   * </pre>
+   */
   @Test
   void testDepartmentNameSubquery() {
     jparqSql.query("""
