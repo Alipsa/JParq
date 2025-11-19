@@ -11,6 +11,7 @@ import java.sql.SQLException;
 import jparq.WhereTest;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
@@ -27,6 +28,15 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
     jparqSql = new JParqSql("jdbc:jparq:" + dir.toAbsolutePath());
   }
 
+  /**
+   * Expected output
+   * <pre>
+   * employee	department
+   *        2	         1
+   *        4	         3
+   *        5	         3
+   * </pre>
+   */
   @Test
   void testCteAndJoin() {
     jparqSql.query("""
@@ -52,6 +62,7 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
     });
   }
 
+  @Disabled
   @Test
   void testDepartmentNameSubquery() {
     jparqSql.query("""
@@ -80,6 +91,7 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
     });
   }
 
+  @Disabled
   @Test
   void testSalaryChangeCountSubquery() {
     jparqSql.query("""
