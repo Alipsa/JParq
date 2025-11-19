@@ -8,6 +8,8 @@ import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 import jparq.WhereTest;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
@@ -30,11 +32,12 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
 
   /**
    * Expected output
+   * 
    * <pre>
-   * employee	department
-   *        2	         1
-   *        4	         3
-   *        5	         3
+   * employee   department
+   *        2            1
+   *        4            3
+   *        5            3
    * </pre>
    */
   @Test
@@ -51,11 +54,13 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
           ORDER BY employee_id;
         """, rs -> {
       try {
-        int rows = 0;
+        List<String> rows = new ArrayList<>();
         while (rs.next()) {
-          rows++;
+          int employeeId = rs.getInt("employee_id");
+          int departmentId = rs.getInt("department_id");
+          rows.add(employeeId + ":" + departmentId);
         }
-        assertEquals(3, rows, "Expected 3 rows from the join, got " + rows);
+        assertEquals(List.of("2:1", "4:3", "5:3"), rows, "Expected rows ordered by employee_id alias, got " + rows);
       } catch (SQLException e) {
         fail(e);
       }

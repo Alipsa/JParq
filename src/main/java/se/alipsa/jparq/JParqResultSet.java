@@ -199,7 +199,7 @@ public class JParqResultSet extends ResultSetAdapter {
     this.windowState = WindowState.empty();
 
     WindowPlan windowPlan = WindowFunctions.plan(selectExpressions);
-    Map<String, Expression> orderByExpressions = extractOrderByExpressions(select);
+    Map<String, Expression> orderByExpressions = extractOrderByExpressions(select, physicalColumnOrder);
 
     try {
       GenericRecord first = reader.read();
@@ -703,12 +703,25 @@ public class JParqResultSet extends ResultSetAdapter {
    * Extract expressions from the SELECT list that may be referenced by ORDER BY
    * aliases.
    *
+   * <p>
+   * All projection expressions are captured so aliases that simply rename a
+   * column are treated the same way as aliases referencing computed expressions.
+   * This allows ORDER BY clauses to consistently evaluate aliases even when the
+   * underlying column name changes after canonicalization (e.g. within joins).
+   * The associated physical column name is also registered to provide a fallback
+   * for parser stages that rewrite the ORDER BY reference to the original column.
+   * </p>
+   *
    * @param select
    *          select statement providing projection labels and expressions
+   * @param physicalColumnOrder
+   *          physical column names corresponding to the projection entries;
+   *          {@code null} when unavailable
    * @return mapping of projection label to the corresponding expression; empty
    *         when no computed expressions are present
    */
-  private static Map<String, Expression> extractOrderByExpressions(SqlParser.Select select) {
+  private static Map<String, Expression> extractOrderByExpressions(SqlParser.Select select,
+      List<String> physicalColumnOrder) {
     if (select == null || select.expressions() == null || select.expressions().isEmpty()) {
       return Map.of();
     }
@@ -719,16 +732,41 @@ public class JParqResultSet extends ResultSetAdapter {
     for (int i = 0; i < size; i++) {
       Expression expression = expressions.get(i);
       String label = labels.get(i);
-      if (expression == null || expression instanceof Column) {
+      final String physical = getPhysicalColumnName(physicalColumnOrder, i);
+      if (expression == null) {
         continue;
       }
       if (label == null || label.isBlank()) {
-        continue;
+        label = null;
       }
-      mapping.putIfAbsent(label, expression);
-      mapping.putIfAbsent(label.toLowerCase(Locale.ROOT), expression);
+      if (label != null) {
+        mapping.putIfAbsent(label, expression);
+        mapping.putIfAbsent(label.toLowerCase(Locale.ROOT), expression);
+      }
+      if (physical != null && !physical.isBlank()) {
+        mapping.putIfAbsent(physical, expression);
+        mapping.putIfAbsent(physical.toLowerCase(Locale.ROOT), expression);
+      }
     }
     return mapping.isEmpty() ? Map.of() : Map.copyOf(mapping);
+  }
+
+  /**
+   * Retrieves the physical column name at the specified index from the order
+   * list.
+   *
+   * @param order
+   *          list of physical column names; may be {@code null}
+   * @param index
+   *          the zero-based index of the column to retrieve
+   * @return the physical column name at the given index, or {@code null} if the
+   *         order list is {@code null}, empty, or the index is out of bounds
+   */
+  private static String getPhysicalColumnName(List<String> order, int index) {
+    if (order == null || order.isEmpty() || index >= order.size()) {
+      return null;
+    }
+    return order.get(index);
   }
 
   /**
