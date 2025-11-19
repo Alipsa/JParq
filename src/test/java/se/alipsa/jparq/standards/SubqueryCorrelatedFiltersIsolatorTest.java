@@ -32,6 +32,7 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
 
   /**
    * Expected output
+   * 
    * <pre>
    * employee   department
    *        2            1
@@ -59,8 +60,7 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
           int departmentId = rs.getInt("department_id");
           rows.add(employeeId + ":" + departmentId);
         }
-        assertEquals(List.of("2:1", "4:3", "5:3"), rows,
-            "Expected rows ordered by employee_id alias, got " + rows);
+        assertEquals(List.of("2:1", "4:3", "5:3"), rows, "Expected rows ordered by employee_id alias, got " + rows);
       } catch (SQLException e) {
         fail(e);
       }

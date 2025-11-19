@@ -709,8 +709,7 @@ public class JParqResultSet extends ResultSetAdapter {
    * This allows ORDER BY clauses to consistently evaluate aliases even when the
    * underlying column name changes after canonicalization (e.g. within joins).
    * The associated physical column name is also registered to provide a fallback
-   * for parser stages that rewrite the ORDER BY reference to the original
-   * column.
+   * for parser stages that rewrite the ORDER BY reference to the original column.
    * </p>
    *
    * @param select
@@ -734,9 +733,7 @@ public class JParqResultSet extends ResultSetAdapter {
       Expression expression = expressions.get(i);
       String label = labels.get(i);
       final String physical = (physicalColumnOrder == null || physicalColumnOrder.isEmpty()
-          || i >= physicalColumnOrder.size())
-              ? null
-              : physicalColumnOrder.get(i);
+          || i >= physicalColumnOrder.size()) ? null : physicalColumnOrder.get(i);
       if (expression == null) {
         continue;
       }

@@ -51,7 +51,6 @@ public class SubqueryCorrelatedFiltersTest {
 
         int rows = 0;
         while (rs.next()) {
-          System.out.println(rs.getString(1));
           rows++;
         }
         assertEquals(3, rows, "Expected 3 rows, got " + rows);
