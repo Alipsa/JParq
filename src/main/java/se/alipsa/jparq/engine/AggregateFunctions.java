@@ -862,6 +862,18 @@ public final class AggregateFunctions {
   }
 
   private static boolean binaryExpressionsEquivalent(BinaryExpression left, BinaryExpression right) {
+    if (left instanceof LikeExpression leftLike) {
+      LikeExpression rightLike = (LikeExpression) right;
+      if (leftLike.isNot() != rightLike.isNot()) {
+        return false;
+      }
+    }
+    if (left instanceof SimilarToExpression leftSimilarTo) {
+      SimilarToExpression rightSimilarTo = (SimilarToExpression) right;
+      if (leftSimilarTo.isNot() != rightSimilarTo.isNot()) {
+        return false;
+      }
+    }
     return expressionsEquivalent(left.getLeftExpression(), right.getLeftExpression())
         && expressionsEquivalent(left.getRightExpression(), right.getRightExpression());
   }
