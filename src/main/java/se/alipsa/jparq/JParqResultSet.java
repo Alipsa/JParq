@@ -30,8 +30,8 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroCoercions;
-import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
+import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelationContextBuilder;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.ParquetSchemas;
@@ -174,8 +174,8 @@ public class JParqResultSet extends ResultSetAdapter {
       canonicalLookup = null;
       try {
         AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan,
-            effectiveResidual, select.having(), select.orderBy(), subqueryExecutor, queryQualifiers,
-            qualifierMapping, unqualifiedMapping);
+            effectiveResidual, select.having(), select.orderBy(), subqueryExecutor, queryQualifiers, qualifierMapping,
+            unqualifiedMapping);
         this.aggregateRows = new ArrayList<>(result.rows());
         this.aggregateSqlTypes = result.sqlTypes();
       } catch (Exception e) {
@@ -229,17 +229,15 @@ public class JParqResultSet extends ResultSetAdapter {
         QueryProcessor.Options options = QueryProcessor.Options.builder().distinct(select.distinct())
             .distinctColumns(distinctProjection).distinctBeforePreLimit(select.innerDistinct())
             .subqueryExecutor(subqueryExecutor).preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
-              .outerQualifiers(queryQualifiers).qualifierColumnMapping(this.qualifierColumnMapping)
-              .unqualifiedColumnMapping(this.unqualifiedColumnMapping)
-              .preStageDistinctColumns(select.innerDistinctColumns()).offset(select.offset())
-              .preOffset(select.preOffset()).windowPlan(windowPlan)
-              .orderByExpressions(orderByExpressions);
+            .outerQualifiers(queryQualifiers).qualifierColumnMapping(this.qualifierColumnMapping)
+            .unqualifiedColumnMapping(this.unqualifiedColumnMapping)
+            .preStageDistinctColumns(select.innerDistinctColumns()).offset(select.offset())
+            .preOffset(select.preOffset()).windowPlan(windowPlan).orderByExpressions(orderByExpressions);
         List<String> projectionColumns = requestedColumns;
         if (projectionColumns == null || projectionColumns.isEmpty()) {
           projectionColumns = select.columns();
         }
-        this.qp = new QueryProcessor(reader, projectionColumns, /* where */ effectiveResidual, select.limit(),
-            options);
+        this.qp = new QueryProcessor(reader, projectionColumns, /* where */ effectiveResidual, select.limit(), options);
         this.current = null;
         this.rowNum = 0;
         this.windowState = qp.windowState();
@@ -422,7 +420,8 @@ public class JParqResultSet extends ResultSetAdapter {
       if (this.columnOrder.isEmpty()) {
         this.columnOrder.addAll(proj); // keep mutable
       }
-      List<String> correlationLabels = this.columnOrder.isEmpty() ? new ArrayList<>(proj)
+      List<String> correlationLabels = this.columnOrder.isEmpty()
+          ? new ArrayList<>(proj)
           : new ArrayList<>(this.columnOrder);
       if (proj != null && !proj.isEmpty()) {
         for (String column : proj) {
@@ -451,11 +450,10 @@ public class JParqResultSet extends ResultSetAdapter {
             .distinct(select.distinct()).distinctColumns(distinctProjection)
             .distinctBeforePreLimit(select.innerDistinct()).firstAlreadyRead(first).subqueryExecutor(subqueryExecutor)
             .preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
-              .preStageDistinctColumns(select.innerDistinctColumns()).outerQualifiers(queryQualifiers)
-              .qualifierColumnMapping(this.qualifierColumnMapping)
-              .unqualifiedColumnMapping(this.unqualifiedColumnMapping).offset(select.offset())
-              .preOffset(select.preOffset()).windowPlan(windowPlan)
-              .orderByExpressions(orderByExpressions);
+            .preStageDistinctColumns(select.innerDistinctColumns()).outerQualifiers(queryQualifiers)
+            .qualifierColumnMapping(this.qualifierColumnMapping).unqualifiedColumnMapping(this.unqualifiedColumnMapping)
+            .offset(select.offset()).preOffset(select.preOffset()).windowPlan(windowPlan)
+            .orderByExpressions(orderByExpressions);
         this.qp = new QueryProcessor(reader, proj, effectiveResidual, select.limit(), options);
         this.current = usePrefetchedAsCurrent ? first : qp.nextMatching();
         this.windowState = qp.windowState();
@@ -465,9 +463,9 @@ public class JParqResultSet extends ResultSetAdapter {
             .distinctColumns(distinctProjection).distinctBeforePreLimit(select.innerDistinct()).orderBy(order)
             .firstAlreadyRead(first).subqueryExecutor(subqueryExecutor).preLimit(select.preLimit())
             .preOrderBy(select.preOrderBy()).preStageDistinctColumns(select.innerDistinctColumns())
-              .outerQualifiers(queryQualifiers).qualifierColumnMapping(this.qualifierColumnMapping)
-              .unqualifiedColumnMapping(this.unqualifiedColumnMapping).offset(select.offset())
-              .preOffset(select.preOffset()).windowPlan(windowPlan).orderByExpressions(orderByExpressions);
+            .outerQualifiers(queryQualifiers).qualifierColumnMapping(this.qualifierColumnMapping)
+            .unqualifiedColumnMapping(this.unqualifiedColumnMapping).offset(select.offset())
+            .preOffset(select.preOffset()).windowPlan(windowPlan).orderByExpressions(orderByExpressions);
         this.qp = new QueryProcessor(reader, proj, effectiveResidual, select.limit(), options);
         this.current = qp.nextMatching();
         this.windowState = qp.windowState();
