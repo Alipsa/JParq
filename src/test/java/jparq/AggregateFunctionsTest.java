@@ -223,11 +223,9 @@ public class AggregateFunctionsTest {
 
     assertFalse(expectedMax.isEmpty(), "Baseline aggregate query should produce results");
 
-    jparqSql.query(
-        "SELECT cyl AS grp, MAX(hp) AS max_hp, "
-            + "MAX((SELECT MAX(m2.hp) FROM mtcars m2 WHERE m2.cyl = mc.grp)) AS correlated_max "
-            + "FROM mtcars mc GROUP BY cyl ORDER BY grp",
-        rs -> {
+    jparqSql.query("SELECT cyl AS grp, MAX(hp) AS max_hp, "
+        + "MAX((SELECT MAX(m2.hp) FROM mtcars m2 WHERE m2.cyl = mc.grp)) AS correlated_max "
+        + "FROM mtcars mc GROUP BY cyl ORDER BY grp", rs -> {
           try {
             int rows = 0;
             while (rs.next()) {

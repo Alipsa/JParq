@@ -45,10 +45,10 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.DateTimeExpressions;
+import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JsonExpressions;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.StringExpressions;
-import se.alipsa.jparq.helper.JParqUtil;
 
 /**
  * Evaluates SELECT-list expressions (e.g. computed columns, {@code CASE}

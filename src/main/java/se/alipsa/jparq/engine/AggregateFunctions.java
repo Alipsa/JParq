@@ -64,8 +64,8 @@ import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
-import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.engine.SqlParser.OrderKey;
+import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.StringExpressions;
@@ -1068,8 +1068,8 @@ public final class AggregateFunctions {
       Expression having, List<OrderKey> orderBy, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping)
       throws IOException {
-    return evaluate(reader, plan, residual, having, orderBy, subqueryExecutor, outerQualifiers,
-        qualifierColumnMapping, unqualifiedColumnMapping, qualifierColumnMapping);
+    return evaluate(reader, plan, residual, having, orderBy, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
+        unqualifiedColumnMapping, qualifierColumnMapping);
   }
 
   /**
@@ -1103,8 +1103,7 @@ public final class AggregateFunctions {
   public static AggregateResult evaluate(RecordReader reader, AggregatePlan plan, Expression residual,
       Expression having, List<OrderKey> orderBy, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping,
-      Map<String, Map<String, String>> correlationContext)
-      throws IOException {
+      Map<String, Map<String, String>> correlationContext) throws IOException {
     List<GroupExpression> groupExpressions = plan.groupExpressions();
     List<GroupingSet> groupingSets = plan.groupingSets();
     List<GroupTypeTracker> groupTrackers = new ArrayList<>(groupExpressions.size());
@@ -1947,8 +1946,8 @@ public final class AggregateFunctions {
       if (!(exists.getRightExpression() instanceof Select subSelect)) {
         throw new IllegalArgumentException("EXISTS requires a subquery");
       }
-      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter
-          .rewrite(subSelect, correlationQualifiers(), (qualifier, column) -> correlatedValue(qualifier, column));
+      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
+          correlationQualifiers(), (qualifier, column) -> correlatedValue(qualifier, column));
       SubqueryExecutor.SubqueryResult result = rewritten.correlated()
           ? subqueryExecutor.executeRaw(rewritten.sql())
           : subqueryExecutor.execute(subSelect);
@@ -2073,8 +2072,8 @@ public final class AggregateFunctions {
       if (subqueryExecutor == null) {
         throw new IllegalStateException("Scalar subqueries require a subquery executor");
       }
-      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter
-          .rewrite(subSelect, correlationQualifiers(), (qualifier, column) -> correlatedValue(qualifier, column));
+      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
+          correlationQualifiers(), (qualifier, column) -> correlatedValue(qualifier, column));
       SubqueryExecutor.SubqueryResult result = rewritten.correlated()
           ? subqueryExecutor.executeRaw(rewritten.sql())
           : subqueryExecutor.execute(subSelect);

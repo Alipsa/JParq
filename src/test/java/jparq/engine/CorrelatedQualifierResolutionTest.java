@@ -85,18 +85,17 @@ class CorrelatedQualifierResolutionTest {
     GenericRecord record = new GenericData.Record(schema);
     record.put("base_id", 9);
 
-      Map<String, Map<String, String>> correlationContext = CorrelationContextBuilder
-          .build(List.of("d"), List.of("alias_id"), List.of("base_id"), Map.of());
+    Map<String, Map<String, String>> correlationContext = CorrelationContextBuilder.build(List.of("d"),
+        List.of("alias_id"), List.of("base_id"), Map.of());
 
     SubqueryExecutor.SubqueryResult subqueryResult = new SubqueryExecutor.SubqueryResult(List.of("v"),
         List.of(List.of("ok")));
     StubbedExecutor executor = new StubbedExecutor(subqueryResult);
 
-      ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema, executor.executor(), List.of("d"),
-          Map.of(), Map.of(), correlationContext, WindowState.empty());
+    ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema, executor.executor(), List.of("d"),
+        Map.of(), Map.of(), correlationContext, WindowState.empty());
 
-    Expression expression = CCJSqlParserUtil
-        .parseExpression("(SELECT v FROM dummy dd WHERE dd.parent = d.alias_id)");
+    Expression expression = CCJSqlParserUtil.parseExpression("(SELECT v FROM dummy dd WHERE dd.parent = d.alias_id)");
 
     Object value = evaluator.eval(expression, record);
     assertEquals("ok", value);
