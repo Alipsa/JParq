@@ -93,11 +93,12 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
           ORDER BY department_name;
         """, rs -> {
       try {
-        int rows = 0;
+        List<String> departments = new ArrayList<>();
         while (rs.next()) {
-          rows++;
+          departments.add(rs.getString("department_name"));
         }
-        assertEquals(3, rows, "Expected 3 rows from the department name subquery, got " + rows);
+        assertEquals(List.of("IT", "Sales", "Sales"), departments,
+            "Expected department names ordered by derived inline view correlation");
       } catch (SQLException e) {
         fail(e);
       }
