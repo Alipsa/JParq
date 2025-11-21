@@ -38,6 +38,7 @@ import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.StringExpressions;
 
 /**
@@ -120,7 +121,7 @@ public final class ExpressionEvaluator {
     this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(qualifierColumnMapping);
     this.unqualifiedColumnMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(unqualifiedColumnMapping);
     this.literalEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, qualifiers,
-        this.qualifierColumnMapping, this.unqualifiedColumnMapping);
+        this.qualifierColumnMapping, this.unqualifiedColumnMapping, this.qualifierColumnMapping, WindowState.empty());
     this.subqueryExecutor = subqueryExecutor;
     this.outerQualifiers = qualifiers;
   }

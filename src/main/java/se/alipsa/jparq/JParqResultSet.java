@@ -998,7 +998,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private void ensureProjectionEvaluator(GenericRecord record) {
     if (projectionEvaluator == null && record != null && !selectExpressions.isEmpty()) {
       projectionEvaluator = new ValueExpressionEvaluator(record.getSchema(), subqueryExecutor, queryQualifiers,
-          qualifierColumnMapping, unqualifiedColumnMapping, windowState);
+          qualifierColumnMapping, unqualifiedColumnMapping, qualifierColumnMapping, windowState);
     }
   }
 
