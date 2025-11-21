@@ -48,11 +48,37 @@ public final class ColumnMappingUtil {
       if (canonical != null) {
         return canonical;
       }
+      canonical = resolveUnqualified(normalizedColumn, qualifierColumnMapping, caseInsensitiveIndex);
+      if (canonical != null) {
+        return canonical;
+      }
       throw new IllegalArgumentException("Ambiguous column reference: " + columnName);
     }
 
     String canonical = caseInsensitiveIndex.get(normalizedColumn);
     return canonical != null ? canonical : columnName;
+  }
+
+  private static String resolveUnqualified(String normalizedColumn,
+      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> caseInsensitiveIndex) {
+    String candidate = null;
+    for (Map<String, String> mapping : qualifierColumnMapping.values()) {
+      if (mapping == null || mapping.isEmpty()) {
+        continue;
+      }
+      String canonical = mapping.get(normalizedColumn);
+      if (canonical == null) {
+        continue;
+      }
+      if (candidate != null && !candidate.equals(canonical)) {
+        return null;
+      }
+      candidate = canonical;
+    }
+    if (candidate != null) {
+      return candidate;
+    }
+    return caseInsensitiveIndex.get(normalizedColumn);
   }
 
   /**
@@ -214,13 +240,15 @@ public final class ColumnMappingUtil {
       if (fallback != null) {
         return fallback;
       }
-      throw new IllegalArgumentException("Unknown column '" + columnName + "' for qualifier '" + qualifier + "'");
+      throw new IllegalArgumentException("Unknown column '" + columnName + "' for qualifier '" + qualifier
+          + "' (available columns: " + caseInsensitiveIndex.keySet() + ")");
     }
 
     String canonical = mapping.get(normalizedColumn);
     if (canonical != null) {
       return canonical;
     }
-    throw new IllegalArgumentException("Unknown column '" + columnName + "' for qualifier '" + qualifier + "'");
+    throw new IllegalArgumentException("Unknown column '" + columnName + "' for qualifier '" + qualifier
+        + "' (available columns: " + mapping.keySet() + ")");
   }
 }
