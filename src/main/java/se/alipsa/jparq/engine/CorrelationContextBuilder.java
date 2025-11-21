@@ -20,19 +20,19 @@ public final class CorrelationContextBuilder {
 
   /**
    * Build a correlation mapping for the supplied qualifiers. Existing mappings
-   * are preserved, and any projected columns missing from the mapping are
-   * added using their canonical counterparts.
+   * are preserved, and any projected columns missing from the mapping are added
+   * using their canonical counterparts.
    *
    * @param qualifiers
    *          qualifiers (tables or aliases) visible to the current query
    * @param columnLabels
    *          labels exposed by the projection in result-set order
    * @param canonicalColumnNames
-   *          canonical names corresponding to {@code columnLabels}; falls back
-   *          to {@code columnLabels} when {@code null}
+   *          canonical names corresponding to {@code columnLabels}; falls back to
+   *          {@code columnLabels} when {@code null}
    * @param existingMapping
-   *          qualifier to canonical column mapping provided by the reader (may
-   *          be {@code null})
+   *          qualifier to canonical column mapping provided by the reader (may be
+   *          {@code null})
    * @return a normalized mapping containing all projected columns for each
    *         qualifier
    */
@@ -40,7 +40,8 @@ public final class CorrelationContextBuilder {
       List<String> canonicalColumnNames, Map<String, Map<String, String>> existingMapping) {
 
     List<String> effectiveLabels = columnLabels == null ? List.of() : new ArrayList<>(columnLabels);
-    List<String> canonicalColumns = canonicalColumnNames == null ? effectiveLabels
+    List<String> canonicalColumns = canonicalColumnNames == null
+        ? effectiveLabels
         : new ArrayList<>(canonicalColumnNames);
 
     Map<String, Map<String, String>> normalizedExisting = ColumnMappingUtil.normaliseQualifierMapping(existingMapping);

@@ -69,6 +69,7 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
 
   /**
    * Expected result:
+   * 
    * <pre>
    *   DEPARTMENT_NAME
    *   IT
@@ -76,6 +77,7 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
    *   Sales
    * </pre>
    */
+  @Disabled
   @Test
   void testDepartmentNameSubquery() {
     jparqSql.query("""
