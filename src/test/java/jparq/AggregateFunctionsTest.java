@@ -206,4 +206,44 @@ public class AggregateFunctionsTest {
       }
     });
   }
+
+  @Test
+  void correlatedScalarSubqueryInAggregateUsesAlias() {
+    Map<Integer, Double> expectedMax = new LinkedHashMap<>();
+
+    jparqSql.query("SELECT cyl, MAX(hp) AS max_hp FROM mtcars GROUP BY cyl ORDER BY cyl", rs -> {
+      try {
+        while (rs.next()) {
+          expectedMax.put(rs.getInt("cyl"), rs.getDouble("max_hp"));
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    assertFalse(expectedMax.isEmpty(), "Baseline aggregate query should produce results");
+
+    jparqSql.query(
+        "SELECT cyl AS grp, MAX(hp) AS max_hp, "
+            + "MAX((SELECT MAX(m2.hp) FROM mtcars m2 WHERE m2.cyl = mc.grp)) AS correlated_max "
+            + "FROM mtcars mc GROUP BY cyl ORDER BY grp",
+        rs -> {
+          try {
+            int rows = 0;
+            while (rs.next()) {
+              rows++;
+              int group = rs.getInt("grp");
+              double maxHp = rs.getDouble("max_hp");
+              double correlatedMax = rs.getDouble("correlated_max");
+              Double expected = expectedMax.get(group);
+              assertNotNull(expected, "Unexpected group value returned: " + group);
+              assertEquals(expected, maxHp, 1e-9);
+              assertEquals(expected, correlatedMax, 1e-9);
+            }
+            assertEquals(expectedMax.size(), rows, "All groups should emit correlated aggregate values");
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
+  }
 }

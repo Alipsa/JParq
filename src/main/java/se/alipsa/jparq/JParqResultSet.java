@@ -172,10 +172,37 @@ public class JParqResultSet extends ResultSetAdapter {
       labels = new ArrayList<>(aggregatePlan.labels());
       physical = null;
       canonicalLookup = null;
+      List<String> correlationColumns = buildCorrelationColumns(canonicalLookup, labels, labels);
+      List<String> correlationCanonical = new ArrayList<>(labels.size());
+      for (int i = 0; i < labels.size(); i++) {
+        String canonical = null;
+        AggregateFunctions.ResultColumn resultColumn = aggregatePlan.resultColumns().get(i);
+        if (resultColumn.kind() == AggregateFunctions.ColumnKind.GROUP && resultColumn.groupIndex() >= 0
+            && resultColumn.groupIndex() < aggregatePlan.groupExpressions().size()) {
+          Expression expr = aggregatePlan.groupExpressions().get(resultColumn.groupIndex()).expression();
+          if (expr instanceof Column column) {
+            String fallbackName = select.columnNames() != null && i < select.columnNames().size()
+                ? select.columnNames().get(i)
+                : correlationColumns.get(i);
+            canonical = canonicalColumnName(column, fallbackName, qualifierMapping, unqualifiedMapping);
+          }
+        }
+        if (canonical == null && select.columnNames() != null && i < select.columnNames().size()) {
+          canonical = select.columnNames().get(i);
+        }
+        if (canonical == null) {
+          canonical = correlationColumns.get(i);
+        }
+        correlationCanonical.add(canonical);
+      }
+      Map<String, String> enrichedUnqualifiedMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping,
+          correlationCanonical);
+      Map<String, Map<String, String>> correlationContext = CorrelationContextBuilder.build(queryQualifiers,
+          correlationColumns, correlationCanonical, qualifierMapping);
       try {
         AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan,
             effectiveResidual, select.having(), select.orderBy(), subqueryExecutor, queryQualifiers, qualifierMapping,
-            unqualifiedMapping);
+            enrichedUnqualifiedMapping, correlationContext);
         this.aggregateRows = new ArrayList<>(result.rows());
         this.aggregateSqlTypes = result.sqlTypes();
       } catch (Exception e) {
@@ -184,12 +211,8 @@ public class JParqResultSet extends ResultSetAdapter {
       this.columnOrder = labels;
       this.physicalColumnOrder = physical;
       this.canonicalColumnNames = canonicalLookup;
-      List<String> correlationColumns = buildCorrelationColumns(canonicalLookup, this.columnOrder, this.columnOrder);
-      Map<String, String> enrichedUnqualifiedMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping,
-          correlationColumns);
       this.unqualifiedColumnMapping = enrichedUnqualifiedMapping;
-      this.qualifierColumnMapping = CorrelationContextBuilder.build(queryQualifiers, correlationColumns,
-          correlationColumns, qualifierMapping);
+      this.qualifierColumnMapping = correlationContext;
       this.aggregateQuery = true;
       this.aggregateOnRow = false;
       this.aggregateRowIndex = -1;
@@ -998,7 +1021,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private void ensureProjectionEvaluator(GenericRecord record) {
     if (projectionEvaluator == null && record != null && !selectExpressions.isEmpty()) {
       projectionEvaluator = new ValueExpressionEvaluator(record.getSchema(), subqueryExecutor, queryQualifiers,
-          qualifierColumnMapping, unqualifiedColumnMapping, windowState);
+          qualifierColumnMapping, unqualifiedColumnMapping, qualifierColumnMapping, windowState);
     }
   }
 

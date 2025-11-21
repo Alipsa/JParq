@@ -317,7 +317,7 @@ public final class WindowFunctions {
       return WindowState.empty();
     }
     ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, outerQualifiers,
-        qualifierColumnMapping, unqualifiedColumnMapping, WindowState.empty());
+        qualifierColumnMapping, unqualifiedColumnMapping, qualifierColumnMapping, WindowState.empty());
 
     final IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
     rowNumberValues = new IdentityHashMap<>();
