@@ -11,6 +11,7 @@ import java.nio.file.Paths;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import jparq.WhereTest;
 import org.junit.jupiter.api.Assertions;
@@ -20,6 +21,10 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqResultSet;
 import se.alipsa.jparq.JParqSql;
 
+/**
+ * Isolated regressions for correlated subqueries against derived tables to
+ * capture qualifier handling without interference from other suites.
+ */
 public class SubqueryCorrelatedFiltersIsolatorTest {
 
   static JParqSql jparqSql;
@@ -68,6 +73,116 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
         fail(e);
       }
     });
+  }
+
+  @Test
+  void derivedAliasQualifierMappingIncludesProjectionAndDiagnostics() {
+    jparqSql.query("""
+          WITH high_salary AS (
+            SELECT DISTINCT employee
+            FROM salary
+            WHERE salary >= 180000.0
+          )
+          SELECT (SELECT d.department FROM departments d WHERE d.id = derived.department_id) AS department_name
+          FROM (
+            SELECT ed.employee AS employee_id, ed.department AS department_id
+            FROM employee_department ed
+            JOIN high_salary hs ON hs.employee = ed.employee
+          ) AS derived
+          ORDER BY department_name;
+        """, rs -> {
+      try {
+        if (!(rs instanceof JParqResultSet jparqRs)) {
+          fail("Expected JParqResultSet to expose qualifier diagnostics but got " + rs.getClass().getName());
+          return;
+        }
+        Map<String, Map<String, String>> qualifierMapping = readQualifierMapping(jparqRs);
+        List<String> qualifiers = readQueryQualifiers(jparqRs);
+        logDerivedDiagnostics("derived", qualifierMapping, qualifiers);
+
+        Assertions.assertTrue(qualifiers.contains("derived"), "Derived alias missing from qualifiers: " + qualifiers);
+        Map<String, String> derivedMapping = qualifierMapping.get("derived");
+        Assertions.assertNotNull(derivedMapping, "Derived mapping must be present for correlation context");
+        String employeeKey = derivedMapping.containsKey("employee_id") ? "employee_id" : "employee";
+        Assertions.assertTrue(derivedMapping.containsKey(employeeKey),
+            "Derived mapping should expose employee column but was " + derivedMapping.keySet());
+        Assertions.assertEquals(employeeKey, derivedMapping.get(employeeKey),
+            "Employee column should map to the projected inline-view column");
+        Assertions.assertEquals("department_id", derivedMapping.get("department_id"),
+            "department_id should map to the projected inline-view column");
+        derivedMapping.keySet()
+            .forEach(key -> Assertions.assertEquals(key.toLowerCase(Locale.ROOT), key,
+                "Derived mapping keys should be normalized for qualifier lookups"));
+
+        List<String> departments = new ArrayList<>();
+        while (jparqRs.next()) {
+          departments.add(jparqRs.getString("department_name"));
+        }
+        System.out.println("[diagnostic] derived departments: " + departments);
+        Assertions.assertFalse(departments.isEmpty(), "Derived correlation query should return rows");
+      } catch (SQLException | IllegalAccessException | NoSuchFieldException e) {
+        fail(e);
+      }
+    });
+  }
+
+  /**
+   * Read the qualifier column mapping from the supplied result set via
+   * reflection to allow assertions without altering production visibility.
+   *
+   * @param rs
+   *          the {@link JParqResultSet} under inspection
+   * @return the qualifier to column mapping used for correlation lookups
+   * @throws NoSuchFieldException
+   *           if the mapping field cannot be located
+   * @throws IllegalAccessException
+   *           if reflective access is denied
+   */
+  private Map<String, Map<String, String>> readQualifierMapping(JParqResultSet rs)
+      throws NoSuchFieldException, IllegalAccessException {
+    Field mappingField = JParqResultSet.class.getDeclaredField("qualifierColumnMapping");
+    mappingField.setAccessible(true);
+    @SuppressWarnings("unchecked")
+    Map<String, Map<String, String>> qualifierMapping = (Map<String, Map<String, String>>) mappingField.get(rs);
+    return qualifierMapping;
+  }
+
+  /**
+   * Read the list of query qualifiers visible to the result set through
+   * reflection.
+   *
+   * @param rs
+   *          the {@link JParqResultSet} to inspect
+   * @return the qualifiers collected during query planning
+   * @throws NoSuchFieldException
+   *           if the field cannot be found
+   * @throws IllegalAccessException
+   *           if reflective access fails
+   */
+  private List<String> readQueryQualifiers(JParqResultSet rs) throws NoSuchFieldException, IllegalAccessException {
+    Field qualifiersField = JParqResultSet.class.getDeclaredField("queryQualifiers");
+    qualifiersField.setAccessible(true);
+    @SuppressWarnings("unchecked")
+    List<String> qualifiers = (List<String>) qualifiersField.get(rs);
+    return qualifiers;
+  }
+
+  /**
+   * Output temporary diagnostics for derived alias mappings to assist debugging
+   * without altering production logging.
+   *
+   * @param derivedAlias
+   *          the alias under inspection
+   * @param qualifierMapping
+   *          the correlation context mapping per qualifier
+   * @param qualifiers
+   *          the normalized qualifiers seen by the query
+   */
+  private void logDerivedDiagnostics(String derivedAlias, Map<String, Map<String, String>> qualifierMapping,
+      List<String> qualifiers) {
+    System.out.println("[diagnostic] query qualifiers: " + qualifiers);
+    System.out.println(
+        "[diagnostic] qualifier mapping for '" + derivedAlias + "': " + qualifierMapping.get(derivedAlias));
   }
 
   /**
