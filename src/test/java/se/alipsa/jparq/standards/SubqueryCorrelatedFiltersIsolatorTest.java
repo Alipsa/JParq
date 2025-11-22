@@ -81,7 +81,7 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
    * </pre>
    */
   @Test
-  @Disabled
+  @Disabled("Temporarily disabled pending correlated subquery fix")
   void testDepartmentNameSubquery() {
     jparqSql.query("""
           WITH high_salary AS (
