@@ -366,8 +366,9 @@ public final class ValueExpressionEvaluator {
     if (subqueryExecutor == null) {
       throw new IllegalStateException("ARRAY subqueries require a subquery executor");
     }
-    CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, correlationQualifiers(),
-        correlationColumns(), (qualifier, column) -> resolveCorrelatedValue(qualifier, column, record));
+    CorrelatedSubqueryRewriter.Result rewritten = SubqueryCorrelatedFiltersIsolator.isolate(subSelect,
+        correlationQualifiers(), correlationColumns(), correlationContext,
+        (qualifier, column) -> resolveCorrelatedValue(qualifier, column, record));
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
         : subqueryExecutor.execute(subSelect);
@@ -512,8 +513,9 @@ public final class ValueExpressionEvaluator {
     if (subqueryExecutor == null) {
       throw new IllegalStateException("Scalar subqueries require a subquery executor");
     }
-    CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, correlationQualifiers(),
-        correlationColumns(), (qualifier, column) -> resolveCorrelatedValue(qualifier, column, record));
+    CorrelatedSubqueryRewriter.Result rewritten = SubqueryCorrelatedFiltersIsolator.isolate(subSelect,
+        correlationQualifiers(), correlationColumns(), correlationContext,
+        (qualifier, column) -> resolveCorrelatedValue(qualifier, column, record));
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
         : subqueryExecutor.execute(subSelect);
