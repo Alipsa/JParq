@@ -28,15 +28,16 @@ import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 
 /**
- * Verifies that correlated subqueries retain derived qualifier mappings provided
- * through the correlation context when delegating to {@link SubqueryExecutor}.
+ * Verifies that correlated subqueries retain derived qualifier mappings
+ * provided through the correlation context when delegating to
+ * {@link SubqueryExecutor}.
  */
 class SubqueryCorrelatedFiltersIsolatorUnitTest {
 
   @Test
   void derivedQualifiersFromCorrelationContextDriveRewrite() throws Exception {
-    Schema schema = SchemaBuilder.record("Derived").fields()
-        .name("derived_id").type().intType().noDefault().endRecord();
+    Schema schema = SchemaBuilder.record("Derived").fields().name("derived_id").type().intType().noDefault()
+        .endRecord();
     GenericRecord record = new GenericData.Record(schema);
     record.put("derived_id", 5);
 
@@ -121,8 +122,8 @@ class SubqueryCorrelatedFiltersIsolatorUnitTest {
     }
 
     private ResultSetMetaData createMetadata() {
-      return (ResultSetMetaData) Proxy.newProxyInstance(
-          SubqueryCorrelatedFiltersIsolatorUnitTest.class.getClassLoader(), new Class<?>[]{
+      return (ResultSetMetaData) Proxy
+          .newProxyInstance(SubqueryCorrelatedFiltersIsolatorUnitTest.class.getClassLoader(), new Class<?>[]{
               ResultSetMetaData.class
           }, (metaProxy, method, metaArgs) -> switch (method.getName()) {
             case "getColumnCount" -> labels.size();

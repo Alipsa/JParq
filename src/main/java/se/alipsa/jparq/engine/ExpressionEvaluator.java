@@ -396,9 +396,9 @@ public final class ExpressionEvaluator {
     if (!(exists.getRightExpression() instanceof net.sf.jsqlparser.statement.select.Select subSelect)) {
       throw new IllegalArgumentException("EXISTS requires a subquery");
     }
-    CorrelatedSubqueryRewriter.Result rewritten = SubqueryCorrelatedFiltersIsolator
-        .isolate(subSelect, outerQualifiers, correlationColumns(), qualifierColumnMapping,
-            (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
+    CorrelatedSubqueryRewriter.Result rewritten = SubqueryCorrelatedFiltersIsolator.isolate(subSelect, outerQualifiers,
+        correlationColumns(), qualifierColumnMapping,
+        (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
         : subqueryExecutor.execute(subSelect);

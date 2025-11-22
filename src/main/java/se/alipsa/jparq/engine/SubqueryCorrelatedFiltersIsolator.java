@@ -43,9 +43,8 @@ public final class SubqueryCorrelatedFiltersIsolator {
    * @return the {@link CorrelatedSubqueryRewriter.Result} describing the
    *         rewritten SQL and correlated references
    */
-  public static CorrelatedSubqueryRewriter.Result isolate(Select subSelect,
-      Collection<String> outerQualifiers, Set<String> correlatedColumns,
-      Map<String, Map<String, String>> correlationContext,
+  public static CorrelatedSubqueryRewriter.Result isolate(Select subSelect, Collection<String> outerQualifiers,
+      Set<String> correlatedColumns, Map<String, Map<String, String>> correlationContext,
       BiFunction<String, String, Object> valueResolver) {
 
     Map<String, Map<String, String>> normalizedContext = ColumnMappingUtil
@@ -61,12 +60,11 @@ public final class SubqueryCorrelatedFiltersIsolator {
     }
     effectiveQualifiers.addAll(normalizedContext.keySet());
 
-    CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter
-        .rewrite(subSelect, effectiveQualifiers, correlatedColumns, valueResolver);
+    CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, effectiveQualifiers,
+        correlatedColumns, valueResolver);
 
     if (log.isDebugEnabled()) {
-      log.debug(
-          "Correlated rewrite for {} with qualifiers {} and context {} produced SQL {} and references {}",
+      log.debug("Correlated rewrite for {} with qualifiers {} and context {} produced SQL {} and references {}",
           subSelect, effectiveQualifiers, normalizedContext, rewritten.sql(), rewritten.correlatedReferences());
     }
     return rewritten;
