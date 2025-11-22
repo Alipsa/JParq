@@ -2161,14 +2161,27 @@ public final class AggregateFunctions {
       return List.copyOf(qualifiers);
     }
 
+    // Unlike ValueExpressionEvaluator/ExpressionEvaluator, we don't filter by
+    // caseInsensitiveIndex because HAVING operates on aggregate results, not a
+    // physical schema. All projection aliases should be available to subqueries.
     private Set<String> correlationColumns() {
       if (correlationContext.isEmpty()) {
         return Set.of();
       }
       Set<String> columns = new LinkedHashSet<>();
       for (Map<String, String> mapping : correlationContext.values()) {
-        if (mapping != null) {
-          columns.addAll(mapping.keySet());
+        if (mapping == null) {
+          continue;
+        }
+        for (Map.Entry<String, String> entry : mapping.entrySet()) {
+          String column = entry.getKey();
+          String canonical = entry.getValue();
+          String normalizedColumn = column == null ? null : column.toLowerCase(Locale.ROOT);
+          String normalizedCanonical = canonical == null ? null : canonical.toLowerCase(Locale.ROOT);
+          if ((normalizedColumn != null && labelLookup.containsKey(normalizedColumn))
+              || (normalizedCanonical != null && labelLookup.containsKey(normalizedCanonical))) {
+            columns.add(column);
+          }
         }
       }
       return Set.copyOf(columns);

@@ -226,6 +226,32 @@ public class SubQueryTest {
     });
   }
 
+  @Test
+  void havingClauseCorrelatesUnqualifiedGroupColumns() throws IOException {
+    Map<Integer, Long> expectedCounts = loadCars().stream()
+        .collect(Collectors.groupingBy(Car::cyl, Collectors.counting()));
+
+    jparqSql.query("SELECT cyl AS grp, COUNT(*) AS total FROM mtcars "
+        + "GROUP BY cyl HAVING EXISTS (SELECT 1 FROM mtcars m2 WHERE m2.cyl = cyl) ORDER BY grp", rs -> {
+          try {
+            int rows = 0;
+            while (rs.next()) {
+              rows++;
+              int cylinders = rs.getInt("grp");
+              long total = rs.getLong("total");
+              Long expected = expectedCounts.get(cylinders);
+              assertNotNull(expected, "Unexpected cylinder group returned: " + cylinders);
+              assertEquals(expected.longValue(), total,
+                  "HAVING subquery should correlate grouped column aliases by value");
+            }
+            assertEquals(expectedCounts.size(), rows,
+                "All distinct cylinder groups should survive the HAVING correlation filter");
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
+  }
+
   /**
    * Read all car rows from the Parquet test dataset.
    *
