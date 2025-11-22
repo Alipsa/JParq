@@ -120,6 +120,12 @@ public class JParqResultSet extends ResultSetAdapter {
    *          the physical column names (may be null)
    * @param subqueryExecutor
    *          executor used to evaluate subqueries during row materialization
+   *
+   * The constructor derives a correlation context from the projection labels and
+   * canonical column names so that correlated subqueries can reference outer
+   * aliases reliably, even when the underlying schema uses different field
+   * names. That context is propagated to evaluators for WHERE, ORDER BY, window
+   * functions, and projection expressions.
    * @throws SQLException
    *           if reading fails
    */

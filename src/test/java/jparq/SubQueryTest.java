@@ -14,7 +14,11 @@ import java.nio.file.Paths;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
@@ -61,7 +65,6 @@ public class SubQueryTest {
 
         assertEquals(32, rows, "Expected 32 rows");
       } catch (SQLException e) {
-        System.err.println(String.join("\n", seen));
         fail(e);
       }
     });
@@ -154,6 +157,48 @@ public class SubQueryTest {
             assertEquals(expected, actual,
                 "Correlated EXISTS should include cars that have a peer with the same cylinder count "
                     + "and higher horsepower");
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
+  }
+
+  @Test
+  void correlatedScalarSubqueryUsesProjectionAlias() {
+    Map<Integer, Long> cylinderCounts = new LinkedHashMap<>();
+
+    jparqSql.query("SELECT cyl, COUNT(*) AS cnt FROM mtcars GROUP BY cyl", rs -> {
+      try {
+        while (rs.next()) {
+          cylinderCounts.put(rs.getInt("cyl"), rs.getLong("cnt"));
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    assertFalse(cylinderCounts.isEmpty(), "Baseline cylinder counts should be available for correlation validation");
+
+    Set<Integer> seenGroups = new HashSet<>();
+
+    jparqSql.query("SELECT cyl AS grp, "
+        + "(SELECT COUNT(*) FROM mtcars m2 WHERE m2.cyl = grp) AS correlated_cnt "
+        + "FROM mtcars mc ORDER BY grp, model", rs -> {
+          try {
+            int rows = 0;
+            while (rs.next()) {
+              rows++;
+              int group = rs.getInt("grp");
+              long correlatedCount = rs.getLong("correlated_cnt");
+              Long expected = cylinderCounts.get(group);
+              assertNotNull(expected, "Unexpected cylinder value returned: " + group);
+              assertEquals(expected.longValue(), correlatedCount,
+                  "Correlation context should expose projection aliases to subqueries");
+              seenGroups.add(group);
+            }
+            assertFalse(seenGroups.isEmpty(), "Expected correlated counts for at least one group");
+            assertEquals(cylinderCounts.size(), seenGroups.size(),
+                "Expected correlated counts for each distinct cylinder");
           } catch (SQLException e) {
             fail(e);
           }

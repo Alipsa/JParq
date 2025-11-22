@@ -1922,7 +1922,7 @@ public final class AggregateFunctions {
           throw new IllegalStateException("IN subqueries require a subquery executor");
         }
         CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
-            correlationQualifiers(), (qualifier, column) -> correlatedValue(qualifier, column));
+            correlationQualifiers(), correlationColumns(), (qualifier, column) -> correlatedValue(qualifier, column));
         SubqueryExecutor.SubqueryResult result = rewritten.correlated()
             ? subqueryExecutor.executeRaw(rewritten.sql())
             : subqueryExecutor.execute(subSelect);
@@ -1947,7 +1947,7 @@ public final class AggregateFunctions {
         throw new IllegalArgumentException("EXISTS requires a subquery");
       }
       CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
-          correlationQualifiers(), (qualifier, column) -> correlatedValue(qualifier, column));
+          correlationQualifiers(), correlationColumns(), (qualifier, column) -> correlatedValue(qualifier, column));
       SubqueryExecutor.SubqueryResult result = rewritten.correlated()
           ? subqueryExecutor.executeRaw(rewritten.sql())
           : subqueryExecutor.execute(subSelect);
@@ -2073,7 +2073,7 @@ public final class AggregateFunctions {
         throw new IllegalStateException("Scalar subqueries require a subquery executor");
       }
       CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
-          correlationQualifiers(), (qualifier, column) -> correlatedValue(qualifier, column));
+          correlationQualifiers(), correlationColumns(), (qualifier, column) -> correlatedValue(qualifier, column));
       SubqueryExecutor.SubqueryResult result = rewritten.correlated()
           ? subqueryExecutor.executeRaw(rewritten.sql())
           : subqueryExecutor.execute(subSelect);
@@ -2159,6 +2159,19 @@ public final class AggregateFunctions {
       Set<String> qualifiers = new LinkedHashSet<>(correlatedQualifiers);
       qualifiers.addAll(correlationContext.keySet());
       return List.copyOf(qualifiers);
+    }
+
+    private Set<String> correlationColumns() {
+      if (correlationContext.isEmpty()) {
+        return Set.of();
+      }
+      Set<String> columns = new LinkedHashSet<>();
+      for (Map<String, String> mapping : correlationContext.values()) {
+        if (mapping != null) {
+          columns.addAll(mapping.keySet());
+        }
+      }
+      return Set.copyOf(columns);
     }
 
     private Object aliasValue(String name) {

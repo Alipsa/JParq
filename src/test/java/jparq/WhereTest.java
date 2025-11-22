@@ -160,7 +160,6 @@ public class WhereTest {
         }
         assertEquals(21, rows, "Expected 21 rows, got " + rows + " models: " + String.join(", ", models));
       } catch (SQLException e) {
-        System.err.println(String.join("\n", models));
         fail(e);
       }
     });
@@ -182,7 +181,6 @@ public class WhereTest {
         }
         assertEquals(21, rows, "Expected 21 rows, got " + rows + " models: " + String.join(", ", models));
       } catch (SQLException e) {
-        System.err.println(String.join("\n", models));
         fail(e);
       }
     });
@@ -200,7 +198,6 @@ public class WhereTest {
         }
         assertEquals(21, rows, "Expected 21 rows, got " + rows + " models: " + String.join(", ", models));
       } catch (SQLException e) {
-        System.err.println(String.join("\n", models));
         fail(e);
       }
     });
@@ -222,7 +219,6 @@ public class WhereTest {
         }
         assertEquals(32, rows, "Expected 32 rows, got " + rows + " models: " + String.join(", ", models));
       } catch (SQLException e) {
-        System.err.println(String.join("\n", models));
         fail(e);
       }
     });
@@ -245,7 +241,6 @@ public class WhereTest {
         }
         assertEquals(7, rows, "Expected 7 rows, got " + rows + " models: " + String.join(", ", models));
       } catch (SQLException e) {
-        System.err.println(String.join("\n", models));
         fail(e);
       }
     });
@@ -270,7 +265,6 @@ public class WhereTest {
         }
         assertEquals(18, rows, "Expected 18 rows, got " + rows + " models: " + String.join(", ", models));
       } catch (SQLException e) {
-        System.err.println(String.join("\n", models));
         fail(e);
       }
     });
@@ -296,7 +290,6 @@ public class WhereTest {
         // mtcars: (4-cyl & mpg>30) = 4 rows, 6-cyl = 7 rows -> 11 total
         assertEquals(11, rows, "Expected 11 rows, got " + rows + " models: " + String.join(", ", models));
       } catch (SQLException e) {
-        System.err.println(String.join("\n", models));
         fail(e);
       }
     });
@@ -323,7 +316,6 @@ public class WhereTest {
         assertEquals(11, rows,
             "Expected 11 rows (AND precedence), got " + rows + " models: " + String.join(", ", models));
       } catch (SQLException e) {
-        System.err.println(String.join("\n", models));
         fail(e);
       }
     });

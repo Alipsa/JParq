@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine;
 
 import java.util.Collection;
 import java.util.LinkedHashSet;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -104,6 +105,29 @@ public final class CorrelatedSubqueryRewriter {
    */
   public static Result rewrite(Select select, Collection<String> outerQualifiers,
       BiFunction<String, String, Object> valueResolver) {
+    return rewrite(select, outerQualifiers, Set.of(), valueResolver);
+  }
+
+  /**
+   * Rewrite the supplied {@link Select} so that correlated column references
+   * are replaced with literal values provided by {@code valueResolver},
+   * including unqualified columns present in the supplied correlation set.
+   *
+   * @param select
+   *          the sub query to inspect
+   * @param outerQualifiers
+   *          names (table or alias) that belong to the outer query scope
+   * @param correlatedColumns
+   *          unqualified column names that should be treated as correlated when
+   *          encountered in the sub query
+   * @param valueResolver
+   *          function mapping a normalized qualifier and column name to the value
+   *          from the current outer row
+   * @return a {@link Result} describing the rewritten SQL and correlated column
+   *         usage
+   */
+  public static Result rewrite(Select select, Collection<String> outerQualifiers, Set<String> correlatedColumns,
+      BiFunction<String, String, Object> valueResolver) {
     Objects.requireNonNull(select, "select");
     Objects.requireNonNull(valueResolver, "valueResolver");
     if (outerQualifiers == null || outerQualifiers.isEmpty()) {
@@ -113,13 +137,17 @@ public final class CorrelatedSubqueryRewriter {
     Set<String> normalized = outerQualifiers.stream().map(JParqUtil::normalizeQualifier).filter(Objects::nonNull)
         .collect(Collectors.toUnmodifiableSet());
 
+    Set<String> unqualified = correlatedColumns == null ? Set.of()
+        : correlatedColumns.stream().filter(Objects::nonNull).map(c -> c.toLowerCase(Locale.ROOT))
+            .collect(Collectors.toUnmodifiableSet());
+
     if (normalized.isEmpty()) {
       return new Result(select.toString(), false, Set.of(), Set.of());
     }
 
     StringBuilder buffer = new StringBuilder();
     AtomicBoolean correlated = new AtomicBoolean(false);
-    Set<String> correlatedColumns = new LinkedHashSet<>();
+    Set<String> correlatedColumnRefs = new LinkedHashSet<>();
     Set<QualifiedColumn> correlatedRefs = new LinkedHashSet<>();
 
     ExpressionDeParser expressionDeParser = new ExpressionDeParser() {
@@ -136,11 +164,24 @@ public final class CorrelatedSubqueryRewriter {
               final Object resolvedValue = valueResolver.apply(normalizedCandidate, column.getColumnName());
               final String literal = toSqlLiteral(resolvedValue);
               correlated.set(true);
-              correlatedColumns.add(column.getColumnName());
+              correlatedColumnRefs.add(column.getColumnName());
               correlatedRefs.add(new QualifiedColumn(normalizedCandidate, column.getColumnName()));
               getBuilder().append(literal);
               return getBuilder();
             }
+          }
+        }
+        String columnName = column.getColumnName();
+        if (!unqualified.isEmpty() && columnName != null) {
+          String normalizedColumn = columnName.toLowerCase(Locale.ROOT);
+          if (unqualified.contains(normalizedColumn)) {
+            final Object resolvedValue = valueResolver.apply(null, column.getColumnName());
+            final String literal = toSqlLiteral(resolvedValue);
+            correlated.set(true);
+            correlatedColumnRefs.add(column.getColumnName());
+            correlatedRefs.add(new QualifiedColumn(null, column.getColumnName()));
+            getBuilder().append(literal);
+            return getBuilder();
           }
         }
         return super.visit(column, context);
@@ -158,7 +199,7 @@ public final class CorrelatedSubqueryRewriter {
     if (select instanceof ParenthesedSelect) {
       sqlText = "(" + sqlText + ")";
     }
-    return new Result(sqlText, correlated.get(), Set.copyOf(correlatedColumns), Set.copyOf(correlatedRefs));
+    return new Result(sqlText, correlated.get(), Set.copyOf(correlatedColumnRefs), Set.copyOf(correlatedRefs));
   }
 
   private static String toSqlLiteral(Object value) {
