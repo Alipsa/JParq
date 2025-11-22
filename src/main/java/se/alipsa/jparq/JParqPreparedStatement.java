@@ -305,8 +305,8 @@ class JParqPreparedStatement implements PreparedStatement {
         reader = joinReader;
         resultTableName = buildJoinTableName();
       } else if (baseCteResult != null) {
-        reader = new InMemoryRecordReader(baseCteResult.rows());
         resultTableName = parsedSelect.tableAlias() != null ? parsedSelect.tableAlias() : parsedSelect.table();
+        reader = new InMemoryRecordReader(baseCteResult.rows(), baseCteResult.schema(), resultTableName);
       } else {
         ParquetReader.Builder<GenericRecord> builder = ParquetReader
             .<GenericRecord>builder(new AvroReadSupport<>(), path).withConf(conf);

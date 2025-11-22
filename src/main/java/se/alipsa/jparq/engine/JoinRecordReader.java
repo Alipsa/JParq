@@ -27,7 +27,7 @@ import org.apache.avro.generic.GenericRecord;
  * matching row.
  * </p>
  */
-public final class JoinRecordReader implements RecordReader {
+public final class JoinRecordReader implements RecordReader, ColumnMappingProvider {
 
   private final Schema schema;
   private final List<String> columnNames;
@@ -625,6 +625,7 @@ public final class JoinRecordReader implements RecordReader {
    *
    * @return immutable mapping used for expression resolution
    */
+  @Override
   public Map<String, Map<String, String>> qualifierColumnMapping() {
     Map<String, Map<String, String>> copy = new LinkedHashMap<>();
     for (Map.Entry<String, Map<String, String>> entry : qualifierColumnMapping.entrySet()) {
@@ -638,6 +639,7 @@ public final class JoinRecordReader implements RecordReader {
    *
    * @return immutable mapping for unqualified column resolution
    */
+  @Override
   public Map<String, String> unqualifiedColumnMapping() {
     return Map.copyOf(unqualifiedColumnMapping);
   }
