@@ -1346,11 +1346,42 @@ public final class ValueExpressionEvaluator {
       if (mapping != null) {
         String canonical = mapping.get(normalizedColumn);
         if (canonical != null) {
+          assertCorrelatedFieldPresent(normalizedQualifier, normalizedColumn, canonical);
           return AvroCoercions.resolveColumnValue(canonical, record, fieldSchemas, caseInsensitiveIndex);
         }
       }
     }
     return resolveColumnValue(qualifier, columnName, record);
+  }
+
+  /**
+   * Guard correlated lookups to ensure the correlation context resolves to a
+   * field that exists on the current record. When the correlation context
+   * supplies a canonical column that is absent from the row schema, correlated
+   * predicates silently evaluate against {@code null} values, masking alias
+   * mismatches for derived tables.
+   *
+   * @param normalizedQualifier
+   *          qualifier participating in the correlation lookup
+   * @param normalizedColumn
+   *          correlated column name normalized for lookup
+   * @param canonical
+   *          canonical column name derived from the correlation context
+   */
+  private void assertCorrelatedFieldPresent(String normalizedQualifier, String normalizedColumn, String canonical) {
+    if (canonical == null || canonical.isBlank()) {
+      return;
+    }
+    if (fieldSchemas.containsKey(canonical)) {
+      return;
+    }
+    String fallback = caseInsensitiveIndex.get(canonical.toLowerCase(Locale.ROOT));
+    if (fallback != null && fieldSchemas.containsKey(fallback)) {
+      return;
+    }
+    throw new IllegalStateException(
+        "Correlation context mapped " + normalizedQualifier + "." + normalizedColumn + " to missing field '"
+            + canonical + "' (available fields: " + fieldSchemas.keySet() + ")");
   }
 
   private List<String> correlationQualifiers() {

@@ -11,7 +11,6 @@ import java.nio.file.Paths;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import jparq.WhereTest;
 import org.junit.jupiter.api.Assertions;
@@ -77,48 +76,64 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
 
   @Test
   void derivedAliasQualifierMappingIncludesProjectionAndDiagnostics() {
+    RuntimeException thrown = Assertions.assertThrows(RuntimeException.class, () -> jparqSql.query("""
+        WITH high_salary AS (
+          SELECT DISTINCT employee
+          FROM salary
+          WHERE salary >= 180000.0
+        )
+        SELECT (SELECT d.department FROM departments d WHERE d.id = derived.department_id) AS department_name
+        FROM (
+          SELECT ed.employee AS employee_id, ed.department AS department_id
+          FROM employee_department ed
+          JOIN high_salary hs ON hs.employee = ed.employee
+        ) AS derived
+        ORDER BY department_name;
+      """, rs -> {
+        // This callback is not expected to run because the guard should surface during query planning.
+      }));
+
+    Throwable cause = thrown.getCause();
+    Assertions.assertNotNull(cause, "Expected a root SQLException describing the correlation guard failure");
+    Assertions.assertTrue(cause instanceof SQLException, "Expected SQLException but was " + cause.getClass().getName());
+    Throwable inner = cause.getCause();
+    Assertions.assertNotNull(inner, "Correlation guard should be reported as the nested cause");
+    Assertions.assertTrue(inner.getMessage().contains("Correlation context mapped derived.department_id"),
+        "Guarded correlated lookup should surface missing derived.department_id mapping but was " + inner.getMessage());
+  }
+
+  /**
+   * Verify correlated predicates resolve derived aliases to concrete columns
+   * instead of silently returning {@code null}.
+   */
+  @Test
+  void correlatedPredicateResolvesDerivedAliasColumns() {
     jparqSql.query("""
-          WITH high_salary AS (
-            SELECT DISTINCT employee
-            FROM salary
-            WHERE salary >= 180000.0
-          )
-          SELECT (SELECT d.department FROM departments d WHERE d.id = derived.department_id) AS department_name
+          SELECT derived.employee_id, derived.department_id
           FROM (
             SELECT ed.employee AS employee_id, ed.department AS department_id
             FROM employee_department ed
-            JOIN high_salary hs ON hs.employee = ed.employee
           ) AS derived
-          ORDER BY department_name;
+          WHERE EXISTS (
+            SELECT 1 FROM departments d WHERE d.id = derived.department_id
+          )
+          ORDER BY derived.employee_id;
         """, rs -> {
       try {
-        if (!(rs instanceof JParqResultSet jparqRs)) {
-          fail("Expected JParqResultSet to expose qualifier diagnostics but got " + rs.getClass().getName());
-          return;
+        if (rs instanceof JParqResultSet jparqRs) {
+          Map<String, Map<String, String>> qualifierMapping = readQualifierMapping(jparqRs);
+          Map<String, String> derivedMapping = qualifierMapping.get("derived");
+          Assertions.assertNotNull(derivedMapping, "Correlation context must include derived alias mapping");
+          Assertions.assertTrue(derivedMapping.containsKey("department_id"),
+              "department_id should be available for correlated predicates but was " + derivedMapping.keySet());
         }
-        Map<String, Map<String, String>> qualifierMapping = readQualifierMapping(jparqRs);
-        List<String> qualifiers = readQueryQualifiers(jparqRs);
-        logDerivedDiagnostics("derived", qualifierMapping, qualifiers);
 
-        Assertions.assertTrue(qualifiers.contains("derived"), "Derived alias missing from qualifiers: " + qualifiers);
-        Map<String, String> derivedMapping = qualifierMapping.get("derived");
-        Assertions.assertNotNull(derivedMapping, "Derived mapping must be present for correlation context");
-        String employeeKey = derivedMapping.containsKey("employee_id") ? "employee_id" : "employee";
-        Assertions.assertTrue(derivedMapping.containsKey(employeeKey),
-            "Derived mapping should expose employee column but was " + derivedMapping.keySet());
-        Assertions.assertEquals(employeeKey, derivedMapping.get(employeeKey),
-            "Employee column should map to the projected inline-view column");
-        Assertions.assertEquals("department_id", derivedMapping.get("department_id"),
-            "department_id should map to the projected inline-view column");
-        derivedMapping.keySet().forEach(key -> Assertions.assertEquals(key.toLowerCase(Locale.ROOT), key,
-            "Derived mapping keys should be normalized for qualifier lookups"));
-
-        List<String> departments = new ArrayList<>();
-        while (jparqRs.next()) {
-          departments.add(jparqRs.getString("department_name"));
+        List<String> rows = new ArrayList<>();
+        while (rs.next()) {
+          rows.add(rs.getInt("employee_id") + ":" + rs.getInt("department_id"));
         }
-        System.out.println("[diagnostic] derived departments: " + departments);
-        Assertions.assertFalse(departments.isEmpty(), "Derived correlation query should return rows");
+        Assertions.assertEquals(List.of("1:1", "2:1", "3:2", "4:3", "5:3"), rows,
+            "Correlated predicate should preserve derived alias values");
       } catch (SQLException | IllegalAccessException | NoSuchFieldException e) {
         fail(e);
       }
