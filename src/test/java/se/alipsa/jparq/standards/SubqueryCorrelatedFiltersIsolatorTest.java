@@ -77,21 +77,22 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
   @Test
   void derivedAliasQualifierMappingIncludesProjectionAndDiagnostics() {
     RuntimeException thrown = Assertions.assertThrows(RuntimeException.class, () -> jparqSql.query("""
-        WITH high_salary AS (
-          SELECT DISTINCT employee
-          FROM salary
-          WHERE salary >= 180000.0
-        )
-        SELECT (SELECT d.department FROM departments d WHERE d.id = derived.department_id) AS department_name
-        FROM (
-          SELECT ed.employee AS employee_id, ed.department AS department_id
-          FROM employee_department ed
-          JOIN high_salary hs ON hs.employee = ed.employee
-        ) AS derived
-        ORDER BY department_name;
-      """, rs -> {
-        // This callback is not expected to run because the guard should surface during query planning.
-      }));
+          WITH high_salary AS (
+            SELECT DISTINCT employee
+            FROM salary
+            WHERE salary >= 180000.0
+          )
+          SELECT (SELECT d.department FROM departments d WHERE d.id = derived.department_id) AS department_name
+          FROM (
+            SELECT ed.employee AS employee_id, ed.department AS department_id
+            FROM employee_department ed
+            JOIN high_salary hs ON hs.employee = ed.employee
+          ) AS derived
+          ORDER BY department_name;
+        """, rs -> {
+      // This callback is not expected to run because the guard should surface during
+      // query planning.
+    }));
 
     Throwable cause = thrown.getCause();
     Assertions.assertNotNull(cause, "Expected a root SQLException describing the correlation guard failure");

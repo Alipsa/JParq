@@ -1379,9 +1379,8 @@ public final class ValueExpressionEvaluator {
     if (fallback != null && fieldSchemas.containsKey(fallback)) {
       return;
     }
-    throw new IllegalStateException(
-        "Correlation context mapped " + normalizedQualifier + "." + normalizedColumn + " to missing field '"
-            + canonical + "' (available fields: " + fieldSchemas.keySet() + ")");
+    throw new IllegalStateException("Correlation context mapped " + normalizedQualifier + "." + normalizedColumn
+        + " to missing field '" + canonical + "' (available fields: " + fieldSchemas.keySet() + ")");
   }
 
   private List<String> correlationQualifiers() {
