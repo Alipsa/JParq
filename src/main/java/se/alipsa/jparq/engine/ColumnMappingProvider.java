@@ -3,8 +3,9 @@ package se.alipsa.jparq.engine;
 import java.util.Map;
 
 /**
- * Exposes qualifier-aware and unqualified column mappings for {@link RecordReader}
- * implementations that can assist with correlation and name resolution.
+ * Exposes qualifier-aware and unqualified column mappings for
+ * {@link RecordReader} implementations that can assist with correlation and
+ * name resolution.
  */
 public interface ColumnMappingProvider {
 

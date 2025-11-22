@@ -62,19 +62,19 @@ class DerivedAndCteCorrelationTest {
         FROM (SELECT cyl AS grp, model FROM mtcars) d
         ORDER BY d.grp, d.model
         """, rs -> {
-          try {
-            while (rs.next()) {
-              rows[0]++;
-              int group = rs.getInt("grp");
-              long correlated = rs.getLong("correlated_cnt");
-              assertEquals(expectedCylinderCounts.get(group), correlated,
-                  "Derived projection alias should be visible to correlated subqueries");
-              seenCylinders.add(group);
-            }
-          } catch (SQLException e) {
-            throw new RuntimeException("Failed to evaluate derived correlation", e);
-          }
-        });
+      try {
+        while (rs.next()) {
+          rows[0]++;
+          int group = rs.getInt("grp");
+          long correlated = rs.getLong("correlated_cnt");
+          assertEquals(expectedCylinderCounts.get(group), correlated,
+              "Derived projection alias should be visible to correlated subqueries");
+          seenCylinders.add(group);
+        }
+      } catch (SQLException e) {
+        throw new RuntimeException("Failed to evaluate derived correlation", e);
+      }
+    });
 
     assertEquals(32, rows[0], "Derived table should emit the base row count when correlation is resolved");
     assertFalse(seenCylinders.isEmpty(), "Expected correlated counts for at least one cylinder group");
@@ -96,19 +96,19 @@ class DerivedAndCteCorrelationTest {
         FROM base
         ORDER BY base.grp, base.model
         """, rs -> {
-          try {
-            while (rs.next()) {
-              rows[0]++;
-              int group = rs.getInt("grp");
-              long correlated = rs.getLong("correlated_cnt");
-              assertEquals(expectedCylinderCounts.get(group), correlated,
-                  "CTE projection alias should be visible to correlated subqueries");
-              seenCylinders.add(group);
-            }
-          } catch (SQLException e) {
-            throw new RuntimeException("Failed to evaluate CTE correlation", e);
-          }
-        });
+      try {
+        while (rs.next()) {
+          rows[0]++;
+          int group = rs.getInt("grp");
+          long correlated = rs.getLong("correlated_cnt");
+          assertEquals(expectedCylinderCounts.get(group), correlated,
+              "CTE projection alias should be visible to correlated subqueries");
+          seenCylinders.add(group);
+        }
+      } catch (SQLException e) {
+        throw new RuntimeException("Failed to evaluate CTE correlation", e);
+      }
+    });
 
     assertEquals(32, rows[0], "CTE should emit the base row count when correlation is resolved");
     assertFalse(seenCylinders.isEmpty(), "Expected correlated counts for at least one cylinder group");
