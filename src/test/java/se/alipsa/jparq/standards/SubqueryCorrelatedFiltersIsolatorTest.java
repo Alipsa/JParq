@@ -110,9 +110,8 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
             "Employee column should map to the projected inline-view column");
         Assertions.assertEquals("department_id", derivedMapping.get("department_id"),
             "department_id should map to the projected inline-view column");
-        derivedMapping.keySet()
-            .forEach(key -> Assertions.assertEquals(key.toLowerCase(Locale.ROOT), key,
-                "Derived mapping keys should be normalized for qualifier lookups"));
+        derivedMapping.keySet().forEach(key -> Assertions.assertEquals(key.toLowerCase(Locale.ROOT), key,
+            "Derived mapping keys should be normalized for qualifier lookups"));
 
         List<String> departments = new ArrayList<>();
         while (jparqRs.next()) {
@@ -127,8 +126,8 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
   }
 
   /**
-   * Read the qualifier column mapping from the supplied result set via
-   * reflection to allow assertions without altering production visibility.
+   * Read the qualifier column mapping from the supplied result set via reflection
+   * to allow assertions without altering production visibility.
    *
    * @param rs
    *          the {@link JParqResultSet} under inspection
@@ -181,8 +180,8 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
   private void logDerivedDiagnostics(String derivedAlias, Map<String, Map<String, String>> qualifierMapping,
       List<String> qualifiers) {
     System.out.println("[diagnostic] query qualifiers: " + qualifiers);
-    System.out.println(
-        "[diagnostic] qualifier mapping for '" + derivedAlias + "': " + qualifierMapping.get(derivedAlias));
+    System.out
+        .println("[diagnostic] qualifier mapping for '" + derivedAlias + "': " + qualifierMapping.get(derivedAlias));
   }
 
   /**
