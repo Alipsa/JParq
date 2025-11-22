@@ -32,6 +32,7 @@ import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.ColumnsUsed;
+import se.alipsa.jparq.engine.ColumnMappingProvider;
 import se.alipsa.jparq.engine.CorrelationContextBuilder;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.ParquetSchemas;
@@ -150,9 +151,9 @@ public class JParqResultSet extends ResultSetAdapter {
     this.queryQualifiers = List.copyOf(qualifiers);
     Map<String, Map<String, String>> qualifierMapping = Map.of();
     Map<String, String> unqualifiedMapping = Map.of();
-    if (reader instanceof JoinRecordReader joinReader) {
-      qualifierMapping = joinReader.qualifierColumnMapping();
-      unqualifiedMapping = joinReader.unqualifiedColumnMapping();
+    if (reader instanceof ColumnMappingProvider mappingProvider) {
+      qualifierMapping = mappingProvider.qualifierColumnMapping();
+      unqualifiedMapping = mappingProvider.unqualifiedColumnMapping();
     }
     Map<String, String> normalizedUnqualifiedMapping = ColumnMappingUtil
         .normaliseUnqualifiedMapping(unqualifiedMapping);
