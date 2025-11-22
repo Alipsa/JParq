@@ -109,9 +109,9 @@ public final class CorrelatedSubqueryRewriter {
   }
 
   /**
-   * Rewrite the supplied {@link Select} so that correlated column references
-   * are replaced with literal values provided by {@code valueResolver},
-   * including unqualified columns present in the supplied correlation set.
+   * Rewrite the supplied {@link Select} so that correlated column references are
+   * replaced with literal values provided by {@code valueResolver}, including
+   * unqualified columns present in the supplied correlation set.
    *
    * @param select
    *          the sub query to inspect
@@ -137,7 +137,8 @@ public final class CorrelatedSubqueryRewriter {
     Set<String> normalized = outerQualifiers.stream().map(JParqUtil::normalizeQualifier).filter(Objects::nonNull)
         .collect(Collectors.toUnmodifiableSet());
 
-    Set<String> unqualified = correlatedColumns == null ? Set.of()
+    Set<String> unqualified = correlatedColumns == null
+        ? Set.of()
         : correlatedColumns.stream().filter(Objects::nonNull).map(c -> c.toLowerCase(Locale.ROOT))
             .collect(Collectors.toUnmodifiableSet());
 

@@ -14,8 +14,8 @@ import java.nio.file.Paths;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -181,8 +181,7 @@ public class SubQueryTest {
 
     Set<Integer> seenGroups = new HashSet<>();
 
-    jparqSql.query("SELECT cyl AS grp, "
-        + "(SELECT COUNT(*) FROM mtcars m2 WHERE m2.cyl = grp) AS correlated_cnt "
+    jparqSql.query("SELECT cyl AS grp, " + "(SELECT COUNT(*) FROM mtcars m2 WHERE m2.cyl = grp) AS correlated_cnt "
         + "FROM mtcars mc ORDER BY grp, model", rs -> {
           try {
             int rows = 0;
