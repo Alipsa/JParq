@@ -53,7 +53,6 @@ public class ComputedExpressionsTest {
 
         assertEquals(32, rows, "Expected 32 rows");
       } catch (SQLException e) {
-        System.err.println(String.join("\n", seen));
         fail(e);
       }
     });
@@ -80,7 +79,6 @@ public class ComputedExpressionsTest {
 
         assertEquals(32, rows, "Expected 32 rows");
       } catch (SQLException e) {
-        System.err.println(String.join("\n", seen));
         fail(e);
       }
     });
@@ -118,7 +116,6 @@ public class ComputedExpressionsTest {
         assertTrue(validated.contains("Merc 240D"), "Expected Merc 240D in result");
         assertTrue(validated.contains("Cadillac Fleetwood"), "Expected Cadillac Fleetwood in result");
       } catch (SQLException e) {
-        System.err.println(String.join("\n", seen));
         fail(e);
       }
     });
@@ -156,7 +153,6 @@ public class ComputedExpressionsTest {
         assertTrue(validated.contains("Mazda RX4"), "Expected Mazda RX4 in result");
         assertTrue(validated.contains("Cadillac Fleetwood"), "Expected Cadillac Fleetwood in result");
       } catch (SQLException e) {
-        System.err.println(String.join("\n", seen));
         fail(e);
       }
     });

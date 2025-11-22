@@ -11,7 +11,10 @@ import se.alipsa.jparq.helper.JParqUtil;
  * Utility for constructing qualifier-aware correlation contexts from projected
  * columns. The resulting mapping associates each visible qualifier (table name
  * or alias) with the canonical column names available in the current row,
- * allowing correlated sub queries to resolve aliases accurately.
+ * allowing correlated sub queries to resolve aliases accurately. The mapping
+ * explicitly preserves projection aliases so correlated scalar subqueries can
+ * reference derived columns even when the physical schema uses different field
+ * names.
  */
 public final class CorrelationContextBuilder {
 
@@ -21,7 +24,9 @@ public final class CorrelationContextBuilder {
   /**
    * Build a correlation mapping for the supplied qualifiers. Existing mappings
    * are preserved, and any projected columns missing from the mapping are added
-   * using their canonical counterparts.
+   * using their canonical counterparts. This ensures the correlation context
+   * remains aware of the columns exposed in the projection, not just the raw
+   * schema fields supplied by the reader.
    *
    * @param qualifiers
    *          qualifiers (tables or aliases) visible to the current query

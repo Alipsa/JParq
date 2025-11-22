@@ -137,7 +137,10 @@ public final class ValueExpressionEvaluator {
    *          (may be {@code null})
    * @param correlationContext
    *          qualifier-aware correlation context used to resolve correlated
-   *          columns in subqueries
+   *          columns in subqueries. This context is built from projection labels
+   *          and canonical column names so that scalar and EXISTS subqueries can
+   *          reference outer aliases even when they differ from the underlying
+   *          field names.
    * @param windowState
    *          precomputed analytic function results available to projection
    *          expressions
@@ -364,7 +367,7 @@ public final class ValueExpressionEvaluator {
       throw new IllegalStateException("ARRAY subqueries require a subquery executor");
     }
     CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, correlationQualifiers(),
-        (qualifier, column) -> resolveCorrelatedValue(qualifier, column, record));
+        correlationColumns(), (qualifier, column) -> resolveCorrelatedValue(qualifier, column, record));
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
         : subqueryExecutor.execute(subSelect);
@@ -510,7 +513,7 @@ public final class ValueExpressionEvaluator {
       throw new IllegalStateException("Scalar subqueries require a subquery executor");
     }
     CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, correlationQualifiers(),
-        (qualifier, column) -> resolveCorrelatedValue(qualifier, column, record));
+        correlationColumns(), (qualifier, column) -> resolveCorrelatedValue(qualifier, column, record));
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
         : subqueryExecutor.execute(subSelect);
@@ -1355,6 +1358,24 @@ public final class ValueExpressionEvaluator {
     Set<String> qualifiers = new LinkedHashSet<>(outerQualifiers);
     qualifiers.addAll(correlationContext.keySet());
     return List.copyOf(qualifiers);
+  }
+
+  private Set<String> correlationColumns() {
+    if (correlationContext.isEmpty()) {
+      return Set.of();
+    }
+    Set<String> columns = new LinkedHashSet<>();
+    for (Map<String, String> mapping : correlationContext.values()) {
+      if (mapping == null) {
+        continue;
+      }
+      for (String key : mapping.keySet()) {
+        if (!caseInsensitiveIndex.containsKey(key)) {
+          columns.add(key);
+        }
+      }
+    }
+    return Set.copyOf(columns);
   }
 
   private String canonicalFieldName(String qualifier, String columnName) {

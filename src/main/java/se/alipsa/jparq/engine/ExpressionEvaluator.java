@@ -8,9 +8,11 @@ import java.sql.Timestamp;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import net.sf.jsqlparser.JSQLParserException;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.AnyType;
@@ -395,7 +397,7 @@ public final class ExpressionEvaluator {
       throw new IllegalArgumentException("EXISTS requires a subquery");
     }
     CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
-        (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
+        correlationColumns(), (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
         : subqueryExecutor.execute(subSelect);
@@ -581,7 +583,7 @@ public final class ExpressionEvaluator {
     // as correlated column references must be resolved in the context of the
     // current row.
     CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
-        (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
+        correlationColumns(), (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
 
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
@@ -629,6 +631,24 @@ public final class ExpressionEvaluator {
   private String canonicalFieldName(String qualifier, String columnName) {
     return ColumnMappingUtil.canonicalFieldName(qualifier, columnName, qualifierColumnMapping, unqualifiedColumnMapping,
         caseInsensitiveIndex);
+  }
+
+  private Set<String> correlationColumns() {
+    if (qualifierColumnMapping.isEmpty()) {
+      return Set.of();
+    }
+    Set<String> columns = new LinkedHashSet<>();
+    for (Map.Entry<String, Map<String, String>> entry : qualifierColumnMapping.entrySet()) {
+      Map<String, String> mapping = entry.getValue();
+      if (mapping != null) {
+        for (String key : mapping.keySet()) {
+          if (!caseInsensitiveIndex.containsKey(key)) {
+            columns.add(key);
+          }
+        }
+      }
+    }
+    return Set.copyOf(columns);
   }
 
   private Operand operand(Expression e, GenericRecord rec) {

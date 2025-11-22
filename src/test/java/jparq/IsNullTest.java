@@ -86,7 +86,6 @@ public class IsNullTest {
         }
         assertEquals(List.of("Bob"), names, "Only Bob should have null age");
       } catch (SQLException e) {
-        System.err.println(String.join("\n", names));
         fail(e);
       }
     });
@@ -103,7 +102,6 @@ public class IsNullTest {
         }
         assertEquals(List.of("Alice", "Bob"), names, "Both Alice and Bob have non-null names");
       } catch (SQLException e) {
-        System.err.println(String.join("\n", names));
         fail(e);
       }
     });

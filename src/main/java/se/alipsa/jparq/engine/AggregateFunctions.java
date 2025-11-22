@@ -1922,7 +1922,7 @@ public final class AggregateFunctions {
           throw new IllegalStateException("IN subqueries require a subquery executor");
         }
         CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
-            correlationQualifiers(), (qualifier, column) -> correlatedValue(qualifier, column));
+            correlationQualifiers(), correlationColumns(), (qualifier, column) -> correlatedValue(qualifier, column));
         SubqueryExecutor.SubqueryResult result = rewritten.correlated()
             ? subqueryExecutor.executeRaw(rewritten.sql())
             : subqueryExecutor.execute(subSelect);
@@ -1947,7 +1947,7 @@ public final class AggregateFunctions {
         throw new IllegalArgumentException("EXISTS requires a subquery");
       }
       CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
-          correlationQualifiers(), (qualifier, column) -> correlatedValue(qualifier, column));
+          correlationQualifiers(), correlationColumns(), (qualifier, column) -> correlatedValue(qualifier, column));
       SubqueryExecutor.SubqueryResult result = rewritten.correlated()
           ? subqueryExecutor.executeRaw(rewritten.sql())
           : subqueryExecutor.execute(subSelect);
@@ -2073,7 +2073,7 @@ public final class AggregateFunctions {
         throw new IllegalStateException("Scalar subqueries require a subquery executor");
       }
       CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
-          correlationQualifiers(), (qualifier, column) -> correlatedValue(qualifier, column));
+          correlationQualifiers(), correlationColumns(), (qualifier, column) -> correlatedValue(qualifier, column));
       SubqueryExecutor.SubqueryResult result = rewritten.correlated()
           ? subqueryExecutor.executeRaw(rewritten.sql())
           : subqueryExecutor.execute(subSelect);
@@ -2159,6 +2159,32 @@ public final class AggregateFunctions {
       Set<String> qualifiers = new LinkedHashSet<>(correlatedQualifiers);
       qualifiers.addAll(correlationContext.keySet());
       return List.copyOf(qualifiers);
+    }
+
+    // Unlike ValueExpressionEvaluator/ExpressionEvaluator, we don't filter by
+    // caseInsensitiveIndex because HAVING operates on aggregate results, not a
+    // physical schema. All projection aliases should be available to subqueries.
+    private Set<String> correlationColumns() {
+      if (correlationContext.isEmpty()) {
+        return Set.of();
+      }
+      Set<String> columns = new LinkedHashSet<>();
+      for (Map<String, String> mapping : correlationContext.values()) {
+        if (mapping == null) {
+          continue;
+        }
+        for (Map.Entry<String, String> entry : mapping.entrySet()) {
+          String column = entry.getKey();
+          String canonical = entry.getValue();
+          String normalizedColumn = column == null ? null : column.toLowerCase(Locale.ROOT);
+          String normalizedCanonical = canonical == null ? null : canonical.toLowerCase(Locale.ROOT);
+          if ((normalizedColumn != null && labelLookup.containsKey(normalizedColumn))
+              || (normalizedCanonical != null && labelLookup.containsKey(normalizedCanonical))) {
+            columns.add(column);
+          }
+        }
+      }
+      return Set.copyOf(columns);
     }
 
     private Object aliasValue(String name) {
