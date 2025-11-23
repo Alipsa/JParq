@@ -1347,11 +1347,18 @@ public final class ValueExpressionEvaluator {
         String canonical = mapping.get(normalizedColumn);
         if (canonical != null) {
           assertCorrelatedFieldPresent(normalizedQualifier, normalizedColumn, canonical);
-          return AvroCoercions.resolveColumnValue(canonical, record, fieldSchemas, caseInsensitiveIndex);
+          Object val = AvroCoercions.resolveColumnValue(canonical, record, fieldSchemas, caseInsensitiveIndex);
+          if (val != null) {
+            return val;
+          }
         }
       }
     }
-    return resolveColumnValue(qualifier, columnName, record);
+    Object direct = resolveColumnValue(qualifier, columnName, record);
+    if (direct != null) {
+      return direct;
+    }
+    return resolveColumnValue(null, columnName, record);
   }
 
   /**

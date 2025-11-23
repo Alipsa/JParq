@@ -14,6 +14,7 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -147,6 +148,9 @@ public class JParqResultSet extends ResultSetAdapter {
           qualifiers.add(ref.tableAlias());
         }
       }
+    }
+    if (qualifiers.isEmpty() && tableName != null && !tableName.isBlank()) {
+      qualifiers.add(tableName);
     }
     this.queryQualifiers = List.copyOf(qualifiers);
     Map<String, Map<String, String>> qualifierMapping = Map.of();
@@ -286,6 +290,20 @@ public class JParqResultSet extends ResultSetAdapter {
       requiredColumns.addAll(SqlParser.collectQualifiedColumns(select.having(), queryQualifiers));
       for (Expression expression : selectExpressions) {
         requiredColumns.addAll(SqlParser.collectQualifiedColumns(expression, queryQualifiers));
+      }
+      if (select.orderBy() != null) {
+        for (SqlParser.OrderKey orderKey : select.orderBy()) {
+          if (orderKey != null && orderKey.column() != null) {
+            requiredColumns.add(orderKey.column());
+          }
+        }
+      }
+      if (select.preOrderBy() != null) {
+        for (SqlParser.OrderKey orderKey : select.preOrderBy()) {
+          if (orderKey != null && orderKey.column() != null) {
+            requiredColumns.add(orderKey.column());
+          }
+        }
       }
       if (windowPlan != null && !windowPlan.isEmpty()) {
         for (RowNumberWindow window : windowPlan.rowNumberWindows()) {
@@ -445,6 +463,24 @@ public class JParqResultSet extends ResultSetAdapter {
         for (Schema.Field field : schema.getFields()) {
           requiredColumns.add(field.name());
         }
+      }
+      if (physicalColumnOrder != null && columnOrder != null && !physicalColumnOrder.isEmpty()
+          && !columnOrder.isEmpty()) {
+        Map<String, String> physicalToLabel = new LinkedHashMap<>();
+        int limit = Math.min(physicalColumnOrder.size(), columnOrder.size());
+        for (int i = 0; i < limit; i++) {
+          String physicalName = physicalColumnOrder.get(i);
+          String labelName = columnOrder.get(i);
+          if (physicalName != null && labelName != null) {
+            physicalToLabel.put(physicalName, labelName);
+          }
+        }
+        Set<String> remapped = new LinkedHashSet<>();
+        for (String column : requiredColumns) {
+          String mapped = physicalToLabel.get(column);
+          remapped.add(mapped == null ? column : mapped);
+        }
+        requiredColumns = remapped;
       }
       proj = new ArrayList<>(requiredColumns);
       if (this.columnOrder.isEmpty()) {
@@ -611,19 +647,14 @@ public class JParqResultSet extends ResultSetAdapter {
 
     // projection name (may be an alias/label)
     String projectedName = columnOrder.get(idx - 1);
+    String canonical = canonicalColumnName(idx);
+    String lookupName = canonical != null ? canonical : projectedName;
+    var field = lookupName == null ? null : current.getSchema().getField(lookupName);
 
-    // Try alias (label) directly first (covers engines that rewrap records by
-    // label)
-    String lookupName = projectedName;
-    var field = current.getSchema().getField(lookupName);
-
-    // If not found, fall back to the canonical column name used for schema lookups
-    if (field == null) {
-      String canonical = canonicalColumnName(idx);
-      if (canonical != null && !canonical.equals(lookupName)) {
-        lookupName = canonical;
-        field = current.getSchema().getField(lookupName);
-      }
+    // If the canonical name was not found, try the projected alias as a fallback
+    if (field == null && projectedName != null && !projectedName.equals(lookupName)) {
+      lookupName = projectedName;
+      field = current.getSchema().getField(lookupName);
     }
 
     if (field == null) {

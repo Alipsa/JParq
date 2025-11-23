@@ -352,7 +352,9 @@ public final class QueryProcessor implements AutoCloseable {
    */
   public QueryProcessor(RecordReader reader, List<String> projection, Expression where, int limit, Options options) {
     this.reader = Objects.requireNonNull(reader);
-    this.projection = Collections.unmodifiableList(new ArrayList<>(projection));
+    List<String> augmentedProjection = augmentProjectionWithOrderColumns(projection, options.orderBy,
+        options.preOrderBy);
+    this.projection = Collections.unmodifiableList(new ArrayList<>(augmentedProjection));
     this.where = where;
     this.limit = limit;
     Options opts = Objects.requireNonNull(options, "options");
@@ -559,15 +561,34 @@ public final class QueryProcessor implements AutoCloseable {
 
   private Object resolveOrderValue(GenericRecord record, Schema schema, SqlParser.OrderKey key) {
     Schema.Field field = schema.getField(key.column());
+    String lookupName = key.column();
+    if (field == null) {
+      field = findFieldIgnoreCase(schema, key.column());
+      if (field != null) {
+        lookupName = field.name();
+      }
+    }
     if (field != null) {
-      return AvroCoercions.unwrap(record.get(key.column()), field.schema());
+      return AvroCoercions.unwrap(record.get(lookupName), field.schema());
     }
     Expression expression = orderExpressionFor(key.column());
     if (expression != null) {
       ensureOrderByEvaluator(schema);
       return orderByEvaluator.eval(expression, record);
     }
-    throw new IllegalArgumentException("Unknown ORDER BY column: " + key.column());
+    return null;
+  }
+
+  private Schema.Field findFieldIgnoreCase(Schema schema, String name) {
+    if (schema == null || name == null) {
+      return null;
+    }
+    for (Schema.Field f : schema.getFields()) {
+      if (f != null && name.equalsIgnoreCase(f.name())) {
+        return f;
+      }
+    }
+    return null;
   }
 
   private Expression orderExpressionFor(String column) {
@@ -753,5 +774,28 @@ public final class QueryProcessor implements AutoCloseable {
       key.add(value);
     }
     return key;
+  }
+
+  private static List<String> augmentProjectionWithOrderColumns(List<String> projection, List<SqlParser.OrderKey> order,
+      List<SqlParser.OrderKey> preOrder) {
+    List<String> merged = new ArrayList<>(projection == null ? List.of() : projection);
+    addOrderColumns(merged, order);
+    addOrderColumns(merged, preOrder);
+    return merged;
+  }
+
+  private static void addOrderColumns(List<String> target, List<SqlParser.OrderKey> keys) {
+    if (keys == null) {
+      return;
+    }
+    for (SqlParser.OrderKey key : keys) {
+      if (key == null) {
+        continue;
+      }
+      String col = key.column();
+      if (col != null && !target.contains(col)) {
+        target.add(col);
+      }
+    }
   }
 }
