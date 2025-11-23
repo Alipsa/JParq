@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -788,12 +789,13 @@ public final class QueryProcessor implements AutoCloseable {
     if (keys == null) {
       return;
     }
+    Set<String> existing = new HashSet<>(target);
     for (SqlParser.OrderKey key : keys) {
       if (key == null) {
         continue;
       }
       String col = key.column();
-      if (col != null && !target.contains(col)) {
+      if (col != null && existing.add(col)) {
         target.add(col);
       }
     }
