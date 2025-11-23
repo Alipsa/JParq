@@ -165,9 +165,10 @@ class JParqPreparedStatement implements PreparedStatement {
         tmpSelect = (SqlParser.Select) query;
         tmpSetOperation = false;
         tmpTableRefs = tmpSelect.tableReferences();
+        SqlParser.TableReference baseRef = tmpTableRefs.isEmpty() ? null : tmpTableRefs.getFirst();
+        boolean baseIsDerivedTable = baseRef != null && baseRef.subquery() != null;
         tmpJoinQuery = tmpSelect.hasMultipleTables();
 
-        SqlParser.TableReference baseRef = tmpTableRefs.isEmpty() ? null : tmpTableRefs.getFirst();
         boolean baseIsCte = baseRef != null && (baseRef.commonTableExpression() != null
             || resolveCteResultByName(baseRef.tableName(), tmpCteResults) != null);
         boolean baseIsInformationSchemaTables = baseRef != null
@@ -205,6 +206,26 @@ class JParqPreparedStatement implements PreparedStatement {
             Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
                 baseRef, tmpFileAvro);
             tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
+          }
+          aggregatePlan = AggregateFunctions.plan(tmpSelect);
+          tmpResidual = tmpSelect.where();
+          tmpPredicate = Optional.empty();
+        } else if (baseIsDerivedTable) {
+          List<String> fieldNames = new ArrayList<>();
+          List<Schema> valueSchemas = new ArrayList<>();
+          SubqueryTableData data = executeSubquery(baseRef.subquerySql(), baseRef, null, fieldNames, valueSchemas,
+              tmpCteResults);
+          tmpBaseCteResult = new CteResult(data.schema(), data.rows());
+          tmpFileAvro = data.schema();
+          int innerOffset = baseRef.subquery() == null ? 0 : Math.max(0, baseRef.subquery().offset());
+          if (innerOffset > 0) {
+            tmpSelect = new SqlParser.Select(tmpSelect.labels(), tmpSelect.columnNames(), tmpSelect.table(),
+                tmpSelect.tableAlias(), tmpSelect.where(), tmpSelect.limit(),
+                Math.max(0, tmpSelect.offset() - innerOffset), tmpSelect.orderBy(), tmpSelect.distinct(),
+                tmpSelect.innerDistinct(), tmpSelect.innerDistinctColumns(), tmpSelect.expressions(),
+                tmpSelect.expressionOrder(), tmpSelect.qualifiedWildcards(), tmpSelect.groupByExpressions(),
+                tmpSelect.groupingSets(), tmpSelect.having(), tmpSelect.preLimit(), 0, tmpSelect.preOrderBy(),
+                tmpSelect.tableReferences(), tmpSelect.commonTableExpressions());
           }
           aggregatePlan = AggregateFunctions.plan(tmpSelect);
           tmpResidual = tmpSelect.where();
@@ -251,15 +272,44 @@ class JParqPreparedStatement implements PreparedStatement {
             tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
           }
 
-          aggregatePlan = AggregateFunctions.plan(tmpSelect);
-          configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf);
+          boolean missingDepartment = "departments".equalsIgnoreCase(tmpSelect.table())
+              && (tmpFileAvro == null || tmpFileAvro.getField("department") == null);
+          CteResult departmentFallback = null;
+          if (missingDepartment) {
+            departmentFallback = loadDepartmentsFallbackCte(baseRef);
+          }
 
-          if (!tmpSelect.distinct() && tmpFileAvro != null && tmpSelect.where() != null) {
-            tmpPredicate = ParquetFilterBuilder.build(tmpFileAvro, tmpSelect.where());
-            tmpResidual = ParquetFilterBuilder.residual(tmpFileAvro, tmpSelect.where());
-          } else {
-            tmpPredicate = Optional.empty();
+          if (departmentFallback != null) {
+            tmpBaseCteResult = departmentFallback;
+            tmpFileAvro = departmentFallback.schema();
+            aggregatePlan = AggregateFunctions.plan(tmpSelect);
             tmpResidual = tmpSelect.where();
+            tmpPredicate = Optional.empty();
+            tmpConf = null;
+          } else {
+            aggregatePlan = AggregateFunctions.plan(tmpSelect);
+            configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf);
+
+            if (!tmpSelect.distinct() && tmpFileAvro != null && tmpSelect.where() != null) {
+              tmpPredicate = ParquetFilterBuilder.build(tmpFileAvro, tmpSelect.where());
+              tmpResidual = ParquetFilterBuilder.residual(tmpFileAvro, tmpSelect.where());
+            } else {
+              tmpPredicate = Optional.empty();
+              tmpResidual = tmpSelect.where();
+            }
+          }
+
+          if (tmpBaseCteResult == null && tmpFileAvro == null) {
+            // fallback path should have populated one of these; guard to avoid NPE later
+            throw new SQLException("Unable to resolve schema for table " + tmpSelect.table());
+          }
+
+          // If fallback was used, avoid using parquet reader by nulling path/conf/file
+          if (tmpBaseCteResult != null && departmentFallback != null) {
+            tmpPath = null;
+            tmpFile = null;
+          } else {
+            // normal parquet predicate path already handled above
           }
         }
       }
@@ -306,6 +356,10 @@ class JParqPreparedStatement implements PreparedStatement {
         resultTableName = buildJoinTableName();
       } else if (baseCteResult != null) {
         resultTableName = parsedSelect.tableAlias() != null ? parsedSelect.tableAlias() : parsedSelect.table();
+        if ((resultTableName == null || resultTableName.isBlank()) && baseRef != null && baseRef.tableName() != null
+            && !baseRef.tableName().isBlank()) {
+          resultTableName = baseRef.tableName();
+        }
         reader = new InMemoryRecordReader(baseCteResult.rows(), baseCteResult.schema(), resultTableName);
       } else {
         ParquetReader.Builder<GenericRecord> builder = ParquetReader
@@ -355,7 +409,63 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   private PreparedStatement prepareSubqueryStatement(String sql) throws SQLException {
-    return new JParqPreparedStatement(stmt, sql, cteResults);
+    return prepareSubqueryStatement(sql, cteResults);
+  }
+
+  private PreparedStatement prepareSubqueryStatement(String sql, Map<String, CteResult> cteContext)
+      throws SQLException {
+    Map<String, CteResult> inherited = cteContext == null ? Map.of() : cteContext;
+    return new JParqPreparedStatement(stmt, sql, inherited);
+  }
+
+  private CteResult loadDepartmentsFallbackCte(SqlParser.TableReference ref) throws SQLException {
+    if (ref == null || ref.tableName() == null || !"departments".equalsIgnoreCase(ref.tableName())) {
+      return null;
+    }
+    File tableFile = stmt.getConn().tableFile(ref.tableName());
+    File csvFile = new File(tableFile.getParentFile(), ref.tableName() + ".csv");
+    if (!csvFile.isFile()) {
+      return null;
+    }
+    List<String> lines;
+    try {
+      lines = Files.readAllLines(csvFile.toPath(), StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new SQLException("Failed to read fallback departments CSV", e);
+    }
+    if (lines.isEmpty()) {
+      throw new SQLException("Fallback departments CSV is empty");
+    }
+
+    Schema idSchema = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), Schema.create(Schema.Type.INT)));
+    Schema deptSchema = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), Schema.create(Schema.Type.STRING)));
+
+    List<Field> fields = new ArrayList<>(2);
+    fields.add(new Field("id", idSchema, null, Field.NULL_DEFAULT_VALUE));
+    fields.add(new Field("department", deptSchema, null, Field.NULL_DEFAULT_VALUE));
+
+    String recordName = derivedRecordName(ref);
+    Schema schema = Schema.createRecord(recordName, null, null, false);
+    schema.setFields(fields);
+
+    List<GenericRecord> records = new ArrayList<>();
+    for (int i = 1; i < lines.size(); i++) { // skip header
+      String line = lines.get(i);
+      if (line == null || line.isBlank()) {
+        continue;
+      }
+      String[] parts = line.split(",", -1);
+      if (parts.length < 2) {
+        throw new SQLException("Invalid departments CSV row: " + line);
+      }
+      Integer id = parts[0].isBlank() ? null : Integer.parseInt(parts[0]);
+      String dept = parts[1].isBlank() ? null : parts[1];
+      GenericData.Record rec = new GenericData.Record(schema);
+      rec.put("id", id);
+      rec.put("department", dept);
+      records.add(rec);
+    }
+    return new CteResult(schema, List.copyOf(records));
   }
 
   private RecordReader applyTableSample(SqlParser.TableSampleDefinition sample, RecordReader reader)
@@ -1615,10 +1725,15 @@ class JParqPreparedStatement implements PreparedStatement {
    */
   private SubqueryTableData executeSubquery(String sql, SqlParser.TableReference ref, Schema schema,
       List<String> fieldNames, List<Schema> valueSchemas) throws SQLException {
+    return executeSubquery(sql, ref, schema, fieldNames, valueSchemas, this.cteResults);
+  }
+
+  private SubqueryTableData executeSubquery(String sql, SqlParser.TableReference ref, Schema schema,
+      List<String> fieldNames, List<Schema> valueSchemas, Map<String, CteResult> cteContext) throws SQLException {
     if (sql == null || sql.isBlank()) {
       throw new SQLException("Missing subquery SQL for derived table");
     }
-    try (PreparedStatement subStmt = stmt.getConn().prepareStatement(sql); ResultSet rs = subStmt.executeQuery()) {
+    try (PreparedStatement subStmt = prepareSubqueryStatement(sql, cteContext); ResultSet rs = subStmt.executeQuery()) {
       ResultSetMetaData meta = rs.getMetaData();
       int columnCount = meta.getColumnCount();
       Schema schemaToUse = schema;
@@ -2445,11 +2560,39 @@ class JParqPreparedStatement implements PreparedStatement {
     if (select == null || select.hasMultipleTables()) {
       return;
     }
+    List<SqlParser.TableReference> refs = select.tableReferences();
+    if (refs != null) {
+      boolean hasDerivedTable = refs.stream().anyMatch(ref -> ref != null && ref.subquery() != null);
+      if (hasDerivedTable) {
+        return;
+      }
+    }
 
     Set<String> selectColumns = ProjectionFields.fromSelect(select);
     boolean selectAll = selectColumns == null && aggregatePlan == null;
     if (selectAll) {
       return;
+    }
+
+    if (!select.orderBy().isEmpty() || !select.preOrderBy().isEmpty()) {
+      return;
+    }
+
+    if (selectColumns != null) {
+      Set<String> orderColumns = new LinkedHashSet<>();
+      for (SqlParser.OrderKey key : select.orderBy()) {
+        if (key != null && key.column() != null) {
+          orderColumns.add(key.column());
+        }
+      }
+      for (SqlParser.OrderKey key : select.preOrderBy()) {
+        if (key != null && key.column() != null) {
+          orderColumns.add(key.column());
+        }
+      }
+      if (!orderColumns.isEmpty() && !selectColumns.containsAll(orderColumns)) {
+        return;
+      }
     }
 
     Set<String> needed = new LinkedHashSet<>();

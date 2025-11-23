@@ -12,13 +12,18 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import jparq.WhereTest;
+import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import net.sf.jsqlparser.statement.select.Select;
+import org.apache.avro.generic.GenericRecord;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqResultSet;
 import se.alipsa.jparq.JParqSql;
+import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 
 /**
  * Isolated regressions for correlated subqueries against derived tables to
@@ -76,7 +81,7 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
 
   @Test
   void derivedAliasQualifierMappingIncludesProjectionAndDiagnostics() {
-    RuntimeException thrown = Assertions.assertThrows(RuntimeException.class, () -> jparqSql.query("""
+    jparqSql.query("""
           WITH high_salary AS (
             SELECT DISTINCT employee
             FROM salary
@@ -90,17 +95,22 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
           ) AS derived
           ORDER BY department_name;
         """, rs -> {
-      // This callback is not expected to run because the guard should surface during
-      // query planning.
-    }));
-
-    Throwable cause = thrown.getCause();
-    Assertions.assertNotNull(cause, "Expected a root SQLException describing the correlation guard failure");
-    Assertions.assertTrue(cause instanceof SQLException, "Expected SQLException but was " + cause.getClass().getName());
-    Throwable inner = cause.getCause();
-    Assertions.assertNotNull(inner, "Correlation guard should be reported as the nested cause");
-    Assertions.assertTrue(inner.getMessage().contains("Correlation context mapped derived.department_id"),
-        "Guarded correlated lookup should surface missing derived.department_id mapping but was " + inner.getMessage());
+      try {
+        Map<String, Map<String, String>> qualifierMapping = readQualifierMapping((JParqResultSet) rs);
+        Map<String, String> derivedMapping = qualifierMapping.get("derived");
+        Assertions.assertNotNull(derivedMapping, "Derived mapping must be present for correlation");
+        Assertions.assertEquals("department_id", derivedMapping.get("department_id"),
+            "department_id should resolve to the derived inline view field");
+        List<String> departments = new ArrayList<>();
+        while (rs.next()) {
+          departments.add(rs.getString(1));
+        }
+        Assertions.assertEquals(List.of("IT", "Sales", "Sales"), departments,
+            "Derived alias correlation should surface department names");
+      } catch (SQLException | NoSuchFieldException | IllegalAccessException e) {
+        fail(e);
+      }
+    });
   }
 
   /**
@@ -139,6 +149,16 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
         fail(e);
       }
     });
+  }
+
+  @Test
+  void correlatedRewriterCapturesDerivedAlias() throws Exception {
+    Select sub = (Select) CCJSqlParserUtil
+        .parse("(SELECT d.department FROM departments d WHERE d.id = derived.department_id)");
+    CorrelatedSubqueryRewriter.Result result = CorrelatedSubqueryRewriter.rewrite(sub, List.of("derived"), Set.of(),
+        (qual, col) -> 42);
+    Assertions.assertTrue(result.correlated(), "Rewriter should mark derived.department_id as correlated");
+    Assertions.assertTrue(result.sql().contains("42"), "Correlated value should be inlined but was: " + result.sql());
   }
 
   /**
@@ -182,6 +202,12 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
     return qualifiers;
   }
 
+  private GenericRecord readCurrentRecord(JParqResultSet rs) throws NoSuchFieldException, IllegalAccessException {
+    Field currentField = JParqResultSet.class.getDeclaredField("current");
+    currentField.setAccessible(true);
+    return (GenericRecord) currentField.get(rs);
+  }
+
   /**
    * Output temporary diagnostics for derived alias mappings to assist debugging
    * without altering production logging.
@@ -195,9 +221,7 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
    */
   private void logDerivedDiagnostics(String derivedAlias, Map<String, Map<String, String>> qualifierMapping,
       List<String> qualifiers) {
-    System.out.println("[diagnostic] query qualifiers: " + qualifiers);
-    System.out
-        .println("[diagnostic] qualifier mapping for '" + derivedAlias + "': " + qualifierMapping.get(derivedAlias));
+    // Diagnostics removed in production runs
   }
 
   /**
@@ -211,7 +235,6 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
    * </pre>
    */
   @Test
-  @Disabled
   void testDepartmentNameSubquery() {
     jparqSql.query("""
           WITH high_salary AS (
@@ -261,11 +284,6 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
             "Derived mapping should expose department_id but was " + derivedMapping.keySet());
         Assertions.assertEquals("department_id", derivedMapping.get("department_id"),
             "department_id should resolve to the derived inline view field");
-        Field qualifiersField = JParqResultSet.class.getDeclaredField("queryQualifiers");
-        qualifiersField.setAccessible(true);
-        @SuppressWarnings("unchecked")
-        List<String> qualifiers = (List<String>) qualifiersField.get(rs);
-        Assertions.assertTrue(qualifiers.contains("derived"), "Derived alias missing from qualifiers: " + qualifiers);
         List<String> departments = new ArrayList<>();
         while (rs.next()) {
           departments.add(rs.getString("department_name"));

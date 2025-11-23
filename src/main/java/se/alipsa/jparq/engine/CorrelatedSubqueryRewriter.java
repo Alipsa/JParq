@@ -8,6 +8,8 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.DateValue;
@@ -155,37 +157,74 @@ public final class CorrelatedSubqueryRewriter {
       @Override
       public <S> StringBuilder visit(Column column, S context) {
         Table table = column.getTable();
-        if (table != null) {
-          String[] candidates = {
-              table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()
-          };
-          for (String candidate : candidates) {
-            String normalizedCandidate = JParqUtil.normalizeQualifier(candidate);
-            if (normalizedCandidate != null && normalized.contains(normalizedCandidate)) {
-              final Object resolvedValue = valueResolver.apply(normalizedCandidate, column.getColumnName());
-              final String literal = toSqlLiteral(resolvedValue);
-              correlated.set(true);
-              correlatedColumnRefs.add(column.getColumnName());
-              correlatedRefs.add(new QualifiedColumn(normalizedCandidate, column.getColumnName()));
-              getBuilder().append(literal);
-              return getBuilder();
-            }
-          }
+        if (inlineQualifiedFromColumnIdentifier(column)) {
+          return getBuilder();
         }
-        String columnName = column.getColumnName();
-        if (!unqualified.isEmpty() && columnName != null) {
-          String normalizedColumn = columnName.toLowerCase(Locale.ROOT);
-          if (unqualified.contains(normalizedColumn)) {
-            final Object resolvedValue = valueResolver.apply(null, column.getColumnName());
-            final String literal = toSqlLiteral(resolvedValue);
-            correlated.set(true);
-            correlatedColumnRefs.add(column.getColumnName());
-            correlatedRefs.add(new QualifiedColumn(null, column.getColumnName()));
-            getBuilder().append(literal);
-            return getBuilder();
-          }
+        if (table != null && inlineQualifiedFromTable(column, table)) {
+          return getBuilder();
+        }
+        if (inlineUnqualifiedColumn(column)) {
+          return getBuilder();
         }
         return super.visit(column, context);
+      }
+
+      private boolean inlineQualifiedFromColumnIdentifier(Column column) {
+        if (column.getTable() != null) {
+          return false;
+        }
+        String colName = column.getColumnName();
+        if (colName == null) {
+          return false;
+        }
+        int dot = colName.indexOf('.');
+        if (dot <= 0 || dot + 1 >= colName.length()) {
+          return false;
+        }
+        String qualifierPart = colName.substring(0, dot);
+        String columnPart = colName.substring(dot + 1);
+        String normalizedQualifier = JParqUtil.normalizeQualifier(qualifierPart);
+        if (normalizedQualifier == null || !normalized.contains(normalizedQualifier)) {
+          return false;
+        }
+        appendCorrelatedLiteral(normalizedQualifier, columnPart, valueResolver.apply(normalizedQualifier, columnPart));
+        return true;
+      }
+
+      private boolean inlineQualifiedFromTable(Column column, Table table) {
+        String[] candidates = {
+            table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()
+        };
+        for (String candidate : candidates) {
+          String normalizedCandidate = JParqUtil.normalizeQualifier(candidate);
+          if (normalizedCandidate != null && normalized.contains(normalizedCandidate)) {
+            appendCorrelatedLiteral(normalizedCandidate, column.getColumnName(),
+                valueResolver.apply(normalizedCandidate, column.getColumnName()));
+            return true;
+          }
+        }
+        return false;
+      }
+
+      private boolean inlineUnqualifiedColumn(Column column) {
+        String columnName = column.getColumnName();
+        if (unqualified.isEmpty() || columnName == null) {
+          return false;
+        }
+        String normalizedColumn = columnName.toLowerCase(Locale.ROOT);
+        if (!unqualified.contains(normalizedColumn)) {
+          return false;
+        }
+        appendCorrelatedLiteral(null, columnName, valueResolver.apply(null, columnName));
+        return true;
+      }
+
+      private void appendCorrelatedLiteral(String qualifier, String columnName, Object resolvedValue) {
+        final String literal = toSqlLiteral(resolvedValue);
+        correlated.set(true);
+        correlatedColumnRefs.add(columnName);
+        correlatedRefs.add(new QualifiedColumn(qualifier, columnName));
+        getBuilder().append(literal);
       }
     };
 
@@ -200,7 +239,49 @@ public final class CorrelatedSubqueryRewriter {
     if (select instanceof ParenthesedSelect) {
       sqlText = "(" + sqlText + ")";
     }
+    if (!correlated.get()) {
+      FallbackResult fallback = inlineCorrelatedLiterals(sqlText, normalized, valueResolver);
+      if (fallback.correlated()) {
+        correlated.set(true);
+        correlatedColumnRefs.addAll(fallback.columns());
+        correlatedRefs.addAll(fallback.references());
+        sqlText = fallback.sql();
+      }
+    }
     return new Result(sqlText, correlated.get(), Set.copyOf(correlatedColumnRefs), Set.copyOf(correlatedRefs));
+  }
+
+  private record FallbackResult(String sql, boolean correlated, Set<String> columns, Set<QualifiedColumn> references) {
+  }
+
+  private static FallbackResult inlineCorrelatedLiterals(String sql, Set<String> normalizedQualifiers,
+      BiFunction<String, String, Object> valueResolver) {
+    if (normalizedQualifiers == null || normalizedQualifiers.isEmpty()) {
+      return new FallbackResult(sql, false, Set.of(), Set.of());
+    }
+    String alternation = normalizedQualifiers.stream().filter(Objects::nonNull).map(Pattern::quote)
+        .collect(Collectors.joining("|"));
+    if (alternation.isEmpty()) {
+      return new FallbackResult(sql, false, Set.of(), Set.of());
+    }
+    Pattern pattern = Pattern.compile("(?i)\\b(" + alternation + ")\\.([A-Za-z0-9_]+)\\b");
+    Matcher matcher = pattern.matcher(sql);
+    StringBuffer buf = new StringBuffer();
+    boolean matched = false;
+    Set<String> columns = new LinkedHashSet<>();
+    Set<QualifiedColumn> refs = new LinkedHashSet<>();
+    while (matcher.find()) {
+      matched = true;
+      String qualifier = matcher.group(1);
+      String column = matcher.group(2);
+      Object value = valueResolver.apply(qualifier.toLowerCase(Locale.ROOT), column);
+      String literal = toSqlLiteral(value);
+      columns.add(column);
+      refs.add(new QualifiedColumn(qualifier.toLowerCase(Locale.ROOT), column));
+      matcher.appendReplacement(buf, Matcher.quoteReplacement(literal));
+    }
+    matcher.appendTail(buf);
+    return new FallbackResult(buf.toString(), matched, Set.copyOf(columns), Set.copyOf(refs));
   }
 
   private static String toSqlLiteral(Object value) {

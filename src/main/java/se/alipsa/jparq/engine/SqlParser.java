@@ -690,11 +690,8 @@ public final class SqlParser {
     }
 
     Expression joinCondition = combineJoinConditions(joinInfos, tableRefs);
-    Expression combinedWhere = combineExpressions(
-        combineExpressions(fromInfo.innerSelect() == null ? null : fromInfo.innerSelect().where(), joinCondition),
-        whereExpr);
-    Expression combinedHaving = combineExpressions(
-        fromInfo.innerSelect() == null ? null : fromInfo.innerSelect().having(), havingExpr);
+    Expression combinedWhere = combineExpressions(joinCondition, whereExpr);
+    Expression combinedHaving = havingExpr;
 
     List<String> labelsCopy = List.copyOf(labels);
     List<String> physicalCopy = Collections.unmodifiableList(new ArrayList<>(physicalCols));
