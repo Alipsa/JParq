@@ -19,7 +19,6 @@ import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.generic.GenericRecord;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqResultSet;
 import se.alipsa.jparq.JParqSql;
@@ -296,7 +295,6 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
     });
   }
 
-  @Disabled
   @Test
   void testSalaryChangeCountSubquery() {
     jparqSql.query("""
