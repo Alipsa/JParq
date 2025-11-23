@@ -8,7 +8,6 @@ import java.math.BigDecimal;
 import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.sql.Array;
 import java.sql.Blob;
 import java.sql.Clob;
@@ -272,44 +271,20 @@ class JParqPreparedStatement implements PreparedStatement {
             tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
           }
 
-          boolean missingDepartment = "departments".equalsIgnoreCase(tmpSelect.table())
-              && (tmpFileAvro == null || tmpFileAvro.getField("department") == null);
-          CteResult departmentFallback = null;
-          if (missingDepartment) {
-            departmentFallback = loadDepartmentsFallbackCte(baseRef);
-          }
+          aggregatePlan = AggregateFunctions.plan(tmpSelect);
+          configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf);
 
-          if (departmentFallback != null) {
-            tmpBaseCteResult = departmentFallback;
-            tmpFileAvro = departmentFallback.schema();
-            aggregatePlan = AggregateFunctions.plan(tmpSelect);
-            tmpResidual = tmpSelect.where();
-            tmpPredicate = Optional.empty();
-            tmpConf = null;
+          if (!tmpSelect.distinct() && tmpFileAvro != null && tmpSelect.where() != null) {
+            tmpPredicate = ParquetFilterBuilder.build(tmpFileAvro, tmpSelect.where());
+            tmpResidual = ParquetFilterBuilder.residual(tmpFileAvro, tmpSelect.where());
           } else {
-            aggregatePlan = AggregateFunctions.plan(tmpSelect);
-            configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf);
-
-            if (!tmpSelect.distinct() && tmpFileAvro != null && tmpSelect.where() != null) {
-              tmpPredicate = ParquetFilterBuilder.build(tmpFileAvro, tmpSelect.where());
-              tmpResidual = ParquetFilterBuilder.residual(tmpFileAvro, tmpSelect.where());
-            } else {
-              tmpPredicate = Optional.empty();
-              tmpResidual = tmpSelect.where();
-            }
+            tmpPredicate = Optional.empty();
+            tmpResidual = tmpSelect.where();
           }
 
           if (tmpBaseCteResult == null && tmpFileAvro == null) {
-            // fallback path should have populated one of these; guard to avoid NPE later
+            // Guard to avoid NPE later when schema resolution fails completely
             throw new SQLException("Unable to resolve schema for table " + tmpSelect.table());
-          }
-
-          // If fallback was used, avoid using parquet reader by nulling path/conf/file
-          if (departmentFallback != null) {
-            tmpPath = null;
-            tmpFile = null;
-          } else {
-            // normal parquet predicate path already handled above
           }
         }
       }
@@ -416,56 +391,6 @@ class JParqPreparedStatement implements PreparedStatement {
       throws SQLException {
     Map<String, CteResult> inherited = cteContext == null ? Map.of() : cteContext;
     return new JParqPreparedStatement(stmt, sql, inherited);
-  }
-
-  private CteResult loadDepartmentsFallbackCte(SqlParser.TableReference ref) throws SQLException {
-    if (ref == null || ref.tableName() == null || !"departments".equalsIgnoreCase(ref.tableName())) {
-      return null;
-    }
-    File tableFile = stmt.getConn().tableFile(ref.tableName());
-    File csvFile = new File(tableFile.getParentFile(), ref.tableName() + ".csv");
-    if (!csvFile.isFile()) {
-      return null;
-    }
-    List<String> lines;
-    try {
-      lines = Files.readAllLines(csvFile.toPath(), StandardCharsets.UTF_8);
-    } catch (IOException e) {
-      throw new SQLException("Failed to read fallback departments CSV", e);
-    }
-    if (lines.isEmpty()) {
-      throw new SQLException("Fallback departments CSV is empty");
-    }
-
-    Schema idSchema = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), Schema.create(Schema.Type.INT)));
-    Schema deptSchema = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), Schema.create(Schema.Type.STRING)));
-
-    List<Field> fields = new ArrayList<>(2);
-    fields.add(new Field("id", idSchema, null, Field.NULL_DEFAULT_VALUE));
-    fields.add(new Field("department", deptSchema, null, Field.NULL_DEFAULT_VALUE));
-
-    String recordName = derivedRecordName(ref);
-    Schema schema = Schema.createRecord(recordName, null, null, false);
-    schema.setFields(fields);
-
-    List<GenericRecord> records = new ArrayList<>();
-    for (int i = 1; i < lines.size(); i++) { // skip header
-      String line = lines.get(i);
-      if (line == null || line.isBlank()) {
-        continue;
-      }
-      String[] parts = line.split(",", -1);
-      if (parts.length < 2) {
-        throw new SQLException("Invalid departments CSV row: " + line);
-      }
-      Integer id = parts[0].isBlank() ? null : Integer.parseInt(parts[0]);
-      String dept = parts[1].isBlank() ? null : parts[1];
-      GenericData.Record rec = new GenericData.Record(schema);
-      rec.put("id", id);
-      rec.put("department", dept);
-      records.add(rec);
-    }
-    return new CteResult(schema, List.copyOf(records));
   }
 
   private RecordReader applyTableSample(SqlParser.TableSampleDefinition sample, RecordReader reader)
@@ -1052,12 +977,7 @@ class JParqPreparedStatement implements PreparedStatement {
       } catch (IOException e) {
         throw new SQLException("Failed to read schema for table " + tableName, e);
       }
-      JoinRecordReader.JoinTable fallback = maybeLoadDepartmentsFallback(tableFile, tableSchema, ref);
-      if (fallback != null) {
-        tables.add(fallback);
-        registerQualifierIndexes(qualifierIndex, fallback, tables.size() - 1);
-        continue;
-      }
+      validateJoinTableColumns(tableSchema, ref);
       List<GenericRecord> rows = new ArrayList<>();
       try (ParquetReader<GenericRecord> tableReader = ParquetReader
           .<GenericRecord>builder(new AvroReadSupport<>(), tablePath).withConf(tableConf).build()) {
@@ -1082,6 +1002,202 @@ class JParqPreparedStatement implements PreparedStatement {
     } catch (IllegalArgumentException e) {
       throw new SQLException("Failed to build join reader", e);
     }
+  }
+
+  /**
+   * Ensure that a join participant exposes all columns referenced in the query
+   * and join predicates.
+   *
+   * @param schema
+   *          schema describing the join table
+   * @param ref
+   *          table reference used in the join
+   * @throws SQLException
+   *           if a referenced column is missing
+   */
+  private void validateJoinTableColumns(Schema schema, SqlParser.TableReference ref) throws SQLException {
+    if (schema == null || ref == null) {
+      return;
+    }
+    Set<String> required = collectColumnsForTable(ref);
+    if (ref.usingColumns() != null) {
+      required.addAll(ref.usingColumns());
+    }
+    List<String> labels = parsedSelect == null ? List.of() : parsedSelect.labels();
+    List<String> columnNames = parsedSelect == null ? List.of() : parsedSelect.columnNames();
+    validateRequiredColumns(schema, required, ref.tableName(), labels, columnNames, required);
+  }
+
+  /**
+   * Collect all column names referenced for a specific table in the parsed SELECT
+   * statement.
+   *
+   * @param ref
+   *          table reference being validated
+   * @return mutable set of referenced column names (empty if none)
+   */
+  private Set<String> collectColumnsForTable(SqlParser.TableReference ref) {
+    if (parsedSelect == null || ref == null) {
+      return new LinkedHashSet<>();
+    }
+    List<String> qualifiers = qualifierList(ref, false);
+    if (qualifiers.isEmpty()) {
+      return new LinkedHashSet<>();
+    }
+    boolean singleTable = !parsedSelect.hasMultipleTables();
+    List<String> primaryQualifier = singleTable ? qualifierList(ref, true) : List.of();
+    Set<String> required = new LinkedHashSet<>();
+    collectColumnReferences(parsedSelect.expressions(), qualifiers, primaryQualifier, required);
+    collectColumnReferences(parsedSelect.where(), qualifiers, primaryQualifier, required);
+    collectColumnReferences(parsedSelect.having(), qualifiers, primaryQualifier, required);
+    for (Expression group : parsedSelect.groupByExpressions()) {
+      collectColumnReferences(group, qualifiers, primaryQualifier, required);
+    }
+    for (SqlParser.OrderKey key : parsedSelect.orderBy()) {
+      if (shouldIncludeOrderKey(key, qualifiers, singleTable)) {
+        addColumn(required, key.column());
+      }
+    }
+    for (SqlParser.OrderKey key : parsedSelect.preOrderBy()) {
+      if (shouldIncludeOrderKey(key, qualifiers, singleTable)) {
+        addColumn(required, key.column());
+      }
+    }
+    collectColumnReferences(ref.joinCondition(), qualifiers, primaryQualifier, required);
+    return required;
+  }
+
+  /**
+   * Collect column references from a list of expressions using the provided
+   * qualifiers.
+   *
+   * @param expressions
+   *          expressions to inspect
+   * @param qualifiers
+   *          qualifiers that identify the target table
+   * @param primaryQualifier
+   *          single qualifier to use for unqualified columns (empty when
+   *          ambiguous)
+   * @param target
+   *          set receiving the column names
+   */
+  private void collectColumnReferences(List<Expression> expressions, List<String> qualifiers,
+      List<String> primaryQualifier, Set<String> target) {
+    collectColumnReferences(expressions, qualifiers, primaryQualifier, target, null);
+  }
+
+  private void collectColumnReferences(List<Expression> expressions, List<String> qualifiers,
+      List<String> primaryQualifier, Set<String> target, Set<String> referenced) {
+    if (expressions == null || expressions.isEmpty()) {
+      return;
+    }
+    for (Expression expression : expressions) {
+      collectColumnReferences(expression, qualifiers, primaryQualifier, target, referenced);
+    }
+  }
+
+  /**
+   * Collect column references from a single expression.
+   *
+   * @param expression
+   *          expression to examine
+   * @param qualifiers
+   *          qualifiers that identify the target table
+   * @param primaryQualifier
+   *          single qualifier used when unqualified columns should be included
+   * @param target
+   *          set receiving the column names
+   */
+  private void collectColumnReferences(Expression expression, List<String> qualifiers, List<String> primaryQualifier,
+      Set<String> target) {
+    collectColumnReferences(expression, qualifiers, primaryQualifier, target, null);
+  }
+
+  private void collectColumnReferences(Expression expression, List<String> qualifiers, List<String> primaryQualifier,
+      Set<String> target, Set<String> referenced) {
+    if (expression == null || target == null) {
+      return;
+    }
+    Set<String> collected = SqlParser.collectQualifiedColumns(expression, qualifiers);
+    addColumns(target, collected);
+    addColumns(referenced, collected);
+    if (primaryQualifier != null && !primaryQualifier.isEmpty()) {
+      Set<String> primaryCollected = SqlParser.collectQualifiedColumns(expression, primaryQualifier);
+      addColumns(target, primaryCollected);
+      addColumns(referenced, primaryCollected);
+    }
+  }
+
+  /**
+   * Decide if an ORDER BY key should be associated with the current table.
+   *
+   * @param key
+   *          order key from the parsed statement
+   * @param qualifiers
+   *          qualifiers that map to the current table
+   * @param singleTable
+   *          flag indicating whether the query only references one table
+   * @return true if the column belongs to the table being validated
+   */
+  private boolean shouldIncludeOrderKey(SqlParser.OrderKey key, List<String> qualifiers, boolean singleTable) {
+    if (key == null || key.column() == null) {
+      return false;
+    }
+    if (isOrdinalReference(key.column())) {
+      return false;
+    }
+    if (singleTable) {
+      return true;
+    }
+    return matchesQualifier(key.qualifier(), qualifiers);
+  }
+
+  /**
+   * Check whether a qualifier matches any of the supplied candidates.
+   *
+   * @param qualifier
+   *          qualifier to compare
+   * @param candidates
+   *          potential matches
+   * @return true if the qualifier matches a candidate
+   */
+  private boolean matchesQualifier(String qualifier, List<String> candidates) {
+    if (qualifier == null || candidates == null || candidates.isEmpty()) {
+      return false;
+    }
+    String normalized = JParqUtil.normalizeQualifier(qualifier);
+    for (String candidate : candidates) {
+      if (normalized != null && normalized.equals(JParqUtil.normalizeQualifier(candidate))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Build a list of qualifiers for a table reference.
+   *
+   * @param ref
+   *          table reference
+   * @param primaryOnly
+   *          whether to return a single qualifier for unqualified lookups
+   * @return ordered list of qualifiers (alias before table name)
+   */
+  private List<String> qualifierList(SqlParser.TableReference ref, boolean primaryOnly) {
+    if (ref == null) {
+      return List.of();
+    }
+    List<String> qualifiers = new ArrayList<>(2);
+    if (ref.tableAlias() != null && !ref.tableAlias().isBlank()) {
+      qualifiers.add(ref.tableAlias());
+      if (primaryOnly) {
+        return List.copyOf(qualifiers);
+      }
+    }
+    if (ref.tableName() != null && !ref.tableName().isBlank()) {
+      qualifiers.add(ref.tableName());
+    }
+    return qualifiers.isEmpty() ? List.of() : List.copyOf(qualifiers);
   }
 
   private List<GenericRecord> applySampleToRows(SqlParser.TableSampleDefinition sample, List<GenericRecord> rows)
@@ -1249,72 +1365,6 @@ class JParqPreparedStatement implements PreparedStatement {
       names.add(field.name());
     }
     return List.copyOf(names);
-  }
-
-  /**
-   * Load a synthetic departments table when the backing parquet file lacks the
-   * {@code department} column expected by integration tests.
-   *
-   * @param tableFile
-   *          original parquet file resolved for the table
-   * @param existingSchema
-   *          schema read from the parquet file
-   * @param ref
-   *          table reference describing the join participant
-   * @return a {@link JoinRecordReader.JoinTable} populated from the fallback CSV
-   *         when available; otherwise {@code null}
-   * @throws SQLException
-   *           if the CSV cannot be parsed or contains invalid rows
-   */
-  private JoinRecordReader.JoinTable maybeLoadDepartmentsFallback(File tableFile, Schema existingSchema,
-      SqlParser.TableReference ref) throws SQLException {
-    if (!"departments".equalsIgnoreCase(ref.tableName())) {
-      return null;
-    }
-    if (existingSchema.getField("department") != null) {
-      return null;
-    }
-    File csvFile = new File(tableFile.getParentFile(), ref.tableName() + ".csv");
-    if (!csvFile.isFile()) {
-      return null;
-    }
-    List<String> lines;
-    try {
-      lines = Files.readAllLines(csvFile.toPath(), StandardCharsets.UTF_8);
-    } catch (IOException e) {
-      throw new SQLException("Failed to read fallback departments CSV", e);
-    }
-    if (lines.isEmpty()) {
-      throw new SQLException("Fallback departments CSV is empty");
-    }
-    List<Schema.Field> fields = new ArrayList<>(2);
-    Schema idSchema = Schema.create(Schema.Type.INT);
-    Schema deptSchema = Schema.create(Schema.Type.STRING);
-    fields.add(new Field("id", Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), idSchema)), null,
-        Field.NULL_DEFAULT_VALUE));
-    fields.add(new Field("department", Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), deptSchema)), null,
-        Field.NULL_DEFAULT_VALUE));
-    String recordName = derivedRecordName(ref);
-    Schema schema = Schema.createRecord(recordName, null, null, false);
-    schema.setFields(fields);
-    List<GenericRecord> rows = new ArrayList<>();
-    for (int i = 1; i < lines.size(); i++) {
-      String line = lines.get(i).trim();
-      if (line.isEmpty()) {
-        continue;
-      }
-      String[] parts = line.split(",", -1);
-      if (parts.length < 2) {
-        throw new SQLException("Invalid departments CSV row: " + line);
-      }
-      GenericData.Record record = new GenericData.Record(schema);
-      record.put("id", parts[0].isEmpty() ? null : Integer.parseInt(parts[0]));
-      record.put("department", parts[1].isEmpty() ? null : parts[1]);
-      rows.add(record);
-    }
-    List<GenericRecord> sampledRows = applySampleToRows(ref.tableSample(), rows);
-    return new JoinRecordReader.JoinTable(ref.tableName(), ref.tableAlias(), schema, sampledRows, ref.joinType(),
-        ref.joinCondition(), ref.usingColumns(), null);
   }
 
   /**
@@ -2552,12 +2602,17 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   private void configureProjectionPushdown(SqlParser.Select select, Schema schema,
-      AggregateFunctions.AggregatePlan aggregatePlan, Configuration configuration) {
-    if (schema == null || configuration == null) {
+      AggregateFunctions.AggregatePlan aggregatePlan, Configuration configuration) throws SQLException {
+    if (schema == null || configuration == null || select == null) {
       return;
     }
 
-    if (select == null || select.hasMultipleTables()) {
+    ColumnRequirement columnRequirement = requiredColumns(select, aggregatePlan);
+    Set<String> requiredColumns = columnRequirement.required();
+    validateRequiredColumns(schema, requiredColumns, select.table(), select.labels(), select.columnNames(),
+        columnRequirement.referenced());
+
+    if (select.hasMultipleTables()) {
       return;
     }
     List<SqlParser.TableReference> refs = select.tableReferences();
@@ -2595,177 +2650,194 @@ class JParqPreparedStatement implements PreparedStatement {
       }
     }
 
-    Set<String> needed = new LinkedHashSet<>();
-    addColumns(needed, selectColumns);
-    if (!select.innerDistinctColumns().isEmpty()) {
-      addColumns(needed, new LinkedHashSet<>(select.innerDistinctColumns()));
+    if (!requiredColumns.isEmpty()) {
+      Schema avroProjection = AvroProjections.project(schema, requiredColumns);
+      AvroReadSupport.setRequestedProjection(configuration, avroProjection);
+      AvroReadSupport.setAvroReadSchema(configuration, avroProjection);
     }
-    addColumns(needed, ColumnsUsed.inWhere(select.where()));
-    List<String> qualifiers = new ArrayList<>();
-    if (select.tableReferences() != null) {
-      for (SqlParser.TableReference ref : select.tableReferences()) {
-        if (ref.tableName() != null && !ref.tableName().isBlank()) {
-          qualifiers.add(ref.tableName());
-        }
-        if (ref.tableAlias() != null && !ref.tableAlias().isBlank()) {
-          qualifiers.add(ref.tableAlias());
+  }
+
+  private record ColumnRequirement(Set<String> required, Set<String> referenced) {
+  }
+
+  private ColumnRequirement requiredColumns(SqlParser.Select select, AggregateFunctions.AggregatePlan aggregatePlan) {
+    if (select == null) {
+      return new ColumnRequirement(Set.of(), Set.of());
+    }
+    Set<String> needed = new LinkedHashSet<>();
+    Set<String> referenced = new LinkedHashSet<>();
+    if (!select.innerDistinctColumns().isEmpty()) {
+      for (String column : select.innerDistinctColumns()) {
+        if (!isOrdinalReference(column)) {
+          addColumn(needed, column);
+          addColumn(referenced, column);
         }
       }
     }
-    for (Expression expression : select.expressions()) {
-      addColumns(needed, SqlParser.collectQualifiedColumns(expression, qualifiers));
-    }
-    addColumns(needed, SqlParser.collectQualifiedColumns(select.where(), qualifiers));
+    Set<String> whereColumns = ColumnsUsed.inWhere(select.where());
+    addColumns(needed, whereColumns);
+    addColumns(referenced, whereColumns);
+    SqlParser.TableReference baseRef = select.tableReferences() == null || select.tableReferences().isEmpty()
+        ? null
+        : select.tableReferences().getFirst();
+    List<String> qualifiers = qualifierList(baseRef, false);
+    List<String> primaryQualifier = qualifierList(baseRef, true);
+    collectColumnReferences(select.expressions(), qualifiers, primaryQualifier, needed, referenced);
+    collectColumnReferences(select.where(), qualifiers, primaryQualifier, needed, referenced);
     for (SqlParser.OrderKey key : select.orderBy()) {
-      addColumn(needed, key.column());
+      if (!isOrdinalReference(key.column())) {
+        addColumn(needed, key.column());
+      }
     }
     for (SqlParser.OrderKey key : select.preOrderBy()) {
-      addColumn(needed, key.column());
+      if (!isOrdinalReference(key.column())) {
+        addColumn(needed, key.column());
+      }
     }
     WindowPlan windowPlan = WindowFunctions.plan(select.expressions());
     if (windowPlan != null && !windowPlan.isEmpty()) {
       for (RowNumberWindow window : windowPlan.rowNumberWindows()) {
         for (Expression partition : window.partitionExpressions()) {
-          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+          collectColumnReferences(partition, qualifiers, primaryQualifier, needed, referenced);
           addColumns(needed, ColumnsUsed.inWhere(partition));
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
       }
       for (RankWindow window : windowPlan.rankWindows()) {
         for (Expression partition : window.partitionExpressions()) {
-          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+          collectColumnReferences(partition, qualifiers, primaryQualifier, needed, referenced);
           addColumns(needed, ColumnsUsed.inWhere(partition));
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
       }
       for (DenseRankWindow window : windowPlan.denseRankWindows()) {
         for (Expression partition : window.partitionExpressions()) {
-          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+          collectColumnReferences(partition, qualifiers, primaryQualifier, needed, referenced);
           addColumns(needed, ColumnsUsed.inWhere(partition));
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
       }
       for (PercentRankWindow window : windowPlan.percentRankWindows()) {
         for (Expression partition : window.partitionExpressions()) {
-          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+          collectColumnReferences(partition, qualifiers, primaryQualifier, needed, referenced);
           addColumns(needed, ColumnsUsed.inWhere(partition));
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
       }
       for (CumeDistWindow window : windowPlan.cumeDistWindows()) {
         for (Expression partition : window.partitionExpressions()) {
-          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+          collectColumnReferences(partition, qualifiers, primaryQualifier, needed, referenced);
           addColumns(needed, ColumnsUsed.inWhere(partition));
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
       }
       for (NtileWindow window : windowPlan.ntileWindows()) {
         for (Expression partition : window.partitionExpressions()) {
-          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+          collectColumnReferences(partition, qualifiers, primaryQualifier, needed, referenced);
           addColumns(needed, ColumnsUsed.inWhere(partition));
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
         Expression bucketExpression = window.bucketExpression();
         if (bucketExpression != null) {
-          addColumns(needed, SqlParser.collectQualifiedColumns(bucketExpression, qualifiers));
+          collectColumnReferences(bucketExpression, qualifiers, primaryQualifier, needed, referenced);
           addColumns(needed, ColumnsUsed.inWhere(bucketExpression));
         }
       }
       for (SumWindow window : windowPlan.sumWindows()) {
         for (Expression partition : window.partitionExpressions()) {
-          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+          collectColumnReferences(partition, qualifiers, primaryQualifier, needed, referenced);
           addColumns(needed, ColumnsUsed.inWhere(partition));
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
         Expression argument = window.argument();
         if (argument != null) {
-          addColumns(needed, SqlParser.collectQualifiedColumns(argument, qualifiers));
+          collectColumnReferences(argument, qualifiers, primaryQualifier, needed, referenced);
           addColumns(needed, ColumnsUsed.inWhere(argument));
         }
       }
       for (AvgWindow window : windowPlan.avgWindows()) {
         for (Expression partition : window.partitionExpressions()) {
-          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+          collectColumnReferences(partition, qualifiers, primaryQualifier, needed, referenced);
           addColumns(needed, ColumnsUsed.inWhere(partition));
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
         Expression argument = window.argument();
         if (argument != null) {
-          addColumns(needed, SqlParser.collectQualifiedColumns(argument, qualifiers));
+          collectColumnReferences(argument, qualifiers, primaryQualifier, needed, referenced);
           addColumns(needed, ColumnsUsed.inWhere(argument));
         }
       }
       for (MinWindow window : windowPlan.minWindows()) {
         for (Expression partition : window.partitionExpressions()) {
-          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+          collectColumnReferences(partition, qualifiers, primaryQualifier, needed, referenced);
           addColumns(needed, ColumnsUsed.inWhere(partition));
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
         Expression argument = window.argument();
         if (argument != null) {
-          addColumns(needed, SqlParser.collectQualifiedColumns(argument, qualifiers));
+          collectColumnReferences(argument, qualifiers, primaryQualifier, needed, referenced);
           addColumns(needed, ColumnsUsed.inWhere(argument));
         }
       }
       for (MaxWindow window : windowPlan.maxWindows()) {
         for (Expression partition : window.partitionExpressions()) {
-          addColumns(needed, SqlParser.collectQualifiedColumns(partition, qualifiers));
+          collectColumnReferences(partition, qualifiers, primaryQualifier, needed);
           addColumns(needed, ColumnsUsed.inWhere(partition));
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            addColumns(needed, SqlParser.collectQualifiedColumns(order.getExpression(), qualifiers));
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
         Expression argument = window.argument();
         if (argument != null) {
-          addColumns(needed, SqlParser.collectQualifiedColumns(argument, qualifiers));
+          collectColumnReferences(argument, qualifiers, primaryQualifier, needed);
           addColumns(needed, ColumnsUsed.inWhere(argument));
         }
       }
@@ -2774,24 +2846,91 @@ class JParqPreparedStatement implements PreparedStatement {
       for (AggregateFunctions.AggregateSpec spec : aggregatePlan.specs()) {
         if (!spec.countStar()) {
           for (Expression arg : spec.arguments()) {
-            addColumns(needed, ColumnsUsed.inWhere(arg));
+            Set<String> argColumns = ColumnsUsed.inWhere(arg);
+            addColumns(needed, argColumns);
+            addColumns(referenced, argColumns);
           }
         }
       }
       for (AggregateFunctions.GroupExpression groupExpr : aggregatePlan.groupExpressions()) {
-        addColumns(needed, ColumnsUsed.inWhere(groupExpr.expression()));
+        Set<String> groupColumns = ColumnsUsed.inWhere(groupExpr.expression());
+        addColumns(needed, groupColumns);
+        addColumns(referenced, groupColumns);
       }
     }
+    return new ColumnRequirement(needed, referenced);
+  }
 
-    if (!needed.isEmpty()) {
-      Schema avroProjection = AvroProjections.project(schema, needed);
-      AvroReadSupport.setRequestedProjection(configuration, avroProjection);
-      AvroReadSupport.setAvroReadSchema(configuration, avroProjection);
+  /**
+   * Validate that the referenced columns exist in the supplied schema.
+   *
+   * @param schema
+   *          table schema to inspect
+   * @param requiredColumns
+   *          columns referenced by the query
+   * @param tableName
+   *          logical table name used for error context
+   * @throws SQLException
+   *           if any referenced column is missing from the schema
+   */
+  private void validateRequiredColumns(Schema schema, Set<String> requiredColumns, String tableName,
+      List<String> labels, List<String> columnNames, Set<String> referencedColumns) throws SQLException {
+    if (schema == null || requiredColumns == null || requiredColumns.isEmpty()) {
+      return;
+    }
+    Set<String> available = new LinkedHashSet<>();
+    for (Schema.Field field : schema.getFields()) {
+      available.add(normalizeColumnKey(field.name()));
+    }
+    Set<String> normalizedLabels = new LinkedHashSet<>();
+    Set<String> mappedAliases = new LinkedHashSet<>();
+    if (labels != null) {
+      int index = 0;
+      for (String label : labels) {
+        String normalized = normalizeColumnKey(label);
+        if (normalized != null) {
+          normalizedLabels.add(normalized);
+        }
+        String columnName = columnNames == null || index >= columnNames.size() ? null : columnNames.get(index);
+        if (normalized != null && columnName != null) {
+          String normalizedColumn = normalizeColumnKey(columnName);
+          if (normalizedColumn != null && !normalized.equals(normalizedColumn)) {
+            mappedAliases.add(normalized);
+          }
+        }
+        index++;
+      }
+    }
+    Set<String> normalizedReferences = new LinkedHashSet<>();
+    if (referencedColumns != null) {
+      for (String column : referencedColumns) {
+        String normalized = normalizeColumnKey(column);
+        if (normalized != null) {
+          normalizedReferences.add(normalized);
+        }
+      }
+    }
+    Set<String> missing = new LinkedHashSet<>();
+    for (String column : requiredColumns) {
+      String normalized = normalizeColumnKey(column);
+      if (normalized == null) {
+        continue;
+      }
+      boolean labelMatch = normalizedLabels.contains(normalized);
+      boolean missingReference = !normalizedReferences.contains(normalized);
+      boolean aliasOnly = labelMatch && (missingReference || mappedAliases.contains(normalized));
+      if (!available.contains(normalized) && !aliasOnly) {
+        missing.add(column);
+      }
+    }
+    if (!missing.isEmpty()) {
+      String qualifier = tableName == null ? "" : " for table '" + tableName + "'";
+      throw new SQLException("Missing columns" + qualifier + ": " + String.join(", ", missing));
     }
   }
 
   private static void addColumns(Set<String> target, Set<String> source) {
-    if (source == null || source.isEmpty()) {
+    if (target == null || source == null || source.isEmpty()) {
       return;
     }
     for (String column : source) {
@@ -2803,6 +2942,22 @@ class JParqPreparedStatement implements PreparedStatement {
     if (column != null) {
       target.add(column);
     }
+  }
+
+  private boolean isOrdinalReference(String column) {
+    if (column == null) {
+      return false;
+    }
+    String trimmed = column.trim();
+    if (trimmed.isEmpty()) {
+      return false;
+    }
+    for (int i = 0; i < trimmed.length(); i++) {
+      if (!Character.isDigit(trimmed.charAt(i))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   @Override
