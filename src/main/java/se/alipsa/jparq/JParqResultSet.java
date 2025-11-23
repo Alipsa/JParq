@@ -489,7 +489,7 @@ public class JParqResultSet extends ResultSetAdapter {
       List<String> correlationLabels = this.columnOrder.isEmpty()
           ? new ArrayList<>(proj)
           : new ArrayList<>(this.columnOrder);
-      if (proj != null && !proj.isEmpty()) {
+      if (!proj.isEmpty()) {
         for (String column : proj) {
           if (column != null && !correlationLabels.contains(column)) {
             correlationLabels.add(column);
