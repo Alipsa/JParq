@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqDriver;
 import se.alipsa.jparq.engine.CorrelationContextBuilder;
+import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
@@ -92,8 +93,9 @@ class CorrelatedQualifierResolutionTest {
         List.of(List.of("ok")));
     StubbedExecutor executor = new StubbedExecutor(subqueryResult);
 
-    ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema, executor.executor(), List.of("d"),
-        Map.of(), Map.of(), correlationContext, WindowState.empty());
+    CorrelationMappings mappings = new CorrelationMappings(List.of("d"), Map.of(), Map.of(), correlationContext);
+    ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema, executor.executor(), mappings,
+        WindowState.empty());
 
     Expression expression = CCJSqlParserUtil.parseExpression("(SELECT v FROM dummy dd WHERE dd.parent = d.alias_id)");
 

@@ -75,7 +75,7 @@ public final class ValueExpressionEvaluator {
    *          the Avro schema describing the available columns
    */
   public ValueExpressionEvaluator(Schema schema) {
-    this(schema, null, List.of(), Map.of(), Map.of(), Map.of(), WindowState.empty());
+    this(schema, null, CorrelationMappings.empty(), WindowState.empty());
   }
 
   /**
@@ -88,7 +88,7 @@ public final class ValueExpressionEvaluator {
    *          executor used for scalar subqueries (may be {@code null})
    */
   public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor) {
-    this(schema, subqueryExecutor, List.of(), Map.of(), Map.of(), Map.of(), WindowState.empty());
+    this(schema, subqueryExecutor, CorrelationMappings.empty(), WindowState.empty());
   }
 
   /**
@@ -112,8 +112,46 @@ public final class ValueExpressionEvaluator {
    */
   public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping) {
-    this(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping, unqualifiedColumnMapping, Map.of(),
-        WindowState.empty());
+    this(schema, subqueryExecutor,
+        CorrelationMappings.of(outerQualifiers, qualifierColumnMapping, unqualifiedColumnMapping), WindowState.empty());
+  }
+
+  /**
+   * Create an evaluator bound to the supplied Avro {@link Schema} with optional
+   * subquery execution support, correlated outer qualifiers, and precomputed
+   * analytic window state.
+   *
+   * @param schema
+   *          the Avro schema describing the available columns
+   * @param subqueryExecutor
+   *          executor used for scalar subqueries (may be {@code null})
+   * @param mappings
+   *          correlation-related mappings for resolving qualified and unqualified
+   *          column references
+   * @param windowState
+   *          precomputed analytic function results available to projection
+   *          expressions
+   */
+  public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, CorrelationMappings mappings,
+      WindowState windowState) {
+    Map<String, Schema> fs = new HashMap<>();
+    Map<String, String> ci = new HashMap<>();
+    for (Schema.Field f : schema.getFields()) {
+      fs.put(f.name(), f.schema());
+      ci.put(f.name().toLowerCase(Locale.ROOT), f.name());
+    }
+    this.fieldSchemas = Map.copyOf(fs);
+    this.caseInsensitiveIndex = Map.copyOf(ci);
+    this.schema = schema;
+    this.subqueryExecutor = subqueryExecutor;
+    this.outerQualifiers = mappings.outerQualifiers() == null ? List.of() : List.copyOf(mappings.outerQualifiers());
+    this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(mappings.qualifierColumnMapping());
+    this.unqualifiedColumnMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(mappings.unqualifiedColumnMapping());
+    Map<String, Map<String, String>> ctx = mappings.correlationContext() == null
+        ? Map.of()
+        : mappings.correlationContext();
+    this.correlationContext = ColumnMappingUtil.normaliseQualifierMapping(ctx);
+    this.windowState = windowState == null ? WindowState.empty() : windowState;
   }
 
   /**
@@ -144,26 +182,17 @@ public final class ValueExpressionEvaluator {
    * @param windowState
    *          precomputed analytic function results available to projection
    *          expressions
+   * @deprecated Use
+   *             {@link #ValueExpressionEvaluator(Schema, SubqueryExecutor, CorrelationMappings, WindowState)}
+   *             instead
    */
+  @Deprecated(since = "0.6.0", forRemoval = true)
   public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping,
       Map<String, Map<String, String>> correlationContext, WindowState windowState) {
-    Map<String, Schema> fs = new HashMap<>();
-    Map<String, String> ci = new HashMap<>();
-    for (Schema.Field f : schema.getFields()) {
-      fs.put(f.name(), f.schema());
-      ci.put(f.name().toLowerCase(Locale.ROOT), f.name());
-    }
-    this.fieldSchemas = Map.copyOf(fs);
-    this.caseInsensitiveIndex = Map.copyOf(ci);
-    this.schema = schema;
-    this.subqueryExecutor = subqueryExecutor;
-    this.outerQualifiers = outerQualifiers == null ? List.of() : List.copyOf(outerQualifiers);
-    this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(qualifierColumnMapping);
-    this.unqualifiedColumnMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(unqualifiedColumnMapping);
-    Map<String, Map<String, String>> ctx = correlationContext == null ? Map.of() : correlationContext;
-    this.correlationContext = ColumnMappingUtil.normaliseQualifierMapping(ctx);
-    this.windowState = windowState == null ? WindowState.empty() : windowState;
+    this(schema, subqueryExecutor,
+        new CorrelationMappings(outerQualifiers, qualifierColumnMapping, unqualifiedColumnMapping, correlationContext),
+        windowState);
   }
 
   /**
