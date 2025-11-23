@@ -122,8 +122,9 @@ public final class ExpressionEvaluator {
     List<String> qualifiers = outerQualifiers == null ? List.of() : List.copyOf(outerQualifiers);
     this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(qualifierColumnMapping);
     this.unqualifiedColumnMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(unqualifiedColumnMapping);
-    this.literalEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, qualifiers,
-        this.qualifierColumnMapping, this.unqualifiedColumnMapping, this.qualifierColumnMapping, WindowState.empty());
+    CorrelationMappings mappings = new CorrelationMappings(qualifiers, this.qualifierColumnMapping,
+        this.unqualifiedColumnMapping, this.qualifierColumnMapping);
+    this.literalEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, mappings, WindowState.empty());
     this.subqueryExecutor = subqueryExecutor;
     this.outerQualifiers = qualifiers;
   }

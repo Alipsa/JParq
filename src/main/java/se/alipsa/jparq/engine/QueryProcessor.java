@@ -554,8 +554,9 @@ public final class QueryProcessor implements AutoCloseable {
 
   private void ensureOrderByEvaluator(Schema schema) {
     if (orderByEvaluator == null && schema != null) {
-      orderByEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
-          unqualifiedColumnMapping, qualifierColumnMapping, windowState());
+      CorrelationMappings mappings = new CorrelationMappings(outerQualifiers, qualifierColumnMapping,
+          unqualifiedColumnMapping, qualifierColumnMapping);
+      orderByEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, mappings, windowState());
     }
   }
 

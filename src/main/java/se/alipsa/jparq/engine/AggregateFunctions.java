@@ -1135,8 +1135,9 @@ public final class AggregateFunctions {
             whereEval = new ExpressionEvaluator(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
                 unqualifiedColumnMapping);
           }
-          valueEval = new ValueExpressionEvaluator(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
-              unqualifiedColumnMapping, normalizedCorrelationContext, WindowState.empty());
+          CorrelationMappings mappings = new CorrelationMappings(outerQualifiers, qualifierColumnMapping,
+              unqualifiedColumnMapping, normalizedCorrelationContext);
+          valueEval = new ValueExpressionEvaluator(schema, subqueryExecutor, mappings, WindowState.empty());
         }
 
         boolean matches = residual == null || whereEval.eval(residual, rec);

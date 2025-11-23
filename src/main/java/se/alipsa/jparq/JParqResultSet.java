@@ -35,6 +35,7 @@ import se.alipsa.jparq.engine.ColumnMappingProvider;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelationContextBuilder;
+import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.QueryProcessor;
@@ -1058,8 +1059,9 @@ public class JParqResultSet extends ResultSetAdapter {
 
   private void ensureProjectionEvaluator(GenericRecord record) {
     if (projectionEvaluator == null && record != null && !selectExpressions.isEmpty()) {
-      projectionEvaluator = new ValueExpressionEvaluator(record.getSchema(), subqueryExecutor, queryQualifiers,
-          qualifierColumnMapping, unqualifiedColumnMapping, qualifierColumnMapping, windowState);
+      CorrelationMappings mappings = new CorrelationMappings(queryQualifiers, qualifierColumnMapping,
+          unqualifiedColumnMapping, qualifierColumnMapping);
+      projectionEvaluator = new ValueExpressionEvaluator(record.getSchema(), subqueryExecutor, mappings, windowState);
     }
   }
 
