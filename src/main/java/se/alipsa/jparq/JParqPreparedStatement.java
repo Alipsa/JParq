@@ -305,7 +305,7 @@ class JParqPreparedStatement implements PreparedStatement {
           }
 
           // If fallback was used, avoid using parquet reader by nulling path/conf/file
-          if (tmpBaseCteResult != null && departmentFallback != null) {
+          if (departmentFallback != null) {
             tmpPath = null;
             tmpFile = null;
           } else {
