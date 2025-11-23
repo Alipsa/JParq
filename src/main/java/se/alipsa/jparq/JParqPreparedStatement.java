@@ -27,6 +27,7 @@ import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.HashMap;
@@ -225,6 +226,18 @@ class JParqPreparedStatement implements PreparedStatement {
                 tmpSelect.expressionOrder(), tmpSelect.qualifiedWildcards(), tmpSelect.groupByExpressions(),
                 tmpSelect.groupingSets(), tmpSelect.having(), tmpSelect.preLimit(), 0, tmpSelect.preOrderBy(),
                 tmpSelect.tableReferences(), tmpSelect.commonTableExpressions());
+          }
+          aggregatePlan = AggregateFunctions.plan(tmpSelect);
+          tmpResidual = tmpSelect.where();
+          tmpPredicate = Optional.empty();
+        } else if (baseRef != null && baseRef.unnest() != null) {
+          CteResult resolved = materializeUnnestTable(baseRef);
+          tmpBaseCteResult = resolved;
+          tmpFileAvro = resolved.schema();
+          if (!tmpSelect.qualifiedWildcards().isEmpty()) {
+            Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
+                baseRef, tmpFileAvro);
+            tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
           }
           aggregatePlan = AggregateFunctions.plan(tmpSelect);
           tmpResidual = tmpSelect.where();
@@ -1390,6 +1403,94 @@ class JParqPreparedStatement implements PreparedStatement {
     List<GenericRecord> rows = applySampleToRows(ref.tableSample(), data.rows());
     return new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), data.schema(), rows, ref.joinType(),
         ref.joinCondition(), ref.usingColumns(), null);
+  }
+
+  /**
+   * Materialize a standalone {@code UNNEST} table reference into an in-memory
+   * representation.
+   *
+   * @param baseRef
+   *          the table reference describing the {@code UNNEST} invocation
+   * @return {@link CteResult} containing the unnested rows and schema
+   * @throws SQLException
+   *           if the {@code UNNEST} expression cannot be evaluated
+   */
+  private CteResult materializeUnnestTable(SqlParser.TableReference baseRef) throws SQLException {
+    if (baseRef == null || baseRef.unnest() == null) {
+      throw new SQLException("UNNEST table reference cannot be null");
+    }
+    Schema literalSchema = Schema.createRecord("unnest_literal", null, null, false);
+    literalSchema.setFields(List.of());
+    GenericData.Record emptyRecord = new GenericData.Record(literalSchema);
+    ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(literalSchema);
+    Object evaluated = evaluator.eval(baseRef.unnest().expression(), emptyRecord);
+    Iterable<?> iterable = toIterable(evaluated);
+    if (iterable == null) {
+      throw new SQLException("UNNEST expression must evaluate to an array or iterable value");
+    }
+    List<Object> elements = new ArrayList<>();
+    for (Object element : iterable) {
+      elements.add(element);
+    }
+    Schema elementSchema = resolveUnnestElementSchema(elements);
+    String fallbackAlias = baseRef.tableAlias() != null && !baseRef.tableAlias().isBlank()
+        ? baseRef.tableAlias()
+        : "unnest";
+    UnnestTableBuilder.AliasPlan aliasPlan = UnnestTableBuilder.AliasPlan.build(baseRef.unnest(), elementSchema,
+        fallbackAlias);
+    Schema unnestSchema = UnnestTableBuilder.buildSchema(baseRef, elementSchema, aliasPlan);
+    List<GenericRecord> rows = UnnestTableBuilder.materializeRows(elements, elementSchema, aliasPlan, unnestSchema);
+    return new CteResult(unnestSchema, rows);
+  }
+
+  /**
+   * Resolve the Avro schema describing the elements produced by an {@code UNNEST}
+   * expression.
+   *
+   * @param elements
+   *          evaluated elements from the {@code UNNEST} input expression
+   * @return schema describing a single element
+   * @throws SQLException
+   *           if the element type cannot be resolved
+   */
+  private Schema resolveUnnestElementSchema(List<Object> elements) throws SQLException {
+    if (elements != null) {
+      for (Object element : elements) {
+        if (element instanceof GenericRecord record) {
+          Schema schema = JdbcTypeMapper.nonNullSchema(record.getSchema());
+          if (schema != null) {
+            return schema;
+          }
+        }
+      }
+    }
+    ValueColumnType elementType = determineColumnType(elements);
+    return schemaForColumnType(elementType, elements);
+  }
+
+  /**
+   * Convert values returned by an {@code UNNEST} expression into an iterable
+   * sequence.
+   *
+   * @param raw
+   *          value produced by the {@code UNNEST} argument expression
+   * @return iterable representation of the elements or {@code null} if the value
+   *         is not array-like
+   */
+  private Iterable<?> toIterable(Object raw) {
+    if (raw == null) {
+      return null;
+    }
+    if (raw instanceof GenericData.Array<?> array) {
+      return array;
+    }
+    if (raw instanceof Iterable<?> iterable) {
+      return iterable;
+    }
+    if (raw instanceof Object[] objects) {
+      return Arrays.asList(objects);
+    }
+    return null;
   }
 
   private CteResult materializeValueTable(ValueTableDefinition valueTable, String tableName) throws SQLException {

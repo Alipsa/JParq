@@ -161,7 +161,19 @@ public final class UnnestTableBuilder {
     return null;
   }
 
-  private static Schema buildSchema(TableReference reference, Schema elementSchema, AliasPlan aliasPlan) {
+  /**
+   * Construct the Avro schema representing the rows produced by an {@code UNNEST}
+   * operation.
+   *
+   * @param reference
+   *          table reference describing the {@code UNNEST} invocation
+   * @param elementSchema
+   *          schema of a single array element
+   * @param aliasPlan
+   *          alias mapping derived from the {@code UNNEST} definition
+   * @return Avro schema for the {@code UNNEST} result rows
+   */
+  public static Schema buildSchema(TableReference reference, Schema elementSchema, AliasPlan aliasPlan) {
     String schemaName = reference.tableAlias() != null ? reference.tableAlias() : "unnest_row";
     Schema schema = Schema.createRecord(schemaName, null, null, false);
     List<Schema.Field> fields = new ArrayList<>();
@@ -184,20 +196,22 @@ public final class UnnestTableBuilder {
     return schema;
   }
 
-  private static List<GenericRecord> evaluateAssignments(List<GenericRecord> assignments, int sourceIndex,
-      String arrayFieldName, Schema elementSchema, AliasPlan aliasPlan, Schema unnestSchema) {
-    if (assignments == null || sourceIndex < 0 || sourceIndex >= assignments.size()) {
-      return List.of();
-    }
-    GenericRecord sourceRecord = assignments.get(sourceIndex);
-    if (sourceRecord == null) {
-      return List.of();
-    }
-    Object raw = sourceRecord.get(arrayFieldName);
-    if (raw == null) {
-      return List.of();
-    }
-    Iterable<?> iterable = toIterable(raw);
+  /**
+   * Convert an iterable set of UNNEST elements into Avro {@link GenericRecord}
+   * rows using the supplied alias plan.
+   *
+   * @param iterable
+   *          the array elements produced by the {@code UNNEST} expression
+   * @param elementSchema
+   *          schema describing a single array element
+   * @param aliasPlan
+   *          alias mapping for projected columns and optional ordinality
+   * @param unnestSchema
+   *          Avro schema for the resulting UNNEST rows
+   * @return immutable list of records representing the UNNEST result set
+   */
+  public static List<GenericRecord> materializeRows(Iterable<?> iterable, Schema elementSchema, AliasPlan aliasPlan,
+      Schema unnestSchema) {
     if (iterable == null) {
       return List.of();
     }
@@ -221,7 +235,27 @@ public final class UnnestTableBuilder {
       rows.add(row);
       position++;
     }
-    return rows;
+    return List.copyOf(rows);
+  }
+
+  private static List<GenericRecord> evaluateAssignments(List<GenericRecord> assignments, int sourceIndex,
+      String arrayFieldName, Schema elementSchema, AliasPlan aliasPlan, Schema unnestSchema) {
+    if (assignments == null || sourceIndex < 0 || sourceIndex >= assignments.size()) {
+      return List.of();
+    }
+    GenericRecord sourceRecord = assignments.get(sourceIndex);
+    if (sourceRecord == null) {
+      return List.of();
+    }
+    Object raw = sourceRecord.get(arrayFieldName);
+    if (raw == null) {
+      return List.of();
+    }
+    Iterable<?> iterable = toIterable(raw);
+    if (iterable == null) {
+      return List.of();
+    }
+    return materializeRows(iterable, elementSchema, aliasPlan, unnestSchema);
   }
 
   private static Iterable<?> toIterable(Object raw) {
@@ -237,9 +271,34 @@ public final class UnnestTableBuilder {
     return null;
   }
 
-  private record AliasPlan(List<String> elementAliases, boolean withOrdinality, String ordinalAlias) {
+  /**
+   * Alias resolution plan for {@code UNNEST} projections, including optional
+   * ordinality column handling.
+   *
+   * @param elementAliases
+   *          aliases assigned to the unnested elements
+   * @param withOrdinality
+   *          whether {@code WITH ORDINALITY} was requested
+   * @param ordinalAlias
+   *          alias used for the ordinality column when present
+   */
+  public record AliasPlan(List<String> elementAliases, boolean withOrdinality, String ordinalAlias) {
 
-    static AliasPlan build(UnnestDefinition definition, Schema elementSchema, String fallbackAlias)
+    /**
+     * Build an {@link AliasPlan} describing how UNNEST results should expose
+     * element columns and optional ordinality.
+     *
+     * @param definition
+     *          parsed {@code UNNEST} definition including aliases and ordinality
+     * @param elementSchema
+     *          Avro schema for a single array element
+     * @param fallbackAlias
+     *          default alias to use when no explicit element alias is provided
+     * @return a populated {@link AliasPlan} ready for schema and row generation
+     * @throws SQLException
+     *           if alias validation fails or aliases do not match the element shape
+     */
+    public static AliasPlan build(UnnestDefinition definition, Schema elementSchema, String fallbackAlias)
         throws SQLException {
       List<String> aliases = new ArrayList<>(definition.columnAliases());
       boolean withOrdinality = definition.withOrdinality();
