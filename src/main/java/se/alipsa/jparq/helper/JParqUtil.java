@@ -3,9 +3,11 @@ package se.alipsa.jparq.helper;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
+import org.apache.avro.generic.GenericData;
 import se.alipsa.jparq.model.MetaDataResultSet;
 
 /** Utility methods. */
@@ -109,5 +111,30 @@ public final class JParqUtil {
       trimmed = trimmed.substring(1, trimmed.length() - 1);
     }
     return trimmed.toLowerCase(Locale.ROOT);
+  }
+
+  /**
+   * Convert an array-like object into an {@link Iterable} so callers can process
+   * it uniformly.
+   *
+   * @param raw
+   *          the value that should be treated as an iterable collection
+   * @return an iterable view of {@code raw}, or {@code null} when it is not
+   *         array-like
+   */
+  public static Iterable<?> toIterable(Object raw) {
+    if (raw == null) {
+      return null;
+    }
+    if (raw instanceof GenericData.Array<?> array) {
+      return array;
+    }
+    if (raw instanceof Iterable<?> iterable) {
+      return iterable;
+    }
+    if (raw instanceof Object[] objects) {
+      return Arrays.asList(objects);
+    }
+    return null;
   }
 }
