@@ -27,7 +27,6 @@ import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.HashMap;
@@ -1424,7 +1423,7 @@ class JParqPreparedStatement implements PreparedStatement {
     GenericData.Record emptyRecord = new GenericData.Record(literalSchema);
     ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(literalSchema);
     Object evaluated = evaluator.eval(baseRef.unnest().expression(), emptyRecord);
-    Iterable<?> iterable = toIterable(evaluated);
+    Iterable<?> iterable = JParqUtil.toIterable(evaluated);
     if (iterable == null) {
       throw new SQLException("UNNEST expression must evaluate to an array or iterable value");
     }
@@ -1466,31 +1465,6 @@ class JParqPreparedStatement implements PreparedStatement {
     }
     ValueColumnType elementType = determineColumnType(elements);
     return schemaForColumnType(elementType, elements);
-  }
-
-  /**
-   * Convert values returned by an {@code UNNEST} expression into an iterable
-   * sequence.
-   *
-   * @param raw
-   *          value produced by the {@code UNNEST} argument expression
-   * @return iterable representation of the elements or {@code null} if the value
-   *         is not array-like
-   */
-  private Iterable<?> toIterable(Object raw) {
-    if (raw == null) {
-      return null;
-    }
-    if (raw instanceof GenericData.Array<?> array) {
-      return array;
-    }
-    if (raw instanceof Iterable<?> iterable) {
-      return iterable;
-    }
-    if (raw instanceof Object[] objects) {
-      return Arrays.asList(objects);
-    }
-    return null;
   }
 
   private CteResult materializeValueTable(ValueTableDefinition valueTable, String tableName) throws SQLException {

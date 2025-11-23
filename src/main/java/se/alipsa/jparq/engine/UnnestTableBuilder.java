@@ -3,7 +3,6 @@ package se.alipsa.jparq.engine;
 import java.io.IOException;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -251,24 +250,11 @@ public final class UnnestTableBuilder {
     if (raw == null) {
       return List.of();
     }
-    Iterable<?> iterable = toIterable(raw);
+    Iterable<?> iterable = JParqUtil.toIterable(raw);
     if (iterable == null) {
       return List.of();
     }
     return materializeRows(iterable, elementSchema, aliasPlan, unnestSchema);
-  }
-
-  private static Iterable<?> toIterable(Object raw) {
-    if (raw instanceof GenericData.Array<?> array) {
-      return array;
-    }
-    if (raw instanceof Iterable<?> iterable) {
-      return iterable;
-    }
-    if (raw instanceof Object[] objects) {
-      return Arrays.asList(objects);
-    }
-    return null;
   }
 
   /**
