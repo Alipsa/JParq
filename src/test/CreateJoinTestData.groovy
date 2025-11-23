@@ -39,7 +39,7 @@ departments = Matrix.builder('departments').data(
   id: [1,2,3],  
   department: ['IT', 'HR', 'Sales']
 ).types(int, String).build()
-MatrixParquetWriter.write(employees, new File(scriptDir,'resources/acme/departments.parquet'))
+MatrixParquetWriter.write(departments, new File(scriptDir,'resources/acme/departments.parquet'))
 println "exported departments"
 
 employeeDepartments = Matrix.builder('employee_department').data(

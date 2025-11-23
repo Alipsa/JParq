@@ -6,10 +6,12 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.regex.Pattern;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
@@ -43,6 +45,7 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.DateTimeExpressions;
+import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JsonExpressions;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.StringExpressions;
@@ -61,6 +64,7 @@ public final class ValueExpressionEvaluator {
   private final List<String> outerQualifiers;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
+  private final Map<String, Map<String, String>> correlationContext;
   private final WindowState windowState;
   private ExpressionEvaluator conditionEvaluator;
 
@@ -71,7 +75,7 @@ public final class ValueExpressionEvaluator {
    *          the Avro schema describing the available columns
    */
   public ValueExpressionEvaluator(Schema schema) {
-    this(schema, null, List.of(), Map.of(), Map.of(), WindowState.empty());
+    this(schema, null, CorrelationMappings.empty(), WindowState.empty());
   }
 
   /**
@@ -84,7 +88,7 @@ public final class ValueExpressionEvaluator {
    *          executor used for scalar subqueries (may be {@code null})
    */
   public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor) {
-    this(schema, subqueryExecutor, List.of(), Map.of(), Map.of(), WindowState.empty());
+    this(schema, subqueryExecutor, CorrelationMappings.empty(), WindowState.empty());
   }
 
   /**
@@ -108,8 +112,46 @@ public final class ValueExpressionEvaluator {
    */
   public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping) {
-    this(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping, unqualifiedColumnMapping,
-        WindowState.empty());
+    this(schema, subqueryExecutor,
+        CorrelationMappings.of(outerQualifiers, qualifierColumnMapping, unqualifiedColumnMapping), WindowState.empty());
+  }
+
+  /**
+   * Create an evaluator bound to the supplied Avro {@link Schema} with optional
+   * subquery execution support, correlated outer qualifiers, and precomputed
+   * analytic window state.
+   *
+   * @param schema
+   *          the Avro schema describing the available columns
+   * @param subqueryExecutor
+   *          executor used for scalar subqueries (may be {@code null})
+   * @param mappings
+   *          correlation-related mappings for resolving qualified and unqualified
+   *          column references
+   * @param windowState
+   *          precomputed analytic function results available to projection
+   *          expressions
+   */
+  public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, CorrelationMappings mappings,
+      WindowState windowState) {
+    Map<String, Schema> fs = new HashMap<>();
+    Map<String, String> ci = new HashMap<>();
+    for (Schema.Field f : schema.getFields()) {
+      fs.put(f.name(), f.schema());
+      ci.put(f.name().toLowerCase(Locale.ROOT), f.name());
+    }
+    this.fieldSchemas = Map.copyOf(fs);
+    this.caseInsensitiveIndex = Map.copyOf(ci);
+    this.schema = schema;
+    this.subqueryExecutor = subqueryExecutor;
+    this.outerQualifiers = mappings.outerQualifiers() == null ? List.of() : List.copyOf(mappings.outerQualifiers());
+    this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(mappings.qualifierColumnMapping());
+    this.unqualifiedColumnMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(mappings.unqualifiedColumnMapping());
+    Map<String, Map<String, String>> ctx = mappings.correlationContext() == null
+        ? Map.of()
+        : mappings.correlationContext();
+    this.correlationContext = ColumnMappingUtil.normaliseQualifierMapping(ctx);
+    this.windowState = windowState == null ? WindowState.empty() : windowState;
   }
 
   /**
@@ -131,27 +173,26 @@ public final class ValueExpressionEvaluator {
    *          mapping of unqualified column names to canonical names for
    *          expressions referencing columns that are unique across all tables
    *          (may be {@code null})
+   * @param correlationContext
+   *          qualifier-aware correlation context used to resolve correlated
+   *          columns in subqueries. This context is built from projection labels
+   *          and canonical column names so that scalar and EXISTS subqueries can
+   *          reference outer aliases even when they differ from the underlying
+   *          field names.
    * @param windowState
    *          precomputed analytic function results available to projection
    *          expressions
+   * @deprecated Use
+   *             {@link #ValueExpressionEvaluator(Schema, SubqueryExecutor, CorrelationMappings, WindowState)}
+   *             instead
    */
+  @Deprecated(since = "0.6.0", forRemoval = true)
   public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping,
-      WindowState windowState) {
-    Map<String, Schema> fs = new HashMap<>();
-    Map<String, String> ci = new HashMap<>();
-    for (Schema.Field f : schema.getFields()) {
-      fs.put(f.name(), f.schema());
-      ci.put(f.name().toLowerCase(Locale.ROOT), f.name());
-    }
-    this.fieldSchemas = Map.copyOf(fs);
-    this.caseInsensitiveIndex = Map.copyOf(ci);
-    this.schema = schema;
-    this.subqueryExecutor = subqueryExecutor;
-    this.outerQualifiers = outerQualifiers == null ? List.of() : List.copyOf(outerQualifiers);
-    this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(qualifierColumnMapping);
-    this.unqualifiedColumnMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(unqualifiedColumnMapping);
-    this.windowState = windowState == null ? WindowState.empty() : windowState;
+      Map<String, Map<String, String>> correlationContext, WindowState windowState) {
+    this(schema, subqueryExecutor,
+        new CorrelationMappings(outerQualifiers, qualifierColumnMapping, unqualifiedColumnMapping, correlationContext),
+        windowState);
   }
 
   /**
@@ -354,8 +395,9 @@ public final class ValueExpressionEvaluator {
     if (subqueryExecutor == null) {
       throw new IllegalStateException("ARRAY subqueries require a subquery executor");
     }
-    CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
-        (qualifier, column) -> resolveColumnValue(qualifier, column, record));
+    CorrelatedSubqueryRewriter.Result rewritten = SubqueryCorrelatedFiltersIsolator.isolate(subSelect,
+        correlationQualifiers(), correlationColumns(), correlationContext,
+        (qualifier, column) -> resolveCorrelatedValue(qualifier, column, record));
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
         : subqueryExecutor.execute(subSelect);
@@ -500,8 +542,9 @@ public final class ValueExpressionEvaluator {
     if (subqueryExecutor == null) {
       throw new IllegalStateException("Scalar subqueries require a subquery executor");
     }
-    CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
-        (qualifier, column) -> resolveColumnValue(qualifier, column, record));
+    CorrelatedSubqueryRewriter.Result rewritten = SubqueryCorrelatedFiltersIsolator.isolate(subSelect,
+        correlationQualifiers(), correlationColumns(), correlationContext,
+        (qualifier, column) -> resolveCorrelatedValue(qualifier, column, record));
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
         : subqueryExecutor.execute(subSelect);
@@ -1322,6 +1365,85 @@ public final class ValueExpressionEvaluator {
   private Object resolveColumnValue(String qualifier, String columnName, GenericRecord record) {
     String canonical = canonicalFieldName(qualifier, columnName);
     return AvroCoercions.resolveColumnValue(canonical, record, fieldSchemas, caseInsensitiveIndex);
+  }
+
+  private Object resolveCorrelatedValue(String qualifier, String columnName, GenericRecord record) {
+    String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
+    String normalizedColumn = columnName == null ? null : columnName.toLowerCase(Locale.ROOT);
+    if (normalizedQualifier != null && normalizedColumn != null && !correlationContext.isEmpty()) {
+      Map<String, String> mapping = correlationContext.get(normalizedQualifier);
+      if (mapping != null) {
+        String canonical = mapping.get(normalizedColumn);
+        if (canonical != null) {
+          assertCorrelatedFieldPresent(normalizedQualifier, normalizedColumn, canonical);
+          Object val = AvroCoercions.resolveColumnValue(canonical, record, fieldSchemas, caseInsensitiveIndex);
+          if (val != null) {
+            return val;
+          }
+        }
+      }
+    }
+    Object direct = resolveColumnValue(qualifier, columnName, record);
+    if (direct != null) {
+      return direct;
+    }
+    return resolveColumnValue(null, columnName, record);
+  }
+
+  /**
+   * Guard correlated lookups to ensure the correlation context resolves to a
+   * field that exists on the current record. When the correlation context
+   * supplies a canonical column that is absent from the row schema, correlated
+   * predicates silently evaluate against {@code null} values, masking alias
+   * mismatches for derived tables.
+   *
+   * @param normalizedQualifier
+   *          qualifier participating in the correlation lookup
+   * @param normalizedColumn
+   *          correlated column name normalized for lookup
+   * @param canonical
+   *          canonical column name derived from the correlation context
+   */
+  private void assertCorrelatedFieldPresent(String normalizedQualifier, String normalizedColumn, String canonical) {
+    if (canonical == null || canonical.isBlank()) {
+      return;
+    }
+    if (fieldSchemas.containsKey(canonical)) {
+      return;
+    }
+    String fallback = caseInsensitiveIndex.get(canonical.toLowerCase(Locale.ROOT));
+    if (fallback != null && fieldSchemas.containsKey(fallback)) {
+      return;
+    }
+    throw new IllegalStateException("Correlation context mapped " + normalizedQualifier + "." + normalizedColumn
+        + " to missing field '" + canonical + "' (available fields: " + fieldSchemas.keySet() + ")");
+  }
+
+  private List<String> correlationQualifiers() {
+    if (correlationContext.isEmpty()) {
+      return outerQualifiers;
+    }
+    Set<String> qualifiers = new LinkedHashSet<>(outerQualifiers);
+    qualifiers.addAll(correlationContext.keySet());
+    return List.copyOf(qualifiers);
+  }
+
+  private Set<String> correlationColumns() {
+    if (correlationContext.isEmpty()) {
+      return Set.of();
+    }
+    Set<String> columns = new LinkedHashSet<>();
+    for (Map<String, String> mapping : correlationContext.values()) {
+      if (mapping == null) {
+        continue;
+      }
+      for (String key : mapping.keySet()) {
+        if (!caseInsensitiveIndex.containsKey(key)) {
+          columns.add(key);
+        }
+      }
+    }
+    return Set.copyOf(columns);
   }
 
   private String canonicalFieldName(String qualifier, String columnName) {

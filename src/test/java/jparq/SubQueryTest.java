@@ -14,7 +14,11 @@ import java.nio.file.Paths;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
@@ -61,7 +65,6 @@ public class SubQueryTest {
 
         assertEquals(32, rows, "Expected 32 rows");
       } catch (SQLException e) {
-        System.err.println(String.join("\n", seen));
         fail(e);
       }
     });
@@ -161,6 +164,47 @@ public class SubQueryTest {
   }
 
   @Test
+  void correlatedScalarSubqueryUsesProjectionAlias() {
+    Map<Integer, Long> cylinderCounts = new LinkedHashMap<>();
+
+    jparqSql.query("SELECT cyl, COUNT(*) AS cnt FROM mtcars GROUP BY cyl", rs -> {
+      try {
+        while (rs.next()) {
+          cylinderCounts.put(rs.getInt("cyl"), rs.getLong("cnt"));
+        }
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    assertFalse(cylinderCounts.isEmpty(), "Baseline cylinder counts should be available for correlation validation");
+
+    Set<Integer> seenGroups = new HashSet<>();
+
+    jparqSql.query("SELECT cyl AS grp, " + "(SELECT COUNT(*) FROM mtcars m2 WHERE m2.cyl = grp) AS correlated_cnt "
+        + "FROM mtcars mc ORDER BY grp, model", rs -> {
+          try {
+            int rows = 0;
+            while (rs.next()) {
+              rows++;
+              int group = rs.getInt("grp");
+              long correlatedCount = rs.getLong("correlated_cnt");
+              Long expected = cylinderCounts.get(group);
+              assertNotNull(expected, "Unexpected cylinder value returned: " + group);
+              assertEquals(expected.longValue(), correlatedCount,
+                  "Correlation context should expose projection aliases to subqueries");
+              seenGroups.add(group);
+            }
+            assertFalse(seenGroups.isEmpty(), "Expected correlated counts for at least one group");
+            assertEquals(cylinderCounts.size(), seenGroups.size(),
+                "Expected correlated counts for each distinct cylinder");
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
+  }
+
+  @Test
   void havingClauseSupportsSubqueries() {
     jparqSql.query("SELECT COUNT(*) AS total FROM mtcars HAVING COUNT(*) >= (SELECT COUNT(*) FROM mtcars)", rs -> {
       try {
@@ -179,6 +223,32 @@ public class SubQueryTest {
         fail(e);
       }
     });
+  }
+
+  @Test
+  void havingClauseCorrelatesUnqualifiedGroupColumns() throws IOException {
+    Map<Integer, Long> expectedCounts = loadCars().stream()
+        .collect(Collectors.groupingBy(Car::cyl, Collectors.counting()));
+
+    jparqSql.query("SELECT cyl AS grp, COUNT(*) AS total FROM mtcars "
+        + "GROUP BY cyl HAVING EXISTS (SELECT 1 FROM mtcars m2 WHERE m2.cyl = cyl) ORDER BY grp", rs -> {
+          try {
+            int rows = 0;
+            while (rs.next()) {
+              rows++;
+              int cylinders = rs.getInt("grp");
+              long total = rs.getLong("total");
+              Long expected = expectedCounts.get(cylinders);
+              assertNotNull(expected, "Unexpected cylinder group returned: " + cylinders);
+              assertEquals(expected.longValue(), total,
+                  "HAVING subquery should correlate grouped column aliases by value");
+            }
+            assertEquals(expectedCounts.size(), rows,
+                "All distinct cylinder groups should survive the HAVING correlation filter");
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
   }
 
   /**

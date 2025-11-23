@@ -14,6 +14,7 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -26,10 +27,15 @@ import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.OrderByElement;
+import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.AggregateFunctions;
 import se.alipsa.jparq.engine.AvroCoercions;
+import se.alipsa.jparq.engine.ColumnMappingProvider;
+import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.ColumnsUsed;
+import se.alipsa.jparq.engine.CorrelationContextBuilder;
+import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.QueryProcessor;
@@ -43,6 +49,7 @@ import se.alipsa.jparq.engine.window.CumeDistWindow;
 import se.alipsa.jparq.engine.window.DenseRankWindow;
 import se.alipsa.jparq.engine.window.MaxWindow;
 import se.alipsa.jparq.engine.window.MinWindow;
+import se.alipsa.jparq.engine.window.NthValueWindow;
 import se.alipsa.jparq.engine.window.NtileWindow;
 import se.alipsa.jparq.engine.window.PercentRankWindow;
 import se.alipsa.jparq.engine.window.RankWindow;
@@ -116,6 +123,12 @@ public class JParqResultSet extends ResultSetAdapter {
    *          the physical column names (may be null)
    * @param subqueryExecutor
    *          executor used to evaluate subqueries during row materialization
+   *
+   *          The constructor derives a correlation context from the projection
+   *          labels and canonical column names so that correlated subqueries can
+   *          reference outer aliases reliably, even when the underlying schema
+   *          uses different field names. That context is propagated to evaluators
+   *          for WHERE, ORDER BY, window functions, and projection expressions.
    * @throws SQLException
    *           if reading fails
    */
@@ -137,16 +150,19 @@ public class JParqResultSet extends ResultSetAdapter {
         }
       }
     }
+    if (qualifiers.isEmpty() && tableName != null && !tableName.isBlank()) {
+      qualifiers.add(tableName);
+    }
     this.queryQualifiers = List.copyOf(qualifiers);
     Map<String, Map<String, String>> qualifierMapping = Map.of();
     Map<String, String> unqualifiedMapping = Map.of();
-    if (reader instanceof JoinRecordReader joinReader) {
-      qualifierMapping = joinReader.qualifierColumnMapping();
-      unqualifiedMapping = joinReader.unqualifiedColumnMapping();
+    if (reader instanceof ColumnMappingProvider mappingProvider) {
+      qualifierMapping = mappingProvider.qualifierColumnMapping();
+      unqualifiedMapping = mappingProvider.unqualifiedColumnMapping();
     }
-    this.qualifierColumnMapping = qualifierMapping;
-    this.unqualifiedColumnMapping = unqualifiedMapping;
-    Set<String> availableQualifiers = new LinkedHashSet<>(this.qualifierColumnMapping.keySet());
+    Map<String, String> normalizedUnqualifiedMapping = ColumnMappingUtil
+        .normaliseUnqualifiedMapping(unqualifiedMapping);
+    Set<String> availableQualifiers = new LinkedHashSet<>(qualifierMapping.keySet());
     if (availableQualifiers.isEmpty() && !this.queryQualifiers.isEmpty()) {
       for (String qualifier : this.queryQualifiers) {
         String normalized = JParqUtil.normalizeQualifier(qualifier);
@@ -168,10 +184,37 @@ public class JParqResultSet extends ResultSetAdapter {
       labels = new ArrayList<>(aggregatePlan.labels());
       physical = null;
       canonicalLookup = null;
+      List<String> correlationColumns = buildCorrelationColumns(canonicalLookup, labels, labels);
+      List<String> correlationCanonical = new ArrayList<>(labels.size());
+      for (int i = 0; i < labels.size(); i++) {
+        String canonical = null;
+        AggregateFunctions.ResultColumn resultColumn = aggregatePlan.resultColumns().get(i);
+        if (resultColumn.kind() == AggregateFunctions.ColumnKind.GROUP && resultColumn.groupIndex() >= 0
+            && resultColumn.groupIndex() < aggregatePlan.groupExpressions().size()) {
+          Expression expr = aggregatePlan.groupExpressions().get(resultColumn.groupIndex()).expression();
+          if (expr instanceof Column column) {
+            String fallbackName = select.columnNames() != null && i < select.columnNames().size()
+                ? select.columnNames().get(i)
+                : correlationColumns.get(i);
+            canonical = canonicalColumnName(column, fallbackName, qualifierMapping, unqualifiedMapping);
+          }
+        }
+        if (canonical == null && select.columnNames() != null && i < select.columnNames().size()) {
+          canonical = select.columnNames().get(i);
+        }
+        if (canonical == null) {
+          canonical = correlationColumns.get(i);
+        }
+        correlationCanonical.add(canonical);
+      }
+      Map<String, String> enrichedUnqualifiedMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping,
+          correlationCanonical);
+      Map<String, Map<String, String>> correlationContext = CorrelationContextBuilder.build(queryQualifiers,
+          correlationColumns, correlationCanonical, qualifierMapping);
       try {
         AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan,
-            effectiveResidual, select.having(), select.orderBy(), subqueryExecutor, queryQualifiers,
-            qualifierColumnMapping, unqualifiedColumnMapping);
+            effectiveResidual, select.having(), select.orderBy(), subqueryExecutor, queryQualifiers, qualifierMapping,
+            enrichedUnqualifiedMapping, correlationContext);
         this.aggregateRows = new ArrayList<>(result.rows());
         this.aggregateSqlTypes = result.sqlTypes();
       } catch (Exception e) {
@@ -180,6 +223,8 @@ public class JParqResultSet extends ResultSetAdapter {
       this.columnOrder = labels;
       this.physicalColumnOrder = physical;
       this.canonicalColumnNames = canonicalLookup;
+      this.unqualifiedColumnMapping = enrichedUnqualifiedMapping;
+      this.qualifierColumnMapping = correlationContext;
       this.aggregateQuery = true;
       this.aggregateOnRow = false;
       this.aggregateRowIndex = -1;
@@ -209,14 +254,20 @@ public class JParqResultSet extends ResultSetAdapter {
         if (this.columnOrder.isEmpty() && !req.isEmpty() && !req.contains("*")) {
           this.columnOrder.addAll(req); // mutable, safe
         }
+        List<String> correlationColumns = this.columnOrder.isEmpty() ? List.of() : List.copyOf(this.columnOrder);
+        Map<String, String> enrichedUnqualifiedMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping,
+            correlationColumns);
+        this.unqualifiedColumnMapping = enrichedUnqualifiedMapping;
+        this.qualifierColumnMapping = CorrelationContextBuilder.build(queryQualifiers, correlationColumns,
+            correlationColumns, qualifierMapping);
         List<String> distinctProjection = resolveDistinctColumns(select);
         QueryProcessor.Options options = QueryProcessor.Options.builder().distinct(select.distinct())
             .distinctColumns(distinctProjection).distinctBeforePreLimit(select.innerDistinct())
             .subqueryExecutor(subqueryExecutor).preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
-            .outerQualifiers(queryQualifiers).qualifierColumnMapping(qualifierColumnMapping)
-            .unqualifiedColumnMapping(unqualifiedColumnMapping).preStageDistinctColumns(select.innerDistinctColumns())
-            .offset(select.offset()).preOffset(select.preOffset()).windowPlan(windowPlan)
-            .orderByExpressions(orderByExpressions);
+            .outerQualifiers(queryQualifiers).qualifierColumnMapping(this.qualifierColumnMapping)
+            .unqualifiedColumnMapping(this.unqualifiedColumnMapping)
+            .preStageDistinctColumns(select.innerDistinctColumns()).offset(select.offset())
+            .preOffset(select.preOffset()).windowPlan(windowPlan).orderByExpressions(orderByExpressions);
         List<String> projectionColumns = requestedColumns;
         if (projectionColumns == null || projectionColumns.isEmpty()) {
           projectionColumns = select.columns();
@@ -229,9 +280,6 @@ public class JParqResultSet extends ResultSetAdapter {
       }
 
       var schema = first.getSchema();
-      var evaluator = new se.alipsa.jparq.engine.ExpressionEvaluator(schema, subqueryExecutor, queryQualifiers,
-          qualifierColumnMapping, unqualifiedColumnMapping);
-      final boolean match = effectiveResidual == null || evaluator.eval(effectiveResidual, first);
 
       // Compute physical projection from schema; only add if we don’t already have
       // labels
@@ -243,6 +291,20 @@ public class JParqResultSet extends ResultSetAdapter {
       requiredColumns.addAll(SqlParser.collectQualifiedColumns(select.having(), queryQualifiers));
       for (Expression expression : selectExpressions) {
         requiredColumns.addAll(SqlParser.collectQualifiedColumns(expression, queryQualifiers));
+      }
+      if (select.orderBy() != null) {
+        for (SqlParser.OrderKey orderKey : select.orderBy()) {
+          if (orderKey != null && orderKey.column() != null) {
+            requiredColumns.add(orderKey.column());
+          }
+        }
+      }
+      if (select.preOrderBy() != null) {
+        for (SqlParser.OrderKey orderKey : select.preOrderBy()) {
+          if (orderKey != null && orderKey.column() != null) {
+            requiredColumns.add(orderKey.column());
+          }
+        }
       }
       if (windowPlan != null && !windowPlan.isEmpty()) {
         for (RowNumberWindow window : windowPlan.rowNumberWindows()) {
@@ -379,11 +441,72 @@ public class JParqResultSet extends ResultSetAdapter {
             requiredColumns.addAll(SqlParser.collectQualifiedColumns(argument, queryQualifiers));
           }
         }
+        for (NthValueWindow window : windowPlan.nthValueWindows()) {
+          for (Expression partition : window.partitionExpressions()) {
+            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
+          }
+          for (OrderByElement order : window.orderByElements()) {
+            if (order != null && order.getExpression() != null) {
+              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
+            }
+          }
+          Expression valueExpression = window.valueExpression();
+          if (valueExpression != null) {
+            requiredColumns.addAll(SqlParser.collectQualifiedColumns(valueExpression, queryQualifiers));
+          }
+          Expression nthExpression = window.nthExpression();
+          if (nthExpression != null) {
+            requiredColumns.addAll(SqlParser.collectQualifiedColumns(nthExpression, queryQualifiers));
+          }
+        }
+      }
+      if (schema != null) {
+        for (Schema.Field field : schema.getFields()) {
+          requiredColumns.add(field.name());
+        }
+      }
+      if (physicalColumnOrder != null && columnOrder != null && !physicalColumnOrder.isEmpty()
+          && !columnOrder.isEmpty()) {
+        Map<String, String> physicalToLabel = new LinkedHashMap<>();
+        int limit = Math.min(physicalColumnOrder.size(), columnOrder.size());
+        for (int i = 0; i < limit; i++) {
+          String physicalName = physicalColumnOrder.get(i);
+          String labelName = columnOrder.get(i);
+          if (physicalName != null && labelName != null) {
+            physicalToLabel.put(physicalName, labelName);
+          }
+        }
+        Set<String> remapped = new LinkedHashSet<>();
+        for (String column : requiredColumns) {
+          String mapped = physicalToLabel.get(column);
+          remapped.add(mapped == null ? column : mapped);
+        }
+        requiredColumns = remapped;
       }
       proj = new ArrayList<>(requiredColumns);
       if (this.columnOrder.isEmpty()) {
         this.columnOrder.addAll(proj); // keep mutable
       }
+      List<String> correlationLabels = this.columnOrder.isEmpty()
+          ? new ArrayList<>(proj)
+          : new ArrayList<>(this.columnOrder);
+      if (!proj.isEmpty()) {
+        for (String column : proj) {
+          if (column != null && !correlationLabels.contains(column)) {
+            correlationLabels.add(column);
+          }
+        }
+      }
+      List<String> correlationColumns = buildCorrelationColumns(this.canonicalColumnNames, correlationLabels, proj);
+      Map<String, String> enrichedUnqualifiedMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping,
+          correlationColumns);
+      this.unqualifiedColumnMapping = enrichedUnqualifiedMapping;
+      this.qualifierColumnMapping = CorrelationContextBuilder.build(queryQualifiers, correlationLabels,
+          correlationColumns, qualifierMapping);
+
+      var evaluator = new se.alipsa.jparq.engine.ExpressionEvaluator(schema, subqueryExecutor, queryQualifiers,
+          this.qualifierColumnMapping, this.unqualifiedColumnMapping);
+      final boolean match = effectiveResidual == null || evaluator.eval(effectiveResidual, first);
 
       var order = select.orderBy();
       boolean usePrefetchedAsCurrent = match && select.offset() == 0;
@@ -395,7 +518,7 @@ public class JParqResultSet extends ResultSetAdapter {
             .distinctBeforePreLimit(select.innerDistinct()).firstAlreadyRead(first).subqueryExecutor(subqueryExecutor)
             .preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
             .preStageDistinctColumns(select.innerDistinctColumns()).outerQualifiers(queryQualifiers)
-            .qualifierColumnMapping(qualifierColumnMapping).unqualifiedColumnMapping(unqualifiedColumnMapping)
+            .qualifierColumnMapping(this.qualifierColumnMapping).unqualifiedColumnMapping(this.unqualifiedColumnMapping)
             .offset(select.offset()).preOffset(select.preOffset()).windowPlan(windowPlan)
             .orderByExpressions(orderByExpressions);
         this.qp = new QueryProcessor(reader, proj, effectiveResidual, select.limit(), options);
@@ -407,9 +530,9 @@ public class JParqResultSet extends ResultSetAdapter {
             .distinctColumns(distinctProjection).distinctBeforePreLimit(select.innerDistinct()).orderBy(order)
             .firstAlreadyRead(first).subqueryExecutor(subqueryExecutor).preLimit(select.preLimit())
             .preOrderBy(select.preOrderBy()).preStageDistinctColumns(select.innerDistinctColumns())
-            .outerQualifiers(queryQualifiers).qualifierColumnMapping(qualifierColumnMapping)
-            .unqualifiedColumnMapping(unqualifiedColumnMapping).offset(select.offset()).preOffset(select.preOffset())
-            .windowPlan(windowPlan).orderByExpressions(orderByExpressions);
+            .outerQualifiers(queryQualifiers).qualifierColumnMapping(this.qualifierColumnMapping)
+            .unqualifiedColumnMapping(this.unqualifiedColumnMapping).offset(select.offset())
+            .preOffset(select.preOffset()).windowPlan(windowPlan).orderByExpressions(orderByExpressions);
         this.qp = new QueryProcessor(reader, proj, effectiveResidual, select.limit(), options);
         this.current = qp.nextMatching();
         this.windowState = qp.windowState();
@@ -525,19 +648,14 @@ public class JParqResultSet extends ResultSetAdapter {
 
     // projection name (may be an alias/label)
     String projectedName = columnOrder.get(idx - 1);
+    String canonical = canonicalColumnName(idx);
+    String lookupName = canonical != null ? canonical : projectedName;
+    var field = lookupName == null ? null : current.getSchema().getField(lookupName);
 
-    // Try alias (label) directly first (covers engines that rewrap records by
-    // label)
-    String lookupName = projectedName;
-    var field = current.getSchema().getField(lookupName);
-
-    // If not found, fall back to the canonical column name used for schema lookups
-    if (field == null) {
-      String canonical = canonicalColumnName(idx);
-      if (canonical != null && !canonical.equals(lookupName)) {
-        lookupName = canonical;
-        field = current.getSchema().getField(lookupName);
-      }
+    // If the canonical name was not found, try the projected alias as a fallback
+    if (field == null && projectedName != null && !projectedName.equals(lookupName)) {
+      lookupName = projectedName;
+      field = current.getSchema().getField(lookupName);
     }
 
     if (field == null) {
@@ -624,6 +742,60 @@ public class JParqResultSet extends ResultSetAdapter {
       }
     }
     return Collections.unmodifiableList(canonical);
+  }
+
+  /**
+   * Build the list of columns participating in correlation lookups, extending any
+   * available canonical names with projection labels to ensure aliases remain
+   * addressable.
+   *
+   * @param canonicalColumns
+   *          canonical column names if available, otherwise {@code null}
+   * @param labels
+   *          projection labels in display order
+   * @param fallback
+   *          fallback column identifiers to use when no canonical names exist
+   * @return ordered list of correlation columns aligned with the projection
+   */
+  private static List<String> buildCorrelationColumns(List<String> canonicalColumns, List<String> labels,
+      List<String> fallback) {
+    if (labels != null && !labels.isEmpty()) {
+      List<String> correlation = new ArrayList<>(labels.size());
+      for (int i = 0; i < labels.size(); i++) {
+        String canonical = canonicalColumns != null && i < canonicalColumns.size() ? canonicalColumns.get(i) : null;
+        if ((canonical == null || canonical.isBlank()) && fallback != null && i < fallback.size()) {
+          canonical = fallback.get(i);
+        }
+        if (canonical == null || canonical.isBlank()) {
+          canonical = labels.get(i);
+        }
+        correlation.add(canonical);
+      }
+      return correlation;
+    }
+    if (canonicalColumns != null) {
+      return new ArrayList<>(canonicalColumns);
+    }
+    return fallback == null ? new ArrayList<>() : new ArrayList<>(fallback);
+  }
+
+  private static Map<String, String> enrichUnqualifiedMapping(Map<String, String> baseMapping,
+      List<String> correlationColumns) {
+    if (correlationColumns == null || correlationColumns.isEmpty()) {
+      return baseMapping == null ? Map.of() : baseMapping;
+    }
+    Map<String, String> enriched = new HashMap<>();
+    if (baseMapping != null) {
+      enriched.putAll(baseMapping);
+    }
+    for (String column : correlationColumns) {
+      if (column == null || column.isBlank()) {
+        continue;
+      }
+      String normalized = column.toLowerCase(Locale.ROOT);
+      enriched.putIfAbsent(normalized, column);
+    }
+    return Map.copyOf(enriched);
   }
 
   /**
@@ -887,8 +1059,9 @@ public class JParqResultSet extends ResultSetAdapter {
 
   private void ensureProjectionEvaluator(GenericRecord record) {
     if (projectionEvaluator == null && record != null && !selectExpressions.isEmpty()) {
-      projectionEvaluator = new ValueExpressionEvaluator(record.getSchema(), subqueryExecutor, queryQualifiers,
-          qualifierColumnMapping, unqualifiedColumnMapping, windowState);
+      CorrelationMappings mappings = new CorrelationMappings(queryQualifiers, qualifierColumnMapping,
+          unqualifiedColumnMapping, qualifierColumnMapping);
+      projectionEvaluator = new ValueExpressionEvaluator(record.getSchema(), subqueryExecutor, mappings, windowState);
     }
   }
 

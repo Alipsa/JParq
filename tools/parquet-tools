@@ -1,0 +1,109 @@
+#!/bin/bash
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+cd "$SCRIPT_DIR" || exit
+# --- Configuration ---
+GROUP_ID="org.apache.parquet"
+ARTIFACT_ID="parquet-tools"
+MAIN_CLASS="org.apache.parquet.tools.Main"
+
+POM=parquet-tools-pom.xml
+# Defaults (Fallbacks if dynamic lookup fails)
+DEFAULT_HADOOP="3.3.5"
+DEFAULT_SLF4J="1.7.36"
+
+# --- Check for Required Tools ---
+if ! command -v mvn &> /dev/null; then echo "Error: Maven is not installed."; exit 1; fi
+if ! command -v java &> /dev/null; then echo "Error: Java is not installed."; exit 1; fi
+if ! command -v curl &> /dev/null; then echo "Error: curl is not installed."; exit 1; fi
+
+# --- Cleanup function ---
+cleanup() {
+    rm -f "${POM}" cp.txt
+}
+trap cleanup EXIT
+
+# 1. Determine Latest Parquet Version
+METADATA_URL="https://repo1.maven.org/maven2/org/apache/parquet/parquet-tools/maven-metadata.xml"
+# echo "Fetching latest version metadata..."
+
+PARQUET_VERSION=$(curl -s "$METADATA_URL" | grep '<release>' | head -1 | sed -e 's/^[[:space:]]*<release>\(.*\)<\/release>/\1/')
+
+if [ -z "$PARQUET_VERSION" ]; then
+    echo "Error: Could not determine parquet-tools version."
+    exit 1
+fi
+
+# echo "Detected Parquet Version: ${PARQUET_VERSION}"
+
+# 2. Dynamic Version Lookup
+# We use 'mvn help:evaluate' to ask Maven: "What is the value of ${hadoop.version} for this artifact?"
+# This handles parent POM inheritance automatically.
+
+lookup_version() {
+    local prop_name=$1
+    local default_val=$2
+
+    # -Dartifact allows us to look inside the remote POM
+    # -DforceStdout ensures we only get the value, not logs
+    local detected=$(mvn help:evaluate -q -DforceStdout \
+        -Dartifact="${GROUP_ID}:${ARTIFACT_ID}:${PARQUET_VERSION}" \
+        -Dexpression="${prop_name}" 2>/dev/null)
+
+    # Check if result is valid (not null, not empty, not containing unresolved ${...})
+    if [[ -n "$detected" && "$detected" != *"\${"* && "$detected" != "null" ]]; then
+        echo "$detected"
+    else
+        echo "$default_val"
+    fi
+}
+
+# echo "Resolving build dependencies from remote POM..."
+HADOOP_VERSION=$(lookup_version "hadoop.version" "$DEFAULT_HADOOP")
+SLF4J_VERSION=$(lookup_version "slf4j.version" "$DEFAULT_SLF4J")
+
+# echo "Using Hadoop: ${HADOOP_VERSION}, SLF4J: ${SLF4J_VERSION}"
+
+# 3. Create Standalone POM with Compatible Versions
+cat > ${POM} << EOF
+<project>
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>temp</groupId>
+    <artifactId>resolver</artifactId>
+    <version>1.0</version>
+    <dependencies>
+        <dependency>
+            <groupId>${GROUP_ID}</groupId>
+            <artifactId>${ARTIFACT_ID}</artifactId>
+            <version>${PARQUET_VERSION}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-client</artifactId>
+            <version>${HADOOP_VERSION}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>${SLF4J_VERSION}</version>
+        </dependency>
+    </dependencies>
+</project>
+EOF
+
+# 4. Build the Full Classpath
+mvn -f ${POM} dependency:build-classpath -q -Dmdep.outputFile=cp.txt || {
+    echo "Maven classpath generation failed."; exit 1;
+}
+
+FULL_CLASSPATH=$(cat cp.txt)
+
+if [ -z "$FULL_CLASSPATH" ]; then
+    echo "Error: Generated classpath is empty."
+    exit 1
+fi
+
+# 5. Execute
+java -cp "${FULL_CLASSPATH}" "${MAIN_CLASS}" "$@"
+
+EXIT_STATUS=$?
+exit ${EXIT_STATUS}

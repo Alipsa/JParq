@@ -12,7 +12,6 @@ import java.sql.SQLException;
 import jparq.WhereTest;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
@@ -61,7 +60,6 @@ public class SubqueryCorrelatedFiltersTest {
     });
   }
 
-  @Disabled
   @Test
   void testSubqueryCorrelatedFilters() {
 
@@ -98,7 +96,6 @@ public class SubqueryCorrelatedFiltersTest {
     });
   }
 
-  @Disabled
   @Test
   void testSubqueryCorrelatedFiltersCTE() {
 
@@ -134,7 +131,6 @@ public class SubqueryCorrelatedFiltersTest {
     });
   }
 
-  @Disabled
   @Test
   void testSubqueryCorrelatedFiltersWithExist() {
 

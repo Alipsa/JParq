@@ -65,6 +65,7 @@ import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.SqlParser.OrderKey;
+import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.StringExpressions;
@@ -1067,12 +1068,51 @@ public final class AggregateFunctions {
       Expression having, List<OrderKey> orderBy, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping)
       throws IOException {
+    return evaluate(reader, plan, residual, having, orderBy, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
+        unqualifiedColumnMapping, qualifierColumnMapping);
+  }
+
+  /**
+   * Evaluate the supplied aggregation plan using the provided records.
+   *
+   * @param reader
+   *          source of {@link GenericRecord} rows
+   * @param plan
+   *          aggregate plan describing grouping, aggregates and projection labels
+   * @param residual
+   *          residual WHERE clause to apply before aggregation
+   * @param having
+   *          HAVING clause to apply after aggregation
+   * @param orderBy
+   *          ORDER BY keys used after aggregation
+   * @param subqueryExecutor
+   *          executor used for correlated subqueries
+   * @param outerQualifiers
+   *          qualifiers visible to correlated subqueries
+   * @param qualifierColumnMapping
+   *          mapping from qualifier to canonical column names used when resolving
+   *          correlated subquery references
+   * @param unqualifiedColumnMapping
+   *          mapping from unqualified column names to canonical field names
+   * @param correlationContext
+   *          correlation context describing qualifier aware column aliases
+   * @return aggregate rows and associated column metadata
+   * @throws IOException
+   *           if reading the records fails
+   */
+  public static AggregateResult evaluate(RecordReader reader, AggregatePlan plan, Expression residual,
+      Expression having, List<OrderKey> orderBy, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
+      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping,
+      Map<String, Map<String, String>> correlationContext) throws IOException {
     List<GroupExpression> groupExpressions = plan.groupExpressions();
     List<GroupingSet> groupingSets = plan.groupingSets();
     List<GroupTypeTracker> groupTrackers = new ArrayList<>(groupExpressions.size());
     for (int i = 0; i < groupExpressions.size(); i++) {
       groupTrackers.add(new GroupTypeTracker());
     }
+
+    Map<String, Map<String, String>> normalizedCorrelationContext = ColumnMappingUtil
+        .normaliseQualifierMapping(correlationContext);
 
     int aggregateCount = plan.specs().size();
     int[] aggregateSqlTypes = new int[aggregateCount];
@@ -1095,8 +1135,9 @@ public final class AggregateFunctions {
             whereEval = new ExpressionEvaluator(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
                 unqualifiedColumnMapping);
           }
-          valueEval = new ValueExpressionEvaluator(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
-              unqualifiedColumnMapping);
+          CorrelationMappings mappings = new CorrelationMappings(outerQualifiers, qualifierColumnMapping,
+              unqualifiedColumnMapping, normalizedCorrelationContext);
+          valueEval = new ValueExpressionEvaluator(schema, subqueryExecutor, mappings, WindowState.empty());
         }
 
         boolean matches = residual == null || whereEval.eval(residual, rec);
@@ -1152,7 +1193,7 @@ public final class AggregateFunctions {
       boolean include = true;
       if (normalizedHaving != null) {
         HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues, labelLookup, subqueryExecutor,
-            outerQualifiers, state.groupingSetIndex());
+            outerQualifiers, normalizedCorrelationContext, state.groupingSetIndex());
         include = evaluator.eval(normalizedHaving);
       }
       if (include) {
@@ -1778,16 +1819,20 @@ public final class AggregateFunctions {
     private final SubqueryExecutor subqueryExecutor;
     private final Map<String, Object> labelLookup;
     private final List<String> correlatedQualifiers;
+    private final Map<String, Map<String, String>> correlationContext;
     private final int groupingSetIndex;
     private final Map<String, Integer> groupIndexLookup;
 
     HavingEvaluator(AggregatePlan plan, List<Object> aggregateValues, Map<String, Object> labelLookup,
-        SubqueryExecutor subqueryExecutor, List<String> correlatedQualifiers, int groupingSetIndex) {
+        SubqueryExecutor subqueryExecutor, List<String> correlatedQualifiers,
+        Map<String, Map<String, String>> correlationContext, int groupingSetIndex) {
       this.plan = plan;
       this.aggregateValues = aggregateValues;
       this.labelLookup = Collections.unmodifiableMap(new HashMap<>(labelLookup));
       this.subqueryExecutor = subqueryExecutor;
       this.correlatedQualifiers = correlatedQualifiers == null ? List.of() : List.copyOf(correlatedQualifiers);
+      this.correlationContext = ColumnMappingUtil
+          .normaliseQualifierMapping(correlationContext == null ? Map.of() : correlationContext);
       this.groupingSetIndex = groupingSetIndex;
       this.groupIndexLookup = groupIndexLookup(plan.groupExpressions());
     }
@@ -1877,7 +1922,12 @@ public final class AggregateFunctions {
         if (subqueryExecutor == null) {
           throw new IllegalStateException("IN subqueries require a subquery executor");
         }
-        List<Object> subqueryValues = subqueryExecutor.execute(subSelect).firstColumnValues();
+        CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
+            correlationQualifiers(), correlationColumns(), (qualifier, column) -> correlatedValue(qualifier, column));
+        SubqueryExecutor.SubqueryResult result = rewritten.correlated()
+            ? subqueryExecutor.executeRaw(rewritten.sql())
+            : subqueryExecutor.execute(subSelect);
+        List<Object> subqueryValues = result.firstColumnValues();
         boolean found = false;
         for (Object candidate : subqueryValues) {
           if (candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
@@ -1897,8 +1947,8 @@ public final class AggregateFunctions {
       if (!(exists.getRightExpression() instanceof Select subSelect)) {
         throw new IllegalArgumentException("EXISTS requires a subquery");
       }
-      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, correlatedQualifiers,
-          this::aliasValue);
+      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
+          correlationQualifiers(), correlationColumns(), (qualifier, column) -> correlatedValue(qualifier, column));
       SubqueryExecutor.SubqueryResult result = rewritten.correlated()
           ? subqueryExecutor.executeRaw(rewritten.sql())
           : subqueryExecutor.execute(subSelect);
@@ -2023,7 +2073,11 @@ public final class AggregateFunctions {
       if (subqueryExecutor == null) {
         throw new IllegalStateException("Scalar subqueries require a subquery executor");
       }
-      SubqueryExecutor.SubqueryResult result = subqueryExecutor.execute(subSelect);
+      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
+          correlationQualifiers(), correlationColumns(), (qualifier, column) -> correlatedValue(qualifier, column));
+      SubqueryExecutor.SubqueryResult result = rewritten.correlated()
+          ? subqueryExecutor.executeRaw(rewritten.sql())
+          : subqueryExecutor.execute(subSelect);
       if (result.rows().isEmpty()) {
         return null;
       }
@@ -2079,6 +2133,59 @@ public final class AggregateFunctions {
     private Object grouping(Function func) {
       List<Integer> indexes = groupingArgumentIndexes(func, groupIndexLookup, plan.groupExpressions());
       return groupingValue(plan, groupingSetIndex, indexes);
+    }
+
+    private Object correlatedValue(String qualifier, String column) {
+      String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
+      String normalizedColumn = column == null ? null : column.toLowerCase(Locale.ROOT);
+      if (normalizedQualifier != null && normalizedColumn != null && !correlationContext.isEmpty()) {
+        Map<String, String> mapping = correlationContext.get(normalizedQualifier);
+        if (mapping != null) {
+          String canonical = mapping.get(normalizedColumn);
+          if (canonical != null) {
+            String lookupKey = canonical.toLowerCase(Locale.ROOT);
+            if (labelLookup.containsKey(lookupKey)) {
+              return labelLookup.get(lookupKey);
+            }
+          }
+        }
+      }
+      return aliasValue(column);
+    }
+
+    private List<String> correlationQualifiers() {
+      if (correlationContext.isEmpty()) {
+        return correlatedQualifiers;
+      }
+      Set<String> qualifiers = new LinkedHashSet<>(correlatedQualifiers);
+      qualifiers.addAll(correlationContext.keySet());
+      return List.copyOf(qualifiers);
+    }
+
+    // Unlike ValueExpressionEvaluator/ExpressionEvaluator, we don't filter by
+    // caseInsensitiveIndex because HAVING operates on aggregate results, not a
+    // physical schema. All projection aliases should be available to subqueries.
+    private Set<String> correlationColumns() {
+      if (correlationContext.isEmpty()) {
+        return Set.of();
+      }
+      Set<String> columns = new LinkedHashSet<>();
+      for (Map<String, String> mapping : correlationContext.values()) {
+        if (mapping == null) {
+          continue;
+        }
+        for (Map.Entry<String, String> entry : mapping.entrySet()) {
+          String column = entry.getKey();
+          String canonical = entry.getValue();
+          String normalizedColumn = column == null ? null : column.toLowerCase(Locale.ROOT);
+          String normalizedCanonical = canonical == null ? null : canonical.toLowerCase(Locale.ROOT);
+          if ((normalizedColumn != null && labelLookup.containsKey(normalizedColumn))
+              || (normalizedCanonical != null && labelLookup.containsKey(normalizedCanonical))) {
+            columns.add(column);
+          }
+        }
+      }
+      return Set.copyOf(columns);
     }
 
     private Object aliasValue(String name) {

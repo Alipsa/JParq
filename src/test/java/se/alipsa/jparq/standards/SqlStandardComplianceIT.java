@@ -53,8 +53,7 @@ public class SqlStandardComplianceIT {
     List<TestCase> testCases = discoverTestCases();
     assertFalse(testCases.isEmpty(), "No SQL standard compliance tests were discovered");
     List<Path> exclusions = List.of(
-        // Example exclusions:
-        standardsRoot.resolve("Subqueries/Correlated/subquery_correlated_filters.sql"),
+        // standardsRoot.resolve("Subqueries/Correlated/subquery_correlated_filters.sql"),
         standardsRoot.resolve("TableValueFunctions/Unnest/unnest_table_wrapper.sql"),
         standardsRoot.resolve("Wildcards/Unqualified/unqualified_star.sql"));
     for (TestCase testCase : testCases) {

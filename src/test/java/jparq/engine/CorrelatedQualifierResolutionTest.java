@@ -20,9 +20,12 @@ import org.apache.avro.generic.GenericRecord;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqDriver;
+import se.alipsa.jparq.engine.CorrelationContextBuilder;
+import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
+import se.alipsa.jparq.engine.window.WindowState;
 
 /**
  * Tests that correlated subquery rewriting resolves qualified outer references
@@ -75,6 +78,31 @@ class CorrelatedQualifierResolutionTest {
     assertEquals(List.of(10, 11), value);
     assertNotNull(executor.lastSql());
     assertTrue(executor.lastSql().contains("= 3"), "Correlated rewrite should embed the outer alias value");
+  }
+
+  @Test
+  void correlatedScalarSubqueryUsesCorrelationContextForAliases() throws Exception {
+    Schema schema = SchemaBuilder.record("Derived").fields().name("base_id").type().intType().noDefault().endRecord();
+    GenericRecord record = new GenericData.Record(schema);
+    record.put("base_id", 9);
+
+    Map<String, Map<String, String>> correlationContext = CorrelationContextBuilder.build(List.of("d"),
+        List.of("alias_id"), List.of("base_id"), Map.of());
+
+    SubqueryExecutor.SubqueryResult subqueryResult = new SubqueryExecutor.SubqueryResult(List.of("v"),
+        List.of(List.of("ok")));
+    StubbedExecutor executor = new StubbedExecutor(subqueryResult);
+
+    CorrelationMappings mappings = new CorrelationMappings(List.of("d"), Map.of(), Map.of(), correlationContext);
+    ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema, executor.executor(), mappings,
+        WindowState.empty());
+
+    Expression expression = CCJSqlParserUtil.parseExpression("(SELECT v FROM dummy dd WHERE dd.parent = d.alias_id)");
+
+    Object value = evaluator.eval(expression, record);
+    assertEquals("ok", value);
+    assertNotNull(executor.lastSql());
+    assertTrue(executor.lastSql().contains("= 9"), "Correlation context should supply aliased columns to subqueries");
   }
 
   private static final class StubbedExecutor {

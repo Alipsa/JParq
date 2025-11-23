@@ -213,9 +213,12 @@ public final class AvroCoercions {
           ByteBuffer bb = ((ByteBuffer) v).duplicate();
           byte[] b = new byte[bb.remaining()];
           bb.get(b);
-          return b;
+          return new String(b, StandardCharsets.UTF_8);
         }
-        return v;
+        if (v instanceof byte[] bytes) {
+          return new String(bytes, StandardCharsets.UTF_8);
+        }
+        return v.toString();
       case RECORD:
         return v.toString();
       case ENUM:
@@ -232,7 +235,7 @@ public final class AvroCoercions {
           java.math.BigInteger bi = new java.math.BigInteger(bytes);
           return new BigDecimal(bi, dec.getScale());
         }
-        return ((GenericData.Fixed) v).bytes();
+        return new String(((GenericData.Fixed) v).bytes(), StandardCharsets.UTF_8);
       default:
         return v;
     }
