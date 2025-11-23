@@ -788,12 +788,13 @@ public final class QueryProcessor implements AutoCloseable {
     if (keys == null) {
       return;
     }
+    Set<String> existing = new LinkedHashSet<>(target);
     for (SqlParser.OrderKey key : keys) {
       if (key == null) {
         continue;
       }
       String col = key.column();
-      if (col != null && !target.contains(col)) {
+      if (col != null && existing.add(col)) {
         target.add(col);
       }
     }
