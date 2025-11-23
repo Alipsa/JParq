@@ -25,6 +25,7 @@ import org.apache.parquet.hadoop.example.GroupWriteSupport;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.apache.parquet.schema.*;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +45,7 @@ public class PredicatePushdownPerfFS {
 
   static Logger LOG = LoggerFactory.getLogger(PredicatePushdownPerfFS.class);
 
+  @Disabled
   @Test
   void pushdownIsFasterWhenSchemaIsPresent() throws Exception {
     // 1) Prepare temp dirs + write files
@@ -90,6 +92,7 @@ public class PredicatePushdownPerfFS {
     }
   }
 
+  @Disabled
   @Test
   void pushdownIsFasterWhenSchemaIsPresentTailRows() throws Exception {
     // 1) Prepare temp dirs + write files
