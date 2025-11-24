@@ -868,10 +868,18 @@ public final class AggregateFunctions {
       if (leftLike.isNot() != rightLike.isNot()) {
         return false;
       }
+      // Compare ESCAPE clauses
+      if (!expressionsEquivalent(leftLike.getEscape(), rightLike.getEscape())) {
+        return false;
+      }
     }
     if (left instanceof SimilarToExpression leftSimilarTo) {
       SimilarToExpression rightSimilarTo = (SimilarToExpression) right;
       if (leftSimilarTo.isNot() != rightSimilarTo.isNot()) {
+        return false;
+      }
+      // Compare ESCAPE strings
+      if (!Objects.equals(leftSimilarTo.getEscape(), rightSimilarTo.getEscape())) {
         return false;
       }
     }
