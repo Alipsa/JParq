@@ -43,17 +43,17 @@ class CorrelatedQualifierResolutionTest {
 
     SubqueryExecutor.SubqueryResult subqueryResult = new SubqueryExecutor.SubqueryResult(List.of("c"),
         List.of(List.of(1)));
-    StubbedExecutor executor = new StubbedExecutor(subqueryResult);
+    try (StubbedExecutor executor = new StubbedExecutor(subqueryResult)) {
+      ExpressionEvaluator evaluator = new ExpressionEvaluator(schema, executor.executor(), List.of("outer_alias"),
+          qualifierMapping, Map.of());
 
-    ExpressionEvaluator evaluator = new ExpressionEvaluator(schema, executor.executor(), List.of("outer_alias"),
-        qualifierMapping, Map.of());
+      Expression existsExpression = CCJSqlParserUtil
+          .parseCondExpression("EXISTS (SELECT 1 FROM dummy d WHERE d.owner = outer_alias.id)");
 
-    Expression existsExpression = CCJSqlParserUtil
-        .parseCondExpression("EXISTS (SELECT 1 FROM dummy d WHERE d.owner = outer_alias.id)");
-
-    assertTrue(evaluator.eval(existsExpression, record));
-    assertNotNull(executor.lastSql());
-    assertTrue(executor.lastSql().contains("= 7"), "Correlated rewrite should embed the outer alias value");
+      assertTrue(evaluator.eval(existsExpression, record));
+      assertNotNull(executor.lastSql());
+      assertTrue(executor.lastSql().contains("= 7"), "Correlated rewrite should embed the outer alias value");
+    }
   }
 
   @Test
@@ -66,18 +66,18 @@ class CorrelatedQualifierResolutionTest {
 
     SubqueryExecutor.SubqueryResult subqueryResult = new SubqueryExecutor.SubqueryResult(List.of("value"),
         List.of(List.of(10), List.of(11)));
-    StubbedExecutor executor = new StubbedExecutor(subqueryResult);
+    try (StubbedExecutor executor = new StubbedExecutor(subqueryResult)) {
+      ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema, executor.executor(),
+          List.of("outer_alias"), qualifierMapping, Map.of());
 
-    ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema, executor.executor(),
-        List.of("outer_alias"), qualifierMapping, Map.of());
+      Expression arrayExpression = CCJSqlParserUtil
+          .parseExpression("ARRAY(SELECT value FROM dummy d WHERE d.owner = outer_alias.id)");
 
-    Expression arrayExpression = CCJSqlParserUtil
-        .parseExpression("ARRAY(SELECT value FROM dummy d WHERE d.owner = outer_alias.id)");
-
-    Object value = evaluator.eval(arrayExpression, record);
-    assertEquals(List.of(10, 11), value);
-    assertNotNull(executor.lastSql());
-    assertTrue(executor.lastSql().contains("= 3"), "Correlated rewrite should embed the outer alias value");
+      Object value = evaluator.eval(arrayExpression, record);
+      assertEquals(List.of(10, 11), value);
+      assertNotNull(executor.lastSql());
+      assertTrue(executor.lastSql().contains("= 3"), "Correlated rewrite should embed the outer alias value");
+    }
   }
 
   @Test
@@ -91,24 +91,25 @@ class CorrelatedQualifierResolutionTest {
 
     SubqueryExecutor.SubqueryResult subqueryResult = new SubqueryExecutor.SubqueryResult(List.of("v"),
         List.of(List.of("ok")));
-    StubbedExecutor executor = new StubbedExecutor(subqueryResult);
+    try (StubbedExecutor executor = new StubbedExecutor(subqueryResult)) {
+      CorrelationMappings mappings = new CorrelationMappings(List.of("d"), Map.of(), Map.of(), correlationContext);
+      ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema, executor.executor(), mappings,
+          WindowState.empty());
 
-    CorrelationMappings mappings = new CorrelationMappings(List.of("d"), Map.of(), Map.of(), correlationContext);
-    ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema, executor.executor(), mappings,
-        WindowState.empty());
+      Expression expression = CCJSqlParserUtil.parseExpression("(SELECT v FROM dummy dd WHERE dd.parent = d.alias_id)");
 
-    Expression expression = CCJSqlParserUtil.parseExpression("(SELECT v FROM dummy dd WHERE dd.parent = d.alias_id)");
-
-    Object value = evaluator.eval(expression, record);
-    assertEquals("ok", value);
-    assertNotNull(executor.lastSql());
-    assertTrue(executor.lastSql().contains("= 9"), "Correlation context should supply aliased columns to subqueries");
+      Object value = evaluator.eval(expression, record);
+      assertEquals("ok", value);
+      assertNotNull(executor.lastSql());
+      assertTrue(executor.lastSql().contains("= 9"), "Correlation context should supply aliased columns to subqueries");
+    }
   }
 
-  private static final class StubbedExecutor {
+  private static final class StubbedExecutor implements AutoCloseable {
 
     private final SubqueryExecutor executor;
     private final AtomicReference<String> lastSql = new AtomicReference<>();
+    private final JParqConnection connection;
 
     StubbedExecutor(SubqueryExecutor.SubqueryResult result) throws Exception {
       SubqueryExecutor.StatementFactory factory = sql -> {
@@ -117,7 +118,8 @@ class CorrelatedQualifierResolutionTest {
       };
       var tempDir = Files.createTempDirectory("jparq-test");
       String url = JParqDriver.URL_PREFIX + tempDir;
-      executor = new SubqueryExecutor(new JParqConnection(url, new Properties()), factory);
+      connection = new JParqConnection(url, new Properties());
+      executor = new SubqueryExecutor(connection, factory);
     }
 
     SubqueryExecutor executor() {
@@ -126,6 +128,11 @@ class CorrelatedQualifierResolutionTest {
 
     String lastSql() {
       return lastSql.get();
+    }
+
+    @Override
+    public void close() throws Exception {
+      connection.close();
     }
   }
 
