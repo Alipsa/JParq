@@ -25,6 +25,7 @@ import org.apache.avro.generic.GenericRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import se.alipsa.jparq.engine.CorrelationMappings;
+import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.helper.LiteralConverter;
@@ -2490,27 +2491,10 @@ public final class WindowFunctions {
       return 0;
     }
     if (lv == null || rv == null) {
-      return compareNulls(lv, rv, left.ascending(), left.nullOrdering());
+      return OrderingUtil.compareNulls(lv, rv, left.ascending(), left.nullOrdering());
     }
     int cmp = compareValues(lv, rv);
     return left.ascending() ? cmp : -cmp;
-  }
-
-  private static int compareNulls(Object left, Object right, boolean asc, OrderByElement.NullOrdering nullOrdering) {
-    if (left == null && right == null) {
-      return 0;
-    }
-    if (nullOrdering == OrderByElement.NullOrdering.NULLS_FIRST) {
-      return left == null ? -1 : 1;
-    }
-    if (nullOrdering == OrderByElement.NullOrdering.NULLS_LAST) {
-      return left == null ? 1 : -1;
-    }
-    // Default ordering: NULLS LAST for ascending, NULLS FIRST for descending
-    if (asc) {
-      return left == null ? 1 : -1;
-    }
-    return left == null ? -1 : 1;
   }
 
   static int compareValues(Object left, Object right) {

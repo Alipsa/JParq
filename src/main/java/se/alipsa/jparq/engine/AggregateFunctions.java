@@ -60,7 +60,6 @@ import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals;
 import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
-import net.sf.jsqlparser.statement.select.OrderByElement;
 import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
@@ -1240,7 +1239,7 @@ public final class AggregateFunctions {
         Object lv = left.get(idx);
         Object rv = right.get(idx);
         boolean hasNull = lv == null || rv == null;
-        int nullCmp = compareNulls(lv, rv, key.asc(), key.nullOrdering());
+        int nullCmp = OrderingUtil.compareNulls(lv, rv, key.asc(), key.nullOrdering());
         if (nullCmp != 0) {
           return nullCmp;
         }
@@ -1255,25 +1254,6 @@ public final class AggregateFunctions {
       return 0;
     };
     rows.sort(comparator);
-  }
-
-  private static int compareNulls(Object left, Object right, boolean asc, OrderByElement.NullOrdering nullOrdering) {
-    if (left == right) {
-      return 0;
-    }
-    if (left != null && right != null) {
-      return 0;
-    }
-    if (nullOrdering == OrderByElement.NullOrdering.NULLS_FIRST) {
-      return left == null ? -1 : 1;
-    }
-    if (nullOrdering == OrderByElement.NullOrdering.NULLS_LAST) {
-      return left == null ? 1 : -1;
-    }
-    if (asc) {
-      return left == null ? 1 : -1;
-    }
-    return left == null ? -1 : 1;
   }
 
   private static Map<String, Integer> buildOrderIndex(AggregatePlan plan) {
