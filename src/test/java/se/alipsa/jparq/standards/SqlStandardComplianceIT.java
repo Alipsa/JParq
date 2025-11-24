@@ -52,8 +52,7 @@ public class SqlStandardComplianceIT {
   void executeStandardComplianceSuite() throws IOException {
     List<TestCase> testCases = discoverTestCases();
     assertFalse(testCases.isEmpty(), "No SQL standard compliance tests were discovered");
-    List<Path> exclusions = List.of(standardsRoot.resolve("combinations/cte_join_window.sql"),
-        standardsRoot.resolve("combinations/with_join_over.sql"));
+    List<Path> exclusions = List.of();
     for (TestCase testCase : testCases) {
       if (exclusions.contains(testCase.sqlPath)) {
         System.out.println("Skipping excluded test: " + describe(testCase.sqlPath));

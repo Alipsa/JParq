@@ -1238,14 +1238,12 @@ public final class AggregateFunctions {
         }
         Object lv = left.get(idx);
         Object rv = right.get(idx);
-        if (lv == null || rv == null) {
-          int nullCmp = (lv == null ? 1 : 0) - (rv == null ? 1 : 0);
-          if (!key.asc()) {
-            nullCmp = -nullCmp;
-          }
-          if (nullCmp != 0) {
-            return nullCmp;
-          }
+        boolean hasNull = lv == null || rv == null;
+        int nullCmp = OrderingUtil.compareNulls(lv, rv, key.asc(), key.nullOrdering());
+        if (nullCmp != 0) {
+          return nullCmp;
+        }
+        if (hasNull) {
           continue;
         }
         int cmp = ExpressionEvaluator.typedCompare(lv, rv);

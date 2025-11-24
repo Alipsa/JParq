@@ -508,15 +508,12 @@ public final class QueryProcessor implements AutoCloseable {
         Object va = resolveOrderValue(a, schema, k);
         Object vb = resolveOrderValue(b, schema, k);
 
-        // NULLS LAST for ASC, NULLS FIRST for DESC
-        if (va == null || vb == null) {
-          int nullCmp = (va == null ? 1 : 0) - (vb == null ? 1 : 0); // null > non-null
-          if (!k.asc()) {
-            nullCmp = -nullCmp;
-          }
-          if (nullCmp != 0) {
-            return nullCmp;
-          }
+        boolean hasNull = va == null || vb == null;
+        int nullCmp = OrderingUtil.compareNulls(va, vb, k.asc(), k.nullOrdering());
+        if (nullCmp != 0) {
+          return nullCmp;
+        }
+        if (hasNull) {
           continue;
         }
 
@@ -615,7 +612,7 @@ public final class QueryProcessor implements AutoCloseable {
       String column = key.column();
       String resolved = ColumnMappingUtil.canonicalOrderColumn(column, key.qualifier(), qualifierColumnMapping,
           unqualifiedColumnMapping);
-      canonical.add(new SqlParser.OrderKey(resolved, key.asc(), key.qualifier()));
+      canonical.add(new SqlParser.OrderKey(resolved, key.asc(), key.qualifier(), key.nullOrdering()));
     }
     return List.copyOf(canonical);
   }
