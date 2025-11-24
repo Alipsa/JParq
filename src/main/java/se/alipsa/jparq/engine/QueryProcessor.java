@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.statement.select.OrderByElement;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.window.WindowFunctions;
@@ -508,15 +509,12 @@ public final class QueryProcessor implements AutoCloseable {
         Object va = resolveOrderValue(a, schema, k);
         Object vb = resolveOrderValue(b, schema, k);
 
-        // NULLS LAST for ASC, NULLS FIRST for DESC
-        if (va == null || vb == null) {
-          int nullCmp = (va == null ? 1 : 0) - (vb == null ? 1 : 0); // null > non-null
-          if (!k.asc()) {
-            nullCmp = -nullCmp;
-          }
-          if (nullCmp != 0) {
-            return nullCmp;
-          }
+        boolean hasNull = va == null || vb == null;
+        int nullCmp = compareNulls(va, vb, k.asc(), k.nullOrdering());
+        if (nullCmp != 0) {
+          return nullCmp;
+        }
+        if (hasNull) {
           continue;
         }
 
@@ -615,9 +613,28 @@ public final class QueryProcessor implements AutoCloseable {
       String column = key.column();
       String resolved = ColumnMappingUtil.canonicalOrderColumn(column, key.qualifier(), qualifierColumnMapping,
           unqualifiedColumnMapping);
-      canonical.add(new SqlParser.OrderKey(resolved, key.asc(), key.qualifier()));
+      canonical.add(new SqlParser.OrderKey(resolved, key.asc(), key.qualifier(), key.nullOrdering()));
     }
     return List.copyOf(canonical);
+  }
+
+  private int compareNulls(Object left, Object right, boolean asc, OrderByElement.NullOrdering nullOrdering) {
+    if (left == right) {
+      return 0;
+    }
+    if (left != null && right != null) {
+      return 0;
+    }
+    if (nullOrdering == OrderByElement.NullOrdering.NULLS_FIRST) {
+      return left == null ? -1 : 1;
+    }
+    if (nullOrdering == OrderByElement.NullOrdering.NULLS_LAST) {
+      return left == null ? 1 : -1;
+    }
+    if (asc) {
+      return left == null ? 1 : -1;
+    }
+    return left == null ? -1 : 1;
   }
 
   private void ensureEvaluator(GenericRecord rec) {

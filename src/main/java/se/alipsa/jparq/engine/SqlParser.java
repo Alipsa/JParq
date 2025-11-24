@@ -55,8 +55,11 @@ public final class SqlParser {
    *          true if ascending order, false if descending
    * @param qualifier
    *          optional table or alias qualifier associated with the column
+   * @param nullOrdering
+   *          explicit null ordering specified in the {@code ORDER BY} clause; may
+   *          be {@code null} when not provided
    */
-  public record OrderKey(String column, boolean asc, String qualifier) {
+  public record OrderKey(String column, boolean asc, String qualifier, OrderByElement.NullOrdering nullOrdering) {
   }
 
   /**
@@ -1735,7 +1738,8 @@ public final class SqlParser {
         String physicalKey = aliasToPhysical.getOrDefault(keyText, keyText);
 
         boolean asc = !e.isAscDescPresent() || e.isAsc(); // default ASC
-        orderKeys.add(new OrderKey(physicalKey, asc, qualifier));
+        OrderByElement.NullOrdering nullOrdering = e.getNullOrdering();
+        orderKeys.add(new OrderKey(physicalKey, asc, qualifier, nullOrdering));
       }
     }
     return orderKeys;
