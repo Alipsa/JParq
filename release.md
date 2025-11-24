@@ -12,7 +12,7 @@
 - Add simple schema validation
 - Bug fixes to UNNEST, CTE, EXCEPT
 - Add SQl compliance test suite to verify that all works 
-- support || operator for string concatenations
+- support || operator for string and binary concatenations
 
 ### 0.11.0 2025-11-14
 - Add ARRAY constructor function support

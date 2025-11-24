@@ -195,6 +195,7 @@ The following SQL statements are supported:
 
 ##### Concatenation
 - CONCAT(string1, string2, …)   Concatenates two or more strings (SQL:2016 added variadic support).     CONCAT('a','b','c') → 'abc'
+- Support for the || operator, covering both binary and text concatenation, as well as null propagation.
 
 ##### Case Conversion
 - UPPER(string) Converts to uppercase.  UPPER('sql') → 'SQL'
