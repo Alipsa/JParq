@@ -160,29 +160,6 @@ The following SQL statements are supported:
 - Derived Tables: UNNEST with or without a table wrapper, LATERAL derived tables, VALUES table constructors
 - INFORMATION_SCHEMA.COLUMNS and INFORMATION_SCHEMA.TABLES
 
-## Roadmap: Might be implemented in the future
-
-### Non standard extensions
-- Support for variable assignment and use within SQL scripts.
-  - @variable_name syntax to define a variable that exists for the duration of the connection
-    - Example (direct assignment, connection scope):
-      declare @myVar INT = 10;
-      SELECT * FROM myTable WHERE myColumn > @myVar;
-      SELECT * FROM anotherTable LIMIT @myVar;
-- PIVOT and UNPIVOT operators.
-- TABLESAMPLE clause for sampling rows from a table.
-
-## Out of scope (will not be supported, at least not in the foreseeable future)
-- Data modification statements (INSERT, UPDATE, DELETE, MERGE)
-- Transaction control (COMMIT, ROLLBACK, SAVEPOINT)
-- Data definition statements (CREATE, ALTER, DROP, TRUNCATE)
-- User management and security (GRANT, REVOKE, CREATE USER, etc.)
-- Stored procedures and functions (CREATE PROCEDURE, CREATE FUNCTION)
-- Triggers (CREATE TRIGGER, DROP TRIGGER)
-- Advanced indexing and optimization hints
-- Full-text search capabilities
-- TEMPORARY TABLES, you need to use CTE's or value tables instead.
-
 #### String functions support details
 ##### Character Length and Position
 - CHAR_LENGTH(string) or CHARACTER_LENGTH(string)       Returns number of characters in a string.       CHAR_LENGTH('hello') → 5
@@ -234,7 +211,28 @@ The following SQL statements are supported:
 - STRING_AGG(expression, separator)     Aggregates values into a single string with a separator.        STRING_AGG(name, ', ') → 'Alice, Bob, Carol'
 - JSON_VALUE, JSON_QUERY, JSON_OBJECT, JSON_ARRAY       JSON construction/extraction—technically not core string functions but string-returning functions standardized in SQL:2016–2023.
 
-## Development
+## Roadmap: Might be implemented in the future
+
+### Non standard extensions
+- Support for variable assignment and use within SQL scripts.
+  - @variable_name syntax to define a variable that exists for the duration of the connection
+    - Example (direct assignment, connection scope):
+      declare @myVar INT = 10;
+      SELECT * FROM myTable WHERE myColumn > @myVar;
+      SELECT * FROM anotherTable LIMIT @myVar;
+- PIVOT and UNPIVOT operators.
+- TABLESAMPLE clause for sampling rows from a table.
+
+## Out of scope (will not be supported, at least not in the foreseeable future)
+- Data modification statements (INSERT, UPDATE, DELETE, MERGE)
+- Transaction control (COMMIT, ROLLBACK, SAVEPOINT)
+- Data definition statements (CREATE, ALTER, DROP, TRUNCATE)
+- User management and security (GRANT, REVOKE, CREATE USER, etc.)
+- Stored procedures and functions (CREATE PROCEDURE, CREATE FUNCTION)
+- Triggers (CREATE TRIGGER, DROP TRIGGER)
+- Advanced indexing and optimization hints
+- Full-text search capabilities
+- TEMPORARY TABLES, you need to use CTE's or value tables instead.
 
 ### Build and test
 
@@ -250,4 +248,4 @@ This project uses Checkstyle, PMD, and Spotless. The checks run automatically as
 
 ### Release notes
 
-See [release.md](release.md) for the full version history and planned work.
+See [release.md](release.md) for the full version history and work in progress.
