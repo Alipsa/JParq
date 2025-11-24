@@ -107,6 +107,7 @@ The following SQL statements are supported:
   - CAST support
   - coalesce (The COALESCE() function returns the first non-null value in a list.)
   - String functions (all SQL standard string function supported)
+    - also support || operator for string concatenations
   - Numeric functions (abs, ceil, floor, round, sqrt, truncate, mod, power, exp, log, rand, sign, sin, cos, tan, asin, acos, atan, atan2, degrees, radians)
   - ARRAY constructor function
 - comments (line --) and block (/* */)
@@ -159,7 +160,7 @@ The following SQL statements are supported:
 - INFORMATION_SCHEMA.COLUMNS and INFORMATION_SCHEMA.TABLES
 
 ## Roadmap: Might be implemented in the future
-- support || for string concatenations
+
 ### Non standard extensions
 - Support for variable assignment and use within SQL scripts.
   - @variable_name syntax to define a variable that exists for the duration of the connection

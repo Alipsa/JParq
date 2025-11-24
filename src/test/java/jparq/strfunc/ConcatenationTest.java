@@ -41,4 +41,24 @@ class ConcatenationTest {
     assertEquals("abc", concatVal.get(), "NULL arguments should be skipped when concatenating");
     assertNull(concatNull.get(), "All-null CONCAT should return NULL");
   }
+
+  @Test
+  void testPipeOperator() {
+    AtomicReference<String> greeting = new AtomicReference<>();
+    AtomicReference<String> nullConcat = new AtomicReference<>("sentinel");
+
+    sql.query("SELECT 'Hi ' || model AS greeting, 'Hello' || NULL AS null_concat FROM mtcars WHERE model = 'Mazda RX4'",
+        rs -> {
+          try {
+            assertTrue(rs.next(), "Expected a row");
+            greeting.set(rs.getString("greeting"));
+            nullConcat.set(rs.getString("null_concat"));
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
+
+    assertEquals("Hi Mazda RX4", greeting.get(), "Concatenation operator should combine character operands");
+    assertNull(nullConcat.get(), "Null operand should propagate through the || operator");
+  }
 }

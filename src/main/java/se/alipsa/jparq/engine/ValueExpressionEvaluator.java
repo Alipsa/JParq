@@ -3,6 +3,8 @@ package se.alipsa.jparq.engine;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.math.RoundingMode;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -31,6 +33,7 @@ import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TrimFunction;
 import net.sf.jsqlparser.expression.WhenClause;
 import net.sf.jsqlparser.expression.operators.arithmetic.Addition;
+import net.sf.jsqlparser.expression.operators.arithmetic.Concat;
 import net.sf.jsqlparser.expression.operators.arithmetic.Division;
 import net.sf.jsqlparser.expression.operators.arithmetic.Modulo;
 import net.sf.jsqlparser.expression.operators.arithmetic.Multiplication;
@@ -248,6 +251,9 @@ public final class ValueExpressionEvaluator {
       }
       BigDecimal value = toBigDecimal(inner);
       return se.getSign() == '-' ? value.negate() : value;
+    }
+    if (expression instanceof Concat concat) {
+      return concatenate(concat.getLeftExpression(), concat.getRightExpression(), record);
     }
     if (expression instanceof Addition add) {
       return arithmetic(add.getLeftExpression(), add.getRightExpression(), record, Operation.ADD);
@@ -1325,6 +1331,55 @@ public final class ValueExpressionEvaluator {
   }
 
   private record NamedArgResult(List<String> names, List<Object> values) {
+  }
+
+  /**
+   * Concatenate two expressions following SQL-92 {@code ||} semantics.
+   *
+   * @param left
+   *          left-hand expression
+   * @param right
+   *          right-hand expression
+   * @param record
+   *          current record
+   * @return concatenated result, or {@code null} when any operand is {@code null}
+   */
+  private Object concatenate(Expression left, Expression right, GenericRecord record) {
+    Object leftVal = evalInternal(left, record);
+    Object rightVal = evalInternal(right, record);
+    if (leftVal == null || rightVal == null) {
+      return null;
+    }
+    boolean leftBinary = isBinaryValue(leftVal);
+    boolean rightBinary = isBinaryValue(rightVal);
+    if (leftBinary || rightBinary) {
+      byte[] leftBytes = leftBinary ? toByteArray(leftVal) : toStringValue(leftVal).getBytes(StandardCharsets.UTF_8);
+      byte[] rightBytes = rightBinary
+          ? toByteArray(rightVal)
+          : toStringValue(rightVal).getBytes(StandardCharsets.UTF_8);
+      byte[] result = new byte[leftBytes.length + rightBytes.length];
+      System.arraycopy(leftBytes, 0, result, 0, leftBytes.length);
+      System.arraycopy(rightBytes, 0, result, leftBytes.length, rightBytes.length);
+      return result;
+    }
+    return toStringValue(leftVal) + toStringValue(rightVal);
+  }
+
+  private boolean isBinaryValue(Object value) {
+    return value instanceof byte[] || value instanceof ByteBuffer;
+  }
+
+  private byte[] toByteArray(Object value) {
+    if (value instanceof byte[] bytes) {
+      return bytes.clone();
+    }
+    if (value instanceof ByteBuffer buffer) {
+      ByteBuffer duplicate = buffer.duplicate();
+      byte[] bytes = new byte[duplicate.remaining()];
+      duplicate.get(bytes);
+      return bytes;
+    }
+    throw new IllegalArgumentException("Unsupported binary value: " + value);
   }
 
   private Object arithmetic(Expression left, Expression right, GenericRecord record, Operation op) {
