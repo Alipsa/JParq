@@ -1059,11 +1059,11 @@ class JParqPreparedStatement implements PreparedStatement {
     boolean singleTable = !parsedSelect.hasMultipleTables();
     List<String> primaryQualifier = singleTable ? qualifierList(ref, true) : List.of();
     Set<String> required = new LinkedHashSet<>();
-    collectColumnReferences(parsedSelect.expressions(), qualifiers, primaryQualifier, required);
-    collectColumnReferences(parsedSelect.where(), qualifiers, primaryQualifier, required);
-    collectColumnReferences(parsedSelect.having(), qualifiers, primaryQualifier, required);
+    collectColumnReferences(parsedSelect.expressions(), qualifiers, primaryQualifier, required, null);
+    collectColumnReferences(parsedSelect.where(), qualifiers, primaryQualifier, required, null);
+    collectColumnReferences(parsedSelect.having(), qualifiers, primaryQualifier, required, null);
     for (Expression group : parsedSelect.groupByExpressions()) {
-      collectColumnReferences(group, qualifiers, primaryQualifier, required);
+      collectColumnReferences(group, qualifiers, primaryQualifier, required, null);
     }
     for (SqlParser.OrderKey key : parsedSelect.orderBy()) {
       if (shouldIncludeOrderKey(key, qualifiers, singleTable)) {
@@ -1075,7 +1075,7 @@ class JParqPreparedStatement implements PreparedStatement {
         addColumn(required, key.column());
       }
     }
-    collectColumnReferences(ref.joinCondition(), qualifiers, primaryQualifier, required);
+    collectColumnReferences(ref.joinCondition(), qualifiers, primaryQualifier, required, null);
     return required;
   }
 
@@ -1092,12 +1092,9 @@ class JParqPreparedStatement implements PreparedStatement {
    *          ambiguous)
    * @param target
    *          set receiving the column names
+   * @param referenced
+   *          optional set to receive all referenced columns (may be null)
    */
-  private void collectColumnReferences(List<Expression> expressions, List<String> qualifiers,
-      List<String> primaryQualifier, Set<String> target) {
-    collectColumnReferences(expressions, qualifiers, primaryQualifier, target, null);
-  }
-
   private void collectColumnReferences(List<Expression> expressions, List<String> qualifiers,
       List<String> primaryQualifier, Set<String> target, Set<String> referenced) {
     if (expressions == null || expressions.isEmpty()) {
@@ -1119,12 +1116,9 @@ class JParqPreparedStatement implements PreparedStatement {
    *          single qualifier used when unqualified columns should be included
    * @param target
    *          set receiving the column names
+   * @param referenced
+   *          optional set to receive all referenced columns (may be null)
    */
-  private void collectColumnReferences(Expression expression, List<String> qualifiers, List<String> primaryQualifier,
-      Set<String> target) {
-    collectColumnReferences(expression, qualifiers, primaryQualifier, target, null);
-  }
-
   private void collectColumnReferences(Expression expression, List<String> qualifiers, List<String> primaryQualifier,
       Set<String> target, Set<String> referenced) {
     if (expression == null || target == null) {
@@ -2778,7 +2772,7 @@ class JParqPreparedStatement implements PreparedStatement {
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed, null);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
@@ -2790,7 +2784,7 @@ class JParqPreparedStatement implements PreparedStatement {
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed, null);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
@@ -2802,7 +2796,7 @@ class JParqPreparedStatement implements PreparedStatement {
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed, null);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
@@ -2814,7 +2808,7 @@ class JParqPreparedStatement implements PreparedStatement {
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed, null);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
@@ -2826,7 +2820,7 @@ class JParqPreparedStatement implements PreparedStatement {
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed, null);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
@@ -2838,7 +2832,7 @@ class JParqPreparedStatement implements PreparedStatement {
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed, null);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
@@ -2855,7 +2849,7 @@ class JParqPreparedStatement implements PreparedStatement {
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed, null);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
@@ -2872,7 +2866,7 @@ class JParqPreparedStatement implements PreparedStatement {
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed, null);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
@@ -2889,7 +2883,7 @@ class JParqPreparedStatement implements PreparedStatement {
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed, null);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
@@ -2901,18 +2895,18 @@ class JParqPreparedStatement implements PreparedStatement {
       }
       for (MaxWindow window : windowPlan.maxWindows()) {
         for (Expression partition : window.partitionExpressions()) {
-          collectColumnReferences(partition, qualifiers, primaryQualifier, needed);
+          collectColumnReferences(partition, qualifiers, primaryQualifier, needed, null);
           addColumns(needed, ColumnsUsed.inWhere(partition));
         }
         for (OrderByElement order : window.orderByElements()) {
           if (order != null && order.getExpression() != null) {
-            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed);
+            collectColumnReferences(order.getExpression(), qualifiers, primaryQualifier, needed, null);
             addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
           }
         }
         Expression argument = window.argument();
         if (argument != null) {
-          collectColumnReferences(argument, qualifiers, primaryQualifier, needed);
+          collectColumnReferences(argument, qualifiers, primaryQualifier, needed, null);
           addColumns(needed, ColumnsUsed.inWhere(argument));
         }
       }
