@@ -7,8 +7,14 @@
 import se.alipsa.matrix.parquet.MatrixParquetWriter
 import se.alipsa.matrix.datasets.Dataset
 
-dir = new File(System.getProperty("user.dir"))
-File file = new File(dir, "resources/datasets/mtcars.parquet")
+@SourceURI
+@Field
+URI sourceUri
+
+@Field
+File scriptDir = new File(sourceUri).parentFile
+
+File file = new File(scriptDir, "../src/test/resources/datasets/mtcars.parquet")
 file.parentFile.mkdirs()
   MatrixParquetWriter.write(
   Dataset.mtcars(),

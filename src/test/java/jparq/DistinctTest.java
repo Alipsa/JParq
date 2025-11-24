@@ -53,7 +53,6 @@ public class DistinctTest {
         // se.alipsa.matrix.datasets.Dataset.mtcars()['mpg'].unique().size()
         assertEquals(25, rows, "Expected 25 rows");
       } catch (SQLException e) {
-        System.err.println(String.join("\n", seen));
         fail(e);
       }
     });

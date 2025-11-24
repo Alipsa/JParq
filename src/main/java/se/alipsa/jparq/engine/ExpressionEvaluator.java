@@ -8,9 +8,11 @@ import java.sql.Timestamp;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import net.sf.jsqlparser.JSQLParserException;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.AnyType;
@@ -38,6 +40,7 @@ import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.StringExpressions;
 
 /**
@@ -119,8 +122,9 @@ public final class ExpressionEvaluator {
     List<String> qualifiers = outerQualifiers == null ? List.of() : List.copyOf(outerQualifiers);
     this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(qualifierColumnMapping);
     this.unqualifiedColumnMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(unqualifiedColumnMapping);
-    this.literalEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, qualifiers,
-        this.qualifierColumnMapping, this.unqualifiedColumnMapping);
+    CorrelationMappings mappings = new CorrelationMappings(qualifiers, this.qualifierColumnMapping,
+        this.unqualifiedColumnMapping, this.qualifierColumnMapping);
+    this.literalEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, mappings, WindowState.empty());
     this.subqueryExecutor = subqueryExecutor;
     this.outerQualifiers = qualifiers;
   }
@@ -393,8 +397,9 @@ public final class ExpressionEvaluator {
     if (!(exists.getRightExpression() instanceof net.sf.jsqlparser.statement.select.Select subSelect)) {
       throw new IllegalArgumentException("EXISTS requires a subquery");
     }
-    CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
-        column -> resolveColumnValue(column, rec));
+    CorrelatedSubqueryRewriter.Result rewritten = SubqueryCorrelatedFiltersIsolator.isolate(subSelect, outerQualifiers,
+        correlationColumns(), qualifierColumnMapping,
+        (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
         : subqueryExecutor.execute(subSelect);
@@ -580,7 +585,7 @@ public final class ExpressionEvaluator {
     // as correlated column references must be resolved in the context of the
     // current row.
     CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
-        column -> resolveColumnValue(column, rec));
+        correlationColumns(), (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
 
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
@@ -620,24 +625,32 @@ public final class ExpressionEvaluator {
   private record Operand(Object value, Schema schemaOrNull) {
   }
 
-  private Object resolveColumnValue(String columnName, GenericRecord rec) {
-    if (columnName == null) {
-      return null;
-    }
-    String qualifier = null;
-    String name = columnName;
-    int dot = columnName.indexOf('.');
-    if (dot > 0) {
-      qualifier = columnName.substring(0, dot);
-      name = columnName.substring(dot + 1);
-    }
-    String canonical = canonicalFieldName(qualifier, name);
+  private Object resolveColumnValue(String qualifier, String columnName, GenericRecord rec) {
+    String canonical = canonicalFieldName(qualifier, columnName);
     return AvroCoercions.resolveColumnValue(canonical, rec, fieldSchemas, caseInsensitiveIndex);
   }
 
   private String canonicalFieldName(String qualifier, String columnName) {
     return ColumnMappingUtil.canonicalFieldName(qualifier, columnName, qualifierColumnMapping, unqualifiedColumnMapping,
         caseInsensitiveIndex);
+  }
+
+  private Set<String> correlationColumns() {
+    if (qualifierColumnMapping.isEmpty()) {
+      return Set.of();
+    }
+    Set<String> columns = new LinkedHashSet<>();
+    for (Map.Entry<String, Map<String, String>> entry : qualifierColumnMapping.entrySet()) {
+      Map<String, String> mapping = entry.getValue();
+      if (mapping != null) {
+        for (String key : mapping.keySet()) {
+          if (!caseInsensitiveIndex.containsKey(key)) {
+            columns.add(key);
+          }
+        }
+      }
+    }
+    return Set.copyOf(columns);
   }
 
   private Operand operand(Expression e, GenericRecord rec) {

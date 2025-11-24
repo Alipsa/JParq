@@ -102,6 +102,35 @@ class TableValueFunctionTest {
     Assertions.assertEquals(List.of("Coupe:5", "Sedan:5"), results);
   }
 
+  /**
+   * Verify that {@code TABLE(UNNEST(...))} works when driven solely by a scalar
+   * array constructor.
+   */
+  @Test
+  void tableWrapperUnnestScalarArray() {
+    String sql = """
+        SELECT
+            numbers.val AS value_column
+        FROM
+            TABLE(UNNEST(ARRAY[1, 2, 3])) AS numbers(val)
+        ORDER BY
+            value_column
+        """;
+
+    List<Integer> values = new ArrayList<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        while (rs.next()) {
+          values.add(rs.getInt("value_column"));
+        }
+      } catch (Exception e) {
+        throw new IllegalStateException("Failed to read scalar TABLE(UNNEST()) results", e);
+      }
+    });
+
+    Assertions.assertEquals(List.of(1, 2, 3), values);
+  }
+
   private static Schema buildVehicleSchema() {
     return SchemaBuilder.record("vehicle").namespace("jparq.derived").fields().requiredString("model")
         .name("gear_ranges").type().array().items().intType().noDefault().endRecord();

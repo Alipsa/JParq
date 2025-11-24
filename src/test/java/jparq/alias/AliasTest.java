@@ -52,7 +52,6 @@ public class AliasTest {
 
         assertEquals(32, rows, "Expected 32 rows");
       } catch (SQLException e) {
-        System.err.println(String.join("\n", seen));
         fail(e);
       }
     });
@@ -77,7 +76,6 @@ public class AliasTest {
 
         assertEquals(32, rows, "Expected 32 rows");
       } catch (SQLException e) {
-        System.err.println(String.join("\n", seen));
         fail(e);
       }
     });
@@ -102,7 +100,6 @@ public class AliasTest {
 
         assertEquals(3, rows, "Expected 3 rows");
       } catch (SQLException e) {
-        System.err.println(String.join("\n", seen));
         fail(e);
       }
     });

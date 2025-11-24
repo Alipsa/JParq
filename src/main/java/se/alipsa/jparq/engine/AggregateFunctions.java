@@ -23,11 +23,22 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.BinaryExpression;
+import net.sf.jsqlparser.expression.CaseExpression;
+import net.sf.jsqlparser.expression.CastExpression;
+import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.Function;
+import net.sf.jsqlparser.expression.JdbcNamedParameter;
+import net.sf.jsqlparser.expression.JdbcParameter;
 import net.sf.jsqlparser.expression.NotExpression;
+import net.sf.jsqlparser.expression.NullValue;
+import net.sf.jsqlparser.expression.Parenthesis;
 import net.sf.jsqlparser.expression.SignedExpression;
+import net.sf.jsqlparser.expression.StringValue;
+import net.sf.jsqlparser.expression.TimeValue;
+import net.sf.jsqlparser.expression.TimestampValue;
+import net.sf.jsqlparser.expression.WhenClause;
 import net.sf.jsqlparser.expression.operators.arithmetic.Addition;
 import net.sf.jsqlparser.expression.operators.arithmetic.Division;
 import net.sf.jsqlparser.expression.operators.arithmetic.Modulo;
@@ -54,6 +65,7 @@ import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.SqlParser.OrderKey;
+import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.StringExpressions;
@@ -396,7 +408,11 @@ public final class AggregateFunctions {
    * @param select
    *          parsed SELECT statement
    * @return aggregate plan for the SELECT list, or {@code null} when the query
-   *         should be handled by the non-aggregate execution path
+   *         should be handled by the non-aggregate execution path. The planner
+   *         validates SELECT expressions against the GROUP BY clause using
+   *         structural expression comparison so that functionally equivalent
+   *         constructs (for example {@code COALESCE} invocations) are accepted
+   *         even when they are formatted differently.
    */
   public static AggregatePlan plan(SqlParser.Select select) {
     List<Expression> expressions = select.expressions();
@@ -433,7 +449,7 @@ public final class AggregateFunctions {
           continue;
         }
         if (isGroupingFunction(func)) {
-          List<Integer> groupingIndexes = groupingArgumentIndexes(func, groupIndexByText);
+          List<Integer> groupingIndexes = groupingArgumentIndexes(func, groupIndexByText, groupExpressions);
           resultColumns.add(new ResultColumn(label, ColumnKind.GROUPING, -1, -1, groupingIndexes, func.toString()));
           continue;
         }
@@ -443,16 +459,7 @@ public final class AggregateFunctions {
         return null; // simple projection without grouping/aggregates
       }
 
-      Integer groupIndex = null;
-      for (String key : expressionKeys(expr)) {
-        if (key == null) {
-          continue;
-        }
-        groupIndex = groupIndexByText.get(key);
-        if (groupIndex != null) {
-          break;
-        }
-      }
+      Integer groupIndex = findGroupIndex(expr, groupIndexByText, groupExpressions);
       if (groupIndex == null) {
         throw new IllegalArgumentException(
             "SELECT expression '" + expr + "' must appear in the GROUP BY clause when aggregates are present");
@@ -619,31 +626,59 @@ public final class AggregateFunctions {
    *          GROUPING function expression
    * @param groupIndexByText
    *          lookup of grouping expression indexes by normalized text
+   * @param groupExpressions
+   *          expressions present in the GROUP BY clause used for structural
+   *          matching
    * @return immutable list of grouping expression indexes
    */
-  private static List<Integer> groupingArgumentIndexes(Function func, Map<String, Integer> groupIndexByText) {
+  private static List<Integer> groupingArgumentIndexes(Function func, Map<String, Integer> groupIndexByText,
+      List<GroupExpression> groupExpressions) {
     ExpressionList<?> parameters = func.getParameters();
     if (parameters == null || parameters.isEmpty()) {
       throw new IllegalArgumentException("GROUPING function requires at least one argument");
     }
     List<Integer> indexes = new ArrayList<>(parameters.size());
     for (Expression argument : parameters) {
-      Integer match = null;
-      for (String key : expressionKeys(argument)) {
-        if (key == null) {
-          continue;
-        }
-        match = groupIndexByText.get(key);
-        if (match != null) {
-          break;
-        }
-      }
+      Integer match = findGroupIndex(argument, groupIndexByText, groupExpressions);
       if (match == null) {
         throw new IllegalArgumentException("GROUPING argument '" + argument + "' must appear in the GROUP BY clause");
       }
       indexes.add(match);
     }
     return List.copyOf(indexes);
+  }
+
+  /**
+   * Locate the index of an expression within the GROUP BY clause.
+   *
+   * @param expression
+   *          expression to match
+   * @param groupIndexByText
+   *          lookup keyed by normalized expression text
+   * @param groupExpressions
+   *          expressions defined in the GROUP BY clause
+   * @return matching index or {@code null} when no match exists
+   */
+  private static Integer findGroupIndex(Expression expression, Map<String, Integer> groupIndexByText,
+      List<GroupExpression> groupExpressions) {
+    if (expression == null) {
+      return null;
+    }
+    for (String key : expressionKeys(expression)) {
+      if (key == null) {
+        continue;
+      }
+      Integer index = groupIndexByText.get(key);
+      if (index != null) {
+        return index;
+      }
+    }
+    for (int i = 0; i < groupExpressions.size(); i++) {
+      if (expressionsEquivalent(expression, groupExpressions.get(i).expression())) {
+        return i;
+      }
+    }
+    return null;
   }
 
   private static String labelFor(List<String> labels, int index, Expression expr) {
@@ -712,6 +747,196 @@ public final class AggregateFunctions {
       }
     }
     return false;
+  }
+
+  private static boolean expressionsEquivalent(Expression first, Expression second) {
+    if (first == second) {
+      return true;
+    }
+    if (first == null || second == null) {
+      return false;
+    }
+    if (!first.getClass().equals(second.getClass())) {
+      return false;
+    }
+    if (first instanceof Column leftColumn) {
+      return columnsEquivalent(leftColumn, (Column) second);
+    }
+    if (first instanceof Function leftFunction) {
+      return functionsEquivalent(leftFunction, (Function) second);
+    }
+    if (first instanceof BinaryExpression leftBinary) {
+      return binaryExpressionsEquivalent(leftBinary, (BinaryExpression) second);
+    }
+    if (first instanceof Between leftBetween) {
+      Between rightBetween = (Between) second;
+      return leftBetween.isNot() == rightBetween.isNot()
+          && expressionsEquivalent(leftBetween.getLeftExpression(), rightBetween.getLeftExpression())
+          && expressionsEquivalent(leftBetween.getBetweenExpressionStart(), rightBetween.getBetweenExpressionStart())
+          && expressionsEquivalent(leftBetween.getBetweenExpressionEnd(), rightBetween.getBetweenExpressionEnd());
+    }
+    if (first instanceof InExpression leftIn) {
+      InExpression rightIn = (InExpression) second;
+      if (leftIn.isNot() != rightIn.isNot()) {
+        return false;
+      }
+      if (!expressionsEquivalent(leftIn.getLeftExpression(), rightIn.getLeftExpression())) {
+        return false;
+      }
+      return expressionsEquivalent(leftIn.getRightExpression(), rightIn.getRightExpression());
+    }
+    if (first instanceof IsNullExpression leftIsNull) {
+      IsNullExpression rightIsNull = (IsNullExpression) second;
+      return leftIsNull.isNot() == rightIsNull.isNot()
+          && expressionsEquivalent(leftIsNull.getLeftExpression(), rightIsNull.getLeftExpression());
+    }
+    if (first instanceof CaseExpression leftCase) {
+      CaseExpression rightCase = (CaseExpression) second;
+      if (!expressionsEquivalent(leftCase.getSwitchExpression(), rightCase.getSwitchExpression())) {
+        return false;
+      }
+      Expression leftElse = leftCase.getElseExpression();
+      Expression rightElse = rightCase.getElseExpression();
+      if (!expressionsEquivalent(leftElse, rightElse)) {
+        return false;
+      }
+      List<WhenClause> leftClauses = leftCase.getWhenClauses();
+      List<WhenClause> rightClauses = rightCase.getWhenClauses();
+      if (leftClauses == null || rightClauses == null) {
+        return leftClauses == rightClauses;
+      }
+      if (leftClauses.size() != rightClauses.size()) {
+        return false;
+      }
+      for (int i = 0; i < leftClauses.size(); i++) {
+        if (!expressionsEquivalent(leftClauses.get(i), rightClauses.get(i))) {
+          return false;
+        }
+      }
+      return true;
+    }
+    if (first instanceof WhenClause leftWhen) {
+      WhenClause rightWhen = (WhenClause) second;
+      return expressionsEquivalent(leftWhen.getWhenExpression(), rightWhen.getWhenExpression())
+          && expressionsEquivalent(leftWhen.getThenExpression(), rightWhen.getThenExpression());
+    }
+    if (first instanceof SignedExpression leftSigned) {
+      SignedExpression rightSigned = (SignedExpression) second;
+      return leftSigned.getSign() == rightSigned.getSign()
+          && expressionsEquivalent(leftSigned.getExpression(), rightSigned.getExpression());
+    }
+    if (first instanceof NotExpression leftNot) {
+      return expressionsEquivalent(leftNot.getExpression(), ((NotExpression) second).getExpression());
+    }
+    if (first instanceof Parenthesis leftParenthesis) {
+      return expressionsEquivalent(leftParenthesis.getExpression(), ((Parenthesis) second).getExpression());
+    }
+    if (first instanceof CastExpression leftCast) {
+      CastExpression rightCast = (CastExpression) second;
+      if (!Objects.equals(String.valueOf(leftCast.getColDataType()), String.valueOf(rightCast.getColDataType()))) {
+        return false;
+      }
+      return expressionsEquivalent(leftCast.getLeftExpression(), rightCast.getLeftExpression());
+    }
+    if (first instanceof NullValue) {
+      return true;
+    }
+    if (first instanceof StringValue leftString) {
+      return Objects.equals(leftString.getValue(), ((StringValue) second).getValue());
+    }
+    if (first instanceof DateValue leftDate) {
+      return Objects.equals(leftDate.getValue(), ((DateValue) second).getValue());
+    }
+    if (first instanceof TimeValue leftTime) {
+      return Objects.equals(leftTime.getValue(), ((TimeValue) second).getValue());
+    }
+    if (first instanceof TimestampValue leftTimestamp) {
+      return Objects.equals(leftTimestamp.getValue(), ((TimestampValue) second).getValue());
+    }
+    if (first instanceof JdbcNamedParameter leftNamed) {
+      return Objects.equals(leftNamed.getName(), ((JdbcNamedParameter) second).getName());
+    }
+    if (first instanceof JdbcParameter leftParam) {
+      return Objects.equals(leftParam.getIndex(), ((JdbcParameter) second).getIndex());
+    }
+    return Objects.equals(first.toString(), second.toString());
+  }
+
+  private static boolean binaryExpressionsEquivalent(BinaryExpression left, BinaryExpression right) {
+    if (left instanceof LikeExpression leftLike) {
+      LikeExpression rightLike = (LikeExpression) right;
+      if (leftLike.isNot() != rightLike.isNot()) {
+        return false;
+      }
+      // Compare ESCAPE clauses
+      if (!expressionsEquivalent(leftLike.getEscape(), rightLike.getEscape())) {
+        return false;
+      }
+    }
+    if (left instanceof SimilarToExpression leftSimilarTo) {
+      SimilarToExpression rightSimilarTo = (SimilarToExpression) right;
+      if (leftSimilarTo.isNot() != rightSimilarTo.isNot()) {
+        return false;
+      }
+      // Compare ESCAPE strings
+      if (!Objects.equals(leftSimilarTo.getEscape(), rightSimilarTo.getEscape())) {
+        return false;
+      }
+    }
+    return expressionsEquivalent(left.getLeftExpression(), right.getLeftExpression())
+        && expressionsEquivalent(left.getRightExpression(), right.getRightExpression());
+  }
+
+  private static boolean columnsEquivalent(Column left, Column right) {
+    if (left == null || right == null) {
+      return left == right;
+    }
+    String leftName = JParqUtil.normalizeQualifier(left.getColumnName());
+    String rightName = JParqUtil.normalizeQualifier(right.getColumnName());
+    if (!Objects.equals(leftName, rightName)) {
+      return false;
+    }
+    return tablesEquivalent(left.getTable(), right.getTable());
+  }
+
+  private static boolean tablesEquivalent(Table left, Table right) {
+    if (left == right) {
+      return true;
+    }
+    if (left == null || right == null) {
+      return false;
+    }
+    if (!Objects.equals(tableAlias(left), tableAlias(right))) {
+      return false;
+    }
+    return Objects.equals(tableName(left), tableName(right));
+  }
+
+  private static boolean functionsEquivalent(Function left, Function right) {
+    if (!Objects.equals(normalizeFunctionName(left.getName()), normalizeFunctionName(right.getName()))) {
+      return false;
+    }
+    if (left.isAllColumns() != right.isAllColumns()) {
+      return false;
+    }
+    if (left.isDistinct() != right.isDistinct()) {
+      return false;
+    }
+    List<Expression> leftArgs = parameters(left);
+    List<Expression> rightArgs = parameters(right);
+    if (leftArgs.size() != rightArgs.size()) {
+      return false;
+    }
+    for (int i = 0; i < leftArgs.size(); i++) {
+      if (!expressionsEquivalent(leftArgs.get(i), rightArgs.get(i))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static String normalizeFunctionName(String name) {
+    return name == null ? null : name.toUpperCase(Locale.ROOT);
   }
 
   private static List<GroupExpression> buildGroupExpressions(List<Expression> groupByExpressions) {
@@ -851,12 +1076,51 @@ public final class AggregateFunctions {
       Expression having, List<OrderKey> orderBy, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping)
       throws IOException {
+    return evaluate(reader, plan, residual, having, orderBy, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
+        unqualifiedColumnMapping, qualifierColumnMapping);
+  }
+
+  /**
+   * Evaluate the supplied aggregation plan using the provided records.
+   *
+   * @param reader
+   *          source of {@link GenericRecord} rows
+   * @param plan
+   *          aggregate plan describing grouping, aggregates and projection labels
+   * @param residual
+   *          residual WHERE clause to apply before aggregation
+   * @param having
+   *          HAVING clause to apply after aggregation
+   * @param orderBy
+   *          ORDER BY keys used after aggregation
+   * @param subqueryExecutor
+   *          executor used for correlated subqueries
+   * @param outerQualifiers
+   *          qualifiers visible to correlated subqueries
+   * @param qualifierColumnMapping
+   *          mapping from qualifier to canonical column names used when resolving
+   *          correlated subquery references
+   * @param unqualifiedColumnMapping
+   *          mapping from unqualified column names to canonical field names
+   * @param correlationContext
+   *          correlation context describing qualifier aware column aliases
+   * @return aggregate rows and associated column metadata
+   * @throws IOException
+   *           if reading the records fails
+   */
+  public static AggregateResult evaluate(RecordReader reader, AggregatePlan plan, Expression residual,
+      Expression having, List<OrderKey> orderBy, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
+      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping,
+      Map<String, Map<String, String>> correlationContext) throws IOException {
     List<GroupExpression> groupExpressions = plan.groupExpressions();
     List<GroupingSet> groupingSets = plan.groupingSets();
     List<GroupTypeTracker> groupTrackers = new ArrayList<>(groupExpressions.size());
     for (int i = 0; i < groupExpressions.size(); i++) {
       groupTrackers.add(new GroupTypeTracker());
     }
+
+    Map<String, Map<String, String>> normalizedCorrelationContext = ColumnMappingUtil
+        .normaliseQualifierMapping(correlationContext);
 
     int aggregateCount = plan.specs().size();
     int[] aggregateSqlTypes = new int[aggregateCount];
@@ -879,8 +1143,9 @@ public final class AggregateFunctions {
             whereEval = new ExpressionEvaluator(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
                 unqualifiedColumnMapping);
           }
-          valueEval = new ValueExpressionEvaluator(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
-              unqualifiedColumnMapping);
+          CorrelationMappings mappings = new CorrelationMappings(outerQualifiers, qualifierColumnMapping,
+              unqualifiedColumnMapping, normalizedCorrelationContext);
+          valueEval = new ValueExpressionEvaluator(schema, subqueryExecutor, mappings, WindowState.empty());
         }
 
         boolean matches = residual == null || whereEval.eval(residual, rec);
@@ -936,7 +1201,7 @@ public final class AggregateFunctions {
       boolean include = true;
       if (normalizedHaving != null) {
         HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues, labelLookup, subqueryExecutor,
-            outerQualifiers, state.groupingSetIndex());
+            outerQualifiers, normalizedCorrelationContext, state.groupingSetIndex());
         include = evaluator.eval(normalizedHaving);
       }
       if (include) {
@@ -1562,16 +1827,20 @@ public final class AggregateFunctions {
     private final SubqueryExecutor subqueryExecutor;
     private final Map<String, Object> labelLookup;
     private final List<String> correlatedQualifiers;
+    private final Map<String, Map<String, String>> correlationContext;
     private final int groupingSetIndex;
     private final Map<String, Integer> groupIndexLookup;
 
     HavingEvaluator(AggregatePlan plan, List<Object> aggregateValues, Map<String, Object> labelLookup,
-        SubqueryExecutor subqueryExecutor, List<String> correlatedQualifiers, int groupingSetIndex) {
+        SubqueryExecutor subqueryExecutor, List<String> correlatedQualifiers,
+        Map<String, Map<String, String>> correlationContext, int groupingSetIndex) {
       this.plan = plan;
       this.aggregateValues = aggregateValues;
       this.labelLookup = Collections.unmodifiableMap(new HashMap<>(labelLookup));
       this.subqueryExecutor = subqueryExecutor;
       this.correlatedQualifiers = correlatedQualifiers == null ? List.of() : List.copyOf(correlatedQualifiers);
+      this.correlationContext = ColumnMappingUtil
+          .normaliseQualifierMapping(correlationContext == null ? Map.of() : correlationContext);
       this.groupingSetIndex = groupingSetIndex;
       this.groupIndexLookup = groupIndexLookup(plan.groupExpressions());
     }
@@ -1661,7 +1930,12 @@ public final class AggregateFunctions {
         if (subqueryExecutor == null) {
           throw new IllegalStateException("IN subqueries require a subquery executor");
         }
-        List<Object> subqueryValues = subqueryExecutor.execute(subSelect).firstColumnValues();
+        CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
+            correlationQualifiers(), correlationColumns(), (qualifier, column) -> correlatedValue(qualifier, column));
+        SubqueryExecutor.SubqueryResult result = rewritten.correlated()
+            ? subqueryExecutor.executeRaw(rewritten.sql())
+            : subqueryExecutor.execute(subSelect);
+        List<Object> subqueryValues = result.firstColumnValues();
         boolean found = false;
         for (Object candidate : subqueryValues) {
           if (candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
@@ -1681,8 +1955,8 @@ public final class AggregateFunctions {
       if (!(exists.getRightExpression() instanceof Select subSelect)) {
         throw new IllegalArgumentException("EXISTS requires a subquery");
       }
-      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, correlatedQualifiers,
-          this::aliasValue);
+      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
+          correlationQualifiers(), correlationColumns(), (qualifier, column) -> correlatedValue(qualifier, column));
       SubqueryExecutor.SubqueryResult result = rewritten.correlated()
           ? subqueryExecutor.executeRaw(rewritten.sql())
           : subqueryExecutor.execute(subSelect);
@@ -1807,7 +2081,11 @@ public final class AggregateFunctions {
       if (subqueryExecutor == null) {
         throw new IllegalStateException("Scalar subqueries require a subquery executor");
       }
-      SubqueryExecutor.SubqueryResult result = subqueryExecutor.execute(subSelect);
+      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
+          correlationQualifiers(), correlationColumns(), (qualifier, column) -> correlatedValue(qualifier, column));
+      SubqueryExecutor.SubqueryResult result = rewritten.correlated()
+          ? subqueryExecutor.executeRaw(rewritten.sql())
+          : subqueryExecutor.execute(subSelect);
       if (result.rows().isEmpty()) {
         return null;
       }
@@ -1846,7 +2124,7 @@ public final class AggregateFunctions {
           for (int j = 0; j < spec.arguments().size(); j++) {
             Expression expected = spec.arguments().get(j);
             Expression actual = params.get(j);
-            if (!expected.toString().equals(actual.toString())) {
+            if (!expressionsEquivalent(expected, actual)) {
               matches = false;
               break;
             }
@@ -1861,8 +2139,61 @@ public final class AggregateFunctions {
     }
 
     private Object grouping(Function func) {
-      List<Integer> indexes = groupingArgumentIndexes(func, groupIndexLookup);
+      List<Integer> indexes = groupingArgumentIndexes(func, groupIndexLookup, plan.groupExpressions());
       return groupingValue(plan, groupingSetIndex, indexes);
+    }
+
+    private Object correlatedValue(String qualifier, String column) {
+      String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
+      String normalizedColumn = column == null ? null : column.toLowerCase(Locale.ROOT);
+      if (normalizedQualifier != null && normalizedColumn != null && !correlationContext.isEmpty()) {
+        Map<String, String> mapping = correlationContext.get(normalizedQualifier);
+        if (mapping != null) {
+          String canonical = mapping.get(normalizedColumn);
+          if (canonical != null) {
+            String lookupKey = canonical.toLowerCase(Locale.ROOT);
+            if (labelLookup.containsKey(lookupKey)) {
+              return labelLookup.get(lookupKey);
+            }
+          }
+        }
+      }
+      return aliasValue(column);
+    }
+
+    private List<String> correlationQualifiers() {
+      if (correlationContext.isEmpty()) {
+        return correlatedQualifiers;
+      }
+      Set<String> qualifiers = new LinkedHashSet<>(correlatedQualifiers);
+      qualifiers.addAll(correlationContext.keySet());
+      return List.copyOf(qualifiers);
+    }
+
+    // Unlike ValueExpressionEvaluator/ExpressionEvaluator, we don't filter by
+    // caseInsensitiveIndex because HAVING operates on aggregate results, not a
+    // physical schema. All projection aliases should be available to subqueries.
+    private Set<String> correlationColumns() {
+      if (correlationContext.isEmpty()) {
+        return Set.of();
+      }
+      Set<String> columns = new LinkedHashSet<>();
+      for (Map<String, String> mapping : correlationContext.values()) {
+        if (mapping == null) {
+          continue;
+        }
+        for (Map.Entry<String, String> entry : mapping.entrySet()) {
+          String column = entry.getKey();
+          String canonical = entry.getValue();
+          String normalizedColumn = column == null ? null : column.toLowerCase(Locale.ROOT);
+          String normalizedCanonical = canonical == null ? null : canonical.toLowerCase(Locale.ROOT);
+          if ((normalizedColumn != null && labelLookup.containsKey(normalizedColumn))
+              || (normalizedCanonical != null && labelLookup.containsKey(normalizedCanonical))) {
+            columns.add(column);
+          }
+        }
+      }
+      return Set.copyOf(columns);
     }
 
     private Object aliasValue(String name) {

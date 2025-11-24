@@ -1,0 +1,6 @@
+employee_id,first_name,department,salary
+1,Per,IT,165000
+2,Karin,IT,180000
+3,Tage,HR,NULL
+4,Arne,Sales,195000
+5,Sixten,Sales,230000

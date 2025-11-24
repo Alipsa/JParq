@@ -59,7 +59,6 @@ public class OrderByTest {
 
         assertEquals(32, rows, "Expected 32 rows");
       } catch (SQLException e) {
-        System.err.println(String.join("\n", seen));
         fail(e);
       }
     });
@@ -89,7 +88,6 @@ public class OrderByTest {
 
         assertEquals(32, rows, "Expected 32 rows");
       } catch (SQLException e) {
-        System.err.println(String.join("\n", seen));
         fail(e);
       }
     });
@@ -138,7 +136,6 @@ public class OrderByTest {
 
         assertEquals(32, rows, "Expected 32 rows");
       } catch (SQLException e) {
-        System.err.println(String.join("\n", seen));
         fail(e);
       }
     });
@@ -181,7 +178,6 @@ public class OrderByTest {
         assertArrayEquals(expectedAvgMpgs, actualAvgMpgs, 0.001, "Unexpected avgMpg values");
 
       } catch (SQLException e) {
-        System.err.println(String.join("\n", seen));
         fail(e);
       }
     });

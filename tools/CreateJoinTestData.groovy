@@ -25,6 +25,10 @@ URI sourceUri
 
 @Field
 File scriptDir = new File(sourceUri).parentFile
+@Field
+File resourcesDir = new File(scriptDir, '../src/test/resources')
+@Field
+File acmeDir = new File(resourcesDir, 'acme')
 
 employees = Matrix.builder('employees').data(
   id: [1,2,3,4,5],
@@ -32,14 +36,14 @@ employees = Matrix.builder('employees').data(
   last_name:  ['Andersson','Pettersson','Lundström','Larsson','Svensson']
 ).types(int, String, String)
 .build()
-MatrixParquetWriter.write(employees, new File(scriptDir, 'resources/acme/employees.parquet'))
+MatrixParquetWriter.write(employees, new File(acmeDir, 'employees.parquet'))
 println "exported employees"
 
 departments = Matrix.builder('departments').data(
   id: [1,2,3],  
   department: ['IT', 'HR', 'Sales']
 ).types(int, String).build()
-MatrixParquetWriter.write(employees, new File(scriptDir,'resources/acme/departments.parquet'))
+MatrixParquetWriter.write(departments, new File(acmeDir,'departments.parquet'))
 println "exported departments"
 
 employeeDepartments = Matrix.builder('employee_department').data(
@@ -47,7 +51,7 @@ employeeDepartments = Matrix.builder('employee_department').data(
   department: [1,1,2,3,3],
   employee: [1,2,3,4,5]
 ).types(int, int, int).build()
-MatrixParquetWriter.write(employeeDepartments, new File(scriptDir,'resources/acme/employee_department.parquet'))
+MatrixParquetWriter.write(employeeDepartments, new File(acmeDir,'employee_department.parquet'))
 println("exported employee_department")
 
 salary = Matrix.builder('salary').data(
@@ -56,7 +60,7 @@ salary = Matrix.builder('salary').data(
   salary: [150000,180000,130000,195000,230000,160000,140000,165000],
   change_date: ListConverter.toLocalDates('2020-03-01','2020-03-01','2021-01-01','2020-10-01','2020-12-15','2021-01-01','2021-12-01','2021-08-01')
 ).types(int, int, BigDecimal, LocalDate).build()
-MatrixParquetWriter.write(salary, new File(scriptDir,'resources/acme/salary.parquet'))
+MatrixParquetWriter.write(salary, new File(acmeDir,'salary.parquet'))
 println("exported salary")
 
 
@@ -89,16 +93,16 @@ if (false) {
       details: productDetails,
       reviews: productReviews
   ).build()
-  MatrixParquetWriter.write(productsNested, new File(scriptDir, 'resources/acme/products_nested.parquet'))
+  MatrixParquetWriter.write(productsNested, new File(acmeDir, 'products_nested.parquet'))
   println("exported products_nested with array and record types")
 }
 println "creating h2 database"
 
 String h2FileName = 'acmeh2'
-File dbFile = new File(scriptDir, "resources/$h2FileName")
+File dbFile = new File(resourcesDir, h2FileName)
 def ant = new AntBuilder()
 ant.delete {
-  fileset(dir: 'resources') {
+  fileset(dir: resourcesDir) {
     include(name: "$h2FileName*")
   }
 }

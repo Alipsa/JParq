@@ -24,6 +24,7 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.helper.LiteralConverter;
@@ -316,8 +317,10 @@ public final class WindowFunctions {
     if (plan == null || plan.isEmpty() || records == null || records.isEmpty() || schema == null) {
       return WindowState.empty();
     }
-    ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, outerQualifiers,
-        qualifierColumnMapping, unqualifiedColumnMapping, WindowState.empty());
+    CorrelationMappings mappings = new CorrelationMappings(outerQualifiers, qualifierColumnMapping,
+        unqualifiedColumnMapping, qualifierColumnMapping);
+    ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, mappings,
+        WindowState.empty());
 
     final IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>> rowNumberValues;
     rowNumberValues = new IdentityHashMap<>();
