@@ -25,9 +25,12 @@ This multi-layered testing approach is a good practice and should be continued.
 
 The following areas have been identified as having gaps in test coverage:
 
-*   **Combinations of SQL Features**: While individual SQL features are well-tested, there is a lack of tests for complex queries that combine multiple SQL features (e.g., a query with a CTE, a join, and a window function). No tests were found that combine `WITH`, `JOIN`, and `OVER` clauses in a single query.
+*   **Combinations of SQL Features**: 
+While individual SQL features are well-tested, there is a lack of tests for complex queries that combine multiple SQL features (e.g., a query with a CTE, a join, and a window function). 
+No tests were found that combine `WITH`, `JOIN`, and `OVER` clauses in a single query.
 
-*   **Helper Classes**: The following helper classes in `src/main/java/se/alipsa/jparq/helper` do not have any dedicated unit tests:
+*   **Helper Classes**: 
+The following helper classes in `src/main/java/se/alipsa/jparq/helper` do not have any dedicated unit tests:
     *   `DateTimeExpressions`
     *   `JdbcTypeMapper`
     *   `JParqUtil`
@@ -35,7 +38,8 @@ The following areas have been identified as having gaps in test coverage:
     *   `LiteralConverter`
     *   `StringExpressions`
 
-*   **Error Handling**: Many tests use `try-catch` blocks with `fail(e)` in the `catch` block. This is not ideal as it does not test for specific exceptions. While some tests use `assertThrows`, there is room for improvement.
+*   **Error Handling**: Many tests use `try-catch` blocks with `fail(e)` in the `catch` block. 
+This is not ideal as it does not test for specific exceptions. While some tests use `assertThrows`, there is room for improvement.
 
 ## 4. Recommendations
 

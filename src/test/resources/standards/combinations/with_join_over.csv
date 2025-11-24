@@ -1,0 +1,6 @@
+department,employee_name,current_salary,previous_salary,pct_increase
+HR,Tage Lundström,140000,130000,7.69
+IT,Per Andersson,165000,160000,3.13
+IT,Karin Pettersson,180000,null,null
+Sales,Arne Larsson,195000,null,null
+Sales,Sixten Svensson,230000,null,null

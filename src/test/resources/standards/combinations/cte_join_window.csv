@@ -1,0 +1,6 @@
+department,full_name,salary,avg_dept_salary,diff_from_avg,rank_in_dept
+HR,Tage Lundström,140000,140000,0,1
+IT,Karin Pettersson,180000,172500,7500,1
+IT,Per Andersson,165000,172500,-7500,2
+Sales,Sixten Svensson,230000,212500,17500,1
+Sales,Arne Larsson,195000,212500,-17500,2

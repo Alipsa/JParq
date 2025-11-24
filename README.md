@@ -159,7 +159,7 @@ The following SQL statements are supported:
 - INFORMATION_SCHEMA.COLUMNS and INFORMATION_SCHEMA.TABLES
 
 ## Roadmap: Might be implemented in the future
-
+- support || for string concatenations
 ### Non standard extensions
 - Support for variable assignment and use within SQL scripts.
   - @variable_name syntax to define a variable that exists for the duration of the connection
