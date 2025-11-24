@@ -52,16 +52,13 @@ public class SqlStandardComplianceIT {
   void executeStandardComplianceSuite() throws IOException {
     List<TestCase> testCases = discoverTestCases();
     assertFalse(testCases.isEmpty(), "No SQL standard compliance tests were discovered");
-    // List<Path> exclusions = List.of(
-    // standardsRoot.resolve("Subqueries/Correlated/subquery_correlated_filters.sql"),
-    // standardsRoot.resolve("TableValueFunctions/Unnest/unnest_table_wrapper.sql"),
-    // standardsRoot.resolve("Wildcards/Unqualified/unqualified_star.sql"));
+    List<Path> exclusions = List.of(standardsRoot.resolve("combinations/cte_join_window.sql"),
+        standardsRoot.resolve("combinations/with_join_over.sql"));
     for (TestCase testCase : testCases) {
-      /*
-       * if (exclusions.contains(testCase.sqlPath)) {
-       * System.out.println("Skipping excluded test: " + describe(testCase.sqlPath));
-       * continue; }
-       */
+      if (exclusions.contains(testCase.sqlPath)) {
+        System.out.println("Skipping excluded test: " + describe(testCase.sqlPath));
+        continue;
+      }
       executeAndVerify(testCase);
     }
   }

@@ -1,7 +1,6 @@
 # Please add support for using || for string concatenations
 
-1. The ANSI Standard (The "Correct" Way)
-   The double pipe || is defined in the SQL-92 standard.
+The double pipe || is defined in the SQL-92 standard.
 
 Syntax: string_a || string_b
 
