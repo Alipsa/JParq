@@ -39,13 +39,14 @@ public class AggregateFunctionsEquivalenceTest {
   @Test
   void likeExpressionsRespectEscapeClause() throws Exception {
     Expression withEscape = CCJSqlParserUtil.parseExpression("col LIKE 'a!%' ESCAPE '!'");
-    Expression withoutEscape = CCJSqlParserUtil.parseExpression("col LIKE 'a!%'");
-    Expression withDifferentEscape = CCJSqlParserUtil.parseExpression("col LIKE 'a!%' ESCAPE '\\'");
-
     assertTrue(equivalent(withEscape, withEscape));
+
+    Expression withoutEscape = CCJSqlParserUtil.parseExpression("col LIKE 'a!%'");
     assertTrue(equivalent(withoutEscape, withoutEscape));
     assertFalse(equivalent(withEscape, withoutEscape),
         "LIKE with ESCAPE should not be equivalent to LIKE without ESCAPE");
+
+    Expression withDifferentEscape = CCJSqlParserUtil.parseExpression("col LIKE 'a!%' ESCAPE '\\'");
     assertFalse(equivalent(withEscape, withDifferentEscape),
         "LIKE with different ESCAPE characters should not be equivalent");
   }
@@ -53,13 +54,14 @@ public class AggregateFunctionsEquivalenceTest {
   @Test
   void similarToExpressionsRespectEscapeClause() throws Exception {
     Expression withEscape = CCJSqlParserUtil.parseExpression("col SIMILAR TO 'a!%' ESCAPE '!'");
-    Expression withoutEscape = CCJSqlParserUtil.parseExpression("col SIMILAR TO 'a!%'");
-    Expression withDifferentEscape = CCJSqlParserUtil.parseExpression("col SIMILAR TO 'a!%' ESCAPE '\\'");
-
     assertTrue(equivalent(withEscape, withEscape));
+
+    Expression withoutEscape = CCJSqlParserUtil.parseExpression("col SIMILAR TO 'a!%'");
     assertTrue(equivalent(withoutEscape, withoutEscape));
     assertFalse(equivalent(withEscape, withoutEscape),
         "SIMILAR TO with ESCAPE should not be equivalent to SIMILAR TO without ESCAPE");
+
+    Expression withDifferentEscape = CCJSqlParserUtil.parseExpression("col SIMILAR TO 'a!%' ESCAPE '\\'");
     assertFalse(equivalent(withEscape, withDifferentEscape),
         "SIMILAR TO with different ESCAPE strings should not be equivalent");
   }
