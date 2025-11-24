@@ -47,20 +47,24 @@ class SubqueryCorrelatedFiltersIsolatorUnitTest {
     SubqueryExecutor.SubqueryResult subqueryResult = new SubqueryExecutor.SubqueryResult(List.of("c"),
         List.of(List.of(1)));
     AtomicReference<String> lastSql = new AtomicReference<>();
-    SubqueryExecutor executor = new SubqueryExecutor(new JParqConnection(jdbcUrl(), new Properties()), sql -> {
-      lastSql.set(sql);
-      return createPreparedStatement(() -> subqueryResult);
-    });
+    try (JParqConnection connection = new JParqConnection(jdbcUrl(), new Properties())) {
+      SubqueryExecutor executor = new SubqueryExecutor(connection, sql -> {
+        lastSql.set(sql);
+        return createPreparedStatement(() -> subqueryResult);
+      });
 
-    ExpressionEvaluator evaluator = new ExpressionEvaluator(schema, executor, List.of(), correlationContext, Map.of());
-    Expression exists = CCJSqlParserUtil
-        .parseCondExpression("EXISTS (SELECT 1 FROM dummy d WHERE d.owner = derived.alias_id)");
+      ExpressionEvaluator evaluator = new ExpressionEvaluator(schema, executor, List.of(), correlationContext,
+          Map.of());
+      Expression exists = CCJSqlParserUtil
+          .parseCondExpression("EXISTS (SELECT 1 FROM dummy d WHERE d.owner = derived.alias_id)");
 
-    assertTrue(evaluator.eval(exists, record));
-    String sql = lastSql.get();
-    assertNotNull(sql, "Subquery SQL should be captured");
-    assertTrue(sql.contains("= 5"), "Correlated rewrite should embed derived alias value but was " + sql);
-    assertFalse(sql.contains("derived.alias_id"), "Correlation context should prevent unresolved qualifier in " + sql);
+      assertTrue(evaluator.eval(exists, record));
+      String sql = lastSql.get();
+      assertNotNull(sql, "Subquery SQL should be captured");
+      assertTrue(sql.contains("= 5"), "Correlated rewrite should embed derived alias value but was " + sql);
+      assertFalse(sql.contains("derived.alias_id"),
+          "Correlation context should prevent unresolved qualifier in " + sql);
+    }
   }
 
   private static String jdbcUrl() throws Exception {
