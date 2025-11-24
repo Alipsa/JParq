@@ -2,6 +2,9 @@ package se.alipsa.jparq.engine;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.Timestamp;
@@ -202,6 +205,7 @@ public final class AvroCoercions {
       case BOOLEAN:
         return v;
       case BYTES:
+        boolean preferBinary = isBinaryPreferred(effective);
         if (effective.getLogicalType() instanceof LogicalTypes.Decimal dec) {
           ByteBuffer bb = ((ByteBuffer) v).duplicate();
           byte[] bytes = new byte[bb.remaining()];
@@ -209,16 +213,20 @@ public final class AvroCoercions {
           java.math.BigInteger bi = new java.math.BigInteger(bytes);
           return new BigDecimal(bi, dec.getScale());
         }
-        if (v instanceof ByteBuffer) {
-          ByteBuffer bb = ((ByteBuffer) v).duplicate();
-          byte[] b = new byte[bb.remaining()];
-          bb.get(b);
-          return new String(b, StandardCharsets.UTF_8);
+        if (v instanceof ByteBuffer byteBuffer) {
+          byte[] bytes = copyBytes(byteBuffer);
+          if (!preferBinary && (hasUtf8Semantic(effective) || isUtf8Text(bytes))) {
+            return new String(bytes, StandardCharsets.UTF_8);
+          }
+          return bytes;
         }
         if (v instanceof byte[] bytes) {
-          return new String(bytes, StandardCharsets.UTF_8);
+          if (!preferBinary && (hasUtf8Semantic(effective) || isUtf8Text(bytes))) {
+            return new String(bytes, StandardCharsets.UTF_8);
+          }
+          return bytes.clone();
         }
-        return v.toString();
+        return v;
       case RECORD:
         return v.toString();
       case ENUM:
@@ -235,9 +243,77 @@ public final class AvroCoercions {
           java.math.BigInteger bi = new java.math.BigInteger(bytes);
           return new BigDecimal(bi, dec.getScale());
         }
-        return new String(((GenericData.Fixed) v).bytes(), StandardCharsets.UTF_8);
+        if (v instanceof GenericData.Fixed fixed) {
+          return fixed.bytes().clone();
+        }
+        return v;
       default:
         return v;
     }
+  }
+
+  /**
+   * Create a defensive copy of the bytes remaining in the supplied
+   * {@link ByteBuffer} without mutating its position.
+   *
+   * @param buffer
+   *          source buffer
+   * @return copied byte array
+   */
+  private static byte[] copyBytes(ByteBuffer buffer) {
+    ByteBuffer duplicate = buffer.duplicate();
+    byte[] bytes = new byte[duplicate.remaining()];
+    duplicate.get(bytes);
+    return bytes;
+  }
+
+  private static boolean isBinaryPreferred(Schema schema) {
+    if (schema == null) {
+      return false;
+    }
+    Object objectProp = schema.getObjectProp("jparq.binary");
+    if (objectProp instanceof Boolean b && b) {
+      return true;
+    }
+    if (objectProp != null && Boolean.parseBoolean(objectProp.toString())) {
+      return true;
+    }
+    String prop = schema.getProp("jparq.binary");
+    return prop != null && Boolean.parseBoolean(prop);
+  }
+
+  private static boolean isUtf8Text(byte[] bytes) {
+    CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder();
+    decoder.onMalformedInput(CodingErrorAction.REPORT);
+    decoder.onUnmappableCharacter(CodingErrorAction.REPORT);
+    try {
+      decoder.decode(ByteBuffer.wrap(bytes));
+      return true;
+    } catch (CharacterCodingException e) {
+      return false;
+    }
+  }
+
+  private static boolean hasUtf8Semantic(Schema schema) {
+    if (schema == null) {
+      return false;
+    }
+    if (schema.getLogicalType() instanceof LogicalTypes.Decimal) {
+      return false;
+    }
+    String logicalType = schema.getProp("logicalType");
+    if (logicalType != null && "string".equalsIgnoreCase(logicalType)) {
+      return true;
+    }
+    String originalType = schema.getProp("originalType");
+    if (originalType != null && "UTF8".equalsIgnoreCase(originalType)) {
+      return true;
+    }
+    String convertedType = schema.getProp("convertedType");
+    if (convertedType != null && "UTF8".equalsIgnoreCase(convertedType)) {
+      return true;
+    }
+    Object javaString = schema.getObjectProp("avro.java.string");
+    return javaString != null;
   }
 }
