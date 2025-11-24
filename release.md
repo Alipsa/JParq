@@ -1,6 +1,6 @@
 # Version history
 
-### 1.0.0 in progress
+### 1.0.0 2025-11-24
 - Additional Derived Tables support: 
   - LATERAL derived tables
   - VALUES table constructors
@@ -13,6 +13,7 @@
 - Bug fixes to UNNEST, CTE, EXCEPT
 - Add SQL compliance test suite to verify that all works 
 - support || operator for string and binary concatenations
+- support for explicit NULLS FIRST and NULLS LAST in ORDER BY
 
 ### 0.11.0 2025-11-14
 - Add ARRAY constructor function support

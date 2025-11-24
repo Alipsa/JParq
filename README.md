@@ -97,6 +97,7 @@ The following SQL statements are supported:
   - Comparison operators: `=`, `!=`, `<`, `>`, `<=`, `>=`
   - Null checks: `IS NULL`, `IS NOT NULL`
 - `ORDER BY` clause with multiple columns and `ASC`/`DESC` options
+  - support for optional explicit NULLS FIRST and NULLS LAST
 - `OFFSET` and `LIMIT` support
   - Also support the PostgreSQL shorthand `LIMIT n OFFSET m` syntax
 - Standard row-limiting syntax (FETCH FIRST / OFFSET … FETCH)
