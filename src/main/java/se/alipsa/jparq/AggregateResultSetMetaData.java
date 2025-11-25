@@ -2,6 +2,7 @@ package se.alipsa.jparq;
 
 import java.sql.JDBCType;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.List;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 
@@ -33,8 +34,8 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter {
    */
   public AggregateResultSetMetaData(List<String> labels, List<Integer> sqlTypes, String tableName, String tableSchema,
       String tableCatalog) {
-    this.labels = List.copyOf(labels);
-    this.sqlTypes = List.copyOf(sqlTypes);
+    this.labels = new ArrayList<>(labels);
+    this.sqlTypes = new ArrayList<>(sqlTypes);
     this.tableName = tableName;
     this.tableSchema = tableSchema;
     this.tableCatalog = tableCatalog;

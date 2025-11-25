@@ -318,6 +318,107 @@ public class DatetimeExpressionsTest {
             .toLocalTime());
   }
 
+  // Additional tests for applyInterval
+  @Test
+  void testApplyIntervalWithLocalDateAndPeriod() {
+    LocalDate ld = LocalDate.of(2023, 1, 15);
+    TemporalInterval interval = TemporalInterval.of(Period.ofMonths(1), Duration.ZERO);
+    Object result = DateTimeExpressions.plus(ld, interval);
+    assertEquals(LocalDate.of(2023, 2, 15), result);
+  }
+
+  @Test
+  void testApplyIntervalWithLocalDateAndDuration() {
+    LocalDate ld = LocalDate.of(2023, 1, 15);
+    TemporalInterval interval = TemporalInterval.of(Period.ZERO, Duration.ofHours(5));
+    Object result = DateTimeExpressions.plus(ld, interval);
+    assertEquals(LocalDateTime.of(2023, 1, 15, 5, 0), result);
+  }
+
+  @Test
+  void testApplyIntervalWithLocalTimeAndDuration() {
+    LocalTime lt = LocalTime.of(10, 30);
+    TemporalInterval interval = TemporalInterval.of(Period.ZERO, Duration.ofMinutes(15));
+    Object result = DateTimeExpressions.plus(lt, interval);
+    assertEquals(LocalTime.of(10, 45), result);
+  }
+
+  @Test
+  void testApplyIntervalWithOffsetDateTime() {
+    OffsetDateTime odt = OffsetDateTime.of(2023, 1, 15, 10, 30, 0, 0, ZoneOffset.ofHours(2));
+    TemporalInterval interval = TemporalInterval.of(Period.ofDays(1), Duration.ofHours(2));
+    Object result = DateTimeExpressions.plus(odt, interval);
+    assertEquals(OffsetDateTime.of(2023, 1, 16, 12, 30, 0, 0, ZoneOffset.ofHours(2)), result);
+  }
+
+  // Additional tests for toTimestamp, toDate, toTime
+  @Test
+  void testToTimestampWithNumber() {
+    long millis = 1672531200000L; // 2023-01-01 00:00:00 UTC
+    Timestamp expected = new Timestamp(millis);
+    assertEquals(expected, DateTimeExpressions.castLiteral(createCastExpression("TIMESTAMP"), millis));
+  }
+
+  @Test
+  void testToDateWithNumber() {
+    long millis = 1672531200000L; // 2023-01-01
+    Date expected = new Date(millis);
+    assertEquals(expected, DateTimeExpressions.castLiteral(createCastExpression("DATE"), millis));
+  }
+
+  @Test
+  void testToTimeWithNumber() {
+    long millis = 37800000L; // 10:30:00
+    Time expected = new Time(millis);
+    assertEquals(expected, DateTimeExpressions.castLiteral(createCastExpression("TIME"), millis));
+  }
+
+  @Test
+  void testToTimestampWithOffsetDateTime() {
+    OffsetDateTime odt = OffsetDateTime.of(2023, 1, 1, 12, 30, 0, 0, ZoneOffset.UTC);
+    Timestamp expected = Timestamp.from(odt.toInstant());
+    assertEquals(expected, DateTimeExpressions.castLiteral(createCastExpression("TIMESTAMP"), odt));
+  }
+
+  @Test
+  void testToTimestampInvalidString() {
+    assertThrows(IllegalArgumentException.class,
+        () -> DateTimeExpressions.castLiteral(createCastExpression("TIMESTAMP"), "invalid-date"));
+  }
+
+  // Additional tests for extract
+  @Test
+  void testExtractFromOffsetDateTime() {
+    OffsetDateTime odt = OffsetDateTime.of(2023, 5, 20, 15, 0, 0, 0, ZoneOffset.UTC);
+    assertEquals(2023, DateTimeExpressions.extract("YEAR", odt));
+    assertEquals(15, DateTimeExpressions.extract("HOUR", odt));
+  }
+
+  // Additional tests for castLiteral
+  @Test
+  void testCastToNumericTypes() {
+    assertEquals((byte) 123, DateTimeExpressions.castLiteral(createCastExpression("TINYINT"), "123"));
+    assertEquals((short) 123, DateTimeExpressions.castLiteral(createCastExpression("SMALLINT"), "123"));
+    assertEquals(123L, DateTimeExpressions.castLiteral(createCastExpression("BIGINT"), "123"));
+    assertEquals(123.45f, DateTimeExpressions.castLiteral(createCastExpression("FLOAT"), "123.45"));
+    assertEquals(123.45, DateTimeExpressions.castLiteral(createCastExpression("DOUBLE"), "123.45"));
+  }
+
+  @Test
+  void testCastToCharTypes() {
+    assertEquals("test", DateTimeExpressions.castLiteral(createCastExpression("CHAR"), "test"));
+    assertEquals("test", DateTimeExpressions.castLiteral(createCastExpression("NCHAR"), "test"));
+    assertEquals("test", DateTimeExpressions.castLiteral(createCastExpression("VARCHAR"), "test"));
+    assertEquals("test", DateTimeExpressions.castLiteral(createCastExpression("NVARCHAR"), "test"));
+    assertEquals("test", DateTimeExpressions.castLiteral(createCastExpression("CHARACTER VARYING"), "test"));
+  }
+
+  @Test
+  void testCastToTextClob() {
+    assertEquals("long text", DateTimeExpressions.castLiteral(createCastExpression("TEXT"), "long text"));
+    assertEquals("long text", DateTimeExpressions.castLiteral(createCastExpression("CLOB"), "long text"));
+  }
+
   private CastExpression createCastExpression(String dataType) {
     CastExpression cast = new CastExpression();
     ColDataType colDataType = new ColDataType();
