@@ -1294,6 +1294,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     return false;
   }
 
+  // TODO: this should return an empty result set instead of null
   @Override
   public ResultSet getUDTs(String catalog, String schemaPattern, String typeNamePattern, int[] types)
       throws SQLException {
@@ -1302,7 +1303,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public Connection getConnection() throws SQLException {
-    return null;
+    return conn;
   }
 
   @Override
@@ -1312,7 +1313,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean supportsNamedParameters() throws SQLException {
-    return false;
+    return false; // TODO: i think this should be true
   }
 
   @Override
