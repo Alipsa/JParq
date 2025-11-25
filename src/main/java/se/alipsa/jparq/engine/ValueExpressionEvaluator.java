@@ -51,7 +51,7 @@ import se.alipsa.jparq.helper.DateTimeExpressions;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JsonExpressions;
 import se.alipsa.jparq.helper.LiteralConverter;
-import se.alipsa.jparq.helper.StringExpressions;
+import se.alipsa.jparq.helper.StringFunctions;
 
 /**
  * Evaluates SELECT-list expressions (e.g. computed columns, {@code CASE}
@@ -638,17 +638,17 @@ public final class ValueExpressionEvaluator {
     String upper = name.toUpperCase(Locale.ROOT);
     return switch (upper) {
       case "COALESCE" -> evaluateCoalesce(func, record);
-      case "CHAR_LENGTH", "CHARACTER_LENGTH" -> StringExpressions.charLength(firstArgument(func, record));
-      case "OCTET_LENGTH" -> StringExpressions.octetLength(firstArgument(func, record));
+      case "LENGTH", "CHAR_LENGTH", "CHARACTER_LENGTH" -> StringFunctions.charLength(firstArgument(func, record));
+      case "OCTET_LENGTH" -> StringFunctions.octetLength(firstArgument(func, record));
       case "POSITION" -> evaluatePosition(func, record);
       case "SUBSTRING" -> evaluateSubstring(func, record);
       case "LEFT" -> evaluateLeftOrRight(func, record, true);
       case "RIGHT" -> evaluateLeftOrRight(func, record, false);
-      case "CONCAT" -> StringExpressions.concat(positionalArgs(func, record));
-      case "UPPER" -> StringExpressions.upper(firstArgument(func, record));
-      case "LOWER" -> StringExpressions.lower(firstArgument(func, record));
-      case "LTRIM" -> evaluateTrimFunction(func, record, StringExpressions.TrimMode.LEADING);
-      case "RTRIM" -> evaluateTrimFunction(func, record, StringExpressions.TrimMode.TRAILING);
+      case "CONCAT" -> StringFunctions.concat(positionalArgs(func, record));
+      case "UPPER" -> StringFunctions.upper(firstArgument(func, record));
+      case "LOWER" -> StringFunctions.lower(firstArgument(func, record));
+      case "LTRIM" -> evaluateTrimFunction(func, record, StringFunctions.TrimMode.LEADING);
+      case "RTRIM" -> evaluateTrimFunction(func, record, StringFunctions.TrimMode.TRAILING);
       case "LPAD" -> evaluatePad(func, record, true);
       case "RPAD" -> evaluatePad(func, record, false);
       case "OVERLAY" -> evaluateOverlay(func, record);
@@ -707,7 +707,7 @@ public final class ValueExpressionEvaluator {
       substring = args.get(0);
       source = args.get(1);
     }
-    return StringExpressions.position(substring, source);
+    return StringFunctions.position(substring, source);
   }
 
   private Object evaluateSubstring(Function func, GenericRecord record) {
@@ -744,7 +744,7 @@ public final class ValueExpressionEvaluator {
     if (input == null || start == null) {
       return null;
     }
-    return StringExpressions.substring(input, start, length);
+    return StringFunctions.substring(input, start, length);
   }
 
   private Object evaluateLeftOrRight(Function func, GenericRecord record, boolean left) {
@@ -757,17 +757,17 @@ public final class ValueExpressionEvaluator {
     if (input == null || count == null) {
       return null;
     }
-    return left ? StringExpressions.left(input, count) : StringExpressions.right(input, count);
+    return left ? StringFunctions.left(input, count) : StringFunctions.right(input, count);
   }
 
-  private Object evaluateTrimFunction(Function func, GenericRecord record, StringExpressions.TrimMode mode) {
+  private Object evaluateTrimFunction(Function func, GenericRecord record, StringFunctions.TrimMode mode) {
     List<Object> args = positionalArgs(func, record);
     if (args.isEmpty()) {
       return null;
     }
     String input = toStringValue(args.get(0));
     String chars = args.size() > 1 ? toStringValue(args.get(1)) : null;
-    return StringExpressions.trim(input, chars, mode);
+    return StringFunctions.trim(input, chars, mode);
   }
 
   private Object evaluatePad(Function func, GenericRecord record, boolean left) {
@@ -781,7 +781,7 @@ public final class ValueExpressionEvaluator {
     if (input == null || length == null) {
       return null;
     }
-    return left ? StringExpressions.lpad(input, length, fill) : StringExpressions.rpad(input, length, fill);
+    return left ? StringFunctions.lpad(input, length, fill) : StringFunctions.rpad(input, length, fill);
   }
 
   private Object evaluateOverlay(Function func, GenericRecord record) {
@@ -820,7 +820,7 @@ public final class ValueExpressionEvaluator {
     if (input == null || replacement == null || start == null) {
       return null;
     }
-    return StringExpressions.overlay(input, replacement, start, length);
+    return StringFunctions.overlay(input, replacement, start, length);
   }
 
   private Object evaluateReplace(Function func, GenericRecord record) {
@@ -834,7 +834,7 @@ public final class ValueExpressionEvaluator {
     if (input == null || search == null || replacement == null) {
       return null;
     }
-    return StringExpressions.replace(input, search, replacement);
+    return StringFunctions.replace(input, search, replacement);
   }
 
   private Object evaluateChar(Function func, GenericRecord record) {
@@ -849,11 +849,11 @@ public final class ValueExpressionEvaluator {
         codes.add(value);
       }
     }
-    return StringExpressions.charFromCodes(codes);
+    return StringFunctions.charFromCodes(codes);
   }
 
   private Object evaluateUnicode(Function func, GenericRecord record) {
-    return StringExpressions.unicode(firstArgument(func, record));
+    return StringFunctions.unicode(firstArgument(func, record));
   }
 
   private Object evaluateNumericFunction(String name, Function func, GenericRecord record) {
@@ -912,7 +912,7 @@ public final class ValueExpressionEvaluator {
       if (argScale == null) {
         return null;
       }
-      scale = argScale.intValue();
+      scale = argScale;
     }
     if (scale >= 0) {
       return number.setScale(scale, RoundingMode.HALF_UP);
@@ -937,7 +937,7 @@ public final class ValueExpressionEvaluator {
       if (argScale == null) {
         return null;
       }
-      scale = argScale.intValue();
+      scale = argScale;
     }
     if (scale >= 0) {
       return number.setScale(scale, RoundingMode.DOWN);
@@ -1092,7 +1092,7 @@ public final class ValueExpressionEvaluator {
     }
     Object value = args.get(0);
     Object form = args.size() > 1 ? args.get(1) : null;
-    return StringExpressions.normalize(value, form);
+    return StringFunctions.normalize(value, form);
   }
 
   private Object evaluateRegexpLike(Function func, GenericRecord record) {
@@ -1150,11 +1150,11 @@ public final class ValueExpressionEvaluator {
       }
     }
     if (effectiveKeyword == LikeExpression.KeyWord.SIMILAR_TO) {
-      boolean matches = StringExpressions.similarTo(input, pattern, escapeChar);
+      boolean matches = StringFunctions.similarTo(input, pattern, escapeChar);
       return like.isNot() ? !matches : matches;
     }
     boolean caseInsensitive = effectiveKeyword == LikeExpression.KeyWord.ILIKE;
-    boolean matches = StringExpressions.like(input, pattern, caseInsensitive, escapeChar);
+    boolean matches = StringFunctions.like(input, pattern, caseInsensitive, escapeChar);
     return like.isNot() ? !matches : matches;
   }
 
@@ -1174,7 +1174,7 @@ public final class ValueExpressionEvaluator {
       }
       escapeChar = escape.charAt(0);
     }
-    boolean matches = StringExpressions.similarTo(input, pattern, escapeChar);
+    boolean matches = StringFunctions.similarTo(input, pattern, escapeChar);
     return similar.isNot() ? !matches : matches;
   }
 
@@ -1196,13 +1196,13 @@ public final class ValueExpressionEvaluator {
 
   private Object evaluateTrim(TrimFunction trim, GenericRecord record) {
     TrimFunction.TrimSpecification specValue = trim.getTrimSpecification();
-    StringExpressions.TrimMode mode;
+    StringFunctions.TrimMode mode;
     if (specValue == TrimFunction.TrimSpecification.LEADING) {
-      mode = StringExpressions.TrimMode.LEADING;
+      mode = StringFunctions.TrimMode.LEADING;
     } else if (specValue == TrimFunction.TrimSpecification.TRAILING) {
-      mode = StringExpressions.TrimMode.TRAILING;
+      mode = StringFunctions.TrimMode.TRAILING;
     } else {
-      mode = StringExpressions.TrimMode.BOTH;
+      mode = StringFunctions.TrimMode.BOTH;
     }
     String characters = null;
     String target;
@@ -1212,7 +1212,7 @@ public final class ValueExpressionEvaluator {
     } else {
       target = toStringValue(trim.getExpression() == null ? null : evalInternal(trim.getExpression(), record));
     }
-    return StringExpressions.trim(target, characters, mode);
+    return StringFunctions.trim(target, characters, mode);
   }
 
   private Object evaluateJsonFunction(JsonFunction json, GenericRecord record) {

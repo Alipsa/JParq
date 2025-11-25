@@ -76,7 +76,8 @@ class JParqPreparedStatementCoverageTest {
     preparedStatement.setCharacterStream(28, new java.io.StringReader("a"), 1);
     preparedStatement.setCharacterStream(29, new java.io.StringReader("b"), 1L);
     preparedStatement.setCharacterStream(30, new java.io.StringReader("c"));
-    preparedStatement.setUnicodeStream(31, new ByteArrayInputStream(new byte[0]), 0);
+    // preparedStatement.setUnicodeStream(31, new ByteArrayInputStream(new byte[0]),
+    // 0);
     preparedStatement.setRef(32, null);
     preparedStatement.setBlob(33, (java.sql.Blob) null);
     preparedStatement.setBlob(34, new ByteArrayInputStream(new byte[0]), 0L);

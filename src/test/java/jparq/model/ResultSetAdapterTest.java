@@ -566,13 +566,13 @@ public class ResultSetAdapterTest {
   }
 
   @Test
-  public void testGetSQLXML() throws SQLException {
+  public void testGetSqlXml() throws SQLException {
     assertNull(resultSetAdapter.getSQLXML(1));
     assertNull(resultSetAdapter.getSQLXML("label"));
   }
 
   @Test
-  public void testUpdateSQLXML() {
+  public void testUpdateSqlXml() {
     assertDoesNotThrow(() -> resultSetAdapter.updateSQLXML(1, null));
     assertDoesNotThrow(() -> resultSetAdapter.updateSQLXML("label", null));
   }

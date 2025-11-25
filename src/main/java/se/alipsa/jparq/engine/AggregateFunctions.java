@@ -68,7 +68,7 @@ import se.alipsa.jparq.engine.SqlParser.OrderKey;
 import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.LiteralConverter;
-import se.alipsa.jparq.helper.StringExpressions;
+import se.alipsa.jparq.helper.StringFunctions;
 
 /**
  * Utilities for detecting and evaluating aggregate functions in SELECT lists.
@@ -1987,10 +1987,10 @@ public final class AggregateFunctions {
       }
       boolean matches;
       if (effective == LikeExpression.KeyWord.SIMILAR_TO) {
-        matches = StringExpressions.similarTo(leftText, pattern, escapeChar);
+        matches = StringFunctions.similarTo(leftText, pattern, escapeChar);
       } else {
         boolean caseInsensitive = effective == LikeExpression.KeyWord.ILIKE;
-        matches = StringExpressions.like(leftText, pattern, caseInsensitive, escapeChar);
+        matches = StringFunctions.like(leftText, pattern, caseInsensitive, escapeChar);
       }
       return like.isNot() != matches;
     }

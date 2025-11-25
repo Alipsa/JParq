@@ -36,10 +36,14 @@ import se.alipsa.jparq.helper.JdbcTypeMapper;
  */
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqDatabaseMetaData implements DatabaseMetaData {
-  private static final String SUPPORTED_NUMERIC_FUNCTIONS = String.join(",",
-      List.of("ABS", "CEIL", "CEILING", "FLOOR", "ROUND", "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW", "EXP",
-          "LOG", "LOG10", "RAND", "RANDOM", "SIGN", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN", "ATAN2", "DEGREES",
-          "RADIANS"));
+  public static final List<String> SUPPORTED_NUMERIC_FUNCTIONS = List.of("ABS", "CEIL", "CEILING", "FLOOR", "ROUND",
+      "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW", "EXP", "LOG", "LOG10", "RAND", "RANDOM", "SIGN", "SIN", "COS",
+      "TAN", "ASIN", "ACOS", "ATAN", "ATAN2", "DEGREES", "RADIANS");
+  public static final List<String> SUPPORTED_STRING_FUNCTIONS = List.of("CHAR_LENGTH", "CHARACTER_LENGTH",
+      "OCTET_LENGTH", "POSITION", "SUBSTRING", "LEFT", "RIGHT", "CONCAT", "UPPER", "LOWER", "LTRIM", "RTRIM", "LPAD",
+      "RPAD", "OVERLAY", "REPLACE", "CHAR", "UNICODE", "NORMALIZE"
+
+  );
   private final JParqConnection conn;
 
   /**
@@ -59,7 +63,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getDatabaseProductVersion() {
-    return "1.0.0";
+    return "1.1.0";
   }
 
   @Override
@@ -69,7 +73,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getDriverVersion() {
-    return "1.0.0";
+    return "1.1.0";
   }
 
   @Override
@@ -79,7 +83,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public int getDriverMinorVersion() {
-    return 0;
+    return 1;
   }
 
   @Override
@@ -690,12 +694,12 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getNumericFunctions() throws SQLException {
-    return SUPPORTED_NUMERIC_FUNCTIONS;
+    return String.join(",", SUPPORTED_NUMERIC_FUNCTIONS);
   }
 
   @Override
   public String getStringFunctions() throws SQLException {
-    return "";
+    return String.join(",", SUPPORTED_STRING_FUNCTIONS);
   }
 
   @Override
@@ -710,12 +714,12 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getSearchStringEscape() throws SQLException {
-    return "";
+    return ""; // TODO: what is this?
   }
 
   @Override
   public String getExtraNameCharacters() throws SQLException {
-    return "";
+    return ""; // TODO: what is this?
   }
 
   @Override
@@ -730,12 +734,12 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean supportsColumnAliasing() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
   public boolean nullPlusNonNullIsNull() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
@@ -760,7 +764,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean supportsExpressionsInOrderBy() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
@@ -770,22 +774,22 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean supportsGroupBy() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
   public boolean supportsGroupByUnrelated() throws SQLException {
-    return false;
+    return false; // TODO: What is this?
   }
 
   @Override
   public boolean supportsGroupByBeyondSelect() throws SQLException {
-    return false;
+    return false; // TODO: what is this?
   }
 
   @Override
   public boolean supportsLikeEscapeClause() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
@@ -840,12 +844,12 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean supportsOuterJoins() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
   public boolean supportsFullOuterJoins() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
@@ -950,37 +954,37 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean supportsSubqueriesInComparisons() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
   public boolean supportsSubqueriesInExists() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
   public boolean supportsSubqueriesInIns() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
   public boolean supportsSubqueriesInQuantifieds() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
   public boolean supportsCorrelatedSubqueries() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
   public boolean supportsUnion() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
   public boolean supportsUnionAll() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
@@ -1045,7 +1049,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public int getMaxConnections() throws SQLException {
-    return 0;
+    return 0; // TODO: may this should be 1?
   }
 
   @Override
@@ -1349,27 +1353,27 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public int getDatabaseMajorVersion() throws SQLException {
-    return 0;
+    return getDriverMajorVersion();
   }
 
   @Override
   public int getDatabaseMinorVersion() throws SQLException {
-    return 0;
+    return getDriverMinorVersion();
   }
 
   @Override
   public int getJDBCMajorVersion() throws SQLException {
-    return 0;
+    return 4;
   }
 
   @Override
   public int getJDBCMinorVersion() throws SQLException {
-    return 0;
+    return 3;
   }
 
   @Override
   public int getSQLStateType() throws SQLException {
-    return 0;
+    return sqlStateSQL;
   }
 
   @Override

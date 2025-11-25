@@ -12,6 +12,7 @@ import se.alipsa.jparq.model.MetaDataResultSet;
 
 /** Utility methods. */
 public final class JParqUtil {
+
   private JParqUtil() {
   }
 

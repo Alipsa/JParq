@@ -9,9 +9,9 @@ import java.util.Locale;
 import java.util.regex.Pattern;
 
 /** Utility methods implementing SQL string functions. */
-public final class StringExpressions {
+public final class StringFunctions {
 
-  private StringExpressions() {
+  private StringFunctions() {
   }
 
   /**

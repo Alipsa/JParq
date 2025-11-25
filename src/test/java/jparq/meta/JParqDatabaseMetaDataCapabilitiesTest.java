@@ -15,6 +15,7 @@ import java.util.Properties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.JParqDatabaseMetaData;
 
 /** Additional coverage for {@link se.alipsa.jparq.JParqDatabaseMetaData}. */
 class JParqDatabaseMetaDataCapabilitiesTest {
@@ -40,7 +41,7 @@ class JParqDatabaseMetaDataCapabilitiesTest {
   void reportsSupportedCapabilitiesAndDefaults() throws SQLException {
     DatabaseMetaData metaData = connection.getMetaData();
     assertEquals("JParq", metaData.getDatabaseProductName());
-    assertEquals("1.0.0", metaData.getDatabaseProductVersion());
+    assertEquals("1.1.0", metaData.getDatabaseProductVersion());
     assertEquals("se.alipsa.jparq.JParqDriver", metaData.getDriverName());
     assertTrue(metaData.usesLocalFiles());
     assertTrue(metaData.usesLocalFilePerTable());
@@ -56,19 +57,19 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertEquals("", metaData.getIdentifierQuoteString());
     assertEquals("", metaData.getSQLKeywords());
     assertTrue(metaData.getNumericFunctions().startsWith("ABS"));
-    assertEquals("", metaData.getStringFunctions());
+    assertEquals(String.join(",", JParqDatabaseMetaData.SUPPORTED_STRING_FUNCTIONS), metaData.getStringFunctions());
     assertEquals("", metaData.getSystemFunctions());
     assertEquals("", metaData.getTimeDateFunctions());
     assertEquals("", metaData.getSearchStringEscape());
     assertEquals("", metaData.getExtraNameCharacters());
-    assertFalse(metaData.supportsGroupBy());
-    assertFalse(metaData.supportsUnion());
-    assertFalse(metaData.supportsUnionAll());
-    assertFalse(metaData.supportsOuterJoins());
-    assertFalse(metaData.supportsFullOuterJoins());
+    assertTrue(metaData.supportsGroupBy());
+    assertTrue(metaData.supportsUnion());
+    assertTrue(metaData.supportsUnionAll());
+    assertTrue(metaData.supportsOuterJoins());
+    assertTrue(metaData.supportsFullOuterJoins());
     assertFalse(metaData.supportsStoredProcedures());
-    assertFalse(metaData.supportsLikeEscapeClause());
-    assertFalse(metaData.supportsExpressionsInOrderBy());
+    assertTrue(metaData.supportsLikeEscapeClause());
+    assertTrue(metaData.supportsExpressionsInOrderBy());
     assertFalse(metaData.supportsOrderByUnrelated());
     assertFalse(metaData.supportsBatchUpdates());
     assertFalse(metaData.supportsSavepoints());
@@ -88,17 +89,17 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertFalse(metaData.supportsCatalogsInPrivilegeDefinitions());
     assertFalse(metaData.supportsTableCorrelationNames());
     assertFalse(metaData.supportsDifferentTableCorrelationNames());
-    assertFalse(metaData.supportsCorrelatedSubqueries());
+    assertTrue(metaData.supportsCorrelatedSubqueries());
     assertFalse(metaData.supportsGetGeneratedKeys());
     assertFalse(metaData.supportsMultipleResultSets());
     assertFalse(metaData.supportsMultipleTransactions());
     assertFalse(metaData.supportsIntegrityEnhancementFacility());
     assertFalse(metaData.supportsStoredFunctionsUsingCallSyntax());
-    assertEquals(0, metaData.getDatabaseMajorVersion());
-    assertEquals(0, metaData.getDatabaseMinorVersion());
-    assertEquals(0, metaData.getJDBCMajorVersion());
-    assertEquals(0, metaData.getJDBCMinorVersion());
-    assertEquals(0, metaData.getSQLStateType());
+    assertEquals(1, metaData.getDatabaseMajorVersion());
+    assertEquals(1, metaData.getDatabaseMinorVersion());
+    assertEquals(4, metaData.getJDBCMajorVersion());
+    assertEquals(3, metaData.getJDBCMinorVersion());
+    assertEquals(2, metaData.getSQLStateType());
     assertEquals(0, metaData.getResultSetHoldability());
     assertFalse(metaData.supportsResultSetHoldability(ResultSet.HOLD_CURSORS_OVER_COMMIT));
     assertFalse(metaData.supportsResultSetType(ResultSet.TYPE_SCROLL_INSENSITIVE));
