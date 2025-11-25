@@ -419,6 +419,24 @@ public class DatetimeExpressionsTest {
     assertEquals("long text", DateTimeExpressions.castLiteral(createCastExpression("CLOB"), "long text"));
   }
 
+  @Test
+  void testMinusBetweenTemporalValues() {
+    Timestamp later = Timestamp.valueOf("2023-01-02 00:00:00");
+    Timestamp earlier = Timestamp.valueOf("2023-01-01 12:00:00");
+    TemporalInterval interval = (TemporalInterval) DateTimeExpressions.minus(later, earlier);
+    assertEquals(Duration.ofHours(12), interval.duration());
+    assertEquals(Period.ZERO, interval.period());
+  }
+
+  @Test
+  void testIntervalArithmeticBetweenIntervals() {
+    TemporalInterval twoDays = TemporalInterval.parse("2", "DAY");
+    TemporalInterval twelveHours = TemporalInterval.parse("12", "HOUR");
+    TemporalInterval diff = (TemporalInterval) DateTimeExpressions.minus(twoDays, twelveHours);
+    assertEquals(Period.ofDays(2), diff.period());
+    assertEquals(Duration.ofHours(-12), diff.duration());
+  }
+
   private CastExpression createCastExpression(String dataType) {
     CastExpression cast = new CastExpression();
     ColDataType colDataType = new ColDataType();

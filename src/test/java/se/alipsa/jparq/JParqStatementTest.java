@@ -15,7 +15,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.mockito.Mockito;
 
 public class JParqStatementTest {
 
@@ -59,11 +58,14 @@ public class JParqStatementTest {
   }
 
   @Test
-  void testGetAndSetCurrentRs() {
-    JParqResultSet rs = Mockito.mock(JParqResultSet.class);
-    assertNull(statement.getCurrentRs());
-    statement.setCurrentRs(rs);
+  void testGetAndSetCurrentRs() throws SQLException {
+    ResultSet rs = statement.executeQuery("SELECT * FROM test");
     assertEquals(rs, statement.getCurrentRs());
+    statement.setCurrentRs(null);
+    assertNull(statement.getCurrentRs());
+    statement.setCurrentRs((JParqResultSet) rs);
+    assertEquals(rs, statement.getCurrentRs());
+    rs.close();
   }
 
   @Test
@@ -117,6 +119,37 @@ public class JParqStatementTest {
   void testGetMoreResults() throws SQLException {
     assertFalse(statement.getMoreResults());
     assertFalse(statement.getMoreResults(Statement.CLOSE_CURRENT_RESULT));
+  }
+
+  @Test
+  void testStatementDefaultsAndUnsupportedOperations() throws SQLException {
+    assertEquals(0, statement.getMaxFieldSize());
+    statement.setMaxFieldSize(10);
+    assertEquals(0, statement.getMaxRows());
+    statement.setMaxRows(5);
+    statement.setEscapeProcessing(true);
+    assertEquals(0, statement.getQueryTimeout());
+    statement.setQueryTimeout(1);
+    statement.cancel();
+    assertNull(statement.getWarnings());
+    statement.clearWarnings();
+    statement.setCursorName("cur");
+    assertThrows(SQLFeatureNotSupportedException.class,
+        () -> statement.execute("SELECT * FROM test", Statement.RETURN_GENERATED_KEYS));
+    assertThrows(SQLFeatureNotSupportedException.class, () -> statement.execute("SELECT * FROM test", new int[]{
+        1
+    }));
+    assertThrows(SQLFeatureNotSupportedException.class, () -> statement.execute("SELECT * FROM test", new String[]{
+        "col"
+    }));
+    assertEquals(0, statement.getResultSetHoldability());
+    assertFalse(statement.isClosed());
+    statement.setPoolable(true);
+    assertFalse(statement.isPoolable());
+    statement.closeOnCompletion();
+    assertFalse(statement.isCloseOnCompletion());
+    assertNull(statement.unwrap(Object.class));
+    assertFalse(statement.isWrapperFor(Object.class));
   }
 
   @Test
