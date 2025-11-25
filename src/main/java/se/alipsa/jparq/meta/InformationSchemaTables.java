@@ -31,10 +31,10 @@ public final class InformationSchemaTables {
   private static Schema buildSchema() {
     return SchemaBuilder.record("information_schema_tables").namespace("se.alipsa.jparq.meta").fields()
         .name("TABLE_CATALOG").type().unionOf().nullType().and().stringType().endUnion().nullDefault()
-        .name("TABLE_SCHEMA").type().unionOf().nullType().and().stringType().endUnion().nullDefault().name("TABLE_NAME")
-        .type().unionOf().nullType().and().stringType().endUnion().nullDefault().name("TABLE_TYPE").type().unionOf()
-        .nullType().and().stringType().endUnion().nullDefault().name("REMARKS").type().unionOf().nullType().and()
-        .stringType().endUnion().nullDefault().endRecord();
+        .name("TABLE_SCHEMA").type().stringType().noDefault().name("TABLE_NAME").type().unionOf().nullType().and()
+        .stringType().endUnion().nullDefault().name("TABLE_TYPE").type().unionOf().nullType().and().stringType()
+        .endUnion().nullDefault().name("REMARKS").type().unionOf().nullType().and().stringType().endUnion()
+        .nullDefault().endRecord();
   }
 
   /**

@@ -14,6 +14,8 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter {
   private final List<String> labels;
   private final List<Integer> sqlTypes;
   private final String tableName;
+  private final String tableSchema;
+  private final String tableCatalog;
 
   /**
    * Create metadata for an aggregate result set.
@@ -24,11 +26,18 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter {
    *          SQL types corresponding to each column label
    * @param tableName
    *          virtual table name reported to JDBC clients
+   * @param tableSchema
+   *          schema reported to JDBC clients (may be {@code null})
+   * @param tableCatalog
+   *          catalog reported to JDBC clients (may be {@code null})
    */
-  public AggregateResultSetMetaData(List<String> labels, List<Integer> sqlTypes, String tableName) {
+  public AggregateResultSetMetaData(List<String> labels, List<Integer> sqlTypes, String tableName, String tableSchema,
+      String tableCatalog) {
     this.labels = List.copyOf(labels);
     this.sqlTypes = List.copyOf(sqlTypes);
     this.tableName = tableName;
+    this.tableSchema = tableSchema;
+    this.tableCatalog = tableCatalog;
   }
 
   @Override
@@ -49,6 +58,16 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter {
   @Override
   public String getTableName(int column) {
     return tableName;
+  }
+
+  @Override
+  public String getSchemaName(int column) {
+    return tableSchema == null ? "" : tableSchema;
+  }
+
+  @Override
+  public String getCatalogName(int column) {
+    return tableCatalog == null ? "" : tableCatalog;
   }
 
   @Override

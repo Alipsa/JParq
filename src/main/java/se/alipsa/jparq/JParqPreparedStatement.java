@@ -108,6 +108,9 @@ class JParqPreparedStatement implements PreparedStatement {
   private final Expression residualExpression;
   private final Path path;
   private final File file;
+  private final String tableSchema;
+  private final String tableCatalog;
+  private final JParqConnection.TableLocation baseTableLocation;
   private final boolean joinQuery;
   private final List<SqlParser.TableReference> tableReferences;
   private final boolean setOperationQuery;
@@ -135,6 +138,8 @@ class JParqPreparedStatement implements PreparedStatement {
     Expression tmpResidual = null;
     Path tmpPath = null;
     File tmpFile = null;
+    JParqConnection.TableLocation tmpBaseLocation = null;
+    String tmpSchemaName = null;
     CteResult tmpBaseCteResult = null;
     Map<String, CteResult> tmpCteResults;
     Map<String, CteResult> tmpValueTables = new LinkedHashMap<>();
@@ -252,6 +257,7 @@ class JParqPreparedStatement implements PreparedStatement {
                 baseRef, tmpFileAvro);
             tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
           }
+          tmpSchemaName = formatSchemaForMetadata("information_schema");
           aggregatePlan = AggregateFunctions.plan(tmpSelect);
           tmpResidual = tmpSelect.where();
           tmpPredicate = Optional.empty();
@@ -261,7 +267,11 @@ class JParqPreparedStatement implements PreparedStatement {
           tmpConf.setBoolean("parquet.read.filter.columnindex.enabled", true);
           tmpConf.setBoolean("parquet.filter.dictionary.enabled", true);
 
-          tmpFile = stmt.getConn().tableFile(tmpSelect.table());
+          String targetTable = baseRef != null ? baseRef.tableName() : tmpSelect.table();
+          String targetSchema = baseRef != null ? baseRef.schemaName() : null;
+          tmpBaseLocation = stmt.getConn().resolveTable(targetSchema, targetTable);
+          tmpSchemaName = formatSchemaForMetadata(tmpBaseLocation.schemaName());
+          tmpFile = tmpBaseLocation.file();
           tmpPath = new Path(tmpFile.toURI());
 
           Schema avro;
@@ -314,6 +324,9 @@ class JParqPreparedStatement implements PreparedStatement {
     this.residualExpression = tmpResidual;
     this.path = tmpPath;
     this.file = tmpFile;
+    this.tableSchema = tmpSchemaName;
+    this.tableCatalog = stmt.getConn().getCatalog();
+    this.baseTableLocation = tmpBaseLocation;
     this.cteResults = tmpCteResults;
     this.valueTableResults = tmpValueTables;
     this.baseCteResult = tmpBaseCteResult;
@@ -333,6 +346,8 @@ class JParqPreparedStatement implements PreparedStatement {
     }
     RecordReader reader;
     String resultTableName;
+    String resultSchema = tableSchema;
+    String resultCatalog = tableCatalog;
     SqlParser.TableReference baseRef = (tableReferences == null || tableReferences.isEmpty())
         ? null
         : tableReferences.get(0);
@@ -341,6 +356,7 @@ class JParqPreparedStatement implements PreparedStatement {
         JoinRecordReader joinReader = buildJoinReader();
         reader = joinReader;
         resultTableName = buildJoinTableName();
+        resultSchema = null;
       } else if (baseCteResult != null) {
         resultTableName = parsedSelect.tableAlias() != null ? parsedSelect.tableAlias() : parsedSelect.table();
         if ((resultTableName == null || resultTableName.isBlank()) && baseRef != null && baseRef.tableName() != null
@@ -358,7 +374,7 @@ class JParqPreparedStatement implements PreparedStatement {
 
         ParquetReader<GenericRecord> parquetReader = builder.build();
         reader = new ParquetRecordReaderAdapter(parquetReader);
-        resultTableName = file.getName();
+        resultTableName = baseTableLocation != null ? baseTableLocation.tableName() : file.getName();
       }
       if (!joinQuery) {
         reader = applyTableSample(baseRef == null ? null : baseRef.tableSample(), reader);
@@ -376,8 +392,8 @@ class JParqPreparedStatement implements PreparedStatement {
     // Create the result set, passing reader, select plan, residual filter,
     // plus projection labels and physical names (for metadata & value lookups)
     SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
-    JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, residualExpression, labels, physical,
-        subqueryExecutor);
+    JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, resultCatalog,
+        residualExpression, labels, physical, subqueryExecutor);
 
     stmt.setCurrentRs(rs);
     return rs;
@@ -415,6 +431,13 @@ class JParqPreparedStatement implements PreparedStatement {
     } catch (IOException e) {
       throw new SQLException("Failed to apply TABLESAMPLE", e);
     }
+  }
+
+  private String formatSchemaForMetadata(String schemaName) {
+    if (schemaName == null) {
+      return null;
+    }
+    return stmt.getConn().isCaseSensitive() ? schemaName : schemaName.toUpperCase(Locale.ROOT);
   }
 
   /**
@@ -977,8 +1000,8 @@ class JParqPreparedStatement implements PreparedStatement {
       if (tableName == null || tableName.isBlank()) {
         throw new SQLException("JOIN requires explicit table names");
       }
-      File tableFile = stmt.getConn().tableFile(tableName);
-      Path tablePath = new Path(tableFile.toURI());
+      JParqConnection.TableLocation tableLocation = stmt.getConn().resolveTable(ref.schemaName(), tableName);
+      Path tablePath = new Path(tableLocation.file().toURI());
       Configuration tableConf = new Configuration(false);
       tableConf.setBoolean("parquet.filter.statistics.enabled", true);
       tableConf.setBoolean("parquet.read.filter.columnindex.enabled", true);
@@ -1002,8 +1025,8 @@ class JParqPreparedStatement implements PreparedStatement {
         throw new SQLException("Failed to read data for table " + tableName, e);
       }
       rows = applySampleToRows(ref.tableSample(), rows);
-      JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), tableSchema, rows,
-          ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
+      JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(tableLocation.tableName(), ref.tableAlias(),
+          tableSchema, rows, ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
       tables.add(table);
       registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
     }
@@ -2192,8 +2215,8 @@ class JParqPreparedStatement implements PreparedStatement {
       if (cte != null) {
         return cte.schema();
       }
-      File tableFile = stmt.getConn().tableFile(ref.tableName());
-      Path path = new Path(tableFile.toURI());
+      JParqConnection.TableLocation location = stmt.getConn().resolveTable(ref.schemaName(), ref.tableName());
+      Path path = new Path(location.file().toURI());
       Configuration tableConf = new Configuration(false);
       tableConf.setBoolean("parquet.filter.statistics.enabled", true);
       tableConf.setBoolean("parquet.read.filter.columnindex.enabled", true);

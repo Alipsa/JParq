@@ -105,8 +105,6 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   @Override
   public ResultSet getTables(String catalog, String schemaPattern, String tableNamePattern, String[] types)
       throws SQLException {
-    File dir = conn.getBaseDir();
-    File[] files = dir.listFiles((d, n) -> n.toLowerCase(Locale.ROOT).endsWith(".parquet"));
     List<Object[]> rows = new ArrayList<>();
     Set<String> typeFilter = null;
     if (types != null && types.length > 0) {
@@ -120,32 +118,32 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         typeFilter = null;
       }
     }
-    String tableRegex = tableNamePattern == null ? null : JParqUtil.sqlLikeToRegex(tableNamePattern);
+    boolean caseSensitive = conn.isCaseSensitive();
+    String tableRegex = buildRegex(tableNamePattern, caseSensitive);
+    String schemaRegex = buildRegex(schemaPattern, caseSensitive);
     Configuration conf = new Configuration(false);
     String effectiveCatalog = (catalog != null && !catalog.isBlank()) ? catalog : conn.getCatalog();
-    if (files != null) {
-      for (File f : files) {
-        String base = f.getName();
-        int dot = base.lastIndexOf('.');
-        if (dot > 0) {
-          base = base.substring(0, dot);
-        }
-        if (tableRegex != null && !base.matches(tableRegex)) {
-          continue;
-        }
-        String tableType = "TABLE";
-        if (typeFilter != null && !typeFilter.contains(tableType.toUpperCase(Locale.ROOT))) {
-          continue;
-        }
-        String remarks = null;
-        Path path = new Path(f.toURI());
-        if (f.isFile()) {
-          remarks = readTableRemarks(path, conf);
-        }
-        rows.add(new Object[]{
-            effectiveCatalog, schemaPattern, base, tableType, remarks, null, null, null, null, null
-        });
+    for (JParqConnection.TableLocation location : conn.listTables()) {
+      String schemaName = location.schemaName();
+      if (schemaRegex != null && !matchesRegex(schemaRegex, schemaName, caseSensitive)) {
+        continue;
       }
+      String base = location.tableName();
+      if (tableRegex != null && !matchesRegex(tableRegex, base, caseSensitive)) {
+        continue;
+      }
+      String tableType = "TABLE";
+      if (typeFilter != null && !typeFilter.contains(tableType.toUpperCase(Locale.ROOT))) {
+        continue;
+      }
+      String remarks = null;
+      Path path = new Path(location.file().toURI());
+      if (location.file().isFile()) {
+        remarks = readTableRemarks(path, conf);
+      }
+      rows.add(new Object[]{
+          effectiveCatalog, formatSchemaName(schemaName), base, tableType, remarks, null, null, null, null, null
+      });
     }
     return JParqUtil.listResultSet(new String[]{
         "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE", "REMARKS", "TYPE_CAT", "TYPE_SCHEM", "TYPE_NAME",
@@ -160,6 +158,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
     List<Object[]> rows = new ArrayList<>();
     Configuration conf = new Configuration(false);
+    boolean caseSensitive = conn.isCaseSensitive();
+    String columnRegex = buildRegex(columnNamePattern, caseSensitive);
 
     try (ResultSet tables = getTables(catalog, schemaPattern, tableNamePattern, new String[]{
         "TABLE"
@@ -170,8 +170,9 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         String tableSchema = tables.getString("TABLE_SCHEM");
         String table = tables.getString("TABLE_NAME");
         String tableType = tables.getString("TABLE_TYPE");
-        File file = conn.tableFile(table);
-
+        JParqConnection.TableLocation location = conn.resolveTable(tableSchema, table);
+        File file = location.file();
+        String resolvedSchemaName = formatSchemaName(location.schemaName());
         hPath = new Path(file.toURI());
         ColumnMetadata columnMetadata = readColumnMetadata(hPath, conf);
         List<String> columnTypeHints = columnMetadata.columnTypeHints();
@@ -189,7 +190,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
           for (Schema.Field field : rec.getSchema().getFields()) {
             int fieldIndex = columnIndex++;
             String columnName = field.name();
-            if (columnNamePattern != null && !columnName.matches(JParqUtil.sqlLikeToRegex(columnNamePattern))) {
+            if (columnRegex != null && !matchesRegex(columnRegex, columnName, caseSensitive)) {
               continue;
             }
             Schema baseSchema = JdbcTypeMapper.nonNullSchema(field.schema());
@@ -209,7 +210,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
             String columnDefault = resolveColumnDefault(field);
             String columnRemark = resolveColumnRemark(field, columnRemarks);
             rows.add(new Object[]{
-                tableCatalog, tableSchema, table, tableType, columnName, pos++, isNullable, jdbcType, typeName,
+                tableCatalog, resolvedSchemaName, table, tableType, columnName, pos++, isNullable, jdbcType, typeName,
                 charMaxLength, numericPrecision, numericScale, null, columnDefault, datetimePrecision, columnRemark
             });
           }
@@ -444,6 +445,32 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       hints.add(part.trim());
     }
     return hints.isEmpty() ? List.of() : List.copyOf(hints);
+  }
+
+  private String buildRegex(String pattern, boolean caseSensitive) {
+    if (pattern == null) {
+      return null;
+    }
+    String normalized = caseSensitive ? pattern : pattern.toLowerCase(Locale.ROOT);
+    return JParqUtil.sqlLikeToRegex(normalized);
+  }
+
+  private boolean matchesRegex(String regex, String candidate, boolean caseSensitive) {
+    if (regex == null) {
+      return true;
+    }
+    if (candidate == null) {
+      return false;
+    }
+    String normalized = caseSensitive ? candidate : candidate.toLowerCase(Locale.ROOT);
+    return normalized.matches(regex);
+  }
+
+  private String formatSchemaName(String schemaName) {
+    if (schemaName == null) {
+      return null;
+    }
+    return conn.isCaseSensitive() ? schemaName : schemaName.toUpperCase(Locale.ROOT);
   }
 
   /**

@@ -246,8 +246,10 @@ public final class SqlParser {
   }
 
   /**
-   * Internal record to hold table name and alias.
+   * Internal record to hold schema, table name, and alias.
    *
+   * @param schemaName
+   *          optional schema that owns the table reference (may be {@code null})
    * @param tableName
    *          the table name
    * @param tableAlias
@@ -265,9 +267,9 @@ public final class SqlParser {
    *          sampling metadata associated with the table reference (may be
    *          {@code null})
    */
-  private record FromInfo(String tableName, String tableAlias, Map<String, String> columnMapping, Select innerSelect,
-      String subquerySql, CommonTableExpression commonTableExpression, ValueTableDefinition valueTable,
-      UnnestDefinition unnest, boolean lateral, TableSampleDefinition tableSample) {
+  private record FromInfo(String schemaName, String tableName, String tableAlias, Map<String, String> columnMapping,
+      Select innerSelect, String subquerySql, CommonTableExpression commonTableExpression,
+      ValueTableDefinition valueTable, UnnestDefinition unnest, boolean lateral, TableSampleDefinition tableSample) {
   }
 
   /**
@@ -295,6 +297,8 @@ public final class SqlParser {
    * Public representation of a table reference discovered in the {@code FROM}
    * clause.
    *
+   * @param schemaName
+   *          the referenced schema name (may be {@code null})
    * @param tableName
    *          the referenced table name
    * @param tableAlias
@@ -328,9 +332,10 @@ public final class SqlParser {
    *          sampling metadata associated with the table reference (may be
    *          {@code null})
    */
-  public record TableReference(String tableName, String tableAlias, JoinType joinType, Expression joinCondition,
-      Select subquery, String subquerySql, CommonTableExpression commonTableExpression, List<String> usingColumns,
-      ValueTableDefinition valueTable, UnnestDefinition unnest, boolean lateral, TableSampleDefinition tableSample) {
+  public record TableReference(String schemaName, String tableName, String tableAlias, JoinType joinType,
+      Expression joinCondition, Select subquery, String subquerySql, CommonTableExpression commonTableExpression,
+      List<String> usingColumns, ValueTableDefinition valueTable, UnnestDefinition unnest, boolean lateral,
+      TableSampleDefinition tableSample) {
   }
 
   /**
@@ -931,13 +936,17 @@ public final class SqlParser {
     boolean lateral = lateralHint;
     TableSampleDefinition tableSample = parseTableSample(fromItem);
     if (fromItem instanceof Table t) {
-      String tableName = t.getName();
+      String sanitizedTableName = IdentifierUtil.sanitizeIdentifier(t.getName());
+      String sanitizedSchemaName = IdentifierUtil.sanitizeIdentifier(t.getSchemaName());
+      String tableName = sanitizedTableName;
+      String schemaName = sanitizedSchemaName;
       String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
-      if (InformationSchemaTables.matchesQualifiedName(t.getSchemaName(), tableName, t.getFullyQualifiedName())) {
+      if (InformationSchemaTables.matchesQualifiedName(schemaName, tableName, t.getFullyQualifiedName())) {
         tableName = InformationSchemaTables.TABLE_IDENTIFIER;
-      } else if (InformationSchemaColumns.matchesQualifiedName(t.getSchemaName(), tableName,
-          t.getFullyQualifiedName())) {
+        schemaName = sanitizedSchemaName;
+      } else if (InformationSchemaColumns.matchesQualifiedName(schemaName, tableName, t.getFullyQualifiedName())) {
         tableName = InformationSchemaColumns.TABLE_IDENTIFIER;
+        schemaName = sanitizedSchemaName;
       }
       CommonTableExpression cte = resolveCommonTableExpression(t, cteLookup);
       Map<String, String> mapping = Map.of();
@@ -959,7 +968,8 @@ public final class SqlParser {
           }
         }
       }
-      return new FromInfo(tableName, tableAlias, mapping, innerSelect, null, cte, null, null, lateral, tableSample);
+      return new FromInfo(schemaName, tableName, tableAlias, mapping, innerSelect, null, cte, null, null, lateral,
+          tableSample);
     }
     if (fromItem instanceof ParenthesedFromItem parenthesed) {
       FromItem inner = parenthesed.getFromItem();
@@ -1033,9 +1043,9 @@ public final class SqlParser {
     if (info == null || tableSample == null) {
       return info;
     }
-    return new FromInfo(info.tableName(), info.tableAlias(), info.columnMapping(), info.innerSelect(),
-        info.subquerySql(), info.commonTableExpression(), info.valueTable(), info.unnest(), info.lateral(),
-        tableSample);
+    return new FromInfo(info.schemaName(), info.tableName(), info.tableAlias(), info.columnMapping(),
+        info.innerSelect(), info.subquerySql(), info.commonTableExpression(), info.valueTable(), info.unnest(),
+        info.lateral(), tableSample);
   }
 
   private static FromInfo parseSubSelect(PlainSelect innerPlain, Alias aliasNode, List<CommonTableExpression> ctes,
@@ -1054,7 +1064,8 @@ public final class SqlParser {
     }
     Map<String, String> mapping = buildColumnMapping(innerSelect);
     String subquerySql = innerPlain.toString();
-    return new FromInfo(innerSelect.table(), alias, mapping, innerSelect, subquerySql, null, null, null, lateral, null);
+    return new FromInfo(null, innerSelect.table(), alias, mapping, innerSelect, subquerySql, null, null, null, lateral,
+        null);
   }
 
   private static FromInfo parseTableFunction(TableFunction tableFunction, boolean lateral) {
@@ -1088,7 +1099,7 @@ public final class SqlParser {
     boolean withOrdinality = tableFunction.getWithClause() != null
         && "ORDINALITY".equalsIgnoreCase(tableFunction.getWithClause().trim());
     UnnestDefinition unnest = new UnnestDefinition(expression, withOrdinality, columnAliases);
-    return new FromInfo(null, aliasName, Map.of(), null, null, null, null, unnest, lateral, null);
+    return new FromInfo(null, null, aliasName, Map.of(), null, null, null, null, unnest, lateral, null);
   }
 
   private static Function unwrapTableWrapper(Function function, TableFunction tableFunction) {
@@ -1160,7 +1171,8 @@ public final class SqlParser {
     String aliasName = aliasNode == null ? null : aliasNode.getName();
     String tableName = (aliasName != null && !aliasName.isBlank()) ? aliasName : "values";
     ValueTableDefinition valueTable = new ValueTableDefinition(rows, columnNames);
-    return new FromInfo(tableName, aliasName, Map.copyOf(mapping), null, null, null, valueTable, null, lateral, null);
+    return new FromInfo(null, tableName, aliasName, Map.copyOf(mapping), null, null, null, valueTable, null, lateral,
+        null);
   }
 
   private static FromInfo applyAlias(FromInfo info, Alias aliasNode) {
@@ -1216,7 +1228,7 @@ public final class SqlParser {
 
     String tableName = aliasName != null ? aliasName : info.tableName();
     String tableAlias = aliasName != null ? aliasName : info.tableAlias();
-    return new FromInfo(tableName, tableAlias, mapping, info.innerSelect(), info.subquerySql(),
+    return new FromInfo(info.schemaName(), tableName, tableAlias, mapping, info.innerSelect(), info.subquerySql(),
         info.commonTableExpression(), valueTable, info.unnest(), info.lateral(), info.tableSample());
   }
 
@@ -2203,17 +2215,17 @@ public final class SqlParser {
 
   private static List<TableReference> buildTableReferences(FromInfo base, List<JoinInfo> joins) {
     List<TableReference> refs = new ArrayList<>();
-    refs.add(new TableReference(base.tableName(), base.tableAlias(), JoinType.BASE, null, base.innerSelect(),
-        base.subquerySql(), base.commonTableExpression(), List.of(), base.valueTable(), base.unnest(), base.lateral(),
-        base.tableSample()));
+    refs.add(new TableReference(base.schemaName(), base.tableName(), base.tableAlias(), JoinType.BASE, null,
+        base.innerSelect(), base.subquerySql(), base.commonTableExpression(), List.of(), base.valueTable(),
+        base.unnest(), base.lateral(), base.tableSample()));
     if (joins != null) {
       for (JoinInfo join : joins) {
         FromInfo info = join.table();
         Expression usingCondition = buildUsingCondition(join.usingColumns(), info);
         Expression combinedCondition = combineExpressions(join.condition(), usingCondition);
-        refs.add(new TableReference(info.tableName(), info.tableAlias(), join.joinType(), combinedCondition,
-            info.innerSelect(), info.subquerySql(), info.commonTableExpression(), join.usingColumns(),
-            info.valueTable(), info.unnest(), info.lateral(), info.tableSample()));
+        refs.add(new TableReference(info.schemaName(), info.tableName(), info.tableAlias(), join.joinType(),
+            combinedCondition, info.innerSelect(), info.subquerySql(), info.commonTableExpression(),
+            join.usingColumns(), info.valueTable(), info.unnest(), info.lateral(), info.tableSample()));
       }
     }
     return List.copyOf(refs);
