@@ -71,6 +71,8 @@ public class JParqResultSet extends ResultSetAdapter {
   private final List<String> columnOrder;
   private final List<String> canonicalColumnNames;
   private final String tableName;
+  private final String tableSchema;
+  private final String tableCatalog;
   private final List<Expression> selectExpressions;
   private final SubqueryExecutor subqueryExecutor;
   private final List<String> queryQualifiers;
@@ -103,7 +105,30 @@ public class JParqResultSet extends ResultSetAdapter {
    */
   static JParqResultSet materializedResult(String tableName, List<String> columnLabels, List<Integer> sqlTypes,
       List<List<Object>> rows) {
-    return new JParqResultSet(tableName, columnLabels, sqlTypes, rows);
+    return materializedResult(tableName, null, null, columnLabels, sqlTypes, rows);
+  }
+
+  /**
+   * Create a {@link JParqResultSet} from precomputed rows with optional schema
+   * context.
+   *
+   * @param tableName
+   *          virtual table name to expose through metadata
+   * @param tableSchema
+   *          schema associated with the virtual table (may be {@code null})
+   * @param tableCatalog
+   *          catalog associated with the virtual table (may be {@code null})
+   * @param columnLabels
+   *          column labels returned to callers
+   * @param sqlTypes
+   *          SQL types corresponding to {@code columnLabels}
+   * @param rows
+   *          materialized row data backing the result set
+   * @return a {@link JParqResultSet} with the provided metadata
+   */
+  static JParqResultSet materializedResult(String tableName, String tableSchema, String tableCatalog,
+      List<String> columnLabels, List<Integer> sqlTypes, List<List<Object>> rows) {
+    return new JParqResultSet(tableName, tableSchema, tableCatalog, columnLabels, sqlTypes, rows);
   }
 
   /**
@@ -115,6 +140,10 @@ public class JParqResultSet extends ResultSetAdapter {
    *          the parsed select statement
    * @param tableName
    *          the name of the table
+   * @param tableSchema
+   *          schema that owns the table or {@code null} for derived results
+   * @param tableCatalog
+   *          catalog reported for the result set, typically the base directory
    * @param residual
    *          the residual WHERE expression (may be null)
    * @param columnOrder
@@ -132,11 +161,13 @@ public class JParqResultSet extends ResultSetAdapter {
    * @throws SQLException
    *           if reading fails
    */
-  public JParqResultSet(RecordReader reader, SqlParser.Select select, String tableName, Expression residual,
-      List<String> columnOrder, // projection labels (aliases) or null
+  public JParqResultSet(RecordReader reader, SqlParser.Select select, String tableName, String tableSchema,
+      String tableCatalog, Expression residual, List<String> columnOrder, // projection labels (aliases) or null
       List<String> physicalColumnOrder, SubqueryExecutor subqueryExecutor) // physical names (may be null)
       throws SQLException {
     this.tableName = tableName;
+    this.tableSchema = tableSchema;
+    this.tableCatalog = tableCatalog;
     this.selectExpressions = List.copyOf(select.expressions());
     this.subqueryExecutor = subqueryExecutor;
     List<String> qualifiers = new ArrayList<>();
@@ -548,6 +579,10 @@ public class JParqResultSet extends ResultSetAdapter {
    *
    * @param tableName
    *          virtual table name to expose through metadata
+   * @param tableSchema
+   *          schema associated with the virtual table (may be {@code null})
+   * @param tableCatalog
+   *          catalog associated with the virtual table (may be {@code null})
    * @param columnLabels
    *          column labels returned to callers
    * @param sqlTypes
@@ -555,8 +590,11 @@ public class JParqResultSet extends ResultSetAdapter {
    * @param rows
    *          materialized row data backing the result set
    */
-  private JParqResultSet(String tableName, List<String> columnLabels, List<Integer> sqlTypes, List<List<Object>> rows) {
+  private JParqResultSet(String tableName, String tableSchema, String tableCatalog, List<String> columnLabels,
+      List<Integer> sqlTypes, List<List<Object>> rows) {
     this.tableName = tableName;
+    this.tableSchema = tableSchema;
+    this.tableCatalog = tableCatalog;
     this.selectExpressions = List.of();
     this.subqueryExecutor = null;
     this.queryQualifiers = List.of();
@@ -1079,12 +1117,12 @@ public class JParqResultSet extends ResultSetAdapter {
   public ResultSetMetaData getMetaData() {
     if (aggregateQuery) {
       List<Integer> types = aggregateSqlTypes == null ? List.of() : aggregateSqlTypes;
-      return new AggregateResultSetMetaData(columnOrder, types, tableName);
+      return new AggregateResultSetMetaData(columnOrder, types, tableName, tableSchema, tableCatalog);
     }
     var schema = (current == null) ? null : current.getSchema();
     var normalized = ParquetSchemas.normalizeStringTypes(schema);
     return new JParqResultSetMetaData(normalized, columnOrder, physicalColumnOrder, canonicalColumnNames, tableName,
-        selectExpressions);
+        tableSchema, tableCatalog, selectExpressions);
   }
 
   @SuppressWarnings("PMD.EmptyCatchBlock")

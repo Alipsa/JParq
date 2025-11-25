@@ -31,17 +31,17 @@ public final class InformationSchemaColumns {
   private static Schema buildSchema() {
     return SchemaBuilder.record("information_schema_columns").namespace("se.alipsa.jparq.meta").fields()
         .name("TABLE_CATALOG").type().unionOf().nullType().and().stringType().endUnion().nullDefault()
-        .name("TABLE_SCHEMA").type().unionOf().nullType().and().stringType().endUnion().nullDefault().name("TABLE_NAME")
-        .type().unionOf().nullType().and().stringType().endUnion().nullDefault().name("COLUMN_NAME").type().unionOf()
-        .nullType().and().stringType().endUnion().nullDefault().name("ORDINAL_POSITION").type().unionOf().nullType()
-        .and().intType().endUnion().nullDefault().name("COLUMN_DEFAULT").type().unionOf().nullType().and().stringType()
-        .endUnion().nullDefault().name("IS_NULLABLE").type().unionOf().nullType().and().stringType().endUnion()
-        .nullDefault().name("DATA_TYPE").type().unionOf().nullType().and().stringType().endUnion().nullDefault()
-        .name("CHARACTER_MAXIMUM_LENGTH").type().unionOf().nullType().and().intType().endUnion().nullDefault()
-        .name("NUMERIC_PRECISION").type().unionOf().nullType().and().intType().endUnion().nullDefault()
-        .name("NUMERIC_SCALE").type().unionOf().nullType().and().intType().endUnion().nullDefault()
-        .name("DATETIME_PRECISION").type().unionOf().nullType().and().intType().endUnion().nullDefault().name("REMARKS")
-        .type().unionOf().nullType().and().stringType().endUnion().nullDefault().endRecord();
+        .name("TABLE_SCHEMA").type().stringType().noDefault().name("TABLE_NAME").type().unionOf().nullType().and()
+        .stringType().endUnion().nullDefault().name("COLUMN_NAME").type().unionOf().nullType().and().stringType()
+        .endUnion().nullDefault().name("ORDINAL_POSITION").type().unionOf().nullType().and().intType().endUnion()
+        .nullDefault().name("COLUMN_DEFAULT").type().unionOf().nullType().and().stringType().endUnion().nullDefault()
+        .name("IS_NULLABLE").type().unionOf().nullType().and().stringType().endUnion().nullDefault().name("DATA_TYPE")
+        .type().unionOf().nullType().and().stringType().endUnion().nullDefault().name("CHARACTER_MAXIMUM_LENGTH").type()
+        .unionOf().nullType().and().intType().endUnion().nullDefault().name("NUMERIC_PRECISION").type().unionOf()
+        .nullType().and().intType().endUnion().nullDefault().name("NUMERIC_SCALE").type().unionOf().nullType().and()
+        .intType().endUnion().nullDefault().name("DATETIME_PRECISION").type().unionOf().nullType().and().intType()
+        .endUnion().nullDefault().name("REMARKS").type().unionOf().nullType().and().stringType().endUnion()
+        .nullDefault().endRecord();
   }
 
   /**

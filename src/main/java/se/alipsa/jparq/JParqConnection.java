@@ -17,6 +17,8 @@ import java.sql.SQLXML;
 import java.sql.Savepoint;
 import java.sql.Statement;
 import java.sql.Struct;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -31,6 +33,8 @@ public class JParqConnection implements Connection {
   private final File baseDir;
   private final boolean caseSensitive;
   private boolean closed = false;
+  /** Default schema used when no explicit schema is provided. */
+  public static final String DEFAULT_SCHEMA = "PUBLIC";
 
   /**
    * Create a new JParq connection for the supplied JDBC URL.
@@ -68,24 +72,150 @@ public class JParqConnection implements Connection {
     }
   }
 
+  /**
+   * Resolve the Parquet file backing the supplied table in the default
+   * {@value #DEFAULT_SCHEMA} schema.
+   *
+   * @param tableName
+   *          logical table name without schema or file extension
+   * @return the {@link File} representing the Parquet table
+   * @throws SQLException
+   *           if the table cannot be found or the directory cannot be listed
+   */
   File tableFile(String tableName) throws SQLException {
-    String name = caseSensitive ? tableName : tableName.toLowerCase(Locale.ROOT);
-    File[] files = baseDir.listFiles((dir, n) -> n.toLowerCase(Locale.ROOT).endsWith(".parquet"));
-    if (files == null) {
+    return resolveTable(null, tableName).file();
+  }
+
+  /**
+   * Resolve the Parquet file backing the supplied table and schema.
+   *
+   * @param schemaName
+   *          schema containing the table; when {@code null} or blank
+   *          {@value #DEFAULT_SCHEMA} is assumed
+   * @param tableName
+   *          logical table name without file extension
+   * @return the {@link File} representing the Parquet table
+   * @throws SQLException
+   *           if the table cannot be found or the directory cannot be listed
+   */
+  File tableFile(String schemaName, String tableName) throws SQLException {
+    return resolveTable(schemaName, tableName).file();
+  }
+
+  /**
+   * Resolve a table reference to its backing file.
+   *
+   * @param schemaName
+   *          schema containing the table; {@value #DEFAULT_SCHEMA} is used when
+   *          omitted
+   * @param tableName
+   *          logical table name
+   * @return immutable {@link TableLocation} describing the table
+   * @throws SQLException
+   *           if the table cannot be found
+   */
+  public TableLocation resolveTable(String schemaName, String tableName) throws SQLException {
+    String effectiveSchema = (schemaName == null || schemaName.isBlank()) ? DEFAULT_SCHEMA : schemaName;
+    String normalizedSchema = normalize(effectiveSchema);
+    String normalizedTable = normalize(validateTableName(tableName));
+    for (TableLocation location : listTables()) {
+      if (normalize(location.schemaName()).equals(normalizedSchema)
+          && normalize(location.tableName()).equals(normalizedTable)) {
+        return location;
+      }
+    }
+    throw new SQLException("Table not found: " + effectiveSchema + "." + tableName);
+  }
+
+  /**
+   * Discover all Parquet tables available under the base directory, mapping the
+   * root directory and any immediate child directories to schemas.
+   *
+   * @return immutable list of available table locations
+   * @throws SQLException
+   *           if a directory cannot be listed
+   */
+  public List<TableLocation> listTables() throws SQLException {
+    Map<String, TableLocation> discovered = new LinkedHashMap<>();
+    addTablesFromDirectory(baseDir, DEFAULT_SCHEMA, discovered);
+    File[] children = baseDir.listFiles(File::isDirectory);
+    if (children == null) {
       throw new SQLException("Failed to list directory: " + baseDir);
     }
+    for (File dir : children) {
+      if (!dir.isDirectory()) {
+        continue;
+      }
+      String schemaName = dir.getName();
+      String effectiveSchema = DEFAULT_SCHEMA.equalsIgnoreCase(schemaName) ? DEFAULT_SCHEMA : schemaName;
+      addTablesFromDirectory(dir, effectiveSchema, discovered);
+    }
+    return List.copyOf(discovered.values());
+  }
+
+  private void addTablesFromDirectory(File dir, String schemaName, Map<String, TableLocation> discovered)
+      throws SQLException {
+    File[] files = dir.listFiles((d, n) -> n.toLowerCase(Locale.ROOT).endsWith(".parquet"));
+    if (files == null) {
+      throw new SQLException("Failed to list directory: " + dir);
+    }
     for (File f : files) {
+      if (!f.isFile()) {
+        continue;
+      }
       String base = f.getName();
       int dot = base.lastIndexOf('.');
       if (dot > 0) {
         base = base.substring(0, dot);
       }
-      String candidate = caseSensitive ? base : base.toLowerCase(Locale.ROOT);
-      if (candidate.equals(name)) {
-        return f;
-      }
+      TableLocation location = new TableLocation(schemaName, base, f);
+      String key = normalize(location.schemaName()) + "|" + normalize(location.tableName());
+      discovered.putIfAbsent(key, location);
     }
-    throw new SQLException("Table not found: " + tableName);
+  }
+
+  private String normalize(String name) {
+    if (name == null) {
+      return "";
+    }
+    String trimmed = name.trim();
+    return caseSensitive ? trimmed : trimmed.toLowerCase(Locale.ROOT);
+  }
+
+  private String validateTableName(String tableName) throws SQLException {
+    if (tableName == null || tableName.isBlank()) {
+      throw new SQLException("Table name must not be blank");
+    }
+    return tableName;
+  }
+
+  /**
+   * Immutable description of a discovered table on disk.
+   *
+   * @param schemaName
+   *          schema that owns the table
+   * @param tableName
+   *          logical table name without extension
+   * @param file
+   *          Parquet file backing the table
+   */
+  public record TableLocation(String schemaName, String tableName, File file) {
+
+    /**
+     * Create a new immutable table location.
+     *
+     * @param schemaName
+     *          schema that owns the table
+     * @param tableName
+     *          logical table name
+     * @param file
+     *          backing Parquet file
+     */
+    public TableLocation {
+      Objects.requireNonNull(schemaName, "schemaName");
+      Objects.requireNonNull(tableName, "tableName");
+      Objects.requireNonNull(file, "file");
+    }
   }
 
   /**

@@ -24,6 +24,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   private final List<String> physicalNames; // underlying physical column names (null for computed)
   private final List<String> canonicalNames; // canonical column names used for schema lookup
   private final String tableName;
+  private final String tableSchema;
+  private final String tableCatalog;
   private final List<Expression> expressions;
   private final Map<String, Integer> caseInsensitiveColumnIndex;
   private final Map<String, Schema.Field> schemaFieldLookup;
@@ -42,16 +44,23 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
    *          {@code null})
    * @param tableName
    *          the table name
+   * @param tableSchema
+   *          schema that owns the table (may be {@code null})
+   * @param tableCatalog
+   *          catalog that owns the table (may be {@code null})
    * @param expressions
    *          parsed SELECT-list expressions corresponding to {@code labels}
    */
   public JParqResultSetMetaData(Schema schema, List<String> labels, List<String> physicalNames,
-      List<String> canonicalNames, String tableName, List<Expression> expressions) {
+      List<String> canonicalNames, String tableName, String tableSchema, String tableCatalog,
+      List<Expression> expressions) {
     this.schema = schema;
     this.labels = labels == null ? List.of() : List.copyOf(labels);
     this.physicalNames = physicalNames == null ? null : Collections.unmodifiableList(new ArrayList<>(physicalNames));
     this.canonicalNames = canonicalNames == null ? null : Collections.unmodifiableList(new ArrayList<>(canonicalNames));
     this.tableName = tableName;
+    this.tableSchema = tableSchema;
+    this.tableCatalog = tableCatalog;
     this.expressions = expressions == null ? List.of() : List.copyOf(expressions);
     this.caseInsensitiveColumnIndex = ColumnNameLookup.buildCaseInsensitiveIndex(this.labels.size(),
         this.canonicalNames, this.physicalNames, this.labels);
@@ -90,6 +99,16 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   @Override
   public String getTableName(int column) {
     return tableName;
+  }
+
+  @Override
+  public String getSchemaName(int column) {
+    return tableSchema == null ? "" : tableSchema;
+  }
+
+  @Override
+  public String getCatalogName(int column) {
+    return tableCatalog == null ? "" : tableCatalog;
   }
 
   private String resolveExpressionColumnName(int column) {
