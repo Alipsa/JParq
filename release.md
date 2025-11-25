@@ -1,6 +1,8 @@
 # Version history
 
-### 1.0.0 2025-11-24
+### 1.1.0, in progress
+
+### 1.0.0, 2025-11-24
 - Additional Derived Tables support: 
   - LATERAL derived tables
   - VALUES table constructors
@@ -15,19 +17,19 @@
 - support || operator for string and binary concatenations
 - support for explicit NULLS FIRST and NULLS LAST in ORDER BY
 
-### 0.11.0 2025-11-14
+### 0.11.0, 2025-11-14
 - Add ARRAY constructor function support
 - Fix column names and types in ResultSetMetaData
 - Adhere JParqDatabaseMetaData specifications for getColumns and getTables methods to the JDBC standard
 - Add support for derived tables
   - UNNEST with and without ordinality
 
-### 0.10.0 (2025-11-12)
+### 0.10.0, 2025-11-12
 - Add support for grouping sets, rollup, and cube in the GROUP BY clause
 - Add support for qualified wildcards (table.*) in SELECT statements
 - Add support for the ARRAY constructor function to create array literals
 
-### 0.9.0 (2025-11-09)
+### 0.9.0, 2025-11-09
 - Add support for Windowing functions i.e:
    - Ranking functions
       - ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE
@@ -37,18 +39,18 @@
       -  LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
 - Add support for JOIN USING clause
 
-### 0.8.0 (2025-11-02)
+### 0.8.0, 2025-11-02
 - Add support for CTE (Common Table Expressions)
 
-### 0.7.0 (2025-11-02)
+### 0.7.0, 2025-11-02
 - Add support for self joins.
 - Add support for UNION, and UNION ALL
 - Add support for INTERSECT and EXCEPT
 
-## 0.6.0 (2025-11-01)
+## 0.6.0, 2025-11-01
 - Add support for INNER, LEFT, RIGHT, FULL, and CROSS Join
 
-## 0.5.0 (2025-10-31)
+## 0.5.0, 2025-10-31
 The following Additional SQL statements are now supported:
 - `OFFSET` and `LIMIT` support
 - `DISTINCT` support
@@ -69,7 +71,7 @@ The following Additional SQL statements are now supported:
 - exists support 
 - any and all support
 
-## 0.1.0 (2025-10-25)
+## 0.1.0, 2025-10-25
 The following SQL statements are supported:
 - `SELECT` with support for
   - `*` to select all columns
