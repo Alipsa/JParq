@@ -112,7 +112,7 @@ public class JParqConnection implements Connection {
    *          logical table name
    * @return immutable {@link TableLocation} describing the table
    * @throws SQLException
-   *           if the table cannot be found
+   *           if the table cannot be found or the provided table name is blank
    */
   public TableLocation resolveTable(String schemaName, String tableName) throws SQLException {
     String effectiveSchema = (schemaName == null || schemaName.isBlank()) ? DEFAULT_SCHEMA : schemaName;

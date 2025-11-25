@@ -936,15 +936,17 @@ public final class SqlParser {
     boolean lateral = lateralHint;
     TableSampleDefinition tableSample = parseTableSample(fromItem);
     if (fromItem instanceof Table t) {
-      String tableName = IdentifierUtil.sanitizeIdentifier(t.getName());
-      String schemaName = IdentifierUtil.sanitizeIdentifier(t.getSchemaName());
+      String sanitizedTableName = IdentifierUtil.sanitizeIdentifier(t.getName());
+      String sanitizedSchemaName = IdentifierUtil.sanitizeIdentifier(t.getSchemaName());
+      String tableName = sanitizedTableName;
+      String schemaName = sanitizedSchemaName;
       String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
       if (InformationSchemaTables.matchesQualifiedName(schemaName, tableName, t.getFullyQualifiedName())) {
         tableName = InformationSchemaTables.TABLE_IDENTIFIER;
-        schemaName = t.getSchemaName();
+        schemaName = sanitizedSchemaName;
       } else if (InformationSchemaColumns.matchesQualifiedName(schemaName, tableName, t.getFullyQualifiedName())) {
         tableName = InformationSchemaColumns.TABLE_IDENTIFIER;
-        schemaName = t.getSchemaName();
+        schemaName = sanitizedSchemaName;
       }
       CommonTableExpression cte = resolveCommonTableExpression(t, cteLookup);
       Map<String, String> mapping = Map.of();
