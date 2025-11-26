@@ -1,6 +1,7 @@
 package se.alipsa.jparq.helper;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.util.List;
 import java.util.Random;
@@ -68,23 +69,20 @@ public class NumericFunctions {
    *         null
    */
   public static BigDecimal toBigDecimal(Object value) {
-    switch (value) {
-      case null -> {
-        return null;
-      }
-      case BigDecimal bd -> {
-        return bd;
-      }
+    return switch (value) {
+      case null -> null;
+      case BigDecimal bd -> bd;
       case Number num -> {
         if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
-          return BigDecimal.valueOf(num.longValue());
+          yield BigDecimal.valueOf(num.longValue());
         }
-        return BigDecimal.valueOf(num.doubleValue());
+        if (value instanceof BigInteger bi) {
+          yield new BigDecimal(bi);
+        }
+        yield BigDecimal.valueOf(num.doubleValue());
       }
-      default -> {
-      }
-    }
-    return new BigDecimal(value.toString());
+      default -> new BigDecimal(value.toString());
+    };
   }
 
   private static Object roundFunction(List<Object> args) {

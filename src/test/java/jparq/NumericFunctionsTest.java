@@ -2,10 +2,13 @@ package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
@@ -22,6 +25,7 @@ import org.apache.parquet.io.OutputFile;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
+import se.alipsa.jparq.helper.NumericFunctions;
 
 /** Tests for SQL numeric functions. */
 public class NumericFunctionsTest {
@@ -207,5 +211,15 @@ public class NumericFunctionsTest {
     }
 
     return file;
+  }
+
+  @Test
+  public void testToBigDecimal() {
+    assertEquals(BigDecimal.valueOf(1.23), NumericFunctions.toBigDecimal("1.23"));
+    assertEquals(BigDecimal.valueOf(1), NumericFunctions.toBigDecimal(1));
+    assertEquals(BigDecimal.valueOf(7), NumericFunctions.toBigDecimal((byte)7));
+    assertEquals(BigDecimal.valueOf(1.33), NumericFunctions.toBigDecimal(1.33));
+    assertEquals(BigDecimal.valueOf(9999), NumericFunctions.toBigDecimal(BigInteger.valueOf(9999)));
+    assertNull(NumericFunctions.toBigDecimal(null));
   }
 }
