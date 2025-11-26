@@ -36,14 +36,17 @@ import se.alipsa.jparq.helper.JdbcTypeMapper;
  */
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqDatabaseMetaData implements DatabaseMetaData {
+
   public static final List<String> SUPPORTED_NUMERIC_FUNCTIONS = List.of("ABS", "CEIL", "CEILING", "FLOOR", "ROUND",
       "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW", "EXP", "LOG", "LOG10", "RAND", "RANDOM", "SIGN", "SIN", "COS",
       "TAN", "ASIN", "ACOS", "ATAN", "ATAN2", "DEGREES", "RADIANS");
+
   public static final List<String> SUPPORTED_STRING_FUNCTIONS = List.of("CHAR_LENGTH", "CHARACTER_LENGTH",
-      "OCTET_LENGTH", "POSITION", "SUBSTRING", "LEFT", "RIGHT", "CONCAT", "UPPER", "LOWER", "LTRIM", "RTRIM", "LPAD",
-      "RPAD", "OVERLAY", "REPLACE", "CHAR", "UNICODE", "NORMALIZE"
+      "OCTET_LENGTH", "POSITION", "SUBSTRING", "LEFT", "RIGHT", "CONCAT", "UPPER", "LOWER", "TRIM", "LTRIM", "RTRIM",
+      "LPAD", "RPAD", "OVERLAY", "REPLACE", "CHAR", "UNICODE", "NORMALIZE"
 
   );
+
   private final JParqConnection conn;
 
   /**

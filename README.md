@@ -222,6 +222,7 @@ The following SQL statements are supported:
       SELECT * FROM anotherTable LIMIT @myVar;
 - PIVOT and UNPIVOT operators.
 - TABLESAMPLE clause for sampling rows from a table.
+- Support for modular encryption via a keystore and/or a Key Management Service
 
 ## Out of scope (will not be supported, at least not in the foreseeable future)
 - Data modification statements (INSERT, UPDATE, DELETE, MERGE)

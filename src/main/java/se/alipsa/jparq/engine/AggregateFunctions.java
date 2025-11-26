@@ -2064,15 +2064,7 @@ public final class AggregateFunctions {
       if (leftVal == null || rightVal == null) {
         return null;
       }
-      BigDecimal leftNum = toBigDecimal(leftVal);
-      BigDecimal rightNum = toBigDecimal(rightVal);
-      return switch (op) {
-        case ADD -> leftNum.add(rightNum);
-        case SUB -> leftNum.subtract(rightNum);
-        case MUL -> leftNum.multiply(rightNum);
-        case DIV -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.divide(rightNum, MathContext.DECIMAL64);
-        case MOD -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.remainder(rightNum);
-      };
+      return calculate(leftVal, rightVal, op);
     }
 
     private Object evaluateScalarSubquery(Select subSelect) {
@@ -2200,23 +2192,17 @@ public final class AggregateFunctions {
       }
       return labelLookup.get(name.toLowerCase(Locale.ROOT));
     }
-
-    private BigDecimal toBigDecimal(Object value) {
-      if (value instanceof BigDecimal bd) {
-        return bd;
-      }
-      if (value instanceof Number num) {
-        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
-          return BigDecimal.valueOf(num.longValue());
-        }
-        return BigDecimal.valueOf(num.doubleValue());
-      }
-      return new BigDecimal(value.toString());
-    }
-
-    private enum Operation {
-      ADD, SUB, MUL, DIV, MOD
-    }
   }
 
+  public static Object calculate(Object leftVal, Object rightVal, Operation op) {
+    BigDecimal leftNum = toBigDecimal(leftVal);
+    BigDecimal rightNum = toBigDecimal(rightVal);
+    return switch (op) {
+      case ADD -> leftNum.add(rightNum);
+      case SUB -> leftNum.subtract(rightNum);
+      case MUL -> leftNum.multiply(rightNum);
+      case DIV -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.divide(rightNum, MathContext.DECIMAL64);
+      case MOD -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.remainder(rightNum);
+    };
+  }
 }
