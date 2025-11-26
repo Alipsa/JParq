@@ -217,7 +217,7 @@ public class NumericFunctionsTest {
   public void testToBigDecimal() {
     assertEquals(BigDecimal.valueOf(1.23), NumericFunctions.toBigDecimal("1.23"));
     assertEquals(BigDecimal.valueOf(1), NumericFunctions.toBigDecimal(1));
-    assertEquals(BigDecimal.valueOf(7), NumericFunctions.toBigDecimal((byte)7));
+    assertEquals(BigDecimal.valueOf(7), NumericFunctions.toBigDecimal((byte) 7));
     assertEquals(BigDecimal.valueOf(1.33), NumericFunctions.toBigDecimal(1.33));
     assertEquals(BigDecimal.valueOf(9999), NumericFunctions.toBigDecimal(BigInteger.valueOf(9999)));
     assertNull(NumericFunctions.toBigDecimal(null));
