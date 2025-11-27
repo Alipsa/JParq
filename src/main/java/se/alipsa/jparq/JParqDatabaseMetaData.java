@@ -2,6 +2,9 @@ package se.alipsa.jparq;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.JDBCType;
@@ -37,17 +40,26 @@ import se.alipsa.jparq.helper.JdbcTypeMapper;
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqDatabaseMetaData implements DatabaseMetaData {
 
+  // TODO: this list should be changed to the standard jdbc escaped function names
+  // e.g. {fn ABS} instead of ABS
   public static final List<String> SUPPORTED_NUMERIC_FUNCTIONS = List.of("ABS", "CEIL", "CEILING", "FLOOR", "ROUND",
       "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW", "EXP", "LOG", "LOG10", "RAND", "RANDOM", "SIGN", "SIN", "COS",
       "TAN", "ASIN", "ACOS", "ATAN", "ATAN2", "DEGREES", "RADIANS");
 
+  // TODO: this list should be changed to the standard jdbc escaped function names
+  // e.g. {fn LENGTH} instead of CHAR_LENGTH
   public static final List<String> SUPPORTED_STRING_FUNCTIONS = List.of("CHAR_LENGTH", "CHARACTER_LENGTH",
       "OCTET_LENGTH", "POSITION", "SUBSTRING", "LEFT", "RIGHT", "CONCAT", "UPPER", "LOWER", "TRIM", "LTRIM", "RTRIM",
-      "LPAD", "RPAD", "OVERLAY", "REPLACE", "CHAR", "UNICODE", "NORMALIZE"
+      "LPAD", "RPAD", "OVERLAY", "REPLACE", "CHAR", "UNICODE", "NORMALIZE");
 
-  );
+  public static final List<String> SUPPORTED_DATETIME_FUNCTIONS = List.of();
+
+  public static final List<String> SUPPORTED_SYSTEM_FUNCTIONS = List.of();
+
+  public static final List<String> SUPPORTED_KEYWORDS = List.of();
 
   private final JParqConnection conn;
+  private final String url;
 
   /**
    * Constructor for JParqDatabaseMetaData.
@@ -55,8 +67,9 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
    * @param conn
    *          the JParqConnection
    */
-  public JParqDatabaseMetaData(JParqConnection conn) {
+  public JParqDatabaseMetaData(JParqConnection conn, String url) {
     this.conn = conn;
+    this.url = url;
   }
 
   @Override
@@ -615,14 +628,39 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     return true;
   }
 
+  public String getDatabaseName() {
+    String protocolPrefix = "jdbc:jparq:";
+    String pathAndParams = url.substring(protocolPrefix.length());
+    try {
+      String maskedUriString = "file://" + pathAndParams;
+      URI uri = new URI(maskedUriString);
+      String path = uri.getPath();
+      return Paths.get(path).getFileName().toString();
+    } catch (URISyntaxException e) {
+      // Fallback to simple string extraction
+      int paramIndex = pathAndParams.indexOf('?');
+      String path;
+      if (paramIndex != -1) {
+        path = pathAndParams.substring(0, paramIndex);
+      } else {
+        path = pathAndParams;
+      }
+      int lastSeparatorIndex = path.lastIndexOf('/');
+      if (lastSeparatorIndex != -1) {
+        return path.substring(lastSeparatorIndex + 1);
+      } else {
+        return path;
+      }
+    }
+  }
   @Override
   public String getURL() {
-    return null;
+    return url;
   }
 
   @Override
   public String getUserName() {
-    return null;
+    return System.getProperty("user.name");
   }
 
   @Override
@@ -691,32 +729,32 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   }
 
   @Override
-  public String getSQLKeywords() throws SQLException {
-    return "";
+  public String getSQLKeywords() {
+    return String.join(",", SUPPORTED_KEYWORDS);
   }
 
   @Override
-  public String getNumericFunctions() throws SQLException {
+  public String getNumericFunctions() {
     return String.join(",", SUPPORTED_NUMERIC_FUNCTIONS);
   }
 
   @Override
-  public String getStringFunctions() throws SQLException {
+  public String getStringFunctions() {
     return String.join(",", SUPPORTED_STRING_FUNCTIONS);
   }
 
   @Override
-  public String getSystemFunctions() throws SQLException {
-    return "";
+  public String getSystemFunctions() {
+    return String.join(",", SUPPORTED_SYSTEM_FUNCTIONS);
   }
 
   @Override
-  public String getTimeDateFunctions() throws SQLException {
-    return "";
+  public String getTimeDateFunctions() {
+    return String.join(",", SUPPORTED_DATETIME_FUNCTIONS);
   }
 
   @Override
-  public String getSearchStringEscape() throws SQLException {
+  public String getSearchStringEscape() {
     return ""; // TODO: what is this?
   }
 

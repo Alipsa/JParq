@@ -16,26 +16,6 @@ return false;
 }
 
 @Override
-public String getSystemFunctions() throws SQLException {
-return "";
-}
-
-@Override
-public String getTimeDateFunctions() throws SQLException {
-return "";
-}
-
-@Override
 public String getIdentifierQuoteString() throws SQLException {
-return "";
-}
-
-@Override
-public String getSQLKeywords() throws SQLException {
-return "";
-}
-
-@Override
-public String getSQLKeywords() throws SQLException {
 return "";
 }

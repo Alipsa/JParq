@@ -50,6 +50,7 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertTrue(metaData.isReadOnly());
     assertFalse(metaData.allProceduresAreCallable());
     assertTrue(metaData.allTablesAreSelectable());
+    assertEquals("acme", ((JParqDatabaseMetaData) metaData).getDatabaseName());
     assertFalse(metaData.nullsAreSortedHigh());
     assertTrue(metaData.nullsAreSortedLow());
     assertFalse(metaData.nullsAreSortedAtStart());

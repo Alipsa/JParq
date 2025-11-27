@@ -35,6 +35,7 @@ public class JParqConnection implements Connection {
   private boolean closed = false;
   /** Default schema used when no explicit schema is provided. */
   public static final String DEFAULT_SCHEMA = "PUBLIC";
+  private String url;
 
   /**
    * Create a new JParq connection for the supplied JDBC URL.
@@ -70,6 +71,7 @@ public class JParqConnection implements Connection {
     if (!baseDir.isDirectory()) {
       throw new SQLException("Not a directory: " + baseDir);
     }
+    this.url = url;
   }
 
   /**
@@ -296,7 +298,7 @@ public class JParqConnection implements Connection {
 
   @Override
   public DatabaseMetaData getMetaData() {
-    return new JParqDatabaseMetaData(this);
+    return new JParqDatabaseMetaData(this, url);
   }
 
   @Override
