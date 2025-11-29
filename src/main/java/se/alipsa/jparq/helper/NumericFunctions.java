@@ -6,6 +6,9 @@ import java.math.RoundingMode;
 import java.util.List;
 import java.util.Random;
 
+/**
+ * The numeric functions that are supported.
+ */
 public class NumericFunctions {
 
   private NumericFunctions() {
@@ -301,6 +304,13 @@ public class NumericFunctions {
     }
   }
 
+  /**
+   * Convert an Object to an Integer.
+   *
+   * @param value
+   *          the object to convert
+   * @return the Integer equivalent.
+   */
   public static Integer toInteger(Object value) {
     if (value == null) {
       return null;

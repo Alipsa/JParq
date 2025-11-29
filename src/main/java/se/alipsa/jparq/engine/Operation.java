@@ -1,5 +1,8 @@
 package se.alipsa.jparq.engine;
 
+/**
+ * The numeric operation (add, sub etc.).
+ */
 public enum Operation {
   /**
    * Addition.
@@ -10,7 +13,7 @@ public enum Operation {
    */
   SUB,
   /**
-   * Multiplcation
+   * Multiplication
    */
   MUL,
   /**

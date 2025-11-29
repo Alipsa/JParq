@@ -42,20 +42,35 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   // TODO: this list should be changed to the standard jdbc escaped function names
   // e.g. {fn ABS} instead of ABS
+  /**
+   * The JDBC numeric functions supported
+   */
   public static final List<String> SUPPORTED_NUMERIC_FUNCTIONS = List.of("ABS", "CEIL", "CEILING", "FLOOR", "ROUND",
       "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW", "EXP", "LOG", "LOG10", "RAND", "RANDOM", "SIGN", "SIN", "COS",
       "TAN", "ASIN", "ACOS", "ATAN", "ATAN2", "DEGREES", "RADIANS");
 
   // TODO: this list should be changed to the standard jdbc escaped function names
   // e.g. {fn LENGTH} instead of CHAR_LENGTH
+  /**
+   * The JDBC string functions supported
+   */
   public static final List<String> SUPPORTED_STRING_FUNCTIONS = List.of("CHAR_LENGTH", "CHARACTER_LENGTH",
       "OCTET_LENGTH", "POSITION", "SUBSTRING", "LEFT", "RIGHT", "CONCAT", "UPPER", "LOWER", "TRIM", "LTRIM", "RTRIM",
       "LPAD", "RPAD", "OVERLAY", "REPLACE", "CHAR", "UNICODE", "NORMALIZE");
 
+  /**
+   * The JDBC datetime functions supported
+   */
   public static final List<String> SUPPORTED_DATETIME_FUNCTIONS = List.of();
 
+  /**
+   * The jdbc system function supported.
+   */
   public static final List<String> SUPPORTED_SYSTEM_FUNCTIONS = List.of();
 
+  /**
+   * The SQL keywords that are not part of the SQL standard that are supported.
+   */
   public static final List<String> SUPPORTED_KEYWORDS = List.of();
 
   private final JParqConnection conn;
@@ -66,6 +81,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
    *
    * @param conn
    *          the JParqConnection
+   * @param url
+   *          the jdbc url used to connect
    */
   public JParqDatabaseMetaData(JParqConnection conn, String url) {
     this.conn = conn;
@@ -628,6 +645,12 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     return true;
   }
 
+  /**
+   * Database name is the folder name of base folder. E.g: /foo/bar/baz would
+   * return baz
+   *
+   * @return the database name.
+   */
   public String getDatabaseName() {
     String protocolPrefix = "jdbc:jparq:";
     String pathAndParams = url.substring(protocolPrefix.length());

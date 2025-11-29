@@ -2194,6 +2194,17 @@ public final class AggregateFunctions {
     }
   }
 
+  /**
+   * Perform the calculation suitable for the operation.
+   *
+   * @param leftVal
+   *          the value on the left
+   * @param rightVal
+   *          the value on the right
+   * @param op
+   *          the operation to perform (ADD, SUB, MUL etc.)
+   * @return the result of the calculation.
+   */
   public static Object calculate(Object leftVal, Object rightVal, Operation op) {
     BigDecimal leftNum = toBigDecimal(leftVal);
     BigDecimal rightNum = toBigDecimal(rightVal);
