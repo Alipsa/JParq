@@ -271,6 +271,11 @@ public final class ValueExpressionEvaluator {
       return arithmetic(mod.getLeftExpression(), mod.getRightExpression(), record, Operation.MOD);
     }
     if (expression instanceof Column col) {
+      if (SqlParser.isTimeKeyword(col.getColumnName()) && !hasSchemaField(col)) {
+        TimeKeyExpression tk = new TimeKeyExpression();
+        tk.setStringValue(col.getColumnName().toUpperCase(Locale.ROOT));
+        return DateTimeFunctions.evaluateTimeKey(tk);
+      }
       return columnValue(col, record);
     }
     if (expression instanceof ExtractExpression extract) {
@@ -609,6 +614,12 @@ public final class ValueExpressionEvaluator {
     String qualifier = column.getTable() == null ? null : column.getTable().getName();
     String name = column.getColumnName();
     return resolveColumnValue(qualifier, name, record);
+  }
+
+  private boolean hasSchemaField(Column column) {
+    String qualifier = column.getTable() == null ? null : column.getTable().getName();
+    String canonical = canonicalFieldName(qualifier, column.getColumnName());
+    return fieldSchemas.containsKey(canonical);
   }
 
   private Object resolveColumnValue(String qualifier, String columnName, GenericRecord record) {

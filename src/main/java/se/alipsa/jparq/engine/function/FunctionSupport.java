@@ -11,6 +11,7 @@ import java.util.function.BiFunction;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.Function;
+import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TrimFunction;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.statement.select.Select;
@@ -105,6 +106,20 @@ public final class FunctionSupport {
       case "JSON_QUERY" -> JsonFunctions.jsonQuery(args.positionalValues());
       case "JSON_OBJECT" -> JsonFunctions.jsonObject(args.positionalValues());
       case "JSON_ARRAY" -> JsonFunctions.jsonArray(args.positionalValues());
+      case "CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP", "LOCALTIME", "LOCALTIMESTAMP" ->
+        evaluateTimeKeyword(upper);
+      case "DAYOFWEEK" -> DateTimeFunctions.dayOfWeek(args.firstValue());
+      case "DAYOFMONTH" -> DateTimeFunctions.dayOfMonth(args.firstValue());
+      case "DAYOFYEAR" -> DateTimeFunctions.dayOfYear(args.firstValue());
+      case "HOUR" -> DateTimeFunctions.hour(args.firstValue());
+      case "MINUTE" -> DateTimeFunctions.minute(args.firstValue());
+      case "SECOND" -> DateTimeFunctions.second(args.firstValue());
+      case "MONTH" -> DateTimeFunctions.month(args.firstValue());
+      case "YEAR" -> DateTimeFunctions.year(args.firstValue());
+      case "QUARTER" -> DateTimeFunctions.quarter(args.firstValue());
+      case "WEEK" -> DateTimeFunctions.week(args.firstValue());
+      case "TIMESTAMPADD" -> DateTimeFunctions.timestampAdd(args.positionalValues());
+      case "TIMESTAMPDIFF" -> DateTimeFunctions.timestampDiff(args.positionalValues());
       case "ARRAY" -> evaluateArrayFunction(func, record, args);
       case "ABS", "CEIL", "CEILING", "FLOOR", "ROUND", "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW", "EXP", "LOG",
           "LOG10", "RAND", "RANDOM", "SIGN", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN", "ATAN2", "DEGREES",
@@ -385,6 +400,12 @@ public final class FunctionSupport {
 
   private String toStringValue(Object value) {
     return value == null ? null : value.toString();
+  }
+
+  private Object evaluateTimeKeyword(String keyword) {
+    TimeKeyExpression tk = new TimeKeyExpression();
+    tk.setStringValue(keyword);
+    return DateTimeFunctions.evaluateTimeKey(tk);
   }
 
   /** Resolve a correlated column value. */

@@ -11,10 +11,12 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.OffsetTime;
 import java.time.Period;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAccessor;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -55,10 +57,208 @@ public final class DateTimeFunctions {
     }
     return switch (key.toUpperCase(Locale.ROOT)) {
       case "CURRENT_DATE" -> Date.valueOf(LocalDate.now(DEFAULT_ZONE));
-      case "CURRENT_TIME" -> Time.valueOf(LocalTime.now(DEFAULT_ZONE));
-      case "CURRENT_TIMESTAMP" -> Timestamp.from(Instant.now());
+      case "CURRENT_TIME" -> OffsetTime.now(DEFAULT_ZONE);
+      case "LOCALTIME" -> LocalTime.now(DEFAULT_ZONE);
+      case "CURRENT_TIMESTAMP" -> OffsetDateTime.now(DEFAULT_ZONE);
+      case "LOCALTIMESTAMP" -> LocalDateTime.now(DEFAULT_ZONE);
       default -> key;
     };
+  }
+
+  /**
+   * Return the JDBC-style day-of-week number for the supplied date.
+   *
+   * @param value
+   *          a date-like value
+   * @return 1 for Sunday through 7 for Saturday, or {@code null} when the input
+   *         is not a date
+   */
+  public static Integer dayOfWeek(Object value) {
+    LocalDate date = toLocalDate(value);
+    if (date == null) {
+      return null;
+    }
+    // JDBC canonical: 1=Sunday..7=Saturday
+    int dow = date.getDayOfWeek().getValue(); // 1=Monday..7=Sunday
+    int sundayBased = dow == 7 ? 1 : dow + 1;
+    return sundayBased;
+  }
+
+  /**
+   * Extract the day of month from the supplied date.
+   *
+   * @param value
+   *          a date-like value
+   * @return day of month or {@code null} when the input is not a date
+   */
+  public static Integer dayOfMonth(Object value) {
+    LocalDate date = toLocalDate(value);
+    return date == null ? null : date.getDayOfMonth();
+  }
+
+  /**
+   * Extract the ordinal day of year from the supplied date.
+   *
+   * @param value
+   *          a date-like value
+   * @return day of year or {@code null} when the input is not a date
+   */
+  public static Integer dayOfYear(Object value) {
+    LocalDate date = toLocalDate(value);
+    return date == null ? null : date.getDayOfYear();
+  }
+
+  /**
+   * Extract the hour component from a time value.
+   *
+   * @param value
+   *          a time-like value
+   * @return hour value or {@code null} when the input is not a time
+   */
+  public static Integer hour(Object value) {
+    LocalTime time = toLocalTime(value);
+    return time == null ? null : time.getHour();
+  }
+
+  /**
+   * Extract the minute component from a time value.
+   *
+   * @param value
+   *          a time-like value
+   * @return minute value or {@code null} when the input is not a time
+   */
+  public static Integer minute(Object value) {
+    LocalTime time = toLocalTime(value);
+    return time == null ? null : time.getMinute();
+  }
+
+  /**
+   * Extract the second component from a time value.
+   *
+   * @param value
+   *          a time-like value
+   * @return second value or {@code null} when the input is not a time
+   */
+  public static Integer second(Object value) {
+    LocalTime time = toLocalTime(value);
+    return time == null ? null : time.getSecond();
+  }
+
+  /**
+   * Extract the numeric month from a date.
+   *
+   * @param value
+   *          a date-like value
+   * @return month value or {@code null} when the input is not a date
+   */
+  public static Integer month(Object value) {
+    LocalDate date = toLocalDate(value);
+    return date == null ? null : date.getMonthValue();
+  }
+
+  /**
+   * Extract the four-digit year from a date.
+   *
+   * @param value
+   *          a date-like value
+   * @return year value or {@code null} when the input is not a date
+   */
+  public static Integer year(Object value) {
+    LocalDate date = toLocalDate(value);
+    return date == null ? null : date.getYear();
+  }
+
+  /**
+   * Calculate the quarter of the year (1-4) for the supplied date.
+   *
+   * @param value
+   *          a date-like value
+   * @return quarter number or {@code null} when the input is not a date
+   */
+  public static Integer quarter(Object value) {
+    Integer month = month(value);
+    if (month == null) {
+      return null;
+    }
+    return (month - 1) / 3 + 1;
+  }
+
+  /**
+   * Calculate the ISO week number for the supplied date.
+   *
+   * @param value
+   *          a date-like value
+   * @return ISO week number or {@code null} when the input is not a date
+   */
+  public static Integer week(Object value) {
+    LocalDate date = toLocalDate(value);
+    if (date == null) {
+      return null;
+    }
+    return date.get(java.time.temporal.IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+  }
+
+  /**
+   * JDBC TIMESTAMPADD implementation supporting common SQL_TSI units.
+   *
+   * @param args
+   *          arguments: interval unit, interval value, timestamp
+   * @return adjusted temporal or {@code null} on invalid input
+   */
+  public static Object timestampAdd(List<Object> args) {
+    if (args == null || args.size() < 3) {
+      return null;
+    }
+    String unitToken = args.get(0) == null ? null : args.get(0).toString();
+    if (unitToken == null) {
+      return null;
+    }
+    ChronoUnit unit = toChronoUnit(unitToken);
+    boolean quarter = isQuarter(unitToken);
+    Integer amount = NumericFunctions.toInteger(args.get(1));
+    if (amount == null) {
+      return null;
+    }
+    Object target = args.get(2);
+    if (quarter) {
+      return applyAdd(target, amount * 3, ChronoUnit.MONTHS);
+    }
+    if (unit == null) {
+      return null;
+    }
+    return applyAdd(target, amount, unit);
+  }
+
+  /**
+   * JDBC TIMESTAMPDIFF implementation supporting common SQL_TSI units.
+   *
+   * @param args
+   *          arguments: interval unit, start timestamp, end timestamp
+   * @return difference in requested unit or {@code null} on invalid input
+   */
+  public static Long timestampDiff(List<Object> args) {
+    if (args == null || args.size() < 3) {
+      return null;
+    }
+    String unitToken = args.get(0) == null ? null : args.get(0).toString();
+    if (unitToken == null) {
+      return null;
+    }
+    ChronoUnit unit = toChronoUnit(unitToken);
+    boolean quarter = isQuarter(unitToken);
+    java.time.temporal.Temporal start = toTemporal(args.get(1));
+    java.time.temporal.Temporal end = toTemporal(args.get(2));
+    if (start == null || end == null) {
+      return null;
+    }
+    if (quarter) {
+      long months = ChronoUnit.MONTHS.between(start, end);
+      return months / 3;
+    }
+    if (unit == null) {
+      return null;
+    }
+    return unit.between(start, end);
   }
 
   /**
@@ -193,7 +393,8 @@ public final class DateTimeFunctions {
 
   private static boolean isTemporal(Object value) {
     return value instanceof Date || value instanceof Time || value instanceof Timestamp || value instanceof LocalDate
-        || value instanceof LocalDateTime || value instanceof LocalTime || value instanceof OffsetDateTime;
+        || value instanceof LocalDateTime || value instanceof LocalTime || value instanceof OffsetDateTime
+        || value instanceof OffsetTime;
   }
 
   private static TemporalAccessor toTemporalAccessor(Object value) {
@@ -215,8 +416,100 @@ public final class DateTimeFunctions {
     if (value instanceof LocalTime lt) {
       return lt;
     }
+    if (value instanceof OffsetTime ot) {
+      return ot.toLocalTime();
+    }
     if (value instanceof OffsetDateTime odt) {
       return odt.toLocalDateTime();
+    }
+    return null;
+  }
+
+  private static LocalDate toLocalDate(Object value) {
+    TemporalAccessor ta = toTemporalAccessor(value);
+    if (ta instanceof LocalDate ld) {
+      return ld;
+    }
+    if (ta instanceof LocalDateTime ldt) {
+      return ldt.toLocalDate();
+    }
+    if (ta instanceof OffsetDateTime odt) {
+      return odt.toLocalDate();
+    }
+    return null;
+  }
+
+  private static LocalTime toLocalTime(Object value) {
+    TemporalAccessor ta = toTemporalAccessor(value);
+    if (ta instanceof LocalTime lt) {
+      return lt;
+    }
+    if (ta instanceof LocalDateTime ldt) {
+      return ldt.toLocalTime();
+    }
+    if (ta instanceof OffsetTime ot) {
+      return ot.toLocalTime();
+    }
+    if (ta instanceof OffsetDateTime odt) {
+      return odt.toLocalTime();
+    }
+    return null;
+  }
+
+  private static Object applyAdd(Object target, int amount, ChronoUnit unit) {
+    if (target instanceof OffsetDateTime odt) {
+      return odt.plus(amount, unit);
+    }
+    if (target instanceof LocalDateTime ldt) {
+      return ldt.plus(amount, unit);
+    }
+    if (target instanceof Timestamp ts) {
+      LocalDateTime adjusted = ts.toLocalDateTime().plus(amount, unit);
+      return Timestamp.valueOf(adjusted);
+    }
+    if (target instanceof Date d) {
+      LocalDate adjusted = d.toLocalDate().plus(amount, unit);
+      return Date.valueOf(adjusted);
+    }
+    if (target instanceof LocalDate ld) {
+      return ld.plus(amount, unit);
+    }
+    if (target instanceof LocalTime lt) {
+      return lt.plus(amount, unit);
+    }
+    if (target instanceof Time t) {
+      LocalTime adjusted = t.toLocalTime().plus(amount, unit);
+      return Time.valueOf(adjusted);
+    }
+    if (target instanceof OffsetTime ot) {
+      return ot.plus(amount, unit);
+    }
+    return null;
+  }
+
+  private static ChronoUnit toChronoUnit(String token) {
+    String normalized = token.replace("'", "").trim().toUpperCase(Locale.ROOT);
+    return switch (normalized) {
+      case "SQL_TSI_FRAC_SECOND", "SQL_TSI_SECOND", "SECOND" -> ChronoUnit.SECONDS;
+      case "SQL_TSI_MINUTE", "MINUTE" -> ChronoUnit.MINUTES;
+      case "SQL_TSI_HOUR", "HOUR" -> ChronoUnit.HOURS;
+      case "SQL_TSI_DAY", "DAYOFMONTH", "DAYOFYEAR", "DAY" -> ChronoUnit.DAYS;
+      case "SQL_TSI_WEEK", "WEEK" -> ChronoUnit.WEEKS;
+      case "SQL_TSI_MONTH", "MONTH" -> ChronoUnit.MONTHS;
+      case "SQL_TSI_YEAR", "YEAR" -> ChronoUnit.YEARS;
+      default -> null;
+    };
+  }
+
+  private static boolean isQuarter(String token) {
+    String normalized = token.replace("'", "").trim().toUpperCase(Locale.ROOT);
+    return "SQL_TSI_QUARTER".equals(normalized) || "QUARTER".equals(normalized);
+  }
+
+  private static java.time.temporal.Temporal toTemporal(Object value) {
+    TemporalAccessor ta = toTemporalAccessor(value);
+    if (ta instanceof java.time.temporal.Temporal temporal) {
+      return temporal;
     }
     return null;
   }

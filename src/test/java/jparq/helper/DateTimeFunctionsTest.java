@@ -38,7 +38,7 @@ public class DateTimeFunctionsTest {
     TimeKeyExpression expr = new TimeKeyExpression();
     expr.setStringValue("CURRENT_TIME");
     Object result = DateTimeFunctions.evaluateTimeKey(expr);
-    assertInstanceOf(Time.class, result);
+    assertInstanceOf(java.time.OffsetTime.class, result);
   }
 
   @Test
@@ -46,12 +46,11 @@ public class DateTimeFunctionsTest {
     TimeKeyExpression expr = new TimeKeyExpression();
     expr.setStringValue("CURRENT_TIMESTAMP");
     Object result = DateTimeFunctions.evaluateTimeKey(expr);
-    assertInstanceOf(Timestamp.class, result);
+    assertInstanceOf(java.time.OffsetDateTime.class, result);
     // Allow for some leeway as system clock can tick between getting current
-    // Instant and creating Timestamp.
-    // Check that the difference is within a reasonable range (e.g., 2 seconds).
+    // Instant and creating the result.
     long currentEpochSecond = Instant.now().getEpochSecond();
-    long resultEpochSecond = ((Timestamp) result).toInstant().getEpochSecond();
+    long resultEpochSecond = ((java.time.OffsetDateTime) result).toInstant().getEpochSecond();
     assertTrue(Math.abs(currentEpochSecond - resultEpochSecond) <= 2);
   }
 
@@ -61,6 +60,17 @@ public class DateTimeFunctionsTest {
     expr.setStringValue("UNKNOWN_KEY");
     Object result = DateTimeFunctions.evaluateTimeKey(expr);
     assertEquals("UNKNOWN_KEY", result);
+  }
+
+  @Test
+  void testEvaluateLocalTimeAndTimestamp() {
+    TimeKeyExpression lt = new TimeKeyExpression();
+    lt.setStringValue("LOCALTIME");
+    assertInstanceOf(LocalTime.class, DateTimeFunctions.evaluateTimeKey(lt));
+
+    TimeKeyExpression lts = new TimeKeyExpression();
+    lts.setStringValue("LOCALTIMESTAMP");
+    assertInstanceOf(LocalDateTime.class, DateTimeFunctions.evaluateTimeKey(lts));
   }
 
   @Test
@@ -435,6 +445,50 @@ public class DateTimeFunctionsTest {
     TemporalInterval diff = (TemporalInterval) DateTimeFunctions.minus(twoDays, twelveHours);
     assertEquals(Period.ofDays(2), diff.period());
     assertEquals(Duration.ofHours(-12), diff.duration());
+  }
+
+  @Test
+  void testDatePartsAcrossTemporalTypes() {
+    Date sqlDate = Date.valueOf(LocalDate.of(2024, 2, 29));
+    assertEquals(5, DateTimeFunctions.dayOfWeek(sqlDate));
+    assertEquals(60, DateTimeFunctions.dayOfYear(sqlDate));
+    assertEquals(2, DateTimeFunctions.month(sqlDate));
+    assertEquals(1, DateTimeFunctions.quarter(sqlDate));
+    assertEquals(2024, DateTimeFunctions.year(sqlDate));
+
+    LocalDateTime ldt = LocalDateTime.of(2024, 12, 31, 23, 59, 58);
+    assertEquals(3, DateTimeFunctions.dayOfWeek(ldt));
+    assertEquals(366, DateTimeFunctions.dayOfYear(ldt));
+    assertEquals(23, DateTimeFunctions.hour(ldt));
+    assertEquals(59, DateTimeFunctions.minute(ldt));
+    assertEquals(58, DateTimeFunctions.second(ldt));
+
+    OffsetDateTime odt = OffsetDateTime.of(ldt, ZoneOffset.UTC);
+    assertEquals(DateTimeFunctions.week(odt), DateTimeFunctions.week(ldt));
+  }
+
+  @Test
+  void testTimestampAddAndDiffCalendarUnits() {
+    Timestamp ts = Timestamp.valueOf(LocalDateTime.of(2024, 1, 31, 10, 0));
+    Object added = DateTimeFunctions.timestampAdd(java.util.Arrays.asList("SQL_TSI_MONTH", 1, ts));
+    assertInstanceOf(Timestamp.class, added);
+    assertEquals(LocalDateTime.of(2024, 2, 29, 10, 0), ((Timestamp) added).toLocalDateTime());
+
+    Long diffDays = DateTimeFunctions.timestampDiff(java.util.Arrays.asList("SQL_TSI_DAY",
+        Timestamp.valueOf("2024-01-01 00:00:00"), Timestamp.valueOf("2024-01-11 00:00:00")));
+    assertEquals(10L, diffDays);
+
+    Long diffHours = DateTimeFunctions.timestampDiff(java.util.Arrays.asList("SQL_TSI_HOUR",
+        LocalDateTime.of(2024, 3, 10, 10, 0), LocalDateTime.of(2024, 3, 10, 15, 30)));
+    assertEquals(5L, diffHours);
+  }
+
+  @Test
+  void testNullInputsReturnNull() {
+    assertNull(DateTimeFunctions.dayOfWeek(null));
+    assertNull(DateTimeFunctions.hour(null));
+    assertNull(DateTimeFunctions.timestampAdd(null));
+    assertNull(DateTimeFunctions.timestampDiff(null));
   }
 
   private CastExpression createCastExpression(String dataType) {

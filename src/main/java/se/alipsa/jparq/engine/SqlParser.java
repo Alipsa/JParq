@@ -21,6 +21,7 @@ import net.sf.jsqlparser.parser.Token;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.*;
+import se.alipsa.jparq.helper.FunctionEscapeResolver;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.meta.InformationSchemaColumns;
 import se.alipsa.jparq.meta.InformationSchemaTables;
@@ -30,6 +31,10 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
  * reader can understand.
  */
 public final class SqlParser {
+
+  private static final Set<String> TIME_KEYWORDS = Set.of("CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP",
+      "LOCALTIME", "LOCALTIMESTAMP");
+
   private SqlParser() {
   }
 
@@ -487,6 +492,7 @@ public final class SqlParser {
   private static Query parseQuery(String sql, boolean allowQualifiedWildcards) {
     try {
       String normalizedSql = stripSqlComments(sql);
+      normalizedSql = FunctionEscapeResolver.resolveJdbcFunctionEscapes(normalizedSql);
       net.sf.jsqlparser.statement.select.Select stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
           .parse(normalizedSql);
       List<CommonTableExpression> ctes = parseWithItems(stmt.getWithItemsList(), allowQualifiedWildcards);
@@ -1934,6 +1940,9 @@ public final class SqlParser {
     expr.accept(new ExpressionVisitorAdapter<Void>() {
       @Override
       public <S> Void visit(Column column, S context) {
+        if (isTimeKeyword(column.getColumnName())) {
+          return super.visit(column, context);
+        }
         Table table = column.getTable();
         if (table == null) {
           if (normalized.size() == 1) {
@@ -2292,6 +2301,21 @@ public final class SqlParser {
       columns.add(column.getColumnName());
     }
     return List.copyOf(columns);
+  }
+
+  /**
+   * Determine whether an identifier should be treated as a SQL time keyword
+   * rather than a column reference.
+   *
+   * @param name
+   *          identifier to inspect
+   * @return {@code true} when the identifier is a known time keyword
+   */
+  public static boolean isTimeKeyword(String name) {
+    if (name == null) {
+      return false;
+    }
+    return TIME_KEYWORDS.contains(name.toUpperCase(Locale.ROOT));
   }
 
   private static List<String> qualifiers(List<TableReference> tableRefs) {

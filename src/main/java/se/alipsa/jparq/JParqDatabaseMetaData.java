@@ -59,9 +59,72 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       "LPAD", "RPAD", "OVERLAY", "REPLACE", "CHAR", "UNICODE", "NORMALIZE");
 
   /**
-   * The JDBC datetime functions supported
+   * Canonical JDBC datetime functions and their SQL equivalents. Used to map JDBC
+   * escape syntax (e.g. {@code {fn CURDATE()}}) to native functions understood by
+   * the engine.
    */
-  public static final List<String> SUPPORTED_DATETIME_FUNCTIONS = List.of();
+  public enum JdbcDateTimeFunction {
+    /** Current date function */
+    CURDATE("CURDATE", "CURRENT_DATE", true),
+    /** Current time function */
+    CURTIME("CURTIME", "CURRENT_TIME", true),
+    /** Current timestamp function */
+    NOW("NOW", "CURRENT_TIMESTAMP", true),
+    /** Day of week function */
+    DAYOFWEEK("DAYOFWEEK", "DAYOFWEEK"),
+    /** Day of month function */
+    DAYOFMONTH("DAYOFMONTH", "DAYOFMONTH"),
+    /** Day of year function */
+    DAYOFYEAR("DAYOFYEAR", "DAYOFYEAR"),
+    /** Hour function */
+    HOUR("HOUR", "HOUR"),
+    /** Minute function */
+    MINUTE("MINUTE", "MINUTE"),
+    /** Month function */
+    MONTH("MONTH", "MONTH"),
+    /** Quarter function */
+    QUARTER("QUARTER", "QUARTER"),
+    /** Second function */
+    SECOND("SECOND", "SECOND"),
+    /** Week function */
+    WEEK("WEEK", "WEEK"),
+    /** Year function */
+    YEAR("YEAR", "YEAR"),
+    /** Timestamp add function */
+    TIMESTAMPADD("TIMESTAMPADD", "TIMESTAMPADD"),
+    /** Timestamp diff function */
+    TIMESTAMPDIFF("TIMESTAMPDIFF", "TIMESTAMPDIFF");
+
+    private final String jdbcName;
+    private final String sqlName;
+    private final boolean noArg;
+
+    JdbcDateTimeFunction(String jdbcName, String sqlName) {
+      this(jdbcName, sqlName, false);
+    }
+
+    JdbcDateTimeFunction(String jdbcName, String sqlName, boolean noArg) {
+      this.jdbcName = jdbcName;
+      this.sqlName = sqlName;
+      this.noArg = noArg;
+    }
+
+    public String jdbcName() {
+      return jdbcName;
+    }
+
+    public String sqlName() {
+      return sqlName;
+    }
+
+    public boolean noArg() {
+      return noArg;
+    }
+
+    public String formatted() {
+      return "{fn " + jdbcName + "}";
+    }
+  }
 
   /**
    * The jdbc system function supported.
@@ -773,7 +836,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getTimeDateFunctions() {
-    return String.join(",", SUPPORTED_DATETIME_FUNCTIONS);
+    return java.util.stream.Stream.of(JdbcDateTimeFunction.values()).map(JdbcDateTimeFunction::formatted)
+        .collect(java.util.stream.Collectors.joining(", "));
   }
 
   @Override
@@ -1360,8 +1424,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   // TODO: this should return an empty result set instead of null
   @Override
-  public ResultSet getUDTs(String catalog, String schemaPattern, String typeNamePattern, int[] types)
-      throws SQLException {
+  public ResultSet getUDTs(String catalog, String schemaPattern, String typeNamePattern, int[] types) {
     return null;
   }
 

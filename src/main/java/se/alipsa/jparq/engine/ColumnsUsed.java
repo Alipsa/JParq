@@ -5,7 +5,6 @@ import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.schema.Column;
-
 /** Collects column names referenced by an expression. */
 public final class ColumnsUsed {
 
@@ -47,7 +46,9 @@ public final class ColumnsUsed {
     ExpressionVisitorAdapter<Void> walker = new ExpressionVisitorAdapter<Void>() {
       @Override
       public <S> Void visit(Column column, S context) {
-        cols.add(column.getColumnName());
+        if (!SqlParser.isTimeKeyword(column.getColumnName())) {
+          cols.add(column.getColumnName());
+        }
         return null;
       }
     };

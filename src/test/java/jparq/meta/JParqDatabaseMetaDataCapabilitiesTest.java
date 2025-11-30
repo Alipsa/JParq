@@ -60,7 +60,10 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertTrue(metaData.getNumericFunctions().startsWith("ABS"));
     assertEquals(String.join(",", JParqDatabaseMetaData.SUPPORTED_STRING_FUNCTIONS), metaData.getStringFunctions());
     assertEquals("", metaData.getSystemFunctions());
-    assertEquals("", metaData.getTimeDateFunctions());
+    String expectedTimeDateFunctions = "{fn CURDATE}, {fn CURTIME}, {fn NOW}, {fn DAYOFWEEK}, {fn DAYOFMONTH}, "
+        + "{fn DAYOFYEAR}, {fn HOUR}, {fn MINUTE}, {fn MONTH}, {fn QUARTER}, {fn SECOND}, {fn WEEK}, {fn YEAR}, "
+        + "{fn TIMESTAMPADD}, {fn TIMESTAMPDIFF}";
+    assertEquals(expectedTimeDateFunctions, metaData.getTimeDateFunctions());
     assertEquals("", metaData.getSearchStringEscape());
     assertEquals("", metaData.getExtraNameCharacters());
     assertTrue(metaData.supportsGroupBy());
