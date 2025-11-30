@@ -18,7 +18,7 @@ public class MetaDataResultSetTest {
    * column label.
    */
   @Test
-  public void testNullRowAccessIsSafe() throws Exception {
+  public void testNullRowAccessIsSafe() throws SQLException {
     String[] headers = {
         "A", "B"
     };
@@ -44,7 +44,7 @@ public class MetaDataResultSetTest {
   }
 
   @Test
-  public void testGetObject() throws Exception {
+  public void testGetObject() throws SQLException {
     String[] headers = {
         "A", "B"
     };
@@ -63,7 +63,7 @@ public class MetaDataResultSetTest {
   }
 
   @Test
-  public void testGetInt() throws Exception {
+  public void testGetInt() throws SQLException {
     String[] headers = {
         "A", "B"
     };
@@ -83,7 +83,7 @@ public class MetaDataResultSetTest {
   }
 
   @Test
-  public void testGetLong() throws Exception {
+  public void testGetLong() throws SQLException {
     String[] headers = {
         "A", "B"
     };
@@ -102,7 +102,7 @@ public class MetaDataResultSetTest {
   }
 
   @Test
-  public void testFindColumn() throws Exception {
+  public void testFindColumn() throws SQLException {
     String[] headers = {
         "A", "B"
     };
