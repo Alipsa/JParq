@@ -58,7 +58,10 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertEquals("", metaData.getIdentifierQuoteString());
     assertEquals("", metaData.getSQLKeywords());
     assertTrue(metaData.getNumericFunctions().startsWith("ABS"));
-    assertEquals(String.join(",", JParqDatabaseMetaData.SUPPORTED_STRING_FUNCTIONS), metaData.getStringFunctions());
+    String expectedStringFunctions = "{fn ASCII}, {fn CHAR}, {fn CONCAT}, {fn DIFFERENCE}, {fn INSERT}, {fn LCASE}, "
+        + "{fn LEFT}, {fn LENGTH}, {fn LOCATE}, {fn LTRIM}, {fn REPEAT}, {fn REPLACE}, {fn RIGHT}, {fn RTRIM}, "
+        + "{fn SOUNDEX}, {fn SPACE}, {fn SUBSTRING}, {fn UCASE}";
+    assertEquals(expectedStringFunctions, metaData.getStringFunctions());
     assertEquals("", metaData.getSystemFunctions());
     String expectedTimeDateFunctions = "{fn CURDATE}, {fn CURTIME}, {fn NOW}, {fn DAYOFWEEK}, {fn DAYOFMONTH}, "
         + "{fn DAYOFYEAR}, {fn HOUR}, {fn MINUTE}, {fn MONTH}, {fn QUARTER}, {fn SECOND}, {fn WEEK}, {fn YEAR}, "

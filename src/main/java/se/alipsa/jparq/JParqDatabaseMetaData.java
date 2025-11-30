@@ -49,14 +49,83 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW", "EXP", "LOG", "LOG10", "RAND", "RANDOM", "SIGN", "SIN", "COS",
       "TAN", "ASIN", "ACOS", "ATAN", "ATAN2", "DEGREES", "RADIANS");
 
-  // TODO: this list should be changed to the standard jdbc escaped function names
-  // e.g. {fn LENGTH} instead of CHAR_LENGTH
   /**
-   * The JDBC string functions supported
+   * Canonical JDBC string functions and their SQL equivalents.
    */
-  public static final List<String> SUPPORTED_STRING_FUNCTIONS = List.of("CHAR_LENGTH", "CHARACTER_LENGTH",
-      "OCTET_LENGTH", "POSITION", "SUBSTRING", "LEFT", "RIGHT", "CONCAT", "UPPER", "LOWER", "TRIM", "LTRIM", "RTRIM",
-      "LPAD", "RPAD", "OVERLAY", "REPLACE", "CHAR", "UNICODE", "NORMALIZE");
+  public enum JdbcStringFunction {
+    /** ASCII function */
+    ASCII("ASCII", "ASCII"),
+    /** CHAR function */
+    CHAR("CHAR", "CHAR"),
+    /** CONCAT function */
+    CONCAT("CONCAT", "CONCAT"),
+    /** DIFFERENCE function */
+    DIFFERENCE("DIFFERENCE", "DIFFERENCE"),
+    /** INSERT function */
+    INSERT("INSERT", "INSERT"),
+    /** LCASE function */
+    LCASE("LCASE", "LOWER"),
+    /** LEFT function */
+    LEFT("LEFT", "LEFT"),
+    /** LENGTH function */
+    LENGTH("LENGTH", "LENGTH"),
+    /** LOCATE function */
+    LOCATE("LOCATE", "LOCATE"),
+    /** LTRIM function */
+    LTRIM("LTRIM", "LTRIM"),
+    /** REPEAT function */
+    REPEAT("REPEAT", "REPEAT"),
+    /** REPLACE function */
+    REPLACE("REPLACE", "REPLACE"),
+    /** RIGHT function */
+    RIGHT("RIGHT", "RIGHT"),
+    /** RTRIM function */
+    RTRIM("RTRIM", "RTRIM"),
+    /** SOUNDEX function */
+    SOUNDEX("SOUNDEX", "SOUNDEX"),
+    /** SPACE function */
+    SPACE("SPACE", "SPACE"),
+    /** SUBSTRING function */
+    SUBSTRING("SUBSTRING", "SUBSTRING"),
+    /** UCASE function */
+    UCASE("UCASE", "UPPER");
+
+    private final String jdbcName;
+    private final String sqlName;
+
+    JdbcStringFunction(String jdbcName, String sqlName) {
+      this.jdbcName = jdbcName;
+      this.sqlName = sqlName;
+    }
+
+    /**
+     * The JDBC escape function name.
+     *
+     * @return canonical JDBC function identifier
+     */
+    public String jdbcName() {
+      return jdbcName;
+    }
+
+    /**
+     * The SQL function name equivalent to the JDBC escape name.
+     *
+     * @return SQL function identifier
+     */
+    public String sqlName() {
+      return sqlName;
+    }
+
+    /**
+     * Render the JDBC function name in escaped form ({@code {fn NAME}}) without
+     * arguments.
+     *
+     * @return formatted JDBC escape name
+     */
+    public String formatted() {
+      return "{fn " + jdbcName + "}";
+    }
+  }
 
   /**
    * Canonical JDBC datetime functions and their SQL equivalents. Used to map JDBC
@@ -109,18 +178,39 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       this.noArg = noArg;
     }
 
+    /**
+     * JDBC escape function name.
+     *
+     * @return canonical JDBC function identifier
+     */
     public String jdbcName() {
       return jdbcName;
     }
 
+    /**
+     * Native SQL function name understood by the engine.
+     *
+     * @return SQL function identifier
+     */
     public String sqlName() {
       return sqlName;
     }
 
+    /**
+     * Whether the function is invoked without parentheses in SQL form.
+     *
+     * @return {@code true} if no parentheses/arguments should be emitted
+     */
     public boolean noArg() {
       return noArg;
     }
 
+    /**
+     * Render the JDBC function name in escaped form ({@code {fn NAME}}) without
+     * arguments.
+     *
+     * @return formatted JDBC escape name
+     */
     public String formatted() {
       return "{fn " + jdbcName + "}";
     }
@@ -826,7 +916,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getStringFunctions() {
-    return String.join(",", SUPPORTED_STRING_FUNCTIONS);
+    return java.util.stream.Stream.of(JdbcStringFunction.values()).map(JdbcStringFunction::formatted)
+        .collect(java.util.stream.Collectors.joining(", "));
   }
 
   @Override

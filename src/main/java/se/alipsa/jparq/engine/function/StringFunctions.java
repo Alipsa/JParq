@@ -77,6 +77,54 @@ public final class StringFunctions {
   }
 
   /**
+   * ASCII code for the first character of the input.
+   *
+   * @param value
+   *          value to inspect
+   * @return ASCII code or {@code null} when {@code value} is {@code null} or
+   *         empty
+   */
+  public static Integer ascii(Object value) {
+    if (value == null) {
+      return null;
+    }
+    String str = value.toString();
+    if (str.isEmpty()) {
+      return null;
+    }
+    return str.codePointAt(0);
+  }
+
+  /**
+   * Locate substring in a string with optional start position.
+   *
+   * @param substring
+   *          value to search for
+   * @param input
+   *          value to search within
+   * @param start
+   *          one-based start position (may be {@code null})
+   * @return one-based position or {@code 0} when not found
+   */
+  public static Integer locate(Object substring, Object input, Number start) {
+    if (substring == null || input == null) {
+      return null;
+    }
+    String needle = substring.toString();
+    String haystack = input.toString();
+    int from = start == null ? 0 : Math.max(0, start.intValue() - 1);
+    if (from >= haystack.length()) {
+      return 0;
+    }
+    int idx = haystack.indexOf(needle, from);
+    if (idx < 0) {
+      return 0;
+    }
+    int codePoints = haystack.substring(0, idx).codePointCount(0, idx);
+    return codePoints + 1;
+  }
+
+  /**
    * Locate the given {@code substring} inside {@code input} using one-based
    * indexing.
    *
@@ -108,6 +156,32 @@ public final class StringFunctions {
   }
 
   /**
+   * Insert a replacement string at the given position after removing length
+   * characters.
+   *
+   * @param input
+   *          source string
+   * @param start
+   *          one-based start position
+   * @param length
+   *          number of characters to remove
+   * @param replacement
+   *          value to insert
+   * @return resulting string or {@code null} when required inputs are missing
+   */
+  public static String insert(String input, Number start, Number length, String replacement) {
+    if (input == null || start == null || length == null || replacement == null) {
+      return null;
+    }
+    int from = Math.max(0, start.intValue() - 1);
+    int len = Math.max(0, length.intValue());
+    int endExclusive = Math.min(input.length(), from + len);
+    String prefix = input.substring(0, Math.min(from, input.length()));
+    String suffix = endExclusive >= input.length() ? "" : input.substring(endExclusive);
+    return prefix + replacement + suffix;
+  }
+
+  /**
    * Implementation of {@code SUBSTRING(string FROM start FOR length)}.
    *
    * @param input
@@ -135,6 +209,38 @@ public final class StringFunctions {
       toExclusive = Math.min(cps.length, from + Math.max(0, length.intValue()));
     }
     return new String(cps, from, Math.max(0, toExclusive - from));
+  }
+
+  /**
+   * Repeat the supplied string {@code count} times.
+   *
+   * @param input
+   *          source string
+   * @param count
+   *          repetition count
+   * @return repeated string or {@code null} when inputs are missing
+   */
+  public static String repeat(String input, Number count) {
+    if (input == null || count == null) {
+      return null;
+    }
+    int n = Math.max(0, count.intValue());
+    return input.repeat(n);
+  }
+
+  /**
+   * Create a string consisting of {@code count} space characters.
+   *
+   * @param count
+   *          number of spaces
+   * @return space-filled string or {@code null} when {@code count} is null
+   */
+  public static String space(Number count) {
+    if (count == null) {
+      return null;
+    }
+    int n = Math.max(0, count.intValue());
+    return " ".repeat(n);
   }
 
   /**
@@ -398,6 +504,77 @@ public final class StringFunctions {
       return input;
     }
     return input.replace(search, replacement);
+  }
+
+  /**
+   * Compute the Soundex code for the supplied value.
+   *
+   * @param value
+   *          input value
+   * @return four-character Soundex code or {@code null} when input is null or
+   *         empty
+   */
+  public static String soundex(Object value) {
+    if (value == null) {
+      return null;
+    }
+    String text = value.toString().trim().toUpperCase(Locale.ROOT);
+    if (text.isEmpty()) {
+      return null;
+    }
+    char first = text.charAt(0);
+    StringBuilder code = new StringBuilder();
+    code.append(first);
+    char prev = mapSoundexChar(first);
+    for (int i = 1; i < text.length() && code.length() < 4; i++) {
+      char mapped = mapSoundexChar(text.charAt(i));
+      if (mapped == '0' || mapped == prev) {
+        continue;
+      }
+      code.append(mapped);
+      prev = mapped;
+    }
+    while (code.length() < 4) {
+      code.append('0');
+    }
+    return code.substring(0, 4);
+  }
+
+  /**
+   * Calculate the similarity between two strings based on their Soundex codes.
+   *
+   * @param left
+   *          first value
+   * @param right
+   *          second value
+   * @return integer between 0 and 4 indicating matching positions in the Soundex
+   *         codes
+   */
+  public static Integer difference(Object left, Object right) {
+    String l = soundex(left);
+    String r = soundex(right);
+    if (l == null || r == null) {
+      return null;
+    }
+    int matches = 0;
+    for (int i = 0; i < Math.min(l.length(), r.length()); i++) {
+      if (l.charAt(i) == r.charAt(i)) {
+        matches++;
+      }
+    }
+    return matches;
+  }
+
+  private static char mapSoundexChar(char ch) {
+    return switch (ch) {
+      case 'B', 'F', 'P', 'V' -> '1';
+      case 'C', 'G', 'J', 'K', 'Q', 'S', 'X', 'Z' -> '2';
+      case 'D', 'T' -> '3';
+      case 'L' -> '4';
+      case 'M', 'N' -> '5';
+      case 'R' -> '6';
+      default -> '0';
+    };
   }
 
   /**
