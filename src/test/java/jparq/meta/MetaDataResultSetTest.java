@@ -1,7 +1,6 @@
 package jparq.meta;
 
 import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
@@ -117,7 +116,7 @@ public class MetaDataResultSetTest {
   }
 
   @Test
-  public void testGetMetaData() throws SQLException {
+  public void testGetMetaData() throws Exception {
     String[] headers = {
         "A", "B"
     };
