@@ -23,6 +23,10 @@ class FunctionEscapeResolverTest {
   void resolvesKnownFunctionsWithArguments() {
     String sql = "SELECT {fn DAYOFWEEK(col)}";
     assertEquals("SELECT DAYOFWEEK(col)", FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+    String lcase = "select {fn LCASE(col)}";
+    assertEquals("select LOWER(col)", FunctionEscapeResolver.resolveJdbcFunctionEscapes(lcase));
+    String charFn = "SELECT {fn CHAR(65)}";
+    assertEquals("SELECT CHAR(65)", FunctionEscapeResolver.resolveJdbcFunctionEscapes(charFn));
   }
 
   @Test

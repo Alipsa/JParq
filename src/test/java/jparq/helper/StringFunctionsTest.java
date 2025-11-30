@@ -46,6 +46,17 @@ class StringFunctionsTest {
   }
 
   @Test
+  void supportsAdditionalJdbcStringFunctions() {
+    assertEquals(65, StringFunctions.ascii("A"));
+    assertEquals(3, StringFunctions.locate("c", "abcabc", 3));
+    assertEquals("abXYZef", StringFunctions.insert("abcdef", 3, 2, "XYZ"));
+    assertEquals("aaaa", StringFunctions.repeat("a", 4));
+    assertEquals("     ", StringFunctions.space(5));
+    assertEquals("R163", StringFunctions.soundex("Robert"));
+    assertEquals(4, StringFunctions.difference("Smith", "Smyth"));
+  }
+
+  @Test
   void evaluatesLikeAndSimilarPatterns() {
     assertTrue(StringFunctions.like("Hello", "H%", true, null));
     assertFalse(StringFunctions.similarTo("cat", "c(d|e)t", null));

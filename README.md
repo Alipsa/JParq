@@ -211,6 +211,15 @@ The following SQL statements are supported:
 - STRING_AGG(expression, separator)     Aggregates values into a single string with a separator.        STRING_AGG(name, ', ') → 'Alice, Bob, Carol'
 - JSON_VALUE, JSON_QUERY, JSON_OBJECT, JSON_ARRAY       JSON construction/extraction—technically not core string functions but string-returning functions standardized in SQL:2016–2023.
 
+##### Non-standard extensions
+- ASCII(string)    Returns the ASCII code of the first character.    ASCII('A') → 65
+- LOCATE(substring, string[, start])    Locates substring in string with optional start position.    LOCATE('c', 'abcabc', 3) → 3
+- REPEAT(string, count)    Repeats the string N times.    REPEAT('a', 4) → 'aaaa'
+- SPACE(count)    Creates a string of N space characters.    SPACE(5) → '     '
+- INSERT(string, start, length, replacement)    Inserts replacement at position after removing length characters.    INSERT('abcdef', 3, 2, 'XYZ') → 'abXYZef'
+- SOUNDEX(string)    Computes the Soundex phonetic code.    SOUNDEX('Robert') → 'R163'
+- DIFFERENCE(string1, string2)    Calculates similarity based on Soundex codes (0-4).    DIFFERENCE('Smith', 'Smyth') → 4
+
 ## Roadmap: Might be implemented in the future
 
 ### Non standard extensions

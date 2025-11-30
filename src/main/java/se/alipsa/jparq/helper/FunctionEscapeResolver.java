@@ -1,5 +1,6 @@
 package se.alipsa.jparq.helper;
 
+import java.util.AbstractMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -7,6 +8,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import se.alipsa.jparq.JParqDatabaseMetaData.JdbcDateTimeFunction;
+import se.alipsa.jparq.JParqDatabaseMetaData.JdbcStringFunction;
 
 /**
  * Resolves JDBC escape syntax function calls (e.g. {@code {fn CURDATE()}}) to
@@ -16,8 +18,15 @@ public final class FunctionEscapeResolver {
 
   private static final Pattern FUNCTION_ESCAPE = Pattern
       .compile("\\{\\s*fn\\s+([^\\s\\(\\}]+)\\s*(\\([^}]*\\))?\\s*\\}", Pattern.CASE_INSENSITIVE);
-  private static final Map<String, JdbcDateTimeFunction> DATE_TIME_LOOKUP = Stream.of(JdbcDateTimeFunction.values())
-      .collect(Collectors.toUnmodifiableMap(f -> f.jdbcName().toUpperCase(Locale.ROOT), f -> f));
+  private static final Map<String, FnMapping> FUNCTION_LOOKUP = Stream
+      .concat(
+          Stream.of(JdbcDateTimeFunction.values())
+              .map(f -> new AbstractMap.SimpleEntry<>(f.jdbcName().toUpperCase(Locale.ROOT),
+                  new FnMapping(f.sqlName(), f.noArg()))),
+          Stream.of(JdbcStringFunction.values())
+              .map(f -> new AbstractMap.SimpleEntry<>(f.jdbcName().toUpperCase(Locale.ROOT),
+                  new FnMapping(f.sqlName(), false))))
+      .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, Map.Entry::getValue));
 
   private FunctionEscapeResolver() {
   }
@@ -39,10 +48,10 @@ public final class FunctionEscapeResolver {
     while (matcher.find()) {
       String fnName = matcher.group(1);
       String args = matcher.group(2);
-      JdbcDateTimeFunction dtFn = DATE_TIME_LOOKUP.get(fnName.toUpperCase(Locale.ROOT));
+      FnMapping mapping = FUNCTION_LOOKUP.get(fnName.toUpperCase(Locale.ROOT));
       String replacement;
-      if (dtFn != null) {
-        replacement = dtFn.noArg() ? dtFn.sqlName() : dtFn.sqlName() + (args == null ? "" : args);
+      if (mapping != null) {
+        replacement = mapping.noArg() ? mapping.sqlName() : mapping.sqlName() + (args == null ? "" : args);
       } else {
         replacement = fnName + (args == null ? "" : args);
       }
@@ -50,5 +59,8 @@ public final class FunctionEscapeResolver {
     }
     matcher.appendTail(sb);
     return sb.toString();
+  }
+
+  private record FnMapping(String sqlName, boolean noArg) {
   }
 }

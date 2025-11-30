@@ -83,25 +83,32 @@ public final class FunctionSupport {
       case "DATABASE" -> SystemFunctions.database();
       case "USER" -> SystemFunctions.user();
       case "SYSTEM_USER" -> SystemFunctions.user();
+      case "ASCII" -> StringFunctions.ascii(args.firstValue());
       case "LENGTH", "CHAR_LENGTH", "CHARACTER_LENGTH" -> StringFunctions.charLength(args.firstValue());
       case "OCTET_LENGTH" -> StringFunctions.octetLength(args.firstValue());
       case "POSITION" -> evaluatePosition(args);
+      case "LOCATE" -> evaluateLocate(args);
       case "SUBSTRING" -> evaluateSubstring(args);
       case "LEFT" -> evaluateLeftOrRight(args, true);
       case "RIGHT" -> evaluateLeftOrRight(args, false);
       case "CONCAT" -> StringFunctions.concat(args.positionalValues());
-      case "UPPER" -> StringFunctions.upper(args.firstValue());
-      case "LOWER" -> StringFunctions.lower(args.firstValue());
+      case "UPPER", "UCASE" -> StringFunctions.upper(args.firstValue());
+      case "LOWER", "LCASE" -> StringFunctions.lower(args.firstValue());
       case "LTRIM" -> evaluateTrimFunction(args, StringFunctions.TrimMode.LEADING);
       case "RTRIM" -> evaluateTrimFunction(args, StringFunctions.TrimMode.TRAILING);
       case "LPAD" -> evaluatePad(args, true);
       case "RPAD" -> evaluatePad(args, false);
       case "OVERLAY" -> evaluateOverlay(args);
       case "REPLACE" -> evaluateReplace(args);
+      case "INSERT" -> evaluateInsert(args);
+      case "REPEAT" -> evaluateRepeat(args);
+      case "SPACE" -> StringFunctions.space(toInteger(args.firstValue()));
       case "CHAR" -> evaluateChar(args);
       case "UNICODE" -> StringFunctions.unicode(args.firstValue());
       case "NORMALIZE" -> evaluateNormalize(args);
       case "REGEXP_LIKE" -> evaluateRegexpLike(args);
+      case "SOUNDEX" -> StringFunctions.soundex(args.firstValue());
+      case "DIFFERENCE" -> evaluateDifference(args);
       case "JSON_VALUE" -> JsonFunctions.jsonValue(args.positionalValues());
       case "JSON_QUERY" -> JsonFunctions.jsonQuery(args.positionalValues());
       case "JSON_OBJECT" -> JsonFunctions.jsonObject(args.positionalValues());
@@ -235,6 +242,17 @@ public final class FunctionSupport {
     return StringFunctions.position(substring, source);
   }
 
+  private Object evaluateLocate(FunctionArguments args) {
+    List<Object> positional = args.positionalValues();
+    if (positional.size() < 2) {
+      return null;
+    }
+    Object substring = positional.get(0);
+    Object source = positional.get(1);
+    Number start = positional.size() > 2 ? toInteger(positional.get(2)) : null;
+    return StringFunctions.locate(substring, source, start);
+  }
+
   private Object evaluateSubstring(FunctionArguments args) {
     FunctionArguments.NamedArgs named = args.named();
     String input;
@@ -362,6 +380,28 @@ public final class FunctionSupport {
     return StringFunctions.replace(input, search, replacement);
   }
 
+  private Object evaluateInsert(FunctionArguments args) {
+    List<Object> positional = args.positionalValues();
+    if (positional.size() < 4) {
+      return null;
+    }
+    String input = toStringValue(positional.get(0));
+    Integer start = toInteger(positional.get(1));
+    Integer length = toInteger(positional.get(2));
+    String replacement = toStringValue(positional.get(3));
+    return StringFunctions.insert(input, start, length, replacement);
+  }
+
+  private Object evaluateRepeat(FunctionArguments args) {
+    List<Object> positional = args.positionalValues();
+    if (positional.size() < 2) {
+      return null;
+    }
+    String input = toStringValue(positional.get(0));
+    Integer count = toInteger(positional.get(1));
+    return StringFunctions.repeat(input, count);
+  }
+
   private Object evaluateChar(FunctionArguments args) {
     List<Object> positional = args.positionalValues();
     if (positional.isEmpty()) {
@@ -396,6 +436,14 @@ public final class FunctionSupport {
     String pattern = toStringValue(positional.get(1));
     String options = positional.size() > 2 && positional.get(2) != null ? positional.get(2).toString() : null;
     return StringFunctions.regexpLike(input, pattern, options);
+  }
+
+  private Object evaluateDifference(FunctionArguments args) {
+    List<Object> positional = args.positionalValues();
+    if (positional.size() < 2) {
+      return null;
+    }
+    return StringFunctions.difference(positional.get(0), positional.get(1));
   }
 
   private String toStringValue(Object value) {
