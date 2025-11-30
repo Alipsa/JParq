@@ -1792,7 +1792,22 @@ public final class WindowFunctions {
     }
   }
 
-  private static Object nthValueFromRelativeFrame(List<Object> argumentValues, Long nth, int partitionStart,
+  /**
+   * Retrieves the NTH_VALUE from a frame defined by relative start and end positions.
+   *
+   * @param argumentValues
+   *          the list of argument values for the entire partition
+   * @param nth
+   *          the resolved NTH_VALUE position
+   * @param partitionStart
+   *          the start index of the partition within argumentValues
+   * @param frameStartRelative
+   *          the relative start index of the frame within the partition
+   * @param frameEndExclusiveRelative
+   *          the relative exclusive end index of the frame within the partition
+   * @return the NTH_VALUE from the specified frame, or null if not found
+   */
+  public static Object nthValueFromRelativeFrame(List<Object> argumentValues, Long nth, int partitionStart,
       int frameStartRelative, int frameEndExclusiveRelative) {
     if (nth == null) {
       return null;
@@ -1823,7 +1838,16 @@ public final class WindowFunctions {
     return argumentValues.get(partitionStart + candidateRelative);
   }
 
-  private static Long resolveNthPosition(Object nthValue, AnalyticExpression expression) {
+  /**
+   * Resolves and validates the NTH_VALUE position expression.
+   *
+   * @param nthValue
+   *          the evaluated NTH_VALUE position expression value
+   * @param expression
+   *          the NTH_VALUE analytic expression
+   * @return the resolved NTH_VALUE position as a Long
+   */
+  public static Long resolveNthPosition(Object nthValue, AnalyticExpression expression) {
     if (nthValue == null) {
       return null;
     }
@@ -2365,7 +2389,17 @@ public final class WindowFunctions {
     };
   }
 
-  private static int safeLongToInt(long value) {
+  /**
+   * Safely converts a long value to an int, throwing an exception if the
+   * long value exceeds the maximum int value.
+   *
+   * @param value
+   *          the long value to convert
+   * @return the converted int value
+   * @throws IllegalArgumentException
+   *           if the long value exceeds {@link Integer#MAX_VALUE}
+   */
+  public static int safeLongToInt(long value) {
     if (value > Integer.MAX_VALUE) {
       throw new IllegalArgumentException("Window frame offset exceeds supported range: " + value);
     }
@@ -2497,7 +2531,17 @@ public final class WindowFunctions {
     return left.ascending() ? cmp : -cmp;
   }
 
-  static int compareValues(Object left, Object right) {
+  /**
+   * Compare two values of potentially different types.
+   *
+   * @param left
+   *          left-hand value (may be {@code null})
+   * @param right
+   *          right-hand value (may be {@code null})
+   * @return negative when {@code left < right}, zero when equal, otherwise
+   *         positive
+   */
+  public static int compareValues(Object left, Object right) {
     if (left instanceof Number && right instanceof Number) {
       return new BigDecimal(left.toString()).compareTo(new BigDecimal(right.toString()));
     }
@@ -2526,7 +2570,20 @@ public final class WindowFunctions {
     return left.toString().compareTo(right.toString());
   }
 
-  private static long resolvePositiveOffset(Object offsetValue, AnalyticExpression expression, String functionName) {
+  /**
+   * Resolve and validate a positive offset value for window functions.
+   *
+   * @param offsetValue
+   *          the offset value to resolve
+   * @param expression
+   *          the analytic expression being evaluated
+   * @param functionName
+   *          the name of the window function (for error messages)
+   * @return the resolved positive offset value
+   * @throws IllegalArgumentException
+   *           if the offset value is not a strictly positive integer
+   */
+  public static long resolvePositiveOffset(Object offsetValue, AnalyticExpression expression, String functionName) {
     if (offsetValue == null) {
       return 1L;
     }
@@ -2555,7 +2612,18 @@ public final class WindowFunctions {
     return offset;
   }
 
-  private static long resolvePositiveBucketCount(Object bucketValue, AnalyticExpression expression) {
+  /**
+   * Resolve and validate a positive bucket count for the NTILE window function.
+   *
+   * @param bucketValue
+   *          the bucket count value to resolve
+   * @param expression
+   *          the analytic expression being evaluated
+   * @return the resolved positive bucket count
+   * @throws IllegalArgumentException
+   *           if the bucket count is not a strictly positive integer
+   */
+  public static long resolvePositiveBucketCount(Object bucketValue, AnalyticExpression expression) {
     if (bucketValue == null) {
       throw new IllegalArgumentException("NTILE bucket expression must evaluate to a positive integer: " + expression);
     }
@@ -2592,7 +2660,7 @@ public final class WindowFunctions {
    * @return negative when {@code left < right}, zero when equal, otherwise
    *         positive
    */
-  private static int compareBinary(byte[] left, byte[] right) {
+  public static int compareBinary(byte[] left, byte[] right) {
     if (left == right) {
       return 0;
     }

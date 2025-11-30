@@ -512,7 +512,17 @@ public final class AggregateFunctions {
     return List.copyOf(keys);
   }
 
-  private static AggregateSpec aggregateSpec(Function func, String label) {
+  /**
+   * Build an aggregate specification from a function expression.
+   *
+   * @param func
+   *          function expression to analyze
+   * @param label
+   *          projection label for the aggregate
+   * @return aggregate specification or {@code null} when the function is not a
+   *         supported aggregate
+   */
+  public static AggregateSpec aggregateSpec(Function func, String label) {
     AggregateType type = AggregateType.from(func.getName());
     if (type == null) {
       return null;
@@ -752,8 +762,10 @@ public final class AggregateFunctions {
   /**
    * Compare two Expression to see if they are equivalent or not.
    *
-   * @param first the left Expression to compare
-   * @param second the right Expression to compare
+   * @param first
+   *          the left Expression to compare
+   * @param second
+   *          the right Expression to compare
    * @return true if they are equivalent, otherwise false
    */
   public static boolean expressionsEquivalent(Expression first, Expression second) {
@@ -897,8 +909,10 @@ public final class AggregateFunctions {
   /**
    * Compare two columns to see if they are equivalent or not.
    *
-   * @param left the left column to compare
-   * @param right the right column to compare
+   * @param left
+   *          the left column to compare
+   * @param right
+   *          the right column to compare
    * @return true if they are equivalent, otherwise false
    */
   public static boolean columnsEquivalent(Column left, Column right) {
@@ -916,11 +930,13 @@ public final class AggregateFunctions {
   /**
    * Compare two Tables to see if they are equivalent or not.
    *
-   * @param left the left Table to compare
-   * @param right the right Table to compare
+   * @param left
+   *          the left Table to compare
+   * @param right
+   *          the right Table to compare
    * @return true if they are equivalent, otherwise false
    */
-  private static boolean tablesEquivalent(Table left, Table right) {
+  public static boolean tablesEquivalent(Table left, Table right) {
     if (left == right) {
       return true;
     }
@@ -933,6 +949,15 @@ public final class AggregateFunctions {
     return Objects.equals(tableName(left), tableName(right));
   }
 
+  /**
+   * Compare two Function to see if they are equivalent or not.
+   *
+   * @param left
+   *          the left Function to compare
+   * @param right
+   *          the right Function to compare
+   * @return true if they are equivalent, otherwise false
+   */
   public static boolean functionsEquivalent(Function left, Function right) {
     if (!Objects.equals(normalizeFunctionName(left.getName()), normalizeFunctionName(right.getName()))) {
       return false;
