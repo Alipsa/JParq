@@ -32,7 +32,6 @@ import org.apache.parquet.hadoop.metadata.ParquetMetadata;
 import org.apache.parquet.hadoop.util.HadoopInputFile;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
-import se.alipsa.jparq.model.ResultSetAdapter;
 
 /**
  * An implementation of the java.sql.DatabaseMetaData interface for parquet
@@ -59,13 +58,42 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       "OCTET_LENGTH", "POSITION", "SUBSTRING", "LEFT", "RIGHT", "CONCAT", "UPPER", "LOWER", "TRIM", "LTRIM", "RTRIM",
       "LPAD", "RPAD", "OVERLAY", "REPLACE", "CHAR", "UNICODE", "NORMALIZE");
 
-  /** Canonical JDBC datetime functions and their SQL equivalents. */
+  /**
+   * Canonical JDBC datetime functions and their SQL equivalents. Used to map JDBC
+   * escape syntax (e.g. {@code {fn CURDATE()}}) to native functions understood by
+   * the engine.
+   */
   public enum JdbcDateTimeFunction {
-    CURDATE("CURDATE", "CURRENT_DATE", true), CURTIME("CURTIME", "LOCALTIME", true), NOW("NOW", "LOCALTIMESTAMP",
-        true), DAYOFWEEK("DAYOFWEEK", "DAYOFWEEK"), DAYOFMONTH("DAYOFMONTH", "DAYOFMONTH"), DAYOFYEAR("DAYOFYEAR",
-            "DAYOFYEAR"), HOUR("HOUR", "HOUR"), MINUTE("MINUTE", "MINUTE"), MONTH("MONTH", "MONTH"), QUARTER("QUARTER",
-                "QUARTER"), SECOND("SECOND", "SECOND"), WEEK("WEEK", "WEEK"), YEAR("YEAR", "YEAR"), TIMESTAMPADD(
-                    "TIMESTAMPADD", "TIMESTAMPADD"), TIMESTAMPDIFF("TIMESTAMPDIFF", "TIMESTAMPDIFF");
+    /** Current date function */
+    CURDATE("CURDATE", "CURRENT_DATE", true),
+    /** Current time function */
+    CURTIME("CURTIME", "CURRENT_TIME", true),
+    /** Current timestamp function */
+    NOW("NOW", "CURRENT_TIMESTAMP", true),
+    /** Day of week function */
+    DAYOFWEEK("DAYOFWEEK", "DAYOFWEEK"),
+    /** Day of month function */
+    DAYOFMONTH("DAYOFMONTH", "DAYOFMONTH"),
+    /** Day of year function */
+    DAYOFYEAR("DAYOFYEAR", "DAYOFYEAR"),
+    /** Hour function */
+    HOUR("HOUR", "HOUR"),
+    /** Minute function */
+    MINUTE("MINUTE", "MINUTE"),
+    /** Month function */
+    MONTH("MONTH", "MONTH"),
+    /** Quarter function */
+    QUARTER("QUARTER", "QUARTER"),
+    /** Second function */
+    SECOND("SECOND", "SECOND"),
+    /** Week function */
+    WEEK("WEEK", "WEEK"),
+    /** Year function */
+    YEAR("YEAR", "YEAR"),
+    /** Timestamp add function */
+    TIMESTAMPADD("TIMESTAMPADD", "TIMESTAMPADD"),
+    /** Timestamp diff function */
+    TIMESTAMPDIFF("TIMESTAMPDIFF", "TIMESTAMPDIFF");
 
     private final String jdbcName;
     private final String sqlName;
@@ -808,15 +836,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getTimeDateFunctions() {
-    StringBuilder sb = new StringBuilder();
-    JdbcDateTimeFunction[] functions = JdbcDateTimeFunction.values();
-    for (int i = 0; i < functions.length; i++) {
-      sb.append(functions[i].formatted());
-      if (i < functions.length - 1) {
-        sb.append(", ");
-      }
-    }
-    return sb.toString();
+    return java.util.stream.Stream.of(JdbcDateTimeFunction.values()).map(JdbcDateTimeFunction::formatted)
+        .collect(java.util.stream.Collectors.joining(", "));
   }
 
   @Override

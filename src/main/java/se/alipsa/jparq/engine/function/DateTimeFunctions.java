@@ -393,7 +393,8 @@ public final class DateTimeFunctions {
 
   private static boolean isTemporal(Object value) {
     return value instanceof Date || value instanceof Time || value instanceof Timestamp || value instanceof LocalDate
-        || value instanceof LocalDateTime || value instanceof LocalTime || value instanceof OffsetDateTime;
+        || value instanceof LocalDateTime || value instanceof LocalTime || value instanceof OffsetDateTime
+        || value instanceof OffsetTime;
   }
 
   private static TemporalAccessor toTemporalAccessor(Object value) {
@@ -414,6 +415,9 @@ public final class DateTimeFunctions {
     }
     if (value instanceof LocalTime lt) {
       return lt;
+    }
+    if (value instanceof OffsetTime ot) {
+      return ot.toLocalTime();
     }
     if (value instanceof OffsetDateTime odt) {
       return odt.toLocalDateTime();
@@ -443,6 +447,9 @@ public final class DateTimeFunctions {
     if (ta instanceof LocalDateTime ldt) {
       return ldt.toLocalTime();
     }
+    if (ta instanceof OffsetTime ot) {
+      return ot.toLocalTime();
+    }
     if (ta instanceof OffsetDateTime odt) {
       return odt.toLocalTime();
     }
@@ -457,7 +464,8 @@ public final class DateTimeFunctions {
       return ldt.plus(amount, unit);
     }
     if (target instanceof Timestamp ts) {
-      return Timestamp.from(ts.toInstant().plus(amount, unit));
+      LocalDateTime adjusted = ts.toLocalDateTime().plus(amount, unit);
+      return Timestamp.valueOf(adjusted);
     }
     if (target instanceof Date d) {
       LocalDate adjusted = d.toLocalDate().plus(amount, unit);

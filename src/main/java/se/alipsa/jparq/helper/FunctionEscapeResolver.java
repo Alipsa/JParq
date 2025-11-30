@@ -42,8 +42,7 @@ public final class FunctionEscapeResolver {
       JdbcDateTimeFunction dtFn = DATE_TIME_LOOKUP.get(fnName.toUpperCase(Locale.ROOT));
       String replacement;
       if (dtFn != null) {
-        boolean hasArgs = args != null && !args.trim().isEmpty() && !"()".equals(args.trim());
-        replacement = hasArgs || !dtFn.noArg() ? dtFn.sqlName() + (args == null ? "" : args) : dtFn.sqlName();
+        replacement = dtFn.noArg() ? dtFn.sqlName() : dtFn.sqlName() + (args == null ? "" : args);
       } else {
         replacement = fnName + (args == null ? "" : args);
       }
