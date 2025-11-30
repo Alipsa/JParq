@@ -43,6 +43,7 @@ public class MetaDataResultSetTest {
     }
   }
 
+  @Test
   public void testGetObject() throws Exception {
     String[] headers = {
         "A", "B"
