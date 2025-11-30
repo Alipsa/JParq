@@ -1793,7 +1793,8 @@ public final class WindowFunctions {
   }
 
   /**
-   * Retrieves the NTH_VALUE from a frame defined by relative start and end positions.
+   * Retrieves the NTH_VALUE from a frame defined by relative start and end
+   * positions.
    *
    * @param argumentValues
    *          the list of argument values for the entire partition
@@ -2390,8 +2391,8 @@ public final class WindowFunctions {
   }
 
   /**
-   * Safely converts a long value to an int, throwing an exception if the
-   * long value exceeds the maximum int value.
+   * Safely converts a long value to an int, throwing an exception if the long
+   * value exceeds the maximum int value.
    *
    * @param value
    *          the long value to convert
