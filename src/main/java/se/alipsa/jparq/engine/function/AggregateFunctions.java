@@ -1,4 +1,4 @@
-package se.alipsa.jparq.engine;
+package se.alipsa.jparq.engine.function;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -64,11 +64,20 @@ import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.engine.ColumnMappingUtil;
+import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
+import se.alipsa.jparq.engine.CorrelationMappings;
+import se.alipsa.jparq.engine.ExpressionEvaluator;
+import se.alipsa.jparq.engine.Operation;
+import se.alipsa.jparq.engine.OrderingUtil;
+import se.alipsa.jparq.engine.RecordReader;
+import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.OrderKey;
+import se.alipsa.jparq.engine.SubqueryExecutor;
+import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.LiteralConverter;
-import se.alipsa.jparq.helper.StringFunctions;
 
 /**
  * Utilities for detecting and evaluating aggregate functions in SELECT lists.

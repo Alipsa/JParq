@@ -40,8 +40,8 @@ import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.engine.function.StringFunctions;
 import se.alipsa.jparq.engine.window.WindowState;
-import se.alipsa.jparq.helper.StringFunctions;
 
 /**
  * Evaluates SQL expressions (via JSqlParser) against Avro
@@ -691,7 +691,16 @@ public final class ExpressionEvaluator {
     return columnSchemaOrNull == null ? value : coerceLiteral(value, columnSchemaOrNull);
   }
 
-  static int typedCompare(Object l, Object r) {
+  /**
+   * Compare two values using SQL-style type coercion rules.
+   *
+   * @param l
+   *          left-hand value
+   * @param r
+   *          right-hand value
+   * @return negative when {@code l < r}, zero when equal, positive when greater
+   */
+  public static int typedCompare(Object l, Object r) {
     if (l instanceof Number && r instanceof Number) {
       return new BigDecimal(l.toString()).compareTo(new BigDecimal(r.toString()));
     }

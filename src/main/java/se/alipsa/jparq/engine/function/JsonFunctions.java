@@ -1,4 +1,4 @@
-package se.alipsa.jparq.helper;
+package se.alipsa.jparq.engine.function;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -11,11 +11,11 @@ import java.util.Iterator;
 import java.util.List;
 
 /** Minimal implementations of SQL JSON_* functions using Jackson. */
-public final class JsonExpressions {
+public final class JsonFunctions {
 
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
-  private JsonExpressions() {
+  private JsonFunctions() {
   }
 
   /**
@@ -49,6 +49,21 @@ public final class JsonExpressions {
   }
 
   /**
+   * Convenience overload for {@code JSON_VALUE} handling positional argument
+   * lists.
+   *
+   * @param args
+   *          positional arguments
+   * @return extracted value or {@code null} when inputs are missing
+   */
+  public static Object jsonValue(List<Object> args) {
+    if (args == null || args.size() < 2) {
+      return null;
+    }
+    return jsonValue(args.get(0), args.get(1));
+  }
+
+  /**
    * Evaluate {@code JSON_QUERY(document, path)} and return a JSON fragment.
    *
    * @param document
@@ -63,6 +78,21 @@ public final class JsonExpressions {
       return null;
     }
     return node.toString();
+  }
+
+  /**
+   * Convenience overload for {@code JSON_QUERY} handling positional argument
+   * lists.
+   *
+   * @param args
+   *          positional arguments
+   * @return JSON fragment or {@code null} when inputs are missing
+   */
+  public static String jsonQuery(List<Object> args) {
+    if (args == null || args.size() < 2) {
+      return null;
+    }
+    return jsonQuery(args.get(0), args.get(1));
   }
 
   /**

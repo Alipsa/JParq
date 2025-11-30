@@ -15,7 +15,7 @@ import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.junit.jupiter.api.Test;
-import se.alipsa.jparq.helper.DateTimeExpressions;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.TemporalInterval;
 
@@ -68,7 +68,7 @@ class LiteralConverterTest {
   void castsLiteralExpressions() throws Exception {
     CastExpression castExpression = (CastExpression) CCJSqlParserUtil.parseExpression("CAST('2024-01-15' AS DATE)");
     Object literal = LiteralConverter.toLiteral(castExpression);
-    assertEquals(DateTimeExpressions.castLiteral(castExpression, "2024-01-15"), literal);
+    assertEquals(DateTimeFunctions.castLiteral(castExpression, "2024-01-15"), literal);
   }
 
   @Test

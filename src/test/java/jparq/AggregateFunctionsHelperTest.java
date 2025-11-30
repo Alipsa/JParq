@@ -4,11 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static se.alipsa.jparq.engine.AggregateFunctions.aggregateSpec;
-import static se.alipsa.jparq.engine.AggregateFunctions.columnsEquivalent;
-import static se.alipsa.jparq.engine.AggregateFunctions.expressionsEquivalent;
-import static se.alipsa.jparq.engine.AggregateFunctions.functionsEquivalent;
-import static se.alipsa.jparq.engine.AggregateFunctions.tablesEquivalent;
+import static se.alipsa.jparq.engine.function.AggregateFunctions.aggregateSpec;
+import static se.alipsa.jparq.engine.function.AggregateFunctions.columnsEquivalent;
+import static se.alipsa.jparq.engine.function.AggregateFunctions.expressionsEquivalent;
+import static se.alipsa.jparq.engine.function.AggregateFunctions.functionsEquivalent;
+import static se.alipsa.jparq.engine.function.AggregateFunctions.tablesEquivalent;
 
 import java.sql.Date;
 import java.sql.Time;
@@ -27,7 +27,7 @@ import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.AllColumns;
 import org.junit.jupiter.api.Test;
-import se.alipsa.jparq.engine.AggregateFunctions;
+import se.alipsa.jparq.engine.function.AggregateFunctions;
 
 /**
  * Unit tests covering helper utilities inside {@link AggregateFunctions}.

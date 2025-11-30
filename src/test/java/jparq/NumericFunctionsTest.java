@@ -25,7 +25,7 @@ import org.apache.parquet.io.OutputFile;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
-import se.alipsa.jparq.helper.NumericFunctions;
+import se.alipsa.jparq.engine.function.NumericFunctions;
 
 /** Tests for SQL numeric functions. */
 public class NumericFunctionsTest {

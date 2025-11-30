@@ -4,9 +4,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.text.Normalizer;
 import java.util.List;
+import net.sf.jsqlparser.expression.Function;
+import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.junit.jupiter.api.Test;
-import se.alipsa.jparq.helper.StringFunctions;
-import se.alipsa.jparq.helper.StringFunctions.TrimMode;
+import se.alipsa.jparq.engine.function.FunctionArguments;
+import se.alipsa.jparq.engine.function.StringFunctions;
+import se.alipsa.jparq.engine.function.StringFunctions.TrimMode;
+import se.alipsa.jparq.helper.LiteralConverter;
 
 /** Unit tests for {@link StringFunctions}. */
 class StringFunctionsTest {
@@ -25,6 +29,13 @@ class StringFunctionsTest {
     assertEquals("center", StringFunctions.trim("***center***", "*", TrimMode.BOTH));
     assertEquals("!!!hi", StringFunctions.lpad("hi", 5, "!"));
     assertEquals("hi????", StringFunctions.rpad("hi", 6, "?"));
+  }
+
+  @Test
+  void coalesceReturnsFirstNonNull() throws Exception {
+    Function func = (Function) CCJSqlParserUtil.parseExpression("coalesce(null, 'x', 'y')");
+    FunctionArguments args = new FunctionArguments(func, null, (expr, record) -> LiteralConverter.toLiteral(expr));
+    assertEquals("x", StringFunctions.coalesce(args));
   }
 
   @Test
