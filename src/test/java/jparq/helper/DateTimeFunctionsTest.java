@@ -47,7 +47,8 @@ public class DateTimeFunctionsTest {
     expr.setStringValue("CURRENT_TIMESTAMP");
     Object result = DateTimeFunctions.evaluateTimeKey(expr);
     assertInstanceOf(java.time.OffsetDateTime.class, result);
-    // Allow for some leeway as system clock can tick between getting current Instant and creating the result.
+    // Allow for some leeway as system clock can tick between getting current
+    // Instant and creating the result.
     long currentEpochSecond = Instant.now().getEpochSecond();
     long resultEpochSecond = ((java.time.OffsetDateTime) result).toInstant().getEpochSecond();
     assertTrue(Math.abs(currentEpochSecond - resultEpochSecond) <= 2);

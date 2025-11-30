@@ -32,6 +32,7 @@ import org.apache.parquet.hadoop.metadata.ParquetMetadata;
 import org.apache.parquet.hadoop.util.HadoopInputFile;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
+import se.alipsa.jparq.model.ResultSetAdapter;
 
 /**
  * An implementation of the java.sql.DatabaseMetaData interface for parquet
@@ -58,12 +59,44 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       "OCTET_LENGTH", "POSITION", "SUBSTRING", "LEFT", "RIGHT", "CONCAT", "UPPER", "LOWER", "TRIM", "LTRIM", "RTRIM",
       "LPAD", "RPAD", "OVERLAY", "REPLACE", "CHAR", "UNICODE", "NORMALIZE");
 
-  /**
-   * The JDBC datetime functions supported
-   */
-  public static final List<String> SUPPORTED_DATETIME_FUNCTIONS = List.of("CURDATE", "CURTIME", "NOW", "DAYOFWEEK",
-      "DAYOFMONTH", "DAYOFYEAR", "HOUR", "MINUTE", "MONTH", "QUARTER", "SECOND", "WEEK", "YEAR", "TIMESTAMPADD",
-      "TIMESTAMPDIFF");
+  /** Canonical JDBC datetime functions and their SQL equivalents. */
+  public enum JdbcDateTimeFunction {
+    CURDATE("CURDATE", "CURRENT_DATE", true), CURTIME("CURTIME", "LOCALTIME", true), NOW("NOW", "LOCALTIMESTAMP",
+        true), DAYOFWEEK("DAYOFWEEK", "DAYOFWEEK"), DAYOFMONTH("DAYOFMONTH", "DAYOFMONTH"), DAYOFYEAR("DAYOFYEAR",
+            "DAYOFYEAR"), HOUR("HOUR", "HOUR"), MINUTE("MINUTE", "MINUTE"), MONTH("MONTH", "MONTH"), QUARTER("QUARTER",
+                "QUARTER"), SECOND("SECOND", "SECOND"), WEEK("WEEK", "WEEK"), YEAR("YEAR", "YEAR"), TIMESTAMPADD(
+                    "TIMESTAMPADD", "TIMESTAMPADD"), TIMESTAMPDIFF("TIMESTAMPDIFF", "TIMESTAMPDIFF");
+
+    private final String jdbcName;
+    private final String sqlName;
+    private final boolean noArg;
+
+    JdbcDateTimeFunction(String jdbcName, String sqlName) {
+      this(jdbcName, sqlName, false);
+    }
+
+    JdbcDateTimeFunction(String jdbcName, String sqlName, boolean noArg) {
+      this.jdbcName = jdbcName;
+      this.sqlName = sqlName;
+      this.noArg = noArg;
+    }
+
+    public String jdbcName() {
+      return jdbcName;
+    }
+
+    public String sqlName() {
+      return sqlName;
+    }
+
+    public boolean noArg() {
+      return noArg;
+    }
+
+    public String formatted() {
+      return "{fn " + jdbcName + "}";
+    }
+  }
 
   /**
    * The jdbc system function supported.
@@ -775,7 +808,15 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getTimeDateFunctions() {
-    return String.join(",", SUPPORTED_DATETIME_FUNCTIONS);
+    StringBuilder sb = new StringBuilder();
+    JdbcDateTimeFunction[] functions = JdbcDateTimeFunction.values();
+    for (int i = 0; i < functions.length; i++) {
+      sb.append(functions[i].formatted());
+      if (i < functions.length - 1) {
+        sb.append(", ");
+      }
+    }
+    return sb.toString();
   }
 
   @Override
@@ -1362,8 +1403,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   // TODO: this should return an empty result set instead of null
   @Override
-  public ResultSet getUDTs(String catalog, String schemaPattern, String typeNamePattern, int[] types)
-      throws SQLException {
+  public ResultSet getUDTs(String catalog, String schemaPattern, String typeNamePattern, int[] types) {
     return null;
   }
 

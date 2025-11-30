@@ -38,3 +38,7 @@ A typical fully compliant return string would look like:
 ```
 {fn ASCII}, {fn CHAR}, {fn CONCAT}, {fn DIFFERENCE}, {fn INSERT}, {fn LCASE}, {fn LEFT}, {fn LENGTH}, {fn LOCATE}, {fn LTRIM}, {fn REPEAT}, {fn REPLACE}, {fn RIGHT}, {fn RTRIM}, {fn SOUNDEX}, {fn SPACE}, {fn SUBSTRING}, {fn UCASE}
 ```
+- Change the SUPPORTED_STRING_FUNCTIONS in JParqDatabaseMetaData into an enum in a similar manner as the JdbcDateTimeFunction enum.
+- Ensure that the JParqDatabaseMetaData.getStringFunctions() returns a list of the supported string functions in the correct (escaped) format.
+- Before the SQL is sent to the Sql parser, we should resolve the jdbc function names and translate them to the corresponding SQL function
+name i.e. if the user runs the query SELECT {fn CHAR(65)} we should send SELECT CHAR(65) to the parser (the result after execution should be 'A').

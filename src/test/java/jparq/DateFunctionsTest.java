@@ -97,7 +97,7 @@ public class DateFunctionsTest {
 
   @Test
   void testCurrentTime() {
-    LocalTime start = LocalTime.now();
+    final LocalTime start = LocalTime.now();
     AtomicReference<Object> value = new AtomicReference<>();
 
     jparqSql.query("SELECT CURRENT_TIME AS current_time FROM mtcars LIMIT 1", rs -> {
@@ -109,18 +109,18 @@ public class DateFunctionsTest {
       }
     });
 
-    LocalTime end = LocalTime.now();
+    final LocalTime end = LocalTime.now();
     Object current = value.get();
     assertNotNull(current, "CURRENT_TIME should produce a value");
     assertInstanceOf(java.time.OffsetTime.class, current);
-    LocalTime actual = ((java.time.OffsetTime) current).toLocalTime();
+    final LocalTime actual = ((java.time.OffsetTime) current).toLocalTime();
     assertFalse(actual.isBefore(start.minusSeconds(1)), "Time should be within the expected window");
     assertFalse(actual.isAfter(end.plusSeconds(1)), "Time should be within the expected window");
   }
 
   @Test
   void testCurrentTimestamp() {
-    Instant start = Instant.now();
+    final Instant start = Instant.now();
     AtomicReference<Object> value = new AtomicReference<>();
 
     jparqSql.query("SELECT CURRENT_TIMESTAMP AS current_ts FROM mtcars LIMIT 1", rs -> {
@@ -132,13 +132,77 @@ public class DateFunctionsTest {
       }
     });
 
-    Instant end = Instant.now();
+    final Instant end = Instant.now();
     Object current = value.get();
     assertNotNull(current, "CURRENT_TIMESTAMP should produce a value");
     assertInstanceOf(java.time.OffsetDateTime.class, current);
-    Instant actual = ((java.time.OffsetDateTime) current).toInstant();
+    final Instant actual = ((java.time.OffsetDateTime) current).toInstant();
     assertFalse(actual.isBefore(start.minusSeconds(1)), "Timestamp should not precede the captured window");
     assertFalse(actual.isAfter(end.plusSeconds(1)), "Timestamp should not exceed the captured window");
+  }
+
+  @Test
+  void testLocalTimeAndLocalTimestamp() {
+    final LocalTime startTime = LocalTime.now();
+    final LocalDateTime startTs = LocalDateTime.now();
+    AtomicReference<Object> localTime = new AtomicReference<>();
+    AtomicReference<Object> localTimestamp = new AtomicReference<>();
+
+    jparqSql.query("SELECT LOCALTIME AS local_time, LOCALTIMESTAMP AS local_ts FROM mtcars LIMIT 1", rs -> {
+      try {
+        assertTrue(rs.next(), "Expected a row");
+        localTime.set(rs.getObject("local_time"));
+        localTimestamp.set(rs.getObject("local_ts"));
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+
+    final LocalTime endTime = LocalTime.now();
+    final LocalDateTime endTs = LocalDateTime.now();
+
+    Object lt = localTime.get();
+    assertNotNull(lt, "LOCALTIME should produce a value");
+    assertTrue(lt instanceof LocalTime || lt instanceof Time, "LOCALTIME should not contain timezone information");
+    LocalTime ltVal = lt instanceof LocalTime ? (LocalTime) lt : ((Time) lt).toLocalTime();
+    assertFalse(ltVal.isBefore(startTime.minusSeconds(1)), "LOCALTIME should be within the expected window");
+    assertFalse(ltVal.isAfter(endTime.plusSeconds(1)), "LOCALTIME should be within the expected window");
+
+    Object lts = localTimestamp.get();
+    assertNotNull(lts, "LOCALTIMESTAMP should produce a value");
+    assertTrue(lts instanceof LocalDateTime || lts instanceof Timestamp,
+        "LOCALTIMESTAMP should not include timezone information");
+    LocalDateTime ltsVal = lts instanceof LocalDateTime ? (LocalDateTime) lts : ((Timestamp) lts).toLocalDateTime();
+    assertFalse(ltsVal.isBefore(startTs.minusSeconds(1)), "LOCALTIMESTAMP should be within the expected window");
+    assertFalse(ltsVal.isAfter(endTs.plusSeconds(1)), "LOCALTIMESTAMP should be within the expected window");
+  }
+
+  @Test
+  void testJdbcFunctionEscapesAreTranslated() {
+    AtomicReference<Object> curDate = new AtomicReference<>();
+    AtomicReference<Object> curTime = new AtomicReference<>();
+    AtomicReference<Object> nowTs = new AtomicReference<>();
+
+    jparqSql.query(
+        "SELECT {fn CURDATE()} AS cur_date, {fn CURTIME()} AS cur_time, {fn NOW()} AS cur_ts " + "FROM mtcars LIMIT 1",
+        rs -> {
+          try {
+            assertTrue(rs.next(), "Expected a row");
+            curDate.set(rs.getObject("cur_date"));
+            curTime.set(rs.getObject("cur_time"));
+            nowTs.set(rs.getObject("cur_ts"));
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
+
+    assertTrue(curDate.get() instanceof Date || curDate.get() instanceof LocalDate);
+    assertNotNull(curTime.get());
+    assertTrue(curTime.get() instanceof java.time.OffsetTime || curTime.get() instanceof java.time.LocalTime
+        || curTime.get() instanceof Time, "CURTIME should yield a temporal value");
+    assertNotNull(nowTs.get());
+    assertTrue(nowTs.get() instanceof java.time.OffsetDateTime || nowTs.get() instanceof Timestamp
+        || nowTs.get() instanceof LocalDateTime);
   }
 
   @Test
