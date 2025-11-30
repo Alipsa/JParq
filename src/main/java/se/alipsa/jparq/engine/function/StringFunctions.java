@@ -1,4 +1,4 @@
-package se.alipsa.jparq.helper;
+package se.alipsa.jparq.engine.function;
 
 import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
+import net.sf.jsqlparser.expression.Expression;
 
 /** Utility methods implementing SQL string functions. */
 public final class StringFunctions {
@@ -22,6 +23,27 @@ public final class StringFunctions {
   }
 
   private StringFunctions() {
+  }
+
+  /**
+   * Implementation of the COALESCE(expr1, expr2, ...) function.
+   *
+   * @param arguments
+   *          function arguments resolver
+   * @return the first non-null argument value, or {@code null} if all are null
+   */
+  public static Object coalesce(FunctionArguments arguments) {
+    List<Expression> expressions = arguments.positionalExpressions();
+    if (expressions.isEmpty()) {
+      return null;
+    }
+    for (Expression expr : expressions) {
+      Object value = arguments.evaluate(expr);
+      if (value != null) {
+        return value;
+      }
+    }
+    return null;
   }
 
   /**
@@ -510,6 +532,47 @@ public final class StringFunctions {
     }
     regex.append('$');
     return regex.toString();
+  }
+
+  /**
+   * Evaluate {@code REGEXP_LIKE} with optional modifier flags.
+   *
+   * @param input
+   *          the value to test
+   * @param pattern
+   *          the regular expression pattern
+   * @param options
+   *          optional flags ({@code i}, {@code m}, {@code n}/{@code s},
+   *          {@code x}, {@code c})
+   * @return {@code true} when the pattern matches, {@code false} when it does not
+   *         and {@code null} when {@code input} or {@code pattern} is
+   *         {@code null}
+   */
+  public static Boolean regexpLike(String input, String pattern, String options) {
+    if (input == null || pattern == null) {
+      return null;
+    }
+    int flags = 0;
+    if (options != null) {
+      String opts = options.toLowerCase(Locale.ROOT);
+      for (int i = 0; i < opts.length(); i++) {
+        char opt = opts.charAt(i);
+        switch (opt) {
+          case 'i' -> flags |= Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE;
+          case 'm' -> flags |= Pattern.MULTILINE;
+          case 'n', 's' -> flags |= Pattern.DOTALL;
+          case 'x' -> flags |= Pattern.COMMENTS;
+          case 'c' -> {
+            // explicit case-sensitive flag, ignore since default
+          }
+          default -> {
+            // ignore unknown flags
+          }
+        }
+      }
+    }
+    Pattern compiled = Pattern.compile(pattern, flags);
+    return compiled.matcher(input).find();
   }
 
   private static void appendLiteral(StringBuilder regex, char ch, boolean inCharClass) {

@@ -13,6 +13,7 @@ import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TimestampValue;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
 /** Converts JSqlParser Expression literals to Java Objects. */
 public class LiteralConverter {
@@ -52,13 +53,13 @@ public class LiteralConverter {
     }
     if (e instanceof CastExpression cast) {
       Object value = toLiteral(cast.getLeftExpression());
-      return DateTimeExpressions.castLiteral(cast, value);
+      return DateTimeFunctions.castLiteral(cast, value);
     }
     if (e instanceof BooleanValue bv) {
       return bv.getValue();
     }
     if (e instanceof TimeKeyExpression tk) {
-      return DateTimeExpressions.evaluateTimeKey(tk);
+      return DateTimeFunctions.evaluateTimeKey(tk);
     }
     if (e instanceof DateValue dv) {
       return dv.getValue(); // java.sql.Date
@@ -67,7 +68,7 @@ public class LiteralConverter {
       return tv.getValue(); // java.sql.Timestamp
     }
     if (e instanceof IntervalExpression interval) {
-      return DateTimeExpressions.toInterval(interval);
+      return DateTimeFunctions.toInterval(interval);
     }
     try {
       return new BigDecimal(e.toString());

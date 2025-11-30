@@ -2,7 +2,7 @@ package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static se.alipsa.jparq.engine.AggregateFunctions.*;
+import static se.alipsa.jparq.engine.function.AggregateFunctions.*;
 
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;

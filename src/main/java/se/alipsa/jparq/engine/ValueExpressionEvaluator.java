@@ -1,19 +1,17 @@
 package se.alipsa.jparq.engine;
 
-import static se.alipsa.jparq.helper.NumericFunctions.*;
+import static se.alipsa.jparq.engine.function.NumericFunctions.*;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Pattern;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.CaseExpression;
@@ -37,20 +35,20 @@ import net.sf.jsqlparser.expression.operators.arithmetic.Division;
 import net.sf.jsqlparser.expression.operators.arithmetic.Modulo;
 import net.sf.jsqlparser.expression.operators.arithmetic.Multiplication;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
-import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
-import net.sf.jsqlparser.expression.operators.relational.NamedExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.engine.function.AggregateFunctions;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
+import se.alipsa.jparq.engine.function.FunctionSupport;
+import se.alipsa.jparq.engine.function.JsonFunctions;
+import se.alipsa.jparq.engine.function.StringFunctions;
 import se.alipsa.jparq.engine.window.WindowState;
-import se.alipsa.jparq.helper.DateTimeExpressions;
 import se.alipsa.jparq.helper.JParqUtil;
-import se.alipsa.jparq.helper.JsonExpressions;
 import se.alipsa.jparq.helper.LiteralConverter;
-import se.alipsa.jparq.helper.StringFunctions;
 
 /**
  * Evaluates SELECT-list expressions (e.g. computed columns, {@code CASE}
@@ -68,6 +66,7 @@ public final class ValueExpressionEvaluator {
   private final Map<String, String> unqualifiedColumnMapping;
   private final Map<String, Map<String, String>> correlationContext;
   private final WindowState windowState;
+  private final FunctionSupport functionSupport;
   private ExpressionEvaluator conditionEvaluator;
 
   /**
@@ -154,6 +153,8 @@ public final class ValueExpressionEvaluator {
         : mappings.correlationContext();
     this.correlationContext = ColumnMappingUtil.normaliseQualifierMapping(ctx);
     this.windowState = windowState == null ? WindowState.empty() : windowState;
+    this.functionSupport = new FunctionSupport(subqueryExecutor, correlationQualifiers(), correlationColumns(),
+        this.correlationContext, this::resolveCorrelatedValue, this::evalInternal);
   }
 
   /**
@@ -231,14 +232,14 @@ public final class ValueExpressionEvaluator {
     }
 
     if (expression instanceof TimeKeyExpression tk) {
-      return DateTimeExpressions.evaluateTimeKey(tk);
+      return DateTimeFunctions.evaluateTimeKey(tk);
     }
     if (expression instanceof CastExpression cast) {
       Object inner = evalInternal(cast.getLeftExpression(), record);
       if (inner == null) {
         return null;
       }
-      return DateTimeExpressions.castLiteral(cast, inner);
+      return DateTimeFunctions.castLiteral(cast, inner);
     }
     if (expression instanceof SignedExpression se) {
       Object inner = evalInternal(se.getExpression(), record);
@@ -274,19 +275,19 @@ public final class ValueExpressionEvaluator {
     }
     if (expression instanceof ExtractExpression extract) {
       Object value = evalInternal(extract.getExpression(), record);
-      return DateTimeExpressions.extract(extract.getName(), value);
+      return DateTimeFunctions.extract(extract.getName(), value);
     }
     if (expression instanceof IntervalExpression interval) {
-      return DateTimeExpressions.toInterval(interval);
+      return DateTimeFunctions.toInterval(interval);
     }
     if (expression instanceof TrimFunction trim) {
-      return evaluateTrim(trim, record);
+      return functionSupport.evaluate(trim, record);
     }
     if (expression instanceof CollateExpression collate) {
       return evalInternal(collate.getLeftExpression(), record);
     }
     if (expression instanceof ArrayConstructor array) {
-      return evaluateArrayConstructor(array, record);
+      return functionSupport.evaluate(array, record);
     }
     if (expression instanceof LikeExpression like) {
       return evaluateLike(like, record);
@@ -298,7 +299,7 @@ public final class ValueExpressionEvaluator {
       return evaluateJsonFunction(json, record);
     }
     if (expression instanceof Function func) {
-      return evaluateFunction(func, record);
+      return functionSupport.evaluate(func, record);
     }
     if (expression instanceof AnalyticExpression analytic) {
       return evaluateAnalytic(analytic, record);
@@ -366,181 +367,6 @@ public final class ValueExpressionEvaluator {
       return windowState.lastValue(analytic, record);
     }
     throw new IllegalArgumentException("Unsupported analytic function: " + analytic);
-  }
-
-  private Object evaluateArrayConstructor(ArrayConstructor array, GenericRecord record) {
-    ExpressionList<? extends Expression> expressionItems = array.getExpressions();
-    if (expressionItems == null || expressionItems.isEmpty()) {
-      return List.of();
-    }
-    List<Object> values = new ArrayList<>(expressionItems.size());
-    for (Expression element : expressionItems) {
-      values.add(evalInternal(element, record));
-    }
-    return homogenizeArrayValues(values);
-  }
-
-  private Object evaluateArrayFunction(Function func, GenericRecord record) {
-    ExpressionList<? extends Expression> parameterExpressions = func.getParameters();
-    if (parameterExpressions == null || parameterExpressions.isEmpty()) {
-      return List.of();
-    }
-    Expression first = parameterExpressions.getFirst();
-    if (first instanceof net.sf.jsqlparser.statement.select.Select select) {
-      return homogenizeArrayValues(executeArraySubquery(select, record));
-    }
-    List<Object> values = new ArrayList<>(parameterExpressions.size());
-    for (Expression element : parameterExpressions) {
-      values.add(evalInternal(element, record));
-    }
-    return homogenizeArrayValues(values);
-  }
-
-  private List<Object> executeArraySubquery(net.sf.jsqlparser.statement.select.Select subSelect, GenericRecord record) {
-    if (subqueryExecutor == null) {
-      throw new IllegalStateException("ARRAY subqueries require a subquery executor");
-    }
-    CorrelatedSubqueryRewriter.Result rewritten = SubqueryCorrelatedFiltersIsolator.isolate(subSelect,
-        correlationQualifiers(), correlationColumns(), correlationContext,
-        (qualifier, column) -> resolveCorrelatedValue(qualifier, column, record));
-    SubqueryExecutor.SubqueryResult result = rewritten.correlated()
-        ? subqueryExecutor.executeRaw(rewritten.sql())
-        : subqueryExecutor.execute(subSelect);
-    if (result.columnLabels().isEmpty()) {
-      return List.of();
-    }
-    if (result.columnLabels().size() > 1) {
-      throw new IllegalArgumentException("ARRAY subquery must return exactly one column: " + subSelect);
-    }
-    return result.firstColumnValues();
-  }
-
-  private List<Object> homogenizeArrayValues(List<Object> values) {
-    if (values == null || values.isEmpty()) {
-      return List.of();
-    }
-    NumericType numericTarget = NumericType.NONE;
-    Class<?> objectTarget = null;
-    for (Object value : values) {
-      if (value == null) {
-        continue;
-      }
-      if (value instanceof Number number) {
-        numericTarget = NumericType.promote(numericTarget, NumericType.of(number));
-        continue;
-      }
-      if (value instanceof CharSequence) {
-        objectTarget = determineObjectTarget(objectTarget, String.class);
-        continue;
-      }
-      if (value instanceof List<?>) {
-        objectTarget = determineObjectTarget(objectTarget, List.class);
-        continue;
-      }
-      objectTarget = determineObjectTarget(objectTarget, value.getClass());
-    }
-    if (numericTarget != NumericType.NONE) {
-      return convertNumericValues(values, numericTarget);
-    }
-    if (objectTarget == null) {
-      return List.copyOf(values);
-    }
-    List<Object> coerced = new ArrayList<>(values.size());
-    for (Object value : values) {
-      if (value == null) {
-        coerced.add(null);
-        continue;
-      }
-      if (objectTarget == String.class) {
-        coerced.add(value.toString());
-        continue;
-      }
-      if (objectTarget == List.class) {
-        if (value instanceof List<?>) {
-          coerced.add(value);
-          continue;
-        }
-        throw new IllegalArgumentException("ARRAY elements must all be lists or scalars of the same type");
-      }
-      if (!objectTarget.equals(value.getClass())) {
-        throw new IllegalArgumentException("ARRAY elements must share a common type; found " + objectTarget.getName()
-            + " and " + value.getClass().getName());
-      }
-      coerced.add(value);
-    }
-    return List.copyOf(coerced);
-  }
-
-  private Class<?> determineObjectTarget(Class<?> current, Class<?> candidate) {
-    if (current == null || current == candidate) {
-      return candidate;
-    }
-    throw new IllegalArgumentException(
-        "ARRAY elements must share a common type; found " + current.getName() + " and " + candidate.getName());
-  }
-
-  private List<Object> convertNumericValues(List<Object> values, NumericType target) {
-    List<Object> converted = new ArrayList<>(values.size());
-    for (Object value : values) {
-      if (value == null) {
-        converted.add(null);
-        continue;
-      }
-      Number number = (Number) value;
-      converted.add(switch (target) {
-        case BIG_DECIMAL -> toBigDecimal(number);
-        case DOUBLE -> number.doubleValue();
-        case FLOAT -> number.floatValue();
-        case LONG -> number.longValue();
-        case INTEGER -> number.intValue();
-        case SHORT -> number.shortValue();
-        case BYTE -> number.byteValue();
-        case NONE -> number;
-      });
-    }
-    return List.copyOf(converted);
-  }
-
-  private enum NumericType {
-    NONE, BYTE, SHORT, INTEGER, LONG, FLOAT, DOUBLE, BIG_DECIMAL;
-
-    static NumericType of(Number value) {
-      if (value instanceof BigDecimal) {
-        return BIG_DECIMAL;
-      }
-      if (value instanceof Double) {
-        return DOUBLE;
-      }
-      if (value instanceof Float) {
-        return FLOAT;
-      }
-      if (value instanceof Long) {
-        return LONG;
-      }
-      if (value instanceof Integer) {
-        return INTEGER;
-      }
-      if (value instanceof Short) {
-        return SHORT;
-      }
-      if (value instanceof Byte) {
-        return BYTE;
-      }
-      if (value instanceof java.math.BigInteger) {
-        return BIG_DECIMAL;
-      }
-      return DOUBLE;
-    }
-
-    static NumericType promote(NumericType current, NumericType candidate) {
-      if (candidate == null || candidate == NONE) {
-        return current;
-      }
-      if (current == NONE) {
-        return candidate;
-      }
-      return values()[Math.max(current.ordinal(), candidate.ordinal())];
-    }
   }
 
   private Object evaluateScalarSubquery(net.sf.jsqlparser.statement.select.Select subSelect, GenericRecord record) {
@@ -617,313 +443,6 @@ public final class ValueExpressionEvaluator {
     }
   }
 
-  /**
-   * Evaluate a SQL function call. Supports COALESCE, numeric functions (ABS,
-   * CEIL, FLOOR, ROUND, SQRT, TRUNCATE, MOD, POWER, EXP, LOG, RAND, SIGN,
-   * trigonometric variants, etc.), character functions, trimming/padding helpers,
-   * pattern matching utilities, JSON helpers and Unicode conversions.
-   *
-   * @param func
-   *          the function expression to evaluate
-   * @param record
-   *          the current record
-   * @return the computed function result (may be {@code null})
-   */
-  private Object evaluateFunction(Function func, GenericRecord record) {
-    String name = func.getName();
-    if (name == null) {
-      return null;
-    }
-    String upper = name.toUpperCase(Locale.ROOT);
-    return switch (upper) {
-      // case "COALESCE", "LENGTH", "CHAR_LENGTH", "CHARACTER_LENGTH", "OCTET_LENGTH",
-      // "POSITION" -> StringFunctions.evaluate(upper, func, record)
-      case "COALESCE" -> evaluateCoalesce(func, record);
-      case "LENGTH", "CHAR_LENGTH", "CHARACTER_LENGTH" -> StringFunctions.charLength(firstArgument(func, record));
-      case "OCTET_LENGTH" -> StringFunctions.octetLength(firstArgument(func, record));
-      case "POSITION" -> evaluatePosition(func, record);
-      case "SUBSTRING" -> evaluateSubstring(func, record);
-      case "LEFT" -> evaluateLeftOrRight(func, record, true);
-      case "RIGHT" -> evaluateLeftOrRight(func, record, false);
-      case "CONCAT" -> StringFunctions.concat(positionalArgs(func, record));
-      case "UPPER" -> StringFunctions.upper(firstArgument(func, record));
-      case "LOWER" -> StringFunctions.lower(firstArgument(func, record));
-      case "LTRIM" -> evaluateTrimFunction(func, record, StringFunctions.TrimMode.LEADING);
-      case "RTRIM" -> evaluateTrimFunction(func, record, StringFunctions.TrimMode.TRAILING);
-      case "LPAD" -> evaluatePad(func, record, true);
-      case "RPAD" -> evaluatePad(func, record, false);
-      case "OVERLAY" -> evaluateOverlay(func, record);
-      case "REPLACE" -> evaluateReplace(func, record);
-      case "CHAR" -> evaluateChar(func, record);
-      case "UNICODE" -> evaluateUnicode(func, record);
-      case "NORMALIZE" -> evaluateNormalize(func, record);
-
-      case "REGEXP_LIKE" -> evaluateRegexpLike(func, record);
-      case "JSON_VALUE" -> evaluateJsonValue(func, record);
-      case "JSON_QUERY" -> evaluateJsonQuery(func, record);
-      case "JSON_OBJECT" -> JsonExpressions.jsonObject(positionalArgs(func, record));
-      case "JSON_ARRAY" -> JsonExpressions.jsonArray(positionalArgs(func, record));
-      case "ARRAY" -> evaluateArrayFunction(func, record);
-      case "ABS", "CEIL", "CEILING", "FLOOR", "ROUND", "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW", "EXP", "LOG",
-          "LOG10", "RAND", "RANDOM", "SIGN", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN", "ATAN2", "DEGREES",
-          "RADIANS" ->
-        evaluateNumericFunction(upper, func, record);
-      default -> LiteralConverter.toLiteral(func);
-    };
-  }
-
-  /**
-   * Implementation of the COALESCE(expr1, expr2, ...) function.
-   *
-   * @param func
-   *          the COALESCE function expression
-   * @param record
-   *          the current record
-   * @return the first non-null argument value, or {@code null} if all are null
-   */
-  private Object evaluateCoalesce(Function func, GenericRecord record) {
-    if (!(func.getParameters() instanceof ExpressionList<?> params) || params.isEmpty()) {
-      return null;
-    }
-    for (Expression expr : params) {
-      Object value = evalInternal(expr, record);
-      if (value != null) {
-        return value;
-      }
-    }
-    return null;
-  }
-
-  private Object evaluatePosition(Function func, GenericRecord record) {
-    NamedArgResult named = namedArgs(func, record);
-    Object substring;
-    Object source;
-    if (named != null) {
-      substring = named.values().isEmpty() ? null : named.values().getFirst();
-      source = named.values().size() > 1 ? named.values().get(1) : null;
-    } else {
-      List<Object> args = positionalArgs(func, record);
-      if (args.size() < 2) {
-        return null;
-      }
-      substring = args.get(0);
-      source = args.get(1);
-    }
-    return StringFunctions.position(substring, source);
-  }
-
-  private Object evaluateSubstring(Function func, GenericRecord record) {
-    NamedArgResult named = namedArgs(func, record);
-    String input;
-    Integer start = null;
-    Integer length = null;
-    if (named != null) {
-      input = toStringValue(named.values().isEmpty() ? null : named.values().getFirst());
-      List<String> names = named.names();
-      List<Object> values = named.values();
-      for (int i = 1; i < names.size(); i++) {
-        String label = names.get(i);
-        Object value = values.get(i);
-        if ("FROM".equalsIgnoreCase(label)) {
-          start = toInteger(value);
-        } else if ("FOR".equalsIgnoreCase(label)) {
-          length = toInteger(value);
-        }
-      }
-    } else {
-      List<Object> args = positionalArgs(func, record);
-      if (args.isEmpty()) {
-        return null;
-      }
-      input = toStringValue(args.get(0));
-      if (args.size() > 1) {
-        start = toInteger(args.get(1));
-      }
-      if (args.size() > 2) {
-        length = toInteger(args.get(2));
-      }
-    }
-    if (input == null || start == null) {
-      return null;
-    }
-    return StringFunctions.substring(input, start, length);
-  }
-
-  private Object evaluateLeftOrRight(Function func, GenericRecord record, boolean left) {
-    List<Object> args = positionalArgs(func, record);
-    if (args.size() < 2) {
-      return null;
-    }
-    String input = toStringValue(args.get(0));
-    Integer count = toInteger(args.get(1));
-    if (input == null || count == null) {
-      return null;
-    }
-    return left ? StringFunctions.left(input, count) : StringFunctions.right(input, count);
-  }
-
-  private Object evaluateTrimFunction(Function func, GenericRecord record, StringFunctions.TrimMode mode) {
-    List<Object> args = positionalArgs(func, record);
-    if (args.isEmpty()) {
-      return null;
-    }
-    String input = toStringValue(args.get(0));
-    String chars = args.size() > 1 ? toStringValue(args.get(1)) : null;
-    return StringFunctions.trim(input, chars, mode);
-  }
-
-  private Object evaluatePad(Function func, GenericRecord record, boolean left) {
-    List<Object> args = positionalArgs(func, record);
-    if (args.size() < 2) {
-      return null;
-    }
-    String input = toStringValue(args.get(0));
-    Integer length = toInteger(args.get(1));
-    String fill = args.size() > 2 ? toStringValue(args.get(2)) : null;
-    if (input == null || length == null) {
-      return null;
-    }
-    return left ? StringFunctions.lpad(input, length, fill) : StringFunctions.rpad(input, length, fill);
-  }
-
-  private Object evaluateOverlay(Function func, GenericRecord record) {
-    NamedArgResult named = namedArgs(func, record);
-    String input;
-    String replacement = null;
-    Integer start = null;
-    Integer length = null;
-    if (named != null) {
-      input = toStringValue(named.values().isEmpty() ? null : named.values().getFirst());
-      List<String> names = named.names();
-      List<Object> values = named.values();
-      for (int i = 1; i < names.size(); i++) {
-        String label = names.get(i);
-        Object value = values.get(i);
-        if ("PLACING".equalsIgnoreCase(label)) {
-          replacement = toStringValue(value);
-        } else if ("FROM".equalsIgnoreCase(label)) {
-          start = toInteger(value);
-        } else if ("FOR".equalsIgnoreCase(label)) {
-          length = toInteger(value);
-        }
-      }
-    } else {
-      List<Object> args = positionalArgs(func, record);
-      if (args.size() < 3) {
-        return null;
-      }
-      input = toStringValue(args.get(0));
-      replacement = toStringValue(args.get(1));
-      start = toInteger(args.get(2));
-      if (args.size() > 3) {
-        length = toInteger(args.get(3));
-      }
-    }
-    if (input == null || replacement == null || start == null) {
-      return null;
-    }
-    return StringFunctions.overlay(input, replacement, start, length);
-  }
-
-  private Object evaluateReplace(Function func, GenericRecord record) {
-    List<Object> args = positionalArgs(func, record);
-    if (args.size() < 3) {
-      return null;
-    }
-    String input = toStringValue(args.get(0));
-    String search = toStringValue(args.get(1));
-    String replacement = toStringValue(args.get(2));
-    if (input == null || search == null || replacement == null) {
-      return null;
-    }
-    return StringFunctions.replace(input, search, replacement);
-  }
-
-  private Object evaluateChar(Function func, GenericRecord record) {
-    List<Object> args = positionalArgs(func, record);
-    if (args.isEmpty()) {
-      return null;
-    }
-    List<Object> codes = new ArrayList<>(args.size());
-    for (Object arg : args) {
-      Integer value = toInteger(arg);
-      if (value != null) {
-        codes.add(value);
-      }
-    }
-    return StringFunctions.charFromCodes(codes);
-  }
-
-  private Object evaluateUnicode(Function func, GenericRecord record) {
-    return StringFunctions.unicode(firstArgument(func, record));
-  }
-
-  private Object evaluateNumericFunction(String name, Function func, GenericRecord record) {
-    List<Object> args = positionalArgs(func, record);
-    return evaluate(name, args);
-    /*
-     * return switch (name) { case "ABS" -> unaryBigDecimal(args, BigDecimal::abs);
-     * case "CEIL", "CEILING" -> unaryBigDecimal(args, v -> v.setScale(0,
-     * RoundingMode.CEILING)); case "FLOOR" -> unaryBigDecimal(args, v ->
-     * v.setScale(0, RoundingMode.FLOOR)); case "ROUND" -> roundFunction(args); case
-     * "SQRT" -> sqrtFunction(args); case "TRUNC", "TRUNCATE" ->
-     * truncateFunction(args); case "MOD" -> modFunction(args); case "POWER", "POW"
-     * -> powerFunction(args); case "EXP" -> expFunction(args); case "LOG" ->
-     * logFunction(args); case "LOG10" -> log10Function(args); case "RAND", "RANDOM"
-     * -> randFunction(args); case "SIGN" -> signFunction(args); case "SIN" ->
-     * trigFunction(args, Math::sin); case "COS" -> trigFunction(args, Math::cos);
-     * case "TAN" -> trigFunction(args, Math::tan); case "ASIN" ->
-     * inverseTrigFunction(args, Math::asin); case "ACOS" ->
-     * inverseTrigFunction(args, Math::acos); case "ATAN" ->
-     * inverseTrigFunction(args, Math::atan); case "ATAN2" -> atan2Function(args);
-     * case "DEGREES" -> trigFunction(args, Math::toDegrees); case "RADIANS" ->
-     * trigFunction(args, Math::toRadians); default -> null; };
-     */
-  }
-
-  private Object evaluateNormalize(Function func, GenericRecord record) {
-    List<Object> args = positionalArgs(func, record);
-    if (args.isEmpty()) {
-      return null;
-    }
-    Object value = args.get(0);
-    Object form = args.size() > 1 ? args.get(1) : null;
-    return StringFunctions.normalize(value, form);
-  }
-
-  private Object evaluateRegexpLike(Function func, GenericRecord record) {
-    List<Object> args = positionalArgs(func, record);
-    if (args.size() < 2) {
-      return null;
-    }
-    String input = toStringValue(args.get(0));
-    String pattern = toStringValue(args.get(1));
-    if (input == null || pattern == null) {
-      return null;
-    }
-    int flags = 0;
-    if (args.size() > 2 && args.get(2) != null) {
-      String opts = args.get(2).toString().toLowerCase(Locale.ROOT);
-      for (int i = 0; i < opts.length(); i++) {
-        char opt = opts.charAt(i);
-        switch (opt) {
-          case 'i' -> flags |= Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE;
-          case 'm' -> flags |= Pattern.MULTILINE;
-          case 'n', 's' -> flags |= Pattern.DOTALL;
-          case 'x' -> flags |= Pattern.COMMENTS;
-          case 'c' -> {
-            // explicit case-sensitive flag, ignore since default
-          }
-          default -> {
-            // ignore unknown flags
-          }
-        }
-      }
-    }
-    Pattern compiled = Pattern.compile(pattern, flags);
-    return compiled.matcher(input).find();
-  }
-
   private Object evaluateLike(LikeExpression like, GenericRecord record) {
     Object left = evalInternal(like.getLeftExpression(), record);
     Object right = evalInternal(like.getRightExpression(), record);
@@ -974,43 +493,6 @@ public final class ValueExpressionEvaluator {
     return similar.isNot() != matches;
   }
 
-  private Object evaluateJsonValue(Function func, GenericRecord record) {
-    List<Object> args = positionalArgs(func, record);
-    if (args.size() < 2) {
-      return null;
-    }
-    return JsonExpressions.jsonValue(args.get(0), args.get(1));
-  }
-
-  private Object evaluateJsonQuery(Function func, GenericRecord record) {
-    List<Object> args = positionalArgs(func, record);
-    if (args.size() < 2) {
-      return null;
-    }
-    return JsonExpressions.jsonQuery(args.get(0), args.get(1));
-  }
-
-  private Object evaluateTrim(TrimFunction trim, GenericRecord record) {
-    TrimFunction.TrimSpecification specValue = trim.getTrimSpecification();
-    StringFunctions.TrimMode mode;
-    if (specValue == TrimFunction.TrimSpecification.LEADING) {
-      mode = StringFunctions.TrimMode.LEADING;
-    } else if (specValue == TrimFunction.TrimSpecification.TRAILING) {
-      mode = StringFunctions.TrimMode.TRAILING;
-    } else {
-      mode = StringFunctions.TrimMode.BOTH;
-    }
-    String characters = null;
-    String target;
-    if (trim.isUsingFromKeyword()) {
-      characters = toStringValue(trim.getExpression() == null ? null : evalInternal(trim.getExpression(), record));
-      target = toStringValue(trim.getFromExpression() == null ? null : evalInternal(trim.getFromExpression(), record));
-    } else {
-      target = toStringValue(trim.getExpression() == null ? null : evalInternal(trim.getExpression(), record));
-    }
-    return StringFunctions.trim(target, characters, mode);
-  }
-
   private Object evaluateJsonFunction(JsonFunction json, GenericRecord record) {
     JsonFunctionType type = json.getType();
     if (type == JsonFunctionType.OBJECT || type == JsonFunctionType.POSTGRES_OBJECT
@@ -1037,54 +519,20 @@ public final class ValueExpressionEvaluator {
         args.add(key);
         args.add(value);
       }
-      return JsonExpressions.jsonObject(args);
+      return JsonFunctions.jsonObject(args);
     }
     if (type == JsonFunctionType.ARRAY) {
       List<Object> values = new ArrayList<>();
       for (JsonFunctionExpression expr : json.getExpressions()) {
         values.add(evalInternal(expr.getExpression(), record));
       }
-      return JsonExpressions.jsonArray(values);
+      return JsonFunctions.jsonArray(values);
     }
     return LiteralConverter.toLiteral(json);
   }
 
-  private Object firstArgument(Function func, GenericRecord record) {
-    List<Object> args = positionalArgs(func, record);
-    if (args.isEmpty()) {
-      return null;
-    }
-    return args.getFirst();
-  }
-
-  private List<Object> positionalArgs(Function func, GenericRecord record) {
-    if (!(func.getParameters() instanceof ExpressionList<?> params) || params.isEmpty()) {
-      return List.of();
-    }
-    List<Object> values = new ArrayList<>(params.size());
-    for (Expression expr : params) {
-      values.add(evalInternal(expr, record));
-    }
-    return Collections.unmodifiableList(values);
-  }
-
-  private NamedArgResult namedArgs(Function func, GenericRecord record) {
-    if (!(func.getNamedParameters() instanceof NamedExpressionList<?> named)) {
-      return null;
-    }
-    List<String> names = new ArrayList<>(named.getNames());
-    List<Object> values = new ArrayList<>(names.size());
-    for (Expression expr : named) {
-      values.add(evalInternal(expr, record));
-    }
-    return new NamedArgResult(Collections.unmodifiableList(names), Collections.unmodifiableList(values));
-  }
-
   private String toStringValue(Object value) {
     return value == null ? null : value.toString();
-  }
-
-  private record NamedArgResult(List<String> names, List<Object> values) {
   }
 
   /**
@@ -1143,13 +591,13 @@ public final class ValueExpressionEvaluator {
       return null;
     }
     if (op == Operation.ADD) {
-      Object temporal = DateTimeExpressions.plus(leftVal, rightVal);
+      Object temporal = DateTimeFunctions.plus(leftVal, rightVal);
       if (temporal != null) {
         return temporal;
       }
     }
     if (op == Operation.SUB) {
-      Object temporal = DateTimeExpressions.minus(leftVal, rightVal);
+      Object temporal = DateTimeFunctions.minus(leftVal, rightVal);
       if (temporal != null) {
         return temporal;
       }

@@ -6,6 +6,7 @@
   - sub directories correspond to a schema
 - Improve test coverage
 - Improve metadata support and accuracy
+- refactored function support for increased coherence and reduced coupling
 
 ### 1.0.0, 2025-11-24
 - Additional Derived Tables support: 

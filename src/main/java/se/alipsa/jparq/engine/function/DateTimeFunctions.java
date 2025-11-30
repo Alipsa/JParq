@@ -1,4 +1,4 @@
-package se.alipsa.jparq.helper;
+package se.alipsa.jparq.engine.function;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -25,15 +25,16 @@ import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.statement.create.table.ColDataType;
+import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
- * Utility methods for evaluating SQL date/time expressions and literal casts.
+ * Utility methods for evaluating SQL date/time functions and literal casts.
  */
-public final class DateTimeExpressions {
+public final class DateTimeFunctions {
 
   private static final ZoneId DEFAULT_ZONE = ZoneId.systemDefault();
 
-  private DateTimeExpressions() {
+  private DateTimeFunctions() {
   }
 
   /**
