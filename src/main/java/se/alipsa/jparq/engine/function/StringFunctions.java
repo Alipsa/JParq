@@ -173,12 +173,19 @@ public final class StringFunctions {
     if (input == null || start == null || length == null || replacement == null) {
       return null;
     }
+    int[] cps = input.codePoints().toArray();
+    int[] replCps = replacement.codePoints().toArray();
     int from = Math.max(0, start.intValue() - 1);
     int len = Math.max(0, length.intValue());
-    int endExclusive = Math.min(input.length(), from + len);
-    String prefix = input.substring(0, Math.min(from, input.length()));
-    String suffix = endExclusive >= input.length() ? "" : input.substring(endExclusive);
-    return prefix + replacement + suffix;
+    int endExclusive = Math.min(cps.length, from + len);
+
+    StringBuilder sb = new StringBuilder();
+    sb.append(new String(cps, 0, Math.min(from, cps.length)));
+    sb.append(new String(replCps, 0, replCps.length));
+    if (endExclusive < cps.length) {
+      sb.append(new String(cps, endExclusive, cps.length - endExclusive));
+    }
+    return sb.toString();
   }
 
   /**
