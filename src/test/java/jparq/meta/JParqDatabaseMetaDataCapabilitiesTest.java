@@ -60,7 +60,7 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertTrue(metaData.getNumericFunctions().startsWith("ABS"));
     assertEquals(String.join(",", JParqDatabaseMetaData.SUPPORTED_STRING_FUNCTIONS), metaData.getStringFunctions());
     assertEquals("", metaData.getSystemFunctions());
-    assertEquals("", metaData.getTimeDateFunctions());
+    assertEquals(String.join(",", JParqDatabaseMetaData.SUPPORTED_DATETIME_FUNCTIONS), metaData.getTimeDateFunctions());
     assertEquals("", metaData.getSearchStringEscape());
     assertEquals("", metaData.getExtraNameCharacters());
     assertTrue(metaData.supportsGroupBy());

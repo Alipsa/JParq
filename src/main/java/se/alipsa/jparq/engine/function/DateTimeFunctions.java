@@ -11,6 +11,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.OffsetTime;
 import java.time.Period;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -55,8 +56,10 @@ public final class DateTimeFunctions {
     }
     return switch (key.toUpperCase(Locale.ROOT)) {
       case "CURRENT_DATE" -> Date.valueOf(LocalDate.now(DEFAULT_ZONE));
-      case "CURRENT_TIME" -> Time.valueOf(LocalTime.now(DEFAULT_ZONE));
-      case "CURRENT_TIMESTAMP" -> Timestamp.from(Instant.now());
+      case "CURRENT_TIME" -> OffsetTime.now(DEFAULT_ZONE);
+      case "LOCALTIME" -> LocalTime.now(DEFAULT_ZONE);
+      case "CURRENT_TIMESTAMP" -> OffsetDateTime.now(DEFAULT_ZONE);
+      case "LOCALTIMESTAMP" -> LocalDateTime.now(DEFAULT_ZONE);
       default -> key;
     };
   }

@@ -61,7 +61,9 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   /**
    * The JDBC datetime functions supported
    */
-  public static final List<String> SUPPORTED_DATETIME_FUNCTIONS = List.of();
+  public static final List<String> SUPPORTED_DATETIME_FUNCTIONS = List.of("CURDATE", "CURTIME", "NOW", "DAYOFWEEK",
+      "DAYOFMONTH", "DAYOFYEAR", "HOUR", "MINUTE", "MONTH", "QUARTER", "SECOND", "WEEK", "YEAR", "TIMESTAMPADD",
+      "TIMESTAMPDIFF");
 
   /**
    * The jdbc system function supported.

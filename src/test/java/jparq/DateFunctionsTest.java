@@ -98,21 +98,22 @@ public class DateFunctionsTest {
   @Test
   void testCurrentTime() {
     LocalTime start = LocalTime.now();
-    AtomicReference<Time> value = new AtomicReference<>();
+    AtomicReference<Object> value = new AtomicReference<>();
 
     jparqSql.query("SELECT CURRENT_TIME AS current_time FROM mtcars LIMIT 1", rs -> {
       try {
         assertTrue(rs.next(), "Expected a row");
-        value.set(rs.getTime("current_time"));
+        value.set(rs.getObject("current_time"));
       } catch (SQLException e) {
         fail(e);
       }
     });
 
     LocalTime end = LocalTime.now();
-    Time current = value.get();
+    Object current = value.get();
     assertNotNull(current, "CURRENT_TIME should produce a value");
-    LocalTime actual = current.toLocalTime();
+    assertInstanceOf(java.time.OffsetTime.class, current);
+    LocalTime actual = ((java.time.OffsetTime) current).toLocalTime();
     assertFalse(actual.isBefore(start.minusSeconds(1)), "Time should be within the expected window");
     assertFalse(actual.isAfter(end.plusSeconds(1)), "Time should be within the expected window");
   }
@@ -120,21 +121,22 @@ public class DateFunctionsTest {
   @Test
   void testCurrentTimestamp() {
     Instant start = Instant.now();
-    AtomicReference<Timestamp> value = new AtomicReference<>();
+    AtomicReference<Object> value = new AtomicReference<>();
 
     jparqSql.query("SELECT CURRENT_TIMESTAMP AS current_ts FROM mtcars LIMIT 1", rs -> {
       try {
         assertTrue(rs.next(), "Expected a row");
-        value.set(rs.getTimestamp("current_ts"));
+        value.set(rs.getObject("current_ts"));
       } catch (SQLException e) {
         fail(e);
       }
     });
 
     Instant end = Instant.now();
-    Timestamp current = value.get();
+    Object current = value.get();
     assertNotNull(current, "CURRENT_TIMESTAMP should produce a value");
-    Instant actual = current.toInstant();
+    assertInstanceOf(java.time.OffsetDateTime.class, current);
+    Instant actual = ((java.time.OffsetDateTime) current).toInstant();
     assertFalse(actual.isBefore(start.minusSeconds(1)), "Timestamp should not precede the captured window");
     assertFalse(actual.isAfter(end.plusSeconds(1)), "Timestamp should not exceed the captured window");
   }

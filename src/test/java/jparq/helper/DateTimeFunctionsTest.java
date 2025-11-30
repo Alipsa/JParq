@@ -38,7 +38,7 @@ public class DateTimeFunctionsTest {
     TimeKeyExpression expr = new TimeKeyExpression();
     expr.setStringValue("CURRENT_TIME");
     Object result = DateTimeFunctions.evaluateTimeKey(expr);
-    assertInstanceOf(Time.class, result);
+    assertInstanceOf(java.time.OffsetTime.class, result);
   }
 
   @Test
@@ -46,12 +46,10 @@ public class DateTimeFunctionsTest {
     TimeKeyExpression expr = new TimeKeyExpression();
     expr.setStringValue("CURRENT_TIMESTAMP");
     Object result = DateTimeFunctions.evaluateTimeKey(expr);
-    assertInstanceOf(Timestamp.class, result);
-    // Allow for some leeway as system clock can tick between getting current
-    // Instant and creating Timestamp.
-    // Check that the difference is within a reasonable range (e.g., 2 seconds).
+    assertInstanceOf(java.time.OffsetDateTime.class, result);
+    // Allow for some leeway as system clock can tick between getting current Instant and creating the result.
     long currentEpochSecond = Instant.now().getEpochSecond();
-    long resultEpochSecond = ((Timestamp) result).toInstant().getEpochSecond();
+    long resultEpochSecond = ((java.time.OffsetDateTime) result).toInstant().getEpochSecond();
     assertTrue(Math.abs(currentEpochSecond - resultEpochSecond) <= 2);
   }
 
@@ -61,6 +59,17 @@ public class DateTimeFunctionsTest {
     expr.setStringValue("UNKNOWN_KEY");
     Object result = DateTimeFunctions.evaluateTimeKey(expr);
     assertEquals("UNKNOWN_KEY", result);
+  }
+
+  @Test
+  void testEvaluateLocalTimeAndTimestamp() {
+    TimeKeyExpression lt = new TimeKeyExpression();
+    lt.setStringValue("LOCALTIME");
+    assertInstanceOf(LocalTime.class, DateTimeFunctions.evaluateTimeKey(lt));
+
+    TimeKeyExpression lts = new TimeKeyExpression();
+    lts.setStringValue("LOCALTIMESTAMP");
+    assertInstanceOf(LocalDateTime.class, DateTimeFunctions.evaluateTimeKey(lts));
   }
 
   @Test
