@@ -1,6 +1,11 @@
 # Version history
 
 ### 1.1.0, in progress
+- improved schema support
+  - parquet files in the root dir will have the schema PUBLIC
+  - sub directories correspond to a schema
+- Improve test coverage
+- Improve metadata support and accuracy
 
 ### 1.0.0, 2025-11-24
 - Additional Derived Tables support: 

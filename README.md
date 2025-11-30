@@ -214,6 +214,8 @@ The following SQL statements are supported:
 ## Roadmap: Might be implemented in the future
 
 ### Non standard extensions
+- Allow omission of from clause in some cases
+  - Several popular databases allow you to omit the FROM clause when you are only selecting literal values, performing arithmetic, or evaluating scalar functions (functions that return a single value). In these cases, the query returns a single row e.g: `SELECT CURRENT_DATE as cur_date`.
 - Support for variable assignment and use within SQL scripts.
   - @variable_name syntax to define a variable that exists for the duration of the connection
     - Example (direct assignment, connection scope):
@@ -222,6 +224,7 @@ The following SQL statements are supported:
       SELECT * FROM anotherTable LIMIT @myVar;
 - PIVOT and UNPIVOT operators.
 - TABLESAMPLE clause for sampling rows from a table.
+- Support for modular encryption via a keystore and/or a Key Management Service
 
 ## Out of scope (will not be supported, at least not in the foreseeable future)
 - Data modification statements (INSERT, UPDATE, DELETE, MERGE)

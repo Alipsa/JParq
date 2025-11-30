@@ -68,7 +68,7 @@ import se.alipsa.jparq.engine.SqlParser.OrderKey;
 import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.LiteralConverter;
-import se.alipsa.jparq.helper.StringExpressions;
+import se.alipsa.jparq.helper.StringFunctions;
 
 /**
  * Utilities for detecting and evaluating aggregate functions in SELECT lists.
@@ -512,7 +512,17 @@ public final class AggregateFunctions {
     return List.copyOf(keys);
   }
 
-  private static AggregateSpec aggregateSpec(Function func, String label) {
+  /**
+   * Build an aggregate specification from a function expression.
+   *
+   * @param func
+   *          function expression to analyze
+   * @param label
+   *          projection label for the aggregate
+   * @return aggregate specification or {@code null} when the function is not a
+   *         supported aggregate
+   */
+  public static AggregateSpec aggregateSpec(Function func, String label) {
     AggregateType type = AggregateType.from(func.getName());
     if (type == null) {
       return null;
@@ -749,7 +759,16 @@ public final class AggregateFunctions {
     return false;
   }
 
-  private static boolean expressionsEquivalent(Expression first, Expression second) {
+  /**
+   * Compare two Expression to see if they are equivalent or not.
+   *
+   * @param first
+   *          the left Expression to compare
+   * @param second
+   *          the right Expression to compare
+   * @return true if they are equivalent, otherwise false
+   */
+  public static boolean expressionsEquivalent(Expression first, Expression second) {
     if (first == second) {
       return true;
     }
@@ -887,7 +906,16 @@ public final class AggregateFunctions {
         && expressionsEquivalent(left.getRightExpression(), right.getRightExpression());
   }
 
-  private static boolean columnsEquivalent(Column left, Column right) {
+  /**
+   * Compare two columns to see if they are equivalent or not.
+   *
+   * @param left
+   *          the left column to compare
+   * @param right
+   *          the right column to compare
+   * @return true if they are equivalent, otherwise false
+   */
+  public static boolean columnsEquivalent(Column left, Column right) {
     if (left == null || right == null) {
       return left == right;
     }
@@ -899,7 +927,16 @@ public final class AggregateFunctions {
     return tablesEquivalent(left.getTable(), right.getTable());
   }
 
-  private static boolean tablesEquivalent(Table left, Table right) {
+  /**
+   * Compare two Tables to see if they are equivalent or not.
+   *
+   * @param left
+   *          the left Table to compare
+   * @param right
+   *          the right Table to compare
+   * @return true if they are equivalent, otherwise false
+   */
+  public static boolean tablesEquivalent(Table left, Table right) {
     if (left == right) {
       return true;
     }
@@ -912,7 +949,16 @@ public final class AggregateFunctions {
     return Objects.equals(tableName(left), tableName(right));
   }
 
-  private static boolean functionsEquivalent(Function left, Function right) {
+  /**
+   * Compare two Function to see if they are equivalent or not.
+   *
+   * @param left
+   *          the left Function to compare
+   * @param right
+   *          the right Function to compare
+   * @return true if they are equivalent, otherwise false
+   */
+  public static boolean functionsEquivalent(Function left, Function right) {
     if (!Objects.equals(normalizeFunctionName(left.getName()), normalizeFunctionName(right.getName()))) {
       return false;
     }
@@ -1987,10 +2033,10 @@ public final class AggregateFunctions {
       }
       boolean matches;
       if (effective == LikeExpression.KeyWord.SIMILAR_TO) {
-        matches = StringExpressions.similarTo(leftText, pattern, escapeChar);
+        matches = StringFunctions.similarTo(leftText, pattern, escapeChar);
       } else {
         boolean caseInsensitive = effective == LikeExpression.KeyWord.ILIKE;
-        matches = StringExpressions.like(leftText, pattern, caseInsensitive, escapeChar);
+        matches = StringFunctions.like(leftText, pattern, caseInsensitive, escapeChar);
       }
       return like.isNot() != matches;
     }
@@ -2064,15 +2110,7 @@ public final class AggregateFunctions {
       if (leftVal == null || rightVal == null) {
         return null;
       }
-      BigDecimal leftNum = toBigDecimal(leftVal);
-      BigDecimal rightNum = toBigDecimal(rightVal);
-      return switch (op) {
-        case ADD -> leftNum.add(rightNum);
-        case SUB -> leftNum.subtract(rightNum);
-        case MUL -> leftNum.multiply(rightNum);
-        case DIV -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.divide(rightNum, MathContext.DECIMAL64);
-        case MOD -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.remainder(rightNum);
-      };
+      return calculate(leftVal, rightVal, op);
     }
 
     private Object evaluateScalarSubquery(Select subSelect) {
@@ -2200,23 +2238,28 @@ public final class AggregateFunctions {
       }
       return labelLookup.get(name.toLowerCase(Locale.ROOT));
     }
-
-    private BigDecimal toBigDecimal(Object value) {
-      if (value instanceof BigDecimal bd) {
-        return bd;
-      }
-      if (value instanceof Number num) {
-        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
-          return BigDecimal.valueOf(num.longValue());
-        }
-        return BigDecimal.valueOf(num.doubleValue());
-      }
-      return new BigDecimal(value.toString());
-    }
-
-    private enum Operation {
-      ADD, SUB, MUL, DIV, MOD
-    }
   }
 
+  /**
+   * Perform the calculation suitable for the operation.
+   *
+   * @param leftVal
+   *          the value on the left
+   * @param rightVal
+   *          the value on the right
+   * @param op
+   *          the operation to perform (ADD, SUB, MUL etc.)
+   * @return the result of the calculation.
+   */
+  public static Object calculate(Object leftVal, Object rightVal, Operation op) {
+    BigDecimal leftNum = toBigDecimal(leftVal);
+    BigDecimal rightNum = toBigDecimal(rightVal);
+    return switch (op) {
+      case ADD -> leftNum.add(rightNum);
+      case SUB -> leftNum.subtract(rightNum);
+      case MUL -> leftNum.multiply(rightNum);
+      case DIV -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.divide(rightNum, MathContext.DECIMAL64);
+      case MOD -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.remainder(rightNum);
+    };
+  }
 }

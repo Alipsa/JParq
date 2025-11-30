@@ -9,9 +9,19 @@ import java.util.Locale;
 import java.util.regex.Pattern;
 
 /** Utility methods implementing SQL string functions. */
-public final class StringExpressions {
+public final class StringFunctions {
 
-  private StringExpressions() {
+  /** Enumeration describing which sides should be trimmed. */
+  public enum TrimMode {
+    /** Trim characters from the start of the input only. */
+    LEADING,
+    /** Trim characters from the end of the input only. */
+    TRAILING,
+    /** Trim characters from both the start and end of the input. */
+    BOTH
+  }
+
+  private StringFunctions() {
   }
 
   /**
@@ -191,16 +201,6 @@ public final class StringExpressions {
    */
   public static String lower(Object value) {
     return value == null ? null : value.toString().toLowerCase(Locale.ROOT);
-  }
-
-  /** Enumeration describing which sides should be trimmed. */
-  public enum TrimMode {
-    /** Trim characters from the start of the input only. */
-    LEADING,
-    /** Trim characters from the end of the input only. */
-    TRAILING,
-    /** Trim characters from both the start and end of the input. */
-    BOTH
   }
 
   /**

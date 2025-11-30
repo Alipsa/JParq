@@ -126,6 +126,17 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
         long nanos = Math.floorMod(nanosTotal, 1_000_000_000L);
         return of(Period.ZERO, Duration.ofSeconds(seconds, nanos));
       }
+      case "day to second": {
+        String[] parts = amt.split(" ");
+        if (parts.length != 2) {
+          throw new IllegalArgumentException("Invalid DAY TO SECOND interval literal: " + amountLiteral);
+        }
+        long days = new BigDecimal(parts[0]).longValueExact();
+        LocalTime timePart = LocalTime.parse(parts[1]);
+        Duration duration = Duration.ofDays(days).plusHours(timePart.getHour()).plusMinutes(timePart.getMinute())
+            .plusSeconds(timePart.getSecond());
+        return of(Period.ZERO, duration);
+      }
       default:
         throw new IllegalArgumentException("Unsupported interval unit: " + unitRaw);
     }
@@ -223,13 +234,6 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
     Objects.requireNonNull(start, "start");
     Objects.requireNonNull(end, "end");
 
-    LocalDateTime startDt = toDateTime(start);
-    LocalDateTime endDt = toDateTime(end);
-    if (startDt != null && endDt != null) {
-      Duration diff = Duration.between(startDt, endDt);
-      return of(Period.ZERO, diff);
-    }
-
     if (start instanceof LocalDate sDate && end instanceof LocalDate eDate) {
       Period diff = Period.between(sDate, eDate);
       return of(diff, Duration.ZERO);
@@ -237,6 +241,13 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
 
     if (start instanceof LocalTime sTime && end instanceof LocalTime eTime) {
       Duration diff = Duration.between(sTime, eTime);
+      return of(Period.ZERO, diff);
+    }
+
+    LocalDateTime startDt = toDateTime(start);
+    LocalDateTime endDt = toDateTime(end);
+    if (startDt != null && endDt != null) {
+      Duration diff = Duration.between(startDt, endDt);
       return of(Period.ZERO, diff);
     }
 
@@ -250,9 +261,6 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
     if (accessor instanceof LocalDate ld) {
       return ld.atStartOfDay();
     }
-    if (accessor instanceof LocalTime) {
-      return null;
-    }
     if (accessor instanceof Instant instant) {
       return LocalDateTime.ofInstant(instant, UTC);
     }
@@ -261,9 +269,6 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
     }
     if (accessor instanceof java.sql.Date date) {
       return date.toLocalDate().atStartOfDay();
-    }
-    if (accessor instanceof java.sql.Time time) {
-      return null;
     }
     return null;
   }

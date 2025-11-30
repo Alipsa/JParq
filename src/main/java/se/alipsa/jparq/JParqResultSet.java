@@ -1387,4 +1387,9 @@ public class JParqResultSet extends ResultSetAdapter {
   public int getConcurrency() {
     return CONCUR_READ_ONLY;
   }
+
+  @Override
+  public boolean isClosed() throws SQLException {
+    return closed;
+  }
 }

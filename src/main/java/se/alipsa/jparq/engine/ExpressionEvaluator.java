@@ -41,7 +41,7 @@ import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.window.WindowState;
-import se.alipsa.jparq.helper.StringExpressions;
+import se.alipsa.jparq.helper.StringFunctions;
 
 /**
  * Evaluates SQL expressions (via JSqlParser) against Avro
@@ -301,10 +301,10 @@ public final class ExpressionEvaluator {
     }
     boolean matches;
     if (effectiveKeyword == LikeExpression.KeyWord.SIMILAR_TO) {
-      matches = StringExpressions.similarTo(left, pat, escapeChar);
+      matches = StringFunctions.similarTo(left, pat, escapeChar);
     } else {
       boolean caseInsensitive = effectiveKeyword == LikeExpression.KeyWord.ILIKE;
-      matches = StringExpressions.like(left, pat, caseInsensitive, escapeChar);
+      matches = StringFunctions.like(left, pat, caseInsensitive, escapeChar);
     }
     return like.isNot() != matches;
   }
@@ -329,7 +329,7 @@ public final class ExpressionEvaluator {
       escapeChar = escape.charAt(0);
     }
 
-    boolean matches = StringExpressions.similarTo(left, pattern, escapeChar);
+    boolean matches = StringFunctions.similarTo(left, pattern, escapeChar);
     return similar.isNot() != matches;
   }
 

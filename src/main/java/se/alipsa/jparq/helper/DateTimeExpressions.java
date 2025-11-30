@@ -200,7 +200,7 @@ public final class DateTimeExpressions {
       return ts.toLocalDateTime();
     }
     if (value instanceof Date d) {
-      return d.toLocalDate().atStartOfDay();
+      return d.toLocalDate();
     }
     if (value instanceof Time t) {
       return t.toLocalTime();

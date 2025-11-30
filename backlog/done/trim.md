@@ -1,0 +1,1 @@
+LTRIM and RTRIM are supported already but TRIM is not.
