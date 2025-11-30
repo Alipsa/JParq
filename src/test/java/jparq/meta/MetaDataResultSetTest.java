@@ -44,6 +44,7 @@ public class MetaDataResultSetTest {
     }
   }
 
+  @Test
   public void testGetObject() throws SQLException {
     String[] headers = {
         "A", "B"
