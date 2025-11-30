@@ -749,7 +749,14 @@ public final class AggregateFunctions {
     return false;
   }
 
-  private static boolean expressionsEquivalent(Expression first, Expression second) {
+  /**
+   * Compare two Expression to see if they are equivalent or not.
+   *
+   * @param first the left Expression to compare
+   * @param second the right Expression to compare
+   * @return true if they are equivalent, otherwise false
+   */
+  public static boolean expressionsEquivalent(Expression first, Expression second) {
     if (first == second) {
       return true;
     }
@@ -887,7 +894,14 @@ public final class AggregateFunctions {
         && expressionsEquivalent(left.getRightExpression(), right.getRightExpression());
   }
 
-  private static boolean columnsEquivalent(Column left, Column right) {
+  /**
+   * Compare two columns to see if they are equivalent or not.
+   *
+   * @param left the left column to compare
+   * @param right the right column to compare
+   * @return true if they are equivalent, otherwise false
+   */
+  public static boolean columnsEquivalent(Column left, Column right) {
     if (left == null || right == null) {
       return left == right;
     }
@@ -899,6 +913,13 @@ public final class AggregateFunctions {
     return tablesEquivalent(left.getTable(), right.getTable());
   }
 
+  /**
+   * Compare two Tables to see if they are equivalent or not.
+   *
+   * @param left the left Table to compare
+   * @param right the right Table to compare
+   * @return true if they are equivalent, otherwise false
+   */
   private static boolean tablesEquivalent(Table left, Table right) {
     if (left == right) {
       return true;
@@ -912,7 +933,7 @@ public final class AggregateFunctions {
     return Objects.equals(tableName(left), tableName(right));
   }
 
-  private static boolean functionsEquivalent(Function left, Function right) {
+  public static boolean functionsEquivalent(Function left, Function right) {
     if (!Objects.equals(normalizeFunctionName(left.getName()), normalizeFunctionName(right.getName()))) {
       return false;
     }

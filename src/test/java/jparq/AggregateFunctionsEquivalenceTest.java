@@ -2,13 +2,11 @@ package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static se.alipsa.jparq.engine.AggregateFunctions.*;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.junit.jupiter.api.Test;
-import se.alipsa.jparq.engine.AggregateFunctions;
 
 /**
  * Tests for the expression equivalence logic used when matching aggregate
@@ -21,9 +19,9 @@ public class AggregateFunctionsEquivalenceTest {
     Expression positiveLike = CCJSqlParserUtil.parseExpression("col LIKE 'a%'");
     Expression negativeLike = CCJSqlParserUtil.parseExpression("col NOT LIKE 'a%'");
 
-    assertTrue(equivalent(positiveLike, positiveLike));
-    assertTrue(equivalent(negativeLike, negativeLike));
-    assertFalse(equivalent(positiveLike, negativeLike));
+    assertTrue(expressionsEquivalent(positiveLike, positiveLike));
+    assertTrue(expressionsEquivalent(negativeLike, negativeLike));
+    assertFalse(expressionsEquivalent(positiveLike, negativeLike));
   }
 
   @Test
@@ -31,46 +29,38 @@ public class AggregateFunctionsEquivalenceTest {
     Expression positiveSimilarTo = CCJSqlParserUtil.parseExpression("col SIMILAR TO 'a%'");
     Expression negativeSimilarTo = CCJSqlParserUtil.parseExpression("col NOT SIMILAR TO 'a%'");
 
-    assertTrue(equivalent(positiveSimilarTo, positiveSimilarTo));
-    assertTrue(equivalent(negativeSimilarTo, negativeSimilarTo));
-    assertFalse(equivalent(positiveSimilarTo, negativeSimilarTo));
+    assertTrue(expressionsEquivalent(positiveSimilarTo, positiveSimilarTo));
+    assertTrue(expressionsEquivalent(negativeSimilarTo, negativeSimilarTo));
+    assertFalse(expressionsEquivalent(positiveSimilarTo, negativeSimilarTo));
   }
 
   @Test
   void likeExpressionsRespectEscapeClause() throws Exception {
     Expression withEscape = CCJSqlParserUtil.parseExpression("col LIKE 'a!%' ESCAPE '!'");
-    assertTrue(equivalent(withEscape, withEscape));
+    assertTrue(expressionsEquivalent(withEscape, withEscape));
 
     Expression withoutEscape = CCJSqlParserUtil.parseExpression("col LIKE 'a!%'");
-    assertTrue(equivalent(withoutEscape, withoutEscape));
-    assertFalse(equivalent(withEscape, withoutEscape),
+    assertTrue(expressionsEquivalent(withoutEscape, withoutEscape));
+    assertFalse(expressionsEquivalent(withEscape, withoutEscape),
         "LIKE with ESCAPE should not be equivalent to LIKE without ESCAPE");
 
     Expression withDifferentEscape = CCJSqlParserUtil.parseExpression("col LIKE 'a!%' ESCAPE '\\'");
-    assertFalse(equivalent(withEscape, withDifferentEscape),
+    assertFalse(expressionsEquivalent(withEscape, withDifferentEscape),
         "LIKE with different ESCAPE characters should not be equivalent");
   }
 
   @Test
   void similarToExpressionsRespectEscapeClause() throws Exception {
     Expression withEscape = CCJSqlParserUtil.parseExpression("col SIMILAR TO 'a!%' ESCAPE '!'");
-    assertTrue(equivalent(withEscape, withEscape));
+    assertTrue(expressionsEquivalent(withEscape, withEscape));
 
     Expression withoutEscape = CCJSqlParserUtil.parseExpression("col SIMILAR TO 'a!%'");
-    assertTrue(equivalent(withoutEscape, withoutEscape));
-    assertFalse(equivalent(withEscape, withoutEscape),
+    assertTrue(expressionsEquivalent(withoutEscape, withoutEscape));
+    assertFalse(expressionsEquivalent(withEscape, withoutEscape),
         "SIMILAR TO with ESCAPE should not be equivalent to SIMILAR TO without ESCAPE");
 
     Expression withDifferentEscape = CCJSqlParserUtil.parseExpression("col SIMILAR TO 'a!%' ESCAPE '\\'");
-    assertFalse(equivalent(withEscape, withDifferentEscape),
+    assertFalse(expressionsEquivalent(withEscape, withDifferentEscape),
         "SIMILAR TO with different ESCAPE strings should not be equivalent");
-  }
-
-  private boolean equivalent(Expression first, Expression second)
-      throws NoSuchMethodException, InvocationTargetException, IllegalAccessException {
-    Method method = AggregateFunctions.class.getDeclaredMethod("expressionsEquivalent", Expression.class,
-        Expression.class);
-    method.setAccessible(true);
-    return (boolean) method.invoke(null, first, second);
   }
 }
