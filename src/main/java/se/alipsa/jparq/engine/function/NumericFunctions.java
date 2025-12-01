@@ -264,7 +264,7 @@ public class NumericFunctions {
       return null;
     }
     double tangent = Math.tan(value);
-    if (Double.isNaN(tangent)) {
+    if (Double.isNaN(tangent) || tangent == 0.0) {
       return null;
     }
     return 1d / tangent;
