@@ -7,6 +7,7 @@
 - Improve test coverage
 - Improve metadata support and accuracy
 - refactored function support for increased coherence and reduced coupling
+- add function mapping from jdbc escape syntax to sql standard function names for numeric, string, datetime, and system functions
 
 ### 1.0.0, 2025-11-24
 - Additional Derived Tables support: 

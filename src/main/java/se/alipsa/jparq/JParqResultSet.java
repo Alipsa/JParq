@@ -43,6 +43,7 @@ import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
+import se.alipsa.jparq.engine.function.SystemFunctions;
 import se.alipsa.jparq.engine.window.AvgWindow;
 import se.alipsa.jparq.engine.window.CountWindow;
 import se.alipsa.jparq.engine.window.CumeDistWindow;
@@ -1135,6 +1136,8 @@ public class JParqResultSet extends ResultSetAdapter {
       }
     } catch (Exception ignore) {
       // intentionally ignored
+    } finally {
+      SystemFunctions.clearContext();
     }
   }
 

@@ -65,7 +65,7 @@ class JParqDatabaseMetaDataCapabilitiesTest {
         + "{fn LEFT}, {fn LENGTH}, {fn LOCATE}, {fn LTRIM}, {fn REPEAT}, {fn REPLACE}, {fn RIGHT}, {fn RTRIM}, "
         + "{fn SOUNDEX}, {fn SPACE}, {fn SUBSTRING}, {fn UCASE}";
     assertEquals(expectedStringFunctions, metaData.getStringFunctions());
-    assertEquals("", metaData.getSystemFunctions());
+    assertEquals("{fn DATABASE}, {fn IFNULL}, {fn USER}", metaData.getSystemFunctions());
     String expectedTimeDateFunctions = "{fn CURDATE}, {fn CURTIME}, {fn NOW}, {fn DAYOFWEEK}, {fn DAYOFMONTH}, "
         + "{fn DAYOFYEAR}, {fn HOUR}, {fn MINUTE}, {fn MONTH}, {fn QUARTER}, {fn SECOND}, {fn WEEK}, {fn YEAR}, "
         + "{fn TIMESTAMPADD}, {fn TIMESTAMPDIFF}";

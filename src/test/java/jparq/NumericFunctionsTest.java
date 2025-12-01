@@ -33,10 +33,12 @@ public class NumericFunctionsTest {
   private static final double EPSILON = 1e-9;
 
   static JParqSql jparqSql;
+  private static String databaseName;
 
   @BeforeAll
   static void setup() throws IOException {
     Path numbers = createNumbersParquet();
+    databaseName = numbers.getParent().getFileName().toString();
     jparqSql = new JParqSql("jdbc:jparq:" + numbers.getParent().toAbsolutePath());
   }
 
@@ -164,6 +166,51 @@ public class NumericFunctionsTest {
         assertEquals(45.0, rs.getDouble("deg_val"), EPSILON, "DEGREES should convert from radians");
         assertEquals(Math.PI / 4, rs.getDouble("rad_val"), EPSILON, "RADIANS should convert to radians");
 
+        assertFalse(rs.next());
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void testSystemFunctionEscapes() {
+    String sql = "SELECT {fn DATABASE} AS db_name, {fn IFNULL(val, 0)} AS ifnull_val, "
+        + "{fn USER} AS user_name FROM numbers";
+
+    String expectedUser = System.getProperty("user.name");
+    jparqSql.query(sql, rs -> {
+      try {
+        assertTrue(rs.next());
+        assertEquals(databaseName, rs.getString("db_name"));
+        assertEquals(-3.75, rs.getDouble("ifnull_val"), EPSILON);
+        assertEquals(expectedUser, rs.getString("user_name"));
+        assertFalse(rs.next());
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void testSystemFunctionsWithNestedQueries() {
+    String sql = """
+        SELECT {fn DATABASE} AS outer_db, {fn USER} AS outer_user,
+          (SELECT {fn DATABASE} FROM numbers n2) AS inner_db,
+          (SELECT {fn USER} FROM numbers n3) AS inner_user,
+          (SELECT COUNT(*) FROM numbers n4
+             WHERE val IN (SELECT val FROM numbers WHERE {fn DATABASE} = {fn DATABASE})) AS nested_count
+        FROM numbers
+        """;
+    String expectedUser = System.getProperty("user.name");
+    jparqSql.query(sql, rs -> {
+      try {
+        assertTrue(rs.next());
+        assertEquals(databaseName, rs.getString("outer_db"));
+        assertEquals(databaseName, rs.getString("inner_db"));
+        assertEquals(expectedUser, rs.getString("outer_user"));
+        assertEquals(expectedUser, rs.getString("inner_user"));
+        assertEquals(1, rs.getInt("nested_count"));
         assertFalse(rs.next());
       } catch (SQLException e) {
         fail(e);

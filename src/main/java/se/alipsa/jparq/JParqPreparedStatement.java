@@ -74,6 +74,7 @@ import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.UnnestTableBuilder;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
+import se.alipsa.jparq.engine.function.SystemFunctions;
 import se.alipsa.jparq.engine.window.AvgWindow;
 import se.alipsa.jparq.engine.window.CumeDistWindow;
 import se.alipsa.jparq.engine.window.DenseRankWindow;
@@ -339,64 +340,74 @@ class JParqPreparedStatement implements PreparedStatement {
   @SuppressWarnings("PMD.CloseResource")
   @Override
   public ResultSet executeQuery() throws SQLException {
-    if (setOperationQuery) {
-      JParqResultSet rs = executeSetOperation();
+    JParqDatabaseMetaData metaData = (JParqDatabaseMetaData) stmt.getConn().getMetaData();
+    SystemFunctions.setContext(metaData.getDatabaseName(), metaData.getUserName());
+    try {
+      if (setOperationQuery) {
+        JParqResultSet rs = executeSetOperation();
+        stmt.setCurrentRs(rs);
+        return rs;
+      }
+      RecordReader reader;
+      String resultTableName;
+      String resultSchema = tableSchema;
+      String resultCatalog = tableCatalog;
+      SqlParser.TableReference baseRef = (tableReferences == null || tableReferences.isEmpty())
+          ? null
+          : tableReferences.get(0);
+      try {
+        if (joinQuery) {
+          JoinRecordReader joinReader = buildJoinReader();
+          reader = joinReader;
+          resultTableName = buildJoinTableName();
+          resultSchema = null;
+        } else if (baseCteResult != null) {
+          resultTableName = parsedSelect.tableAlias() != null ? parsedSelect.tableAlias() : parsedSelect.table();
+          if ((resultTableName == null || resultTableName.isBlank()) && baseRef != null && baseRef.tableName() != null
+              && !baseRef.tableName().isBlank()) {
+            resultTableName = baseRef.tableName();
+          }
+          reader = new InMemoryRecordReader(baseCteResult.rows(), baseCteResult.schema(), resultTableName);
+        } else {
+          ParquetReader.Builder<GenericRecord> builder = ParquetReader
+              .<GenericRecord>builder(new AvroReadSupport<>(), path).withConf(conf);
+
+          if (parquetPredicate.isPresent()) {
+            builder = builder.withFilter(FilterCompat.get(parquetPredicate.get()));
+          }
+
+          ParquetReader<GenericRecord> parquetReader = builder.build();
+          reader = new ParquetRecordReaderAdapter(parquetReader);
+          resultTableName = baseTableLocation != null ? baseTableLocation.tableName() : file.getName();
+        }
+        if (!joinQuery) {
+          reader = applyTableSample(baseRef == null ? null : baseRef.tableSample(), reader);
+        }
+      } catch (SQLException e) {
+        throw e;
+      } catch (Exception e) {
+        throw new SQLException("Failed to open parquet data source", e);
+      }
+
+      // Derive label/physical lists from the parsed SELECT
+      // Convention from SqlParser: labels() empty => SELECT *
+      final List<String> labels = parsedSelect.labels().isEmpty() ? null : parsedSelect.labels();
+      final List<String> physical = parsedSelect.labels().isEmpty() ? null : parsedSelect.columnNames();
+      // Create the result set, passing reader, select plan, residual filter,
+      // plus projection labels and physical names (for metadata & value lookups)
+      SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
+      JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, resultCatalog,
+          residualExpression, labels, physical, subqueryExecutor);
+
       stmt.setCurrentRs(rs);
       return rs;
-    }
-    RecordReader reader;
-    String resultTableName;
-    String resultSchema = tableSchema;
-    String resultCatalog = tableCatalog;
-    SqlParser.TableReference baseRef = (tableReferences == null || tableReferences.isEmpty())
-        ? null
-        : tableReferences.get(0);
-    try {
-      if (joinQuery) {
-        JoinRecordReader joinReader = buildJoinReader();
-        reader = joinReader;
-        resultTableName = buildJoinTableName();
-        resultSchema = null;
-      } else if (baseCteResult != null) {
-        resultTableName = parsedSelect.tableAlias() != null ? parsedSelect.tableAlias() : parsedSelect.table();
-        if ((resultTableName == null || resultTableName.isBlank()) && baseRef != null && baseRef.tableName() != null
-            && !baseRef.tableName().isBlank()) {
-          resultTableName = baseRef.tableName();
-        }
-        reader = new InMemoryRecordReader(baseCteResult.rows(), baseCteResult.schema(), resultTableName);
-      } else {
-        ParquetReader.Builder<GenericRecord> builder = ParquetReader
-            .<GenericRecord>builder(new AvroReadSupport<>(), path).withConf(conf);
-
-        if (parquetPredicate.isPresent()) {
-          builder = builder.withFilter(FilterCompat.get(parquetPredicate.get()));
-        }
-
-        ParquetReader<GenericRecord> parquetReader = builder.build();
-        reader = new ParquetRecordReaderAdapter(parquetReader);
-        resultTableName = baseTableLocation != null ? baseTableLocation.tableName() : file.getName();
-      }
-      if (!joinQuery) {
-        reader = applyTableSample(baseRef == null ? null : baseRef.tableSample(), reader);
-      }
     } catch (SQLException e) {
+      SystemFunctions.clearContext();
       throw e;
-    } catch (Exception e) {
-      throw new SQLException("Failed to open parquet data source", e);
+    } catch (RuntimeException e) {
+      SystemFunctions.clearContext();
+      throw e;
     }
-
-    // Derive label/physical lists from the parsed SELECT
-    // Convention from SqlParser: labels() empty => SELECT *
-    final List<String> labels = parsedSelect.labels().isEmpty() ? null : parsedSelect.labels();
-    final List<String> physical = parsedSelect.labels().isEmpty() ? null : parsedSelect.columnNames();
-    // Create the result set, passing reader, select plan, residual filter,
-    // plus projection labels and physical names (for metadata & value lookups)
-    SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
-    JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, resultCatalog,
-        residualExpression, labels, physical, subqueryExecutor);
-
-    stmt.setCurrentRs(rs);
-    return rs;
   }
 
   @Override

@@ -1,9 +1,14 @@
 package se.alipsa.jparq.engine.function;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
+
 /**
  * Collection of JDBC system functions (e.g. database metadata helpers).
  */
 public final class SystemFunctions {
+
+  private static final ThreadLocal<Deque<SystemContext>> CONTEXT = ThreadLocal.withInitial(ArrayDeque::new);
 
   private SystemFunctions() {
   }
@@ -14,7 +19,8 @@ public final class SystemFunctions {
    * @return the database identifier or {@code "JParq"} when unknown
    */
   public static String database() {
-    return "JParq";
+    SystemContext ctx = currentContext();
+    return ctx != null && ctx.databaseName() != null && !ctx.databaseName().isBlank() ? ctx.databaseName() : "JParq";
   }
 
   /**
@@ -24,7 +30,9 @@ public final class SystemFunctions {
    *         unavailable
    */
   public static String user() {
-    return System.getProperty("user.name");
+    SystemContext ctx = currentContext();
+    String systemUser = System.getProperty("user.name");
+    return ctx != null && ctx.userName() != null && !ctx.userName().isBlank() ? ctx.userName() : systemUser;
   }
 
   /**
@@ -38,5 +46,43 @@ public final class SystemFunctions {
    */
   public static Object ifNull(Object first, Object second) {
     return first != null ? first : second;
+  }
+
+  /**
+   * Install per-execution system context for system functions.
+   *
+   * @param databaseName
+   *          the database identifier to expose via {@code DATABASE()}
+   * @param userName
+   *          the user identifier to expose via {@code USER()}
+   */
+  public static void setContext(String databaseName, String userName) {
+    CONTEXT.get().push(new SystemContext(databaseName, userName));
+  }
+
+  /**
+   * Clear any system context previously installed for the current thread.
+   */
+  public static void clearContext() {
+    Deque<SystemContext> stack = CONTEXT.get();
+    if (stack.isEmpty()) {
+      CONTEXT.remove();
+    } else {
+      stack.pop();
+      if (stack.isEmpty()) {
+        CONTEXT.remove();
+      }
+    }
+  }
+
+  private static SystemContext currentContext() {
+    Deque<SystemContext> stack = CONTEXT.get();
+    if (stack == null || stack.isEmpty()) {
+      return null;
+    }
+    return stack.peek();
+  }
+
+  private record SystemContext(String databaseName, String userName) {
   }
 }

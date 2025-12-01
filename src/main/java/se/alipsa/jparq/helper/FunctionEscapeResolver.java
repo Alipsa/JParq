@@ -10,6 +10,7 @@ import java.util.stream.Stream;
 import se.alipsa.jparq.JParqDatabaseMetaData.JdbcDateTimeFunction;
 import se.alipsa.jparq.JParqDatabaseMetaData.JdbcNumericFunction;
 import se.alipsa.jparq.JParqDatabaseMetaData.JdbcStringFunction;
+import se.alipsa.jparq.JParqDatabaseMetaData.JdbcSystemFunction;
 
 /**
  * Resolves JDBC escape syntax function calls (e.g. {@code {fn CURDATE()}}) to
@@ -22,11 +23,12 @@ public final class FunctionEscapeResolver {
   private static final Map<String, FnMapping> FUNCTION_LOOKUP = Stream
       .of(Stream.of(JdbcDateTimeFunction.values())
           .map(f -> new AbstractMap.SimpleEntry<>(f.jdbcName().toUpperCase(Locale.ROOT),
-              new FnMapping(f.sqlName(), f.noArg()))),
+              new FnMapping(f.sqlName(), f.noArg(), false))),
           Stream.of(JdbcStringFunction.values())
               .map(f -> new AbstractMap.SimpleEntry<>(f.jdbcName().toUpperCase(Locale.ROOT),
-                  new FnMapping(f.sqlName(), false))),
-          Stream.of(JdbcNumericFunction.values()).flatMap(FunctionEscapeResolver::mapNumericFunction))
+                  new FnMapping(f.sqlName(), false, false))),
+          Stream.of(JdbcNumericFunction.values()).flatMap(FunctionEscapeResolver::mapNumericFunction),
+          Stream.of(JdbcSystemFunction.values()).map(FunctionEscapeResolver::mapSystemFunction))
       .flatMap(s -> s).collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, Map.Entry::getValue));
 
   private FunctionEscapeResolver() {
@@ -52,7 +54,13 @@ public final class FunctionEscapeResolver {
       FnMapping mapping = FUNCTION_LOOKUP.get(fnName.toUpperCase(Locale.ROOT));
       String replacement;
       if (mapping != null) {
-        replacement = mapping.noArg() ? mapping.sqlName() : mapping.sqlName() + (args == null ? "" : args);
+        if (mapping.noArg()) {
+          replacement = mapping.sqlName();
+        } else if (args == null) {
+          replacement = mapping.sqlName() + (mapping.appendEmptyArgs() ? "()" : "");
+        } else {
+          replacement = mapping.sqlName() + args;
+        }
       } else {
         replacement = fnName + (args == null ? "" : args);
       }
@@ -63,10 +71,15 @@ public final class FunctionEscapeResolver {
   }
 
   private static Stream<Map.Entry<String, FnMapping>> mapNumericFunction(JdbcNumericFunction function) {
-    return function.jdbcNames().stream().map(
-        name -> new AbstractMap.SimpleEntry<>(name.toUpperCase(Locale.ROOT), new FnMapping(function.sqlName(), false)));
+    return function.jdbcNames().stream().map(name -> new AbstractMap.SimpleEntry<>(name.toUpperCase(Locale.ROOT),
+        new FnMapping(function.sqlName(), false, false)));
   }
 
-  private record FnMapping(String sqlName, boolean noArg) {
+  private static Map.Entry<String, FnMapping> mapSystemFunction(JdbcSystemFunction function) {
+    return new AbstractMap.SimpleEntry<>(function.jdbcName().toUpperCase(Locale.ROOT),
+        new FnMapping(function.sqlName(), false, function.appendEmptyArgs()));
+  }
+
+  private record FnMapping(String sqlName, boolean noArg, boolean appendEmptyArgs) {
   }
 }
