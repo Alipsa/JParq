@@ -30,6 +30,17 @@ class FunctionEscapeResolverTest {
   }
 
   @Test
+  void resolvesNumericFunctionsAndAliases() {
+    String canonical = "SELECT {fn ABS(-10.5)}, {fn CEILING(4.2)}, {fn RAND(5)}, {fn TRUNCATE(4.567, 2)}, {fn PI()}";
+    assertEquals("SELECT ABS(-10.5), CEILING(4.2), RAND(5), TRUNCATE(4.567, 2), PI()",
+        FunctionEscapeResolver.resolveJdbcFunctionEscapes(canonical));
+
+    String aliases = "SELECT {fn ceil(1.2)}, {fn pow(2,3)}, {fn random(7)}, {fn trunc(9.99,1)}";
+    assertEquals("SELECT CEILING(1.2), POWER(2,3), RAND(7), TRUNCATE(9.99,1)",
+        FunctionEscapeResolver.resolveJdbcFunctionEscapes(aliases));
+  }
+
+  @Test
   void leavesUnknownFunctionsIntact() {
     String sql = "SELECT {fn CUSTOM_FN(1, 2)}";
     assertEquals("SELECT CUSTOM_FN(1, 2)", FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));

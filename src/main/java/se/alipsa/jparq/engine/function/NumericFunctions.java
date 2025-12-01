@@ -41,12 +41,14 @@ public class NumericFunctions {
       case "SIN" -> trigFunction(args, Math::sin);
       case "COS" -> trigFunction(args, Math::cos);
       case "TAN" -> trigFunction(args, Math::tan);
+      case "COT" -> cotFunction(args);
       case "ASIN" -> inverseTrigFunction(args, Math::asin);
       case "ACOS" -> inverseTrigFunction(args, Math::acos);
       case "ATAN" -> inverseTrigFunction(args, Math::atan);
       case "ATAN2" -> atan2Function(args);
       case "DEGREES" -> trigFunction(args, Math::toDegrees);
       case "RADIANS" -> trigFunction(args, Math::toRadians);
+      case "PI" -> Math.PI;
       default -> null;
     };
   }
@@ -251,6 +253,21 @@ public class NumericFunctions {
       return null;
     }
     return operator.applyAsDouble(value);
+  }
+
+  private static Object cotFunction(List<Object> args) {
+    if (args.isEmpty()) {
+      return null;
+    }
+    Double value = toDouble(args.getFirst());
+    if (value == null) {
+      return null;
+    }
+    double tangent = Math.tan(value);
+    if (Double.isNaN(tangent)) {
+      return null;
+    }
+    return 1d / tangent;
   }
 
   private static Object inverseTrigFunction(List<Object> args, java.util.function.DoubleUnaryOperator operator) {

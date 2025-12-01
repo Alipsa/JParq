@@ -113,7 +113,8 @@ The following SQL statements are supported:
   - coalesce (The COALESCE() function returns the first non-null value in a list.)
   - String functions (all SQL standard string function supported)
     - also support || operator for string concatenations
-  - Numeric functions (abs, ceil, floor, round, sqrt, truncate, mod, power, exp, log, rand, sign, sin, cos, tan, asin, acos, atan, atan2, degrees, radians)
+  - Numeric functions (abs, ceil/ceiling, floor, round, sqrt, truncate/trunc, mod, power/pow, exp, log, log10,
+    rand/random, sign, sin, cos, tan, cot, asin, acos, atan, atan2, degrees, radians, pi)
   - ARRAY constructor function
 - comments (line --) and block (/* */)
 - Subquery support
