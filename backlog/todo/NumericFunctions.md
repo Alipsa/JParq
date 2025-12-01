@@ -42,3 +42,7 @@ A typical fully compliant return string would look like:
 ```
 {fn ABS}, {fn ACOS}, {fn ASIN}, {fn ATAN}, {fn ATAN2}, {fn CEILING}, {fn COS}, {fn COT}, {fn DEGREES}, {fn EXP}, {fn FLOOR}, {fn LOG}, {fn LOG10}, {fn MOD}, {fn PI}, {fn POWER}, {fn RADIANS}, {fn RAND}, {fn ROUND}, {fn SIGN}, {fn SIN}, {fn SQRT}, {fn TAN}, {fn TRUNCATE}
 ```
+
+- Change the SUPPORTED_NUMERIC_FUNCTIONS in JParqDatabaseMetaData into an enum in a similar manner as the JdbcDateTimeFunction enum.
+- Ensure that the JParqDatabaseMetaData.getNumericFunctions() returns a list of the supported numeric functions in the correct (escaped) format.
+- Before the SQL is sent to the Sql parser, we should resolve the jdbc function names and translate them to the corresponding SQL function name i.e. if the user runs the query SELECT {fn ABS(-10.5)} we should send SELECT ABS(-10.5) to the parser (the result after execution should be 10.5).
