@@ -385,7 +385,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   /**
    * The SQL keywords that are not part of the SQL standard that are supported.
    */
-  public static final List<String> SUPPORTED_KEYWORDS = List.of();
+  public static final List<String> SUPPORTED_KEYWORDS = List.of("ILIKE", "LIMIT", "REGEXP_LIKE");
 
   private final JParqConnection conn;
   private final String url;
@@ -1067,7 +1067,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getSQLKeywords() {
-    return String.join(",", SUPPORTED_KEYWORDS);
+    return String.join(", ", SUPPORTED_KEYWORDS);
   }
 
   @Override

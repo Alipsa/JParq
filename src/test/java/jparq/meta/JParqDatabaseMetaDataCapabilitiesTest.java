@@ -56,7 +56,7 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertFalse(metaData.nullsAreSortedAtStart());
     assertTrue(metaData.nullsAreSortedAtEnd());
     assertEquals("", metaData.getIdentifierQuoteString());
-    assertEquals("", metaData.getSQLKeywords());
+    assertEquals("ILIKE, LIMIT, REGEXP_LIKE", metaData.getSQLKeywords());
     String expectedNumericFunctions = "{fn ABS}, {fn ACOS}, {fn ASIN}, {fn ATAN}, {fn ATAN2}, {fn CEILING}, "
         + "{fn COS}, {fn COT}, {fn DEGREES}, {fn EXP}, {fn FLOOR}, {fn LOG}, {fn LOG10}, {fn MOD}, {fn PI}, "
         + "{fn POWER}, {fn RADIANS}, {fn RAND}, {fn ROUND}, {fn SIGN}, {fn SIN}, {fn SQRT}, {fn TAN}, {fn TRUNCATE}";
