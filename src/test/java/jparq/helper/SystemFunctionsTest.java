@@ -13,7 +13,13 @@ class SystemFunctionsTest {
 
   @Test
   void returnsSystemInformation() {
-    assertEquals("JParq", SystemFunctions.database());
+    SystemFunctions.setContext("mydb", "alice");
+    try {
+      assertEquals("mydb", SystemFunctions.database());
+      assertEquals("alice", SystemFunctions.user());
+    } finally {
+      SystemFunctions.clearContext();
+    }
     assertEquals(System.getProperty("user.name"), SystemFunctions.user());
   }
 

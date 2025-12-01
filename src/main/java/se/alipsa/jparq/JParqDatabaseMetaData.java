@@ -318,9 +318,69 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   }
 
   /**
-   * The jdbc system function supported.
+   * Canonical JDBC system functions and their SQL equivalents.
    */
-  public static final List<String> SUPPORTED_SYSTEM_FUNCTIONS = List.of();
+  public enum JdbcSystemFunction {
+    /** Database name function */
+    DATABASE("DATABASE", "DATABASE", true),
+    /** If-null function */
+    IFNULL("IFNULL", "COALESCE"),
+    /** User function */
+    USER("USER", "USER", true);
+
+    private final String jdbcName;
+    private final String sqlName;
+    private final boolean appendEmptyArgs;
+
+    JdbcSystemFunction(String jdbcName, String sqlName, boolean appendEmptyArgs) {
+      this.jdbcName = jdbcName;
+      this.sqlName = sqlName;
+      this.appendEmptyArgs = appendEmptyArgs;
+    }
+
+    JdbcSystemFunction(String jdbcName, String sqlName) {
+      this(jdbcName, sqlName, false);
+    }
+
+    /**
+     * The JDBC escape function name.
+     *
+     * @return canonical JDBC function identifier
+     */
+    public String jdbcName() {
+      return jdbcName;
+    }
+
+    /**
+     * The SQL function name equivalent to the JDBC escape name.
+     *
+     * @return SQL function identifier
+     */
+    public String sqlName() {
+      return sqlName;
+    }
+
+    /**
+     * Whether an empty argument list should be appended when none is supplied in
+     * the JDBC escape.
+     *
+     * @return {@code true} if {@code ()} should be appended when the escape has no
+     *         arguments
+     */
+    public boolean appendEmptyArgs() {
+      return appendEmptyArgs;
+    }
+
+    /**
+     * Render the JDBC function name in escaped form ({@code {fn NAME}}) without
+     * arguments.
+     *
+     * @return formatted JDBC escape name
+     */
+    public String formatted() {
+      return "{fn " + jdbcName + "}";
+    }
+  }
 
   /**
    * The SQL keywords that are not part of the SQL standard that are supported.
@@ -1024,7 +1084,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getSystemFunctions() {
-    return String.join(",", SUPPORTED_SYSTEM_FUNCTIONS);
+    return java.util.stream.Stream.of(JdbcSystemFunction.values()).map(JdbcSystemFunction::formatted)
+        .collect(java.util.stream.Collectors.joining(", "));
   }
 
   @Override

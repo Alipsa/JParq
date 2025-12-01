@@ -44,3 +44,10 @@ A fully compliant JDBC driver should return a string containing these three func
 {fn DATABASE}, {fn IFNULL}, {fn USER}
 ```
 
+- Change the SUPPORTED_SYSTEM_FUNCTIONS in JParqDatabaseMetaData into an enum in a similar manner as the JdbcDateTimeFunction enum.
+- Ensure that the JParqDatabaseMetaData.getSystemFunctions() returns a list of the supported numeric functions in the correct (escaped) format.
+- Before the SQL is sent to the Sql parser, we should resolve the jdbc function names and translate them to the corresponding SQL function name 
+- If the user runs the query SELECT {fn DATABASE} we should send SELECT DATABASE() to the parser (the result after execution should be identical to JParqDatabaseMetaData.getDatabaseName()). 
+- The result of {fn IFNULL(exp1, exp2)} should be identical to COALESCE(exp1, exp2).
+- The result of {fn USER()} should be identical to System.getProperty("user.name") i.e. the SystemFunctions already has the correct implementation for this.
+

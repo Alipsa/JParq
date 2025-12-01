@@ -45,6 +45,7 @@ public class JParqDatabaseMetaDataTest {
               + "{fn EXP}, {fn FLOOR}, {fn LOG}, {fn LOG10}, {fn MOD}, {fn PI}, {fn POWER}, {fn RADIANS}, {fn RAND}, "
               + "{fn ROUND}, {fn SIGN}, {fn SIN}, {fn SQRT}, {fn TAN}, {fn TRUNCATE}",
           metaData.getNumericFunctions());
+      Assertions.assertEquals("{fn DATABASE}, {fn IFNULL}, {fn USER}", metaData.getSystemFunctions());
 
       try (ResultSet tables = metaData.getTables(null, null, null, new String[]{
           "TABLE"

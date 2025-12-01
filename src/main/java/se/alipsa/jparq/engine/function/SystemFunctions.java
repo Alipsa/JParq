@@ -5,6 +5,8 @@ package se.alipsa.jparq.engine.function;
  */
 public final class SystemFunctions {
 
+  private static final ThreadLocal<SystemContext> CONTEXT = new ThreadLocal<>();
+
   private SystemFunctions() {
   }
 
@@ -14,6 +16,10 @@ public final class SystemFunctions {
    * @return the database identifier or {@code "JParq"} when unknown
    */
   public static String database() {
+    SystemContext ctx = CONTEXT.get();
+    if (ctx != null && ctx.databaseName() != null && !ctx.databaseName().isBlank()) {
+      return ctx.databaseName();
+    }
     return "JParq";
   }
 
@@ -24,6 +30,10 @@ public final class SystemFunctions {
    *         unavailable
    */
   public static String user() {
+    SystemContext ctx = CONTEXT.get();
+    if (ctx != null && ctx.userName() != null && !ctx.userName().isBlank()) {
+      return ctx.userName();
+    }
     return System.getProperty("user.name");
   }
 
@@ -38,5 +48,27 @@ public final class SystemFunctions {
    */
   public static Object ifNull(Object first, Object second) {
     return first != null ? first : second;
+  }
+
+  /**
+   * Install per-execution system context for system functions.
+   *
+   * @param databaseName
+   *          the database identifier to expose via {@code DATABASE()}
+   * @param userName
+   *          the user identifier to expose via {@code USER()}
+   */
+  public static void setContext(String databaseName, String userName) {
+    CONTEXT.set(new SystemContext(databaseName, userName));
+  }
+
+  /**
+   * Clear any system context previously installed for the current thread.
+   */
+  public static void clearContext() {
+    CONTEXT.remove();
+  }
+
+  private record SystemContext(String databaseName, String userName) {
   }
 }

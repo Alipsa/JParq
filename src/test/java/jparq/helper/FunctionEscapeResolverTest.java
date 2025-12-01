@@ -41,6 +41,13 @@ class FunctionEscapeResolverTest {
   }
 
   @Test
+  void resolvesSystemFunctions() {
+    String sql = "SELECT {fn DATABASE}, {fn IFNULL(col, 'x')}, {fn USER}";
+    assertEquals("SELECT DATABASE(), COALESCE(col, 'x'), USER()",
+        FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+  }
+
+  @Test
   void leavesUnknownFunctionsIntact() {
     String sql = "SELECT {fn CUSTOM_FN(1, 2)}";
     assertEquals("SELECT CUSTOM_FN(1, 2)", FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));

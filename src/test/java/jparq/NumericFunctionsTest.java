@@ -33,10 +33,12 @@ public class NumericFunctionsTest {
   private static final double EPSILON = 1e-9;
 
   static JParqSql jparqSql;
+  private static String databaseName;
 
   @BeforeAll
   static void setup() throws IOException {
     Path numbers = createNumbersParquet();
+    databaseName = numbers.getParent().getFileName().toString();
     jparqSql = new JParqSql("jdbc:jparq:" + numbers.getParent().toAbsolutePath());
   }
 
@@ -164,6 +166,25 @@ public class NumericFunctionsTest {
         assertEquals(45.0, rs.getDouble("deg_val"), EPSILON, "DEGREES should convert from radians");
         assertEquals(Math.PI / 4, rs.getDouble("rad_val"), EPSILON, "RADIANS should convert to radians");
 
+        assertFalse(rs.next());
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void testSystemFunctionEscapes() {
+    String sql = "SELECT {fn DATABASE} AS db_name, {fn IFNULL(val, 0)} AS ifnull_val, "
+        + "{fn USER} AS user_name FROM numbers";
+
+    String expectedUser = System.getProperty("user.name");
+    jparqSql.query(sql, rs -> {
+      try {
+        assertTrue(rs.next());
+        assertEquals(databaseName, rs.getString("db_name"));
+        assertEquals(-3.75, rs.getDouble("ifnull_val"), EPSILON);
+        assertEquals(expectedUser, rs.getString("user_name"));
         assertFalse(rs.next());
       } catch (SQLException e) {
         fail(e);
