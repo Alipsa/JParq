@@ -40,6 +40,11 @@ public class JParqDatabaseMetaDataTest {
       var metaData = con.getMetaData();
       Assertions.assertEquals("JParq", metaData.getDatabaseProductName());
       Assertions.assertEquals("se.alipsa.jparq.JParqDriver", metaData.getDriverName());
+      Assertions.assertEquals(
+          "{fn ABS}, {fn ACOS}, {fn ASIN}, {fn ATAN}, {fn ATAN2}, {fn CEILING}, {fn COS}, {fn COT}, {fn DEGREES}, "
+              + "{fn EXP}, {fn FLOOR}, {fn LOG}, {fn LOG10}, {fn MOD}, {fn PI}, {fn POWER}, {fn RADIANS}, {fn RAND}, "
+              + "{fn ROUND}, {fn SIGN}, {fn SIN}, {fn SQRT}, {fn TAN}, {fn TRUNCATE}",
+          metaData.getNumericFunctions());
 
       try (ResultSet tables = metaData.getTables(null, null, null, new String[]{
           "TABLE"

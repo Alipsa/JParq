@@ -128,9 +128,9 @@ public final class FunctionSupport {
       case "TIMESTAMPADD" -> DateTimeFunctions.timestampAdd(args.positionalValues());
       case "TIMESTAMPDIFF" -> DateTimeFunctions.timestampDiff(args.positionalValues());
       case "ARRAY" -> evaluateArrayFunction(func, record, args);
-      case "ABS", "CEIL", "CEILING", "FLOOR", "ROUND", "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW", "EXP", "LOG",
-          "LOG10", "RAND", "RANDOM", "SIGN", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN", "ATAN2", "DEGREES",
-          "RADIANS" ->
+      case "ABS", "CEIL", "CEILING", "COT", "FLOOR", "ROUND", "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW", "EXP",
+          "LOG", "LOG10", "PI", "RAND", "RANDOM", "SIGN", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN", "ATAN2",
+          "DEGREES", "RADIANS" ->
         NumericFunctions.evaluate(upper, args.positionalValues());
       default -> LiteralConverter.toLiteral(func);
     };

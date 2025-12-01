@@ -8,6 +8,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import se.alipsa.jparq.JParqDatabaseMetaData.JdbcDateTimeFunction;
+import se.alipsa.jparq.JParqDatabaseMetaData.JdbcNumericFunction;
 import se.alipsa.jparq.JParqDatabaseMetaData.JdbcStringFunction;
 
 /**
@@ -19,14 +20,14 @@ public final class FunctionEscapeResolver {
   private static final Pattern FUNCTION_ESCAPE = Pattern
       .compile("\\{\\s*fn\\s+([^\\s\\(\\}]+)\\s*(\\([^}]*\\))?\\s*\\}", Pattern.CASE_INSENSITIVE);
   private static final Map<String, FnMapping> FUNCTION_LOOKUP = Stream
-      .concat(
-          Stream.of(JdbcDateTimeFunction.values())
-              .map(f -> new AbstractMap.SimpleEntry<>(f.jdbcName().toUpperCase(Locale.ROOT),
-                  new FnMapping(f.sqlName(), f.noArg()))),
+      .of(Stream.of(JdbcDateTimeFunction.values())
+          .map(f -> new AbstractMap.SimpleEntry<>(f.jdbcName().toUpperCase(Locale.ROOT),
+              new FnMapping(f.sqlName(), f.noArg()))),
           Stream.of(JdbcStringFunction.values())
               .map(f -> new AbstractMap.SimpleEntry<>(f.jdbcName().toUpperCase(Locale.ROOT),
-                  new FnMapping(f.sqlName(), false))))
-      .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, Map.Entry::getValue));
+                  new FnMapping(f.sqlName(), false))),
+          Stream.of(JdbcNumericFunction.values()).flatMap(FunctionEscapeResolver::mapNumericFunction))
+      .flatMap(s -> s).collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, Map.Entry::getValue));
 
   private FunctionEscapeResolver() {
   }
@@ -59,6 +60,11 @@ public final class FunctionEscapeResolver {
     }
     matcher.appendTail(sb);
     return sb.toString();
+  }
+
+  private static Stream<Map.Entry<String, FnMapping>> mapNumericFunction(JdbcNumericFunction function) {
+    return function.jdbcNames().stream().map(
+        name -> new AbstractMap.SimpleEntry<>(name.toUpperCase(Locale.ROOT), new FnMapping(function.sqlName(), false)));
   }
 
   private record FnMapping(String sqlName, boolean noArg) {

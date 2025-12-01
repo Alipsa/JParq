@@ -128,7 +128,7 @@ public class NumericFunctionsTest {
     String sql = """
         SELECT SIN(angle) AS sin_val, COS(angle) AS cos_val, TAN(angle) AS tan_val,
         ASIN(unit) AS asin_val, ACOS(unit) AS acos_val, ATAN(unit) AS atan_val,
-        ATAN2(y, x) AS atan2_val FROM numbers
+        ATAN2(y, x) AS atan2_val, COT(angle) AS cot_val, PI() AS pi_val FROM numbers
         """;
 
     jparqSql.query(sql, rs -> {
@@ -143,6 +143,8 @@ public class NumericFunctionsTest {
         assertEquals(Math.acos(0.5), rs.getDouble("acos_val"), EPSILON, "ACOS should invert COS");
         assertEquals(Math.atan(0.5), rs.getDouble("atan_val"), EPSILON, "ATAN should compute arctangent");
         assertEquals(Math.atan2(4.0, 3.0), rs.getDouble("atan2_val"), EPSILON, "ATAN2 should use y,x arguments");
+        assertEquals(1.0, rs.getDouble("cot_val"), EPSILON, "COT should be reciprocal of TAN");
+        assertEquals(Math.PI, rs.getDouble("pi_val"), EPSILON, "PI should return mathematical constant");
 
         assertFalse(rs.next());
       } catch (SQLException e) {
@@ -161,6 +163,31 @@ public class NumericFunctionsTest {
 
         assertEquals(45.0, rs.getDouble("deg_val"), EPSILON, "DEGREES should convert from radians");
         assertEquals(Math.PI / 4, rs.getDouble("rad_val"), EPSILON, "RADIANS should convert to radians");
+
+        assertFalse(rs.next());
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void testJdbcNumericEscapesAreResolved() {
+    double expectedSeeded = new Random(42).nextDouble();
+    String sql = "SELECT {fn ABS(val)} AS escaped_abs, {fn ROUND(val2, 0)} AS escaped_round, "
+        + "{fn CEILING(val)} AS escaped_ceiling, {fn POWER(2, 3)} AS escaped_power, {fn RAND(42)} AS escaped_rand, "
+        + "{fn PI()} AS escaped_pi FROM numbers";
+
+    jparqSql.query(sql, rs -> {
+      try {
+        assertTrue(rs.next());
+
+        assertEquals(3.75, rs.getDouble("escaped_abs"), EPSILON, "ABS escape should be evaluated");
+        assertEquals(3.0, rs.getDouble("escaped_round"), EPSILON, "ROUND escape should be evaluated");
+        assertEquals(-3.0, rs.getDouble("escaped_ceiling"), EPSILON, "CEILING escape should be evaluated");
+        assertEquals(8.0, rs.getDouble("escaped_power"), EPSILON, "POWER escape should be evaluated");
+        assertEquals(expectedSeeded, rs.getDouble("escaped_rand"), EPSILON, "RAND escape should respect seed");
+        assertEquals(Math.PI, rs.getDouble("escaped_pi"), EPSILON, "PI escape should yield constant");
 
         assertFalse(rs.next());
       } catch (SQLException e) {

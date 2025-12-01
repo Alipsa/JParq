@@ -40,14 +40,115 @@ import se.alipsa.jparq.helper.JdbcTypeMapper;
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqDatabaseMetaData implements DatabaseMetaData {
 
-  // TODO: this list should be changed to the standard jdbc escaped function names
-  // e.g. {fn ABS} instead of ABS
   /**
-   * The JDBC numeric functions supported
+   * Canonical JDBC numeric functions and their SQL equivalents.
    */
-  public static final List<String> SUPPORTED_NUMERIC_FUNCTIONS = List.of("ABS", "CEIL", "CEILING", "FLOOR", "ROUND",
-      "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW", "EXP", "LOG", "LOG10", "RAND", "RANDOM", "SIGN", "SIN", "COS",
-      "TAN", "ASIN", "ACOS", "ATAN", "ATAN2", "DEGREES", "RADIANS");
+  public enum JdbcNumericFunction {
+    /** Absolute value function */
+    ABS("ABS"),
+    /** Arc cosine function */
+    ACOS("ACOS"),
+    /** Arc sine function */
+    ASIN("ASIN"),
+    /** Arc tangent function */
+    ATAN("ATAN"),
+    /** Arc tangent function with two arguments */
+    ATAN2("ATAN2"),
+    /** Ceiling function */
+    CEILING("CEILING", "CEILING", "CEIL"),
+    /** Cosine function */
+    COS("COS"),
+    /** Cotangent function */
+    COT("COT"),
+    /** Degrees conversion function */
+    DEGREES("DEGREES"),
+    /** Exponential function */
+    EXP("EXP"),
+    /** Floor function */
+    FLOOR("FLOOR"),
+    /** Natural logarithm function */
+    LOG("LOG"),
+    /** Base 10 logarithm function */
+    LOG10("LOG10"),
+    /** Modulo function */
+    MOD("MOD"),
+    /** PI constant function */
+    PI("PI"),
+    /** Power function */
+    POWER("POWER", "POWER", "POW"),
+    /** Radians conversion function */
+    RADIANS("RADIANS"),
+    /** Random number generator */
+    RAND("RAND", "RAND", "RANDOM"),
+    /** Rounding function */
+    ROUND("ROUND"),
+    /** Sign function */
+    SIGN("SIGN"),
+    /** Sine function */
+    SIN("SIN"),
+    /** Square root function */
+    SQRT("SQRT"),
+    /** Tangent function */
+    TAN("TAN"),
+    /** Truncate function */
+    TRUNCATE("TRUNCATE", "TRUNCATE", "TRUNC");
+
+    private final String jdbcName;
+    private final String sqlName;
+    private final List<String> jdbcNames;
+
+    JdbcNumericFunction(String jdbcName) {
+      this(jdbcName, jdbcName);
+    }
+
+    JdbcNumericFunction(String jdbcName, String sqlName, String... aliases) {
+      this.jdbcName = jdbcName;
+      this.sqlName = sqlName;
+      List<String> names = new ArrayList<>();
+      names.add(jdbcName);
+      if (aliases != null && aliases.length > 0) {
+        names.addAll(List.of(aliases));
+      }
+      this.jdbcNames = List.copyOf(names);
+    }
+
+    /**
+     * The JDBC escape function name.
+     *
+     * @return canonical JDBC function identifier
+     */
+    public String jdbcName() {
+      return jdbcName;
+    }
+
+    /**
+     * All JDBC escape names mapping to this SQL function, including aliases.
+     *
+     * @return immutable list of JDBC function identifiers
+     */
+    public List<String> jdbcNames() {
+      return jdbcNames;
+    }
+
+    /**
+     * The SQL function name equivalent to the JDBC escape name.
+     *
+     * @return SQL function identifier
+     */
+    public String sqlName() {
+      return sqlName;
+    }
+
+    /**
+     * Render the JDBC function name in escaped form ({@code {fn NAME}}) without
+     * arguments.
+     *
+     * @return formatted JDBC escape name
+     */
+    public String formatted() {
+      return "{fn " + jdbcName + "}";
+    }
+  }
 
   /**
    * Canonical JDBC string functions and their SQL equivalents.
@@ -911,7 +1012,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getNumericFunctions() {
-    return String.join(",", SUPPORTED_NUMERIC_FUNCTIONS);
+    return java.util.stream.Stream.of(JdbcNumericFunction.values()).map(JdbcNumericFunction::formatted)
+        .collect(java.util.stream.Collectors.joining(", "));
   }
 
   @Override
