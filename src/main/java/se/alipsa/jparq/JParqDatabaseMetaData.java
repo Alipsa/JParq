@@ -1553,7 +1553,12 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public ResultSet getCatalogs() throws SQLException {
-    return null;
+    String catalog = getDatabaseName();
+    List<Object[]> rows = new ArrayList<>();
+    rows.add(new Object[]{catalog});
+    return JParqUtil.listResultSet(new String[]{
+        "TABLE_CAT"
+    }, rows);
   }
 
   @Override
