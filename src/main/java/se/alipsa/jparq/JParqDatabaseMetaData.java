@@ -2,9 +2,6 @@ package se.alipsa.jparq;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.JDBCType;
@@ -959,37 +956,6 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     return true;
   }
 
-  /**
-   * Database name is the folder name of base folder. E.g: /foo/bar/baz would
-   * return baz
-   *
-   * @return the database name.
-   */
-  public String getDatabaseName() {
-    String protocolPrefix = "jdbc:jparq:";
-    String pathAndParams = url.substring(protocolPrefix.length());
-    try {
-      String maskedUriString = "file://" + pathAndParams;
-      URI uri = new URI(maskedUriString);
-      String path = uri.getPath();
-      return Paths.get(path).getFileName().toString();
-    } catch (URISyntaxException e) {
-      // Fallback to simple string extraction
-      int paramIndex = pathAndParams.indexOf('?');
-      String path;
-      if (paramIndex != -1) {
-        path = pathAndParams.substring(0, paramIndex);
-      } else {
-        path = pathAndParams;
-      }
-      int lastSeparatorIndex = path.lastIndexOf('/');
-      if (lastSeparatorIndex != -1) {
-        return path.substring(lastSeparatorIndex + 1);
-      } else {
-        return path;
-      }
-    }
-  }
   @Override
   public String getURL() {
     return url;
@@ -1553,9 +1519,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public ResultSet getCatalogs() throws SQLException {
-    String catalog = getDatabaseName();
+    String catalog = conn.getCatalog();
     List<Object[]> rows = new ArrayList<>();
-    rows.add(new Object[]{catalog});
+    rows.add(new Object[]{
+        catalog
+    });
     return JParqUtil.listResultSet(new String[]{
         "TABLE_CAT"
     }, rows);

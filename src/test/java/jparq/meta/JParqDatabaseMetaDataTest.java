@@ -134,7 +134,7 @@ public class JParqDatabaseMetaDataTest {
 
   private Integer integerOrNull(ResultSet rs, String columnLabel) throws SQLException {
     int value = rs.getInt(columnLabel);
-    return rs.wasNull() ? null : Integer.valueOf(value);
+    return rs.wasNull() ? null : value;
   }
 
   private record ColumnInfo(String tableType, int ordinalPosition, String isNullable, int dataType, String typeName,
