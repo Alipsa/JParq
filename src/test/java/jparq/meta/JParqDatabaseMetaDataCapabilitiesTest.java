@@ -15,7 +15,6 @@ import java.util.Properties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import se.alipsa.jparq.JParqDatabaseMetaData;
 
 /** Additional coverage for {@link se.alipsa.jparq.JParqDatabaseMetaData}. */
 class JParqDatabaseMetaDataCapabilitiesTest {
@@ -50,7 +49,9 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertTrue(metaData.isReadOnly());
     assertFalse(metaData.allProceduresAreCallable());
     assertTrue(metaData.allTablesAreSelectable());
-    assertEquals("acme", ((JParqDatabaseMetaData) metaData).getDatabaseName());
+    var rs = metaData.getCatalogs();
+    rs.next();
+    assertEquals("acme", rs.getString("TABLE_CAT"));
     assertFalse(metaData.nullsAreSortedHigh());
     assertTrue(metaData.nullsAreSortedLow());
     assertFalse(metaData.nullsAreSortedAtStart());

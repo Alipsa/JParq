@@ -340,8 +340,9 @@ class JParqPreparedStatement implements PreparedStatement {
   @SuppressWarnings("PMD.CloseResource")
   @Override
   public ResultSet executeQuery() throws SQLException {
-    JParqDatabaseMetaData metaData = (JParqDatabaseMetaData) stmt.getConn().getMetaData();
-    SystemFunctions.setContext(metaData.getDatabaseName(), metaData.getUserName());
+    Connection conn = getConnection();
+    JParqDatabaseMetaData metaData = (JParqDatabaseMetaData) conn.getMetaData();
+    SystemFunctions.setContext(conn.getCatalog(), metaData.getUserName());
     try {
       if (setOperationQuery) {
         JParqResultSet rs = executeSetOperation();
@@ -401,10 +402,7 @@ class JParqPreparedStatement implements PreparedStatement {
 
       stmt.setCurrentRs(rs);
       return rs;
-    } catch (SQLException e) {
-      SystemFunctions.clearContext();
-      throw e;
-    } catch (RuntimeException e) {
+    } catch (SQLException | RuntimeException e) {
       SystemFunctions.clearContext();
       throw e;
     }

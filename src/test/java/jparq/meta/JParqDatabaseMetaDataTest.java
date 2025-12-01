@@ -40,6 +40,11 @@ public class JParqDatabaseMetaDataTest {
       var metaData = con.getMetaData();
       Assertions.assertEquals("JParq", metaData.getDatabaseProductName());
       Assertions.assertEquals("se.alipsa.jparq.JParqDriver", metaData.getDriverName());
+      try (ResultSet catalogs = metaData.getCatalogs()) {
+        Assertions.assertTrue(catalogs.next());
+        Assertions.assertEquals("acme", catalogs.getString("TABLE_CAT"));
+        Assertions.assertFalse(catalogs.next());
+      }
       Assertions.assertEquals(
           "{fn ABS}, {fn ACOS}, {fn ASIN}, {fn ATAN}, {fn ATAN2}, {fn CEILING}, {fn COS}, {fn COT}, {fn DEGREES}, "
               + "{fn EXP}, {fn FLOOR}, {fn LOG}, {fn LOG10}, {fn MOD}, {fn PI}, {fn POWER}, {fn RADIANS}, {fn RAND}, "
@@ -129,7 +134,7 @@ public class JParqDatabaseMetaDataTest {
 
   private Integer integerOrNull(ResultSet rs, String columnLabel) throws SQLException {
     int value = rs.getInt(columnLabel);
-    return rs.wasNull() ? null : Integer.valueOf(value);
+    return rs.wasNull() ? null : value;
   }
 
   private record ColumnInfo(String tableType, int ordinalPosition, String isNullable, int dataType, String typeName,
