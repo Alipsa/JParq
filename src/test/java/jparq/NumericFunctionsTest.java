@@ -193,6 +193,32 @@ public class NumericFunctionsTest {
   }
 
   @Test
+  void testSystemFunctionsWithNestedQueries() {
+    String sql = """
+        SELECT {fn DATABASE} AS outer_db, {fn USER} AS outer_user,
+          (SELECT {fn DATABASE} FROM numbers n2) AS inner_db,
+          (SELECT {fn USER} FROM numbers n3) AS inner_user,
+          (SELECT COUNT(*) FROM numbers n4
+             WHERE val IN (SELECT val FROM numbers WHERE {fn DATABASE} = {fn DATABASE})) AS nested_count
+        FROM numbers
+        """;
+    String expectedUser = System.getProperty("user.name");
+    jparqSql.query(sql, rs -> {
+      try {
+        assertTrue(rs.next());
+        assertEquals(databaseName, rs.getString("outer_db"));
+        assertEquals(databaseName, rs.getString("inner_db"));
+        assertEquals(expectedUser, rs.getString("outer_user"));
+        assertEquals(expectedUser, rs.getString("inner_user"));
+        assertEquals(1, rs.getInt("nested_count"));
+        assertFalse(rs.next());
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  @Test
   void testJdbcNumericEscapesAreResolved() {
     double expectedSeeded = new Random(42).nextDouble();
     String sql = "SELECT {fn ABS(val)} AS escaped_abs, {fn ROUND(val2, 0)} AS escaped_round, "

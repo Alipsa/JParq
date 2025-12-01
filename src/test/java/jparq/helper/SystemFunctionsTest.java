@@ -20,6 +20,7 @@ class SystemFunctionsTest {
     } finally {
       SystemFunctions.clearContext();
     }
+    assertEquals("JParq", SystemFunctions.database());
     assertEquals(System.getProperty("user.name"), SystemFunctions.user());
   }
 
