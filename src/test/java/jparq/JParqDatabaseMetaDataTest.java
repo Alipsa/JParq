@@ -84,8 +84,7 @@ public class JParqDatabaseMetaDataTest {
   }
 
   @Test
-  public void testGetSchemasWithPublicSubdirNoDuplicates(@TempDir File tempDir)
-      throws SQLException, IOException {
+  public void testGetSchemasWithPublicSubdirNoDuplicates(@TempDir File tempDir) throws SQLException {
     // Create subdirectories including variants of "PUBLIC" to verify no duplicates
     new File(tempDir, "PUBLIC").mkdir();
     new File(tempDir, "schema1").mkdir();
@@ -108,8 +107,7 @@ public class JParqDatabaseMetaDataTest {
   }
 
   @Test
-  public void testGetSchemasWithPublicCaseVariantsNoDuplicates(@TempDir File tempDir)
-      throws SQLException, IOException {
+  public void testGetSchemasWithPublicCaseVariantsNoDuplicates(@TempDir File tempDir) throws SQLException {
     // Create subdirectories with case variants of "PUBLIC"
     new File(tempDir, "public").mkdir();
     new File(tempDir, "Public").mkdir();
