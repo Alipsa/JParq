@@ -82,4 +82,51 @@ public class JParqDatabaseMetaDataTest {
       }
     }
   }
+
+  @Test
+  public void testGetSchemasWithPublicSubdirNoDuplicates(@TempDir File tempDir) throws SQLException {
+    // Create subdirectories including variants of "PUBLIC" to verify no duplicates
+    new File(tempDir, "PUBLIC").mkdir();
+    new File(tempDir, "schema1").mkdir();
+
+    String jdbcUrl = "jdbc:jparq:" + tempDir.getAbsolutePath();
+    try (JParqConnection conn = (JParqConnection) DriverManager.getConnection(jdbcUrl)) {
+      DatabaseMetaData metaData = conn.getMetaData();
+      try (ResultSet rs = metaData.getSchemas()) {
+        List<String> schemas = new ArrayList<>();
+        while (rs.next()) {
+          schemas.add(rs.getString("TABLE_SCHEM"));
+        }
+        Collections.sort(schemas);
+        // Should have PUBLIC (merged from default and subdirectory) and schema1
+        assertEquals(2, schemas.size(), "PUBLIC subdirectory should not create duplicate schema");
+        assertEquals("PUBLIC", schemas.get(0));
+        assertEquals("schema1", schemas.get(1));
+      }
+    }
+  }
+
+  @Test
+  public void testGetSchemasWithPublicCaseVariantsNoDuplicates(@TempDir File tempDir) throws SQLException {
+    // Create subdirectories with case variants of "PUBLIC"
+    new File(tempDir, "public").mkdir();
+    new File(tempDir, "Public").mkdir();
+    new File(tempDir, "schema1").mkdir();
+
+    String jdbcUrl = "jdbc:jparq:" + tempDir.getAbsolutePath();
+    try (JParqConnection conn = (JParqConnection) DriverManager.getConnection(jdbcUrl)) {
+      DatabaseMetaData metaData = conn.getMetaData();
+      try (ResultSet rs = metaData.getSchemas()) {
+        List<String> schemas = new ArrayList<>();
+        while (rs.next()) {
+          schemas.add(rs.getString("TABLE_SCHEM"));
+        }
+        Collections.sort(schemas);
+        // All case variants of PUBLIC should be normalized to a single entry
+        assertEquals(2, schemas.size(), "Case variants of PUBLIC should not create duplicate schemas");
+        assertEquals("PUBLIC", schemas.get(0));
+        assertEquals("schema1", schemas.get(1));
+      }
+    }
+  }
 }

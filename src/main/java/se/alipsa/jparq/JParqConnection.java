@@ -175,7 +175,9 @@ public class JParqConnection implements Connection {
       if (!dir.isDirectory()) {
         continue;
       }
-      schemas.add(dir.getName());
+      String schemaName = dir.getName();
+      String effectiveSchema = DEFAULT_SCHEMA.equalsIgnoreCase(schemaName) ? DEFAULT_SCHEMA : schemaName;
+      schemas.add(effectiveSchema);
     }
     return List.copyOf(schemas);
   }
