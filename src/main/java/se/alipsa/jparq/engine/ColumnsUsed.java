@@ -55,25 +55,16 @@ public final class ColumnsUsed {
 
       @Override
       public <S> Void visit(TranscodingFunction convert, S context) {
-        if (convert == null) {
+        SqlParser.ConvertProcessingResult result = SqlParser.analyzeConvertFunction(convert);
+        if (result.syntheticColumnName() != null) {
+          cols.add(result.syntheticColumnName());
           return null;
         }
-        if (convert.isTranscodeStyle()) {
+        if (result.processInner() && convert != null) {
           Expression expr = convert.getExpression();
           if (expr != null) {
             expr.accept(this, context);
           }
-          return null;
-        }
-        Expression expr = convert.getExpression();
-        String typeCandidate = convert.getColDataType() == null ? null : convert.getColDataType().getDataType();
-        if (expr instanceof Column column && SqlParser.isConvertTypeName(column.getColumnName())
-            && typeCandidate != null) {
-          cols.add(typeCandidate);
-          return null;
-        }
-        if (expr != null) {
-          expr.accept(this, context);
         }
         return null;
       }

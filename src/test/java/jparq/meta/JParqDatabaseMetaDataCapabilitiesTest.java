@@ -85,6 +85,7 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertTrue(metaData.supportsOrderByUnrelated());
     assertTrue(metaData.supportsConvert());
     assertTrue(metaData.supportsConvert(Types.VARCHAR, Types.INTEGER));
+    assertFalse(metaData.supportsConvert(Types.BLOB, Types.INTEGER));
     assertFalse(metaData.supportsBatchUpdates());
     assertFalse(metaData.supportsSavepoints());
     assertFalse(metaData.supportsNamedParameters());

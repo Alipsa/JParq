@@ -36,8 +36,8 @@ public final class SqlParser {
       "LOCALTIME", "LOCALTIMESTAMP");
   private static final Set<String> CONVERT_TYPE_NAMES = Set.of("boolean", "bool", "char", "character", "nchar",
       "varchar", "charactervarying", "nvarchar", "string", "text", "clob", "tinyint", "smallint", "int", "integer",
-      "signed", "int4", "bigint", "int8", "float", "real", "float4", "double", "doubleprecision", "float8", "numeric",
-      "decimal", "number");
+      "signed", "int2", "int4", "bigint", "int8", "float", "real", "float4", "double", "doubleprecision", "float8",
+      "numeric", "decimal", "number");
 
   private SqlParser() {
   }
@@ -52,6 +52,50 @@ public final class SqlParser {
       normalized = normalized.substring(0, paren).trim();
     }
     return CONVERT_TYPE_NAMES.contains(normalized);
+  }
+
+  /**
+   * Result of analyzing a CONVERT/CAST transcoding function for column
+   * extraction.
+   *
+   * @param processInner
+   *          if true, the inner expression should be processed by the visitor
+   * @param syntheticColumnName
+   *          if non-null, represents a synthetic column name that should be
+   *          processed instead of the inner expression
+   */
+  record ConvertProcessingResult(boolean processInner, String syntheticColumnName) {
+  }
+
+  /**
+   * Analyzes a {@link TranscodingFunction} to determine how it should be
+   * processed for column extraction.
+   *
+   * <p>
+   * This method handles the special case where CONVERT is used with a type name
+   * as the first argument (e.g., CONVERT(VARCHAR, column_name)). In this case,
+   * JSqlParser swaps the arguments, putting the type name where the column would
+   * normally be. This method detects that pattern and returns a result indicating
+   * the actual column name to use.
+   *
+   * @param convert
+   *          the transcoding function to analyze (may be null)
+   * @return a result indicating whether to process the inner expression and/or a
+   *         synthetic column name
+   */
+  static ConvertProcessingResult analyzeConvertFunction(TranscodingFunction convert) {
+    if (convert == null) {
+      return new ConvertProcessingResult(false, null);
+    }
+    if (convert.isTranscodeStyle()) {
+      return new ConvertProcessingResult(true, null);
+    }
+    Expression inner = convert.getExpression();
+    String typeCandidate = convert.getColDataType() == null ? null : convert.getColDataType().getDataType();
+    if (inner instanceof Column column && isConvertTypeName(column.getColumnName()) && typeCandidate != null) {
+      return new ConvertProcessingResult(false, typeCandidate);
+    }
+    return new ConvertProcessingResult(true, null);
   }
 
   /**
@@ -2015,25 +2059,17 @@ public final class SqlParser {
 
       @Override
       public <S> Void visit(TranscodingFunction convert, S context) {
-        if (convert == null) {
+        ConvertProcessingResult result = analyzeConvertFunction(convert);
+        if (result.syntheticColumnName() != null) {
+          Column synthetic = new Column(result.syntheticColumnName());
+          synthetic.accept(this, context);
           return null;
         }
-        if (convert.isTranscodeStyle()) {
+        if (result.processInner() && convert != null) {
           Expression inner = convert.getExpression();
           if (inner != null) {
             inner.accept(this, context);
           }
-          return null;
-        }
-        Expression inner = convert.getExpression();
-        String typeCandidate = convert.getColDataType() == null ? null : convert.getColDataType().getDataType();
-        if (inner instanceof Column column && isConvertTypeName(column.getColumnName()) && typeCandidate != null) {
-          Column synthetic = new Column(typeCandidate);
-          synthetic.accept(this, context);
-          return null;
-        }
-        if (inner != null) {
-          inner.accept(this, context);
         }
         return null;
       }

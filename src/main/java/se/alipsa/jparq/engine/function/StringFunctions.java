@@ -29,36 +29,23 @@ public final class StringFunctions {
 
   private static final Map<String, String> CHARSET_ALIASES = Map.ofEntries(
       // UTF family
-      Map.entry("UTF-8", StandardCharsets.UTF_8.name()),
-      Map.entry("UTF8", StandardCharsets.UTF_8.name()),
-      Map.entry("UTF8MB4", StandardCharsets.UTF_8.name()),
-      Map.entry("UTF-16", "UTF-16"),
-      Map.entry("UTF16", "UTF-16"),
-      Map.entry("UTF-16BE", "UTF-16BE"),
-      Map.entry("UCS2", "UTF-16BE"),
+      Map.entry("UTF-8", StandardCharsets.UTF_8.name()), Map.entry("UTF8", StandardCharsets.UTF_8.name()),
+      Map.entry("UTF8MB4", StandardCharsets.UTF_8.name()), Map.entry("UTF-16", "UTF-16"), Map.entry("UTF16", "UTF-16"),
+      Map.entry("UTF-16BE", "UTF-16BE"), Map.entry("UCS2", "UTF-16BE"),
       // ISO family
-      Map.entry("ISO-8859-1", "ISO-8859-1"),
-      Map.entry("LATIN1", "ISO-8859-1"),
-      Map.entry("ISO-8859-2", "ISO-8859-2"),
+      Map.entry("ISO-8859-1", "ISO-8859-1"), Map.entry("LATIN1", "ISO-8859-1"), Map.entry("ISO-8859-2", "ISO-8859-2"),
       Map.entry("LATIN2", "ISO-8859-2"),
       // ASCII
-      Map.entry("ASCII", "US-ASCII"),
-      Map.entry("US-ASCII", "US-ASCII"),
+      Map.entry("ASCII", "US-ASCII"), Map.entry("US-ASCII", "US-ASCII"),
       // Japanese encodings
-      Map.entry("EUC-JP", "EUC-JP"),
-      Map.entry("UJIS", "EUC-JP"),
-      Map.entry("SJIS", "Shift_JIS"),
+      Map.entry("EUC-JP", "EUC-JP"), Map.entry("UJIS", "EUC-JP"), Map.entry("SJIS", "Shift_JIS"),
       Map.entry("CP932", "Shift_JIS"),
       // Chinese encodings
-      Map.entry("GB2312", "GB2312"),
-      Map.entry("GBK", "GBK"),
+      Map.entry("GB2312", "GB2312"), Map.entry("GBK", "GBK"),
       // Russian encodings
-      Map.entry("KOI8-R", "KOI8-R"),
-      Map.entry("KOI8_R", "KOI8-R"),
+      Map.entry("KOI8-R", "KOI8-R"), Map.entry("KOI8_R", "KOI8-R"),
       // Windows encodings
-      Map.entry("WINDOWS-1252", "Windows-1252"),
-      Map.entry("CP1252", "Windows-1252")
-  );
+      Map.entry("WINDOWS-1252", "Windows-1252"), Map.entry("CP1252", "Windows-1252"));
 
   /**
    * Implementation of the COALESCE(expr1, expr2, ...) function.

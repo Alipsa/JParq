@@ -37,6 +37,11 @@ import se.alipsa.jparq.helper.JdbcTypeMapper;
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqDatabaseMetaData implements DatabaseMetaData {
 
+  private static final Set<Integer> SUPPORTED_CONVERT_TYPES = Set.of(Types.BOOLEAN, Types.BIT, Types.CHAR,
+      Types.VARCHAR, Types.LONGVARCHAR, Types.NCHAR, Types.NVARCHAR, Types.LONGNVARCHAR, Types.CLOB, Types.NUMERIC,
+      Types.DECIMAL, Types.TINYINT, Types.SMALLINT, Types.INTEGER, Types.BIGINT, Types.REAL, Types.FLOAT, Types.DOUBLE,
+      Types.DATE, Types.TIME, Types.TIMESTAMP);
+
   /**
    * Canonical JDBC numeric functions and their SQL equivalents.
    */
@@ -1102,7 +1107,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean supportsConvert(int fromType, int toType) {
-    return true;
+    return SUPPORTED_CONVERT_TYPES.contains(fromType) && SUPPORTED_CONVERT_TYPES.contains(toType);
   }
 
   /**
@@ -2008,60 +2013,175 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     return false;
   }
 
+  /**
+   * Updates are not supported.
+   *
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @return false
+   */
   @Override
-  public boolean ownUpdatesAreVisible(int type) throws SQLException {
+  public boolean ownUpdatesAreVisible(int type) {
     return false;
   }
 
+  /**
+   * Deletes are not supported.
+   *
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @return false
+   */
   @Override
-  public boolean ownDeletesAreVisible(int type) throws SQLException {
+  public boolean ownDeletesAreVisible(int type) {
     return false;
   }
 
+  /**
+   * Inserts are not supported.
+   *
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @return false
+   */
   @Override
-  public boolean ownInsertsAreVisible(int type) throws SQLException {
+  public boolean ownInsertsAreVisible(int type) {
     return false;
   }
 
+  /**
+   * Updates are not supported.
+   *
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @return false
+   */
   @Override
-  public boolean othersUpdatesAreVisible(int type) throws SQLException {
+  public boolean othersUpdatesAreVisible(int type) {
     return false;
   }
 
+  /**
+   * Deletes are not supported.
+   *
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @return false
+   */
   @Override
-  public boolean othersDeletesAreVisible(int type) throws SQLException {
+  public boolean othersDeletesAreVisible(int type) {
     return false;
   }
 
+  /**
+   * Inserts are not supported.
+   *
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @return false
+   */
   @Override
-  public boolean othersInsertsAreVisible(int type) throws SQLException {
+  public boolean othersInsertsAreVisible(int type) {
     return false;
   }
 
+  /**
+   * Updates are not supported.
+   *
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @return false
+   */
   @Override
-  public boolean updatesAreDetected(int type) throws SQLException {
+  public boolean updatesAreDetected(int type) {
     return false;
   }
 
+  /**
+   * Deletes are not supported.
+   *
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @return false
+   */
   @Override
-  public boolean deletesAreDetected(int type) throws SQLException {
+  public boolean deletesAreDetected(int type) {
     return false;
   }
 
+  /**
+   * Inserts are not supported.
+   *
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @return false
+   */
   @Override
-  public boolean insertsAreDetected(int type) throws SQLException {
+  public boolean insertsAreDetected(int type) {
     return false;
   }
 
+  /**
+   * Batch updates are not supported.
+   *
+   * @return false
+   */
   @Override
-  public boolean supportsBatchUpdates() throws SQLException {
+  public boolean supportsBatchUpdates() {
     return false;
   }
 
-  // TODO: this should return an empty result set instead of null
+  /**
+   * User-defined types (UDTs) are not supported so this will always return an
+   * empty result set.
+   *
+   * @param catalog
+   *          a catalog name; must match the catalog name as it is stored in the
+   *          database; "" retrieves those without a catalog; {@code null} means
+   *          that the catalog name should not be used to narrow the search
+   * @param schemaPattern
+   *          a schema pattern name; must match the schema name as it is stored in
+   *          the database; "" retrieves those without a schema; {@code null}
+   *          means that the schema name should not be used to narrow the search
+   * @param typeNamePattern
+   *          a type name pattern; must match the type name as it is stored in the
+   *          database; may be a fully qualified name
+   * @param types
+   *          a list of user-defined types (JAVA_OBJECT, STRUCT, or DISTINCT) to
+   *          include; {@code null} returns all types
+   * @return an empty result set.
+   */
   @Override
   public ResultSet getUDTs(String catalog, String schemaPattern, String typeNamePattern, int[] types) {
-    return null;
+    return JParqUtil.listResultSet(
+        List.of("TYPE_CAT", "TYPE_SCHEM", "TYPE_NAME", "CLASS_NAME", "DATA_TYPE", "REMARKS", "BASE_TYPE"), List.of());
   }
 
   @Override
