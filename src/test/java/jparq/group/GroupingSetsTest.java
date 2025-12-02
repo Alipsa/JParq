@@ -118,6 +118,34 @@ public class GroupingSetsTest {
       assertEquals(total, actualCylTotals.get(cyl), 1e-9, "Cylinder total mismatch for cyl = " + cyl);
     });
   }
+
+  @Test
+  void testOrderByGroupingFunction() {
+    MtcarsHpSums.Aggregates sums = MtcarsHpSums.compute(jparqSql);
+    List<Double> actualTotals = new ArrayList<>();
+    jparqSql.query(
+        "SELECT SUM(hp) AS total_hp FROM mtcars GROUP BY GROUPING SETS ((cyl), ()) "
+            + "ORDER BY GROUPING(cyl) DESC, cyl ASC",
+        rs -> {
+          try {
+            while (rs.next()) {
+              actualTotals.add(rs.getDouble("total_hp"));
+            }
+          } catch (SQLException e) {
+            fail(e);
+          }
+        });
+
+    List<Double> expectedTotals = new ArrayList<>();
+    expectedTotals.add(sums.grandTotal());
+    new TreeSet<>(sums.cylinderTotals().keySet()).forEach(cyl -> expectedTotals.add(sums.cylinderTotals().get(cyl)));
+
+    assertEquals(expectedTotals.size(), actualTotals.size(), "Unexpected number of rows when ordering by GROUPING()");
+    for (int i = 0; i < expectedTotals.size(); i++) {
+      assertEquals(expectedTotals.get(i), actualTotals.get(i), 1e-9, "Mismatch at ordered row " + i);
+    }
+  }
+
   private record ResultRow(Integer cyl, Integer gear, double totalHp, int groupingCyl, int groupingGear) {
   }
 }

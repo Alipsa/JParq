@@ -13,10 +13,12 @@ import java.nio.file.Paths;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
@@ -184,16 +186,32 @@ public class OrderByTest {
     });
   }
 
-  @Disabled
   @Test
   void testOrderByOnlyInGroupBy() {
-    jparqSql.query("""
-        SELECT SUM(hp) FROM cars GROUP BY cyl ORDER BY cyl DESC
-        """, rs -> {
+    Map<Integer, Integer> totalsByCyl = new HashMap<>();
+    jparqSql.query("SELECT cyl, hp FROM mtcars", rs -> {
       try {
         while (rs.next()) {
-          System.out.println(rs.getInt(1));
+          totalsByCyl.merge(rs.getInt("cyl"), rs.getInt("hp"), Integer::sum);
         }
+      } catch (SQLException e) {
+        throw new RuntimeException(e);
+      }
+    });
+    List<Integer> expectedTotals = totalsByCyl.entrySet().stream()
+        .sorted(Map.Entry.<Integer, Integer>comparingByKey(Comparator.reverseOrder())).map(Map.Entry::getValue)
+        .toList();
+
+    jparqSql.query("""
+        SELECT SUM(hp) FROM mtcars GROUP BY cyl ORDER BY cyl DESC
+        """, rs -> {
+      try {
+        List<Integer> actualTotals = new ArrayList<>();
+        while (rs.next()) {
+          actualTotals.add(rs.getInt(1));
+        }
+        assertEquals(expectedTotals, actualTotals,
+            "Aggregates should be ordered by grouping column even when it is not projected");
       } catch (SQLException e) {
         throw new RuntimeException(e);
       }

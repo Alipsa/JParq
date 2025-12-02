@@ -1246,7 +1246,7 @@ public final class AggregateFunctions {
       groupSqlTypes.add(tracker.sqlType());
     }
 
-    List<List<Object>> rows = new ArrayList<>();
+    List<AggregatedRow> rows = new ArrayList<>();
     Expression normalizedHaving = ExpressionEvaluator.unwrapParenthesis(having);
 
     for (GroupState state : states.values()) {
@@ -1260,7 +1260,7 @@ public final class AggregateFunctions {
         include = evaluator.eval(normalizedHaving);
       }
       if (include) {
-        rows.add(row);
+        rows.add(new AggregatedRow(row, state.groupValues(), aggregateValues, state.groupingSetIndex()));
       }
     }
 
@@ -1279,20 +1279,22 @@ public final class AggregateFunctions {
       }
     }
 
-    return new AggregateResult(List.copyOf(rows), List.copyOf(columnSqlTypes));
+    List<List<Object>> projectedRows = rows.stream().map(AggregatedRow::rowValues).toList();
+
+    return new AggregateResult(List.copyOf(projectedRows), List.copyOf(columnSqlTypes));
   }
 
-  private static void sortAggregatedRows(List<List<Object>> rows, AggregatePlan plan, List<OrderKey> orderBy) {
-    Map<String, Integer> indexByColumn = buildOrderIndex(plan);
-    Comparator<List<Object>> comparator = (left, right) -> {
+  private static void sortAggregatedRows(List<AggregatedRow> rows, AggregatePlan plan, List<OrderKey> orderBy) {
+    Map<String, OrderValueAccessor> accessorByColumn = buildOrderAccessors(plan);
+    Comparator<AggregatedRow> comparator = (left, right) -> {
       for (OrderKey key : orderBy) {
-        Integer idx = indexByColumn.get(key.column().toLowerCase(Locale.ROOT));
-        if (idx == null) {
+        OrderValueAccessor accessor = accessorByColumn.get(key.column().toLowerCase(Locale.ROOT));
+        if (accessor == null) {
           throw new IllegalArgumentException(
-              "ORDER BY column '" + key.column() + "' is not present in the SELECT list");
+              "ORDER BY column '" + key.column() + "' is not present in the SELECT list or grouping expressions");
         }
-        Object lv = left.get(idx);
-        Object rv = right.get(idx);
+        Object lv = accessor.value(left);
+        Object rv = accessor.value(right);
         boolean hasNull = lv == null || rv == null;
         int nullCmp = OrderingUtil.compareNulls(lv, rv, key.asc(), key.nullOrdering());
         if (nullCmp != 0) {
@@ -1311,32 +1313,129 @@ public final class AggregateFunctions {
     rows.sort(comparator);
   }
 
-  private static Map<String, Integer> buildOrderIndex(AggregatePlan plan) {
-    Map<String, Integer> mapping = new HashMap<>();
+  private static Map<String, OrderValueAccessor> buildOrderAccessors(AggregatePlan plan) {
+    Map<String, OrderValueAccessor> mapping = new HashMap<>();
     List<ResultColumn> columns = plan.resultColumns();
     for (int i = 0; i < columns.size(); i++) {
       ResultColumn column = columns.get(i);
-      registerOrderKey(mapping, column.label(), i);
+      registerOrderAccessor(mapping, column.label(), OrderValueAccessor.projection(i));
       if (column.isAggregate()) {
         AggregateSpec spec = plan.specs().get(column.aggregateIndex());
-        registerOrderKey(mapping, spec.label(), i);
-        registerOrderKey(mapping, aggregateExpressionText(spec), i);
+        OrderValueAccessor aggregateAccessor = OrderValueAccessor.aggregate(column.aggregateIndex());
+        registerOrderAccessor(mapping, spec.label(), aggregateAccessor);
+        registerOrderAccessor(mapping, aggregateExpressionText(spec), aggregateAccessor);
       } else if (column.isGrouping()) {
-        registerOrderKey(mapping, column.expressionText(), i);
+        registerOrderAccessor(mapping, column.expressionText(), OrderValueAccessor.projection(i));
       } else {
         GroupExpression group = plan.groupExpressions().get(column.groupIndex());
-        registerOrderKey(mapping, group.label(), i);
-        registerOrderKey(mapping, group.expression().toString(), i);
+        OrderValueAccessor groupAccessor = OrderValueAccessor.groupValue(column.groupIndex());
+        registerOrderAccessor(mapping, group.label(), groupAccessor);
+        registerOrderAccessor(mapping, group.expression().toString(), groupAccessor);
       }
     }
+    List<GroupExpression> groups = plan.groupExpressions();
+    for (int i = 0; i < groups.size(); i++) {
+      GroupExpression group = groups.get(i);
+      registerOrderAccessor(mapping, group.label(), OrderValueAccessor.groupValue(i));
+      registerOrderAccessor(mapping, group.expression().toString(), OrderValueAccessor.groupValue(i));
+    }
+    registerGroupingFunctionAccessors(mapping, plan);
     return mapping;
   }
 
-  private static void registerOrderKey(Map<String, Integer> mapping, String key, int index) {
-    if (key == null || key.isBlank()) {
+  private static void registerGroupingFunctionAccessors(Map<String, OrderValueAccessor> mapping, AggregatePlan plan) {
+    List<GroupExpression> groups = plan.groupExpressions();
+    for (int i = 0; i < groups.size(); i++) {
+      GroupExpression group = groups.get(i);
+      OrderValueAccessor accessor = OrderValueAccessor.groupingFunction(List.of(i), plan);
+      registerOrderAccessor(mapping, "GROUPING(" + group.label() + ")", accessor);
+      registerOrderAccessor(mapping, "GROUPING(" + group.expression() + ")", accessor);
+    }
+  }
+
+  private static void registerOrderAccessor(Map<String, OrderValueAccessor> mapping, String key,
+      OrderValueAccessor accessor) {
+    if (key == null || key.isBlank() || accessor == null) {
       return;
     }
-    mapping.putIfAbsent(key.toLowerCase(Locale.ROOT), index);
+    mapping.putIfAbsent(key.toLowerCase(Locale.ROOT), accessor);
+  }
+
+  private enum OrderValueKind {
+    PROJECTION,
+    GROUP,
+    AGGREGATE,
+    GROUPING_FUNCTION
+  }
+
+  private static final class OrderValueAccessor {
+    private final OrderValueKind kind;
+    private final int index;
+    private final List<Integer> groupingIndexes;
+    private final AggregatePlan plan;
+
+    private OrderValueAccessor(OrderValueKind kind, int index, List<Integer> groupingIndexes, AggregatePlan plan) {
+      this.kind = kind;
+      this.index = index;
+      this.groupingIndexes = groupingIndexes == null ? List.of() : groupingIndexes;
+      this.plan = plan;
+    }
+
+    static OrderValueAccessor projection(int index) {
+      return new OrderValueAccessor(OrderValueKind.PROJECTION, index, List.of(), null);
+    }
+
+    static OrderValueAccessor groupValue(int index) {
+      return new OrderValueAccessor(OrderValueKind.GROUP, index, List.of(), null);
+    }
+
+    static OrderValueAccessor aggregate(int index) {
+      return new OrderValueAccessor(OrderValueKind.AGGREGATE, index, List.of(), null);
+    }
+
+    static OrderValueAccessor groupingFunction(List<Integer> indexes, AggregatePlan plan) {
+      return new OrderValueAccessor(OrderValueKind.GROUPING_FUNCTION, -1, indexes, plan);
+    }
+
+    Object value(AggregatedRow row) {
+      return switch (kind) {
+        case PROJECTION -> row.rowValues().get(index);
+        case GROUP -> row.groupValues().get(index);
+        case AGGREGATE -> row.aggregateValues().get(index);
+        case GROUPING_FUNCTION -> groupingValue(plan, row.groupingSetIndex(), groupingIndexes);
+      };
+    }
+  }
+
+  private static final class AggregatedRow {
+    private final List<Object> rowValues;
+    private final List<Object> groupValues;
+    private final List<Object> aggregateValues;
+    private final int groupingSetIndex;
+
+    AggregatedRow(List<Object> rowValues, List<Object> groupValues, List<Object> aggregateValues,
+        int groupingSetIndex) {
+      this.rowValues = immutableListAllowingNulls(rowValues);
+      this.groupValues = immutableListAllowingNulls(groupValues);
+      this.aggregateValues = immutableListAllowingNulls(aggregateValues);
+      this.groupingSetIndex = groupingSetIndex;
+    }
+
+    List<Object> rowValues() {
+      return rowValues;
+    }
+
+    List<Object> groupValues() {
+      return groupValues;
+    }
+
+    List<Object> aggregateValues() {
+      return aggregateValues;
+    }
+
+    int groupingSetIndex() {
+      return groupingSetIndex;
+    }
   }
 
   private static String aggregateExpressionText(AggregateSpec spec) {
