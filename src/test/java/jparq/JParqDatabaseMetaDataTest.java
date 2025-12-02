@@ -18,7 +18,7 @@ import se.alipsa.jparq.JParqConnection;
 public class JParqDatabaseMetaDataTest {
 
   @Test
-  public void testGetSchemas(@TempDir File tempDir) throws SQLException, IOException {
+  public void testGetSchemas(@TempDir File tempDir) throws SQLException {
     // Create some subdirectories to represent schemas
     new File(tempDir, "schema1").mkdir();
     new File(tempDir, "schema2").mkdir();
