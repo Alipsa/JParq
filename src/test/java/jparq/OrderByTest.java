@@ -218,4 +218,32 @@ public class OrderByTest {
     });
   }
 
+  @Test
+  void testOrderByExpressionOutsideSelect() {
+    List<String> expectedModels = new ArrayList<>();
+    jparqSql.query("SELECT model FROM mtcars ORDER BY hp DESC", rs -> {
+      try {
+        while (rs.next()) {
+          expectedModels.add(rs.getString("model"));
+        }
+      } catch (SQLException e) {
+        throw new RuntimeException(e);
+      }
+    });
+
+    List<String> actualModels = new ArrayList<>();
+    jparqSql.query("SELECT model FROM mtcars ORDER BY hp + 10 DESC", rs -> {
+      try {
+        while (rs.next()) {
+          actualModels.add(rs.getString("model"));
+        }
+      } catch (SQLException e) {
+        throw new RuntimeException(e);
+      }
+    });
+
+    assertEquals(expectedModels, actualModels,
+        "Ordering by expression not in SELECT should match ordering by the underlying columns");
+  }
+
 }

@@ -26,6 +26,7 @@ import java.sql.SQLWarning;
 import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
@@ -47,6 +48,7 @@ import org.apache.avro.LogicalType;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.Schema.Field;
+import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
@@ -57,6 +59,7 @@ import org.apache.parquet.filter2.predicate.FilterPredicate;
 import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
+import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.IdentifierUtil;
 import se.alipsa.jparq.engine.InMemoryRecordReader;
@@ -73,6 +76,7 @@ import se.alipsa.jparq.engine.SqlParser.ValueTableDefinition;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.UnnestTableBuilder;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
+import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
 import se.alipsa.jparq.engine.function.SystemFunctions;
 import se.alipsa.jparq.engine.window.AvgWindow;
@@ -511,7 +515,7 @@ class JParqPreparedStatement implements PreparedStatement {
       sqlTypes = List.of();
     }
     List<List<Object>> combined = evaluateSetOperation(components, componentRows);
-    List<List<Object>> ordered = applySetOrdering(combined, labels, parsedSetQuery.orderBy());
+    List<List<Object>> ordered = applySetOrdering(combined, labels, sqlTypes, parsedSetQuery.orderBy());
     List<List<Object>> sliced = applySetLimitOffset(ordered, parsedSetQuery.limit(), parsedSetQuery.offset());
     return JParqResultSet.materializedResult("set_operation_result", labels, sqlTypes, sliced);
   }
@@ -634,7 +638,7 @@ class JParqPreparedStatement implements PreparedStatement {
    * @throws SQLException
    *           if an ORDER BY column cannot be resolved
    */
-  private List<List<Object>> applySetOrdering(List<List<Object>> rows, List<String> labels,
+  private List<List<Object>> applySetOrdering(List<List<Object>> rows, List<String> labels, List<Integer> sqlTypes,
       List<SqlParser.SetOrder> orderBy) throws SQLException {
     if (orderBy == null || orderBy.isEmpty() || rows.isEmpty()) {
       return rows;
@@ -644,27 +648,57 @@ class JParqPreparedStatement implements PreparedStatement {
       labelIndexes.put(labels.get(i).toLowerCase(Locale.ROOT), i);
     }
     List<ResolvedSetOrder> resolved = new ArrayList<>(orderBy.size());
+    boolean hasExpressions = false;
     for (SqlParser.SetOrder order : orderBy) {
       int index;
       if (order.columnIndex() != null) {
         index = order.columnIndex() - 1;
-      } else {
+      } else if (order.expression() == null) {
         if (order.columnLabel() == null) {
-          throw new SQLException("Set operation ORDER BY requires column index or label");
+          throw new SQLException("Set operation ORDER BY requires column index, label, or expression");
         }
         Integer mapped = labelIndexes.get(order.columnLabel().toLowerCase(Locale.ROOT));
         if (mapped == null) {
           throw new SQLException("Unknown set operation ORDER BY column: " + order.columnLabel());
         }
         index = mapped;
+      } else {
+        index = -1;
+        hasExpressions = true;
       }
-      if (index < 0 || index >= labels.size()) {
+      if (index < 0 && order.expression() == null || index >= labels.size()) {
         throw new SQLException("Set operation ORDER BY column index out of range: " + (index + 1));
       }
-      resolved.add(new ResolvedSetOrder(index, order.asc()));
+      resolved.add(new ResolvedSetOrder(index, order.asc(), order.expression()));
     }
-    List<List<Object>> sorted = new ArrayList<>(rows);
-    sorted.sort((left, right) -> compareSetRows(left, right, resolved));
+    ValueExpressionEvaluator evaluator = null;
+    Schema setOrderSchema = null;
+    if (hasExpressions) {
+      setOrderSchema = buildSetOrderSchema(labels, sqlTypes);
+      CorrelationMappings mappings = new CorrelationMappings(List.of(), Map.of(), Map.of(), Map.of());
+      evaluator = new ValueExpressionEvaluator(setOrderSchema, null, mappings, WindowState.empty());
+    }
+
+    List<SortableSetRow> sortableRows = new ArrayList<>(rows.size());
+    for (List<Object> row : rows) {
+      List<Object> keys = new ArrayList<>(resolved.size());
+      for (ResolvedSetOrder order : resolved) {
+        Object keyVal;
+        if (order.expression() != null) {
+          keyVal = evaluateSetOrderExpression(order.expression(), row, labels, setOrderSchema, evaluator);
+        } else {
+          keyVal = row.get(order.index());
+        }
+        keys.add(keyVal);
+      }
+      sortableRows.add(new SortableSetRow(row, keys));
+    }
+
+    sortableRows.sort((left, right) -> compareSetRows(left.keys(), right.keys(), resolved));
+    List<List<Object>> sorted = new ArrayList<>(sortableRows.size());
+    for (SortableSetRow sortableRow : sortableRows) {
+      sorted.add(sortableRow.row());
+    }
     return sorted;
   }
 
@@ -858,9 +892,10 @@ class JParqPreparedStatement implements PreparedStatement {
    * @return comparison result consistent with SQL ordering semantics
    */
   private int compareSetRows(List<Object> left, List<Object> right, List<ResolvedSetOrder> orders) {
-    for (ResolvedSetOrder order : orders) {
-      Object lv = left.get(order.index());
-      Object rv = right.get(order.index());
+    for (int i = 0; i < orders.size(); i++) {
+      ResolvedSetOrder order = orders.get(i);
+      Object lv = left.get(i);
+      Object rv = right.get(i);
       int cmp;
       if (lv == null || rv == null) {
         cmp = (lv == null ? 1 : 0) - (rv == null ? 1 : 0);
@@ -912,11 +947,98 @@ class JParqPreparedStatement implements PreparedStatement {
     return left.toString().compareTo(right.toString());
   }
 
+  private Schema buildSetOrderSchema(List<String> labels, List<Integer> sqlTypes) {
+    if (labels == null || labels.isEmpty()) {
+      return SchemaBuilder.record("set_order").fields().endRecord();
+    }
+    SchemaBuilder.FieldAssembler<Schema> fields = SchemaBuilder.record("set_order").fields();
+    for (int i = 0; i < labels.size(); i++) {
+      String label = labels.get(i);
+      Schema baseType = mapSqlTypeToAvroType(sqlTypes, i);
+      fields = fields.name(label).type(SchemaBuilder.unionOf().nullType().and().type(baseType).endUnion()).noDefault();
+    }
+    return fields.endRecord();
+  }
+
+  private Schema mapSqlTypeToAvroType(List<Integer> sqlTypes, int index) {
+    Schema.Type type = Schema.Type.STRING;
+    if (sqlTypes != null && index >= 0 && index < sqlTypes.size()) {
+      Integer sqlType = sqlTypes.get(index);
+      if (sqlType != null) {
+        type = switch (sqlType) {
+          case Types.BOOLEAN, Types.BIT -> Schema.Type.BOOLEAN;
+          case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> Schema.Type.INT;
+          case Types.BIGINT -> Schema.Type.LONG;
+          case Types.FLOAT, Types.REAL, Types.DOUBLE, Types.NUMERIC, Types.DECIMAL -> Schema.Type.DOUBLE;
+          case Types.DATE, Types.TIME, Types.TIMESTAMP -> Schema.Type.LONG;
+          case Types.CHAR, Types.VARCHAR, Types.LONGVARCHAR, Types.NCHAR, Types.NVARCHAR, Types.LONGNVARCHAR ->
+            Schema.Type.STRING;
+          default -> Schema.Type.STRING;
+        };
+      }
+    }
+    return Schema.create(type);
+  }
+
+  private Object evaluateSetOrderExpression(Expression expression, List<Object> row, List<String> labels,
+      Schema schema, ValueExpressionEvaluator evaluator) {
+    if (expression == null || evaluator == null || schema == null) {
+      return null;
+    }
+    GenericData.Record record = new GenericData.Record(schema);
+    for (int i = 0; i < labels.size() && i < row.size(); i++) {
+      Schema.Field field = schema.getField(labels.get(i));
+      if (field == null) {
+        continue;
+      }
+      record.put(field.name(), adaptValueForSchema(field.schema(), row.get(i)));
+    }
+    return evaluator.eval(expression, record);
+  }
+
+  private Object adaptValueForSchema(Schema schema, Object value) {
+    if (value == null || schema == null) {
+      return null;
+    }
+    Schema base = schema.getType() == Schema.Type.UNION ? schema.getTypes().stream()
+        .filter(s -> s.getType() != Schema.Type.NULL).findFirst().orElse(Schema.create(Schema.Type.STRING)) : schema;
+    return switch (base.getType()) {
+      case BOOLEAN -> (value instanceof Boolean) ? value : Boolean.parseBoolean(value.toString());
+      case INT -> (value instanceof Number) ? ((Number) value).intValue() : Integer.parseInt(value.toString());
+      case LONG -> {
+        if (value instanceof Date date) {
+          yield date.getTime();
+        }
+        if (value instanceof Time time) {
+          yield time.getTime();
+        }
+        if (value instanceof Timestamp ts) {
+          yield ts.getTime();
+        }
+        yield (value instanceof Number) ? ((Number) value).longValue() : Long.parseLong(value.toString());
+      }
+      case DOUBLE -> {
+        if (value instanceof Number num) {
+          yield num.doubleValue();
+        }
+        if (value instanceof BigDecimal bigDecimal) {
+          yield bigDecimal.doubleValue();
+        }
+        yield Double.parseDouble(value.toString());
+      }
+      case STRING -> value.toString();
+      default -> value;
+    };
+  }
+
   /**
    * Internal representation of a set operation ORDER BY directive once column
    * positions have been resolved.
    */
-  private record ResolvedSetOrder(int index, boolean asc) {
+  private record ResolvedSetOrder(int index, boolean asc, Expression expression) {
+  }
+
+  private record SortableSetRow(List<Object> row, List<Object> keys) {
   }
 
   /**
@@ -2112,7 +2234,7 @@ class JParqPreparedStatement implements PreparedStatement {
     for (int i = 1; i <= columnCount; i++) {
       String columnName = columnLabel(meta, i);
       Schema valueSchema = columnSchema(meta, i);
-      if (ref != null && meta.getColumnType(i) == java.sql.Types.OTHER) {
+      if (ref != null && meta.getColumnType(i) == Types.OTHER) {
         Schema inferred = inferSubqueryColumnSchema(ref, i);
         if (inferred != null) {
           valueSchema = inferred;
@@ -2300,16 +2422,16 @@ class JParqPreparedStatement implements PreparedStatement {
   private Schema columnSchema(ResultSetMetaData meta, int column) throws SQLException {
     int type = meta.getColumnType(column);
     return switch (type) {
-      case java.sql.Types.BOOLEAN, java.sql.Types.BIT -> Schema.create(Schema.Type.BOOLEAN);
-      case java.sql.Types.TINYINT, java.sql.Types.SMALLINT, java.sql.Types.INTEGER -> Schema.create(Schema.Type.INT);
-      case java.sql.Types.BIGINT -> Schema.create(Schema.Type.LONG);
-      case java.sql.Types.FLOAT, java.sql.Types.REAL -> Schema.create(Schema.Type.FLOAT);
-      case java.sql.Types.DOUBLE -> Schema.create(Schema.Type.DOUBLE);
-      case java.sql.Types.NUMERIC, java.sql.Types.DECIMAL -> decimalSchema(meta, column);
-      case java.sql.Types.DATE -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
-      case java.sql.Types.TIME -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
-      case java.sql.Types.TIMESTAMP -> LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
-      case java.sql.Types.BINARY, java.sql.Types.VARBINARY, java.sql.Types.LONGVARBINARY ->
+      case Types.BOOLEAN, Types.BIT -> Schema.create(Schema.Type.BOOLEAN);
+      case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> Schema.create(Schema.Type.INT);
+      case Types.BIGINT -> Schema.create(Schema.Type.LONG);
+      case Types.FLOAT, Types.REAL -> Schema.create(Schema.Type.FLOAT);
+      case Types.DOUBLE -> Schema.create(Schema.Type.DOUBLE);
+      case Types.NUMERIC, Types.DECIMAL -> decimalSchema(meta, column);
+      case Types.DATE -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
+      case Types.TIME -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
+      case Types.TIMESTAMP -> LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
+      case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY ->
         Schema.create(Schema.Type.BYTES);
       default -> Schema.create(Schema.Type.STRING);
     };
@@ -2792,12 +2914,16 @@ class JParqPreparedStatement implements PreparedStatement {
     collectColumnReferencesFromList(select.expressions(), qualifiers, primaryQualifier, needed, referenced);
     collectColumnReferencesFromExpression(select.where(), qualifiers, primaryQualifier, needed, referenced);
     for (SqlParser.OrderKey key : select.orderBy()) {
-      if (!isOrdinalReference(key.column()) && !isGroupingFunctionReference(key.column())) {
+      if (key.expression() != null) {
+        addColumns(needed, ColumnsUsed.inWhere(key.expression()));
+      } else if (!isOrdinalReference(key.column()) && !isGroupingFunctionReference(key.column())) {
         addColumn(needed, key.column());
       }
     }
     for (SqlParser.OrderKey key : select.preOrderBy()) {
-      if (!isOrdinalReference(key.column()) && !isGroupingFunctionReference(key.column())) {
+      if (key.expression() != null) {
+        addColumns(needed, ColumnsUsed.inWhere(key.expression()));
+      } else if (!isOrdinalReference(key.column()) && !isGroupingFunctionReference(key.column())) {
         addColumn(needed, key.column());
       }
     }

@@ -63,8 +63,12 @@ public final class SqlParser {
    * @param nullOrdering
    *          explicit null ordering specified in the {@code ORDER BY} clause; may
    *          be {@code null} when not provided
+   * @param expression
+   *          the original ORDER BY expression used for evaluation; {@code null}
+   *          when the ORDER BY references a simple column
    */
-  public record OrderKey(String column, boolean asc, String qualifier, OrderByElement.NullOrdering nullOrdering) {
+  public record OrderKey(String column, boolean asc, String qualifier, OrderByElement.NullOrdering nullOrdering,
+      Expression expression) {
   }
 
   /**
@@ -200,7 +204,7 @@ public final class SqlParser {
 
   /**
    * ORDER BY key for set operation queries supporting either column positions or
-   * labels.
+   * labels or full expressions.
    *
    * @param columnIndex
    *          1-based column index when ORDER BY uses positional syntax,
@@ -211,8 +215,10 @@ public final class SqlParser {
    * @param asc
    *          {@code true} when ascending order is requested, {@code false} for
    *          descending
+   * @param expression
+   *          the ORDER BY expression when not a simple column reference
    */
-  public record SetOrder(Integer columnIndex, String columnLabel, boolean asc) {
+  public record SetOrder(Integer columnIndex, String columnLabel, boolean asc, Expression expression) {
   }
 
   /**
@@ -819,15 +825,16 @@ public final class SqlParser {
       Expression expression = element.getExpression();
       Integer columnIndex = null;
       String columnLabel = null;
+      Expression orderExpression = null;
       if (expression instanceof LongValue value) {
         columnIndex = value.getBigIntegerValue().intValue();
       } else if (expression instanceof Column column) {
         columnLabel = column.getColumnName();
       } else {
-        throw new IllegalArgumentException("Set operation ORDER BY supports column index or name only: " + expression);
+        orderExpression = expression;
       }
       boolean asc = !element.isAscDescPresent() || element.isAsc();
-      orders.add(new SetOrder(columnIndex, columnLabel, asc));
+      orders.add(new SetOrder(columnIndex, columnLabel, asc, orderExpression));
     }
     return List.copyOf(orders);
   }
@@ -1741,6 +1748,7 @@ public final class SqlParser {
 
         // Extract the ORDER BY token as text
         String keyText;
+        Expression expressionReference = (ex instanceof Column) ? null : ex;
         if (ex instanceof Column c) {
           keyText = c.getColumnName();
           if (tableRefs.size() > 1) {
@@ -1757,7 +1765,7 @@ public final class SqlParser {
 
         boolean asc = !e.isAscDescPresent() || e.isAsc(); // default ASC
         OrderByElement.NullOrdering nullOrdering = e.getNullOrdering();
-        orderKeys.add(new OrderKey(physicalKey, asc, qualifier, nullOrdering));
+        orderKeys.add(new OrderKey(physicalKey, asc, qualifier, nullOrdering, expressionReference));
       }
     }
     return orderKeys;
