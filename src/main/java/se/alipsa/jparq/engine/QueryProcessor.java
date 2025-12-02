@@ -558,6 +558,12 @@ public final class QueryProcessor implements AutoCloseable {
   }
 
   private Object resolveOrderValue(GenericRecord record, Schema schema, SqlParser.OrderKey key) {
+    if (key.expression() != null) {
+      ensureOrderByEvaluator(schema);
+      if (orderByEvaluator != null) {
+        return orderByEvaluator.eval(key.expression(), record);
+      }
+    }
     Schema.Field field = schema.getField(key.column());
     String lookupName = key.column();
     if (field == null) {
@@ -612,7 +618,7 @@ public final class QueryProcessor implements AutoCloseable {
       String column = key.column();
       String resolved = ColumnMappingUtil.canonicalOrderColumn(column, key.qualifier(), qualifierColumnMapping,
           unqualifiedColumnMapping);
-      canonical.add(new SqlParser.OrderKey(resolved, key.asc(), key.qualifier(), key.nullOrdering()));
+      canonical.add(new SqlParser.OrderKey(resolved, key.asc(), key.qualifier(), key.nullOrdering(), key.expression()));
     }
     return List.copyOf(canonical);
   }

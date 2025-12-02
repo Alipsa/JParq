@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -216,6 +217,42 @@ public class OrderByTest {
         throw new RuntimeException(e);
       }
     });
+  }
+
+  @Test
+  void testOrderByExpressionOutsideSelect() {
+    List<String> expectedModels = new ArrayList<>();
+    jparqSql.query("SELECT model FROM mtcars ORDER BY hp DESC", rs -> {
+      try {
+        while (rs.next()) {
+          expectedModels.add(rs.getString("model"));
+        }
+      } catch (SQLException e) {
+        throw new RuntimeException(e);
+      }
+    });
+
+    List<String> actualModels = new ArrayList<>();
+    jparqSql.query("SELECT model FROM mtcars ORDER BY hp + 10 DESC", rs -> {
+      try {
+        while (rs.next()) {
+          actualModels.add(rs.getString("model"));
+        }
+      } catch (SQLException e) {
+        throw new RuntimeException(e);
+      }
+    });
+
+    assertEquals(expectedModels, actualModels,
+        "Ordering by expression not in SELECT should match ordering by the underlying columns");
+  }
+
+  @Test
+  void testInvalidOrderByExpression() {
+    RuntimeException ex = assertThrows(RuntimeException.class,
+        () -> jparqSql.query("SELECT model FROM mtcars ORDER BY nonexistent_column + 10", rs -> {
+        }));
+    assertTrue(ex.getCause() instanceof SQLException, "Expected SQLException cause for invalid ORDER BY expression");
   }
 
 }
