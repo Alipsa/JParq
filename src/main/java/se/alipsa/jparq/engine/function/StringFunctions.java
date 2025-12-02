@@ -610,7 +610,7 @@ public final class StringFunctions {
     return compiled.matcher(input).matches();
   }
 
-  private static String toLikeRegex(String pattern, Character escape) {
+  public static String toLikeRegex(String pattern, Character escape) {
     StringBuilder regex = new StringBuilder();
     regex.append('^');
     for (int i = 0; i < pattern.length(); i++) {
