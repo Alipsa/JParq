@@ -88,6 +88,79 @@ class ConvertFunctionTest {
     assertTrue(ex.getCause() instanceof SQLException, "Expected SQLException cause for invalid charset");
   }
 
+  @Test
+  void jdbcEscapeConvertWithNestedFunctionCall() {
+    String sql = """
+        SELECT {fn convert(CONCAT(model, ' model'), VARCHAR)} AS converted
+        FROM mtcars
+        WHERE model = 'Mazda RX4'
+        """;
+    jparqSql.query(sql, rs -> {
+      try {
+        assertTrue(rs.next(), "Expected a row for Mazda RX4");
+        assertEquals("Mazda RX4 model", rs.getString("converted"));
+        assertFalse(rs.next(), "Only one row should match Mazda RX4");
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void jdbcEscapeConvertWithUsingClauseIsNotRewrittenToCast() {
+    // JDBC escape CONVERT with USING clause should NOT be rewritten to CAST.
+    // Even though {fn convert('text', USING charset)} is non-standard JDBC syntax,
+    // the resolver correctly identifies it as charset conversion (not type cast)
+    // and preserves it as a CONVERT call rather than incorrectly rewriting to CAST.
+    // Note: This test verifies the resolver's behavior, not that the final SQL is valid.
+    String escapedSql = "{fn convert('Café', USING UTF8)}";
+    String resolved = se.alipsa.jparq.helper.FunctionEscapeResolver.resolveJdbcFunctionEscapes(
+        "VALUES (" + escapedSql + ")");
+    // Should NOT be rewritten to CAST - should remain as CONVERT
+    assertFalse(resolved.contains("CAST"), 
+        "CONVERT with USING should not be rewritten to CAST: " + resolved);
+    assertTrue(resolved.contains("CONVERT"), 
+        "Should preserve CONVERT function: " + resolved);
+  }
+
+  @Test
+  void jdbcEscapeConvertWithMultipleCommasInNestedFunction() {
+    // Edge case: nested function with multiple commas should still parse correctly
+    String sql = """
+        SELECT {fn convert(SUBSTRING(model, 1, 5), VARCHAR)} AS converted
+        FROM mtcars
+        WHERE model = 'Mazda RX4'
+        """;
+    jparqSql.query(sql, rs -> {
+      try {
+        assertTrue(rs.next(), "Expected a row for Mazda RX4");
+        assertEquals("Mazda", rs.getString("converted"));
+        assertFalse(rs.next(), "Only one row should match Mazda RX4");
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void jdbcEscapeConvertWithComplexNestedExpression() {
+    // Edge case: complex nested expression with parentheses and commas
+    String sql = """
+        SELECT {fn convert(COALESCE(NULL, model, 'default'), VARCHAR)} AS converted
+        FROM mtcars
+        WHERE model = 'Datsun 710'
+        """;
+    jparqSql.query(sql, rs -> {
+      try {
+        assertTrue(rs.next(), "Expected a row for Datsun 710");
+        assertEquals("Datsun 710", rs.getString("converted"));
+        assertFalse(rs.next(), "Only one row should match Datsun 710");
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
   private void assertSingleString(ResultSet rs, String expected) {
     try {
       assertTrue(rs.next(), "Expected a single row from VALUES");

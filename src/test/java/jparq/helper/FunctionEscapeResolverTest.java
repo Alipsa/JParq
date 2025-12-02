@@ -70,4 +70,57 @@ class FunctionEscapeResolverTest {
     String sql = "SELECT 1";
     assertEquals(sql, FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
   }
+
+  @Test
+  void convertEscapeWithUsingClauseIsNotRewritten() {
+    // CONVERT with USING clause should not be rewritten to CAST
+    String sql = "SELECT {fn CONVERT('text', USING UTF8)}";
+    assertEquals("SELECT CONVERT('text', USING UTF8)",
+        FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+  }
+
+  @Test
+  void convertEscapeWithTypeCastIsRewrittenToCast() {
+    // CONVERT with type (not USING) should be rewritten to CAST
+    String sql = "SELECT {fn CONVERT(value, INTEGER)}";
+    assertEquals("SELECT CAST(value AS INTEGER)", FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+  }
+
+  @Test
+  void convertEscapeWithNestedFunctionCall() {
+    // Nested function calls with parentheses should be handled by firstTopLevelComma
+    String sql = "SELECT {fn CONVERT(CONCAT(a, b), VARCHAR)}";
+    assertEquals("SELECT CAST(CONCAT(a, b) AS VARCHAR)",
+        FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+  }
+
+  @Test
+  void convertEscapeWithMultipleCommasInNestedFunction() {
+    // Edge case: nested function with multiple commas should find the top-level comma
+    String sql = "SELECT {fn CONVERT(SUBSTRING(text, 1, 5), VARCHAR)}";
+    assertEquals("SELECT CAST(SUBSTRING(text, 1, 5) AS VARCHAR)",
+        FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+  }
+
+  @Test
+  void convertEscapeWithDeeplyNestedParentheses() {
+    // Edge case: deeply nested parentheses
+    String sql = "SELECT {fn CONVERT(COALESCE(NULL, CONCAT('a', 'b'), 'default'), VARCHAR)}";
+    assertEquals("SELECT CAST(COALESCE(NULL, CONCAT('a', 'b'), 'default') AS VARCHAR)",
+        FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+  }
+
+  @Test
+  void convertEscapeWithNoCommaPassesThrough() {
+    // Edge case: CONVERT with no comma (malformed) should pass through unchanged
+    String sql = "SELECT {fn CONVERT(value)}";
+    assertEquals("SELECT CONVERT(value)", FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+  }
+
+  @Test
+  void convertEscapeWithEmptyArgsPassesThrough() {
+    // Edge case: CONVERT with empty args
+    String sql = "SELECT {fn CONVERT()}";
+    assertEquals("SELECT CONVERT()", FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+  }
 }
