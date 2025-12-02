@@ -37,9 +37,9 @@ public class JParqDatabaseMetaDataTest {
         Collections.sort(schemas);
         assertEquals(4, schemas.size());
         assertEquals("PUBLIC", schemas.get(0));
-        assertEquals("schema1", schemas.get(1));
-        assertEquals("schema2", schemas.get(2));
-        assertEquals("schema3", schemas.get(3));
+        assertEquals("SCHEMA1", schemas.get(1));
+        assertEquals("SCHEMA2", schemas.get(2));
+        assertEquals("SCHEMA3", schemas.get(3));
       }
     }
   }
@@ -77,8 +77,33 @@ public class JParqDatabaseMetaDataTest {
         }
         Collections.sort(schemas);
         assertEquals(2, schemas.size());
-        assertEquals("schema1", schemas.get(0));
-        assertEquals("schema2", schemas.get(1));
+        assertEquals("SCHEMA1", schemas.get(0));
+        assertEquals("SCHEMA2", schemas.get(1));
+      }
+    }
+  }
+
+  @Test
+  public void testGetSchemasCaseSensitive(@TempDir File tempDir) throws SQLException, IOException {
+    // Create some subdirectories to represent schemas with mixed case
+    new File(tempDir, "Schema1").mkdir();
+    new File(tempDir, "SCHEMA2").mkdir();
+    new File(tempDir, "schema3").mkdir();
+
+    String jdbcUrl = "jdbc:jparq:" + tempDir.getAbsolutePath() + "?caseSensitive=true";
+    try (JParqConnection conn = (JParqConnection) DriverManager.getConnection(jdbcUrl)) {
+      DatabaseMetaData metaData = conn.getMetaData();
+      try (ResultSet rs = metaData.getSchemas()) {
+        List<String> schemas = new ArrayList<>();
+        while (rs.next()) {
+          schemas.add(rs.getString("TABLE_SCHEM"));
+        }
+        Collections.sort(schemas);
+        assertEquals(4, schemas.size());
+        assertEquals("PUBLIC", schemas.get(0));
+        assertEquals("SCHEMA2", schemas.get(1));
+        assertEquals("Schema1", schemas.get(2));
+        assertEquals("schema3", schemas.get(3));
       }
     }
   }
