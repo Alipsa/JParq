@@ -1893,7 +1893,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     String catalog = conn.getCatalog();
     for (String schema : conn.listSchemas()) {
       rows.add(new Object[]{
-          schema, catalog
+          formatSchemaName(schema), catalog
       });
     }
     return JParqUtil.listResultSet(new String[]{
@@ -1912,7 +1912,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         continue;
       }
       rows.add(new Object[]{
-          schema, cat
+          formatSchemaName(schema), cat
       });
     }
     return JParqUtil.listResultSet(new String[]{
