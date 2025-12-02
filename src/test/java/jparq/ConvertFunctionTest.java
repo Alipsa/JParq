@@ -88,6 +88,50 @@ class ConvertFunctionTest {
     assertTrue(ex.getCause() instanceof SQLException, "Expected SQLException cause for invalid charset");
   }
 
+  @Test
+  void convertHandlesColumnNameMatchingTypeName() {
+    // This test verifies the argument swapping logic in ValueExpressionEvaluator.resolveConvertArguments()
+    // JSqlParser swaps CONVERT arguments: CONVERT(value, type) is parsed as expression=type, colDataType=value
+    // The swap logic detects this and corrects it, unless both arguments could be valid column names
+    String sql = """
+        SELECT CONVERT(num_value, VARCHAR) AS value_as_str,
+               CAST(num_value AS VARCHAR) AS value_cast_str
+        FROM (SELECT hp AS num_value FROM mtcars WHERE model = 'Mazda RX4') AS data
+        """;
+    jparqSql.query(sql, rs -> {
+      try {
+        assertTrue(rs.next(), "Expected a row from derived table");
+        // Both CONVERT and CAST should produce the same result
+        assertEquals(rs.getString("value_cast_str"), rs.getString("value_as_str"),
+            "CONVERT should behave like CAST for type conversion");
+        assertEquals("110", rs.getString("value_as_str"));
+        assertFalse(rs.next(), "Only one row should be returned");
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  @Test
+  void convertWithColumnNamedAfterType() {
+    // Edge case: column named after a SQL type keyword
+    // Tests argument swapping when the column name itself is "integer"
+    String sql = """
+        SELECT CONVERT(integer, VARCHAR) AS converted
+        FROM (SELECT hp AS integer FROM mtcars WHERE model = 'Mazda RX4') AS data
+        """;
+    jparqSql.query(sql, rs -> {
+      try {
+        assertTrue(rs.next(), "Expected a row");
+        // Should convert the "integer" column value (110) to VARCHAR
+        assertEquals("110", rs.getString("converted"));
+        assertFalse(rs.next());
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
   private void assertSingleString(ResultSet rs, String expected) {
     try {
       assertTrue(rs.next(), "Expected a single row from VALUES");
