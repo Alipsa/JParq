@@ -67,7 +67,8 @@ public final class ColumnsUsed {
         }
         Expression expr = convert.getExpression();
         String typeCandidate = convert.getColDataType() == null ? null : convert.getColDataType().getDataType();
-        if (expr instanceof Column column && SqlParser.isConvertTypeName(column.getColumnName()) && typeCandidate != null) {
+        if (expr instanceof Column column && SqlParser.isConvertTypeName(column.getColumnName())
+            && typeCandidate != null) {
           cols.add(typeCandidate);
           return null;
         }
