@@ -663,10 +663,19 @@ class JParqPreparedStatement implements PreparedStatement {
         }
         index = mapped;
       } else {
+        Set<String> expressionColumns = ColumnsUsed.inWhere(order.expression());
+        for (String column : expressionColumns) {
+          if (column == null) {
+            continue;
+          }
+          if (!labelIndexes.containsKey(column.toLowerCase(Locale.ROOT))) {
+            throw new SQLException("Unknown set operation ORDER BY expression column: " + column);
+          }
+        }
         index = -1;
         hasExpressions = true;
       }
-      if (index < 0 && order.expression() == null || index >= labels.size()) {
+      if ((index < 0 && order.expression() == null) || index >= labels.size()) {
         throw new SQLException("Set operation ORDER BY column index out of range: " + (index + 1));
       }
       resolved.add(new ResolvedSetOrder(index, order.asc(), order.expression()));
@@ -981,7 +990,7 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   private Object evaluateSetOrderExpression(Expression expression, List<Object> row, List<String> labels,
-      Schema schema, ValueExpressionEvaluator evaluator) {
+      Schema schema, ValueExpressionEvaluator evaluator) throws SQLException {
     if (expression == null || evaluator == null || schema == null) {
       return null;
     }
@@ -996,7 +1005,7 @@ class JParqPreparedStatement implements PreparedStatement {
     return evaluator.eval(expression, record);
   }
 
-  private Object adaptValueForSchema(Schema schema, Object value) {
+  private Object adaptValueForSchema(Schema schema, Object value) throws SQLException {
     if (value == null || schema == null) {
       return null;
     }
@@ -1004,7 +1013,16 @@ class JParqPreparedStatement implements PreparedStatement {
         .filter(s -> s.getType() != Schema.Type.NULL).findFirst().orElse(Schema.create(Schema.Type.STRING)) : schema;
     return switch (base.getType()) {
       case BOOLEAN -> (value instanceof Boolean) ? value : Boolean.parseBoolean(value.toString());
-      case INT -> (value instanceof Number) ? ((Number) value).intValue() : Integer.parseInt(value.toString());
+      case INT -> {
+        if (value instanceof Number) {
+          yield ((Number) value).intValue();
+        }
+        try {
+          yield Integer.parseInt(value.toString());
+        } catch (NumberFormatException e) {
+          throw new SQLException("Cannot convert value to INT: " + value, e);
+        }
+      }
       case LONG -> {
         if (value instanceof Date date) {
           yield date.getTime();
@@ -1015,16 +1033,27 @@ class JParqPreparedStatement implements PreparedStatement {
         if (value instanceof Timestamp ts) {
           yield ts.getTime();
         }
-        yield (value instanceof Number) ? ((Number) value).longValue() : Long.parseLong(value.toString());
+        if (value instanceof Number) {
+          yield ((Number) value).longValue();
+        }
+        try {
+          yield Long.parseLong(value.toString());
+        } catch (NumberFormatException e) {
+          throw new SQLException("Cannot convert value to LONG: " + value, e);
+        }
       }
       case DOUBLE -> {
-        if (value instanceof Number num) {
-          yield num.doubleValue();
-        }
         if (value instanceof BigDecimal bigDecimal) {
           yield bigDecimal.doubleValue();
         }
-        yield Double.parseDouble(value.toString());
+        if (value instanceof Number num) {
+          yield num.doubleValue();
+        }
+        try {
+          yield Double.parseDouble(value.toString());
+        } catch (NumberFormatException e) {
+          throw new SQLException("Cannot convert value to DOUBLE: " + value, e);
+        }
       }
       case STRING -> value.toString();
       default -> value;

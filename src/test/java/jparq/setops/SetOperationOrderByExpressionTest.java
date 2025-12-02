@@ -2,6 +2,8 @@ package jparq.setops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.net.URISyntaxException;
@@ -60,5 +62,18 @@ public class SetOperationOrderByExpressionTest {
 
     assertEquals(expected, actual,
         "Set operation ORDER BY expressions should sort using derived expressions from the first query");
+  }
+
+  @Test
+  void testInvalidOrderByExpression() {
+    String sql = """
+        SELECT hp AS power FROM mtcars WHERE cyl = 4
+        UNION
+        SELECT hp AS power FROM mtcars WHERE cyl = 6
+        ORDER BY nonexistent_column + 10 DESC
+        """;
+    RuntimeException ex = assertThrows(RuntimeException.class, () -> jparqSql.query(sql, rs -> {
+    }));
+    assertTrue(ex.getCause() instanceof SQLException, "Expected SQLException cause for invalid ORDER BY expression");
   }
 }
