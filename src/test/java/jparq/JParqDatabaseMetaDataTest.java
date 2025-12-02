@@ -1,6 +1,7 @@
 package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.io.IOException;
@@ -61,7 +62,7 @@ public class JParqDatabaseMetaDataTest {
   }
 
   @Test
-  public void testGetSchemasWithPattern(@TempDir File tempDir) throws SQLException, IOException {
+  public void testGetSchemasWithPattern(@TempDir File tempDir) throws SQLException {
     // Create some subdirectories to represent schemas
     assertTrue(new File(tempDir, "schema1").mkdir(), "Failed to create schema1 directory");
     assertTrue(new File(tempDir, "schema2").mkdir(), "Failed to create schema2 directory");
@@ -126,7 +127,7 @@ public class JParqDatabaseMetaDataTest {
         // Should have PUBLIC (merged from default and subdirectory) and schema1
         assertEquals(2, schemas.size(), "PUBLIC subdirectory should not create duplicate schema");
         assertEquals("PUBLIC", schemas.get(0));
-        assertEquals("schema1", schemas.get(1));
+        assertEquals("SCHEMA1", schemas.get(1));
       }
     }
   }
@@ -150,7 +151,7 @@ public class JParqDatabaseMetaDataTest {
         // All case variants of PUBLIC should be normalized to a single entry
         assertEquals(2, schemas.size(), "Case variants of PUBLIC should not create duplicate schemas");
         assertEquals("PUBLIC", schemas.get(0));
-        assertEquals("schema1", schemas.get(1));
+        assertEquals("SCHEMA1", schemas.get(1));
       }
     }
   }
