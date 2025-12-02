@@ -610,6 +610,18 @@ public final class StringFunctions {
     return compiled.matcher(input).matches();
   }
 
+  /**
+   * Converts a SQL {@code LIKE} pattern to a Java regular expression string.
+   * Supports SQL wildcards {@code %} (matches any sequence of characters) and {@code _} (matches any single character),
+   * as well as an optional escape character to treat wildcards as literals.
+   *
+   * @param pattern
+   *          the SQL LIKE pattern to convert
+   * @param escape
+   *          optional escape character (may be {@code null}); if present, the next character is treated as a literal
+   * @return the equivalent Java regular expression string
+   * @throws IllegalArgumentException if the escape character appears at the end of the pattern
+   */
   public static String toLikeRegex(String pattern, Character escape) {
     StringBuilder regex = new StringBuilder();
     regex.append('^');
