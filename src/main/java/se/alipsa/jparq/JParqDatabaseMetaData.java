@@ -1888,13 +1888,42 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   }
 
   @Override
-  public ResultSet getSchemas() {
-    return null;
+  public ResultSet getSchemas() throws SQLException {
+    List<Object[]> rows = new ArrayList<>();
+    String catalog = conn.getCatalog();
+    for (String schema : conn.listSchemas()) {
+      rows.add(new Object[]{
+          formatSchemaName(schema), catalog
+      });
+    }
+    return JParqUtil.listResultSet(new String[]{
+        "TABLE_SCHEM", "TABLE_CATALOG"
+    }, rows);
   }
 
   @Override
   public ResultSet getSchemas(String catalog, String schemaPattern) throws SQLException {
-    return null;
+    String actualCatalog = conn.getCatalog();
+    String effectiveCatalog = (catalog != null && !catalog.isBlank()) ? catalog : actualCatalog;
+    if (!effectiveCatalog.equals(actualCatalog)) {
+      return JParqUtil.listResultSet(new String[]{
+          "TABLE_SCHEM", "TABLE_CATALOG"
+      }, List.of());
+    }
+    List<Object[]> rows = new ArrayList<>();
+    boolean caseSensitive = conn.isCaseSensitive();
+    String schemaRegex = buildRegex(schemaPattern, caseSensitive);
+    for (String schema : conn.listSchemas()) {
+      if (schemaRegex != null && !matchesRegex(schemaRegex, schema, caseSensitive)) {
+        continue;
+      }
+      rows.add(new Object[]{
+          formatSchemaName(schema), actualCatalog
+      });
+    }
+    return JParqUtil.listResultSet(new String[]{
+        "TABLE_SCHEM", "TABLE_CATALOG"
+    }, rows);
   }
 
   @Override
