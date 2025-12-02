@@ -112,15 +112,14 @@ class ConvertFunctionTest {
     // Even though {fn convert('text', USING charset)} is non-standard JDBC syntax,
     // the resolver correctly identifies it as charset conversion (not type cast)
     // and preserves it as a CONVERT call rather than incorrectly rewriting to CAST.
-    // Note: This test verifies the resolver's behavior, not that the final SQL is valid.
+    // Note: This test verifies the resolver's behavior, not that the final SQL is
+    // valid.
     String escapedSql = "{fn convert('Café', USING UTF8)}";
-    String resolved = se.alipsa.jparq.helper.FunctionEscapeResolver.resolveJdbcFunctionEscapes(
-        "VALUES (" + escapedSql + ")");
+    String resolved = se.alipsa.jparq.helper.FunctionEscapeResolver
+        .resolveJdbcFunctionEscapes("VALUES (" + escapedSql + ")");
     // Should NOT be rewritten to CAST - should remain as CONVERT
-    assertFalse(resolved.contains("CAST"), 
-        "CONVERT with USING should not be rewritten to CAST: " + resolved);
-    assertTrue(resolved.contains("CONVERT"), 
-        "Should preserve CONVERT function: " + resolved);
+    assertFalse(resolved.contains("CAST"), "CONVERT with USING should not be rewritten to CAST: " + resolved);
+    assertTrue(resolved.contains("CONVERT"), "Should preserve CONVERT function: " + resolved);
   }
 
   @Test

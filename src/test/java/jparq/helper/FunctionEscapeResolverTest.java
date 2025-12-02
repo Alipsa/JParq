@@ -75,8 +75,7 @@ class FunctionEscapeResolverTest {
   void convertEscapeWithUsingClauseIsNotRewritten() {
     // CONVERT with USING clause should not be rewritten to CAST
     String sql = "SELECT {fn CONVERT('text', USING UTF8)}";
-    assertEquals("SELECT CONVERT('text', USING UTF8)",
-        FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+    assertEquals("SELECT CONVERT('text', USING UTF8)", FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
   }
 
   @Test
@@ -88,15 +87,16 @@ class FunctionEscapeResolverTest {
 
   @Test
   void convertEscapeWithNestedFunctionCall() {
-    // Nested function calls with parentheses should be handled by firstTopLevelComma
+    // Nested function calls with parentheses should be handled by
+    // firstTopLevelComma
     String sql = "SELECT {fn CONVERT(CONCAT(a, b), VARCHAR)}";
-    assertEquals("SELECT CAST(CONCAT(a, b) AS VARCHAR)",
-        FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+    assertEquals("SELECT CAST(CONCAT(a, b) AS VARCHAR)", FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
   }
 
   @Test
   void convertEscapeWithMultipleCommasInNestedFunction() {
-    // Edge case: nested function with multiple commas should find the top-level comma
+    // Edge case: nested function with multiple commas should find the top-level
+    // comma
     String sql = "SELECT {fn CONVERT(SUBSTRING(text, 1, 5), VARCHAR)}";
     assertEquals("SELECT CAST(SUBSTRING(text, 1, 5) AS VARCHAR)",
         FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
