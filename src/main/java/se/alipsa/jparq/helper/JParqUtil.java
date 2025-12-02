@@ -89,6 +89,15 @@ public final class JParqUtil {
     return new MetaDataResultSet(headers, rows);
   }
 
+  /**
+   * Creates a ResultSet from the given headers and rows.
+   *
+   * @param headers
+   *          the column headers
+   * @param rows
+   *          the data rows
+   * @return a ResultSet representing the data
+   */
   public static ResultSet listResultSet(List<String> headers, List<Object[]> rows) {
     String[] h = headers.toArray(new String[0]);
     return new MetaDataResultSet(h, rows);

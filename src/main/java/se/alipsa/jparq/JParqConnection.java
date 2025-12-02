@@ -18,11 +18,13 @@ import java.sql.Savepoint;
 import java.sql.Statement;
 import java.sql.Struct;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import se.alipsa.jparq.helper.JParqUtil;
 
@@ -153,6 +155,29 @@ public class JParqConnection implements Connection {
       addTablesFromDirectory(dir, effectiveSchema, discovered);
     }
     return List.copyOf(discovered.values());
+  }
+
+  /**
+   * Discover all schemas available under the base directory.
+   *
+   * @return immutable list of available schema names
+   * @throws SQLException
+   *           if a directory cannot be listed
+   */
+  public List<String> listSchemas() throws SQLException {
+    Set<String> schemas = new LinkedHashSet<>();
+    schemas.add(DEFAULT_SCHEMA);
+    File[] children = baseDir.listFiles(File::isDirectory);
+    if (children == null) {
+      throw new SQLException("Failed to list directory: " + baseDir);
+    }
+    for (File dir : children) {
+      if (!dir.isDirectory()) {
+        continue;
+      }
+      schemas.add(dir.getName());
+    }
+    return List.copyOf(schemas);
   }
 
   private void addTablesFromDirectory(File dir, String schemaName, Map<String, TableLocation> discovered)
