@@ -53,7 +53,9 @@ public final class FunctionEscapeResolver {
       String args = matcher.group(2);
       FnMapping mapping = FUNCTION_LOOKUP.get(fnName.toUpperCase(Locale.ROOT));
       String replacement;
-      if (mapping != null) {
+      if ("CONVERT".equalsIgnoreCase(fnName)) {
+        replacement = rewriteConvertEscape(args);
+      } else if (mapping != null) {
         if (mapping.noArg()) {
           replacement = mapping.sqlName();
         } else if (args == null) {
@@ -78,6 +80,42 @@ public final class FunctionEscapeResolver {
   private static Map.Entry<String, FnMapping> mapSystemFunction(JdbcSystemFunction function) {
     return new AbstractMap.SimpleEntry<>(function.jdbcName().toUpperCase(Locale.ROOT),
         new FnMapping(function.sqlName(), false, function.appendEmptyArgs()));
+  }
+
+  private static String rewriteConvertEscape(String args) {
+    if (args == null) {
+      return "CONVERT";
+    }
+    String trimmed = args.trim();
+    if (!trimmed.startsWith("(") || !trimmed.endsWith(")")) {
+      return "CONVERT" + args;
+    }
+    String inner = trimmed.substring(1, trimmed.length() - 1);
+    int commaIndex = firstTopLevelComma(inner);
+    if (commaIndex < 0) {
+      return "CONVERT" + args;
+    }
+    String value = inner.substring(0, commaIndex).trim();
+    String type = inner.substring(commaIndex + 1).trim();
+    if (type.toUpperCase(Locale.ROOT).startsWith("USING")) {
+      return "CONVERT" + args;
+    }
+    return "CAST(" + value + " AS " + type + ")";
+  }
+
+  private static int firstTopLevelComma(String input) {
+    int depth = 0;
+    for (int i = 0; i < input.length(); i++) {
+      char ch = input.charAt(i);
+      if (ch == '(') {
+        depth++;
+      } else if (ch == ')') {
+        depth = Math.max(0, depth - 1);
+      } else if (ch == ',' && depth == 0) {
+        return i;
+      }
+    }
+    return -1;
   }
 
   private record FnMapping(String sqlName, boolean noArg, boolean appendEmptyArgs) {
