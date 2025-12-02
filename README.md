@@ -229,6 +229,7 @@ The following SQL statements are supported:
 ## Roadmap: Might be implemented in the future
 
 ### Non standard extensions
+- Named parameters i.e. :paramName syntax for prepared statements
 - Allow omission of from clause in some cases
   - Several popular databases allow you to omit the FROM clause when you are only selecting literal values, performing arithmetic, or evaluating scalar functions (functions that return a single value). In these cases, the query returns a single row e.g: `SELECT CURRENT_DATE as cur_date`.
 - Support for variable assignment and use within SQL scripts.
