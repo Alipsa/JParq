@@ -795,7 +795,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       return null;
     }
     String normalized = caseSensitive ? pattern : pattern.toLowerCase(Locale.ROOT);
-    return JParqUtil.sqlLikeToRegex(normalized);
+    return se.alipsa.jparq.engine.function.StringFunctions.toLikeRegex(normalized, '\\');
   }
 
   private boolean matchesRegex(String regex, String candidate, boolean caseSensitive) {
@@ -1061,7 +1061,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getSearchStringEscape() {
-    return ""; // TODO: this should be changed by searchStringEscape.md requirement
+    return "\\";
   }
 
   /**
