@@ -2016,10 +2016,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   /**
    * Updates are not supported.
    *
-   * @param type the {@code ResultSet} type; one of
-   *        {@code ResultSet.TYPE_FORWARD_ONLY},
-   *        {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
-   *        {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
    * @return false
    */
   @Override
@@ -2030,10 +2031,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   /**
    * Deletes are not supported.
    *
-   * @param type the {@code ResultSet} type; one of
-   *        {@code ResultSet.TYPE_FORWARD_ONLY},
-   *        {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
-   *        {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
    * @return false
    */
   @Override
@@ -2044,10 +2046,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   /**
    * Inserts are not supported.
    *
-   * @param type the {@code ResultSet} type; one of
-   *        {@code ResultSet.TYPE_FORWARD_ONLY},
-   *        {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
-   *        {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
    * @return false
    */
   @Override
@@ -2058,10 +2061,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   /**
    * Updates are not supported.
    *
-   * @param type the {@code ResultSet} type; one of
-   *        {@code ResultSet.TYPE_FORWARD_ONLY},
-   *        {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
-   *        {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
    * @return false
    */
   @Override
@@ -2072,10 +2076,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   /**
    * Deletes are not supported.
    *
-   * @param type the {@code ResultSet} type; one of
-   *        {@code ResultSet.TYPE_FORWARD_ONLY},
-   *        {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
-   *        {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
    * @return false
    */
   @Override
@@ -2086,10 +2091,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   /**
    * Inserts are not supported.
    *
-   * @param type the {@code ResultSet} type; one of
-   *        {@code ResultSet.TYPE_FORWARD_ONLY},
-   *        {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
-   *        {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
    * @return false
    */
   @Override
@@ -2100,10 +2106,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   /**
    * Updates are not supported.
    *
-   * @param type the {@code ResultSet} type; one of
-   *        {@code ResultSet.TYPE_FORWARD_ONLY},
-   *        {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
-   *        {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
    * @return false
    */
   @Override
@@ -2114,10 +2121,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   /**
    * Deletes are not supported.
    *
-   * @param type the {@code ResultSet} type; one of
-   *        {@code ResultSet.TYPE_FORWARD_ONLY},
-   *        {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
-   *        {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
    * @return false
    */
   @Override
@@ -2128,10 +2136,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   /**
    * Inserts are not supported.
    *
-   * @param type the {@code ResultSet} type; one of
-   *        {@code ResultSet.TYPE_FORWARD_ONLY},
-   *        {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
-   *        {@code ResultSet.TYPE_SCROLL_SENSITIVE}
+   * @param type
+   *          the {@code ResultSet} type; one of
+   *          {@code ResultSet.TYPE_FORWARD_ONLY},
+   *          {@code ResultSet.TYPE_SCROLL_INSENSITIVE}, or
+   *          {@code ResultSet.TYPE_SCROLL_SENSITIVE}
    * @return false
    */
   @Override
@@ -2153,25 +2162,26 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
    * User-defined types (UDTs) are not supported so this will always return an
    * empty result set.
    *
-   * @param catalog a catalog name; must match the catalog name as it
-   *        is stored in the database; "" retrieves those without a catalog;
-   *        {@code null} means that the catalog name should not be used to narrow
-   *        the search
-   * @param schemaPattern a schema pattern name; must match the schema name
-   *        as it is stored in the database; "" retrieves those without a schema;
-   *        {@code null} means that the schema name should not be used to narrow
-   *        the search
-   * @param typeNamePattern a type name pattern; must match the type name
-   *        as it is stored in the database; may be a fully qualified name
-   * @param types a list of user-defined types (JAVA_OBJECT,
-   *        STRUCT, or DISTINCT) to include; {@code null} returns all types
+   * @param catalog
+   *          a catalog name; must match the catalog name as it is stored in the
+   *          database; "" retrieves those without a catalog; {@code null} means
+   *          that the catalog name should not be used to narrow the search
+   * @param schemaPattern
+   *          a schema pattern name; must match the schema name as it is stored in
+   *          the database; "" retrieves those without a schema; {@code null}
+   *          means that the schema name should not be used to narrow the search
+   * @param typeNamePattern
+   *          a type name pattern; must match the type name as it is stored in the
+   *          database; may be a fully qualified name
+   * @param types
+   *          a list of user-defined types (JAVA_OBJECT, STRUCT, or DISTINCT) to
+   *          include; {@code null} returns all types
    * @return an empty result set.
    */
   @Override
   public ResultSet getUDTs(String catalog, String schemaPattern, String typeNamePattern, int[] types) {
     return JParqUtil.listResultSet(
-        List.of("TYPE_CAT", "TYPE_SCHEM", "TYPE_NAME", "CLASS_NAME", "DATA_TYPE", "REMARKS", "BASE_TYPE"), List.of()
-    );
+        List.of("TYPE_CAT", "TYPE_SCHEM", "TYPE_NAME", "CLASS_NAME", "DATA_TYPE", "REMARKS", "BASE_TYPE"), List.of());
   }
 
   @Override
