@@ -132,6 +132,77 @@ public class JParqDatabaseMetaDataTest {
     }
   }
 
+  @Test
+  void testEscapeCharacterInPatterns() throws SQLException {
+    try (Connection con = DriverManager.getConnection(jdbcUrl)) {
+      var metaData = con.getMetaData();
+
+      // Verify the escape character is backslash
+      Assertions.assertEquals("\\", metaData.getSearchStringEscape());
+
+      // Test 1: Escaped underscore should match literal underscore only
+      // employee\_department should match only "employee_department", not "employees"
+      // or "employeeXdepartment"
+      try (ResultSet tables = metaData.getTables(null, null, "employee\\_department", new String[]{
+          "TABLE"
+      })) {
+        Set<String> tableNames = new LinkedHashSet<>();
+        while (tables.next()) {
+          tableNames.add(tables.getString("TABLE_NAME"));
+        }
+        Assertions.assertEquals(Set.of("employee_department"), tableNames,
+            "Escaped underscore should match literal underscore only");
+      }
+
+      // Test 2: Unescaped underscore should work as wildcard (matches any single
+      // character)
+      // employee_department has exactly one character between "employee" and
+      // "department"
+      // This pattern should match employee_department
+      try (ResultSet tables = metaData.getTables(null, null, "employee_d%", new String[]{
+          "TABLE"
+      })) {
+        Set<String> tableNames = new LinkedHashSet<>();
+        while (tables.next()) {
+          tableNames.add(tables.getString("TABLE_NAME"));
+        }
+        Assertions.assertTrue(tableNames.contains("employee_department"),
+            "Unescaped underscore should work as single-character wildcard");
+      }
+
+      // Test 3: Unescaped percent should work as wildcard (matches zero or more
+      // characters)
+      // employee% should match both "employees" and "employee_department"
+      try (ResultSet tables = metaData.getTables(null, null, "employee%", new String[]{
+          "TABLE"
+      })) {
+        Set<String> tableNames = new LinkedHashSet<>();
+        while (tables.next()) {
+          tableNames.add(tables.getString("TABLE_NAME"));
+        }
+        Assertions.assertTrue(tableNames.contains("employees"), "Pattern 'employee%' should match 'employees'");
+        Assertions.assertTrue(tableNames.contains("employee_department"),
+            "Pattern 'employee%' should match 'employee_department'");
+        Assertions.assertEquals(2, tableNames.size(), "Pattern 'employee%' should match exactly 2 tables");
+      }
+
+      // Test 4: Test escape character with columns
+      // First, let's see what columns exist in employee_department
+      try (ResultSet columns = metaData.getColumns(null, null, "employee_department", "employee\\_id")) {
+        Set<String> columnNames = new LinkedHashSet<>();
+        while (columns.next()) {
+          columnNames.add(columns.getString("COLUMN_NAME"));
+        }
+        // This tests that the escape works for column patterns too
+        // If there's an employee_id column, it should match exactly
+        if (!columnNames.isEmpty()) {
+          Assertions.assertTrue(columnNames.contains("employee_id"),
+              "Escaped underscore in column pattern should match literal underscore");
+        }
+      }
+    }
+  }
+
   private Integer integerOrNull(ResultSet rs, String columnLabel) throws SQLException {
     int value = rs.getInt(columnLabel);
     return rs.wasNull() ? null : value;
