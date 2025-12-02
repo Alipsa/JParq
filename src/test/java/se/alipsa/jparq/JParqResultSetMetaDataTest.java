@@ -32,6 +32,7 @@ public class JParqResultSetMetaDataTest {
     assertEquals("INTEGER", metaData.getColumnTypeName(2));
     assertEquals(String.class.getName(), metaData.getColumnClassName(1));
     assertEquals(Integer.class.getName(), metaData.getColumnClassName(2));
-    assertEquals(java.sql.ResultSetMetaData.columnNullableUnknown, metaData.isNullable(1));
+    assertEquals(java.sql.ResultSetMetaData.columnNoNulls, metaData.isNullable(1));
+    assertEquals(java.sql.ResultSetMetaData.columnNoNulls, metaData.isNullable(2));
   }
 }

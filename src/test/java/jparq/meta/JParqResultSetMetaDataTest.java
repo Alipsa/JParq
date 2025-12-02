@@ -107,6 +107,27 @@ class JParqResultSetMetaDataTest {
   }
 
   @Test
+  void nullableRepetitionLevelsReflectParquetDefinitions() {
+    Schema requiredSchema = schemaWithField();
+    JParqResultSetMetaData requiredMeta = createMetadataWithExpression(requiredSchema, List.of("value"),
+        Collections.singletonList("value"), Collections.emptyList());
+    assertEquals(ResultSetMetaData.columnNoNulls, requiredMeta.isNullable(1),
+        "REQUIRED fields should be reported as not nullable");
+
+    Schema optionalSchema = schemaWithNullableField();
+    JParqResultSetMetaData optionalMeta = createMetadataWithExpression(optionalSchema, List.of("optional"),
+        Collections.singletonList("optional"), Collections.emptyList());
+    assertEquals(ResultSetMetaData.columnNullable, optionalMeta.isNullable(1),
+        "OPTIONAL fields should be reported as nullable");
+
+    Schema repeatedSchema = schemaWithArrayField();
+    JParqResultSetMetaData repeatedMeta = createMetadataWithExpression(repeatedSchema, List.of("entries"),
+        Collections.singletonList("entries"), Collections.emptyList());
+    assertEquals(ResultSetMetaData.columnNullable, repeatedMeta.isNullable(1),
+        "REPEATED fields should be reported as nullable");
+  }
+
+  @Test
   void arraySchemaFieldsReportListClass() {
     Schema schema = schemaWithArrayField();
     JParqResultSetMetaData metaData = createMetadataWithExpression(schema, List.of("entries"),
