@@ -51,3 +51,11 @@ The table below lists the most common character sets and their standard, canonic
 
 4.  ### Case Insensitivity
   * SQL character set names are typically **case-insensitive**, while Java's `Charset.forName()` method accepts both canonical names and case-insensitive aliases. It's best practice to normalize the SQL input (e.g., convert to uppercase) before looking up the Java name.
+
+Since the JDBC standard understands CONVERT in a different way than the SQL standard we should also add specific handling of this as follows:
+- Return true for JParqDatabaseMetaData.supportsConvert().
+- Return true for JParqDatabaseMetaData.supportsConvert(int from, int to).
+- Implement a Rewrite Rule:
+  - If we receive the JDBC Escape syntax {fn convert(val, type)} -> Rewrite to CAST(val AS type).
+  - If we receive the raw function CONVERT(val, type) where the 2nd arg is a data type -> Rewrite to CAST(val AS type).
+  - If we receive CONVERT(val USING charset) -> Leave it alone (pass it through).

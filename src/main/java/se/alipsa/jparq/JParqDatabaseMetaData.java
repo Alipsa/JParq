@@ -440,11 +440,6 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     return true;
   }
 
-  @Override
-  public boolean supportsMixedCaseIdentifiers() {
-    return conn.isCaseSensitive();
-  }
-
   private static final List<String> TABLE_REMARK_KEYS = List.of("comment", "description", "parquet.schema.comment",
       "doc");
   private static final List<String> COLUMN_REMARK_PREFIXES = List.of("parquet.column.comment.", "column.comment.",
@@ -945,7 +940,6 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     return defaultValue.toString();
   }
 
-  // Boilerplate defaults for unimplemented metadata
   @Override
   public boolean allProceduresAreCallable() {
     return false;
@@ -992,23 +986,28 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   }
 
   @Override
-  public boolean storesUpperCaseIdentifiers() throws SQLException {
+  public boolean storesUpperCaseIdentifiers() {
     return false;
   }
 
   @Override
-  public boolean storesLowerCaseIdentifiers() throws SQLException {
+  public boolean storesLowerCaseIdentifiers() {
     return false;
   }
 
   @Override
-  public boolean storesMixedCaseIdentifiers() throws SQLException {
-    return false;
+  public boolean storesMixedCaseIdentifiers() {
+    return !conn.isCaseSensitive();
   }
 
   @Override
-  public boolean supportsMixedCaseQuotedIdentifiers() throws SQLException {
-    return false;
+  public boolean supportsMixedCaseIdentifiers() {
+    return conn.isCaseSensitive();
+  }
+
+  @Override
+  public boolean supportsMixedCaseQuotedIdentifiers() {
+    return true;
   }
 
   @Override
@@ -1028,7 +1027,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getIdentifierQuoteString() throws SQLException {
-    return "";
+    return "\"";
   }
 
   @Override
@@ -1062,22 +1061,28 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getSearchStringEscape() {
-    return ""; // TODO: what is this?
+    return ""; // TODO: this should be changed by searchStringEscape.md requirement
   }
 
+  /**
+   * allows a driver to declare which special characters (symbols) can be used in
+   * unquoted identifier names, beyond the standard SQL set.
+   *
+   * @return an empty string, only standard identifiers allowed
+   */
   @Override
-  public String getExtraNameCharacters() throws SQLException {
-    return ""; // TODO: what is this?
+  public String getExtraNameCharacters() {
+    return "";
   }
 
   @Override
   public boolean supportsAlterTableWithAddColumn() throws SQLException {
-    return false;
+    return false; // only read operations supported
   }
 
   @Override
   public boolean supportsAlterTableWithDropColumn() throws SQLException {
-    return false;
+    return false; // only read operations supported
   }
 
   @Override
@@ -1091,62 +1096,97 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   }
 
   @Override
-  public boolean supportsConvert() throws SQLException {
+  public boolean supportsConvert() {
+    return false; // TODO: this will be changed after implementing the convert.md requirement
+  }
+
+  @Override
+  public boolean supportsConvert(int fromType, int toType) {
+    return false; // TODO: this will be changed after implementing the convert.md requirement
+  }
+
+  /**
+   * Tells if the database supports assigning a temporary alias (a nickname) to a
+   * table within a specific SQL query. This "correlation name" is better known to
+   * most developers simply as a Table Alias.
+   *
+   * @return true since this is supported
+   */
+  @Override
+  public boolean supportsTableCorrelationNames() {
+    return true;
+  }
+
+  /**
+   * Is the user forbidden from using an alias (correlation name) that is
+   * identical to the table name?
+   *
+   * @return false, since there is no such restriction
+   */
+  @Override
+  public boolean supportsDifferentTableCorrelationNames() {
     return false;
   }
 
   @Override
-  public boolean supportsConvert(int fromType, int toType) throws SQLException {
-    return false;
+  public boolean supportsExpressionsInOrderBy() {
+    return true;
+    // This is supported but has some restrictions that are addressed in
+    // expressionsInOrderBy.md
   }
 
+  /**
+   * Whether JParq supports ordering by columns not present in the SELECT list,
+   * e.g: <code>
+   * SELECT model FROM mtcars ORDER BY mpg
+   * </code>
+   *
+   * @return true since this is fully supported
+   */
   @Override
-  public boolean supportsTableCorrelationNames() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsDifferentTableCorrelationNames() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsExpressionsInOrderBy() throws SQLException {
+  public boolean supportsOrderByUnrelated() {
     return true;
   }
 
   @Override
-  public boolean supportsOrderByUnrelated() throws SQLException {
+  public boolean supportsGroupBy() {
+    return true;
+  }
+
+  /**
+   * Whether JParq supports grouping by fields that are not included in the SELECT
+   * list.
+   *
+   * @return true since this is supported
+   */
+  @Override
+  public boolean supportsGroupByUnrelated() {
+    return true;
+  }
+
+  /**
+   * Whether JParq allows sorting by a grouping column that is not in the SELECT
+   * list
+   *
+   * @return false since this is currently NOT supported
+   */
+  @Override
+  public boolean supportsGroupByBeyondSelect() {
     return false;
   }
 
   @Override
-  public boolean supportsGroupBy() throws SQLException {
+  public boolean supportsLikeEscapeClause() {
     return true;
   }
 
   @Override
-  public boolean supportsGroupByUnrelated() throws SQLException {
-    return false; // TODO: What is this?
-  }
-
-  @Override
-  public boolean supportsGroupByBeyondSelect() throws SQLException {
-    return false; // TODO: what is this?
-  }
-
-  @Override
-  public boolean supportsLikeEscapeClause() throws SQLException {
-    return true;
-  }
-
-  @Override
-  public boolean supportsMultipleResultSets() throws SQLException {
+  public boolean supportsMultipleResultSets() {
     return false;
   }
 
   @Override
-  public boolean supportsMultipleTransactions() throws SQLException {
+  public boolean supportsMultipleTransactions() {
     return false;
   }
 
@@ -1157,358 +1197,698 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean supportsMinimumSQLGrammar() throws SQLException {
-    return false;
+    return false; // only read operations supported
   }
 
   @Override
   public boolean supportsCoreSQLGrammar() throws SQLException {
-    return false;
+    return false; // only read operations supported
   }
 
   @Override
   public boolean supportsExtendedSQLGrammar() throws SQLException {
-    return false;
+    return false; // only read operations supported
   }
 
   @Override
   public boolean supportsANSI92EntryLevelSQL() throws SQLException {
-    return false;
+    return false; // only read operations supported
   }
 
   @Override
   public boolean supportsANSI92IntermediateSQL() throws SQLException {
-    return false;
+    return false; // only read operations supported
   }
 
   @Override
   public boolean supportsANSI92FullSQL() throws SQLException {
+    return false; // only read operations supported
+  }
+
+  /**
+   * Indicates whether the database supports the Integrity Enhancement Facility
+   * (IEF), a specific subset of the SQL-89 standard. i.e. Does the database
+   * support Primary Keys, Foreign Keys, and CHECK constraints?
+   *
+   * @return false since this it is impossible to enforce in externally created
+   *         data (parquet files)
+   */
+  @Override
+  public boolean supportsIntegrityEnhancementFacility() {
     return false;
   }
 
   @Override
-  public boolean supportsIntegrityEnhancementFacility() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsOuterJoins() throws SQLException {
+  public boolean supportsOuterJoins() {
     return true;
   }
 
   @Override
-  public boolean supportsFullOuterJoins() throws SQLException {
+  public boolean supportsFullOuterJoins() {
     return true;
   }
 
   @Override
-  public boolean supportsLimitedOuterJoins() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public String getSchemaTerm() throws SQLException {
-    return "";
-  }
-
-  @Override
-  public String getProcedureTerm() throws SQLException {
-    return "";
-  }
-
-  @Override
-  public String getCatalogTerm() throws SQLException {
-    return "";
-  }
-
-  @Override
-  public boolean isCatalogAtStart() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public String getCatalogSeparator() throws SQLException {
-    return "";
-  }
-
-  @Override
-  public boolean supportsSchemasInDataManipulation() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsSchemasInProcedureCalls() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsSchemasInTableDefinitions() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsSchemasInIndexDefinitions() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsSchemasInPrivilegeDefinitions() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsCatalogsInDataManipulation() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsCatalogsInProcedureCalls() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsCatalogsInTableDefinitions() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsCatalogsInIndexDefinitions() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsCatalogsInPrivilegeDefinitions() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsPositionedDelete() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsPositionedUpdate() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsSelectForUpdate() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsStoredProcedures() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public boolean supportsSubqueriesInComparisons() throws SQLException {
+  public boolean supportsLimitedOuterJoins() {
     return true;
   }
 
+  @Override
+  public String getSchemaTerm() {
+    return "folder";
+  }
+
+  /**
+   * Stored procedures are not supported.
+   *
+   * @return an empty string
+   */
+  @Override
+  public String getProcedureTerm() {
+    return "";
+  }
+
+  @Override
+  public String getCatalogTerm() {
+    return "database";
+  }
+
+  @Override
+  public boolean isCatalogAtStart() {
+    return true;
+  }
+
+  /**
+   * The catalog name is part of the connection context but never written in the
+   * SQL itself.
+   *
+   * @return an empty string
+   */
+  @Override
+  public String getCatalogSeparator() {
+    return "";
+  }
+
+  /**
+   * This is supported: <code>SELECT * FROM my_schema.my_table</code>
+   *
+   * @return true since this is supported
+   */
+  @Override
+  public boolean supportsSchemasInDataManipulation() {
+    return true;
+  }
+
+  /**
+   * Stored procedures are not supported
+   *
+   * @return false
+   */
+  @Override
+  public boolean supportsSchemasInProcedureCalls() {
+    return false;
+  }
+
+  /**
+   * DDL's are not supported
+   *
+   * @return false
+   */
+  @Override
+  public boolean supportsSchemasInTableDefinitions() {
+    return false;
+  }
+
+  /**
+   * Indexing are not supported
+   *
+   * @return false
+   */
+  @Override
+  public boolean supportsSchemasInIndexDefinitions() {
+    return false;
+  }
+
+  /**
+   * Privilege definitions are not supported
+   *
+   * @return false
+   */
+  @Override
+  public boolean supportsSchemasInPrivilegeDefinitions() {
+    return false;
+  }
+
+  /**
+   * The catalog name is part of the connection context but never written in the
+   * SQL itself.
+   *
+   * @return false
+   */
+  @Override
+  public boolean supportsCatalogsInDataManipulation() {
+    return false;
+  }
+
+  /**
+   * Stored procedures are not supported
+   *
+   * @return false
+   */
+  @Override
+  public boolean supportsCatalogsInProcedureCalls() {
+    return false;
+  }
+
+  /**
+   * DDL's are not supported
+   *
+   * @return false
+   */
+  @Override
+  public boolean supportsCatalogsInTableDefinitions() {
+    return false;
+  }
+
+  /**
+   * Indexing are not supported
+   *
+   * @return false
+   */
+  @Override
+  public boolean supportsCatalogsInIndexDefinitions() {
+    return false;
+  }
+
+  /**
+   * Privilege definitions are not supported
+   *
+   * @return false
+   */
+  @Override
+  public boolean supportsCatalogsInPrivilegeDefinitions() {
+    return false;
+  }
+
+  /**
+   * Deletes are not supported
+   *
+   * @return false
+   */
+  @Override
+  public boolean supportsPositionedDelete() {
+    return false;
+  }
+
+  /**
+   * Updates are not supported
+   *
+   * @return false
+   */
+  @Override
+  public boolean supportsPositionedUpdate() {
+    return false;
+  }
+
+  /**
+   * Updates are not supported
+   *
+   * @return false
+   */
+  @Override
+  public boolean supportsSelectForUpdate() {
+    return false;
+  }
+
+  /**
+   * Stored procedures are not supported
+   *
+   * @return false
+   */
+  @Override
+  public boolean supportsStoredProcedures() {
+    return false;
+  }
+
+  /**
+   * Whether JParq supports SQL syntax where a value is compared against the
+   * result of a SELECT statement. E.g:
+   * <code>SELECT * FROM t WHERE id = (SELECT id FROM t2 WHERE ...)</code>
+   *
+   * @return true
+   */
+  @Override
+  public boolean supportsSubqueriesInComparisons() {
+    return true;
+  }
+
+  /**
+   * Whether JParq supports SQL syntax where a value is compared against the
+   * result of an EXISTS statement.
+   *
+   * @return true
+   */
   @Override
   public boolean supportsSubqueriesInExists() throws SQLException {
     return true;
   }
 
+  /**
+   * Whether JParq supports SQL syntax where a value is compared against the
+   * result of an IN statement
+   *
+   * @return true
+   */
   @Override
-  public boolean supportsSubqueriesInIns() throws SQLException {
+  public boolean supportsSubqueriesInIns() {
     return true;
   }
 
+  /**
+   * indicates whether your database supports Quantified Comparison Operators.
+   *
+   * @return true
+   */
   @Override
-  public boolean supportsSubqueriesInQuantifieds() throws SQLException {
+  public boolean supportsSubqueriesInQuantifieds() {
     return true;
   }
 
+  /**
+   * The JParq codebase has explicit and robust support for correlated subqueries
+   *
+   * @return true
+   */
   @Override
-  public boolean supportsCorrelatedSubqueries() throws SQLException {
+  public boolean supportsCorrelatedSubqueries() {
     return true;
   }
 
+  /**
+   * Whether JParq supports union statements.
+   *
+   * @return true
+   */
   @Override
-  public boolean supportsUnion() throws SQLException {
+  public boolean supportsUnion() {
     return true;
   }
 
+  /**
+   * Whether JParq supports union all statements.
+   *
+   * @return true
+   */
   @Override
   public boolean supportsUnionAll() throws SQLException {
     return true;
   }
 
+  /**
+   * Transactions are not supported
+   *
+   * @return false
+   */
   @Override
-  public boolean supportsOpenCursorsAcrossCommit() throws SQLException {
+  public boolean supportsOpenCursorsAcrossCommit() {
     return false;
   }
 
+  /**
+   * Transactions are not supported
+   *
+   * @return false
+   */
   @Override
-  public boolean supportsOpenCursorsAcrossRollback() throws SQLException {
+  public boolean supportsOpenCursorsAcrossRollback() {
     return false;
   }
 
+  /**
+   * Transactions are not supported
+   *
+   * @return false
+   */
   @Override
-  public boolean supportsOpenStatementsAcrossCommit() throws SQLException {
+  public boolean supportsOpenStatementsAcrossCommit() {
     return false;
   }
 
+  /**
+   * Transactions are not supported
+   *
+   * @return false
+   */
   @Override
-  public boolean supportsOpenStatementsAcrossRollback() throws SQLException {
+  public boolean supportsOpenStatementsAcrossRollback() {
     return false;
   }
 
+  /**
+   * No limit on binary length
+   *
+   * @return 0
+   */
   @Override
-  public int getMaxBinaryLiteralLength() throws SQLException {
+  public int getMaxBinaryLiteralLength() {
     return 0;
   }
 
+  /**
+   * No limit on char literal length
+   *
+   * @return 0
+   */
   @Override
-  public int getMaxCharLiteralLength() throws SQLException {
+  public int getMaxCharLiteralLength() {
     return 0;
   }
 
+  /**
+   * No limit on column name length
+   *
+   * @return 0
+   */
   @Override
-  public int getMaxColumnNameLength() throws SQLException {
+  public int getMaxColumnNameLength() {
     return 0;
   }
 
+  /**
+   * No limit on columns in group by clause
+   *
+   * @return 0
+   */
   @Override
-  public int getMaxColumnsInGroupBy() throws SQLException {
+  public int getMaxColumnsInGroupBy() {
     return 0;
   }
 
+  /**
+   * Indexes are not supported
+   *
+   * @return 0
+   */
   @Override
-  public int getMaxColumnsInIndex() throws SQLException {
+  public int getMaxColumnsInIndex() {
     return 0;
   }
 
+  /**
+   * No limit to number of columns in the order by.
+   *
+   * @return 0
+   */
   @Override
-  public int getMaxColumnsInOrderBy() throws SQLException {
+  public int getMaxColumnsInOrderBy() {
     return 0;
   }
 
+  /**
+   * No limit to the max number of columns in the select clause.
+   *
+   * @return 0
+   */
   @Override
-  public int getMaxColumnsInSelect() throws SQLException {
+  public int getMaxColumnsInSelect() {
     return 0;
   }
 
+  /**
+   * No limit to the max number of columns in the table.
+   *
+   * @return 0
+   */
   @Override
-  public int getMaxColumnsInTable() throws SQLException {
+  public int getMaxColumnsInTable() {
     return 0;
   }
 
+  /**
+   * Jparq supports multiple concurrent connections. The only limit is the
+   * available memory.
+   *
+   * @return 0
+   */
   @Override
-  public int getMaxConnections() throws SQLException {
-    return 0; // TODO: may this should be 1?
-  }
-
-  @Override
-  public int getMaxCursorNameLength() throws SQLException {
+  public int getMaxConnections() {
     return 0;
   }
 
+  /**
+   * Cursors are not supported.
+   *
+   * @return 0
+   */
   @Override
-  public int getMaxIndexLength() throws SQLException {
+  public int getMaxCursorNameLength() {
     return 0;
   }
 
+  /**
+   * Indexes a re not supported.
+   *
+   * @return 0
+   */
   @Override
-  public int getMaxSchemaNameLength() throws SQLException {
+  public int getMaxIndexLength() {
     return 0;
   }
 
+  /**
+   * A schema in Jparq corresponds to a subdirectory under the base dir. The limit
+   * depends on the filesystem and os limitations for directory length.
+   *
+   * @return 0
+   */
   @Override
-  public int getMaxProcedureNameLength() throws SQLException {
+  public int getMaxSchemaNameLength() {
     return 0;
   }
 
+  /**
+   * Stored procedures are not supported.
+   *
+   * @return 0
+   */
   @Override
-  public int getMaxCatalogNameLength() throws SQLException {
+  public int getMaxProcedureNameLength() {
     return 0;
   }
 
+  /**
+   * The catalog corresponds to the base dir. The limit depends on the filesystem
+   * and os limitations for directory length.
+   * 
+   * @return 0
+   */
   @Override
-  public int getMaxRowSize() throws SQLException {
+  public int getMaxCatalogNameLength() {
     return 0;
   }
 
+  /**
+   * Since Parquet/Avro row sizes are limited only by memory and configuration
+   * there is no limit.
+   *
+   * @return 0
+   */
   @Override
-  public boolean doesMaxRowSizeIncludeBlobs() throws SQLException {
-    return false;
-  }
-
-  @Override
-  public int getMaxStatementLength() throws SQLException {
+  public int getMaxRowSize() {
     return 0;
   }
 
+  /**
+   * Since Parquet/Avro row sizes are limited only by memory and configuration
+   * there is no limit.
+   *
+   * @return true
+   */
   @Override
-  public int getMaxStatements() throws SQLException {
+  public boolean doesMaxRowSizeIncludeBlobs() {
+    return true;
+  }
+
+  /**
+   * Statement length is only restricted by available memory.
+   *
+   * @return 0
+   */
+  @Override
+  public int getMaxStatementLength() {
     return 0;
   }
 
+  /**
+   * Multiple `Statement` Objects: You can create multiple Statement or
+   * PreparedStatement objects from a single JParqConnection. Each of these
+   * statement objects can be used to execute queries independently. The
+   * JParqConnection.createStatement() method returns a new JParqStatement
+   * instance each time it is called.
+   *
+   * <p>
+   * Sequential Queries on a Single `Statement`: A single Statement object can be
+   * used to execute multiple queries sequentially. However, you should close the
+   * ResultSet from the previous query before executing the next one, which is
+   * standard JDBC practice.
+   *
+   * <p>
+   * It is important to note that JParq does not support executing a string
+   * containing multiple SQL statements in a single executeQuery() call (e.g.,
+   * <code>SELECT  FROM table1; SELECT  FROM table2;</code>). The batch execution
+   * methods (addBatch(), executeBatch()) are also not supported.
+   *
+   * @return 0 since there is no limit to the number of statements that can be
+   *         open at the same time
+   */
   @Override
-  public int getMaxTableNameLength() throws SQLException {
+  public int getMaxStatements() {
     return 0;
   }
 
+  /**
+   * A table in JParq corresponds to the file name of the parquet file. The limit
+   * depends on whether the underlying filesyste/os imposes a limit or not.
+   *
+   * @return 0 since there is no limit, or it is unknown.
+   */
   @Override
-  public int getMaxTablesInSelect() throws SQLException {
+  public int getMaxTableNameLength() {
     return 0;
   }
 
+  /**
+   * There is no limit imposed on the number of tables in a select. In practice
+   * the limit is contained to the number of files that can exists in a directory
+   * i.e. it depends on you filesystem/os.
+   *
+   * @return 0
+   */
   @Override
-  public int getMaxUserNameLength() throws SQLException {
+  public int getMaxTablesInSelect() {
     return 0;
   }
 
+  /**
+   * In JParq the user is the same as the username logged in i.e.
+   * System.getProperty("user.name") thus the max length is os/platform specific.
+   *
+   * @return 0
+   */
+  @Override
+  public int getMaxUserNameLength() {
+    return 0;
+  }
+
+  /**
+   * Transactions are not supported.
+   *
+   * @return 0
+   */
   @Override
   public int getDefaultTransactionIsolation() throws SQLException {
     return 0;
   }
 
+  /**
+   * Transactions are not supported.
+   *
+   * @return false
+   */
   @Override
   public boolean supportsTransactions() throws SQLException {
     return false;
   }
 
+  /**
+   * Transactions are not supported.
+   *
+   * @return false
+   */
   @Override
   public boolean supportsTransactionIsolationLevel(int level) throws SQLException {
     return false;
   }
 
+  /**
+   * Transactions are not supported.
+   *
+   * @return false
+   */
   @Override
   public boolean supportsDataDefinitionAndDataManipulationTransactions() throws SQLException {
     return false;
   }
 
+  /**
+   * Transactions are not supported.
+   *
+   * @return false
+   */
   @Override
   public boolean supportsDataManipulationTransactionsOnly() throws SQLException {
     return false;
   }
 
+  /**
+   * Transactions are not supported.
+   *
+   * @return false
+   */
   @Override
   public boolean dataDefinitionCausesTransactionCommit() throws SQLException {
     return false;
   }
 
+  /**
+   * Transactions are not supported.
+   *
+   * @return false
+   */
   @Override
   public boolean dataDefinitionIgnoredInTransactions() throws SQLException {
     return false;
   }
 
+  /**
+   * Stored procedures are not supported.
+   *
+   * @return false
+   */
   @Override
-  public ResultSet getProcedures(String catalog, String schemaPattern, String procedureNamePattern)
-      throws SQLException {
-    return null;
+  public ResultSet getProcedures(String catalog, String schemaPattern, String procedureNamePattern) {
+    return JParqUtil.listResultSet(List.of("PROCEDURE_CAT", "PROCEDURE_SCHEM", "PROCEDURE_NAME", "reserved1",
+        "reserved2", "reserved3", "REMARKS", "PROCEDURE_TYPE", "SPECIFIC_NAME"), List.of());
   }
 
   @Override
   public ResultSet getProcedureColumns(String catalog, String schemaPattern, String procedureNamePattern,
       String columnNamePattern) throws SQLException {
-    return null;
+    return JParqUtil.listResultSet(List.of("PROCEDURE_CAT", // 1. Catalog
+        "PROCEDURE_SCHEM", // 2. Schema
+        "PROCEDURE_NAME", // 3. Procedure Name
+        "COLUMN_NAME", // 4. Column/Parameter Name
+        "COLUMN_TYPE", // 5. Kind of column (IN, OUT, INOUT, etc.)
+        "DATA_TYPE", // 6. SQL type from java.sql.Types
+        "TYPE_NAME", // 7. SQL type name
+        "PRECISION", // 8. Precision
+        "LENGTH", // 9. Byte length
+        "SCALE", // 10. Scale
+        "RADIX", // 11. Radix
+        "NULLABLE", // 12. Can it contain Null?
+        "REMARKS", // 13. Comment
+        "COLUMN_DEF", // 14. Default value
+        "SQL_DATA_TYPE", // 15. Reserved for future use
+        "SQL_DATETIME_SUB", // 16. Reserved for future use
+        "CHAR_OCTET_LENGTH", // 17. max bytes for char types
+        "ORDINAL_POSITION", // 18. The order (1, 2, 3...)
+        "IS_NULLABLE", // 19. "YES" or "NO"
+        "SPECIFIC_NAME" // 20. Specific name
+    ), List.of());
   }
 
   @Override
-  public ResultSet getSchemas() throws SQLException {
+  public ResultSet getSchemas() {
     return null;
   }
 

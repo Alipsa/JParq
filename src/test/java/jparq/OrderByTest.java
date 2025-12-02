@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqSql;
 
@@ -179,6 +180,22 @@ public class OrderByTest {
 
       } catch (SQLException e) {
         fail(e);
+      }
+    });
+  }
+
+  @Disabled
+  @Test
+  void testOrderByOnlyInGroupBy() {
+    jparqSql.query("""
+        SELECT SUM(hp) FROM cars GROUP BY cyl ORDER BY cyl DESC
+        """, rs -> {
+      try {
+        while (rs.next()) {
+          System.out.println(rs.getInt(1));
+        }
+      } catch (SQLException e) {
+        throw new RuntimeException(e);
       }
     });
   }

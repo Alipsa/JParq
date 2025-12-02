@@ -89,6 +89,11 @@ public final class JParqUtil {
     return new MetaDataResultSet(headers, rows);
   }
 
+  public static ResultSet listResultSet(List<String> headers, List<Object[]> rows) {
+    String[] h = headers.toArray(new String[0]);
+    return new MetaDataResultSet(h, rows);
+  }
+
   /**
    * Normalizes a SQL table or column qualifier by removing quotes, backticks, and
    * brackets, and converting to lowercase.

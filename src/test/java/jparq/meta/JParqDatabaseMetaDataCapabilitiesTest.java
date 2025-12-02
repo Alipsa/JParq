@@ -45,7 +45,7 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertTrue(metaData.usesLocalFiles());
     assertTrue(metaData.usesLocalFilePerTable());
     assertFalse(metaData.supportsMixedCaseIdentifiers());
-    assertFalse(metaData.supportsMixedCaseQuotedIdentifiers());
+    assertTrue(metaData.supportsMixedCaseQuotedIdentifiers());
     assertTrue(metaData.isReadOnly());
     assertFalse(metaData.allProceduresAreCallable());
     assertTrue(metaData.allTablesAreSelectable());
@@ -56,7 +56,7 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertTrue(metaData.nullsAreSortedLow());
     assertFalse(metaData.nullsAreSortedAtStart());
     assertTrue(metaData.nullsAreSortedAtEnd());
-    assertEquals("", metaData.getIdentifierQuoteString());
+    assertEquals("\"", metaData.getIdentifierQuoteString());
     assertEquals("ILIKE, LIMIT, REGEXP_LIKE", metaData.getSQLKeywords());
     String expectedNumericFunctions = "{fn ABS}, {fn ACOS}, {fn ASIN}, {fn ATAN}, {fn ATAN2}, {fn CEILING}, "
         + "{fn COS}, {fn COT}, {fn DEGREES}, {fn EXP}, {fn FLOOR}, {fn LOG}, {fn LOG10}, {fn MOD}, {fn PI}, "
@@ -81,14 +81,14 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertFalse(metaData.supportsStoredProcedures());
     assertTrue(metaData.supportsLikeEscapeClause());
     assertTrue(metaData.supportsExpressionsInOrderBy());
-    assertFalse(metaData.supportsOrderByUnrelated());
+    assertTrue(metaData.supportsOrderByUnrelated());
     assertFalse(metaData.supportsBatchUpdates());
     assertFalse(metaData.supportsSavepoints());
     assertFalse(metaData.supportsNamedParameters());
     assertEquals("", metaData.getCatalogSeparator());
-    assertEquals("", metaData.getSchemaTerm());
+    assertEquals("folder", metaData.getSchemaTerm());
     assertEquals("", metaData.getProcedureTerm());
-    assertFalse(metaData.supportsSchemasInDataManipulation());
+    assertTrue(metaData.supportsSchemasInDataManipulation());
     assertFalse(metaData.supportsSchemasInProcedureCalls());
     assertFalse(metaData.supportsSchemasInTableDefinitions());
     assertFalse(metaData.supportsSchemasInIndexDefinitions());
@@ -98,7 +98,7 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertFalse(metaData.supportsCatalogsInTableDefinitions());
     assertFalse(metaData.supportsCatalogsInIndexDefinitions());
     assertFalse(metaData.supportsCatalogsInPrivilegeDefinitions());
-    assertFalse(metaData.supportsTableCorrelationNames());
+    assertTrue(metaData.supportsTableCorrelationNames());
     assertFalse(metaData.supportsDifferentTableCorrelationNames());
     assertTrue(metaData.supportsCorrelatedSubqueries());
     assertFalse(metaData.supportsGetGeneratedKeys());

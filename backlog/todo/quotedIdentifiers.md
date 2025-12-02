@@ -1,0 +1,2 @@
+Inconsistent Post-Parse Handling: While the parser preserves case, downstream processing can be inconsistent. For instance, Common Table
+Expression (CTE) names are explicitly converted to lowercase, making them case-insensitive regardless of quoting.
