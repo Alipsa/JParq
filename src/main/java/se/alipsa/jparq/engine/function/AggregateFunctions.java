@@ -1362,10 +1362,7 @@ public final class AggregateFunctions {
   }
 
   private enum OrderValueKind {
-    PROJECTION,
-    GROUP,
-    AGGREGATE,
-    GROUPING_FUNCTION
+    PROJECTION, GROUP, AGGREGATE, GROUPING_FUNCTION
   }
 
   private static final class OrderValueAccessor {

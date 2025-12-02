@@ -59,8 +59,8 @@ import org.apache.parquet.filter2.predicate.FilterPredicate;
 import org.apache.parquet.hadoop.ParquetReader;
 import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
-import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
+import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.IdentifierUtil;
 import se.alipsa.jparq.engine.InMemoryRecordReader;
 import se.alipsa.jparq.engine.JoinRecordReader;
@@ -76,7 +76,6 @@ import se.alipsa.jparq.engine.SqlParser.ValueTableDefinition;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.UnnestTableBuilder;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
-import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
 import se.alipsa.jparq.engine.function.SystemFunctions;
 import se.alipsa.jparq.engine.window.AvgWindow;
@@ -91,6 +90,7 @@ import se.alipsa.jparq.engine.window.RowNumberWindow;
 import se.alipsa.jparq.engine.window.SumWindow;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
+import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
@@ -989,8 +989,8 @@ class JParqPreparedStatement implements PreparedStatement {
     return Schema.create(type);
   }
 
-  private Object evaluateSetOrderExpression(Expression expression, List<Object> row, List<String> labels,
-      Schema schema, ValueExpressionEvaluator evaluator) throws SQLException {
+  private Object evaluateSetOrderExpression(Expression expression, List<Object> row, List<String> labels, Schema schema,
+      ValueExpressionEvaluator evaluator) throws SQLException {
     if (expression == null || evaluator == null || schema == null) {
       return null;
     }
@@ -1009,8 +1009,10 @@ class JParqPreparedStatement implements PreparedStatement {
     if (value == null || schema == null) {
       return null;
     }
-    Schema base = schema.getType() == Schema.Type.UNION ? schema.getTypes().stream()
-        .filter(s -> s.getType() != Schema.Type.NULL).findFirst().orElse(Schema.create(Schema.Type.STRING)) : schema;
+    Schema base = schema.getType() == Schema.Type.UNION
+        ? schema.getTypes().stream().filter(s -> s.getType() != Schema.Type.NULL).findFirst()
+            .orElse(Schema.create(Schema.Type.STRING))
+        : schema;
     return switch (base.getType()) {
       case BOOLEAN -> (value instanceof Boolean) ? value : Boolean.parseBoolean(value.toString());
       case INT -> {
@@ -2460,8 +2462,7 @@ class JParqPreparedStatement implements PreparedStatement {
       case Types.DATE -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
       case Types.TIME -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
       case Types.TIMESTAMP -> LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
-      case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY ->
-        Schema.create(Schema.Type.BYTES);
+      case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY -> Schema.create(Schema.Type.BYTES);
       default -> Schema.create(Schema.Type.STRING);
     };
   }

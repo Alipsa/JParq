@@ -123,10 +123,8 @@ public class GroupingSetsTest {
   void testOrderByGroupingFunction() {
     MtcarsHpSums.Aggregates sums = MtcarsHpSums.compute(jparqSql);
     List<Double> actualTotals = new ArrayList<>();
-    jparqSql.query(
-        "SELECT SUM(hp) AS total_hp FROM mtcars GROUP BY GROUPING SETS ((cyl), ()) "
-            + "ORDER BY GROUPING(cyl) DESC, cyl ASC",
-        rs -> {
+    jparqSql.query("SELECT SUM(hp) AS total_hp FROM mtcars GROUP BY GROUPING SETS ((cyl), ()) "
+        + "ORDER BY GROUPING(cyl) DESC, cyl ASC", rs -> {
           try {
             while (rs.next()) {
               actualTotals.add(rs.getDouble("total_hp"));
