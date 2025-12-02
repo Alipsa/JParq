@@ -1,11 +1,13 @@
 package se.alipsa.jparq.engine.function;
 
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.text.Normalizer.Form;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Pattern;
 import net.sf.jsqlparser.expression.Expression;
 
@@ -24,6 +26,31 @@ public final class StringFunctions {
 
   private StringFunctions() {
   }
+
+  private static final Map<String, String> CHARSET_ALIASES = Map.ofEntries(
+      Map.entry("UTF8", StandardCharsets.UTF_8.name()),
+      Map.entry("UTF-8", StandardCharsets.UTF_8.name()),
+      Map.entry("UTF8MB4", StandardCharsets.UTF_8.name()),
+      Map.entry("UCS2", "UTF-16BE"),
+      Map.entry("UTF-16BE", "UTF-16BE"),
+      Map.entry("UTF16", "UTF-16"),
+      Map.entry("UTF-16", "UTF-16"),
+      Map.entry("LATIN1", "ISO-8859-1"),
+      Map.entry("ISO-8859-1", "ISO-8859-1"),
+      Map.entry("ASCII", "US-ASCII"),
+      Map.entry("US-ASCII", "US-ASCII"),
+      Map.entry("LATIN2", "ISO-8859-2"),
+      Map.entry("ISO-8859-2", "ISO-8859-2"),
+      Map.entry("EUC-JP", "EUC-JP"),
+      Map.entry("UJIS", "EUC-JP"),
+      Map.entry("SJIS", "Shift_JIS"),
+      Map.entry("CP932", "Shift_JIS"),
+      Map.entry("GBK", "GBK"),
+      Map.entry("GB2312", "GB2312"),
+      Map.entry("KOI8-R", "KOI8-R"),
+      Map.entry("KOI8_R", "KOI8-R"),
+      Map.entry("WINDOWS-1252", "Windows-1252"),
+      Map.entry("CP1252", "Windows-1252"));
 
   /**
    * Implementation of the COALESCE(expr1, expr2, ...) function.
@@ -93,6 +120,48 @@ public final class StringFunctions {
       return null;
     }
     return str.codePointAt(0);
+  }
+
+  /**
+   * Convert the supplied value to the requested character set using UTF-8 as the
+   * source encoding. {@code UTF-8} targets are treated as a pass-through.
+   *
+   * @param value
+   *          the value to convert (converted to a string)
+   * @param charsetName
+   *          SQL-style character set name (case-insensitive)
+   * @return the converted text or {@code null} when {@code value} is {@code null}
+   */
+  public static String convertCharset(Object value, String charsetName) {
+    if (value == null) {
+      return null;
+    }
+    String javaCharset = normalizeCharset(charsetName);
+    if (StandardCharsets.UTF_8.name().equalsIgnoreCase(javaCharset)) {
+      return value.toString();
+    }
+    String text = value.toString();
+    try {
+      return new String(text.getBytes(StandardCharsets.UTF_8), Charset.forName(javaCharset));
+    } catch (Exception e) {
+      throw new IllegalArgumentException("Failed to convert value using character set " + charsetName, e);
+    }
+  }
+
+  private static String normalizeCharset(String charsetName) {
+    if (charsetName == null || charsetName.trim().isEmpty()) {
+      throw new IllegalArgumentException("CONVERT requires a target character set");
+    }
+    String key = charsetName.trim().toUpperCase(Locale.ROOT);
+    String mapped = CHARSET_ALIASES.get(key);
+    if (mapped != null) {
+      return mapped;
+    }
+    try {
+      return Charset.forName(charsetName.trim()).name();
+    } catch (Exception e) {
+      throw new IllegalArgumentException("Unsupported character set: " + charsetName, e);
+    }
   }
 
   /**

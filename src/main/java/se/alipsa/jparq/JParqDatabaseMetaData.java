@@ -1097,12 +1097,12 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean supportsConvert() {
-    return false; // TODO: this will be changed after implementing the convert.md requirement
+    return true;
   }
 
   @Override
   public boolean supportsConvert(int fromType, int toType) {
-    return false; // TODO: this will be changed after implementing the convert.md requirement
+    return true;
   }
 
   /**

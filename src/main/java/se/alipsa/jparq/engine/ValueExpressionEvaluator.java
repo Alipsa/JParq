@@ -26,6 +26,7 @@ import net.sf.jsqlparser.expression.JsonFunctionExpression;
 import net.sf.jsqlparser.expression.JsonFunctionType;
 import net.sf.jsqlparser.expression.JsonKeyValuePair;
 import net.sf.jsqlparser.expression.SignedExpression;
+import net.sf.jsqlparser.expression.TranscodingFunction;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TrimFunction;
 import net.sf.jsqlparser.expression.WhenClause;
@@ -39,6 +40,7 @@ import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
 import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.statement.create.table.ColDataType;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
@@ -303,6 +305,9 @@ public final class ValueExpressionEvaluator {
     if (expression instanceof JsonFunction json) {
       return evaluateJsonFunction(json, record);
     }
+    if (expression instanceof TranscodingFunction convert) {
+      return evaluateConvert(convert, record);
+    }
     if (expression instanceof Function func) {
       return functionSupport.evaluate(func, record);
     }
@@ -313,6 +318,53 @@ public final class ValueExpressionEvaluator {
       return evaluateScalarSubquery(subSelect, record);
     }
     return LiteralConverter.toLiteral(expression);
+  }
+
+  private Object evaluateConvert(TranscodingFunction convert, GenericRecord record) {
+    if (convert.isTranscodeStyle()) {
+      Object value = evalInternal(convert.getExpression(), record);
+      return StringFunctions.convertCharset(value, convert.getTranscodingName());
+    }
+    ConvertArguments args = resolveConvertArguments(convert);
+    Object value = evalInternal(args.valueExpression(), record);
+    if (args.colDataType() == null) {
+      return value;
+    }
+    CastExpression cast = new CastExpression();
+    cast.setColDataType(args.colDataType());
+    cast.setLeftExpression(args.valueExpression());
+    return DateTimeFunctions.castLiteral(cast, value);
+  }
+
+  private ConvertArguments resolveConvertArguments(TranscodingFunction convert) {
+    Expression valueExpr = convert.getExpression();
+    ColDataType colType = convert.getColDataType();
+    if (colType != null && valueExpr != null) {
+      String typeCandidate = colType.getDataType();
+      String exprText = valueExpr.toString();
+      if (looksLikeSchemaColumn(typeCandidate) && isTypeName(exprText) && !looksLikeSchemaColumn(exprText)) {
+        valueExpr = new Column(typeCandidate);
+        ColDataType swapped = new ColDataType();
+        swapped.setDataType(exprText);
+        colType = swapped;
+      }
+    }
+    return new ConvertArguments(valueExpr, colType);
+  }
+
+  private boolean looksLikeSchemaColumn(String name) {
+    if (name == null) {
+      return false;
+    }
+    String normalized = name.trim().toLowerCase(Locale.ROOT);
+    return caseInsensitiveIndex.containsKey(normalized);
+  }
+
+  private boolean isTypeName(String name) {
+    return SqlParser.isConvertTypeName(name);
+  }
+
+  private record ConvertArguments(Expression valueExpression, ColDataType colDataType) {
   }
 
   private Object evaluateAnalytic(AnalyticExpression analytic, GenericRecord record) {

@@ -11,6 +11,7 @@ import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.Properties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -82,6 +83,8 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertTrue(metaData.supportsLikeEscapeClause());
     assertTrue(metaData.supportsExpressionsInOrderBy());
     assertTrue(metaData.supportsOrderByUnrelated());
+    assertTrue(metaData.supportsConvert());
+    assertTrue(metaData.supportsConvert(Types.VARCHAR, Types.INTEGER));
     assertFalse(metaData.supportsBatchUpdates());
     assertFalse(metaData.supportsSavepoints());
     assertFalse(metaData.supportsNamedParameters());

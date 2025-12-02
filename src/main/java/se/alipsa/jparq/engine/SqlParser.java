@@ -34,8 +34,24 @@ public final class SqlParser {
 
   private static final Set<String> TIME_KEYWORDS = Set.of("CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP",
       "LOCALTIME", "LOCALTIMESTAMP");
+  private static final Set<String> CONVERT_TYPE_NAMES = Set.of("boolean", "bool", "char", "character", "nchar",
+      "varchar", "charactervarying", "nvarchar", "string", "text", "clob", "tinyint", "smallint", "int", "integer",
+      "signed", "int4", "bigint", "int8", "float", "real", "float4", "double", "doubleprecision", "float8", "numeric",
+      "decimal", "number");
 
   private SqlParser() {
+  }
+
+  static boolean isConvertTypeName(String name) {
+    if (name == null || name.isBlank()) {
+      return false;
+    }
+    String normalized = name.trim().toLowerCase(Locale.ROOT);
+    int paren = normalized.indexOf('(');
+    if (paren > 0) {
+      normalized = normalized.substring(0, paren).trim();
+    }
+    return CONVERT_TYPE_NAMES.contains(normalized);
   }
 
   /**
@@ -1995,6 +2011,31 @@ public final class SqlParser {
             name -> null);
         columns.addAll(rewritten.correlatedColumns());
         return super.visit(select, context);
+      }
+
+      @Override
+      public <S> Void visit(TranscodingFunction convert, S context) {
+        if (convert == null) {
+          return null;
+        }
+        if (convert.isTranscodeStyle()) {
+          Expression inner = convert.getExpression();
+          if (inner != null) {
+            inner.accept(this, context);
+          }
+          return null;
+        }
+        Expression inner = convert.getExpression();
+        String typeCandidate = convert.getColDataType() == null ? null : convert.getColDataType().getDataType();
+        if (inner instanceof Column column && isConvertTypeName(column.getColumnName()) && typeCandidate != null) {
+          Column synthetic = new Column(typeCandidate);
+          synthetic.accept(this, context);
+          return null;
+        }
+        if (inner != null) {
+          inner.accept(this, context);
+        }
+        return null;
       }
     });
     return Set.copyOf(columns);

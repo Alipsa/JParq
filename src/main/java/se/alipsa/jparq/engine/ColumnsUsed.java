@@ -4,6 +4,7 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
+import net.sf.jsqlparser.expression.TranscodingFunction;
 import net.sf.jsqlparser.schema.Column;
 /** Collects column names referenced by an expression. */
 public final class ColumnsUsed {
@@ -48,6 +49,30 @@ public final class ColumnsUsed {
       public <S> Void visit(Column column, S context) {
         if (!SqlParser.isTimeKeyword(column.getColumnName())) {
           cols.add(column.getColumnName());
+        }
+        return null;
+      }
+
+      @Override
+      public <S> Void visit(TranscodingFunction convert, S context) {
+        if (convert == null) {
+          return null;
+        }
+        if (convert.isTranscodeStyle()) {
+          Expression expr = convert.getExpression();
+          if (expr != null) {
+            expr.accept(this, context);
+          }
+          return null;
+        }
+        Expression expr = convert.getExpression();
+        String typeCandidate = convert.getColDataType() == null ? null : convert.getColDataType().getDataType();
+        if (expr instanceof Column column && SqlParser.isConvertTypeName(column.getColumnName()) && typeCandidate != null) {
+          cols.add(typeCandidate);
+          return null;
+        }
+        if (expr != null) {
+          expr.accept(this, context);
         }
         return null;
       }

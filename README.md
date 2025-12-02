@@ -110,6 +110,7 @@ The following SQL statements are supported:
   - Date functions
   - Aggregate functions (count, sum, avg, max, min)
   - CAST support
+  - CONVERT support (for character set conversion as per the sql standard, use cast for data type conversion)
   - coalesce (The COALESCE() function returns the first non-null value in a list.)
   - String functions (all SQL standard string function supported)
     - also support || operator for string concatenations
