@@ -20,11 +20,11 @@ public class JParqDatabaseMetaDataTest {
   @Test
   public void testGetSchemas(@TempDir File tempDir) throws SQLException {
     // Create some subdirectories to represent schemas
-    new File(tempDir, "schema1").mkdir();
-    new File(tempDir, "schema2").mkdir();
+    assertTrue(new File(tempDir, "schema1").mkdir(), "Failed to create schema1 directory");
+    assertTrue(new File(tempDir, "schema2").mkdir(), "Failed to create schema2 directory");
     File schema3 = new File(tempDir, "schema3");
-    schema3.mkdir();
-    new File(schema3, "nested").mkdir();
+    assertTrue(schema3.mkdir(), "Failed to create schema3 directory");
+    assertTrue(new File(schema3, "nested").mkdir(), "Failed to create nested directory in schema3");
 
     String jdbcUrl = "jdbc:jparq:" + tempDir.getAbsolutePath();
     try (JParqConnection conn = (JParqConnection) DriverManager.getConnection(jdbcUrl)) {
