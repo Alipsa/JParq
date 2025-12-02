@@ -90,9 +90,12 @@ class ConvertFunctionTest {
 
   @Test
   void convertHandlesColumnNameMatchingTypeName() {
-    // This test verifies the argument swapping logic in ValueExpressionEvaluator.resolveConvertArguments()
-    // JSqlParser swaps CONVERT arguments: CONVERT(value, type) is parsed as expression=type, colDataType=value
-    // The swap logic detects this and corrects it, unless both arguments could be valid column names
+    // This test verifies the argument swapping logic in
+    // ValueExpressionEvaluator.resolveConvertArguments()
+    // JSqlParser swaps CONVERT arguments: CONVERT(value, type) is parsed as
+    // expression=type, colDataType=value
+    // The swap logic detects this and corrects it, unless both arguments could be
+    // valid column names
     String sql = """
         SELECT CONVERT(num_value, VARCHAR) AS value_as_str,
                CAST(num_value AS VARCHAR) AS value_cast_str
@@ -111,7 +114,7 @@ class ConvertFunctionTest {
       }
     });
   }
-  
+
   @Test
   void jdbcEscapeConvertWithNestedFunctionCall() {
     String sql = """
@@ -149,7 +152,7 @@ class ConvertFunctionTest {
       }
     });
   }
-  
+
   @Test
   void jdbcEscapeConvertWithUsingClauseIsNotRewrittenToCast() {
     // JDBC escape CONVERT with USING clause should NOT be rewritten to CAST.
