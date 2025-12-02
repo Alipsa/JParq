@@ -82,4 +82,45 @@ public class JParqDatabaseMetaDataTest {
       }
     }
   }
+
+  @Test
+  public void testGetSchemasWithNonMatchingCatalog(@TempDir File tempDir) throws SQLException, IOException {
+    // Create some subdirectories to represent schemas
+    new File(tempDir, "schema1").mkdir();
+
+    String jdbcUrl = "jdbc:jparq:" + tempDir.getAbsolutePath();
+    try (JParqConnection conn = (JParqConnection) DriverManager.getConnection(jdbcUrl)) {
+      DatabaseMetaData metaData = conn.getMetaData();
+      // Query with a catalog that doesn't match the connection's catalog
+      try (ResultSet rs = metaData.getSchemas("nonexistent_catalog", null)) {
+        List<String> schemas = new ArrayList<>();
+        while (rs.next()) {
+          schemas.add(rs.getString("TABLE_SCHEM"));
+        }
+        // Should return empty result set when catalog doesn't match
+        assertEquals(0, schemas.size());
+      }
+    }
+  }
+
+  @Test
+  public void testGetSchemasWithMatchingCatalog(@TempDir File tempDir) throws SQLException, IOException {
+    // Create some subdirectories to represent schemas
+    new File(tempDir, "schema1").mkdir();
+
+    String jdbcUrl = "jdbc:jparq:" + tempDir.getAbsolutePath();
+    try (JParqConnection conn = (JParqConnection) DriverManager.getConnection(jdbcUrl)) {
+      DatabaseMetaData metaData = conn.getMetaData();
+      String actualCatalog = conn.getCatalog();
+      // Query with the actual catalog
+      try (ResultSet rs = metaData.getSchemas(actualCatalog, null)) {
+        List<String> schemas = new ArrayList<>();
+        while (rs.next()) {
+          schemas.add(rs.getString("TABLE_SCHEM"));
+        }
+        // Should return schemas when catalog matches
+        assertEquals(2, schemas.size()); // PUBLIC + schema1
+      }
+    }
+  }
 }

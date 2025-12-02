@@ -1903,8 +1903,12 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public ResultSet getSchemas(String catalog, String schemaPattern) throws SQLException {
+    String actualCatalog = conn.getCatalog();
+    String effectiveCatalog = (catalog != null && !catalog.isBlank()) ? catalog : actualCatalog;
+    if (!effectiveCatalog.equals(actualCatalog)) {
+      return JParqUtil.listResultSet(new String[]{"TABLE_SCHEM", "TABLE_CATALOG"}, List.of());
+    }
     List<Object[]> rows = new ArrayList<>();
-    String cat = conn.getCatalog();
     boolean caseSensitive = conn.isCaseSensitive();
     String schemaRegex = buildRegex(schemaPattern, caseSensitive);
     for (String schema : conn.listSchemas()) {
@@ -1912,7 +1916,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         continue;
       }
       rows.add(new Object[]{
-          schema, cat
+          schema, actualCatalog
       });
     }
     return JParqUtil.listResultSet(new String[]{
