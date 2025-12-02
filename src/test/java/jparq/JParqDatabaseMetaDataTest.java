@@ -123,8 +123,7 @@ public class JParqDatabaseMetaDataTest {
         }
         Collections.sort(schemas);
         // All case variants of PUBLIC should be normalized to a single entry
-        assertEquals(2, schemas.size(),
-            "Case variants of PUBLIC should not create duplicate schemas");
+        assertEquals(2, schemas.size(), "Case variants of PUBLIC should not create duplicate schemas");
         assertEquals("PUBLIC", schemas.get(0));
         assertEquals("schema1", schemas.get(1));
       }
