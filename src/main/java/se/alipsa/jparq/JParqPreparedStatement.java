@@ -2792,12 +2792,12 @@ class JParqPreparedStatement implements PreparedStatement {
     collectColumnReferencesFromList(select.expressions(), qualifiers, primaryQualifier, needed, referenced);
     collectColumnReferencesFromExpression(select.where(), qualifiers, primaryQualifier, needed, referenced);
     for (SqlParser.OrderKey key : select.orderBy()) {
-      if (!isOrdinalReference(key.column())) {
+      if (!isOrdinalReference(key.column()) && !isGroupingFunctionReference(key.column())) {
         addColumn(needed, key.column());
       }
     }
     for (SqlParser.OrderKey key : select.preOrderBy()) {
-      if (!isOrdinalReference(key.column())) {
+      if (!isOrdinalReference(key.column()) && !isGroupingFunctionReference(key.column())) {
         addColumn(needed, key.column());
       }
     }
@@ -3065,6 +3065,13 @@ class JParqPreparedStatement implements PreparedStatement {
       }
     }
     return true;
+  }
+
+  private boolean isGroupingFunctionReference(String column) {
+    if (column == null) {
+      return false;
+    }
+    return column.trim().toUpperCase(Locale.ROOT).startsWith("GROUPING(");
   }
 
   @Override
