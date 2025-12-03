@@ -9,6 +9,7 @@
 - refactored function support for increased coherence and reduced coupling
 - add function mapping from jdbc escape syntax to sql standard function names for numeric, string, datetime, and system functions
 - several minor bug fixes and improvements
+- Improved support for quoted identifiers throughout the codebase
 
 ### 1.0.0, 2025-11-24
 - Additional Derived Tables support: 

@@ -94,6 +94,7 @@ The following SQL statements are supported:
   - Qualified wildcard projections (table.*).
   - alias support for columns and tables
   - Support computed expressions with aliases (e.g. SELECT mpg*2 AS double_mpg)
+  - Quoted identifiers using "double quotes" as per the SQL standard.
   - `CASE` support
 - `SELECT` statements with `WHERE` supporting:
   - `BETWEEN`, `IN`, `LIKE` operators
