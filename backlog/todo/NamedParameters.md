@@ -4,7 +4,7 @@ The current **SQL Standard** (e.g., in SQL:2003 and later specifications) genera
 
 **Named parameters** are more commonly found in:
 
-* **Vendor-Specific SQL Dialects:** Many database systems (like SQL Server, Oracle, PostgreSQL, etc.) support named parameters, especially when calling **stored procedures** or **user-defined functions**. They often use a specific prefix (e.g., `@name`, `:name`) to denote the parameter.
+* **Vendor-Specific SQL Dialects:** Many database systems (like SQL Server, Oracle, PostgreSQL, etc.) support named parameters, especially when calling **stored procedures** or **user-defined functions**. They often use a specific prefix (e.g., `@name`, `:name`) to denote the parameter. In this implementaion we will use the `:name` syntax.
 * **Application-Level Abstractions:** Frameworks and libraries (like Spring's `NamedParameterJdbcTemplate`) implement named parameter support *on top of* standard JDBC. They parse the SQL string to map named placeholders to the positional `?` placeholders required by the underlying JDBC `PreparedStatement`.
 
 ### Why Use Named Parameters?
@@ -16,7 +16,7 @@ Named parameters offer significant advantages over positional parameters:
 
 ---
 
-## Implementing Named Parameter Support in a JDBC Driver
+## Implementing Named Parameter Support in the JParq JDBC Driver
 
 Since **plain JDBC** (specifically `PreparedStatement`) is designed around the positional parameter marker (`?`), implementing named parameter support in a JDBC driver usually involves a layer that translates the named format to the positional format.
 
@@ -33,7 +33,6 @@ Here are the important things to consider:
 * **Escape/Literal Conflicts:** Your parser must distinguish between a named parameter and a seemingly identical string that is actually part of an SQL literal, a comment, or vendor-specific syntax. For example, a string like `'This is :not a parameter'` should not be parsed as a named parameter.
 * **Reused Parameters:** If a query uses the same named parameter multiple times (e.g., `... WHERE a = :val OR b = :val`), your implementation must bind the same value to *each* corresponding positional `?` marker.
   * *Implementation detail:* The single named parameter will map to multiple positional indices in the rewritten SQL.
-* **Calling Stored Procedures:** The standard JDBC **`CallableStatement`** already provides a mechanism for using named parameters (e.g., `cs.setString("paramName", value)`), particularly for procedures that support them. Your implementation for `PreparedStatement` should not interfere with `CallableStatement` usage.
 
 ### 3. User Experience and API
 

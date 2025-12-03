@@ -227,7 +227,7 @@ The following SQL statements are supported:
 - SOUNDEX(string)    Computes the Soundex phonetic code.    SOUNDEX('Robert') → 'R163'
 - DIFFERENCE(string1, string2)    Calculates similarity based on Soundex codes (0-4).    DIFFERENCE('Smith', 'Smyth') → 4
 
-## Roadmap: Might be implemented in the future
+## Roadmap: _Might_ be implemented in the future
 
 ### Non standard extensions
 - Named parameters i.e. :paramName syntax for prepared statements
