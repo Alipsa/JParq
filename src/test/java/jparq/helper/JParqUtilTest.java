@@ -31,9 +31,9 @@ class JParqUtilTest {
 
   @Test
   void normalizesQualifiers() {
-    assertEquals("table", JParqUtil.normalizeQualifier("\"table\""));
-    assertEquals("column", JParqUtil.normalizeQualifier("`column`"));
-    assertEquals("schema", JParqUtil.normalizeQualifier("[schema]"));
+    assertEquals("Q:table", JParqUtil.normalizeQualifier("\"table\""));
+    assertEquals("Q:column", JParqUtil.normalizeQualifier("`column`"));
+    assertEquals("Q:schema", JParqUtil.normalizeQualifier("[schema]"));
     assertNull(JParqUtil.normalizeQualifier("   "));
     assertNull(JParqUtil.normalizeQualifier(null));
   }

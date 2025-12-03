@@ -10,7 +10,6 @@ import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.Locale;
 import java.util.Map;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
@@ -130,7 +129,7 @@ public final class AvroCoercions {
    * @param fieldSchemas
    *          map from exact field name to schema
    * @param caseInsensitiveIndex
-   *          map from lowercase field name to canonical field name
+   *          map from normalized field name to canonical field name
    * @return the unwrapped column value, or {@code null} if not found
    */
   public static Object resolveColumnValue(String columnName, GenericRecord record, Map<String, Schema> fieldSchemas,
@@ -141,7 +140,7 @@ public final class AvroCoercions {
     String lookup = columnName;
     Schema schema = fieldSchemas.get(columnName);
     if (schema == null) {
-      String canonical = caseInsensitiveIndex.get(columnName.toLowerCase(Locale.ROOT));
+      String canonical = caseInsensitiveIndex.get(Identifier.lookupKey(columnName));
       if (canonical != null) {
         lookup = canonical;
         schema = fieldSchemas.get(canonical);

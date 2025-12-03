@@ -6,7 +6,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -537,13 +536,17 @@ public final class QueryProcessor implements AutoCloseable {
       if (key == null || key.isBlank() || expression == null) {
         continue;
       }
-      normalized.putIfAbsent(key, expression);
-      normalized.putIfAbsent(key.toLowerCase(Locale.ROOT), expression);
+      String normalizedKey = Identifier.lookupKey(key);
+      if (normalizedKey != null) {
+        normalized.putIfAbsent(normalizedKey, expression);
+      }
       String canonical = ColumnMappingUtil.canonicalOrderColumn(key, null, qualifierColumnMapping,
           unqualifiedColumnMapping);
       if (canonical != null) {
-        normalized.putIfAbsent(canonical, expression);
-        normalized.putIfAbsent(canonical.toLowerCase(Locale.ROOT), expression);
+        String canonicalKey = Identifier.lookupKey(canonical);
+        if (canonicalKey != null) {
+          normalized.putIfAbsent(canonicalKey, expression);
+        }
       }
     }
     return Map.copyOf(normalized);
@@ -599,11 +602,11 @@ public final class QueryProcessor implements AutoCloseable {
     if (column == null || orderByExpressions.isEmpty()) {
       return null;
     }
-    Expression expression = orderByExpressions.get(column);
-    if (expression != null) {
-      return expression;
+    String key = Identifier.lookupKey(column);
+    if (key == null) {
+      return null;
     }
-    return orderByExpressions.get(column.toLowerCase(Locale.ROOT));
+    return orderByExpressions.get(key);
   }
 
   private List<SqlParser.OrderKey> canonicalizeOrderKeys(List<SqlParser.OrderKey> keys) {

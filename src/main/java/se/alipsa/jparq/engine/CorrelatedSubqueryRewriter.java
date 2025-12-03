@@ -27,7 +27,6 @@ import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.select.SelectVisitor;
 import net.sf.jsqlparser.util.deparser.ExpressionDeParser;
 import net.sf.jsqlparser.util.deparser.SelectDeParser;
-import se.alipsa.jparq.helper.JParqUtil;
 
 /**
  * Utility that rewrites sub queries containing correlated column references by
@@ -136,12 +135,12 @@ public final class CorrelatedSubqueryRewriter {
       return new Result(select.toString(), false, Set.of(), Set.of());
     }
 
-    Set<String> normalized = outerQualifiers.stream().map(JParqUtil::normalizeQualifier).filter(Objects::nonNull)
-        .collect(Collectors.toUnmodifiableSet());
+    Set<String> normalized = outerQualifiers.stream().map(CorrelatedSubqueryRewriter::normalizeIdentifier)
+        .filter(Objects::nonNull).collect(Collectors.toUnmodifiableSet());
 
     Set<String> unqualified = correlatedColumns == null
         ? Set.of()
-        : correlatedColumns.stream().filter(Objects::nonNull).map(c -> c.toLowerCase(Locale.ROOT))
+        : correlatedColumns.stream().filter(Objects::nonNull).map(CorrelatedSubqueryRewriter::normalizeIdentifier)
             .collect(Collectors.toUnmodifiableSet());
 
     if (normalized.isEmpty()) {
@@ -183,7 +182,7 @@ public final class CorrelatedSubqueryRewriter {
         }
         String qualifierPart = colName.substring(0, dot);
         String columnPart = colName.substring(dot + 1);
-        String normalizedQualifier = JParqUtil.normalizeQualifier(qualifierPart);
+        String normalizedQualifier = normalizeIdentifier(qualifierPart);
         if (normalizedQualifier == null || !normalized.contains(normalizedQualifier)) {
           return false;
         }
@@ -196,7 +195,7 @@ public final class CorrelatedSubqueryRewriter {
             table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()
         };
         for (String candidate : candidates) {
-          String normalizedCandidate = JParqUtil.normalizeQualifier(candidate);
+          String normalizedCandidate = normalizeIdentifier(candidate);
           if (normalizedCandidate != null && normalized.contains(normalizedCandidate)) {
             appendCorrelatedLiteral(normalizedCandidate, column.getColumnName(),
                 valueResolver.apply(normalizedCandidate, column.getColumnName()));
@@ -211,7 +210,7 @@ public final class CorrelatedSubqueryRewriter {
         if (unqualified.isEmpty() || columnName == null) {
           return false;
         }
-        String normalizedColumn = columnName.toLowerCase(Locale.ROOT);
+        String normalizedColumn = normalizeIdentifier(columnName);
         if (!unqualified.contains(normalizedColumn)) {
           return false;
         }
@@ -259,12 +258,12 @@ public final class CorrelatedSubqueryRewriter {
     if (normalizedQualifiers == null || normalizedQualifiers.isEmpty()) {
       return new FallbackResult(sql, false, Set.of(), Set.of());
     }
-    String alternation = normalizedQualifiers.stream().filter(Objects::nonNull).map(Pattern::quote)
-        .collect(Collectors.joining("|"));
+    String alternation = normalizedQualifiers.stream().filter(Objects::nonNull)
+        .map(CorrelatedSubqueryRewriter::qualifierRegex).collect(Collectors.joining("|"));
     if (alternation.isEmpty()) {
       return new FallbackResult(sql, false, Set.of(), Set.of());
     }
-    Pattern pattern = Pattern.compile("(?i)\\b(" + alternation + ")\\.([A-Za-z0-9_]+)\\b");
+    Pattern pattern = Pattern.compile("\\b(" + alternation + ")\\.([A-Za-z0-9_]+)\\b");
     Matcher matcher = pattern.matcher(sql);
     StringBuffer buf = new StringBuffer();
     boolean matched = false;
@@ -274,14 +273,61 @@ public final class CorrelatedSubqueryRewriter {
       matched = true;
       String qualifier = matcher.group(1);
       String column = matcher.group(2);
-      Object value = valueResolver.apply(qualifier.toLowerCase(Locale.ROOT), column);
+      String normalizedQualifier = normalizeIdentifier(qualifier);
+      Object value = valueResolver.apply(normalizedQualifier, column);
       String literal = toSqlLiteral(value);
       columns.add(column);
-      refs.add(new QualifiedColumn(qualifier.toLowerCase(Locale.ROOT), column));
+      refs.add(new QualifiedColumn(normalizedQualifier, column));
       matcher.appendReplacement(buf, Matcher.quoteReplacement(literal));
     }
     matcher.appendTail(buf);
     return new FallbackResult(buf.toString(), matched, Set.copyOf(columns), Set.copyOf(refs));
+  }
+
+  private static String normalizeIdentifier(String text) {
+    if (text == null) {
+      return null;
+    }
+    String trimmed = text.trim();
+    if (trimmed.isEmpty()) {
+      return null;
+    }
+    if (looksLikeLookupKey(trimmed)) {
+      String prefix = trimmed.substring(0, 2).toUpperCase(Locale.ROOT);
+      String body = trimmed.substring(2);
+      while (looksLikeLookupKey(body)) {
+        body = body.substring(2);
+      }
+      if ("U:".equals(prefix)) {
+        return "U:" + body.toLowerCase(Locale.ROOT);
+      }
+      if ("Q:".equals(prefix)) {
+        return "Q:" + body;
+      }
+      return null;
+    }
+    return Identifier.lookupKey(trimmed);
+  }
+
+  private static boolean looksLikeLookupKey(String value) {
+    if (value == null || value.length() < 2) {
+      return false;
+    }
+    char prefix = Character.toUpperCase(value.charAt(0));
+    return (prefix == 'U' || prefix == 'Q') && value.charAt(1) == ':';
+  }
+
+  private static String qualifierRegex(String normalizedQualifier) {
+    if (normalizedQualifier == null || normalizedQualifier.isBlank()) {
+      return "";
+    }
+    if (normalizedQualifier.startsWith("Q:")) {
+      return Pattern.quote(normalizedQualifier.substring(2));
+    }
+    if (normalizedQualifier.startsWith("U:")) {
+      return "(?i:" + Pattern.quote(normalizedQualifier.substring(2)) + ")";
+    }
+    return Pattern.quote(normalizedQualifier);
   }
 
   private static String toSqlLiteral(Object value) {

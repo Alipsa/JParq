@@ -7,6 +7,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -49,7 +50,6 @@ import se.alipsa.jparq.engine.function.FunctionSupport;
 import se.alipsa.jparq.engine.function.JsonFunctions;
 import se.alipsa.jparq.engine.function.StringFunctions;
 import se.alipsa.jparq.engine.window.WindowState;
-import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.LiteralConverter;
 
 /**
@@ -67,6 +67,7 @@ public final class ValueExpressionEvaluator {
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
   private final Map<String, Map<String, String>> correlationContext;
+  private final Map<String, Map<String, String>> effectiveQualifierMapping;
   private final WindowState windowState;
   private final FunctionSupport functionSupport;
   private ExpressionEvaluator conditionEvaluator;
@@ -141,7 +142,10 @@ public final class ValueExpressionEvaluator {
     Map<String, String> ci = new HashMap<>();
     for (Schema.Field f : schema.getFields()) {
       fs.put(f.name(), f.schema());
-      ci.put(f.name().toLowerCase(Locale.ROOT), f.name());
+      String key = Identifier.lookupKey(f.name());
+      if (key != null) {
+        ci.put(key, f.name());
+      }
     }
     this.fieldSchemas = Map.copyOf(fs);
     this.caseInsensitiveIndex = Map.copyOf(ci);
@@ -154,6 +158,7 @@ public final class ValueExpressionEvaluator {
         ? Map.of()
         : mappings.correlationContext();
     this.correlationContext = ColumnMappingUtil.normaliseQualifierMapping(ctx);
+    this.effectiveQualifierMapping = mergeQualifierMappings(this.qualifierColumnMapping, this.correlationContext);
     this.windowState = windowState == null ? WindowState.empty() : windowState;
     this.functionSupport = new FunctionSupport(subqueryExecutor, correlationQualifiers(), correlationColumns(),
         this.correlationContext, this::resolveCorrelatedValue, this::evalInternal);
@@ -356,8 +361,8 @@ public final class ValueExpressionEvaluator {
     if (name == null) {
       return false;
     }
-    String normalized = name.trim().toLowerCase(Locale.ROOT);
-    return caseInsensitiveIndex.containsKey(normalized);
+    String normalized = Identifier.lookupKey(name);
+    return normalized != null && caseInsensitiveIndex.containsKey(normalized);
   }
 
   private boolean isTypeName(String name) {
@@ -680,8 +685,8 @@ public final class ValueExpressionEvaluator {
   }
 
   private Object resolveCorrelatedValue(String qualifier, String columnName, GenericRecord record) {
-    String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
-    String normalizedColumn = columnName == null ? null : columnName.toLowerCase(Locale.ROOT);
+    String normalizedQualifier = Identifier.lookupKey(qualifier);
+    String normalizedColumn = Identifier.lookupKey(columnName);
     if (normalizedQualifier != null && normalizedColumn != null && !correlationContext.isEmpty()) {
       Map<String, String> mapping = correlationContext.get(normalizedQualifier);
       if (mapping != null) {
@@ -723,7 +728,7 @@ public final class ValueExpressionEvaluator {
     if (fieldSchemas.containsKey(canonical)) {
       return;
     }
-    String fallback = caseInsensitiveIndex.get(canonical.toLowerCase(Locale.ROOT));
+    String fallback = caseInsensitiveIndex.get(Identifier.lookupKey(canonical));
     if (fallback != null && fieldSchemas.containsKey(fallback)) {
       return;
     }
@@ -741,11 +746,11 @@ public final class ValueExpressionEvaluator {
   }
 
   private Set<String> correlationColumns() {
-    if (correlationContext.isEmpty()) {
+    if (effectiveQualifierMapping.isEmpty()) {
       return Set.of();
     }
     Set<String> columns = new LinkedHashSet<>();
-    for (Map<String, String> mapping : correlationContext.values()) {
+    for (Map<String, String> mapping : effectiveQualifierMapping.values()) {
       if (mapping == null) {
         continue;
       }
@@ -759,7 +764,22 @@ public final class ValueExpressionEvaluator {
   }
 
   private String canonicalFieldName(String qualifier, String columnName) {
-    return ColumnMappingUtil.canonicalFieldName(qualifier, columnName, qualifierColumnMapping, unqualifiedColumnMapping,
-        caseInsensitiveIndex);
+    return ColumnMappingUtil.canonicalFieldName(qualifier, columnName, effectiveQualifierMapping,
+        unqualifiedColumnMapping, caseInsensitiveIndex);
+  }
+
+  private static Map<String, Map<String, String>> mergeQualifierMappings(Map<String, Map<String, String>> primary,
+      Map<String, Map<String, String>> secondary) {
+    if (secondary == null || secondary.isEmpty()) {
+      return primary == null ? Map.of() : primary;
+    }
+    Map<String, Map<String, String>> merged = new LinkedHashMap<>();
+    if (secondary != null) {
+      merged.putAll(secondary);
+    }
+    if (primary != null) {
+      merged.putAll(primary);
+    }
+    return merged.isEmpty() ? Map.of() : Map.copyOf(merged);
   }
 }

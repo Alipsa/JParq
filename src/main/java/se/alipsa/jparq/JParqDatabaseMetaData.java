@@ -467,17 +467,18 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       }
     }
     boolean caseSensitive = conn.isCaseSensitive();
-    String tableRegex = buildRegex(tableNamePattern, caseSensitive);
-    String schemaRegex = buildRegex(schemaPattern, caseSensitive);
+    PatternSpec tablePattern = buildPattern(tableNamePattern, caseSensitive);
+    PatternSpec schemaPatternSpec = buildPattern(schemaPattern, caseSensitive);
     Configuration conf = new Configuration(false);
     String effectiveCatalog = (catalog != null && !catalog.isBlank()) ? catalog : conn.getCatalog();
     for (JParqConnection.TableLocation location : conn.listTables()) {
       String schemaName = location.schemaName();
-      if (schemaRegex != null && !matchesRegex(schemaRegex, schemaName, caseSensitive)) {
+      if (schemaPatternSpec.regex() != null
+          && !matchesRegex(schemaPatternSpec.regex(), schemaName, schemaPatternSpec.caseSensitive())) {
         continue;
       }
       String base = location.tableName();
-      if (tableRegex != null && !matchesRegex(tableRegex, base, caseSensitive)) {
+      if (tablePattern.regex() != null && !matchesRegex(tablePattern.regex(), base, tablePattern.caseSensitive())) {
         continue;
       }
       String tableType = "TABLE";
@@ -507,7 +508,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     List<Object[]> rows = new ArrayList<>();
     Configuration conf = new Configuration(false);
     boolean caseSensitive = conn.isCaseSensitive();
-    String columnRegex = buildRegex(columnNamePattern, caseSensitive);
+    PatternSpec columnPattern = buildPattern(columnNamePattern, caseSensitive);
 
     try (ResultSet tables = getTables(catalog, schemaPattern, tableNamePattern, new String[]{
         "TABLE"
@@ -538,7 +539,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
           for (Schema.Field field : rec.getSchema().getFields()) {
             int fieldIndex = columnIndex++;
             String columnName = field.name();
-            if (columnRegex != null && !matchesRegex(columnRegex, columnName, caseSensitive)) {
+            if (columnPattern.regex() != null
+                && !matchesRegex(columnPattern.regex(), columnName, columnPattern.caseSensitive())) {
               continue;
             }
             Schema baseSchema = JdbcTypeMapper.nonNullSchema(field.schema());
@@ -795,12 +797,16 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     return hints.isEmpty() ? List.of() : List.copyOf(hints);
   }
 
-  private String buildRegex(String pattern, boolean caseSensitive) {
+  private PatternSpec buildPattern(String pattern, boolean caseSensitive) {
     if (pattern == null) {
-      return null;
+      return new PatternSpec(null, caseSensitive);
     }
-    String normalized = caseSensitive ? pattern : pattern.toLowerCase(Locale.ROOT);
-    return se.alipsa.jparq.engine.function.StringFunctions.toLikeRegex(normalized, '\\');
+    boolean quoted = pattern.length() > 1 && pattern.startsWith("\"") && pattern.endsWith("\"");
+    String body = quoted ? pattern.substring(1, pattern.length() - 1) : pattern;
+    boolean effectiveCase = caseSensitive || quoted;
+    String normalized = effectiveCase ? body : body.toLowerCase(Locale.ROOT);
+    String regex = se.alipsa.jparq.engine.function.StringFunctions.toLikeRegex(normalized, '\\');
+    return new PatternSpec(regex, effectiveCase);
   }
 
   private boolean matchesRegex(String regex, String candidate, boolean caseSensitive) {
@@ -812,6 +818,9 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     }
     String normalized = caseSensitive ? candidate : candidate.toLowerCase(Locale.ROOT);
     return normalized.matches(regex);
+  }
+
+  private record PatternSpec(String regex, boolean caseSensitive) {
   }
 
   private String formatSchemaName(String schemaName) {
@@ -1917,9 +1926,10 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     }
     List<Object[]> rows = new ArrayList<>();
     boolean caseSensitive = conn.isCaseSensitive();
-    String schemaRegex = buildRegex(schemaPattern, caseSensitive);
+    PatternSpec schemaPatternSpec = buildPattern(schemaPattern, caseSensitive);
     for (String schema : conn.listSchemas()) {
-      if (schemaRegex != null && !matchesRegex(schemaRegex, schema, caseSensitive)) {
+      if (schemaPatternSpec.regex() != null
+          && !matchesRegex(schemaPatternSpec.regex(), schema, schemaPatternSpec.caseSensitive())) {
         continue;
       }
       rows.add(new Object[]{
@@ -2196,7 +2206,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean supportsNamedParameters() throws SQLException {
-    return false; // TODO: i think this should be true
+    return false; // Named parameters are not supported by this driver.
   }
 
   @Override

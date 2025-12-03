@@ -4,7 +4,6 @@ import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import se.alipsa.jparq.helper.JParqUtil;
 
 /**
  * Utility methods for handling qualifier-aware column mappings when resolving
@@ -37,7 +36,10 @@ public final class ColumnMappingUtil {
     Objects.requireNonNull(columnName, "columnName");
     Objects.requireNonNull(caseInsensitiveIndex, "caseInsensitiveIndex");
 
-    String normalizedColumn = normalizeColumnKey(columnName);
+    String normalizedColumn = normalizeLookupKey(columnName);
+    if (normalizedColumn == null) {
+      return columnName;
+    }
     if (hasQualifier(qualifier)) {
       return resolveQualifiedReference(qualifier, columnName, normalizedColumn, qualifierColumnMapping,
           caseInsensitiveIndex);
@@ -45,10 +47,22 @@ public final class ColumnMappingUtil {
 
     if (!qualifierColumnMapping.isEmpty()) {
       String canonical = unqualifiedColumnMapping.get(normalizedColumn);
+      if (canonical == null) {
+        String alternative = alternativeColumnKey(normalizedColumn);
+        if (alternative != null) {
+          canonical = unqualifiedColumnMapping.get(alternative);
+        }
+      }
       if (canonical != null) {
         return canonical;
       }
       canonical = resolveUnqualified(normalizedColumn, qualifierColumnMapping, caseInsensitiveIndex);
+      if (canonical == null) {
+        String alternative = alternativeColumnKey(normalizedColumn);
+        if (alternative != null) {
+          canonical = resolveUnqualified(alternative, qualifierColumnMapping, caseInsensitiveIndex);
+        }
+      }
       if (canonical != null) {
         return canonical;
       }
@@ -56,6 +70,12 @@ public final class ColumnMappingUtil {
     }
 
     String canonical = caseInsensitiveIndex.get(normalizedColumn);
+    if (canonical == null) {
+      String alternative = alternativeColumnKey(normalizedColumn);
+      if (alternative != null) {
+        canonical = caseInsensitiveIndex.get(alternative);
+      }
+    }
     return canonical != null ? canonical : columnName;
   }
 
@@ -111,45 +131,30 @@ public final class ColumnMappingUtil {
         : qualifierColumnMapping;
     Map<String, String> unqualifiedMapping = (unqualifiedColumnMapping == null) ? Map.of() : unqualifiedColumnMapping;
 
-    String normalizedColumn = normalizeColumnKey(columnName);
+    String normalizedColumn = normalizeLookupKey(columnName);
+    if (normalizedColumn == null) {
+      return columnName;
+    }
 
     if (qualifier != null && !qualifier.isBlank() && !qualifierMapping.isEmpty()) {
-      String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
-      if (normalizedQualifier != null) {
-        Map<String, String> mapping = qualifierMapping.getOrDefault(normalizedQualifier, Map.of());
-        String canonical = mapping.get(normalizedColumn);
-        if (canonical != null) {
-          return canonical;
-        }
+      String canonical = resolveQualifiedOrderColumn(normalizedColumn, qualifier, qualifierMapping);
+      if (canonical != null) {
+        return canonical;
       }
     }
 
     String canonical = unqualifiedMapping.get(normalizedColumn);
+    if (canonical == null) {
+      String alternative = alternativeColumnKey(normalizedColumn);
+      if (alternative != null) {
+        canonical = unqualifiedMapping.get(alternative);
+      }
+    }
     if (canonical != null) {
       return canonical;
     }
 
     return columnName;
-  }
-
-  /**
-   * Normalize a column identifier for lookup in the qualifier or case-insensitive
-   * indices by stripping optional quoting characters and applying lower-case
-   * semantics.
-   *
-   * @param columnName
-   *          column identifier provided in the SQL expression
-   * @return normalized lookup key, or {@code null} when the input is null
-   */
-  private static String normalizeColumnKey(String columnName) {
-    if (columnName == null) {
-      return null;
-    }
-    String normalized = JParqUtil.normalizeQualifier(columnName);
-    if (normalized != null) {
-      return normalized;
-    }
-    return columnName.toLowerCase(Locale.ROOT);
   }
 
   /**
@@ -166,7 +171,7 @@ public final class ColumnMappingUtil {
     }
     Map<String, Map<String, String>> normalized = new HashMap<>();
     for (Map.Entry<String, Map<String, String>> entry : source.entrySet()) {
-      String qualifier = JParqUtil.normalizeQualifier(entry.getKey());
+      String qualifier = normalizeLookupKey(entry.getKey());
       if (qualifier == null) {
         continue;
       }
@@ -174,7 +179,10 @@ public final class ColumnMappingUtil {
       Map<String, String> value = entry.getValue();
       if (value != null) {
         for (Map.Entry<String, String> innerEntry : value.entrySet()) {
-          inner.put(innerEntry.getKey().toLowerCase(Locale.ROOT), innerEntry.getValue());
+          String columnKey = normalizeLookupKey(innerEntry.getKey());
+          if (columnKey != null) {
+            inner.put(columnKey, innerEntry.getValue());
+          }
         }
       }
       normalized.put(qualifier, Map.copyOf(inner));
@@ -195,7 +203,10 @@ public final class ColumnMappingUtil {
     }
     Map<String, String> normalized = new HashMap<>();
     for (Map.Entry<String, String> entry : source.entrySet()) {
-      normalized.put(entry.getKey().toLowerCase(Locale.ROOT), entry.getValue());
+      String key = normalizeLookupKey(entry.getKey());
+      if (key != null) {
+        normalized.put(key, entry.getValue());
+      }
     }
     return Map.copyOf(normalized);
   }
@@ -229,7 +240,7 @@ public final class ColumnMappingUtil {
    */
   private static String resolveQualifiedReference(String qualifier, String columnName, String normalizedColumn,
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> caseInsensitiveIndex) {
-    String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
+    String normalizedQualifier = normalizeLookupKey(qualifier);
     if (normalizedQualifier == null) {
       throw new IllegalArgumentException("Unknown column '" + columnName + "' for qualifier '" + qualifier + "'");
     }
@@ -237,6 +248,12 @@ public final class ColumnMappingUtil {
     Map<String, String> mapping = qualifierColumnMapping.get(normalizedQualifier);
     if (mapping == null || mapping.isEmpty()) {
       String fallback = caseInsensitiveIndex.get(normalizedColumn);
+      if (fallback == null) {
+        String alternative = alternativeColumnKey(normalizedColumn);
+        if (alternative != null) {
+          fallback = caseInsensitiveIndex.get(alternative);
+        }
+      }
       if (fallback != null) {
         return fallback;
       }
@@ -245,10 +262,94 @@ public final class ColumnMappingUtil {
     }
 
     String canonical = mapping.get(normalizedColumn);
+    if (canonical == null) {
+      String alternative = alternativeColumnKey(normalizedColumn);
+      if (alternative != null) {
+        canonical = mapping.get(alternative);
+      }
+    }
     if (canonical != null) {
       return canonical;
     }
     throw new IllegalArgumentException("Unknown column '" + columnName + "' for qualifier '" + qualifier
         + "' (available columns: " + mapping.keySet() + ")");
+  }
+
+  /**
+   * Resolve the canonical column for ORDER BY/DISTINCT clauses where a qualifier
+   * is present.
+   *
+   * @param normalizedColumn
+   *          the normalized column lookup key
+   * @param qualifier
+   *          the qualifier provided in the SQL statement
+   * @param qualifierMapping
+   *          normalized qualifier mapping supplied by the reader
+   * @return the canonical column name or {@code null} when not found
+   */
+  private static String resolveQualifiedOrderColumn(String normalizedColumn, String qualifier,
+      Map<String, Map<String, String>> qualifierMapping) {
+    String normalizedQualifier = normalizeLookupKey(qualifier);
+    if (normalizedQualifier == null) {
+      return null;
+    }
+    Map<String, String> mapping = qualifierMapping.getOrDefault(normalizedQualifier, Map.of());
+    if (mapping.isEmpty()) {
+      return null;
+    }
+    String canonical = mapping.get(normalizedColumn);
+    if (canonical != null) {
+      return canonical;
+    }
+    String alternative = alternativeColumnKey(normalizedColumn);
+    if (alternative == null) {
+      return null;
+    }
+    return mapping.get(alternative);
+  }
+
+  private static boolean looksLikeLookupKey(String value) {
+    if (value == null || value.length() < 2) {
+      return false;
+    }
+    char prefix = Character.toUpperCase(value.charAt(0));
+    return (prefix == 'U' || prefix == 'Q') && value.charAt(1) == ':';
+  }
+
+  private static String normalizeLookupKey(String value) {
+    if (value == null) {
+      return null;
+    }
+    String trimmed = value.trim();
+    if (trimmed.isEmpty()) {
+      return null;
+    }
+    if (looksLikeLookupKey(trimmed)) {
+      String prefix = trimmed.substring(0, 2).toUpperCase(Locale.ROOT);
+      String body = trimmed.substring(2);
+      while (looksLikeLookupKey(body)) {
+        body = body.substring(2);
+      }
+      if ("U:".equals(prefix)) {
+        return "U:" + body.toLowerCase(Locale.ROOT);
+      }
+      if ("Q:".equals(prefix)) {
+        return "Q:" + body;
+      }
+      return null;
+    }
+    return Identifier.lookupKey(trimmed);
+  }
+
+  private static String alternativeColumnKey(String normalizedColumn) {
+    if (normalizedColumn == null || !normalizedColumn.startsWith("Q:") || normalizedColumn.length() <= 2) {
+      return null;
+    }
+    String body = normalizedColumn.substring(2);
+    String lowerCase = body.toLowerCase(Locale.ROOT);
+    if (!body.equals(lowerCase)) {
+      return null;
+    }
+    return "U:" + lowerCase;
   }
 }

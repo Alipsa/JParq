@@ -61,7 +61,7 @@ import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.CorrelationMappings;
-import se.alipsa.jparq.engine.IdentifierUtil;
+import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.InMemoryRecordReader;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
@@ -119,8 +119,8 @@ class JParqPreparedStatement implements PreparedStatement {
   private final boolean joinQuery;
   private final List<SqlParser.TableReference> tableReferences;
   private final boolean setOperationQuery;
-  private final Map<String, CteResult> cteResults;
-  private final Map<String, CteResult> valueTableResults;
+  private final Map<Identifier, CteResult> cteResults;
+  private final Map<Identifier, CteResult> valueTableResults;
   private final CteResult baseCteResult;
   private CteResult informationSchemaTablesResult;
   private CteResult informationSchemaColumnsResult;
@@ -129,7 +129,8 @@ class JParqPreparedStatement implements PreparedStatement {
     this(stmt, sql, Map.of());
   }
 
-  JParqPreparedStatement(JParqStatement stmt, String sql, Map<String, CteResult> inheritedCtes) throws SQLException {
+  JParqPreparedStatement(JParqStatement stmt, String sql, Map<Identifier, CteResult> inheritedCtes)
+      throws SQLException {
     this.stmt = stmt;
 
     SqlParser.Select tmpSelect = null;
@@ -146,17 +147,17 @@ class JParqPreparedStatement implements PreparedStatement {
     JParqConnection.TableLocation tmpBaseLocation = null;
     String tmpSchemaName = null;
     CteResult tmpBaseCteResult = null;
-    Map<String, CteResult> tmpCteResults;
-    Map<String, CteResult> tmpValueTables = new LinkedHashMap<>();
+    Map<Identifier, CteResult> tmpCteResults;
+    Map<Identifier, CteResult> tmpValueTables = new LinkedHashMap<>();
 
     // --- QUERY PLANNING PHASE (Expensive CPU Work) ---
     try {
       SqlParser.Query query = SqlParser.parseQuery(sql);
 
-      Map<String, CteResult> mutableCtes = new LinkedHashMap<>();
+      Map<Identifier, CteResult> mutableCtes = new LinkedHashMap<>();
       if (inheritedCtes != null && !inheritedCtes.isEmpty()) {
-        for (Map.Entry<String, CteResult> entry : inheritedCtes.entrySet()) {
-          String key = normalizeCteKey(entry.getKey());
+        for (Map.Entry<Identifier, CteResult> entry : inheritedCtes.entrySet()) {
+          Identifier key = entry.getKey();
           if (key != null && entry.getValue() != null) {
             mutableCtes.put(key, entry.getValue());
           }
@@ -428,9 +429,9 @@ class JParqPreparedStatement implements PreparedStatement {
     return prepareSubqueryStatement(sql, cteResults);
   }
 
-  private PreparedStatement prepareSubqueryStatement(String sql, Map<String, CteResult> cteContext)
+  private PreparedStatement prepareSubqueryStatement(String sql, Map<Identifier, CteResult> cteContext)
       throws SQLException {
-    Map<String, CteResult> inherited = cteContext == null ? Map.of() : cteContext;
+    Map<Identifier, CteResult> inherited = cteContext == null ? Map.of() : cteContext;
     return new JParqPreparedStatement(stmt, sql, inherited);
   }
 
@@ -645,7 +646,10 @@ class JParqPreparedStatement implements PreparedStatement {
     }
     Map<String, Integer> labelIndexes = new HashMap<>();
     for (int i = 0; i < labels.size(); i++) {
-      labelIndexes.put(labels.get(i).toLowerCase(Locale.ROOT), i);
+      String key = Identifier.lookupKey(labels.get(i));
+      if (key != null) {
+        labelIndexes.put(key, i);
+      }
     }
     List<ResolvedSetOrder> resolved = new ArrayList<>(orderBy.size());
     boolean hasExpressions = false;
@@ -657,7 +661,8 @@ class JParqPreparedStatement implements PreparedStatement {
         if (order.columnLabel() == null) {
           throw new SQLException("Set operation ORDER BY requires column index, label, or expression");
         }
-        Integer mapped = labelIndexes.get(order.columnLabel().toLowerCase(Locale.ROOT));
+        String lookupKey = Identifier.lookupKey(order.columnLabel());
+        Integer mapped = lookupKey == null ? null : labelIndexes.get(lookupKey);
         if (mapped == null) {
           throw new SQLException("Unknown set operation ORDER BY column: " + order.columnLabel());
         }
@@ -668,7 +673,8 @@ class JParqPreparedStatement implements PreparedStatement {
           if (column == null) {
             continue;
           }
-          if (!labelIndexes.containsKey(column.toLowerCase(Locale.ROOT))) {
+          String lookupKey = Identifier.lookupKey(column);
+          if (lookupKey == null || !labelIndexes.containsKey(lookupKey)) {
             throw new SQLException("Unknown set operation ORDER BY expression column: " + column);
           }
         }
@@ -1490,15 +1496,11 @@ class JParqPreparedStatement implements PreparedStatement {
     if (qualifier == null || qualifier.isBlank()) {
       return;
     }
-    String trimmed = qualifier.trim();
-    if (trimmed.isEmpty()) {
+    Identifier qualifierId = Identifier.of(qualifier);
+    if (qualifierId == null) {
       return;
     }
-    String sanitized = IdentifierUtil.sanitizeIdentifier(trimmed);
-    Map<String, String> columns = qualifierMapping.get(sanitized.toLowerCase(Locale.ROOT));
-    if ((columns == null || columns.isEmpty()) && !sanitized.equals(trimmed)) {
-      columns = qualifierMapping.get(trimmed.toLowerCase(Locale.ROOT));
-    }
+    Map<String, String> columns = qualifierMapping.getOrDefault(qualifierId.lookupKey(), Map.of());
     if (columns == null || columns.isEmpty()) {
       return;
     }
@@ -1511,10 +1513,7 @@ class JParqPreparedStatement implements PreparedStatement {
       }
     }
     if (!ordered.isEmpty()) {
-      target.putIfAbsent(sanitized, List.copyOf(ordered));
-      if (!sanitized.equals(trimmed)) {
-        target.putIfAbsent(trimmed, List.copyOf(ordered));
-      }
+      target.putIfAbsent(qualifierId.text(), List.copyOf(ordered));
     }
   }
 
@@ -1542,14 +1541,15 @@ class JParqPreparedStatement implements PreparedStatement {
     if (qualifier == null || qualifier.isBlank()) {
       return;
     }
-    String trimmed = qualifier.trim();
-    if (trimmed.isEmpty()) {
+    Identifier identifier = Identifier.of(qualifier);
+    if (identifier == null) {
       return;
     }
-    mapping.putIfAbsent(trimmed, columns);
-    String sanitized = IdentifierUtil.sanitizeIdentifier(trimmed);
-    if (!sanitized.equals(trimmed)) {
-      mapping.putIfAbsent(sanitized, columns);
+    String trimmed = qualifier.trim();
+    String text = identifier.text();
+    mapping.putIfAbsent(text, columns);
+    if (!trimmed.equals(text)) {
+      mapping.putIfAbsent(trimmed, columns);
     }
   }
 
@@ -1907,16 +1907,17 @@ class JParqPreparedStatement implements PreparedStatement {
     }
   }
 
-  private void registerValueTableResult(SqlParser.TableReference ref, CteResult result, Map<String, CteResult> target) {
+  private void registerValueTableResult(SqlParser.TableReference ref, CteResult result,
+      Map<Identifier, CteResult> target) {
     if (ref == null || result == null || target == null) {
       return;
     }
-    String aliasKey = normalizeCteKey(ref.tableAlias());
+    Identifier aliasKey = Identifier.of(ref.tableAlias());
     if (aliasKey != null) {
       target.put(aliasKey, result);
     }
-    String tableKey = normalizeCteKey(ref.tableName());
-    if (tableKey != null && (aliasKey == null || !aliasKey.equals(tableKey))) {
+    Identifier tableKey = Identifier.of(ref.tableName());
+    if (tableKey != null && (aliasKey == null || !aliasKey.matches(tableKey))) {
       target.putIfAbsent(tableKey, result);
     }
   }
@@ -1925,14 +1926,14 @@ class JParqPreparedStatement implements PreparedStatement {
     if (ref == null || valueTableResults == null || valueTableResults.isEmpty()) {
       return null;
     }
-    String aliasKey = normalizeCteKey(ref.tableAlias());
+    Identifier aliasKey = Identifier.of(ref.tableAlias());
     if (aliasKey != null) {
       CteResult result = valueTableResults.get(aliasKey);
       if (result != null) {
         return result;
       }
     }
-    String tableKey = normalizeCteKey(ref.tableName());
+    Identifier tableKey = Identifier.of(ref.tableName());
     if (tableKey != null) {
       return valueTableResults.get(tableKey);
     }
@@ -1943,13 +1944,13 @@ class JParqPreparedStatement implements PreparedStatement {
     if (ref == null) {
       return "values";
     }
-    String alias = ref.tableAlias();
-    if (alias != null && !alias.isBlank()) {
-      return alias;
+    Identifier alias = Identifier.of(ref.tableAlias());
+    if (alias != null) {
+      return alias.text();
     }
-    String name = ref.tableName();
-    if (name != null && !name.isBlank()) {
-      return name;
+    Identifier name = Identifier.of(ref.tableName());
+    if (name != null) {
+      return name.text();
     }
     return "values";
   }
@@ -2039,7 +2040,7 @@ class JParqPreparedStatement implements PreparedStatement {
   }
 
   private SubqueryTableData executeSubquery(String sql, SqlParser.TableReference ref, Schema schema,
-      List<String> fieldNames, List<Schema> valueSchemas, Map<String, CteResult> cteContext) throws SQLException {
+      List<String> fieldNames, List<Schema> valueSchemas, Map<Identifier, CteResult> cteContext) throws SQLException {
     if (sql == null || sql.isBlank()) {
       throw new SQLException("Missing subquery SQL for derived table");
     }
@@ -2224,11 +2225,7 @@ class JParqPreparedStatement implements PreparedStatement {
    * @return normalized column key or {@code null}
    */
   private static String normalizeColumnKey(String column) {
-    if (column == null) {
-      return null;
-    }
-    String normalized = JParqUtil.normalizeQualifier(column);
-    return normalized != null ? normalized : column.toLowerCase(Locale.ROOT);
+    return Identifier.lookupKey(column);
   }
 
   /**
@@ -2411,24 +2408,38 @@ class JParqPreparedStatement implements PreparedStatement {
       List<Schema> valueSchemas, List<String> columnAliases) throws SQLException {
     int columnCount = meta.getColumnCount();
     if (columnAliases != null && !columnAliases.isEmpty() && columnAliases.size() != columnCount) {
+      List<String> metaLabels = new ArrayList<>(columnCount);
+      for (int i = 1; i <= columnCount; i++) {
+        metaLabels.add(columnLabel(meta, i));
+      }
       throw new SQLException("Number of column aliases (" + columnAliases.size()
-          + ") does not match projected column count " + columnCount);
+          + ") does not match projected column count " + columnCount + " (metadata labels: " + metaLabels + ")");
     }
     List<Field> fields = new ArrayList<>(columnCount);
     for (int i = 1; i <= columnCount; i++) {
       String columnName;
+      String lookupKey = null;
       if (columnAliases != null && !columnAliases.isEmpty()) {
         String alias = columnAliases.get(i - 1);
         if (alias == null || alias.isBlank()) {
           throw new SQLException("CTE column alias cannot be blank");
         }
-        columnName = alias.trim();
+        Identifier aliasId = Identifier.of(alias);
+        if (aliasId == null) {
+          throw new SQLException("Invalid CTE column alias: '" + alias + "'");
+        }
+        columnName = aliasId.text();
+        lookupKey = aliasId.lookupKey();
       } else {
         columnName = columnLabel(meta, i);
+        lookupKey = Identifier.lookupKey(columnName);
       }
       Schema valueSchema = columnSchema(meta, i);
       Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
       Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
+      if (lookupKey != null) {
+        field.addProp("jparq.lookupKey", lookupKey);
+      }
       fields.add(field);
       fieldNames.add(columnName);
       valueSchemas.add(valueSchema);
@@ -2590,8 +2601,8 @@ class JParqPreparedStatement implements PreparedStatement {
     return timestamp.toInstant().toEpochMilli();
   }
 
-  private void evaluateCommonTableExpressions(List<SqlParser.CommonTableExpression> ctes, Map<String, CteResult> target)
-      throws SQLException {
+  private void evaluateCommonTableExpressions(List<SqlParser.CommonTableExpression> ctes,
+      Map<Identifier, CteResult> target) throws SQLException {
     if (ctes == null || ctes.isEmpty()) {
       return;
     }
@@ -2599,19 +2610,19 @@ class JParqPreparedStatement implements PreparedStatement {
       if (cte == null) {
         continue;
       }
-      String key = normalizeCteKey(cte.name());
-      if (key == null || key.isEmpty()) {
+      Identifier key = cte.name();
+      if (key == null) {
         throw new SQLException("CTE definition is missing a name");
       }
       if (target.containsKey(key)) {
-        throw new SQLException("Duplicate CTE name detected: " + cte.name());
+        throw new SQLException("Duplicate CTE name detected: " + cte.name().text());
       }
       CteResult result = evaluateCte(cte, target);
       target.put(key, result);
     }
   }
 
-  private CteResult evaluateCte(SqlParser.CommonTableExpression cte, Map<String, CteResult> available)
+  private CteResult evaluateCte(SqlParser.CommonTableExpression cte, Map<Identifier, CteResult> available)
       throws SQLException {
     if (cte == null) {
       throw new SQLException("CTE definition cannot be null");
@@ -2622,10 +2633,10 @@ class JParqPreparedStatement implements PreparedStatement {
     return executeCteQuery(cte.sql(), available, cte.name(), cte.columnAliases());
   }
 
-  private CteResult evaluateRecursiveCte(SqlParser.CommonTableExpression cte, Map<String, CteResult> available)
+  private CteResult evaluateRecursiveCte(SqlParser.CommonTableExpression cte, Map<Identifier, CteResult> available)
       throws SQLException {
     if (!(cte.query() instanceof SqlParser.SetQuery setQuery)) {
-      throw new SQLException("Recursive CTE '" + cte.name() + "' must use a UNION or UNION ALL set query");
+      throw new SQLException("Recursive CTE '" + cte.name().text() + "' must use a UNION or UNION ALL set query");
     }
     List<SqlParser.SetComponent> components = setQuery.components();
     if (components == null || components.isEmpty()) {
@@ -2649,14 +2660,14 @@ class JParqPreparedStatement implements PreparedStatement {
     }
     List<GenericRecord> accumulated = new ArrayList<>(initialRows);
     List<GenericRecord> working = new ArrayList<>(initialRows);
-    String key = normalizeCteKey(cte.name());
+    Identifier key = cte.name();
     boolean changed;
     do {
       changed = false;
       if (working.isEmpty()) {
         break;
       }
-      Map<String, CteResult> iterationContext = new LinkedHashMap<>(available);
+      Map<Identifier, CteResult> iterationContext = new LinkedHashMap<>(available);
       iterationContext.put(key, new CteResult(schema, List.copyOf(working)));
       List<GenericRecord> nextWorking = new ArrayList<>();
       List<GenericRecord> rowsToAdd = new ArrayList<>();
@@ -2668,7 +2679,7 @@ class JParqPreparedStatement implements PreparedStatement {
         }
         CteResult partial = executeCteQuery(component.sql(), iterationContext, cte.name(), cte.columnAliases());
         if (!schemasCompatible(schema, partial.schema())) {
-          throw new SQLException("Recursive CTE '" + cte.name() + "' produced mismatched schemas");
+          throw new SQLException("Recursive CTE '" + cte.name().text() + "' produced mismatched schemas");
         }
         List<GenericRecord> alignedRows = new ArrayList<>(partial.rows().size());
         for (GenericRecord record : partial.rows()) {
@@ -2697,12 +2708,8 @@ class JParqPreparedStatement implements PreparedStatement {
     return new CteResult(schema, List.copyOf(accumulated));
   }
 
-  private boolean queryReferencesCte(SqlParser.Query query, String cteName) {
+  private boolean queryReferencesCte(SqlParser.Query query, Identifier cteName) {
     if (query == null || cteName == null) {
-      return false;
-    }
-    String key = normalizeCteKey(cteName);
-    if (key == null) {
       return false;
     }
     if (query instanceof SqlParser.Select select) {
@@ -2712,10 +2719,11 @@ class JParqPreparedStatement implements PreparedStatement {
           if (ref == null) {
             continue;
           }
-          if (ref.commonTableExpression() != null && key.equals(normalizeCteKey(ref.commonTableExpression().name()))) {
+          if (ref.commonTableExpression() != null && cteName.matches(ref.commonTableExpression().name())) {
             return true;
           }
-          if (ref.tableName() != null && key.equals(normalizeCteKey(ref.tableName()))) {
+          Identifier refTable = Identifier.of(ref.tableName());
+          if (refTable != null && cteName.matches(refTable)) {
             return true;
           }
         }
@@ -2732,11 +2740,12 @@ class JParqPreparedStatement implements PreparedStatement {
     return false;
   }
 
-  private CteResult executeCteQuery(String sql, Map<String, CteResult> context, String tableName,
+  private CteResult executeCteQuery(String sql, Map<Identifier, CteResult> context, Identifier tableName,
       List<String> columnAliases) throws SQLException {
     try (JParqPreparedStatement prepared = new JParqPreparedStatement(stmt, sql, context);
         ResultSet rs = prepared.executeQuery()) {
-      return consumeResultSet(rs, tableName, columnAliases);
+      String recordName = tableName == null ? null : tableName.text();
+      return consumeResultSet(rs, recordName, columnAliases);
     }
   }
 
@@ -2757,22 +2766,18 @@ class JParqPreparedStatement implements PreparedStatement {
     return new CteResult(schema, rows);
   }
 
-  private CteResult resolveCteResult(SqlParser.CommonTableExpression cte, Map<String, CteResult> available) {
+  private CteResult resolveCteResult(SqlParser.CommonTableExpression cte, Map<Identifier, CteResult> available) {
     if (cte == null || available == null || available.isEmpty()) {
       return null;
     }
-    String key = normalizeCteKey(cte.name());
-    if (key == null) {
-      return null;
-    }
-    return available.get(key);
+    return available.get(cte.name());
   }
 
-  private CteResult resolveCteResultByName(String name, Map<String, CteResult> available) {
+  private CteResult resolveCteResultByName(String name, Map<Identifier, CteResult> available) {
     if (name == null || available == null || available.isEmpty()) {
       return null;
     }
-    String key = normalizeCteKey(name);
+    Identifier key = Identifier.of(name);
     if (key == null) {
       return null;
     }
@@ -2827,17 +2832,6 @@ class JParqPreparedStatement implements PreparedStatement {
       converted.put(field.name(), toAvroValue(raw, nonNullSchema));
     }
     return converted;
-  }
-
-  private static String normalizeCteKey(String name) {
-    if (name == null) {
-      return null;
-    }
-    String trimmed = name.trim();
-    if (trimmed.isEmpty()) {
-      return null;
-    }
-    return trimmed.toLowerCase(Locale.ROOT);
   }
 
   private String buildJoinTableName() {
@@ -3179,10 +3173,18 @@ class JParqPreparedStatement implements PreparedStatement {
       if (normalized == null) {
         continue;
       }
+      boolean present = available.contains(normalized);
+      if (!present && normalized.startsWith("Q:")) {
+        String body = normalized.substring(2);
+        String lowerCase = body.toLowerCase(Locale.ROOT);
+        if (body.equals(lowerCase)) {
+          present = available.contains("U:" + lowerCase);
+        }
+      }
       boolean labelMatch = normalizedLabels.contains(normalized);
       boolean missingReference = !normalizedReferences.contains(normalized);
       boolean aliasOnly = labelMatch && (missingReference || mappedAliases.contains(normalized));
-      if (!available.contains(normalized) && !aliasOnly) {
+      if (!present && !aliasOnly) {
         missing.add(column);
       }
     }

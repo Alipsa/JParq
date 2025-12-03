@@ -94,6 +94,7 @@ The following SQL statements are supported:
   - Qualified wildcard projections (table.*).
   - alias support for columns and tables
   - Support computed expressions with aliases (e.g. SELECT mpg*2 AS double_mpg)
+  - Quoted identifiers using "double quotes" as per the SQL standard.
   - `CASE` support
 - `SELECT` statements with `WHERE` supporting:
   - `BETWEEN`, `IN`, `LIKE` operators
@@ -226,7 +227,7 @@ The following SQL statements are supported:
 - SOUNDEX(string)    Computes the Soundex phonetic code.    SOUNDEX('Robert') → 'R163'
 - DIFFERENCE(string1, string2)    Calculates similarity based on Soundex codes (0-4).    DIFFERENCE('Smith', 'Smyth') → 4
 
-## Roadmap: Might be implemented in the future
+## Roadmap: _Might_ be implemented in the future
 
 ### Non standard extensions
 - Named parameters i.e. :paramName syntax for prepared statements

@@ -68,6 +68,7 @@ import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
+import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.Operation;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.RecordReader;
@@ -512,6 +513,10 @@ public final class AggregateFunctions {
     String rendered = expression.toString();
     addIfNotBlank(keys, rendered);
     if (expression instanceof Column column) {
+      Identifier identifier = Identifier.of(column.getColumnName());
+      if (identifier != null) {
+        addIfNotBlank(keys, identifier.text());
+      }
       String columnName = JParqUtil.normalizeQualifier(column.getColumnName());
       if (columnName != null) {
         keys.add(columnName);
@@ -1288,7 +1293,8 @@ public final class AggregateFunctions {
     Map<String, OrderValueAccessor> accessorByColumn = buildOrderAccessors(plan);
     Comparator<AggregatedRow> comparator = (left, right) -> {
       for (OrderKey key : orderBy) {
-        OrderValueAccessor accessor = accessorByColumn.get(key.column().toLowerCase(Locale.ROOT));
+        String lookupKey = Identifier.lookupKey(key.column());
+        OrderValueAccessor accessor = lookupKey == null ? null : accessorByColumn.get(lookupKey);
         if (accessor == null) {
           throw new IllegalArgumentException(
               "ORDER BY column '" + key.column() + "' is not present in the SELECT list or grouping expressions");
@@ -1358,7 +1364,10 @@ public final class AggregateFunctions {
     if (key == null || key.isBlank() || accessor == null) {
       return;
     }
-    mapping.putIfAbsent(key.toLowerCase(Locale.ROOT), accessor);
+    String normalized = Identifier.lookupKey(key);
+    if (normalized != null) {
+      mapping.putIfAbsent(normalized, accessor);
+    }
   }
 
   private enum OrderValueKind {
@@ -1556,14 +1565,20 @@ public final class AggregateFunctions {
     for (int i = 0; i < columns.size(); i++) {
       String label = columns.get(i).label();
       if (label != null && !label.isBlank()) {
-        map.put(label.toLowerCase(Locale.ROOT), rowValues.get(i));
+        String normalized = Identifier.lookupKey(label);
+        if (normalized != null) {
+          map.put(normalized, rowValues.get(i));
+        }
       }
     }
     List<GroupExpression> groups = plan.groupExpressions();
     for (int i = 0; i < groups.size(); i++) {
       String label = groups.get(i).label();
       if (label != null && !label.isBlank()) {
-        map.putIfAbsent(label.toLowerCase(Locale.ROOT), groupValues.get(i));
+        String normalized = Identifier.lookupKey(label);
+        if (normalized != null) {
+          map.putIfAbsent(normalized, groupValues.get(i));
+        }
       }
     }
     return map;
@@ -2286,13 +2301,13 @@ public final class AggregateFunctions {
 
     private Object correlatedValue(String qualifier, String column) {
       String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
-      String normalizedColumn = column == null ? null : column.toLowerCase(Locale.ROOT);
+      String normalizedColumn = Identifier.lookupKey(column);
       if (normalizedQualifier != null && normalizedColumn != null && !correlationContext.isEmpty()) {
         Map<String, String> mapping = correlationContext.get(normalizedQualifier);
         if (mapping != null) {
           String canonical = mapping.get(normalizedColumn);
           if (canonical != null) {
-            String lookupKey = canonical.toLowerCase(Locale.ROOT);
+            String lookupKey = Identifier.lookupKey(canonical);
             if (labelLookup.containsKey(lookupKey)) {
               return labelLookup.get(lookupKey);
             }
@@ -2326,8 +2341,8 @@ public final class AggregateFunctions {
         for (Map.Entry<String, String> entry : mapping.entrySet()) {
           String column = entry.getKey();
           String canonical = entry.getValue();
-          String normalizedColumn = column == null ? null : column.toLowerCase(Locale.ROOT);
-          String normalizedCanonical = canonical == null ? null : canonical.toLowerCase(Locale.ROOT);
+          String normalizedColumn = Identifier.lookupKey(column);
+          String normalizedCanonical = Identifier.lookupKey(canonical);
           if ((normalizedColumn != null && labelLookup.containsKey(normalizedColumn))
               || (normalizedCanonical != null && labelLookup.containsKey(normalizedCanonical))) {
             columns.add(column);
@@ -2341,7 +2356,8 @@ public final class AggregateFunctions {
       if (name == null) {
         return null;
       }
-      return labelLookup.get(name.toLowerCase(Locale.ROOT));
+      String key = Identifier.lookupKey(name);
+      return key == null ? null : labelLookup.get(key);
     }
   }
 

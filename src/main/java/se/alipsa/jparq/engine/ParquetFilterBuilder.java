@@ -5,7 +5,6 @@ import static se.alipsa.jparq.engine.ExpressionEvaluator.unwrapParenthesis;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.BinaryExpression;
@@ -128,9 +127,9 @@ public final class ParquetFilterBuilder {
     if (f != null) {
       return f;
     }
-    String target = name.toLowerCase(Locale.ROOT);
+    String target = Identifier.lookupKey(name);
     for (Schema.Field sf : schema.getFields()) {
-      if (sf.name().toLowerCase(Locale.ROOT).equals(target)) {
+      if (target != null && target.equals(Identifier.lookupKey(sf.name()))) {
         return sf;
       }
     }

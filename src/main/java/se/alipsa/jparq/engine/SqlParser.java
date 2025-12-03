@@ -285,7 +285,7 @@ public final class SqlParser {
    * Definition of a common table expression present in the query.
    *
    * @param name
-   *          the exposed name of the CTE
+   *          identifier representing the exposed name of the CTE
    * @param columnAliases
    *          optional column aliases defined alongside the CTE name
    * @param query
@@ -293,7 +293,7 @@ public final class SqlParser {
    * @param sql
    *          textual representation of the CTE body
    */
-  public record CommonTableExpression(String name, List<String> columnAliases, Query query, String sql) {
+  public record CommonTableExpression(Identifier name, List<String> columnAliases, Query query, String sql) {
   }
 
   /**
@@ -562,7 +562,7 @@ public final class SqlParser {
       net.sf.jsqlparser.statement.select.Select stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
           .parse(normalizedSql);
       List<CommonTableExpression> ctes = parseWithItems(stmt.getWithItemsList(), allowQualifiedWildcards);
-      Map<String, CommonTableExpression> cteLookup = buildCteLookup(ctes);
+      Map<Identifier, CommonTableExpression> cteLookup = buildCteLookup(ctes);
       return parseSelectStatement(stmt, ctes, cteLookup, allowQualifiedWildcards);
     } catch (Exception e) {
       throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
@@ -570,7 +570,8 @@ public final class SqlParser {
   }
 
   private static Query parseSelectStatement(net.sf.jsqlparser.statement.select.Select stmt,
-      List<CommonTableExpression> ctes, Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
+      List<CommonTableExpression> ctes, Map<Identifier, CommonTableExpression> cteLookup,
+      boolean allowQualifiedWildcards) {
     if (stmt instanceof ParenthesedSelect parenthesed) {
       return parseSelectStatement(parenthesed.getSelect(), ctes, cteLookup, allowQualifiedWildcards);
     }
@@ -601,18 +602,22 @@ public final class SqlParser {
       if (select == null || select.getSelect() == null) {
         throw new IllegalArgumentException("Unsupported WITH item: " + item);
       }
-      List<CommonTableExpression> available = List.copyOf(prior);
-      Map<String, CommonTableExpression> availableLookup = buildCteLookup(available);
-      Query query = parseSelectStatement(select.getSelect(), available, availableLookup, allowQualifiedWildcards);
-      List<String> columnAliases = parseCteColumns(item.getWithItemList());
-      String sql = select.toString();
-      String name = item.getUnquotedAliasName();
-      if (name == null || name.isBlank()) {
-        name = item.getAliasName();
+      String rawName = item.getAliasName();
+      if (rawName == null) {
+        rawName = item.getUnquotedAliasName();
       }
-      if (name == null || name.isBlank()) {
+      if (rawName == null || rawName.isBlank()) {
+        throw new IllegalArgumentException("WITH item is missing a valid name: " + item);
+      }
+      Identifier name = Identifier.of(rawName);
+      if (name == null) {
         throw new IllegalArgumentException("WITH item is missing a name: " + item);
       }
+      List<String> columnAliases = parseCteColumns(item.getWithItemList());
+      List<CommonTableExpression> available = List.copyOf(prior);
+      Map<Identifier, CommonTableExpression> availableLookup = buildCteLookup(available);
+      Query query = parseSelectStatement(select.getSelect(), available, availableLookup, allowQualifiedWildcards);
+      String sql = select.toString();
       CommonTableExpression cte = new CommonTableExpression(name, columnAliases, query, sql);
       parsed.add(cte);
       prior.add(cte);
@@ -620,21 +625,34 @@ public final class SqlParser {
     return List.copyOf(parsed);
   }
 
-  private static Map<String, CommonTableExpression> buildCteLookup(List<CommonTableExpression> ctes) {
+  private static Map<Identifier, CommonTableExpression> buildCteLookup(List<CommonTableExpression> ctes) {
     if (ctes == null || ctes.isEmpty()) {
       return Map.of();
     }
-    Map<String, CommonTableExpression> lookup = new HashMap<>();
+    Map<Identifier, CommonTableExpression> lookup = new HashMap<>();
     for (CommonTableExpression cte : ctes) {
       if (cte == null || cte.name() == null) {
         continue;
       }
-      String key = identifierKey(cte.name());
-      if (key != null) {
-        lookup.put(key, cte);
-      }
+      lookup.putIfAbsent(cte.name(), cte);
     }
     return Map.copyOf(lookup);
+  }
+
+  private static Identifier identifier(Table table) {
+    if (table == null) {
+      return null;
+    }
+    String[] candidates = {
+        table.getName(), table.getFullyQualifiedName(), table.getUnquotedName()
+    };
+    for (String candidate : candidates) {
+      Identifier identifier = Identifier.of(candidate);
+      if (identifier != null) {
+        return identifier;
+      }
+    }
+    return null;
   }
 
   private static List<String> parseCteColumns(List<SelectItem<?>> items) {
@@ -649,38 +667,19 @@ public final class SqlParser {
   }
 
   private static CommonTableExpression resolveCommonTableExpression(Table table,
-      Map<String, CommonTableExpression> cteLookup) {
+      Map<Identifier, CommonTableExpression> cteLookup) {
     if (table == null || cteLookup == null || cteLookup.isEmpty()) {
       return null;
     }
-    String[] candidates = {
-        table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()
-    };
-    for (String candidate : candidates) {
-      String key = identifierKey(candidate);
-      if (key != null) {
-        CommonTableExpression cte = cteLookup.get(key);
-        if (cte != null) {
-          return cte;
-        }
-      }
-    }
-    return null;
-  }
-
-  private static String identifierKey(String identifier) {
+    Identifier identifier = identifier(table);
     if (identifier == null) {
       return null;
     }
-    String trimmed = identifier.trim();
-    if (trimmed.isEmpty()) {
-      return null;
-    }
-    return trimmed.toLowerCase(Locale.ROOT);
+    return cteLookup.get(identifier);
   }
 
   private static Select parsePlainSelect(PlainSelect ps, List<CommonTableExpression> ctes,
-      Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
+      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
     FromInfo fromInfo = parseFromItem(ps.getFromItem(), ctes, cteLookup, allowQualifiedWildcards);
     List<JoinInfo> joinInfos = parseJoins(ps.getJoins(), ctes, cteLookup, allowQualifiedWildcards);
     List<TableReference> tableRefs = buildTableReferences(fromInfo, joinInfos);
@@ -791,7 +790,7 @@ public final class SqlParser {
   }
 
   private static Select parseValuesSelect(Values values, List<CommonTableExpression> ctes,
-      Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
+      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
     if (values == null) {
       throw new IllegalArgumentException("VALUES statement cannot be null");
     }
@@ -838,7 +837,7 @@ public final class SqlParser {
    * @return a normalized {@link SetQuery} describing the components and modifiers
    */
   private static SetQuery parseSetOperationList(SetOperationList list, List<CommonTableExpression> ctes,
-      Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
+      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
     List<net.sf.jsqlparser.statement.select.Select> selects = list.getSelects();
     List<SetOperation> operations = list.getOperations();
     if (selects == null || selects.isEmpty()) {
@@ -1000,26 +999,24 @@ public final class SqlParser {
    * name/alias.
    */
   private static FromInfo parseFromItem(FromItem fromItem, List<CommonTableExpression> ctes,
-      Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
+      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
     return parseFromItem(fromItem, ctes, cteLookup, allowQualifiedWildcards, false);
   }
 
   private static FromInfo parseFromItem(FromItem fromItem, List<CommonTableExpression> ctes,
-      Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateralHint) {
+      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateralHint) {
     boolean lateral = lateralHint;
     TableSampleDefinition tableSample = parseTableSample(fromItem);
     if (fromItem instanceof Table t) {
-      String sanitizedTableName = IdentifierUtil.sanitizeIdentifier(t.getName());
-      String sanitizedSchemaName = IdentifierUtil.sanitizeIdentifier(t.getSchemaName());
-      String tableName = sanitizedTableName;
-      String schemaName = sanitizedSchemaName;
+      String tableName = t.getName();
+      String schemaName = t.getSchemaName();
       String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
       if (InformationSchemaTables.matchesQualifiedName(schemaName, tableName, t.getFullyQualifiedName())) {
         tableName = InformationSchemaTables.TABLE_IDENTIFIER;
-        schemaName = sanitizedSchemaName;
+        schemaName = IdentifierUtil.sanitizeIdentifier(t.getSchemaName());
       } else if (InformationSchemaColumns.matchesQualifiedName(schemaName, tableName, t.getFullyQualifiedName())) {
         tableName = InformationSchemaColumns.TABLE_IDENTIFIER;
-        schemaName = sanitizedSchemaName;
+        schemaName = IdentifierUtil.sanitizeIdentifier(t.getSchemaName());
       }
       CommonTableExpression cte = resolveCommonTableExpression(t, cteLookup);
       Map<String, String> mapping = Map.of();
@@ -1122,7 +1119,7 @@ public final class SqlParser {
   }
 
   private static FromInfo parseSubSelect(PlainSelect innerPlain, Alias aliasNode, List<CommonTableExpression> ctes,
-      Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateral) {
+      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateral) {
     if (innerPlain == null) {
       throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
     }
@@ -1200,26 +1197,41 @@ public final class SqlParser {
     }
     List<List<Expression>> rows = new ArrayList<>();
     int columnCount = -1;
-    for (Object expression : expressions) {
-      List<Expression> row = new ArrayList<>();
-      if (expression instanceof ExpressionList<?> list) {
-        for (Object element : list) {
-          if (element instanceof Expression expr) {
-            row.add(expr);
-          }
+    boolean containsRowConstructors = expressions.stream().anyMatch(ExpressionList.class::isInstance);
+    if (!containsRowConstructors) {
+      List<Expression> row = new ArrayList<>(expressions.size());
+      for (Object expression : expressions) {
+        if (expression instanceof Expression expr) {
+          row.add(expr);
         }
-      } else if (expression instanceof Expression expr) {
-        row.add(expr);
       }
       if (row.isEmpty()) {
-        throw new IllegalArgumentException("VALUES row cannot be empty: " + expression);
+        throw new IllegalArgumentException("VALUES row cannot be empty: " + values);
       }
-      if (columnCount < 0) {
-        columnCount = row.size();
-      } else if (columnCount != row.size()) {
-        throw new IllegalArgumentException("VALUES rows must all contain " + columnCount + " columns: " + values);
-      }
+      columnCount = row.size();
       rows.add(List.copyOf(row));
+    } else {
+      for (Object expression : expressions) {
+        List<Expression> row = new ArrayList<>();
+        if (expression instanceof ExpressionList<?> list) {
+          for (Object element : list) {
+            if (element instanceof Expression expr) {
+              row.add(expr);
+            }
+          }
+        } else if (expression instanceof Expression expr) {
+          row.add(expr);
+        }
+        if (row.isEmpty()) {
+          throw new IllegalArgumentException("VALUES row cannot be empty: " + expression);
+        }
+        if (columnCount < 0) {
+          columnCount = row.size();
+        } else if (columnCount != row.size()) {
+          throw new IllegalArgumentException("VALUES rows must all contain " + columnCount + " columns: " + values);
+        }
+        rows.add(List.copyOf(row));
+      }
     }
     Alias aliasNode = values.getAlias();
     List<String> aliasColumns = extractAliasColumns(aliasNode);
@@ -1560,9 +1572,10 @@ public final class SqlParser {
         continue;
       }
       List<QualifiedExpansionColumn> copy = List.copyOf(value);
-      normalized.putIfAbsent(key, copy);
-      String lower = key.toLowerCase(Locale.ROOT);
-      normalized.putIfAbsent(lower, copy);
+      String normalizedKey = Identifier.lookupKey(key);
+      if (normalizedKey != null) {
+        normalized.putIfAbsent(normalizedKey, copy);
+      }
     }
     return normalized;
   }
@@ -1572,11 +1585,11 @@ public final class SqlParser {
     if (qualifier == null) {
       return normalized.get(null);
     }
-    List<QualifiedExpansionColumn> direct = normalized.get(qualifier);
-    if (direct != null) {
-      return direct;
+    String normalizedKey = Identifier.lookupKey(qualifier);
+    if (normalizedKey == null) {
+      return List.of();
     }
-    return normalized.get(qualifier.toLowerCase(Locale.ROOT));
+    return normalized.getOrDefault(normalizedKey, List.of());
   }
 
   private record OrderedSelectItem(int order, int subOrder, String label, String physical, Expression expression) {
@@ -2255,7 +2268,7 @@ public final class SqlParser {
   }
 
   private static List<JoinInfo> parseJoins(List<Join> joins, List<CommonTableExpression> ctes,
-      Map<String, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
+      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
     if (joins == null || joins.isEmpty()) {
       return List.of();
     }

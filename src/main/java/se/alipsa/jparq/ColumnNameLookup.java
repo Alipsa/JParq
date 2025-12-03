@@ -3,8 +3,8 @@ package se.alipsa.jparq;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
+import se.alipsa.jparq.engine.Identifier;
 
 /**
  * Utility helpers for resolving column names within result set metadata and
@@ -63,7 +63,7 @@ public final class ColumnNameLookup {
    *          {@code null})
    * @param labels
    *          projection labels (aliases) exposed to callers (may be {@code null})
-   * @return an immutable map associating lower-cased column names to their
+   * @return an immutable map associating normalized column identifiers to their
    *         1-based column index
    */
   public static Map<String, Integer> buildCaseInsensitiveIndex(int columnCount, List<String> canonicalNames,
@@ -90,14 +90,8 @@ public final class ColumnNameLookup {
    *         {@code null} or blank
    */
   static String normalizeKey(String name) {
-    if (name == null) {
-      return "";
-    }
-    String trimmed = name.trim();
-    if (trimmed.isEmpty()) {
-      return "";
-    }
-    return trimmed.toLowerCase(Locale.ROOT);
+    String key = Identifier.lookupKey(name);
+    return key == null ? "" : key;
   }
 
   private static void addName(Map<String, Integer> index, List<String> names, int position, int columnIndex) {

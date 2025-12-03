@@ -7,7 +7,6 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -272,7 +271,8 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
       if (tableMap == null) {
         return null;
       }
-      return tableMap.get(fieldName.toLowerCase(Locale.ROOT));
+      String key = Identifier.lookupKey(fieldName);
+      return key == null ? null : tableMap.get(key);
     }
 
     static UsingMetadata from(List<JoinTable> tables) {
@@ -288,7 +288,10 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
           if (usingColumn == null || usingColumn.isBlank()) {
             continue;
           }
-          String normalized = usingColumn.toLowerCase(Locale.ROOT);
+          String normalized = Identifier.lookupKey(usingColumn);
+          if (normalized == null) {
+            continue;
+          }
           UsingColumnInfo info = byNormalized.get(normalized);
           if (info == null) {
             int ownerIndex = locateOwnerTable(tables, tableIndex, usingColumn);
@@ -332,7 +335,11 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
 
     private static void registerUsingField(Map<Integer, Map<String, UsingColumnInfo>> tableLookup, int tableIndex,
         String fieldName, UsingColumnInfo info) {
-      tableLookup.computeIfAbsent(tableIndex, k -> new LinkedHashMap<>()).put(fieldName.toLowerCase(Locale.ROOT), info);
+      String key = Identifier.lookupKey(fieldName);
+      if (key == null) {
+        return;
+      }
+      tableLookup.computeIfAbsent(tableIndex, k -> new LinkedHashMap<>()).put(key, info);
     }
 
     private static String resolveFieldName(Schema schema, String column) {
@@ -425,6 +432,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
       }
       for (Schema.Field field : tableSchema.getFields()) {
         String name = field.name();
+        String lookupKey = Identifier.lookupKey(name);
         UsingColumnInfo usingInfo = usingMetadata.lookup(tableIndex, name);
         boolean usingColumn = usingInfo != null;
         boolean duplicate = columnCounts.getOrDefault(name, 0) > 1;
@@ -436,9 +444,14 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
         }
         String label = (!usingColumn && duplicate) ? name : canonical;
         canonicalLabels.putIfAbsent(canonical, label);
-        String lookupKey = name.toLowerCase(Locale.ROOT);
-        registerQualifierMappings(qualifierMap, qualifiers, includeTableQualifier, normalizedTableName, lookupKey,
+        String originalKey = Identifier.lookupKey(label);
+        String canonicalKey = Identifier.lookupKey(canonical);
+        registerQualifierMappings(qualifierMap, qualifiers, includeTableQualifier, normalizedTableName, originalKey,
             canonical);
+        if (canonicalKey != null && !canonicalKey.equals(originalKey)) {
+          registerQualifierMappings(qualifierMap, qualifiers, includeTableQualifier, normalizedTableName, canonicalKey,
+              canonical);
+        }
         if (usingColumn) {
           final boolean owner = usingInfo.isOwner(tableIndex);
           UsingFieldState state = usingFieldStates.computeIfAbsent(canonical, key -> new UsingFieldState());
@@ -526,12 +539,15 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
    * @param normalizedTableName
    *          normalized physical table name (may be {@code null})
    * @param lookupKey
-   *          lower-cased column name
+   *          normalized column name
    * @param canonical
    *          canonical column name in the join schema
    */
   private static void registerQualifierMappings(Map<String, Map<String, String>> qualifierMap, Set<String> qualifiers,
       boolean includeTableQualifier, String normalizedTableName, String lookupKey, String canonical) {
+    if (lookupKey == null) {
+      return;
+    }
     for (String qualifier : qualifiers) {
       String normalizedQualifier = normalize(qualifier);
       if (normalizedQualifier == null) {
@@ -582,7 +598,8 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
   }
 
   private static String normalize(String qualifier) {
-    return qualifier == null ? null : qualifier.toLowerCase(Locale.ROOT);
+    Identifier identifier = Identifier.of(qualifier);
+    return identifier == null ? null : identifier.lookupKey();
   }
 
   private static List<String> buildColumnNames(List<FieldMapping> mappings) {
