@@ -602,19 +602,22 @@ public final class SqlParser {
       if (select == null || select.getSelect() == null) {
         throw new IllegalArgumentException("Unsupported WITH item: " + item);
       }
-      List<CommonTableExpression> available = List.copyOf(prior);
-      Map<Identifier, CommonTableExpression> availableLookup = buildCteLookup(available);
-      Query query = parseSelectStatement(select.getSelect(), available, availableLookup, allowQualifiedWildcards);
-      List<String> columnAliases = parseCteColumns(item.getWithItemList());
-      String sql = select.toString();
       String rawName = item.getAliasName();
-      if (rawName == null || rawName.isBlank()) {
+      if (rawName == null) {
         rawName = item.getUnquotedAliasName();
+      }
+      if (rawName == null || rawName.isBlank()) {
+        throw new IllegalArgumentException("WITH item is missing a valid name: " + item);
       }
       Identifier name = Identifier.of(rawName);
       if (name == null) {
         throw new IllegalArgumentException("WITH item is missing a name: " + item);
       }
+      List<String> columnAliases = parseCteColumns(item.getWithItemList());
+      List<CommonTableExpression> available = List.copyOf(prior);
+      Map<Identifier, CommonTableExpression> availableLookup = buildCteLookup(available);
+      Query query = parseSelectStatement(select.getSelect(), available, availableLookup, allowQualifiedWildcards);
+      String sql = select.toString();
       CommonTableExpression cte = new CommonTableExpression(name, columnAliases, query, sql);
       parsed.add(cte);
       prior.add(cte);

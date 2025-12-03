@@ -1,5 +1,6 @@
 package jparq.quoted;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -77,6 +78,26 @@ class QuotedIdentifierTest {
         throw new RuntimeException(e);
       }
     });
+  }
+
+  @Test
+  void quotedPhysicalColumnsRequireMatchingCase() {
+    resourceSql.query("""
+        SELECT "mpg" FROM mtcars
+        """, rs -> {
+      try {
+        assertTrue(rs.next(), "Lower-case quoted column should match physical column");
+        assertDoesNotThrow(() -> rs.getDouble("mpg"), "Lower-case quoted column should be retrievable");
+      } catch (SQLException e) {
+        throw new RuntimeException(e);
+      }
+    });
+
+    RuntimeException exception = assertThrows(RuntimeException.class, () -> resourceSql.query("""
+        SELECT "MPG" FROM mtcars
+        """, rs -> {
+    }));
+    assertTrue(exception.getCause() instanceof SQLException, "Quoted column with different case should not resolve");
   }
 
   @Test

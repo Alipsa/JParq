@@ -345,6 +345,11 @@ public final class ColumnMappingUtil {
     if (normalizedColumn == null || !normalizedColumn.startsWith("Q:") || normalizedColumn.length() <= 2) {
       return null;
     }
-    return "U:" + normalizedColumn.substring(2).toLowerCase(Locale.ROOT);
+    String body = normalizedColumn.substring(2);
+    String lowerCase = body.toLowerCase(Locale.ROOT);
+    if (!body.equals(lowerCase)) {
+      return null;
+    }
+    return "U:" + lowerCase;
   }
 }

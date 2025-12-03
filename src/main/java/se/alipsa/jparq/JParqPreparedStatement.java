@@ -3175,8 +3175,11 @@ class JParqPreparedStatement implements PreparedStatement {
       }
       boolean present = available.contains(normalized);
       if (!present && normalized.startsWith("Q:")) {
-        String unquoted = "U:" + normalized.substring(2).toLowerCase(Locale.ROOT);
-        present = available.contains(unquoted);
+        String body = normalized.substring(2);
+        String lowerCase = body.toLowerCase(Locale.ROOT);
+        if (body.equals(lowerCase)) {
+          present = available.contains("U:" + lowerCase);
+        }
       }
       boolean labelMatch = normalizedLabels.contains(normalized);
       boolean missingReference = !normalizedReferences.contains(normalized);
