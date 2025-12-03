@@ -69,8 +69,8 @@ class AvroCoercionsTest {
     fieldSchemas.put("value", Schema.create(Schema.Type.INT));
 
     Map<String, String> caseInsensitive = new HashMap<>();
-    caseInsensitive.put("name", "Name");
-    caseInsensitive.put("value", "value");
+    caseInsensitive.put(Identifier.lookupKey("Name"), "Name");
+    caseInsensitive.put(Identifier.lookupKey("value"), "value");
 
     assertEquals("Ada", AvroCoercions.resolveColumnValue("name", record, fieldSchemas, caseInsensitive));
     assertEquals(7, AvroCoercions.resolveColumnValue("value", record, fieldSchemas, caseInsensitive));

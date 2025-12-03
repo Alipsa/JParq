@@ -26,6 +26,7 @@ import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.helper.JParqUtil;
 
 /** An implementation of the java.sql.Connection interface for parquet files. */
@@ -204,11 +205,14 @@ public class JParqConnection implements Connection {
   }
 
   private String normalize(String name) {
-    if (name == null) {
+    Identifier identifier = Identifier.of(name);
+    if (identifier == null) {
       return "";
     }
-    String trimmed = name.trim();
-    return caseSensitive ? trimmed : trimmed.toLowerCase(Locale.ROOT);
+    if (caseSensitive || identifier.quoted()) {
+      return identifier.text();
+    }
+    return identifier.normalized();
   }
 
   private String validateTableName(String tableName) throws SQLException {

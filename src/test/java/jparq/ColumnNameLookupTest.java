@@ -34,8 +34,8 @@ class ColumnNameLookupTest {
 
     Map<String, Integer> index = ColumnNameLookup.buildCaseInsensitiveIndex(labels.size(), canonical, physical, labels);
 
-    assertEquals(1, index.get("id").intValue());
-    assertEquals(2, index.get("first_name").intValue());
-    assertEquals(3, index.get("salaryalias").intValue());
+    assertEquals(1, index.get("U:id").intValue());
+    assertEquals(2, index.get("U:first_name").intValue());
+    assertEquals(3, index.get("U:salaryalias").intValue());
   }
 }

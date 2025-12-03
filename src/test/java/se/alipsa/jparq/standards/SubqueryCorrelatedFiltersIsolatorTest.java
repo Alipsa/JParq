@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqResultSet;
 import se.alipsa.jparq.JParqSql;
 import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
+import se.alipsa.jparq.engine.Identifier;
 
 /**
  * Isolated regressions for correlated subqueries against derived tables to
@@ -96,9 +97,9 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
         """, rs -> {
       try {
         Map<String, Map<String, String>> qualifierMapping = readQualifierMapping((JParqResultSet) rs);
-        Map<String, String> derivedMapping = qualifierMapping.get("derived");
+        Map<String, String> derivedMapping = qualifierMapping.get(Identifier.lookupKey("derived"));
         Assertions.assertNotNull(derivedMapping, "Derived mapping must be present for correlation");
-        Assertions.assertEquals("department_id", derivedMapping.get("department_id"),
+        Assertions.assertEquals("department_id", derivedMapping.get(Identifier.lookupKey("department_id")),
             "department_id should resolve to the derived inline view field");
         List<String> departments = new ArrayList<>();
         while (rs.next()) {
@@ -132,9 +133,9 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
       try {
         if (rs instanceof JParqResultSet jparqRs) {
           Map<String, Map<String, String>> qualifierMapping = readQualifierMapping(jparqRs);
-          Map<String, String> derivedMapping = qualifierMapping.get("derived");
+          Map<String, String> derivedMapping = qualifierMapping.get(Identifier.lookupKey("derived"));
           Assertions.assertNotNull(derivedMapping, "Correlation context must include derived alias mapping");
-          Assertions.assertTrue(derivedMapping.containsKey("department_id"),
+          Assertions.assertTrue(derivedMapping.containsKey(Identifier.lookupKey("department_id")),
               "department_id should be available for correlated predicates but was " + derivedMapping.keySet());
         }
 
@@ -277,11 +278,11 @@ public class SubqueryCorrelatedFiltersIsolatorTest {
         mappingField.setAccessible(true);
         @SuppressWarnings("unchecked")
         Map<String, Map<String, String>> qualifierMapping = (Map<String, Map<String, String>>) mappingField.get(rs);
-        Map<String, String> derivedMapping = qualifierMapping.get("derived");
+        Map<String, String> derivedMapping = qualifierMapping.get(Identifier.lookupKey("derived"));
         Assertions.assertNotNull(derivedMapping, "Derived mapping must be present for correlation");
-        Assertions.assertTrue(derivedMapping.containsKey("department_id"),
+        Assertions.assertTrue(derivedMapping.containsKey(Identifier.lookupKey("department_id")),
             "Derived mapping should expose department_id but was " + derivedMapping.keySet());
-        Assertions.assertEquals("department_id", derivedMapping.get("department_id"),
+        Assertions.assertEquals("department_id", derivedMapping.get(Identifier.lookupKey("department_id")),
             "department_id should resolve to the derived inline view field");
         List<String> departments = new ArrayList<>();
         while (rs.next()) {

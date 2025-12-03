@@ -5,9 +5,9 @@ import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Locale;
 import java.util.Properties;
 import org.apache.avro.generic.GenericData;
+import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.model.MetaDataResultSet;
 
 /** Utility methods. */
@@ -104,28 +104,19 @@ public final class JParqUtil {
   }
 
   /**
-   * Normalizes a SQL table or column qualifier by removing quotes, backticks, and
-   * brackets, and converting to lowercase.
+   * Normalizes a SQL table or column qualifier using SQL identifier semantics.
+   * Quoted qualifiers remain case sensitive while unquoted qualifiers are treated
+   * case-insensitively. The returned value encodes quoting information using the
+   * {@link se.alipsa.jparq.engine.Identifier#lookupKey(String)} format to avoid
+   * collisions between quoted and unquoted identifiers.
    *
    * @param qualifier
    *          the qualifier to normalize (e.g., table name, column name)
-   * @return the normalized qualifier, or null if the input is null or empty
+   * @return the normalized qualifier, or {@code null} if the input is null or
+   *         empty
    */
   public static String normalizeQualifier(String qualifier) {
-    if (qualifier == null) {
-      return null;
-    }
-    String trimmed = qualifier.trim();
-    if (trimmed.isEmpty()) {
-      return null;
-    }
-    if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("`") && trimmed.endsWith("`"))) {
-      trimmed = trimmed.substring(1, trimmed.length() - 1);
-    }
-    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-      trimmed = trimmed.substring(1, trimmed.length() - 1);
-    }
-    return trimmed.toLowerCase(Locale.ROOT);
+    return Identifier.lookupKey(qualifier);
   }
 
   /**

@@ -25,12 +25,12 @@ class SqlParserCteTest {
 
     assertEquals(1, select.commonTableExpressions().size(), "Expected a single CTE definition");
     SqlParser.CommonTableExpression cte = select.commonTableExpressions().get(0);
-    assertEquals("summary", cte.name());
+    assertEquals("summary", cte.name().text());
     assertInstanceOf(SqlParser.Select.class, cte.query(), "CTE body should be parsed as a SELECT");
 
     SqlParser.TableReference reference = select.tableReferences().get(0);
     assertNotNull(reference.commonTableExpression(), "Table reference should link to the CTE definition");
-    assertEquals("summary", reference.commonTableExpression().name());
+    assertEquals("summary", reference.commonTableExpression().name().text());
   }
 
   @Test
@@ -69,7 +69,7 @@ class SqlParserCteTest {
     SqlParser.SetQuery setQuery = assertInstanceOf(SqlParser.SetQuery.class, query);
     assertEquals(1, setQuery.commonTableExpressions().size(), "Set query should expose CTE definitions");
     SqlParser.CommonTableExpression cte = setQuery.commonTableExpressions().get(0);
-    assertEquals("base", cte.name());
+    assertEquals("base", cte.name().text());
     assertTrue(setQuery.components().stream().allMatch(component -> {
       SqlParser.Query componentQuery = component.query();
       if (componentQuery instanceof SqlParser.Select componentSelect) {

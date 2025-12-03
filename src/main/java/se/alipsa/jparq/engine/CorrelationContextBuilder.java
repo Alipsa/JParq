@@ -3,9 +3,7 @@ package se.alipsa.jparq.engine;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import se.alipsa.jparq.helper.JParqUtil;
 
 /**
  * Utility for constructing qualifier-aware correlation contexts from projected
@@ -68,17 +66,21 @@ public final class CorrelationContextBuilder {
         canonical = label;
       }
       if (label != null && !label.isBlank()) {
-        String normalizedLabel = label.toLowerCase(Locale.ROOT);
-        projectionMapping.put(normalizedLabel, canonical);
+        String normalizedLabel = Identifier.lookupKey(label);
+        if (normalizedLabel != null) {
+          projectionMapping.put(normalizedLabel, canonical);
+        }
       }
       if (canonical != null && !canonical.isBlank()) {
-        String normalizedCanonical = canonical.toLowerCase(Locale.ROOT);
-        projectionMapping.putIfAbsent(normalizedCanonical, canonical);
+        String normalizedCanonical = Identifier.lookupKey(canonical);
+        if (normalizedCanonical != null) {
+          projectionMapping.putIfAbsent(normalizedCanonical, canonical);
+        }
       }
     }
 
     for (String qualifier : qualifiers) {
-      String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
+      String normalizedQualifier = Identifier.lookupKey(qualifier);
       if (normalizedQualifier == null) {
         continue;
       }

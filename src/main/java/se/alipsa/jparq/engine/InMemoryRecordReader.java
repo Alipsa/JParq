@@ -3,7 +3,6 @@ package se.alipsa.jparq.engine;
 import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import org.apache.avro.Schema;
@@ -97,8 +96,13 @@ public final class InMemoryRecordReader implements RecordReader, ColumnMappingPr
       if (field == null || field.name() == null) {
         continue;
       }
-      String normalized = field.name().toLowerCase(Locale.ROOT);
-      mapping.putIfAbsent(normalized, field.name());
+      String normalized = field.getProp("jparq.lookupKey");
+      if (normalized == null || normalized.isBlank()) {
+        normalized = Identifier.lookupKey(field.name());
+      }
+      if (normalized != null) {
+        mapping.putIfAbsent(normalized, field.name());
+      }
     }
     return mapping;
   }

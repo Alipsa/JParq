@@ -17,7 +17,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
@@ -35,6 +34,7 @@ import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelationContextBuilder;
 import se.alipsa.jparq.engine.CorrelationMappings;
+import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.QueryProcessor;
@@ -59,7 +59,6 @@ import se.alipsa.jparq.engine.window.SumWindow;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.engine.window.WindowState;
-import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.model.ResultSetAdapter;
 
 /** An implementation of the java.sql.ResultSet interface. */
@@ -189,15 +188,14 @@ public class JParqResultSet extends ResultSetAdapter {
     Map<String, Map<String, String>> qualifierMapping = Map.of();
     Map<String, String> unqualifiedMapping = Map.of();
     if (reader instanceof ColumnMappingProvider mappingProvider) {
-      qualifierMapping = mappingProvider.qualifierColumnMapping();
-      unqualifiedMapping = mappingProvider.unqualifiedColumnMapping();
+      qualifierMapping = ColumnMappingUtil.normaliseQualifierMapping(mappingProvider.qualifierColumnMapping());
+      unqualifiedMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(mappingProvider.unqualifiedColumnMapping());
     }
-    Map<String, String> normalizedUnqualifiedMapping = ColumnMappingUtil
-        .normaliseUnqualifiedMapping(unqualifiedMapping);
+    Map<String, String> normalizedUnqualifiedMapping = unqualifiedMapping;
     Set<String> availableQualifiers = new LinkedHashSet<>(qualifierMapping.keySet());
     if (availableQualifiers.isEmpty() && !this.queryQualifiers.isEmpty()) {
       for (String qualifier : this.queryQualifiers) {
-        String normalized = JParqUtil.normalizeQualifier(qualifier);
+        String normalized = Identifier.lookupKey(qualifier);
         if (normalized != null && !normalized.isEmpty()) {
           availableQualifiers.add(normalized);
         }
@@ -831,8 +829,10 @@ public class JParqResultSet extends ResultSetAdapter {
       if (column == null || column.isBlank()) {
         continue;
       }
-      String normalized = column.toLowerCase(Locale.ROOT);
-      enriched.putIfAbsent(normalized, column);
+      String normalized = Identifier.lookupKey(column);
+      if (normalized != null) {
+        enriched.putIfAbsent(normalized, column);
+      }
     }
     return Map.copyOf(enriched);
   }
@@ -855,17 +855,19 @@ public class JParqResultSet extends ResultSetAdapter {
       Map<String, Map<String, String>> qualifierMapping, Map<String, String> unqualifiedMapping) {
     String qualifier = resolveQualifier(column);
     String columnName = column.getColumnName();
+    String columnKey = Identifier.lookupKey(columnName);
     if (qualifier != null && qualifierMapping != null) {
-      Map<String, String> mapping = qualifierMapping.get(qualifier.toLowerCase(Locale.ROOT));
+      String qualifierKey = Identifier.lookupKey(qualifier);
+      Map<String, String> mapping = qualifierKey == null ? null : qualifierMapping.get(qualifierKey);
       if (mapping != null) {
-        String canonical = mapping.get(columnName.toLowerCase(Locale.ROOT));
+        String canonical = mapping.get(columnKey);
         if (canonical != null) {
           return canonical;
         }
       }
     }
     if (unqualifiedMapping != null) {
-      String canonical = unqualifiedMapping.get(columnName.toLowerCase(Locale.ROOT));
+      String canonical = unqualifiedMapping.get(columnKey);
       if (canonical != null) {
         return canonical;
       }
@@ -952,11 +954,9 @@ public class JParqResultSet extends ResultSetAdapter {
       }
       if (label != null) {
         mapping.putIfAbsent(label, expression);
-        mapping.putIfAbsent(label.toLowerCase(Locale.ROOT), expression);
       }
       if (physical != null && !physical.isBlank()) {
         mapping.putIfAbsent(physical, expression);
-        mapping.putIfAbsent(physical.toLowerCase(Locale.ROOT), expression);
       }
     }
     return mapping.isEmpty() ? Map.of() : Map.copyOf(mapping);
@@ -1063,7 +1063,7 @@ public class JParqResultSet extends ResultSetAdapter {
       public <S> Void visit(Column column, S context) {
         String qualifier = resolveQualifier(column);
         if (qualifier != null) {
-          String normalized = JParqUtil.normalizeQualifier(qualifier);
+          String normalized = Identifier.lookupKey(qualifier);
           if (normalized != null) {
             qualifiers.add(normalized);
           }
@@ -1106,12 +1106,74 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public int findColumn(String label) throws SQLException {
+    Map<String, Integer> index = new LinkedHashMap<>();
+    int columnCount = columnOrder.size();
+    for (int i = 0; i < columnCount; i++) {
+      addIndexKey(index, valueAt(canonicalColumnNames, i), i + 1);
+      addIndexKey(index, valueAt(physicalColumnOrder, i), i + 1);
+      addIndexKey(index, valueAt(columnOrder, i), i + 1);
+    }
+    String normalized = Identifier.lookupKey(label);
+    if (normalized != null) {
+      Integer mapped = index.get(normalized);
+      if (mapped != null) {
+        return mapped;
+      }
+    }
+    Identifier labelId = Identifier.of(label);
+    String labelText = labelId == null ? label : labelId.text();
     for (int i = 0; i < columnOrder.size(); i++) {
-      if (columnOrder.get(i).equals(label)) {
+      String candidate = columnOrder.get(i);
+      Identifier candidateId = Identifier.of(candidate);
+      String candidateText = candidateId == null ? candidate : candidateId.text();
+      if (candidate.equals(label) || candidateText.equals(labelText)) {
         return i + 1;
       }
     }
     throw new SQLException("Unknown column: " + label);
+  }
+
+  private void addIndexKey(Map<String, Integer> index, String name, int position) {
+    if (name == null || name.isBlank()) {
+      return;
+    }
+    String key = lookupKeyFromSchema(name);
+    if (key == null || key.isEmpty()) {
+      key = Identifier.lookupKey(name);
+    }
+    if (key != null && !key.isEmpty()) {
+      index.putIfAbsent(key, position);
+    }
+  }
+
+  private String lookupKeyFromSchema(String name) {
+    if (current == null || name == null || name.isBlank()) {
+      return null;
+    }
+    Schema schema = current.getSchema();
+    if (schema == null || schema.getFields() == null) {
+      return null;
+    }
+    Schema.Field field = schema.getField(name);
+    if (field == null) {
+      return null;
+    }
+    String key = field.getProp("jparq.lookupKey");
+    if (key == null || key.isBlank()) {
+      return null;
+    }
+    return key;
+  }
+
+  private static String valueAt(List<String> values, int index) {
+    if (values == null || index < 0 || index >= values.size()) {
+      return null;
+    }
+    String value = values.get(index);
+    if (value == null || value.isBlank()) {
+      return null;
+    }
+    return value;
   }
 
   @Override

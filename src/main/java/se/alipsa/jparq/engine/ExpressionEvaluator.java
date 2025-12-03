@@ -10,7 +10,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import net.sf.jsqlparser.JSQLParserException;
@@ -115,7 +114,10 @@ public final class ExpressionEvaluator {
     Map<String, String> ci = new HashMap<>();
     for (Schema.Field f : schema.getFields()) {
       fs.put(f.name(), f.schema());
-      ci.put(f.name().toLowerCase(Locale.ROOT), f.name());
+      String key = Identifier.lookupKey(f.name());
+      if (key != null) {
+        ci.put(key, f.name());
+      }
     }
     this.fieldSchemas = Collections.unmodifiableMap(fs);
     this.caseInsensitiveIndex = Collections.unmodifiableMap(ci);
