@@ -270,7 +270,7 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
 
   @Override
   public int getResultSetHoldability() throws SQLException {
-    return 0;
+    return ResultSet.CLOSE_CURSORS_AT_COMMIT;
   }
 
   @Override

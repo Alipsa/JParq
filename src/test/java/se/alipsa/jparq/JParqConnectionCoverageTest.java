@@ -75,7 +75,7 @@ class JParqConnectionCoverageTest {
     connection.abort(command -> command.run());
     connection.setNetworkTimeout(command -> command.run(), 10);
     assertEquals(0, connection.getNetworkTimeout());
-    assertEquals(0, connection.getHoldability());
+    assertEquals(ResultSet.CLOSE_CURSORS_AT_COMMIT, connection.getHoldability());
     connection.setHoldability(ResultSet.CLOSE_CURSORS_AT_COMMIT);
     connection.setTypeMap(new java.util.HashMap<>());
     assertTrue(connection.getTypeMap().isEmpty());
