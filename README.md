@@ -91,6 +91,23 @@ public class JParqExample {
   ```
 - Paths may be specified directly or using the `file://` prefix.
 
+## JParq CLI
+An interactive command line interface is available for querying Parquet files using JParq. The CLI supports command
+history and basic line editing features. It also includes several commands starting with a slash (/) for controlling the CLI itself.
+To start the CLI, run the following command, replacing `path/to/jparq.jar` with the actual path to the JParq fat jar and the {path to jparq dir} with the path the directory where your parquet files reside. 
+```shell
+java -jar path/to/jparq.jar {path to jparq dir}
+```
+
+To download the fat jar, you can use the following command:
+
+```shell
+LATEST_VERSION=$(curl -s https://repo1.maven.org/maven2/se/alipsa/jparq/maven-metadata.xml | grep -oP '<release>\K[^<]+')
+
+curl -o jparq.jar https://repo1.maven.org/maven2/se/alipsa/jparq/$LATEST_VERSION/jparq-$LATEST_VERSION-fat.jar
+```
+
+```bash
 ## SQL Support
 The following SQL statements are supported:
 - `SELECT` with support for

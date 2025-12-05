@@ -34,8 +34,6 @@ import se.alipsa.jparq.helper.TemporalInterval;
  */
 public final class DateTimeFunctions {
 
-  private static final ZoneId DEFAULT_ZONE = ZoneId.systemDefault();
-
   private DateTimeFunctions() {
   }
 
@@ -55,14 +53,34 @@ public final class DateTimeFunctions {
     if (key == null) {
       return null;
     }
+    ZoneId zone = defaultZone();
     return switch (key.toUpperCase(Locale.ROOT)) {
-      case "CURRENT_DATE" -> Date.valueOf(LocalDate.now(DEFAULT_ZONE));
-      case "CURRENT_TIME" -> OffsetTime.now(DEFAULT_ZONE);
-      case "LOCALTIME" -> LocalTime.now(DEFAULT_ZONE);
-      case "CURRENT_TIMESTAMP" -> OffsetDateTime.now(DEFAULT_ZONE);
-      case "LOCALTIMESTAMP" -> LocalDateTime.now(DEFAULT_ZONE);
+      case "CURRENT_DATE" -> Date.valueOf(LocalDate.now(zone));
+      case "CURRENT_TIME" -> OffsetTime.now(zone);
+      case "LOCALTIME" -> LocalTime.now(zone);
+      case "CURRENT_TIMESTAMP" -> OffsetDateTime.now(zone);
+      case "LOCALTIMESTAMP" -> LocalDateTime.now(zone);
       default -> key;
     };
+  }
+
+  /**
+   * Resolve the time zone to use for time-key evaluations. Prefers the
+   * {@code user.timezone} system property when present to honor test isolation
+   * and runtime overrides, otherwise falls back to the JVM default zone.
+   *
+   * @return the active {@link ZoneId} to use
+   */
+  private static ZoneId defaultZone() {
+    String userZone = System.getProperty("user.timezone");
+    if (userZone != null && !userZone.isBlank()) {
+      try {
+        return ZoneId.of(userZone);
+      } catch (Exception ignored) {
+        // fall through to system default if the provided zone is invalid
+      }
+    }
+    return ZoneId.systemDefault();
   }
 
   /**

@@ -11,6 +11,7 @@ import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.statement.create.table.ColDataType;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
@@ -18,10 +19,22 @@ import se.alipsa.jparq.helper.TemporalInterval;
 
 public class DateTimeFunctionsTest {
 
+  private String previousTimeZone;
+
   @BeforeEach
   public void setUp() {
+    previousTimeZone = System.getProperty("user.timezone");
     // Set a fixed zone for consistent test results
     System.setProperty("user.timezone", "UTC");
+  }
+
+  @AfterEach
+  public void tearDown() {
+    if (previousTimeZone == null) {
+      System.clearProperty("user.timezone");
+    } else {
+      System.setProperty("user.timezone", previousTimeZone);
+    }
   }
 
   @Test

@@ -35,6 +35,7 @@
     <hadoop.version>3.4.2</hadoop.version>
     <jsqlparser.version>5.3</jsqlparser.version>
     <jackson.version>2.20.1</jackson.version>
+    <jline.version>3.25.1</jline.version>
     <junit.version>6.0.1</junit.version>
     <maven-assembly-plugin.version>3.7.1</maven-assembly-plugin.version>
     <parquet.version>1.16.0</parquet.version>
@@ -224,6 +225,16 @@
       <optional>true</optional>
     </dependency>
     <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>jul-to-slf4j</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.jline</groupId>
+      <artifactId>jline</artifactId>
+      <version>${jline.version}</version>
+    </dependency>
+    <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
       <version>${junit.version}</version>
@@ -410,9 +421,11 @@
         <configuration>
           <archive>
             <manifestEntries>
-              <Premain-Class>com.alipsa.parquet.jdbc.ParquetDriver</Premain-Class>
-              <Automatic-Module-Name>com.alipsa.parquet.jdbc</Automatic-Module-Name>
-              <Main-Class>com.alipsa.parquet.jdbc.ParquetDriver</Main-Class>
+              <Automatic-Module-Name>se.alipsa.jparq</Automatic-Module-Name>
+              <Main-Class>se.alipsa.jparq.cli.JParqCli</Main-Class>
+              <Implementation-Title>${project.artifactId}</Implementation-Title>
+              <Implementation-Version>${project.version}</Implementation-Version>
+              <Max-Jdk-Version>${java.version}</Max-Jdk-Version>
             </manifestEntries>
           </archive>
         </configuration>
@@ -431,12 +444,20 @@
             <configuration>
               <archive>
                 <manifest>
-                  <mainClass>com.alipsa.parquet.jdbc.ParquetDriver</mainClass>
+                  <mainClass>se.alipsa.jparq.cli.JParqCli</mainClass>
                 </manifest>
-              </archive>
-              <descriptorRefs>
-                <descriptorRef>jar-with-dependencies</descriptorRef>
-              </descriptorRefs>
+              <manifestEntries>
+                <Implementation-Title>${project.artifactId}</Implementation-Title>
+                <Implementation-Version>${project.version}</Implementation-Version>
+                <Max-Jdk-Version>${java.version}</Max-Jdk-Version>
+              </manifestEntries>
+            </archive>
+            <descriptors>
+              <descriptor>src/assembly/fat.xml</descriptor>
+            </descriptors>
+              <appendAssemblyId>true</appendAssemblyId>
+              <finalName>${project.artifactId}-${project.version}</finalName>
+              <attach>true</attach>
             </configuration>
           </execution>
         </executions>
