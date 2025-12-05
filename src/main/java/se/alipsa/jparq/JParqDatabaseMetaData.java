@@ -10,6 +10,7 @@ import java.sql.RowIdLifetime;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -388,6 +389,8 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
    * The SQL keywords that are not part of the SQL standard that are supported.
    */
   public static final List<String> SUPPORTED_KEYWORDS = List.of("ILIKE", "LIMIT", "REGEXP_LIKE");
+
+  private static final List<TypeInfo> TYPE_INFO = buildTypeInfo();
 
   private final JParqConnection conn;
   private final String url;
@@ -797,6 +800,67 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     return hints.isEmpty() ? List.of() : List.copyOf(hints);
   }
 
+  private static List<TypeInfo> buildTypeInfo() {
+    List<TypeInfo> types = new ArrayList<>();
+    types.add(new TypeInfo("ARRAY", Types.ARRAY, null, null, null, null, typeNullable, false, typePredNone, false,
+        false, false, "ARRAY", 0, 0, null, null, null));
+    types.add(new TypeInfo("BIGINT", Types.BIGINT, 19, null, null, null, typeNullable, false, typeSearchable, false,
+        false, false, "BIGINT", 0, 0, null, null, 10));
+    types.add(new TypeInfo("BINARY", Types.BINARY, Integer.MAX_VALUE, null, null, "length", typeNullable, false,
+        typeSearchable, false, false, false, "BINARY", 0, 0, null, null, null));
+    types.add(new TypeInfo("BOOLEAN", Types.BOOLEAN, 1, null, null, null, typeNullable, false, typeSearchable, false,
+        false, false, "BOOLEAN", 0, 0, null, null, 2));
+    types.add(new TypeInfo("DATE", Types.DATE, 10, "'", "'", null, typeNullable, false, typeSearchable, false, false,
+        false, "DATE", 0, 0, null, null, null));
+    types.add(new TypeInfo("DECIMAL", Types.DECIMAL, 38, null, null, "precision, scale", typeNullable, false,
+        typeSearchable, false, false, false, "DECIMAL", 0, 38, null, null, 10));
+    types.add(new TypeInfo("DOUBLE", Types.DOUBLE, 15, null, null, null, typeNullable, false, typeSearchable, false,
+        false, false, "DOUBLE", 0, 0, null, null, 10));
+    types.add(new TypeInfo("INTEGER", Types.INTEGER, 10, null, null, null, typeNullable, false, typeSearchable, false,
+        false, false, "INTEGER", 0, 0, null, null, 10));
+    types.add(new TypeInfo("REAL", Types.REAL, 7, null, null, null, typeNullable, false, typeSearchable, false, false,
+        false, "REAL", 0, 0, null, null, 10));
+    types.add(new TypeInfo("SMALLINT", Types.SMALLINT, 5, null, null, null, typeNullable, false, typeSearchable, false,
+        false, false, "SMALLINT", 0, 0, null, null, 10));
+    types.add(new TypeInfo("STRUCT", Types.STRUCT, null, null, null, null, typeNullable, false, typePredNone, false,
+        false, false, "STRUCT", 0, 0, null, null, null));
+    types.add(new TypeInfo("TIME", Types.TIME, 15, "'", "'", null, typeNullable, false, typeSearchable, false, false,
+        false, "TIME", 0, 6, null, null, null));
+    types.add(new TypeInfo("TIMESTAMP", Types.TIMESTAMP, 26, "'", "'", null, typeNullable, false, typeSearchable, false,
+        false, false, "TIMESTAMP", 0, 6, null, null, null));
+    types.add(new TypeInfo("TINYINT", Types.TINYINT, 3, null, null, null, typeNullable, false, typeSearchable, false,
+        false, false, "TINYINT", 0, 0, null, null, 10));
+    types.add(new TypeInfo("VARCHAR", Types.VARCHAR, Integer.MAX_VALUE, "'", "'", "length", typeNullable, true,
+        typeSearchable, false, false, false, "VARCHAR", 0, 0, null, null, null));
+    types.sort(Comparator.comparingInt(TypeInfo::dataType).thenComparing(TypeInfo::typeName));
+    return List.copyOf(types);
+  }
+
+  private record TypeInfo(String typeName, int dataType, Integer precision, String literalPrefix, String literalSuffix,
+      String createParams, int nullable, boolean caseSensitive, int searchable, boolean unsignedAttribute,
+      boolean fixedPrecScale, boolean autoIncrement, String localTypeName, Integer minimumScale, Integer maximumScale,
+      Integer sqlDataType, Integer sqlDatetimeSub, Integer numPrecRadix) {
+
+    Object[] toRow() {
+      return new Object[]{
+          typeName, dataType, precision, literalPrefix, literalSuffix, createParams, nullable, caseSensitive,
+          searchable, unsignedAttribute, fixedPrecScale, autoIncrement, localTypeName, minimumScale, maximumScale,
+          sqlDataType, sqlDatetimeSub, numPrecRadix
+      };
+    }
+  }
+
+  /**
+   * Build an empty metadata {@link ResultSet} exposing the supplied headers.
+   *
+   * @param headers
+   *          column labels to include in the result set
+   * @return a {@link ResultSet} with no rows
+   */
+  private ResultSet emptyResultSet(String... headers) {
+    return JParqUtil.listResultSet(headers, List.<Object[]>of());
+  }
+
   private PatternSpec buildPattern(String pattern, boolean caseSensitive) {
     if (pattern == null) {
       return new PatternSpec(null, caseSensitive);
@@ -981,12 +1045,12 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean nullsAreSortedHigh() {
-    return false;
+    return true;
   }
 
   @Override
   public boolean nullsAreSortedLow() {
-    return true;
+    return false;
   }
 
   @Override
@@ -996,7 +1060,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean nullsAreSortedAtEnd() {
-    return true;
+    return false;
   }
 
   @Override
@@ -1011,7 +1075,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean storesMixedCaseIdentifiers() {
-    return !conn.isCaseSensitive();
+    return true;
   }
 
   @Override
@@ -1036,7 +1100,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean storesMixedCaseQuotedIdentifiers() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
@@ -1206,7 +1270,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean supportsNonNullableColumns() throws SQLException {
-    return false;
+    return true;
   }
 
   @Override
@@ -1801,7 +1865,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
    */
   @Override
   public int getDefaultTransactionIsolation() throws SQLException {
-    return 0;
+    return Connection.TRANSACTION_NONE;
   }
 
   /**
@@ -1953,74 +2017,111 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     }, rows);
   }
 
+  /**
+   * Report the table types supported by the driver; JParq only exposes Parquet
+   * files as standard tables.
+   *
+   * @return a result set containing a single {@code TABLE} row
+   * @throws SQLException
+   *           if the in-memory result set cannot be created
+   */
   @Override
   public ResultSet getTableTypes() throws SQLException {
-    return null;
+    return JParqUtil.listResultSet(new String[]{
+        "TABLE_TYPE"
+    }, List.<Object[]>of(new Object[]{
+        "TABLE"
+    }));
   }
 
   @Override
   public ResultSet getColumnPrivileges(String catalog, String schema, String table, String columnNamePattern)
       throws SQLException {
-    return null;
+    return emptyResultSet("TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME", "GRANTOR", "GRANTEE", "PRIVILEGE",
+        "IS_GRANTABLE");
   }
 
   @Override
   public ResultSet getTablePrivileges(String catalog, String schemaPattern, String tableNamePattern)
       throws SQLException {
-    return null;
+    return emptyResultSet("TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "GRANTOR", "GRANTEE", "PRIVILEGE", "IS_GRANTABLE");
   }
 
   @Override
   public ResultSet getBestRowIdentifier(String catalog, String schema, String table, int scope, boolean nullable)
       throws SQLException {
-    return null;
+    return emptyResultSet("SCOPE", "COLUMN_NAME", "DATA_TYPE", "TYPE_NAME", "COLUMN_SIZE", "BUFFER_LENGTH",
+        "DECIMAL_DIGITS", "PSEUDO_COLUMN");
   }
 
   @Override
   public ResultSet getVersionColumns(String catalog, String schema, String table) throws SQLException {
-    return null;
+    return emptyResultSet("SCOPE", "COLUMN_NAME", "DATA_TYPE", "TYPE_NAME", "COLUMN_SIZE", "BUFFER_LENGTH",
+        "DECIMAL_DIGITS", "PSEUDO_COLUMN");
   }
 
   @Override
   public ResultSet getPrimaryKeys(String catalog, String schema, String table) throws SQLException {
-    return null;
+    return emptyResultSet("TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME", "KEY_SEQ", "PK_NAME");
   }
 
   @Override
   public ResultSet getImportedKeys(String catalog, String schema, String table) throws SQLException {
-    return null;
+    return emptyResultSet("PKTABLE_CAT", "PKTABLE_SCHEM", "PKTABLE_NAME", "PKCOLUMN_NAME", "FKTABLE_CAT",
+        "FKTABLE_SCHEM", "FKTABLE_NAME", "FKCOLUMN_NAME", "KEY_SEQ", "UPDATE_RULE", "DELETE_RULE", "FK_NAME", "PK_NAME",
+        "DEFERRABILITY");
   }
 
   @Override
   public ResultSet getExportedKeys(String catalog, String schema, String table) throws SQLException {
-    return null;
+    return emptyResultSet("PKTABLE_CAT", "PKTABLE_SCHEM", "PKTABLE_NAME", "PKCOLUMN_NAME", "FKTABLE_CAT",
+        "FKTABLE_SCHEM", "FKTABLE_NAME", "FKCOLUMN_NAME", "KEY_SEQ", "UPDATE_RULE", "DELETE_RULE", "FK_NAME", "PK_NAME",
+        "DEFERRABILITY");
   }
 
   @Override
   public ResultSet getCrossReference(String parentCatalog, String parentSchema, String parentTable,
       String foreignCatalog, String foreignSchema, String foreignTable) throws SQLException {
-    return null;
+    return emptyResultSet("PKTABLE_CAT", "PKTABLE_SCHEM", "PKTABLE_NAME", "PKCOLUMN_NAME", "FKTABLE_CAT",
+        "FKTABLE_SCHEM", "FKTABLE_NAME", "FKCOLUMN_NAME", "KEY_SEQ", "UPDATE_RULE", "DELETE_RULE", "FK_NAME", "PK_NAME",
+        "DEFERRABILITY");
   }
 
+  /**
+   * Describe supported JDBC types for the Parquet-backed driver.
+   *
+   * @return a {@link ResultSet} adhering to the JDBC type info contract
+   * @throws SQLException
+   *           if the in-memory result set cannot be created
+   */
   @Override
   public ResultSet getTypeInfo() throws SQLException {
-    return null;
+    List<Object[]> rows = new ArrayList<>();
+    for (TypeInfo typeInfo : TYPE_INFO) {
+      rows.add(typeInfo.toRow());
+    }
+    return JParqUtil.listResultSet(new String[]{
+        "TYPE_NAME", "DATA_TYPE", "PRECISION", "LITERAL_PREFIX", "LITERAL_SUFFIX", "CREATE_PARAMS", "NULLABLE",
+        "CASE_SENSITIVE", "SEARCHABLE", "UNSIGNED_ATTRIBUTE", "FIXED_PREC_SCALE", "AUTO_INCREMENT", "LOCAL_TYPE_NAME",
+        "MINIMUM_SCALE", "MAXIMUM_SCALE", "SQL_DATA_TYPE", "SQL_DATETIME_SUB", "NUM_PREC_RADIX"
+    }, rows);
   }
 
   @Override
   public ResultSet getIndexInfo(String catalog, String schema, String table, boolean unique, boolean approximate)
       throws SQLException {
-    return null;
+    return emptyResultSet("TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "NON_UNIQUE", "INDEX_QUALIFIER", "INDEX_NAME",
+        "TYPE", "ORDINAL_POSITION", "COLUMN_NAME", "ASC_OR_DESC", "CARDINALITY", "PAGES", "FILTER_CONDITION");
   }
 
   @Override
   public boolean supportsResultSetType(int type) throws SQLException {
-    return false;
+    return type == ResultSet.TYPE_FORWARD_ONLY;
   }
 
   @Override
   public boolean supportsResultSetConcurrency(int type, int concurrency) throws SQLException {
-    return false;
+    return type == ResultSet.TYPE_FORWARD_ONLY && concurrency == ResultSet.CONCUR_READ_ONLY;
   }
 
   /**
@@ -2221,28 +2322,31 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public ResultSet getSuperTypes(String catalog, String schemaPattern, String typeNamePattern) throws SQLException {
-    return null;
+    return emptyResultSet("TYPE_CAT", "TYPE_SCHEM", "TYPE_NAME", "SUPERTYPE_CAT", "SUPERTYPE_SCHEM", "SUPERTYPE_NAME");
   }
 
   @Override
   public ResultSet getSuperTables(String catalog, String schemaPattern, String tableNamePattern) throws SQLException {
-    return null;
+    return emptyResultSet("TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "SUPERTABLE_NAME");
   }
 
   @Override
   public ResultSet getAttributes(String catalog, String schemaPattern, String typeNamePattern,
       String attributeNamePattern) throws SQLException {
-    return null;
+    return emptyResultSet("TYPE_CAT", "TYPE_SCHEM", "TYPE_NAME", "ATTR_NAME", "DATA_TYPE", "ATTR_TYPE_NAME",
+        "ATTR_SIZE", "DECIMAL_DIGITS", "NUM_PREC_RADIX", "NULLABLE", "REMARKS", "ATTR_DEF", "SQL_DATA_TYPE",
+        "SQL_DATETIME_SUB", "CHAR_OCTET_LENGTH", "ORDINAL_POSITION", "IS_NULLABLE", "SCOPE_CATALOG", "SCOPE_SCHEMA",
+        "SCOPE_TABLE", "SOURCE_DATA_TYPE");
   }
 
   @Override
   public boolean supportsResultSetHoldability(int holdability) throws SQLException {
-    return false;
+    return holdability == ResultSet.CLOSE_CURSORS_AT_COMMIT;
   }
 
   @Override
   public int getResultSetHoldability() throws SQLException {
-    return 0;
+    return ResultSet.CLOSE_CURSORS_AT_COMMIT;
   }
 
   @Override
@@ -2282,7 +2386,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public RowIdLifetime getRowIdLifetime() throws SQLException {
-    return null;
+    return RowIdLifetime.ROWID_UNSUPPORTED;
   }
 
   @Override
@@ -2297,24 +2401,28 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public ResultSet getClientInfoProperties() throws SQLException {
-    return null;
+    return emptyResultSet("NAME", "MAX_LEN", "DEFAULT_VALUE", "DESCRIPTION");
   }
 
   @Override
   public ResultSet getFunctions(String catalog, String schemaPattern, String functionNamePattern) throws SQLException {
-    return null;
+    return emptyResultSet("FUNCTION_CAT", "FUNCTION_SCHEM", "FUNCTION_NAME", "REMARKS", "FUNCTION_TYPE",
+        "SPECIFIC_NAME");
   }
 
   @Override
   public ResultSet getFunctionColumns(String catalog, String schemaPattern, String functionNamePattern,
       String columnNamePattern) throws SQLException {
-    return null;
+    return emptyResultSet("FUNCTION_CAT", "FUNCTION_SCHEM", "FUNCTION_NAME", "COLUMN_NAME", "COLUMN_TYPE", "DATA_TYPE",
+        "TYPE_NAME", "PRECISION", "LENGTH", "SCALE", "RADIX", "NULLABLE", "REMARKS", "CHAR_OCTET_LENGTH",
+        "ORDINAL_POSITION", "IS_NULLABLE", "SPECIFIC_NAME");
   }
 
   @Override
   public ResultSet getPseudoColumns(String catalog, String schemaPattern, String tableNamePattern,
       String columnNamePattern) throws SQLException {
-    return null;
+    return emptyResultSet("TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME", "DATA_TYPE", "COLUMN_SIZE",
+        "DECIMAL_DIGITS", "NUM_PREC_RADIX", "COLUMN_USAGE", "REMARKS", "CHAR_OCTET_LENGTH", "IS_NULLABLE");
   }
 
   @Override
@@ -2324,11 +2432,14 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public <T> T unwrap(Class<T> iface) throws SQLException {
-    return null;
+    if (iface.isInstance(this)) {
+      return iface.cast(this);
+    }
+    throw new SQLException("No wrapper for " + iface.getName());
   }
 
   @Override
   public boolean isWrapperFor(Class<?> iface) throws SQLException {
-    return false;
+    return iface.isInstance(this);
   }
 }

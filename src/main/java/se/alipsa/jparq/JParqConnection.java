@@ -9,6 +9,7 @@ import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.NClob;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLClientInfoException;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
@@ -427,11 +428,14 @@ public class JParqConnection implements Connection {
 
   @Override
   public void setHoldability(int holdability) throws SQLException {
+    if (holdability != ResultSet.CLOSE_CURSORS_AT_COMMIT) {
+      throw new SQLFeatureNotSupportedException("Only CLOSE_CURSORS_AT_COMMIT holdability is supported.");
+    }
   }
 
   @Override
   public int getHoldability() throws SQLException {
-    return 0;
+    return ResultSet.CLOSE_CURSORS_AT_COMMIT;
   }
 
   @Override

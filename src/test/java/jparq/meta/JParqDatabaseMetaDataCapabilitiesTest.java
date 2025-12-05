@@ -10,6 +10,8 @@ import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.RowIdLifetime;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.Properties;
@@ -53,11 +55,15 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     var rs = metaData.getCatalogs();
     rs.next();
     assertEquals("acme", rs.getString("TABLE_CAT"));
-    assertFalse(metaData.nullsAreSortedHigh());
-    assertTrue(metaData.nullsAreSortedLow());
+    assertTrue(metaData.nullsAreSortedHigh());
+    assertFalse(metaData.nullsAreSortedLow());
     assertFalse(metaData.nullsAreSortedAtStart());
-    assertTrue(metaData.nullsAreSortedAtEnd());
+    assertFalse(metaData.nullsAreSortedAtEnd());
     assertEquals("\"", metaData.getIdentifierQuoteString());
+    assertTrue(metaData.storesMixedCaseIdentifiers());
+    assertFalse(metaData.storesLowerCaseIdentifiers());
+    assertTrue(metaData.storesMixedCaseQuotedIdentifiers());
+    assertEquals(RowIdLifetime.ROWID_UNSUPPORTED, metaData.getRowIdLifetime());
     assertEquals("ILIKE, LIMIT, REGEXP_LIKE", metaData.getSQLKeywords());
     String expectedNumericFunctions = "{fn ABS}, {fn ACOS}, {fn ASIN}, {fn ATAN}, {fn ATAN2}, {fn CEILING}, "
         + "{fn COS}, {fn COT}, {fn DEGREES}, {fn EXP}, {fn FLOOR}, {fn LOG}, {fn LOG10}, {fn MOD}, {fn PI}, "
@@ -115,14 +121,61 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertEquals(4, metaData.getJDBCMajorVersion());
     assertEquals(3, metaData.getJDBCMinorVersion());
     assertEquals(2, metaData.getSQLStateType());
-    assertEquals(0, metaData.getResultSetHoldability());
+    assertTrue(metaData.supportsNonNullableColumns());
+    assertEquals(ResultSet.CLOSE_CURSORS_AT_COMMIT, metaData.getResultSetHoldability());
+    assertTrue(metaData.supportsResultSetHoldability(ResultSet.CLOSE_CURSORS_AT_COMMIT));
     assertFalse(metaData.supportsResultSetHoldability(ResultSet.HOLD_CURSORS_OVER_COMMIT));
+    assertTrue(metaData.supportsResultSetType(ResultSet.TYPE_FORWARD_ONLY));
     assertFalse(metaData.supportsResultSetType(ResultSet.TYPE_SCROLL_INSENSITIVE));
+    assertTrue(metaData.supportsResultSetConcurrency(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY));
     assertFalse(metaData.supportsResultSetConcurrency(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE));
     assertFalse(metaData.supportsTransactions());
     assertFalse(metaData.supportsTransactionIsolationLevel(Connection.TRANSACTION_READ_COMMITTED));
     assertFalse(metaData.supportsDataDefinitionAndDataManipulationTransactions());
     assertFalse(metaData.supportsDataManipulationTransactionsOnly());
+  }
+
+  @Test
+  void shouldExposeTableTypesAndTypeInfo() throws SQLException {
+    DatabaseMetaData metaData = connection.getMetaData();
+    try (ResultSet tableTypes = metaData.getTableTypes()) {
+      ResultSetMetaData meta = tableTypes.getMetaData();
+      assertEquals(1, meta.getColumnCount());
+      assertTrue(tableTypes.next());
+      assertEquals("TABLE", tableTypes.getString("TABLE_TYPE"));
+      assertFalse(tableTypes.next());
+    }
+    try (ResultSet typeInfo = metaData.getTypeInfo()) {
+      ResultSetMetaData meta = typeInfo.getMetaData();
+      assertEquals(18, meta.getColumnCount());
+      boolean sawVarchar = false;
+      boolean sawInteger = false;
+      boolean sawTimestamp = false;
+      while (typeInfo.next()) {
+        String typeName = typeInfo.getString("TYPE_NAME");
+        if ("VARCHAR".equals(typeName)) {
+          sawVarchar = true;
+          assertEquals(Types.VARCHAR, typeInfo.getInt("DATA_TYPE"));
+          assertEquals(DatabaseMetaData.typeNullable, typeInfo.getInt("NULLABLE"));
+          assertEquals("length", typeInfo.getString("CREATE_PARAMS"));
+          assertEquals("'", typeInfo.getString("LITERAL_PREFIX"));
+          assertEquals("'", typeInfo.getString("LITERAL_SUFFIX"));
+          Object caseSensitive = typeInfo.getObject("CASE_SENSITIVE");
+          assertTrue(caseSensitive instanceof Boolean && (Boolean) caseSensitive);
+          assertEquals(DatabaseMetaData.typeSearchable, typeInfo.getInt("SEARCHABLE"));
+        } else if ("INTEGER".equals(typeName)) {
+          sawInteger = true;
+          assertEquals(Types.INTEGER, typeInfo.getInt("DATA_TYPE"));
+          assertEquals(10, typeInfo.getInt("NUM_PREC_RADIX"));
+        } else if ("TIMESTAMP".equals(typeName)) {
+          sawTimestamp = true;
+          assertEquals(Types.TIMESTAMP, typeInfo.getInt("DATA_TYPE"));
+        }
+      }
+      assertTrue(sawVarchar, "VARCHAR type info should be present");
+      assertTrue(sawInteger, "INTEGER type info should be present");
+      assertTrue(sawTimestamp, "TIMESTAMP type info should be present");
+    }
   }
 
   @Test
@@ -132,6 +185,31 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     try (Connection sensitiveConnection = DriverManager.getConnection(jdbcUrl + "?caseSensitive=true", props)) {
       DatabaseMetaData metaData = sensitiveConnection.getMetaData();
       assertTrue(metaData.supportsMixedCaseIdentifiers());
+    }
+  }
+
+  @Test
+  void unsupportedMetadataEndpointsReturnEmptyResultSets() throws SQLException {
+    DatabaseMetaData metaData = connection.getMetaData();
+    try (ResultSet privileges = metaData.getTablePrivileges(null, null, "employees")) {
+      assertFalse(privileges.next());
+      assertEquals(7, privileges.getMetaData().getColumnCount());
+    }
+    try (ResultSet pk = metaData.getPrimaryKeys(null, null, "employees")) {
+      assertFalse(pk.next());
+      assertEquals(6, pk.getMetaData().getColumnCount());
+    }
+    try (ResultSet indexes = metaData.getIndexInfo(null, null, "employees", false, false)) {
+      assertFalse(indexes.next());
+      assertEquals(13, indexes.getMetaData().getColumnCount());
+    }
+    try (ResultSet functions = metaData.getFunctions(null, null, "%")) {
+      assertFalse(functions.next());
+      assertEquals(6, functions.getMetaData().getColumnCount());
+    }
+    try (ResultSet clientInfo = metaData.getClientInfoProperties()) {
+      assertFalse(clientInfo.next());
+      assertEquals(4, clientInfo.getMetaData().getColumnCount());
     }
   }
 

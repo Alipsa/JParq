@@ -142,7 +142,7 @@ public class JParqStatementTest {
     assertThrows(SQLFeatureNotSupportedException.class, () -> statement.execute("SELECT * FROM test", new String[]{
         "col"
     }));
-    assertEquals(0, statement.getResultSetHoldability());
+    assertEquals(ResultSet.CLOSE_CURSORS_AT_COMMIT, statement.getResultSetHoldability());
     assertFalse(statement.isClosed());
     statement.setPoolable(true);
     assertFalse(statement.isPoolable());

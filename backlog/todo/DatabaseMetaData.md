@@ -1,1 +1,0 @@
-Review the methods in JParqDatabaseMetaData and verify that they return appropriate values according to the JDBC specification and the capabilities of the driver. Create a plan that can be executed on sequentially for making necessary adjustments to ensure compliance. Do not continue with implementation, just create the plan.
