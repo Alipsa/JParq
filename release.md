@@ -2,6 +2,7 @@
 
 ### 1.1.0, in progress
 - create a fat jar so the driver can be used in tools that require adding a jar to the classpath
+- optimize dependency footprint by excluding more transitive dependencies
 - improved schema support
   - parquet files in the root dir will have the schema PUBLIC
   - subdirectories correspond to a schema
