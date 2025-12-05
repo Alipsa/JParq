@@ -36,6 +36,7 @@
     <jsqlparser.version>5.3</jsqlparser.version>
     <jackson.version>2.20.1</jackson.version>
     <junit.version>6.0.1</junit.version>
+    <maven-assembly-plugin.version>3.7.1</maven-assembly-plugin.version>
     <parquet.version>1.16.0</parquet.version>
     <pmd.plugin.version>3.28.0</pmd.plugin.version>
     <slf4j.version>2.0.17</slf4j.version>
@@ -212,7 +213,7 @@
                 <requireJavaVersion>
                   <version>[${java.version},23)</version>
                   <level>ERROR</level>
-                  <message>Please use Java &gt; ${java.version} and &lt; 23</message>
+                  <message>Please use Java &gt;= ${java.version} and &lt;= 23</message>
                 </requireJavaVersion>
               </rules>
             </configuration>
@@ -361,6 +362,30 @@
             </manifestEntries>
           </archive>
         </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-assembly-plugin</artifactId>
+        <version>${maven-assembly-plugin.version}</version>
+        <executions>
+          <execution>
+            <id>make-assembly</id>
+            <phase>package</phase>
+            <goals>
+              <goal>single</goal>
+            </goals>
+            <configuration>
+              <archive>
+                <manifest>
+                  <mainClass>com.alipsa.parquet.jdbc.ParquetDriver</mainClass>
+                </manifest>
+              </archive>
+              <descriptorRefs>
+                <descriptorRef>jar-with-dependencies</descriptorRef>
+              </descriptorRefs>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

@@ -33,6 +33,10 @@ Add the dependency to your build. Replace `x.y.z` with the latest version number
 </dependency>
 ```
 
+### Fat Jar
+
+A "fat" jar, which includes all dependencies, is also created. This is useful when you want to add the driver to the classpath of a tool. The fat jar is named `jparq-x.y.z-jar-with-dependencies.jar` and can be found in the `target` directory after building, or downloaded from the releases page.
+
 ## Usage
 
 The driver registers itself when the `se.alipsa.jparq.JParqDriver` class is loaded, so simply placing the JAR on the
