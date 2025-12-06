@@ -130,6 +130,25 @@ Once the CLI is started, you can use the following commands:
 
 Anything else will be treated as a SQL query and executed against the connected dir.
 
+Example session:
+```
+$ java -jar target/jparq-1.1.0-fat.jar target/test-classes/acme
+JParq CLI version 1.1.0
+Connected to /home/user1/project/JParq/target/test-classes/acme
+jparq(acme)> select * from employees e left join salary s on e.id = salary.employee
+e__id | first_name | last_name  | s__id | employee | salary   | change_date
+------+------------+------------+-------+----------+----------+------------
+1     | Per        | Andersson  | 1     | 1        | 150000.0 | 2020-03-01 
+1     | Per        | Andersson  | 6     | 1        | 160000.0 | 2021-01-01 
+1     | Per        | Andersson  | 8     | 1        | 165000.0 | 2021-08-01 
+2     | Karin      | Pettersson | 2     | 2        | 180000.0 | 2020-03-01 
+3     | Tage       | Lundström  | 3     | 3        | 130000.0 | 2021-01-01 
+3     | Tage       | Lundström  | 7     | 3        | 140000.0 | 2021-12-01 
+4     | Arne       | Larsson    | 4     | 4        | 195000.0 | 2020-10-01 
+5     | Sixten     | Svensson   | 5     | 5        | 230000.0 | 2020-12-15 
+jparq(acme)> 
+```
+
 ## SQL Support
 JParq aims to be fully compliant with the read part of the SQL standard (SQL:2016 and earlier). 
 As of version 1.1.1, the support (as far as I know) for the standard is complete. The following is a detailed list of supported features and functions.
