@@ -46,6 +46,15 @@ public final class AvroCoercions {
     return s;
   }
 
+  /**
+   * Coerces a literal value to match the target schema type where possible.
+   *
+   * @param lit
+   *          the literal value
+   * @param s
+   *          the target schema
+   * @return coerced value
+   */
   @SuppressWarnings("PMD.EmptyCatchBlock")
   public static Object coerceLiteral(Object lit, Schema s) {
     if (lit == null) {

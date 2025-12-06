@@ -23,4 +23,13 @@
     <ignoreVersion type="regex">.*jre23</ignoreVersion>
     <ignoreVersion type="regex">.*jre24</ignoreVersion>
   </ignoreVersions>
+  <rules>
+    <rule groupId="org.jline" artifactId="jline">
+      <ignoreVersions>
+        <ignoreVersion type="regex">3\.2[6-9]\..*</ignoreVersion>
+        <ignoreVersion type="regex">3\.[3-9]\d\..*</ignoreVersion>
+        <ignoreVersion type="regex">[4-9]\..*</ignoreVersion>
+      </ignoreVersions>
+    </rule>
+  </rules>
 </ruleset>

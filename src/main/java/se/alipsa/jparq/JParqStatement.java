@@ -29,6 +29,15 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
     this.conn = conn;
   }
 
+  /**
+   * Prepares a SQL statement.
+   *
+   * @param sql
+   *          the SQL query
+   * @return a PreparedStatement
+   * @throws SQLException
+   *           if a database access error occurs
+   */
   // Used by JParqConnection
   public PreparedStatement prepare(String sql) throws SQLException {
     this.currentSql = sql;
