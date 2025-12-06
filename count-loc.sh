@@ -73,7 +73,7 @@ fi
 
 CLOC_REPORT=$(run_cloc "$PATH_ARG" "${CLOC_ARGS[@]}")
 
-echo "$version" > "$TEXT_OUT"
+echo "Version $version" > "$TEXT_OUT"
 echo "Number of main classes: $(find src/main/java -type f | wc -l)" >> "$TEXT_OUT"
 echo "Number of test classes: $(find src/test/java -type f | wc -l)" >> "$TEXT_OUT"
 echo "-------------------------------------" >> "$TEXT_OUT"
