@@ -4,9 +4,22 @@
 # JParq
 
 JParq is a JDBC driver for Apache Parquet files. It treats a directory as a database and every `.parquet` file in that
-directory as a table. The table name is the filename without the `.parquet` extension. JParq uses Apache Arrow and Apache
-Parquet for efficient columnar reads and jsqlparser to parse SQL statements. It aims to be 100% compliant with the
-read part of the SQL standard. There are a few common extensions supported as well e.g. LIMIT, ASCII, REPEAT, DIFFERENCE.
+directory as a table. The table name is the filename without the `.parquet` extension. 
+Sub directories are treated as schemas. 
+For example, given the following directory structure:
+
+```
+/data
+  ├── employees.parquet
+  ├── departments.parquet
+  └── sales
+      ├── orders.parquet
+      └── customers.parquet   
+```
+The tables `employees` and `departments` would be in the default PUBLIC schema, while `orders` and `customers` would be in the `sales` schema.
+
+JParq uses Apache Arrow and Apache Parquet for efficient columnar reads and jsqlparser to parse SQL statements. 
+It aims to be 100% compliant with the read part of the SQL standard. There are a few common extensions supported as well e.g. LIMIT, ASCII, REPEAT, DIFFERENCE.
 
 Note: When common implementations differ from the SQL standard, we stick to the standard. An example of this is
 convert which in many databases is used for data type casting, but in the SQL standard is used for character set
@@ -81,7 +94,7 @@ public class JParqExample {
 
 ### Connection options
 
-- `caseSensitive` — defaults to `false`. Set to `true` to make table-name resolution case sensitive.
+- `caseSensitive` — defaults to `false`. Set to `true` to make table-name resolution case-sensitive.
   ```text
   jdbc:jparq:/home/user/data?caseSensitive=true
   ```
@@ -118,6 +131,9 @@ Once the CLI is started, you can use the following commands:
 Anything else will be treated as a SQL query and executed against the connected dir.
 
 ## SQL Support
+JParq aims to be fully compliant with the read part of the SQL standard (SQL:2016 and earlier). 
+As of version 1.1.1, the support (as far as I know) for the standard is complete. The following is a detailed list of supported features and functions.
+
 The following SQL statements are supported:
 - `SELECT` with support for
   - `*` to select all columns
@@ -171,31 +187,30 @@ The following SQL statements are supported:
   - `COUNT(*)` aggregation
   - `HAVING` clause with conditions
   - support aggregation functions and case statements in the `GROUP BY` and `SELECT` clause
-- exists support
-- any and all support
+- `EXISTS` support
+- `ANY` and `ALL` support
 - Join support: INNER, LEFT, RIGHT, FULL, CROSS, and Self Join, join ... using syntax
-- union and union all support
-- intersect and except support
+- `UNION` and `UNION ALL` support
 - Complete set-operation coverage.
-  - EXCEPT
-  - INTERSECT
-  - INTERSECT ALL
-  - EXCEPT ALL
+  - `EXCEPT`
+  - `INTERSECT`
+  - `INTERSECT ALL`
+  - `EXCEPT ALL`
   - nesting of set operations
 - CTE (Common Table Expressions) support
 - Windowing
   - Ranking functions
-    - ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE
+    - `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `PERCENT_RANK`, `CUME_DIST`, `NTILE`
   -  Aggregate window functions
-    - SUM, AVG, MIN, MAX, COUNT
+    - `SUM`, `AVG`, `MIN`, `MAX`, `COUNT`
   - Analytic Value/Navigation Functions
-    -  LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE
+    -  `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE`
 - Advanced GROUP BY constructs i.e:
-  - GROUPING SETS
-  - ROLLUP
-  - CUBE
-- Derived Tables: UNNEST with or without a table wrapper, LATERAL derived tables, VALUES table constructors
-- INFORMATION_SCHEMA.COLUMNS and INFORMATION_SCHEMA.TABLES
+  - `GROUPING SETS`
+  - `ROLLUP`
+  - `CUBE`
+- Derived Tables: `UNNEST` with or without a table wrapper, `LATERAL` derived tables, `VALUES` table constructors
+- `INFORMATION_SCHEMA.COLUMNS` and `INFORMATION_SCHEMA.TABLES`
 
 #### String functions support details
 ##### Character Length and Position
@@ -257,6 +272,22 @@ The following SQL statements are supported:
 - SOUNDEX(string)    Computes the Soundex phonetic code.    SOUNDEX('Robert') → 'R163'
 - DIFFERENCE(string1, string2)    Calculates similarity based on Soundex codes (0-4).    DIFFERENCE('Smith', 'Smyth') → 4
 
+### Build and test
+
+```bash
+mvn verify
+```
+- To run without spotless, add -Dspotless.check.skip=true
+- To skip unit tests, add -DskipTests
+- To skip integration tests add -DskipITs=true
+
+This project uses Checkstyle, PMD, and Spotless. The checks run automatically as part of the Maven build. Use the
+`spotless:apply` goal before committing if you need to fix formatting issues.
+
+### Release notes
+
+See [release.md](release.md) for the full version history and work in progress.
+
 ## Roadmap: _Might_ be implemented in the future
 
 ### Non standard extensions
@@ -283,19 +314,3 @@ The following SQL statements are supported:
 - Advanced indexing and optimization hints
 - Full-text search capabilities
 - TEMPORARY TABLES, you need to use CTE's or value tables instead.
-
-### Build and test
-
-```bash
-mvn verify
-```
-- To run without spotless, add -Dspotless.check.skip=true
-- To skip unit tests, add -DskipTests
-- To skip integration tests add -DskipITs=true
-
-This project uses Checkstyle, PMD, and Spotless. The checks run automatically as part of the Maven build. Use the
-`spotless:apply` goal before committing if you need to fix formatting issues.
-
-### Release notes
-
-See [release.md](release.md) for the full version history and work in progress.
