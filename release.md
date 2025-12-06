@@ -13,7 +13,6 @@
 - several minor bug fixes and improvements
 - Improved support for quoted identifiers throughout the codebase
 - added a cli interface for interactive querying
-- added a jar-with-dependencies build target to create an uber-jar for easy usage e.g. in tools like DBeaver
 
 ### 1.0.0, 2025-11-24
 - Additional Derived Tables support: 
