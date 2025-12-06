@@ -108,6 +108,7 @@ A "fat" jar, which includes all dependencies, is also created. This is useful wh
 An interactive command line interface is available for querying Parquet files using JParq. The CLI supports command
 history and basic line editing features. It also includes several commands starting with a slash (/) for controlling the CLI itself.
 To start the CLI, run the following command, replacing `path/to/jparq.jar` with the actual path to the JParq fat jar and the {path to jparq dir} with the path the directory where your parquet files reside. 
+
 ```shell
 java -jar path/to/jparq.jar {path to jparq dir}
 ```
@@ -129,7 +130,7 @@ Once the CLI is started, you can use the following commands:
 - /exit - Exit the CLI
 
 
-Anything else will be treated as a SQL query and executed against the connected dir.
+> Anything else will be treated as a SQL query and executed against the connected dir.
 
 Example session:
 ```
