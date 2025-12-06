@@ -33,10 +33,6 @@ Add the dependency to your build. Replace `x.y.z` with the latest version number
 </dependency>
 ```
 
-### Fat Jar
-
-A "fat" jar, which includes all dependencies, is also created. This is useful when you want to add the driver to the classpath of a tool. The fat jar is named `jparq-x.y.z-jar-with-dependencies.jar` and can be found in the `target` directory after building, or downloaded from the releases page.
-
 ## Usage
 
 The driver registers itself when the `se.alipsa.jparq.JParqDriver` class is loaded, so simply placing the JAR on the
@@ -91,6 +87,10 @@ public class JParqExample {
   ```
 - Paths may be specified directly or using the `file://` prefix.
 
+### Fat Jar
+
+A "fat" jar, which includes all dependencies, is also created. This is useful when you want to add the driver to the classpath of a tool. The fat jar is named `jparq-x.y.z-fat.jar` i.e. fat is the maven classifier.
+
 ## JParq CLI
 An interactive command line interface is available for querying Parquet files using JParq. The CLI supports command
 history and basic line editing features. It also includes several commands starting with a slash (/) for controlling the CLI itself.
@@ -103,11 +103,20 @@ To download the fat jar, you can use the following command:
 
 ```shell
 LATEST_VERSION=$(curl -s https://repo1.maven.org/maven2/se/alipsa/jparq/maven-metadata.xml | grep -oP '<release>\K[^<]+')
-
 curl -o jparq.jar https://repo1.maven.org/maven2/se/alipsa/jparq/$LATEST_VERSION/jparq-$LATEST_VERSION-fat.jar
 ```
 
-```bash
+Once the CLI is started, you can use the following commands:
+- /connect <base directory path> - Connect to a Parquet database directory (dir with parquet files)
+- /close - Close the current connection
+- /list - List available tables
+- /describe <table name> - Show column definitions for a table
+- /info - Show information about the current connection
+- /help - Display this help text
+- /exit - Exit the CLI
+
+Anything else will be treated as a SQL query and executed against the connected dir.
+
 ## SQL Support
 The following SQL statements are supported:
 - `SELECT` with support for

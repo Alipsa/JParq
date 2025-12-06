@@ -1,6 +1,8 @@
 # Version history
 
-### 1.1.0, in progress
+### 1.1.1, in progress
+
+### 1.1.0, 2025-12-06
 - create a fat jar so the driver can be used in tools that require adding a jar to the classpath
 - optimize dependency footprint by excluding more transitive dependencies
 - improved schema support
