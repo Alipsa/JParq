@@ -128,6 +128,7 @@ Once the CLI is started, you can use the following commands:
 - /help - Display this help text
 - /exit - Exit the CLI
 
+
 Anything else will be treated as a SQL query and executed against the connected dir.
 
 Example session:
@@ -146,7 +147,8 @@ e__id | first_name | last_name  | s__id | employee | salary   | change_date
 3     | Tage       | Lundström  | 7     | 3        | 140000.0 | 2021-12-01 
 4     | Arne       | Larsson    | 4     | 4        | 195000.0 | 2020-10-01 
 5     | Sixten     | Svensson   | 5     | 5        | 230000.0 | 2020-12-15 
-jparq(acme)> 
+jparq(acme)> /exit
+$
 ```
 
 ## SQL Support
