@@ -47,7 +47,7 @@ public final class AvroCoercions {
   }
 
   @SuppressWarnings("PMD.EmptyCatchBlock")
-  static Object coerceLiteral(Object lit, Schema s) {
+  public static Object coerceLiteral(Object lit, Schema s) {
     if (lit == null) {
       return null;
     }

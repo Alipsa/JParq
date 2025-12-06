@@ -30,7 +30,7 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
   }
 
   // Used by JParqConnection
-  PreparedStatement prepare(String sql) throws SQLException {
+  public PreparedStatement prepare(String sql) throws SQLException {
     this.currentSql = sql;
     return new JParqPreparedStatement(this, sql);
   }

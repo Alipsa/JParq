@@ -1,5 +1,8 @@
 package se.alipsa.jparq.cli;
 
+import static se.alipsa.jparq.cli.JParqCliSession.ANSI_RESET;
+import static se.alipsa.jparq.cli.JParqCliSession.PROMPT_COLOR;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
@@ -44,11 +47,11 @@ public final class JParqCli {
       Terminal terminal = TerminalBuilder.builder().system(true).build();
       Path historyFile = Paths.get(System.getProperty("user.home"), ".jparq_history");
       LineReader reader = LineReaderBuilder.builder().terminal(terminal).appName("jparq")
-          .variable(LineReader.HISTORY_FILE, historyFile).build();
+          .variable(LineReader.HISTORY_FILE, historyFile).highlighter(new UserInputHighlighter()).build();
       PrintWriter out = new PrintWriter(terminal.output(), true);
       PrintWriter err = new PrintWriter(terminal.output(), true);
       try (JParqCliSession session = new JParqCliSession(out, err)) {
-        out.println("JParq CLI version " + JParqCliSession.cliVersion());
+        out.println(PROMPT_COLOR + "JParq CLI version " + JParqCliSession.cliVersion() + ANSI_RESET);
         Path initialDir = resolveInitialDirectory(args);
         session.connectDirectory(initialDir.toString());
         boolean running = true;
@@ -89,7 +92,7 @@ public final class JParqCli {
    * {@link IllegalStateException} when the current runtime is newer than
    * supported.
    */
-  static void validateJavaVersion() {
+  public static void validateJavaVersion() {
     String maxJdk = resolveMaxJdkVersion();
     if (maxJdk == null || maxJdk.isBlank()) {
       LOG.warn("Max-Jdk-Version not specified; skipping Java version check.");
@@ -98,8 +101,8 @@ public final class JParqCli {
     int maxFeature = parseFeatureVersion(maxJdk);
     int currentFeature = Runtime.version().feature();
     if (currentFeature > maxFeature) {
-      throw new IllegalStateException("Java " + Runtime.version()
-          + " is not supported. Maximum supported major version is " + maxFeature + ".");
+      throw new IllegalStateException(
+          "Java " + Runtime.version() + " is not supported. Maximum supported major version is " + maxFeature + ".");
     }
   }
 

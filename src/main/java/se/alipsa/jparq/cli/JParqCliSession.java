@@ -28,8 +28,18 @@ import se.alipsa.jparq.JParqDriver;
 public class JParqCliSession implements Closeable {
 
   private static final String UNKNOWN_VERSION = "DEV";
-  private static final String PROMPT_COLOR = "\u001B[2;37m"; // dim light gray for subtle contrast
-  private static final String ANSI_RESET = "\u001B[0m";
+  /**
+   * ANSI color used for the CLI prompt to keep it subtly visible.
+   */
+  public static final String PROMPT_COLOR = "\u001B[2;37m"; // dim light gray for subtle contrast
+  /**
+   * ANSI color used to render user input a bit brighter than the prompt.
+   */
+  public static final String USER_INPUT = "\u001B[0;97m"; // brighter white to separate input from output
+  /**
+   * ANSI code that resets styling after colored segments.
+   */
+  public static final String ANSI_RESET = "\u001B[0m";
   private Connection connection;
   private String jdbcUrl;
   private String connectedDirectory;
@@ -172,7 +182,7 @@ public class JParqCliSession implements Closeable {
       } else {
         connectedDirectory = baseDir;
       }
-      out.println("Connected to " + baseDir);
+      out.println(PROMPT_COLOR + "Connected to " + baseDir + ANSI_RESET);
       out.flush();
     } catch (SQLException e) {
       jdbcUrl = null;

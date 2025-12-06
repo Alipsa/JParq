@@ -102,7 +102,7 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
     "checkstyle:AbbreviationAsWordInName", "checkstyle:OverloadMethodsDeclarationOrder",
     "PMD.AvoidCatchingGenericException"
 })
-class JParqPreparedStatement implements PreparedStatement {
+public class JParqPreparedStatement implements PreparedStatement {
   private final JParqStatement stmt;
 
   // --- Query Plan Fields (calculated in constructor) ---
