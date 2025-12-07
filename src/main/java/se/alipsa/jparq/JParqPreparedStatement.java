@@ -397,7 +397,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     this.tableReferences = tmpTableRefs;
     this.joinQuery = tmpJoinQuery;
     this.conf = tmpConf;
-    this.parquetPredicate = tmpPredicate == null ? Optional.empty() : tmpPredicate;
+    this.parquetPredicate = tmpPredicate;
     this.residualExpression = tmpResidual;
     this.path = tmpPath;
     this.file = tmpFile;
@@ -431,14 +431,12 @@ public class JParqPreparedStatement implements PreparedStatement {
       RecordReader reader;
       String resultTableName;
       String resultSchema = tableSchema;
-      String resultCatalog = tableCatalog;
       SqlParser.TableReference baseRef = (tableReferences == null || tableReferences.isEmpty())
           ? null
-          : tableReferences.get(0);
+          : tableReferences.getFirst();
       try {
         if (joinQuery) {
-          JoinRecordReader joinReader = buildJoinReader();
-          reader = joinReader;
+          reader = buildJoinReader();
           resultTableName = buildJoinTableName();
           resultSchema = null;
         } else if (baseCteResult != null) {
@@ -476,7 +474,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       // Create the result set, passing reader, select plan, residual filter,
       // plus projection labels and physical names (for metadata & value lookups)
       SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
-      JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, resultCatalog,
+      JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, tableCatalog,
           residualExpression, labels, physical, subqueryExecutor);
 
       stmt.setCurrentRs(rs);
@@ -572,7 +570,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           throw new SQLException("Set operation components must project the same number of columns");
         } else {
           for (int col = 1; col <= columnCount; col++) {
-            Integer expectedType = sqlTypes == null ? null : sqlTypes.get(col - 1);
+            Integer expectedType = sqlTypes.get(col - 1);
             if (expectedType != null && expectedType != meta.getColumnType(col)) {
               throw new SQLException("Set operation components must use compatible column types");
             }
@@ -587,10 +585,6 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
       }
       componentRows.add(componentData);
-    }
-    if (labels == null) {
-      labels = List.of();
-      sqlTypes = List.of();
     }
     List<List<Object>> combined = evaluateSetOperation(components, componentRows);
     List<List<Object>> ordered = applySetOrdering(combined, labels, sqlTypes, parsedSetQuery.orderBy());
@@ -623,23 +617,22 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (operator == SqlParser.SetOperator.FIRST) {
         throw new SQLException("Unexpected FIRST operator in set operation evaluation");
       }
-      while (!operatorStack.isEmpty()
-          && precedence(operatorStack.get(operatorStack.size() - 1)) >= precedence(operator)) {
-        SqlParser.SetOperator top = operatorStack.remove(operatorStack.size() - 1);
-        List<List<Object>> right = valueStack.remove(valueStack.size() - 1);
-        List<List<Object>> left = valueStack.remove(valueStack.size() - 1);
+      while (!operatorStack.isEmpty() && precedence(operatorStack.getLast()) >= precedence(operator)) {
+        SqlParser.SetOperator top = operatorStack.removeLast();
+        List<List<Object>> right = valueStack.removeLast();
+        List<List<Object>> left = valueStack.removeLast();
         valueStack.add(applySetOperator(left, right, top));
       }
       operatorStack.add(operator);
       valueStack.add(new ArrayList<>(rowsPerComponent.get(i)));
     }
     while (!operatorStack.isEmpty()) {
-      SqlParser.SetOperator top = operatorStack.remove(operatorStack.size() - 1);
-      List<List<Object>> right = valueStack.remove(valueStack.size() - 1);
-      List<List<Object>> left = valueStack.remove(valueStack.size() - 1);
+      SqlParser.SetOperator top = operatorStack.removeLast();
+      List<List<Object>> right = valueStack.removeLast();
+      List<List<Object>> left = valueStack.removeLast();
       valueStack.add(applySetOperator(left, right, top));
     }
-    return valueStack.isEmpty() ? List.<List<Object>>of() : valueStack.get(0);
+    return valueStack.isEmpty() ? List.<List<Object>>of() : valueStack.getFirst();
   }
 
   /**
@@ -1109,17 +1102,21 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
       }
       case LONG -> {
-        if (value instanceof Date date) {
-          yield date.getTime();
-        }
-        if (value instanceof Time time) {
-          yield time.getTime();
-        }
-        if (value instanceof Timestamp ts) {
-          yield ts.getTime();
-        }
-        if (value instanceof Number) {
-          yield ((Number) value).longValue();
+        switch (value) {
+          case Date date -> {
+            yield date.getTime();
+          }
+          case Time time -> {
+            yield time.getTime();
+          }
+          case Timestamp ts -> {
+            yield ts.getTime();
+          }
+          case Number number -> {
+            yield number.longValue();
+          }
+          default -> {
+          }
         }
         try {
           yield Long.parseLong(value.toString());
@@ -3328,7 +3325,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
     }
     for (Integer index : parameters.keySet()) {
-      if (index.intValue() < 1 || index.intValue() > parameterCount) {
+      if (index < 1 || index > parameterCount) {
         throw new SQLException("Parameter index " + index + " is out of range");
       }
     }
@@ -3376,7 +3373,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (parameterIndex < 1) {
       return;
     }
-    parameterValues.put(Integer.valueOf(parameterIndex), value);
+    parameterValues.put(parameterIndex, value);
   }
 
   private int countPlaceholders(String sql) {
@@ -3405,18 +3402,11 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
         case SINGLE_QUOTE -> {
           if (c == '\'') {
-            // Check for escaped quote ('')
             if (i + 1 < sql.length() && sql.charAt(i + 1) == '\'') {
-              // Skip the second quote (escape sequence)
-              i++;
+              i++; // Skip escaped quote
             } else {
-              // End of string literal
               state = ParseState.NORMAL;
             }
-          if (c == '\'' && i + 1 < sql.length() && sql.charAt(i + 1) == '\'') {
-            i++; // Skip the escaped quote pair
-          } else if (c == '\'') {
-            state = ParseState.NORMAL;
           }
         }
         case DOUBLE_QUOTE -> {
@@ -3518,65 +3508,73 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   private String renderLiteral(Object value) throws SQLException {
-    if (value == null) {
-      return "NULL";
-    }
-    if (value instanceof String str) {
-      return "'" + escapeSingleQuotes(str) + "'";
-    }
-    if (value instanceof Character ch) {
-      return "'" + escapeSingleQuotes(String.valueOf(ch)) + "'";
-    }
-    if (value instanceof Boolean bool) {
-      return bool.booleanValue() ? "TRUE" : "FALSE";
+    switch (value) {
+      case null -> {
+        return "NULL";
+      }
+      case String str -> {
+        return "'" + escapeSingleQuotes(str) + "'";
+      }
+      case Character ch -> {
+        return "'" + escapeSingleQuotes(String.valueOf(ch)) + "'";
+      }
+      case Boolean bool -> {
+        return bool.booleanValue() ? "TRUE" : "FALSE";
+      }
+      default -> {
+      }
     }
     if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
       return value.toString();
     }
-    if (value instanceof BigDecimal decimal) {
-      return decimal.toPlainString();
-    }
-    if (value instanceof Float f) {
-      if (Float.isNaN(f) || Float.isInfinite(f)) {
-        throw new SQLException("Floating point parameter cannot be NaN or infinite");
+    switch (value) {
+      case BigDecimal decimal -> {
+        return decimal.toPlainString();
       }
-      return f.toString();
-    }
-    if (value instanceof Double d) {
-      if (Double.isNaN(d) || Double.isInfinite(d)) {
-        throw new SQLException("Floating point parameter cannot be NaN or infinite");
+      case Float f -> {
+        if (Float.isNaN(f) || Float.isInfinite(f)) {
+          throw new SQLException("Floating point parameter cannot be NaN or infinite");
+        }
+        return f.toString();
       }
-      return d.toString();
-    }
-    if (value instanceof Timestamp ts) {
-      LocalDateTime ldt = ts.toLocalDateTime();
-      return "'" + TIMESTAMP_FORMAT.format(ldt) + "'";
-    }
-    if (value instanceof Date date) {
-      LocalDate localDate = date.toLocalDate();
-      return "'" + DATE_FORMAT.format(localDate) + "'";
-    }
-    if (value instanceof Time time) {
-      LocalTime lt = time.toLocalTime();
-      return "'" + TIME_FORMAT.format(lt) + "'";
-    }
-    if (value instanceof LocalDate ld) {
-      return "'" + DATE_FORMAT.format(ld) + "'";
-    }
-    if (value instanceof LocalTime lt) {
-      return "'" + TIME_FORMAT.format(lt) + "'";
-    }
-    if (value instanceof LocalDateTime ldt) {
-      return "'" + TIMESTAMP_FORMAT.format(ldt) + "'";
-    }
-    if (value instanceof ByteBuffer buffer) {
-      ByteBuffer dup = buffer.duplicate();
-      byte[] bytes = new byte[dup.remaining()];
-      dup.get(bytes);
-      return toHexLiteral(bytes);
-    }
-    if (value instanceof byte[] bytes) {
-      return toHexLiteral(bytes);
+      case Double d -> {
+        if (Double.isNaN(d) || Double.isInfinite(d)) {
+          throw new SQLException("Floating point parameter cannot be NaN or infinite");
+        }
+        return d.toString();
+      }
+      case Timestamp ts -> {
+        LocalDateTime ldt = ts.toLocalDateTime();
+        return "'" + TIMESTAMP_FORMAT.format(ldt) + "'";
+      }
+      case Date date -> {
+        LocalDate localDate = date.toLocalDate();
+        return "'" + DATE_FORMAT.format(localDate) + "'";
+      }
+      case Time time -> {
+        LocalTime lt = time.toLocalTime();
+        return "'" + TIME_FORMAT.format(lt) + "'";
+      }
+      case LocalDate ld -> {
+        return "'" + DATE_FORMAT.format(ld) + "'";
+      }
+      case LocalTime lt -> {
+        return "'" + TIME_FORMAT.format(lt) + "'";
+      }
+      case LocalDateTime ldt -> {
+        return "'" + TIMESTAMP_FORMAT.format(ldt) + "'";
+      }
+      case ByteBuffer buffer -> {
+        ByteBuffer dup = buffer.duplicate();
+        byte[] bytes = new byte[dup.remaining()];
+        dup.get(bytes);
+        return toHexLiteral(bytes);
+      }
+      case byte[] bytes -> {
+        return toHexLiteral(bytes);
+      }
+      default -> {
+      }
     }
     if (value instanceof InputStream || value instanceof Reader) {
       throw new SQLException("Stream parameters are not supported");
@@ -3656,27 +3654,27 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
   @Override
   public void setBoolean(int parameterIndex, boolean x) {
-    storeParameter(parameterIndex, Boolean.valueOf(x));
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setByte(int parameterIndex, byte x) {
-    storeParameter(parameterIndex, Byte.valueOf(x));
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setShort(int parameterIndex, short x) {
-    storeParameter(parameterIndex, Short.valueOf(x));
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setLong(int parameterIndex, long x) {
-    storeParameter(parameterIndex, Long.valueOf(x));
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setFloat(int parameterIndex, float x) {
-    storeParameter(parameterIndex, Float.valueOf(x));
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setDouble(int parameterIndex, double x) {
-    storeParameter(parameterIndex, Double.valueOf(x));
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setBigDecimal(int parameterIndex, BigDecimal x) {
@@ -3722,7 +3720,6 @@ public class JParqPreparedStatement implements PreparedStatement {
   public void setAsciiStream(int parameterIndex, InputStream x) {
     storeParameter(parameterIndex, x);
   }
-  @SuppressWarnings("deprecation")
   @Override
   public void setUnicodeStream(int parameterIndex, InputStream x, int length) {
     storeParameter(parameterIndex, x);
@@ -3825,8 +3822,6 @@ public class JParqPreparedStatement implements PreparedStatement {
    * read-only, each batch entry executes the prepared query with the stored
    * parameters and reports {@link Statement#SUCCESS_NO_INFO} as the update count.
    *
-   * @throws SQLException
-   *           if queuing fails
    */
   @Override
   public void addBatch() {
