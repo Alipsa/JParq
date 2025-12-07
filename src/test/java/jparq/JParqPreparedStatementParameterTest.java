@@ -264,6 +264,44 @@ class JParqPreparedStatementParameterTest {
   }
 
   @Test
+  void ignoresNamedMarkerInsideLineComment() throws SQLException {
+    try (PreparedStatement ps = connection
+        .prepareStatement("SELECT COUNT(*) FROM mtcars -- comment contains :ignored\nWHERE cyl = :cyl")) {
+      JParqPreparedStatement named = (JParqPreparedStatement) ps;
+      named.setInt("cyl", 4);
+      try (ResultSet rs = named.executeQuery()) {
+        assertTrue(rs.next());
+        assertEquals(11, rs.getInt(1));
+      }
+    }
+  }
+
+  @Test
+  void ignoresNamedMarkerInsideBlockComment() throws SQLException {
+    try (PreparedStatement ps = connection
+        .prepareStatement("SELECT COUNT(*) FROM mtcars /* comment with :ignored */ WHERE cyl = :cyl")) {
+      JParqPreparedStatement named = (JParqPreparedStatement) ps;
+      named.setInt("cyl", 4);
+      try (ResultSet rs = named.executeQuery()) {
+        assertTrue(rs.next());
+        assertEquals(11, rs.getInt(1));
+      }
+    }
+  }
+
+  @Test
+  void doesNotTreatPostgresCastAsNamedParameter() throws SQLException {
+    try (PreparedStatement ps = connection.prepareStatement("SELECT cyl::int FROM mtcars WHERE cyl = 4")) {
+      ParameterMetaData metaData = ps.getParameterMetaData();
+      assertEquals(0, metaData.getParameterCount());
+      try (ResultSet rs = ps.executeQuery()) {
+        assertTrue(rs.next());
+        assertEquals(4, rs.getInt(1));
+      }
+    }
+  }
+
+  @Test
   void syntaxErrorDetectedAtPreparationTime() {
     SQLException exception = assertThrows(SQLException.class,
         () -> connection.prepareStatement("SELECT * FORM mtcars WHERE cyl = ?"));

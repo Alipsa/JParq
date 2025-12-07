@@ -3454,7 +3454,8 @@ public class JParqPreparedStatement implements PreparedStatement {
             state = ParseState.BLOCK_COMMENT;
           } else if (c == '?') {
             count++;
-          } else if (c == ':' && i + 1 < sql.length() && isParameterStart(sql.charAt(i + 1))) {
+          } else if (c == ':' && (i == 0 || sql.charAt(i - 1) != ':') && i + 1 < sql.length()
+              && isParameterStart(sql.charAt(i + 1))) {
             int start = i + 1;
             int end = start;
             while (end < sql.length() && isParameterPart(sql.charAt(end))) {
@@ -3907,9 +3908,6 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           if the parameter name is unknown
    */
   public void setNull(String parameterName, int sqlType) throws SQLException {
-    if (sqlType < 0) {
-      throw new SQLException("SQL type must be non-negative");
-    }
     storeNamedParameter(parameterName, null);
   }
 
