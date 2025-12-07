@@ -3332,7 +3332,9 @@ public class JParqPreparedStatement implements PreparedStatement {
           }
         }
         case SINGLE_QUOTE -> {
-          if (c == '\'') {
+          if (c == '\'' && i + 1 < sql.length() && sql.charAt(i + 1) == '\'') {
+            i++; // Skip the escaped quote pair
+          } else if (c == '\'') {
             state = ParseState.NORMAL;
           }
         }
