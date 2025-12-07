@@ -103,7 +103,41 @@ import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.meta.InformationSchemaColumns;
 import se.alipsa.jparq.meta.InformationSchemaTables;
 
-/** An implementation of the java.sql.PreparedStatement interface. */
+/**
+ * An implementation of the java.sql.PreparedStatement interface.
+ *
+ * <h2>Prepared Statement Behavior</h2>
+ * <p>
+ * This implementation uses a two-phase approach for parameterized queries:
+ * </p>
+ * <ul>
+ * <li><b>Preparation phase</b>: Validates SQL syntax by parsing the query with
+ * placeholders. This catches syntax errors and invalid table references early,
+ * providing fail-fast behavior.</li>
+ * <li><b>Execution phase</b>: Re-plans the query with bound parameter values to
+ * enable optimizations like predicate pushdown to Parquet filters. This ensures
+ * that WHERE clause conditions with parameters can be pushed down to the
+ * storage layer for efficient filtering.</li>
+ * </ul>
+ * <p>
+ * This design trades some preparation-time overhead for correctness and
+ * performance:
+ * </p>
+ * <ul>
+ * <li><b>Early error detection</b>: Syntax and schema errors are caught at
+ * {@code prepareStatement()} time rather than deferred to
+ * {@code executeQuery()}.</li>
+ * <li><b>Execution-time planning</b>: Query optimization with actual parameter
+ * values enables Parquet filter pushdown, which can dramatically reduce I/O for
+ * large datasets.</li>
+ * <li><b>Parameter safety</b>: Parameters are bound through safe literal
+ * rendering (escaping quotes, hex-encoding binary data) to prevent SQL
+ * injection.</li>
+ * </ul>
+ *
+ * @see #executeQuery()
+ * @see #bindParameters()
+ */
 @SuppressWarnings({
     "checkstyle:AbbreviationAsWordInName", "checkstyle:OverloadMethodsDeclarationOrder",
     "PMD.AvoidCatchingGenericException"
@@ -140,6 +174,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   private CteResult informationSchemaColumnsResult;
   private final Map<Integer, Object> parameterValues = new LinkedHashMap<>();
   private final List<Map<Integer, Object>> batchedParameters = new ArrayList<>();
+  private JParqPreparedStatement boundStatement;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
     this(stmt, sql, Map.of());
@@ -173,6 +208,15 @@ public class JParqPreparedStatement implements PreparedStatement {
     // --- QUERY PLANNING PHASE (Expensive CPU Work) ---
     try {
       if (hasParameters) {
+        // For parameterized queries, perform lightweight syntax validation at
+        // preparation time
+        // to catch errors early (fail-fast), but defer full query planning (including
+        // schema
+        // resolution and optimization) to execution time when actual parameter values
+        // are known.
+        // This enables predicate pushdown with bound values while still providing early
+        // error detection.
+        SqlParser.parseQuery(sql); // Validates syntax and basic structure
         tmpSetOperation = false;
         tmpTableRefs = List.of();
         tmpJoinQuery = false;
@@ -451,8 +495,11 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   @Override
   public void close() {
-    // No-op for now, as PreparedStatement cleanup is minimal in this read-only
-    // context.
+    // Close the bound statement if it exists
+    if (boundStatement != null) {
+      boundStatement.close();
+      boundStatement = null;
+    }
   }
 
   private PreparedStatement prepareSubqueryStatement(String sql) throws SQLException {
@@ -3287,10 +3334,35 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
   }
 
+  /**
+   * Executes the query with bound parameters by re-planning with actual values.
+   * <p>
+   * This method performs the second phase of the two-phase prepared statement
+   * execution:
+   * </p>
+   * <ol>
+   * <li>Bind all parameters to their values, rendering them as safe SQL
+   * literals</li>
+   * <li>Create a new statement with the bound SQL for full query planning</li>
+   * <li>Execute the re-planned query, enabling optimizations like predicate
+   * pushdown</li>
+   * </ol>
+   * <p>
+   * Re-planning at execution time is necessary because Parquet filter predicates
+   * require actual values (not placeholders) to construct efficient column-level
+   * filters. This approach ensures that WHERE conditions with parameters like
+   * {@code WHERE age > ?} can be pushed down to Parquet's storage layer,
+   * dramatically reducing I/O for filtered queries.
+   * </p>
+   *
+   * @return the result set from executing the query with bound parameters
+   * @throws SQLException
+   *           if parameter binding fails or query execution fails
+   */
   private ResultSet executeWithBoundParameters() throws SQLException {
     String boundSql = bindParameters();
-    JParqPreparedStatement bound = new JParqPreparedStatement(stmt, boundSql, inheritedCteContext);
-    return bound.executeQuery();
+    boundStatement = new JParqPreparedStatement(stmt, boundSql, inheritedCteContext);
+    return boundStatement.executeQuery();
   }
 
   private void restoreParameters(Map<Integer, Object> snapshot) {
@@ -3341,6 +3413,10 @@ public class JParqPreparedStatement implements PreparedStatement {
               // End of string literal
               state = ParseState.NORMAL;
             }
+          if (c == '\'' && i + 1 < sql.length() && sql.charAt(i + 1) == '\'') {
+            i++; // Skip the escaped quote pair
+          } else if (c == '\'') {
+            state = ParseState.NORMAL;
           }
         }
         case DOUBLE_QUOTE -> {
@@ -3373,7 +3449,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     StringBuilder rendered = new StringBuilder(originalSql.length() + 32);
     ParseState state = ParseState.NORMAL;
-    int index = 0;
+    int foundCount = 0;
     for (int i = 0; i < originalSql.length(); i++) {
       char c = originalSql.charAt(i);
       boolean consumed = false;
@@ -3388,8 +3464,8 @@ public class JParqPreparedStatement implements PreparedStatement {
           } else if (c == '/' && i + 1 < originalSql.length() && originalSql.charAt(i + 1) == '*') {
             state = ParseState.BLOCK_COMMENT;
           } else if (c == '?') {
-            index++;
-            Object value = parameterValues.get(Integer.valueOf(index));
+            foundCount++;
+            Object value = parameterValues.get(Integer.valueOf(foundCount));
             rendered.append(renderLiteral(value));
             consumed = true;
           }
@@ -3435,8 +3511,8 @@ public class JParqPreparedStatement implements PreparedStatement {
         rendered.append(c);
       }
     }
-    if (index != parameterCount) {
-      throw new SQLException("Expected " + parameterCount + " parameters but found " + index);
+    if (foundCount != parameterCount) {
+      throw new SQLException("Expected " + parameterCount + " parameters but found " + foundCount);
     }
     return rendered.toString();
   }
@@ -3494,7 +3570,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return "'" + TIMESTAMP_FORMAT.format(ldt) + "'";
     }
     if (value instanceof ByteBuffer buffer) {
-      ByteBuffer dup = buffer.slice();
+      ByteBuffer dup = buffer.duplicate();
       byte[] bytes = new byte[dup.remaining()];
       dup.get(bytes);
       return toHexLiteral(bytes);
@@ -3521,8 +3597,24 @@ public class JParqPreparedStatement implements PreparedStatement {
     return sb.toString();
   }
 
+  /**
+   * Escapes single quotes in a string for SQL literals.
+   * <p>
+   * Precondition: {@code value} must not be {@code null}. This is guaranteed by
+   * the caller (renderLiteral). If {@code value} is {@code null}, this method
+   * throws {@link IllegalArgumentException}.
+   *
+   * @param value
+   *          the string to escape (must not be null)
+   * @return the escaped string
+   * @throws IllegalArgumentException
+   *           if value is null
+   */
   private String escapeSingleQuotes(String value) {
-    return value == null ? "" : value.replace("'", "''");
+    if (value == null) {
+      throw new IllegalArgumentException("value must not be null (guaranteed by renderLiteral)");
+    }
+    return value.replace("'", "''");
   }
 
   private enum ParseState {
