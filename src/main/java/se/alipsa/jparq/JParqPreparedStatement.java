@@ -3404,6 +3404,15 @@ public class JParqPreparedStatement implements PreparedStatement {
           }
         }
         case SINGLE_QUOTE -> {
+          if (c == '\'') {
+            // Check for escaped quote ('')
+            if (i + 1 < sql.length() && sql.charAt(i + 1) == '\'') {
+              // Skip the second quote (escape sequence)
+              i++;
+            } else {
+              // End of string literal
+              state = ParseState.NORMAL;
+            }
           if (c == '\'' && i + 1 < sql.length() && sql.charAt(i + 1) == '\'') {
             i++; // Skip the escaped quote pair
           } else if (c == '\'') {
@@ -3463,7 +3472,17 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
         case SINGLE_QUOTE -> {
           if (c == '\'') {
-            state = ParseState.NORMAL;
+            // Check for escaped quote ('')
+            if (i + 1 < originalSql.length() && originalSql.charAt(i + 1) == '\'') {
+              // Append both quotes (escape sequence)
+              rendered.append(c);
+              rendered.append(originalSql.charAt(i + 1));
+              i++;
+              consumed = true;
+            } else {
+              // End of string literal
+              state = ParseState.NORMAL;
+            }
           }
         }
         case DOUBLE_QUOTE -> {
