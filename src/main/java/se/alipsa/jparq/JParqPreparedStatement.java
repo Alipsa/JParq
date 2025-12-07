@@ -3488,7 +3488,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (value instanceof InputStream || value instanceof Reader) {
       throw new SQLException("Stream parameters are not supported");
     }
-    return "'" + escapeSingleQuotes(String.valueOf(value)) + "'";
+    throw new SQLException("Unsupported parameter type: " + value.getClass().getName());
   }
 
   private String toHexLiteral(byte[] bytes) {
