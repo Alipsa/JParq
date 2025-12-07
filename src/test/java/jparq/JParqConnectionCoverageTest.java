@@ -39,21 +39,32 @@ class JParqConnectionCoverageTest {
   }
 
   @Test
-  void prepareStatementVariantsReturnDefaults() throws SQLException {
-    assertNull(connection.prepareStatement("SELECT 1", ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY));
-    assertNull(connection.prepareStatement("SELECT 1", ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY,
-        ResultSet.CLOSE_CURSORS_AT_COMMIT));
-    assertNull(connection.prepareStatement("SELECT 1", Statement.RETURN_GENERATED_KEYS));
-    assertNull(connection.prepareStatement("SELECT 1", new int[]{
+  void prepareStatementVariantsValidateOptions() throws SQLException {
+    String sql = "SELECT * FROM cars";
+    try (var ps = connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
+      assertNotNull(ps);
+    }
+    assertThrows(SQLFeatureNotSupportedException.class,
+        () -> connection.prepareStatement(sql, ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY));
+    try (var ps = connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY,
+        ResultSet.CLOSE_CURSORS_AT_COMMIT)) {
+      assertNotNull(ps);
+    }
+    assertThrows(SQLFeatureNotSupportedException.class, () -> connection.prepareStatement(sql,
+        ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY, ResultSet.HOLD_CURSORS_OVER_COMMIT));
+    assertThrows(SQLFeatureNotSupportedException.class,
+        () -> connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS));
+    assertThrows(SQLFeatureNotSupportedException.class, () -> connection.prepareStatement(sql, new int[]{
         1
     }));
-    assertNull(connection.prepareStatement("SELECT 1", new String[]{
+    assertThrows(SQLFeatureNotSupportedException.class, () -> connection.prepareStatement(sql, new String[]{
         "id"
     }));
-    assertThrows(SQLFeatureNotSupportedException.class, () -> connection.prepareCall("SELECT 1"));
-    assertNull(connection.prepareCall("SELECT 1", ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY));
-    assertNull(connection.prepareCall("SELECT 1", ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY,
-        ResultSet.CLOSE_CURSORS_AT_COMMIT));
+    assertThrows(SQLFeatureNotSupportedException.class, () -> connection.prepareCall(sql));
+    assertThrows(SQLFeatureNotSupportedException.class,
+        () -> connection.prepareCall(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY));
+    assertThrows(SQLFeatureNotSupportedException.class, () -> connection.prepareCall(sql, ResultSet.TYPE_FORWARD_ONLY,
+        ResultSet.CONCUR_READ_ONLY, ResultSet.CLOSE_CURSORS_AT_COMMIT));
   }
 
   @Test

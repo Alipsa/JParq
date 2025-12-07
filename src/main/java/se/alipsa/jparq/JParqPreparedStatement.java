@@ -29,6 +29,10 @@ import java.sql.Statement;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
@@ -99,13 +103,52 @@ import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.meta.InformationSchemaColumns;
 import se.alipsa.jparq.meta.InformationSchemaTables;
 
-/** An implementation of the java.sql.PreparedStatement interface. */
+/**
+ * An implementation of the java.sql.PreparedStatement interface.
+ *
+ * <h2>Prepared Statement Behavior</h2>
+ * <p>
+ * This implementation uses a two-phase approach for parameterized queries:
+ * </p>
+ * <ul>
+ * <li><b>Preparation phase</b>: Validates SQL syntax by parsing the query with
+ * placeholders. This catches syntax errors and invalid table references early,
+ * providing fail-fast behavior.</li>
+ * <li><b>Execution phase</b>: Re-plans the query with bound parameter values to
+ * enable optimizations like predicate pushdown to Parquet filters. This ensures
+ * that WHERE clause conditions with parameters can be pushed down to the
+ * storage layer for efficient filtering.</li>
+ * </ul>
+ * <p>
+ * This design trades some preparation-time overhead for correctness and
+ * performance:
+ * </p>
+ * <ul>
+ * <li><b>Early error detection</b>: Syntax and schema errors are caught at
+ * {@code prepareStatement()} time rather than deferred to
+ * {@code executeQuery()}.</li>
+ * <li><b>Execution-time planning</b>: Query optimization with actual parameter
+ * values enables Parquet filter pushdown, which can dramatically reduce I/O for
+ * large datasets.</li>
+ * <li><b>Parameter safety</b>: Parameters are bound through safe literal
+ * rendering (escaping quotes, hex-encoding binary data) to prevent SQL
+ * injection.</li>
+ * </ul>
+ *
+ * @see #executeQuery()
+ * @see #bindParameters()
+ */
 @SuppressWarnings({
     "checkstyle:AbbreviationAsWordInName", "checkstyle:OverloadMethodsDeclarationOrder",
     "PMD.AvoidCatchingGenericException"
 })
 public class JParqPreparedStatement implements PreparedStatement {
+  private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE;
+  private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ISO_LOCAL_TIME;
+  private static final DateTimeFormatter TIMESTAMP_FORMAT = DateTimeFormatter
+      .ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSSSSS");
   private final JParqStatement stmt;
+  private final String originalSql;
 
   // --- Query Plan Fields (calculated in constructor) ---
   private SqlParser.Select parsedSelect;
@@ -124,10 +167,14 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final Map<Identifier, CteResult> cteResults;
   private final Map<Identifier, CteResult> valueTableResults;
   private final CteResult baseCteResult;
+  private final Map<Identifier, CteResult> inheritedCteContext;
+  private final int parameterCount;
+  private final boolean hasParameters;
   private CteResult informationSchemaTablesResult;
   private CteResult informationSchemaColumnsResult;
   private final Map<Integer, Object> parameterValues = new LinkedHashMap<>();
   private final List<Map<Integer, Object>> batchedParameters = new ArrayList<>();
+  private JParqPreparedStatement boundStatement;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
     this(stmt, sql, Map.of());
@@ -136,6 +183,10 @@ public class JParqPreparedStatement implements PreparedStatement {
   JParqPreparedStatement(JParqStatement stmt, String sql, Map<Identifier, CteResult> inheritedCtes)
       throws SQLException {
     this.stmt = stmt;
+    this.originalSql = sql;
+    this.parameterCount = countPlaceholders(sql);
+    this.hasParameters = parameterCount > 0;
+    this.inheritedCteContext = inheritedCtes == null ? Map.of() : Map.copyOf(inheritedCtes);
 
     SqlParser.Select tmpSelect = null;
     SqlParser.SetQuery tmpSetQuery = null;
@@ -156,167 +207,183 @@ public class JParqPreparedStatement implements PreparedStatement {
 
     // --- QUERY PLANNING PHASE (Expensive CPU Work) ---
     try {
-      SqlParser.Query query = SqlParser.parseQuery(sql);
-
-      Map<Identifier, CteResult> mutableCtes = new LinkedHashMap<>();
-      if (inheritedCtes != null && !inheritedCtes.isEmpty()) {
-        for (Map.Entry<Identifier, CteResult> entry : inheritedCtes.entrySet()) {
-          Identifier key = entry.getKey();
-          if (key != null && entry.getValue() != null) {
-            mutableCtes.put(key, entry.getValue());
-          }
-        }
-      }
-      evaluateCommonTableExpressions(query.commonTableExpressions(), mutableCtes);
-      tmpCteResults = Map.copyOf(mutableCtes);
-
-      if (query instanceof SqlParser.SetQuery setQuery) {
-        tmpSetQuery = setQuery;
-        tmpSetOperation = true;
+      if (hasParameters) {
+        // For parameterized queries, perform lightweight syntax validation at
+        // preparation time
+        // to catch errors early (fail-fast), but defer full query planning (including
+        // schema
+        // resolution and optimization) to execution time when actual parameter values
+        // are known.
+        // This enables predicate pushdown with bound values while still providing early
+        // error detection.
+        SqlParser.parseQuery(sql); // Validates syntax and basic structure
+        tmpSetOperation = false;
         tmpTableRefs = List.of();
         tmpJoinQuery = false;
+        tmpCteResults = this.inheritedCteContext;
       } else {
-        tmpSelect = (SqlParser.Select) query;
-        tmpSetOperation = false;
-        tmpTableRefs = tmpSelect.tableReferences();
-        SqlParser.TableReference baseRef = tmpTableRefs.isEmpty() ? null : tmpTableRefs.getFirst();
-        boolean baseIsDerivedTable = baseRef != null && baseRef.subquery() != null;
-        tmpJoinQuery = tmpSelect.hasMultipleTables();
+        SqlParser.Query query = SqlParser.parseQuery(sql);
 
-        boolean baseIsCte = baseRef != null && (baseRef.commonTableExpression() != null
-            || resolveCteResultByName(baseRef.tableName(), tmpCteResults) != null);
-        boolean baseIsInformationSchemaTables = baseRef != null
-            && InformationSchemaTables.matchesTableReference(baseRef.tableName());
-        boolean baseIsInformationSchemaColumns = baseRef != null
-            && InformationSchemaColumns.matchesTableReference(baseRef.tableName());
-
-        AggregateFunctions.AggregatePlan aggregatePlan = null;
-
-        if (tmpJoinQuery) {
-          tmpResidual = tmpSelect.where();
-        } else if (baseRef != null && baseRef.valueTable() != null) {
-          CteResult resolved = materializeValueTable(baseRef.valueTable(), deriveValueTableName(baseRef));
-          tmpBaseCteResult = resolved;
-          tmpFileAvro = resolved.schema();
-          registerValueTableResult(baseRef, resolved, tmpValueTables);
-          if (!tmpSelect.qualifiedWildcards().isEmpty()) {
-            Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
-                baseRef, tmpFileAvro);
-            tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
-          }
-          aggregatePlan = AggregateFunctions.plan(tmpSelect);
-          tmpResidual = tmpSelect.where();
-          tmpPredicate = Optional.empty();
-        } else if (baseIsCte) {
-          CteResult resolved = baseRef.commonTableExpression() != null
-              ? resolveCteResult(baseRef.commonTableExpression(), tmpCteResults)
-              : resolveCteResultByName(baseRef.tableName(), tmpCteResults);
-          if (resolved == null) {
-            throw new SQLException("CTE result not available for table '" + baseRef.tableName() + "'");
-          }
-          tmpBaseCteResult = resolved;
-          tmpFileAvro = resolved.schema();
-          if (!tmpSelect.qualifiedWildcards().isEmpty()) {
-            Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
-                baseRef, tmpFileAvro);
-            tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
-          }
-          aggregatePlan = AggregateFunctions.plan(tmpSelect);
-          tmpResidual = tmpSelect.where();
-          tmpPredicate = Optional.empty();
-        } else if (baseIsDerivedTable) {
-          List<String> fieldNames = new ArrayList<>();
-          List<Schema> valueSchemas = new ArrayList<>();
-          SubqueryTableData data = executeSubquery(baseRef.subquerySql(), baseRef, null, fieldNames, valueSchemas,
-              tmpCteResults);
-          tmpBaseCteResult = new CteResult(data.schema(), data.rows());
-          tmpFileAvro = data.schema();
-          int innerOffset = baseRef.subquery() == null ? 0 : Math.max(0, baseRef.subquery().offset());
-          if (innerOffset > 0) {
-            tmpSelect = new SqlParser.Select(tmpSelect.labels(), tmpSelect.columnNames(), tmpSelect.table(),
-                tmpSelect.tableAlias(), tmpSelect.where(), tmpSelect.limit(),
-                Math.max(0, tmpSelect.offset() - innerOffset), tmpSelect.orderBy(), tmpSelect.distinct(),
-                tmpSelect.innerDistinct(), tmpSelect.innerDistinctColumns(), tmpSelect.expressions(),
-                tmpSelect.expressionOrder(), tmpSelect.qualifiedWildcards(), tmpSelect.groupByExpressions(),
-                tmpSelect.groupingSets(), tmpSelect.having(), tmpSelect.preLimit(), 0, tmpSelect.preOrderBy(),
-                tmpSelect.tableReferences(), tmpSelect.commonTableExpressions());
-          }
-          aggregatePlan = AggregateFunctions.plan(tmpSelect);
-          tmpResidual = tmpSelect.where();
-          tmpPredicate = Optional.empty();
-        } else if (baseRef != null && baseRef.unnest() != null) {
-          CteResult resolved = materializeUnnestTable(baseRef);
-          tmpBaseCteResult = resolved;
-          tmpFileAvro = resolved.schema();
-          if (!tmpSelect.qualifiedWildcards().isEmpty()) {
-            Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
-                baseRef, tmpFileAvro);
-            tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
-          }
-          aggregatePlan = AggregateFunctions.plan(tmpSelect);
-          tmpResidual = tmpSelect.where();
-          tmpPredicate = Optional.empty();
-        } else if (baseIsInformationSchemaTables || baseIsInformationSchemaColumns) {
-          CteResult resolved = baseIsInformationSchemaTables
-              ? materializeInformationSchemaTables()
-              : materializeInformationSchemaColumns();
-          tmpBaseCteResult = resolved;
-          tmpFileAvro = resolved.schema();
-          if (!tmpSelect.qualifiedWildcards().isEmpty()) {
-            Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
-                baseRef, tmpFileAvro);
-            tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
-          }
-          tmpSchemaName = formatSchemaForMetadata("information_schema");
-          aggregatePlan = AggregateFunctions.plan(tmpSelect);
-          tmpResidual = tmpSelect.where();
-          tmpPredicate = Optional.empty();
-        } else {
-          tmpConf = new Configuration(false);
-          tmpConf.setBoolean("parquet.filter.statistics.enabled", true);
-          tmpConf.setBoolean("parquet.read.filter.columnindex.enabled", true);
-          tmpConf.setBoolean("parquet.filter.dictionary.enabled", true);
-
-          String targetTable = baseRef != null ? baseRef.tableName() : tmpSelect.table();
-          String targetSchema = baseRef != null ? baseRef.schemaName() : null;
-          tmpBaseLocation = stmt.getConn().resolveTable(targetSchema, targetTable);
-          tmpSchemaName = formatSchemaForMetadata(tmpBaseLocation.schemaName());
-          tmpFile = tmpBaseLocation.file();
-          tmpPath = new Path(tmpFile.toURI());
-
-          Schema avro;
-          try {
-            avro = ParquetSchemas.readAvroSchema(tmpPath, tmpConf);
-          } catch (IOException ignore) {
-            /* No schema -> no pushdown */
-            avro = null;
-          }
-
-          tmpFileAvro = avro;
-
-          if (!tmpSelect.qualifiedWildcards().isEmpty()) {
-            if (tmpFileAvro == null) {
-              throw new SQLException("Unable to resolve schema for qualified wildcard projection");
+        Map<Identifier, CteResult> mutableCtes = new LinkedHashMap<>();
+        if (inheritedCtes != null && !inheritedCtes.isEmpty()) {
+          for (Map.Entry<Identifier, CteResult> entry : inheritedCtes.entrySet()) {
+            Identifier key = entry.getKey();
+            if (key != null && entry.getValue() != null) {
+              mutableCtes.put(key, entry.getValue());
             }
-            Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
-                baseRef, tmpFileAvro);
-            tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
           }
+        }
+        evaluateCommonTableExpressions(query.commonTableExpressions(), mutableCtes);
+        tmpCteResults = Map.copyOf(mutableCtes);
 
-          aggregatePlan = AggregateFunctions.plan(tmpSelect);
-          configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf);
+        if (query instanceof SqlParser.SetQuery setQuery) {
+          tmpSetQuery = setQuery;
+          tmpSetOperation = true;
+          tmpTableRefs = List.of();
+          tmpJoinQuery = false;
+        } else {
+          tmpSelect = (SqlParser.Select) query;
+          tmpSetOperation = false;
+          tmpTableRefs = tmpSelect.tableReferences();
+          SqlParser.TableReference baseRef = tmpTableRefs.isEmpty() ? null : tmpTableRefs.getFirst();
+          boolean baseIsDerivedTable = baseRef != null && baseRef.subquery() != null;
+          tmpJoinQuery = tmpSelect.hasMultipleTables();
 
-          if (!tmpSelect.distinct() && tmpFileAvro != null && tmpSelect.where() != null) {
-            tmpPredicate = ParquetFilterBuilder.build(tmpFileAvro, tmpSelect.where());
-            tmpResidual = ParquetFilterBuilder.residual(tmpFileAvro, tmpSelect.where());
-          } else {
-            tmpPredicate = Optional.empty();
+          boolean baseIsCte = baseRef != null && (baseRef.commonTableExpression() != null
+              || resolveCteResultByName(baseRef.tableName(), tmpCteResults) != null);
+          boolean baseIsInformationSchemaTables = baseRef != null
+              && InformationSchemaTables.matchesTableReference(baseRef.tableName());
+          boolean baseIsInformationSchemaColumns = baseRef != null
+              && InformationSchemaColumns.matchesTableReference(baseRef.tableName());
+
+          AggregateFunctions.AggregatePlan aggregatePlan = null;
+
+          if (tmpJoinQuery) {
             tmpResidual = tmpSelect.where();
-          }
+          } else if (baseRef != null && baseRef.valueTable() != null) {
+            CteResult resolved = materializeValueTable(baseRef.valueTable(), deriveValueTableName(baseRef));
+            tmpBaseCteResult = resolved;
+            tmpFileAvro = resolved.schema();
+            registerValueTableResult(baseRef, resolved, tmpValueTables);
+            if (!tmpSelect.qualifiedWildcards().isEmpty()) {
+              Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
+                  baseRef, tmpFileAvro);
+              tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
+            }
+            aggregatePlan = AggregateFunctions.plan(tmpSelect);
+            tmpResidual = tmpSelect.where();
+            tmpPredicate = Optional.empty();
+          } else if (baseIsCte) {
+            CteResult resolved = baseRef.commonTableExpression() != null
+                ? resolveCteResult(baseRef.commonTableExpression(), tmpCteResults)
+                : resolveCteResultByName(baseRef.tableName(), tmpCteResults);
+            if (resolved == null) {
+              throw new SQLException("CTE result not available for table '" + baseRef.tableName() + "'");
+            }
+            tmpBaseCteResult = resolved;
+            tmpFileAvro = resolved.schema();
+            if (!tmpSelect.qualifiedWildcards().isEmpty()) {
+              Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
+                  baseRef, tmpFileAvro);
+              tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
+            }
+            aggregatePlan = AggregateFunctions.plan(tmpSelect);
+            tmpResidual = tmpSelect.where();
+            tmpPredicate = Optional.empty();
+          } else if (baseIsDerivedTable) {
+            List<String> fieldNames = new ArrayList<>();
+            List<Schema> valueSchemas = new ArrayList<>();
+            SubqueryTableData data = executeSubquery(baseRef.subquerySql(), baseRef, null, fieldNames, valueSchemas,
+                tmpCteResults);
+            tmpBaseCteResult = new CteResult(data.schema(), data.rows());
+            tmpFileAvro = data.schema();
+            int innerOffset = baseRef.subquery() == null ? 0 : Math.max(0, baseRef.subquery().offset());
+            if (innerOffset > 0) {
+              tmpSelect = new SqlParser.Select(tmpSelect.labels(), tmpSelect.columnNames(), tmpSelect.table(),
+                  tmpSelect.tableAlias(), tmpSelect.where(), tmpSelect.limit(),
+                  Math.max(0, tmpSelect.offset() - innerOffset), tmpSelect.orderBy(), tmpSelect.distinct(),
+                  tmpSelect.innerDistinct(), tmpSelect.innerDistinctColumns(), tmpSelect.expressions(),
+                  tmpSelect.expressionOrder(), tmpSelect.qualifiedWildcards(), tmpSelect.groupByExpressions(),
+                  tmpSelect.groupingSets(), tmpSelect.having(), tmpSelect.preLimit(), 0, tmpSelect.preOrderBy(),
+                  tmpSelect.tableReferences(), tmpSelect.commonTableExpressions());
+            }
+            aggregatePlan = AggregateFunctions.plan(tmpSelect);
+            tmpResidual = tmpSelect.where();
+            tmpPredicate = Optional.empty();
+          } else if (baseRef != null && baseRef.unnest() != null) {
+            CteResult resolved = materializeUnnestTable(baseRef);
+            tmpBaseCteResult = resolved;
+            tmpFileAvro = resolved.schema();
+            if (!tmpSelect.qualifiedWildcards().isEmpty()) {
+              Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
+                  baseRef, tmpFileAvro);
+              tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
+            }
+            aggregatePlan = AggregateFunctions.plan(tmpSelect);
+            tmpResidual = tmpSelect.where();
+            tmpPredicate = Optional.empty();
+          } else if (baseIsInformationSchemaTables || baseIsInformationSchemaColumns) {
+            CteResult resolved = baseIsInformationSchemaTables
+                ? materializeInformationSchemaTables()
+                : materializeInformationSchemaColumns();
+            tmpBaseCteResult = resolved;
+            tmpFileAvro = resolved.schema();
+            if (!tmpSelect.qualifiedWildcards().isEmpty()) {
+              Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
+                  baseRef, tmpFileAvro);
+              tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
+            }
+            tmpSchemaName = formatSchemaForMetadata("information_schema");
+            aggregatePlan = AggregateFunctions.plan(tmpSelect);
+            tmpResidual = tmpSelect.where();
+            tmpPredicate = Optional.empty();
+          } else {
+            tmpConf = new Configuration(false);
+            tmpConf.setBoolean("parquet.filter.statistics.enabled", true);
+            tmpConf.setBoolean("parquet.read.filter.columnindex.enabled", true);
+            tmpConf.setBoolean("parquet.filter.dictionary.enabled", true);
 
-          if (tmpBaseCteResult == null && tmpFileAvro == null) {
-            // Guard to avoid NPE later when schema resolution fails completely
-            throw new SQLException("Unable to resolve schema for table " + tmpSelect.table());
+            String targetTable = baseRef != null ? baseRef.tableName() : tmpSelect.table();
+            String targetSchema = baseRef != null ? baseRef.schemaName() : null;
+            tmpBaseLocation = stmt.getConn().resolveTable(targetSchema, targetTable);
+            tmpSchemaName = formatSchemaForMetadata(tmpBaseLocation.schemaName());
+            tmpFile = tmpBaseLocation.file();
+            tmpPath = new Path(tmpFile.toURI());
+
+            Schema avro;
+            try {
+              avro = ParquetSchemas.readAvroSchema(tmpPath, tmpConf);
+            } catch (IOException ignore) {
+              /* No schema -> no pushdown */
+              avro = null;
+            }
+
+            tmpFileAvro = avro;
+
+            if (!tmpSelect.qualifiedWildcards().isEmpty()) {
+              if (tmpFileAvro == null) {
+                throw new SQLException("Unable to resolve schema for qualified wildcard projection");
+              }
+              Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
+                  baseRef, tmpFileAvro);
+              tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
+            }
+
+            aggregatePlan = AggregateFunctions.plan(tmpSelect);
+            configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf);
+
+            if (!tmpSelect.distinct() && tmpFileAvro != null && tmpSelect.where() != null) {
+              tmpPredicate = ParquetFilterBuilder.build(tmpFileAvro, tmpSelect.where());
+              tmpResidual = ParquetFilterBuilder.residual(tmpFileAvro, tmpSelect.where());
+            } else {
+              tmpPredicate = Optional.empty();
+              tmpResidual = tmpSelect.where();
+            }
+
+            if (tmpBaseCteResult == null && tmpFileAvro == null) {
+              // Guard to avoid NPE later when schema resolution fails completely
+              throw new SQLException("Unable to resolve schema for table " + tmpSelect.table());
+            }
           }
         }
       }
@@ -330,7 +397,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     this.tableReferences = tmpTableRefs;
     this.joinQuery = tmpJoinQuery;
     this.conf = tmpConf;
-    this.parquetPredicate = tmpPredicate == null ? Optional.empty() : tmpPredicate;
+    this.parquetPredicate = tmpPredicate;
     this.residualExpression = tmpResidual;
     this.path = tmpPath;
     this.file = tmpFile;
@@ -349,6 +416,9 @@ public class JParqPreparedStatement implements PreparedStatement {
   @SuppressWarnings("PMD.CloseResource")
   @Override
   public ResultSet executeQuery() throws SQLException {
+    if (hasParameters) {
+      return executeWithBoundParameters();
+    }
     Connection conn = getConnection();
     JParqDatabaseMetaData metaData = (JParqDatabaseMetaData) conn.getMetaData();
     SystemFunctions.setContext(conn.getCatalog(), metaData.getUserName());
@@ -361,14 +431,12 @@ public class JParqPreparedStatement implements PreparedStatement {
       RecordReader reader;
       String resultTableName;
       String resultSchema = tableSchema;
-      String resultCatalog = tableCatalog;
       SqlParser.TableReference baseRef = (tableReferences == null || tableReferences.isEmpty())
           ? null
-          : tableReferences.get(0);
+          : tableReferences.getFirst();
       try {
         if (joinQuery) {
-          JoinRecordReader joinReader = buildJoinReader();
-          reader = joinReader;
+          reader = buildJoinReader();
           resultTableName = buildJoinTableName();
           resultSchema = null;
         } else if (baseCteResult != null) {
@@ -406,7 +474,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       // Create the result set, passing reader, select plan, residual filter,
       // plus projection labels and physical names (for metadata & value lookups)
       SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
-      JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, resultCatalog,
+      JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, tableCatalog,
           residualExpression, labels, physical, subqueryExecutor);
 
       stmt.setCurrentRs(rs);
@@ -425,8 +493,11 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   @Override
   public void close() {
-    // No-op for now, as PreparedStatement cleanup is minimal in this read-only
-    // context.
+    // Close the bound statement if it exists
+    if (boundStatement != null) {
+      boundStatement.close();
+      boundStatement = null;
+    }
   }
 
   private PreparedStatement prepareSubqueryStatement(String sql) throws SQLException {
@@ -499,7 +570,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           throw new SQLException("Set operation components must project the same number of columns");
         } else {
           for (int col = 1; col <= columnCount; col++) {
-            Integer expectedType = sqlTypes == null ? null : sqlTypes.get(col - 1);
+            Integer expectedType = sqlTypes.get(col - 1);
             if (expectedType != null && expectedType != meta.getColumnType(col)) {
               throw new SQLException("Set operation components must use compatible column types");
             }
@@ -514,10 +585,6 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
       }
       componentRows.add(componentData);
-    }
-    if (labels == null) {
-      labels = List.of();
-      sqlTypes = List.of();
     }
     List<List<Object>> combined = evaluateSetOperation(components, componentRows);
     List<List<Object>> ordered = applySetOrdering(combined, labels, sqlTypes, parsedSetQuery.orderBy());
@@ -550,23 +617,22 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (operator == SqlParser.SetOperator.FIRST) {
         throw new SQLException("Unexpected FIRST operator in set operation evaluation");
       }
-      while (!operatorStack.isEmpty()
-          && precedence(operatorStack.get(operatorStack.size() - 1)) >= precedence(operator)) {
-        SqlParser.SetOperator top = operatorStack.remove(operatorStack.size() - 1);
-        List<List<Object>> right = valueStack.remove(valueStack.size() - 1);
-        List<List<Object>> left = valueStack.remove(valueStack.size() - 1);
+      while (!operatorStack.isEmpty() && precedence(operatorStack.getLast()) >= precedence(operator)) {
+        SqlParser.SetOperator top = operatorStack.removeLast();
+        List<List<Object>> right = valueStack.removeLast();
+        List<List<Object>> left = valueStack.removeLast();
         valueStack.add(applySetOperator(left, right, top));
       }
       operatorStack.add(operator);
       valueStack.add(new ArrayList<>(rowsPerComponent.get(i)));
     }
     while (!operatorStack.isEmpty()) {
-      SqlParser.SetOperator top = operatorStack.remove(operatorStack.size() - 1);
-      List<List<Object>> right = valueStack.remove(valueStack.size() - 1);
-      List<List<Object>> left = valueStack.remove(valueStack.size() - 1);
+      SqlParser.SetOperator top = operatorStack.removeLast();
+      List<List<Object>> right = valueStack.removeLast();
+      List<List<Object>> left = valueStack.removeLast();
       valueStack.add(applySetOperator(left, right, top));
     }
-    return valueStack.isEmpty() ? List.<List<Object>>of() : valueStack.get(0);
+    return valueStack.isEmpty() ? List.<List<Object>>of() : valueStack.getFirst();
   }
 
   /**
@@ -1036,17 +1102,21 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
       }
       case LONG -> {
-        if (value instanceof Date date) {
-          yield date.getTime();
-        }
-        if (value instanceof Time time) {
-          yield time.getTime();
-        }
-        if (value instanceof Timestamp ts) {
-          yield ts.getTime();
-        }
-        if (value instanceof Number) {
-          yield ((Number) value).longValue();
+        switch (value) {
+          case Date date -> {
+            yield date.getTime();
+          }
+          case Time time -> {
+            yield time.getTime();
+          }
+          case Timestamp ts -> {
+            yield ts.getTime();
+          }
+          case Number number -> {
+            yield number.longValue();
+          }
+          default -> {
+          }
         }
         try {
           yield Long.parseLong(value.toString());
@@ -3245,6 +3315,53 @@ public class JParqPreparedStatement implements PreparedStatement {
     return new LinkedHashMap<>(parameterValues);
   }
 
+  private void validateParameterBindings(Map<Integer, Object> parameters) throws SQLException {
+    if (!hasParameters) {
+      return;
+    }
+    for (int i = 1; i <= parameterCount; i++) {
+      if (!parameters.containsKey(Integer.valueOf(i))) {
+        throw new SQLException("Parameter " + i + " is not set");
+      }
+    }
+    for (Integer index : parameters.keySet()) {
+      if (index < 1 || index > parameterCount) {
+        throw new SQLException("Parameter index " + index + " is out of range");
+      }
+    }
+  }
+
+  /**
+   * Executes the query with bound parameters by re-planning with actual values.
+   * <p>
+   * This method performs the second phase of the two-phase prepared statement
+   * execution:
+   * </p>
+   * <ol>
+   * <li>Bind all parameters to their values, rendering them as safe SQL
+   * literals</li>
+   * <li>Create a new statement with the bound SQL for full query planning</li>
+   * <li>Execute the re-planned query, enabling optimizations like predicate
+   * pushdown</li>
+   * </ol>
+   * <p>
+   * Re-planning at execution time is necessary because Parquet filter predicates
+   * require actual values (not placeholders) to construct efficient column-level
+   * filters. This approach ensures that WHERE conditions with parameters like
+   * {@code WHERE age > ?} can be pushed down to Parquet's storage layer,
+   * dramatically reducing I/O for filtered queries.
+   * </p>
+   *
+   * @return the result set from executing the query with bound parameters
+   * @throws SQLException
+   *           if parameter binding fails or query execution fails
+   */
+  private ResultSet executeWithBoundParameters() throws SQLException {
+    String boundSql = bindParameters();
+    boundStatement = new JParqPreparedStatement(stmt, boundSql, inheritedCteContext);
+    return boundStatement.executeQuery();
+  }
+
   private void restoreParameters(Map<Integer, Object> snapshot) {
     parameterValues.clear();
     if (snapshot != null && !snapshot.isEmpty()) {
@@ -3256,7 +3373,250 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (parameterIndex < 1) {
       return;
     }
-    parameterValues.put(Integer.valueOf(parameterIndex), value);
+    parameterValues.put(parameterIndex, value);
+  }
+
+  private int countPlaceholders(String sql) {
+    if (sql == null || sql.isEmpty()) {
+      return 0;
+    }
+    int count = 0;
+    ParseState state = ParseState.NORMAL;
+    for (int i = 0; i < sql.length(); i++) {
+      char c = sql.charAt(i);
+      switch (state) {
+        case NORMAL -> {
+          if (c == '\'') {
+            state = ParseState.SINGLE_QUOTE;
+          } else if (c == '"') {
+            state = ParseState.DOUBLE_QUOTE;
+          } else if (c == '-' && i + 1 < sql.length() && sql.charAt(i + 1) == '-') {
+            state = ParseState.LINE_COMMENT;
+            i++;
+          } else if (c == '/' && i + 1 < sql.length() && sql.charAt(i + 1) == '*') {
+            state = ParseState.BLOCK_COMMENT;
+            i++;
+          } else if (c == '?') {
+            count++;
+          }
+        }
+        case SINGLE_QUOTE -> {
+          if (c == '\'') {
+            if (i + 1 < sql.length() && sql.charAt(i + 1) == '\'') {
+              i++; // Skip escaped quote
+            } else {
+              state = ParseState.NORMAL;
+            }
+          }
+        }
+        case DOUBLE_QUOTE -> {
+          if (c == '"') {
+            state = ParseState.NORMAL;
+          }
+        }
+        case LINE_COMMENT -> {
+          if (c == '\n' || c == '\r') {
+            state = ParseState.NORMAL;
+          }
+        }
+        case BLOCK_COMMENT -> {
+          if (c == '*' && i + 1 < sql.length() && sql.charAt(i + 1) == '/') {
+            state = ParseState.NORMAL;
+            i++;
+          }
+        }
+        default -> {
+        }
+      }
+    }
+    return count;
+  }
+
+  private String bindParameters() throws SQLException {
+    validateParameterBindings(parameterValues);
+    if (parameterCount == 0) {
+      return originalSql;
+    }
+    StringBuilder rendered = new StringBuilder(originalSql.length() + 32);
+    ParseState state = ParseState.NORMAL;
+    int foundCount = 0;
+    for (int i = 0; i < originalSql.length(); i++) {
+      char c = originalSql.charAt(i);
+      boolean consumed = false;
+      switch (state) {
+        case NORMAL -> {
+          if (c == '\'') {
+            state = ParseState.SINGLE_QUOTE;
+          } else if (c == '"') {
+            state = ParseState.DOUBLE_QUOTE;
+          } else if (c == '-' && i + 1 < originalSql.length() && originalSql.charAt(i + 1) == '-') {
+            state = ParseState.LINE_COMMENT;
+          } else if (c == '/' && i + 1 < originalSql.length() && originalSql.charAt(i + 1) == '*') {
+            state = ParseState.BLOCK_COMMENT;
+          } else if (c == '?') {
+            foundCount++;
+            Object value = parameterValues.get(Integer.valueOf(foundCount));
+            rendered.append(renderLiteral(value));
+            consumed = true;
+          }
+        }
+        case SINGLE_QUOTE -> {
+          if (c == '\'') {
+            // Check for escaped quote ('')
+            if (i + 1 < originalSql.length() && originalSql.charAt(i + 1) == '\'') {
+              // Append both quotes (escape sequence)
+              rendered.append(c);
+              rendered.append(originalSql.charAt(i + 1));
+              i++;
+              consumed = true;
+            } else {
+              // End of string literal
+              state = ParseState.NORMAL;
+            }
+          }
+        }
+        case DOUBLE_QUOTE -> {
+          if (c == '"') {
+            state = ParseState.NORMAL;
+          }
+        }
+        case LINE_COMMENT -> {
+          if (c == '\n' || c == '\r') {
+            state = ParseState.NORMAL;
+          }
+        }
+        case BLOCK_COMMENT -> {
+          if (c == '*' && i + 1 < originalSql.length() && originalSql.charAt(i + 1) == '/') {
+            state = ParseState.NORMAL;
+            rendered.append(c);
+            rendered.append(originalSql.charAt(i + 1));
+            i++;
+            consumed = true;
+          }
+        }
+        default -> {
+        }
+      }
+      if (!consumed) {
+        rendered.append(c);
+      }
+    }
+    if (foundCount != parameterCount) {
+      throw new SQLException("Expected " + parameterCount + " parameters but found " + foundCount);
+    }
+    return rendered.toString();
+  }
+
+  private String renderLiteral(Object value) throws SQLException {
+    switch (value) {
+      case null -> {
+        return "NULL";
+      }
+      case String str -> {
+        return "'" + escapeSingleQuotes(str) + "'";
+      }
+      case Character ch -> {
+        return "'" + escapeSingleQuotes(String.valueOf(ch)) + "'";
+      }
+      case Boolean bool -> {
+        return bool.booleanValue() ? "TRUE" : "FALSE";
+      }
+      default -> {
+      }
+    }
+    if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+      return value.toString();
+    }
+    switch (value) {
+      case BigDecimal decimal -> {
+        return decimal.toPlainString();
+      }
+      case Float f -> {
+        if (Float.isNaN(f) || Float.isInfinite(f)) {
+          throw new SQLException("Floating point parameter cannot be NaN or infinite");
+        }
+        return f.toString();
+      }
+      case Double d -> {
+        if (Double.isNaN(d) || Double.isInfinite(d)) {
+          throw new SQLException("Floating point parameter cannot be NaN or infinite");
+        }
+        return d.toString();
+      }
+      case Timestamp ts -> {
+        LocalDateTime ldt = ts.toLocalDateTime();
+        return "'" + TIMESTAMP_FORMAT.format(ldt) + "'";
+      }
+      case Date date -> {
+        LocalDate localDate = date.toLocalDate();
+        return "'" + DATE_FORMAT.format(localDate) + "'";
+      }
+      case Time time -> {
+        LocalTime lt = time.toLocalTime();
+        return "'" + TIME_FORMAT.format(lt) + "'";
+      }
+      case LocalDate ld -> {
+        return "'" + DATE_FORMAT.format(ld) + "'";
+      }
+      case LocalTime lt -> {
+        return "'" + TIME_FORMAT.format(lt) + "'";
+      }
+      case LocalDateTime ldt -> {
+        return "'" + TIMESTAMP_FORMAT.format(ldt) + "'";
+      }
+      case ByteBuffer buffer -> {
+        ByteBuffer dup = buffer.duplicate();
+        byte[] bytes = new byte[dup.remaining()];
+        dup.get(bytes);
+        return toHexLiteral(bytes);
+      }
+      case byte[] bytes -> {
+        return toHexLiteral(bytes);
+      }
+      default -> {
+      }
+    }
+    if (value instanceof InputStream || value instanceof Reader) {
+      throw new SQLException("Stream parameters are not supported");
+    }
+    throw new SQLException("Unsupported parameter type: " + value.getClass().getName());
+  }
+
+  private String toHexLiteral(byte[] bytes) {
+    if (bytes == null) {
+      return "NULL";
+    }
+    StringBuilder sb = new StringBuilder(2 + bytes.length * 2);
+    sb.append("X'");
+    for (byte b : bytes) {
+      sb.append(String.format("%02X", b));
+    }
+    sb.append('\'');
+    return sb.toString();
+  }
+
+  /**
+   * Escapes single quotes in a string for SQL literals.
+   * <p>
+   * Precondition: {@code value} must not be {@code null}. This is guaranteed by
+   * the caller (renderLiteral). If {@code value} is {@code null}, this method
+   * throws {@link IllegalArgumentException}.
+   *
+   * @param value
+   *          the string to escape (must not be null)
+   * @return the escaped string
+   * @throws IllegalArgumentException
+   *           if value is null
+   */
+  private String escapeSingleQuotes(String value) {
+    if (value == null) {
+      throw new IllegalArgumentException("value must not be null (guaranteed by renderLiteral)");
+    }
+    return value.replace("'", "''");
+  }
+
+  private enum ParseState {
+    NORMAL, SINGLE_QUOTE, DOUBLE_QUOTE, LINE_COMMENT, BLOCK_COMMENT
   }
 
   // --- Parameter Setters (state stored for batching compatibility) ---
@@ -3294,27 +3654,27 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
   @Override
   public void setBoolean(int parameterIndex, boolean x) {
-    storeParameter(parameterIndex, Boolean.valueOf(x));
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setByte(int parameterIndex, byte x) {
-    storeParameter(parameterIndex, Byte.valueOf(x));
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setShort(int parameterIndex, short x) {
-    storeParameter(parameterIndex, Short.valueOf(x));
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setLong(int parameterIndex, long x) {
-    storeParameter(parameterIndex, Long.valueOf(x));
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setFloat(int parameterIndex, float x) {
-    storeParameter(parameterIndex, Float.valueOf(x));
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setDouble(int parameterIndex, double x) {
-    storeParameter(parameterIndex, Double.valueOf(x));
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setBigDecimal(int parameterIndex, BigDecimal x) {
@@ -3360,7 +3720,6 @@ public class JParqPreparedStatement implements PreparedStatement {
   public void setAsciiStream(int parameterIndex, InputStream x) {
     storeParameter(parameterIndex, x);
   }
-  @SuppressWarnings("deprecation")
   @Override
   public void setUnicodeStream(int parameterIndex, InputStream x, int length) {
     storeParameter(parameterIndex, x);
@@ -3463,8 +3822,6 @@ public class JParqPreparedStatement implements PreparedStatement {
    * read-only, each batch entry executes the prepared query with the stored
    * parameters and reports {@link Statement#SUCCESS_NO_INFO} as the update count.
    *
-   * @throws SQLException
-   *           if queuing fails
    */
   @Override
   public void addBatch() {
@@ -3562,7 +3919,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
   @Override
   public ParameterMetaData getParameterMetaData() {
-    return null;
+    return new BasicParameterMetaData(parameterCount);
   }
   @Override
   public int executeUpdate() throws SQLException {
@@ -3684,7 +4041,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
   @Override
   public int getResultSetHoldability() {
-    return 0;
+    return ResultSet.CLOSE_CURSORS_AT_COMMIT;
   }
   @Override
   public <T> T unwrap(Class<T> iface) {
@@ -3693,5 +4050,85 @@ public class JParqPreparedStatement implements PreparedStatement {
   @Override
   public boolean isWrapperFor(Class<?> iface) {
     return false;
+  }
+
+  private static final class BasicParameterMetaData implements ParameterMetaData {
+    private final int count;
+
+    BasicParameterMetaData(int count) {
+      this.count = count;
+    }
+
+    @Override
+    public int getParameterCount() {
+      return count;
+    }
+
+    @Override
+    public int isNullable(int param) throws SQLException {
+      validateIndex(param);
+      return parameterNullableUnknown;
+    }
+
+    @Override
+    public boolean isSigned(int param) throws SQLException {
+      validateIndex(param);
+      return true;
+    }
+
+    @Override
+    public int getPrecision(int param) throws SQLException {
+      validateIndex(param);
+      return 0;
+    }
+
+    @Override
+    public int getScale(int param) throws SQLException {
+      validateIndex(param);
+      return 0;
+    }
+
+    @Override
+    public int getParameterType(int param) throws SQLException {
+      validateIndex(param);
+      return Types.VARCHAR;
+    }
+
+    @Override
+    public String getParameterTypeName(int param) throws SQLException {
+      validateIndex(param);
+      return "VARCHAR";
+    }
+
+    @Override
+    public String getParameterClassName(int param) throws SQLException {
+      validateIndex(param);
+      return String.class.getName();
+    }
+
+    @Override
+    public int getParameterMode(int param) throws SQLException {
+      validateIndex(param);
+      return parameterModeIn;
+    }
+
+    @Override
+    public <T> T unwrap(Class<T> iface) throws SQLException {
+      if (iface.isInstance(this)) {
+        return iface.cast(this);
+      }
+      throw new SQLException("No wrapper available for " + iface.getName());
+    }
+
+    @Override
+    public boolean isWrapperFor(Class<?> iface) {
+      return iface.isInstance(this);
+    }
+
+    private void validateIndex(int param) throws SQLException {
+      if (param < 1 || param > count) {
+        throw new SQLException("Parameter index out of range: " + param + " (1.." + count + ")");
+      }
+    }
   }
 }
