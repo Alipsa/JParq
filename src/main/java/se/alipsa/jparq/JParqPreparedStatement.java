@@ -9,6 +9,7 @@ import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.sql.Array;
+import java.sql.BatchUpdateException;
 import java.sql.Blob;
 import java.sql.Clob;
 import java.sql.Connection;
@@ -24,6 +25,7 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLWarning;
 import java.sql.SQLXML;
+import java.sql.Statement;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
@@ -124,6 +126,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final CteResult baseCteResult;
   private CteResult informationSchemaTablesResult;
   private CteResult informationSchemaColumnsResult;
+  private final Map<Integer, Object> parameterValues = new LinkedHashMap<>();
+  private final List<Map<Integer, Object>> batchedParameters = new ArrayList<>();
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
     this(stmt, sql, Map.of());
@@ -3237,161 +3241,234 @@ public class JParqPreparedStatement implements PreparedStatement {
     return stmt.getConnection();
   }
 
-  // --- Parameter Setters (No-ops for read-only, non-parameterized driver) ---
+  private Map<Integer, Object> snapshotParameters() {
+    return new LinkedHashMap<>(parameterValues);
+  }
+
+  private void restoreParameters(Map<Integer, Object> snapshot) {
+    parameterValues.clear();
+    if (snapshot != null && !snapshot.isEmpty()) {
+      parameterValues.putAll(snapshot);
+    }
+  }
+
+  private void storeParameter(int parameterIndex, Object value) {
+    if (parameterIndex < 1) {
+      return;
+    }
+    parameterValues.put(Integer.valueOf(parameterIndex), value);
+  }
+
+  // --- Parameter Setters (state stored for batching compatibility) ---
   @Override
   public void setString(int parameterIndex, String x) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setInt(int parameterIndex, int x) {
+    storeParameter(parameterIndex, Integer.valueOf(x));
   }
   @Override
   public void setObject(int parameterIndex, Object x) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setObject(int parameterIndex, Object x, int targetSqlType) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setObject(int parameterIndex, Object x, int targetSqlType, int scaleOrLength) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void clearParameters() {
+    parameterValues.clear();
   }
   @Override
   public void setNull(int parameterIndex, int sqlType) {
+    storeParameter(parameterIndex, null);
   }
   @Override
   public void setNull(int parameterIndex, int sqlType, String typeName) {
+    storeParameter(parameterIndex, null);
   }
   @Override
   public void setBoolean(int parameterIndex, boolean x) {
+    storeParameter(parameterIndex, Boolean.valueOf(x));
   }
   @Override
   public void setByte(int parameterIndex, byte x) {
+    storeParameter(parameterIndex, Byte.valueOf(x));
   }
   @Override
   public void setShort(int parameterIndex, short x) {
+    storeParameter(parameterIndex, Short.valueOf(x));
   }
   @Override
   public void setLong(int parameterIndex, long x) {
+    storeParameter(parameterIndex, Long.valueOf(x));
   }
   @Override
   public void setFloat(int parameterIndex, float x) {
+    storeParameter(parameterIndex, Float.valueOf(x));
   }
   @Override
   public void setDouble(int parameterIndex, double x) {
+    storeParameter(parameterIndex, Double.valueOf(x));
   }
   @Override
   public void setBigDecimal(int parameterIndex, BigDecimal x) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setBytes(int parameterIndex, byte[] x) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setDate(int parameterIndex, Date x) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setDate(int parameterIndex, Date x, Calendar cal) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setTime(int parameterIndex, Time x) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setTime(int parameterIndex, Time x, Calendar cal) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setTimestamp(int parameterIndex, Timestamp x) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setTimestamp(int parameterIndex, Timestamp x, Calendar cal) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setAsciiStream(int parameterIndex, InputStream x, int length) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setAsciiStream(int parameterIndex, InputStream x, long length) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setAsciiStream(int parameterIndex, InputStream x) {
+    storeParameter(parameterIndex, x);
   }
   @SuppressWarnings("deprecation")
   @Override
   public void setUnicodeStream(int parameterIndex, InputStream x, int length) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setBinaryStream(int parameterIndex, InputStream x, int length) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setBinaryStream(int parameterIndex, InputStream x, long length) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setBinaryStream(int parameterIndex, InputStream x) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setCharacterStream(int parameterIndex, Reader reader, int length) {
+    storeParameter(parameterIndex, reader);
   }
   @Override
   public void setCharacterStream(int parameterIndex, Reader reader, long length) {
+    storeParameter(parameterIndex, reader);
   }
   @Override
   public void setCharacterStream(int parameterIndex, Reader reader) {
+    storeParameter(parameterIndex, reader);
   }
   @Override
   public void setRef(int parameterIndex, Ref x) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setBlob(int parameterIndex, Blob x) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setBlob(int parameterIndex, InputStream inputStream, long length) {
+    storeParameter(parameterIndex, inputStream);
   }
   @Override
   public void setBlob(int parameterIndex, InputStream inputStream) {
+    storeParameter(parameterIndex, inputStream);
   }
   @Override
   public void setClob(int parameterIndex, Clob x) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setClob(int parameterIndex, Reader reader, long length) {
+    storeParameter(parameterIndex, reader);
   }
   @Override
   public void setClob(int parameterIndex, Reader reader) {
+    storeParameter(parameterIndex, reader);
   }
   @Override
   public void setArray(int parameterIndex, Array x) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setURL(int parameterIndex, URL x) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setRowId(int parameterIndex, RowId x) {
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setNString(int parameterIndex, String value) {
+    storeParameter(parameterIndex, value);
   }
   @Override
   public void setNCharacterStream(int parameterIndex, Reader value, long length) {
+    storeParameter(parameterIndex, value);
   }
   @Override
   public void setNCharacterStream(int parameterIndex, Reader value) {
+    storeParameter(parameterIndex, value);
   }
   @Override
   public void setNClob(int parameterIndex, NClob value) {
+    storeParameter(parameterIndex, value);
   }
   @Override
   public void setNClob(int parameterIndex, Reader reader, long length) {
+    storeParameter(parameterIndex, reader);
   }
   @Override
   public void setNClob(int parameterIndex, Reader reader) {
+    storeParameter(parameterIndex, reader);
   }
   @Override
   public void setSQLXML(int parameterIndex, SQLXML xmlObject) {
+    storeParameter(parameterIndex, xmlObject);
   }
 
-  // --- Batching methods (Unsupported) ---
-
+  /**
+   * Queues the current parameter snapshot for batch execution. As this driver is
+   * read-only, each batch entry executes the prepared query with the stored
+   * parameters and reports {@link Statement#SUCCESS_NO_INFO} as the update count.
+   *
+   * @throws SQLException
+   *           if queuing fails
+   */
   @Override
-  public void addBatch() throws SQLException {
-    throw new SQLFeatureNotSupportedException("Batch operations are not supported by this read-only driver.");
+  public void addBatch() {
+    batchedParameters.add(snapshotParameters());
   }
 
   @Override
@@ -3399,14 +3476,51 @@ public class JParqPreparedStatement implements PreparedStatement {
     throw new SQLFeatureNotSupportedException("Batch operations are not supported by this read-only driver.");
   }
 
+  /**
+   * Clears all queued batch parameter sets.
+   */
   @Override
-  public void clearBatch() throws SQLException {
-    throw new SQLFeatureNotSupportedException("Batch operations are not supported by this read-only driver.");
+  public void clearBatch() {
+    batchedParameters.clear();
   }
 
+  /**
+   * Executes the queued batch entries sequentially. Each entry reuses the
+   * prepared query plan and closes its result set immediately after execution.
+   *
+   * @return an array containing {@link Statement#SUCCESS_NO_INFO} for each
+   *         successful batch entry, or an empty array when no batch entries are
+   *         queued
+   * @throws SQLException
+   *           if a batch entry fails to execute
+   */
   @Override
   public int[] executeBatch() throws SQLException {
-    throw new SQLFeatureNotSupportedException("Batch operations are not supported by this read-only driver.");
+    if (batchedParameters.isEmpty()) {
+      return new int[0];
+    }
+    int[] updateCounts = new int[batchedParameters.size()];
+    int completed = 0;
+    try {
+      for (Map<Integer, Object> parameters : batchedParameters) {
+        restoreParameters(parameters);
+        try (ResultSet rs = executeQuery()) {
+          updateCounts[completed] = SUCCESS_NO_INFO;
+          rs.getMetaData(); // Access to avoid unused warning; result set closes immediately after
+        }
+        stmt.setCurrentRs(null);
+        completed++;
+      }
+    } catch (SQLException e) {
+      int[] partial = new int[completed];
+      System.arraycopy(updateCounts, 0, partial, 0, completed);
+      stmt.setCurrentRs(null);
+      throw new BatchUpdateException("Failed to execute batch entry " + completed, e.getSQLState(), e.getErrorCode(),
+          partial, e);
+    } finally {
+      clearBatch();
+    }
+    return updateCounts;
   }
 
   // --- Boilerplate (Standard PreparedStatement methods) ---

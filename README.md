@@ -152,6 +152,14 @@ jparq(acme)> /exit
 $
 ```
 
+## JDBC support
+
+- **Driver scope** — Read-only. Only `SELECT` statements are supported; `executeUpdate`/DML, generated keys, and updatable result sets are not implemented. Result sets are `TYPE_FORWARD_ONLY`, `CONCUR_READ_ONLY` with `CLOSE_CURSORS_AT_COMMIT` holdability.
+- **Prepared statements** — SQL is planned when the `PreparedStatement` is created; positional parameters are not bound (parameter setters are no-ops). Only `prepareStatement(String)` is implemented; other overloads are unsupported. Prepared-statement batching without a SQL argument is supported for convenience and reports `SUCCESS_NO_INFO` counts per entry. `Statement` batching and `addBatch(String)` remain unsupported.
+- **Transactions and sessions** — The connection is always read-only with `TRANSACTION_NONE`; `commit`, `rollback`, and savepoints are no-ops. `getAutoCommit()` always returns `true`, and changing isolation level, holdability, or poolability is not supported.
+- **Metadata** — `DatabaseMetaData` exposes tables and columns derived from the base directory and subdirectories (schemas); the catalog is the base directory name. Callable statements, stored procedures, and custom type mappings are not supported.
+- **Other JDBC surfaces** — `CallableStatement`, `createClob`/`createBlob`/`createArrayOf`, network timeout, and client-info features are not implemented. Connection validation (`isValid`) is not supported.
+
 ## SQL Support
 JParq aims to be fully compliant with the read part of the SQL standard (SQL:2016 and earlier). 
 As of version 1.1.1, the support (as far as I know) for the standard is complete. The following is a detailed list of supported features and functions.

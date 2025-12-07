@@ -45,7 +45,7 @@ class JParqPreparedStatementCoverageTest {
   }
 
   @Test
-  void noOpParameterSettersDoNotThrow() throws SQLException {
+  void parameterSettersDoNotThrow() throws SQLException {
     preparedStatement.setString(1, "value");
     preparedStatement.setInt(2, 5);
     preparedStatement.setObject(3, "value");
@@ -101,11 +101,27 @@ class JParqPreparedStatementCoverageTest {
   }
 
   @Test
-  void batchOperationsAreUnsupported() {
-    assertThrows(SQLFeatureNotSupportedException.class, () -> preparedStatement.addBatch());
+  void batchExecutionReturnsCountsAndClearsState() throws SQLException {
+    preparedStatement.addBatch();
+    preparedStatement.addBatch();
+    int[] counts = preparedStatement.executeBatch();
+    assertArrayEquals(new int[]{
+        Statement.SUCCESS_NO_INFO, Statement.SUCCESS_NO_INFO
+    }, counts);
+    assertNull(preparedStatement.getResultSet());
+    assertArrayEquals(new int[0], preparedStatement.executeBatch());
+  }
+
+  @Test
+  void clearBatchRemovesQueuedEntries() throws SQLException {
+    preparedStatement.addBatch();
+    preparedStatement.clearBatch();
+    assertArrayEquals(new int[0], preparedStatement.executeBatch());
+  }
+
+  @Test
+  void addBatchWithSqlIsUnsupported() {
     assertThrows(SQLFeatureNotSupportedException.class, () -> preparedStatement.addBatch("SELECT 1"));
-    assertThrows(SQLFeatureNotSupportedException.class, () -> preparedStatement.clearBatch());
-    assertThrows(SQLFeatureNotSupportedException.class, () -> preparedStatement.executeBatch());
   }
 
   @Test

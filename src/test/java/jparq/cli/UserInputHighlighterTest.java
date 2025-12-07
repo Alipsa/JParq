@@ -1,8 +1,10 @@
-package se.alipsa.jparq.cli;
+package jparq.cli;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.cli.JParqCliSession;
+import se.alipsa.jparq.cli.UserInputHighlighter;
 
 /**
  * Tests for verifying that the CLI user input highlighter colors input text and

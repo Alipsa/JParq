@@ -8,7 +8,7 @@ import org.jline.utils.AttributedString;
 /**
  * Highlights user input to distinguish it from query results in the CLI.
  */
-class UserInputHighlighter implements Highlighter {
+public class UserInputHighlighter implements Highlighter {
 
   /**
    * Apply a brighter ANSI color to the current input while ensuring the color is
