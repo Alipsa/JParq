@@ -140,6 +140,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   private CteResult informationSchemaColumnsResult;
   private final Map<Integer, Object> parameterValues = new LinkedHashMap<>();
   private final List<Map<Integer, Object>> batchedParameters = new ArrayList<>();
+  private JParqPreparedStatement boundStatement;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
     this(stmt, sql, Map.of());
@@ -451,8 +452,11 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   @Override
   public void close() {
-    // No-op for now, as PreparedStatement cleanup is minimal in this read-only
-    // context.
+    // Close the bound statement if it exists
+    if (boundStatement != null) {
+      boundStatement.close();
+      boundStatement = null;
+    }
   }
 
   private PreparedStatement prepareSubqueryStatement(String sql) throws SQLException {
@@ -3289,8 +3293,8 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   private ResultSet executeWithBoundParameters() throws SQLException {
     String boundSql = bindParameters();
-    JParqPreparedStatement bound = new JParqPreparedStatement(stmt, boundSql, inheritedCteContext);
-    return bound.executeQuery();
+    boundStatement = new JParqPreparedStatement(stmt, boundSql, inheritedCteContext);
+    return boundStatement.executeQuery();
   }
 
   private void restoreParameters(Map<Integer, Object> snapshot) {
