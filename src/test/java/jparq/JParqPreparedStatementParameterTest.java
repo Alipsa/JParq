@@ -83,4 +83,44 @@ class JParqPreparedStatementParameterTest {
       assertThrows(SQLException.class, ps::executeQuery);
     }
   }
+
+  @Test
+  void handlesEscapedQuotesInSqlString() throws SQLException {
+    try (PreparedStatement ps = connection.prepareStatement(
+        "SELECT * FROM mtcars WHERE model = 'O''Brien' AND cyl = ?")) {
+      ps.setInt(1, 4);
+      try (ResultSet rs = ps.executeQuery()) {
+        // Should execute without treating the escaped quote as end of string
+        // No results expected since there's no model called "O'Brien" in mtcars
+        assertFalse(rs.next());
+      }
+    }
+  }
+
+  @Test
+  void handlesMultipleEscapedQuotesAndParameters() throws SQLException {
+    // Test with escaped quotes before and after placeholder
+    try (PreparedStatement ps = connection.prepareStatement(
+        "SELECT * FROM mtcars WHERE model = 'O''Brien''s Car' AND cyl = ? AND hp > ?")) {
+      ps.setInt(1, 4);
+      ps.setInt(2, 100);
+      try (ResultSet rs = ps.executeQuery()) {
+        // Should correctly identify 2 placeholders despite multiple escaped quotes
+        assertFalse(rs.next());
+      }
+    }
+  }
+
+  @Test
+  void handlesQuestionMarkInsideEscapedQuoteString() throws SQLException {
+    // Test with ? inside a string literal containing escaped quotes
+    try (PreparedStatement ps = connection.prepareStatement(
+        "SELECT * FROM mtcars WHERE model = 'O''Brien?''s' AND cyl = ?")) {
+      ps.setInt(1, 4);
+      try (ResultSet rs = ps.executeQuery()) {
+        // Should identify only 1 placeholder (the ? inside the string is not a placeholder)
+        assertFalse(rs.next());
+      }
+    }
+  }
 }
