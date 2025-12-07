@@ -3506,8 +3506,21 @@ public class JParqPreparedStatement implements PreparedStatement {
     return sb.toString();
   }
 
+  /**
+   * Escapes single quotes in a string for SQL literals.
+   * <p>
+   * Precondition: {@code value} must not be {@code null}. This is guaranteed by the caller (renderLiteral).
+   * If {@code value} is {@code null}, this method throws {@link IllegalArgumentException}.
+   *
+   * @param value the string to escape (must not be null)
+   * @return the escaped string
+   * @throws IllegalArgumentException if value is null
+   */
   private String escapeSingleQuotes(String value) {
-    return value == null ? "" : value.replace("'", "''");
+    if (value == null) {
+      throw new IllegalArgumentException("value must not be null (guaranteed by renderLiteral)");
+    }
+    return value.replace("'", "''");
   }
 
   private enum ParseState {
