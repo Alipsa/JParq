@@ -3440,7 +3440,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     StringBuilder rendered = new StringBuilder(originalSql.length() + 32);
     ParseState state = ParseState.NORMAL;
-    int index = 0;
+    int foundCount = 0;
     for (int i = 0; i < originalSql.length(); i++) {
       char c = originalSql.charAt(i);
       boolean consumed = false;
@@ -3455,8 +3455,8 @@ public class JParqPreparedStatement implements PreparedStatement {
           } else if (c == '/' && i + 1 < originalSql.length() && originalSql.charAt(i + 1) == '*') {
             state = ParseState.BLOCK_COMMENT;
           } else if (c == '?') {
-            index++;
-            Object value = parameterValues.get(Integer.valueOf(index));
+            foundCount++;
+            Object value = parameterValues.get(Integer.valueOf(foundCount));
             rendered.append(renderLiteral(value));
             consumed = true;
           }
@@ -3492,8 +3492,8 @@ public class JParqPreparedStatement implements PreparedStatement {
         rendered.append(c);
       }
     }
-    if (index != parameterCount) {
-      throw new SQLException("Expected " + parameterCount + " parameters but found " + index);
+    if (foundCount != parameterCount) {
+      throw new SQLException("Expected " + parameterCount + " parameters but found " + foundCount);
     }
     return rendered.toString();
   }
