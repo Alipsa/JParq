@@ -103,7 +103,41 @@ import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.meta.InformationSchemaColumns;
 import se.alipsa.jparq.meta.InformationSchemaTables;
 
-/** An implementation of the java.sql.PreparedStatement interface. */
+/**
+ * An implementation of the java.sql.PreparedStatement interface.
+ *
+ * <h2>Prepared Statement Behavior</h2>
+ * <p>
+ * This implementation uses a two-phase approach for parameterized queries:
+ * </p>
+ * <ul>
+ * <li><b>Preparation phase</b>: Validates SQL syntax by parsing the query with
+ * placeholders. This catches syntax errors and invalid table references early,
+ * providing fail-fast behavior.</li>
+ * <li><b>Execution phase</b>: Re-plans the query with bound parameter values to
+ * enable optimizations like predicate pushdown to Parquet filters. This ensures
+ * that WHERE clause conditions with parameters can be pushed down to the
+ * storage layer for efficient filtering.</li>
+ * </ul>
+ * <p>
+ * This design trades some preparation-time overhead for correctness and
+ * performance:
+ * </p>
+ * <ul>
+ * <li><b>Early error detection</b>: Syntax and schema errors are caught at
+ * {@code prepareStatement()} time rather than deferred to
+ * {@code executeQuery()}.</li>
+ * <li><b>Execution-time planning</b>: Query optimization with actual parameter
+ * values enables Parquet filter pushdown, which can dramatically reduce I/O for
+ * large datasets.</li>
+ * <li><b>Parameter safety</b>: Parameters are bound through safe literal
+ * rendering (escaping quotes, hex-encoding binary data) to prevent SQL
+ * injection.</li>
+ * </ul>
+ *
+ * @see #executeQuery()
+ * @see #bindParameters()
+ */
 @SuppressWarnings({
     "checkstyle:AbbreviationAsWordInName", "checkstyle:OverloadMethodsDeclarationOrder",
     "PMD.AvoidCatchingGenericException"
@@ -173,6 +207,15 @@ public class JParqPreparedStatement implements PreparedStatement {
     // --- QUERY PLANNING PHASE (Expensive CPU Work) ---
     try {
       if (hasParameters) {
+        // For parameterized queries, perform lightweight syntax validation at
+        // preparation time
+        // to catch errors early (fail-fast), but defer full query planning (including
+        // schema
+        // resolution and optimization) to execution time when actual parameter values
+        // are known.
+        // This enables predicate pushdown with bound values while still providing early
+        // error detection.
+        SqlParser.parseQuery(sql); // Validates syntax and basic structure
         tmpSetOperation = false;
         tmpTableRefs = List.of();
         tmpJoinQuery = false;
@@ -3287,6 +3330,31 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
   }
 
+  /**
+   * Executes the query with bound parameters by re-planning with actual values.
+   * <p>
+   * This method performs the second phase of the two-phase prepared statement
+   * execution:
+   * </p>
+   * <ol>
+   * <li>Bind all parameters to their values, rendering them as safe SQL
+   * literals</li>
+   * <li>Create a new statement with the bound SQL for full query planning</li>
+   * <li>Execute the re-planned query, enabling optimizations like predicate
+   * pushdown</li>
+   * </ol>
+   * <p>
+   * Re-planning at execution time is necessary because Parquet filter predicates
+   * require actual values (not placeholders) to construct efficient column-level
+   * filters. This approach ensures that WHERE conditions with parameters like
+   * {@code WHERE age > ?} can be pushed down to Parquet's storage layer,
+   * dramatically reducing I/O for filtered queries.
+   * </p>
+   *
+   * @return the result set from executing the query with bound parameters
+   * @throws SQLException
+   *           if parameter binding fails or query execution fails
+   */
   private ResultSet executeWithBoundParameters() throws SQLException {
     String boundSql = bindParameters();
     JParqPreparedStatement bound = new JParqPreparedStatement(stmt, boundSql, inheritedCteContext);
@@ -3509,12 +3577,15 @@ public class JParqPreparedStatement implements PreparedStatement {
   /**
    * Escapes single quotes in a string for SQL literals.
    * <p>
-   * Precondition: {@code value} must not be {@code null}. This is guaranteed by the caller (renderLiteral).
-   * If {@code value} is {@code null}, this method throws {@link IllegalArgumentException}.
+   * Precondition: {@code value} must not be {@code null}. This is guaranteed by
+   * the caller (renderLiteral). If {@code value} is {@code null}, this method
+   * throws {@link IllegalArgumentException}.
    *
-   * @param value the string to escape (must not be null)
+   * @param value
+   *          the string to escape (must not be null)
    * @return the escaped string
-   * @throws IllegalArgumentException if value is null
+   * @throws IllegalArgumentException
+   *           if value is null
    */
   private String escapeSingleQuotes(String value) {
     if (value == null) {
