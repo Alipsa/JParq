@@ -3281,7 +3281,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
     }
     for (Integer index : parameters.keySet()) {
-      if (index == null || index.intValue() < 1 || index.intValue() > parameterCount) {
+      if (index.intValue() < 1 || index.intValue() > parameterCount) {
         throw new SQLException("Parameter index " + index + " is out of range");
       }
     }
