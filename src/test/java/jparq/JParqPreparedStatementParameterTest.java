@@ -226,11 +226,10 @@ class JParqPreparedStatementParameterTest {
 
   @Test
   void bindsNamedParameterAndFilters() throws SQLException {
-    try (PreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) FROM mtcars WHERE cyl = :cyl")) {
+    try (JParqPreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) FROM mtcars WHERE cyl = :cyl")) {
       assertInstanceOf(JParqPreparedStatement.class, ps);
-      JParqPreparedStatement named = (JParqPreparedStatement) ps;
-      named.setInt("cyl", 4);
-      try (ResultSet rs = named.executeQuery()) {
+      ps.setInt("cyl", 4);
+      try (ResultSet rs = ps.executeQuery()) {
         assertTrue(rs.next());
         assertEquals(11, rs.getInt(1));
       }
@@ -239,11 +238,10 @@ class JParqPreparedStatementParameterTest {
 
   @Test
   void appliesSameValueToRepeatedNamedParameter() throws SQLException {
-    try (PreparedStatement ps = connection
+    try (JParqPreparedStatement ps = connection
         .prepareStatement("SELECT COUNT(*) FROM mtcars WHERE model = :model OR model = :model")) {
-      JParqPreparedStatement named = (JParqPreparedStatement) ps;
-      named.setString("model", "Ford Pantera L");
-      try (ResultSet rs = named.executeQuery()) {
+      ps.setString("model", "Ford Pantera L");
+      try (ResultSet rs = ps.executeQuery()) {
         assertTrue(rs.next());
         assertEquals(1, rs.getInt(1));
       }
@@ -252,11 +250,10 @@ class JParqPreparedStatementParameterTest {
 
   @Test
   void ignoresNamedMarkerInsideStringLiteral() throws SQLException {
-    try (PreparedStatement ps = connection
+    try (JParqPreparedStatement ps = connection
         .prepareStatement("SELECT COUNT(*) FROM mtcars WHERE model = ':literal' OR cyl = :cyl")) {
-      JParqPreparedStatement named = (JParqPreparedStatement) ps;
-      named.setInt("cyl", 4);
-      try (ResultSet rs = named.executeQuery()) {
+      ps.setInt("cyl", 4);
+      try (ResultSet rs = ps.executeQuery()) {
         assertTrue(rs.next());
         assertEquals(11, rs.getInt(1));
       }
@@ -265,11 +262,10 @@ class JParqPreparedStatementParameterTest {
 
   @Test
   void ignoresNamedMarkerInsideLineComment() throws SQLException {
-    try (PreparedStatement ps = connection
+    try (JParqPreparedStatement ps = connection
         .prepareStatement("SELECT COUNT(*) FROM mtcars -- comment contains :ignored\nWHERE cyl = :cyl")) {
-      JParqPreparedStatement named = (JParqPreparedStatement) ps;
-      named.setInt("cyl", 4);
-      try (ResultSet rs = named.executeQuery()) {
+      ps.setInt("cyl", 4);
+      try (ResultSet rs = ps.executeQuery()) {
         assertTrue(rs.next());
         assertEquals(11, rs.getInt(1));
       }
@@ -278,11 +274,10 @@ class JParqPreparedStatementParameterTest {
 
   @Test
   void ignoresNamedMarkerInsideBlockComment() throws SQLException {
-    try (PreparedStatement ps = connection
+    try (JParqPreparedStatement ps = connection
         .prepareStatement("SELECT COUNT(*) FROM mtcars /* comment with :ignored */ WHERE cyl = :cyl")) {
-      JParqPreparedStatement named = (JParqPreparedStatement) ps;
-      named.setInt("cyl", 4);
-      try (ResultSet rs = named.executeQuery()) {
+      ps.setInt("cyl", 4);
+      try (ResultSet rs = ps.executeQuery()) {
         assertTrue(rs.next());
         assertEquals(11, rs.getInt(1));
       }

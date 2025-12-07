@@ -160,6 +160,9 @@ $
 - **Metadata** — `DatabaseMetaData` exposes tables and columns derived from the base directory and subdirectories (schemas); the catalog is the base directory name. Callable statements, stored procedures, and custom type mappings are not supported.
 - **Other JDBC surfaces** — `CallableStatement`, `createClob`/`createBlob`/`createArrayOf`, network timeout, and client-info features are not implemented. Connection validation (`isValid`) is not supported.
 
+### Non standard JDBC extensions
+- Named parameters i.e. :paramName syntax for prepared statements
+
 ## SQL Support
 JParq aims to be fully compliant with the read part of the SQL standard (SQL:2016 and earlier). 
 As of version 1.1.1, the support (as far as I know) for the standard is complete. The following is a detailed list of supported features and functions.
@@ -321,7 +324,6 @@ See [release.md](release.md) for the full version history and work in progress.
 ## Roadmap: _Might_ be implemented in the future
 
 ### Non standard extensions
-- Named parameters i.e. :paramName syntax for prepared statements
 - Allow omission of from clause in some cases
   - Several popular databases allow you to omit the FROM clause when you are only selecting literal values, performing arithmetic, or evaluating scalar functions (functions that return a single value). In these cases, the query returns a single row e.g: `SELECT CURRENT_DATE as cur_date`.
 - Support for variable assignment and use within SQL scripts.

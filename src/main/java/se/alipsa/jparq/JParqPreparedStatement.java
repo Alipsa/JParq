@@ -305,7 +305,7 @@ public class JParqPreparedStatement implements PreparedStatement {
                 tmpCteResults);
             tmpBaseCteResult = new CteResult(data.schema(), data.rows());
             tmpFileAvro = data.schema();
-            int innerOffset = baseRef.subquery() == null ? 0 : Math.max(0, baseRef.subquery().offset());
+            int innerOffset = Math.max(0, baseRef.subquery().offset());
             if (innerOffset > 0) {
               tmpSelect = new SqlParser.Select(tmpSelect.labels(), tmpSelect.columnNames(), tmpSelect.table(),
                   tmpSelect.tableAlias(), tmpSelect.where(), tmpSelect.limit(),
@@ -423,7 +423,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   @SuppressWarnings("PMD.CloseResource")
   @Override
-  public ResultSet executeQuery() throws SQLException {
+  public JParqResultSet executeQuery() throws SQLException {
     if (hasParameters) {
       return executeWithBoundParameters();
     }
@@ -508,11 +508,11 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
   }
 
-  private PreparedStatement prepareSubqueryStatement(String sql) throws SQLException {
+  private JParqPreparedStatement prepareSubqueryStatement(String sql) throws SQLException {
     return prepareSubqueryStatement(sql, cteResults);
   }
 
-  private PreparedStatement prepareSubqueryStatement(String sql, Map<Identifier, CteResult> cteContext)
+  private JParqPreparedStatement prepareSubqueryStatement(String sql, Map<Identifier, CteResult> cteContext)
       throws SQLException {
     Map<Identifier, CteResult> inherited = cteContext == null ? Map.of() : cteContext;
     return new JParqPreparedStatement(stmt, sql, inherited);
@@ -560,8 +560,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     List<String> labels = null;
     List<Integer> sqlTypes = null;
     int columnCount = -1;
-    for (int i = 0; i < components.size(); i++) {
-      SqlParser.SetComponent component = components.get(i);
+    for (SqlParser.SetComponent component : components) {
       List<List<Object>> componentData = new ArrayList<>();
       try (JParqPreparedStatement prepared = new JParqPreparedStatement(stmt, component.sql(), cteResults);
           ResultSet rs = prepared.executeQuery()) {
@@ -615,11 +614,11 @@ public class JParqPreparedStatement implements PreparedStatement {
   private List<List<Object>> evaluateSetOperation(List<SqlParser.SetComponent> components,
       List<List<List<Object>>> rowsPerComponent) throws SQLException {
     if (components.isEmpty()) {
-      return List.<List<Object>>of();
+      return List.of();
     }
     List<List<List<Object>>> valueStack = new ArrayList<>();
     List<SqlParser.SetOperator> operatorStack = new ArrayList<>();
-    valueStack.add(new ArrayList<>(rowsPerComponent.get(0)));
+    valueStack.add(new ArrayList<>(rowsPerComponent.getFirst()));
     for (int i = 1; i < components.size(); i++) {
       SqlParser.SetOperator operator = components.get(i).operator();
       if (operator == SqlParser.SetOperator.FIRST) {
@@ -2266,9 +2265,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (record == null) {
       return null;
     }
-    Map<String, String> mapping = normalizedQualifier == null
-        ? Map.of()
-        : columnLookup.getOrDefault(normalizedQualifier, Map.of());
+    Map<String, String> mapping = columnLookup.getOrDefault(normalizedQualifier, Map.of());
     String normalizedColumn = normalizeColumnKey(column);
     String fieldName = mapping.get(normalizedColumn);
     if (fieldName == null) {
@@ -3328,7 +3325,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return;
     }
     for (int i = 1; i <= parameterCount; i++) {
-      if (!parameters.containsKey(Integer.valueOf(i))) {
+      if (!parameters.containsKey(i)) {
         throw new SQLException("Parameter " + i + " is not set");
       }
     }
@@ -3364,7 +3361,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @throws SQLException
    *           if parameter binding fails or query execution fails
    */
-  private ResultSet executeWithBoundParameters() throws SQLException {
+  private JParqResultSet executeWithBoundParameters() throws SQLException {
     String boundSql = bindParameters();
     boundStatement = new JParqPreparedStatement(stmt, boundSql, inheritedCteContext);
     return boundStatement.executeQuery();
@@ -3463,7 +3460,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             }
             String name = sql.substring(start, end);
             count++;
-            nameToIndexes.computeIfAbsent(name, key -> new ArrayList<>()).add(Integer.valueOf(count));
+            nameToIndexes.computeIfAbsent(name, key -> new ArrayList<>()).add(count);
             rewritten.append('?');
             i = end - 1;
             consumed = true;
@@ -3559,7 +3556,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             state = ParseState.BLOCK_COMMENT;
           } else if (c == '?') {
             foundCount++;
-            Object value = parameterValues.get(Integer.valueOf(foundCount));
+            Object value = parameterValues.get(foundCount);
             rendered.append(renderLiteral(value));
             consumed = true;
           }
@@ -3623,7 +3620,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         return "'" + escapeSingleQuotes(String.valueOf(ch)) + "'";
       }
       case Boolean bool -> {
-        return bool.booleanValue() ? "TRUE" : "FALSE";
+        return bool ? "TRUE" : "FALSE";
       }
       default -> {
       }
@@ -3749,7 +3746,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           if the parameter name is unknown
    */
   public void setInt(String parameterName, int value) throws SQLException {
-    storeNamedParameter(parameterName, Integer.valueOf(value));
+    storeNamedParameter(parameterName, value);
   }
 
   /**
@@ -3763,7 +3760,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           if the parameter name is unknown
    */
   public void setLong(String parameterName, long value) throws SQLException {
-    storeNamedParameter(parameterName, Long.valueOf(value));
+    storeNamedParameter(parameterName, value);
   }
 
   /**
@@ -3777,7 +3774,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           if the parameter name is unknown
    */
   public void setDouble(String parameterName, double value) throws SQLException {
-    storeNamedParameter(parameterName, Double.valueOf(value));
+    storeNamedParameter(parameterName, value);
   }
 
   /**
@@ -3791,7 +3788,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           if the parameter name is unknown
    */
   public void setFloat(String parameterName, float value) throws SQLException {
-    storeNamedParameter(parameterName, Float.valueOf(value));
+    storeNamedParameter(parameterName, value);
   }
 
   /**
@@ -3805,7 +3802,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           if the parameter name is unknown
    */
   public void setBoolean(String parameterName, boolean value) throws SQLException {
-    storeNamedParameter(parameterName, Boolean.valueOf(value));
+    storeNamedParameter(parameterName, value);
   }
 
   /**
@@ -3918,7 +3915,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
   @Override
   public void setInt(int parameterIndex, int x) {
-    storeParameter(parameterIndex, Integer.valueOf(x));
+    storeParameter(parameterIndex, x);
   }
   @Override
   public void setObject(int parameterIndex, Object x) {

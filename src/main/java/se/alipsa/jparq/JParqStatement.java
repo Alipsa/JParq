@@ -1,7 +1,6 @@
 package se.alipsa.jparq;
 
 import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
@@ -34,12 +33,12 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
    *
    * @param sql
    *          the SQL query
-   * @return a PreparedStatement
+   * @return a JParqPreparedStatement
    * @throws SQLException
    *           if a database access error occurs
    */
   // Used by JParqConnection
-  public PreparedStatement prepare(String sql) throws SQLException {
+  public JParqPreparedStatement prepare(String sql) throws SQLException {
     this.currentSql = sql;
     return new JParqPreparedStatement(this, sql);
   }

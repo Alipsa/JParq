@@ -370,7 +370,7 @@ public class JParqConnection implements Connection {
   }
 
   @Override
-  public PreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency)
+  public JParqPreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency)
       throws SQLException {
     if (resultSetType == ResultSet.TYPE_FORWARD_ONLY && resultSetConcurrency == ResultSet.CONCUR_READ_ONLY) {
       return prepareStatement(sql);
@@ -379,7 +379,7 @@ public class JParqConnection implements Connection {
   }
 
   @Override
-  public PreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency,
+  public JParqPreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency,
       int resultSetHoldability) throws SQLException {
     if (resultSetHoldability != ResultSet.CLOSE_CURSORS_AT_COMMIT) {
       throw new SQLFeatureNotSupportedException("Only CLOSE_CURSORS_AT_COMMIT holdability is supported.");
@@ -403,7 +403,7 @@ public class JParqConnection implements Connection {
   }
 
   @Override
-  public PreparedStatement prepareStatement(String sql) throws SQLException {
+  public JParqPreparedStatement prepareStatement(String sql) throws SQLException {
     return new JParqStatement(this).prepare(sql);
   }
 
