@@ -3479,7 +3479,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return "'" + TIMESTAMP_FORMAT.format(ldt) + "'";
     }
     if (value instanceof ByteBuffer buffer) {
-      ByteBuffer dup = buffer.slice();
+      ByteBuffer dup = buffer.duplicate();
       byte[] bytes = new byte[dup.remaining()];
       dup.get(bytes);
       return toHexLiteral(bytes);
