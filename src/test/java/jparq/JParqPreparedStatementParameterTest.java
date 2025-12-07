@@ -19,6 +19,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import se.alipsa.jparq.JParqConnection;
+import se.alipsa.jparq.JParqPreparedStatement;
 
 /**
  * Verifies parameter binding and SQL injection protection for prepared
@@ -219,6 +220,45 @@ class JParqPreparedStatementParameterTest {
       try (ResultSet rs = ps.executeQuery()) {
         assertTrue(rs.next());
         assertEquals(10, rs.getInt(1));
+      }
+    }
+  }
+
+  @Test
+  void bindsNamedParameterAndFilters() throws SQLException {
+    try (PreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) FROM mtcars WHERE cyl = :cyl")) {
+      assertInstanceOf(JParqPreparedStatement.class, ps);
+      JParqPreparedStatement named = (JParqPreparedStatement) ps;
+      named.setInt("cyl", 4);
+      try (ResultSet rs = named.executeQuery()) {
+        assertTrue(rs.next());
+        assertEquals(11, rs.getInt(1));
+      }
+    }
+  }
+
+  @Test
+  void appliesSameValueToRepeatedNamedParameter() throws SQLException {
+    try (PreparedStatement ps = connection
+        .prepareStatement("SELECT COUNT(*) FROM mtcars WHERE model = :model OR model = :model")) {
+      JParqPreparedStatement named = (JParqPreparedStatement) ps;
+      named.setString("model", "Ford Pantera L");
+      try (ResultSet rs = named.executeQuery()) {
+        assertTrue(rs.next());
+        assertEquals(1, rs.getInt(1));
+      }
+    }
+  }
+
+  @Test
+  void ignoresNamedMarkerInsideStringLiteral() throws SQLException {
+    try (PreparedStatement ps = connection
+        .prepareStatement("SELECT COUNT(*) FROM mtcars WHERE model = ':literal' OR cyl = :cyl")) {
+      JParqPreparedStatement named = (JParqPreparedStatement) ps;
+      named.setInt("cyl", 4);
+      try (ResultSet rs = named.executeQuery()) {
+        assertTrue(rs.next());
+        assertEquals(11, rs.getInt(1));
       }
     }
   }

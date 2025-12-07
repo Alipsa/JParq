@@ -134,6 +134,11 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
  * rendering (escaping quotes, hex-encoding binary data) to prevent SQL
  * injection.</li>
  * </ul>
+ * <p>
+ * Named parameters using the {@code :name} syntax are rewritten to JDBC
+ * positional markers and can be bound via the dedicated setter overloads (for
+ * example {@link #setString(String, String)}).
+ * </p>
  *
  * @see #executeQuery()
  * @see #bindParameters()
@@ -169,6 +174,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final CteResult baseCteResult;
   private final Map<Identifier, CteResult> inheritedCteContext;
   private final int parameterCount;
+  private final Map<String, List<Integer>> namedParameterIndexes;
   private final boolean hasParameters;
   private CteResult informationSchemaTablesResult;
   private CteResult informationSchemaColumnsResult;
@@ -183,8 +189,10 @@ public class JParqPreparedStatement implements PreparedStatement {
   JParqPreparedStatement(JParqStatement stmt, String sql, Map<Identifier, CteResult> inheritedCtes)
       throws SQLException {
     this.stmt = stmt;
-    this.originalSql = sql;
-    this.parameterCount = countPlaceholders(sql);
+    ParameterParseResult parseResult = parseParameters(sql);
+    this.originalSql = parseResult.sql();
+    this.parameterCount = parseResult.parameterCount();
+    this.namedParameterIndexes = parseResult.namedParameterIndexes();
     this.hasParameters = parameterCount > 0;
     this.inheritedCteContext = inheritedCtes == null ? Map.of() : Map.copyOf(inheritedCtes);
 
@@ -216,13 +224,13 @@ public class JParqPreparedStatement implements PreparedStatement {
         // are known.
         // This enables predicate pushdown with bound values while still providing early
         // error detection.
-        SqlParser.parseQuery(sql); // Validates syntax and basic structure
+        SqlParser.parseQuery(originalSql); // Validates syntax and basic structure
         tmpSetOperation = false;
         tmpTableRefs = List.of();
         tmpJoinQuery = false;
         tmpCteResults = this.inheritedCteContext;
       } else {
-        SqlParser.Query query = SqlParser.parseQuery(sql);
+        SqlParser.Query query = SqlParser.parseQuery(originalSql);
 
         Map<Identifier, CteResult> mutableCtes = new LinkedHashMap<>();
         if (inheritedCtes != null && !inheritedCtes.isEmpty()) {
@@ -3376,14 +3384,64 @@ public class JParqPreparedStatement implements PreparedStatement {
     parameterValues.put(parameterIndex, value);
   }
 
-  private int countPlaceholders(String sql) {
-    if (sql == null || sql.isEmpty()) {
-      return 0;
+  /**
+   * Stores a parameter value for every positional index associated with the
+   * supplied named parameter.
+   *
+   * @param parameterName
+   *          the name of the parameter to set
+   * @param value
+   *          the value to associate with the named parameter
+   * @throws SQLException
+   *           if the parameter name is not present in the prepared SQL
+   */
+  private void storeNamedParameter(String parameterName, Object value) throws SQLException {
+    List<Integer> indexes = indexesForName(parameterName);
+    for (Integer index : indexes) {
+      storeParameter(index.intValue(), value);
     }
+  }
+
+  /**
+   * Resolves positional indexes for a named parameter.
+   *
+   * @param parameterName
+   *          the parameter name to resolve
+   * @return the positional indexes that reference the parameter
+   * @throws SQLException
+   *           if the parameter name is null, blank, or not present in the SQL
+   */
+  private List<Integer> indexesForName(String parameterName) throws SQLException {
+    if (parameterName == null || parameterName.isBlank()) {
+      throw new SQLException("Parameter name must not be null or blank");
+    }
+    List<Integer> indexes = namedParameterIndexes.get(parameterName);
+    if (indexes == null || indexes.isEmpty()) {
+      throw new SQLException("Unknown parameter name: " + parameterName);
+    }
+    return indexes;
+  }
+
+  /**
+   * Parses the SQL for positional and named parameters, rewriting any
+   * {@code :name} placeholders to JDBC {@code ?} markers.
+   *
+   * @param sql
+   *          the SQL string to inspect
+   * @return a parse result containing the rewritten SQL, the discovered named
+   *         parameter indexes, and the total number of parameters
+   */
+  private ParameterParseResult parseParameters(String sql) {
+    if (sql == null || sql.isEmpty()) {
+      return new ParameterParseResult("", Map.of(), 0);
+    }
+    Map<String, List<Integer>> nameToIndexes = new LinkedHashMap<>();
+    StringBuilder rewritten = new StringBuilder(sql.length());
     int count = 0;
     ParseState state = ParseState.NORMAL;
     for (int i = 0; i < sql.length(); i++) {
       char c = sql.charAt(i);
+      boolean consumed = false;
       switch (state) {
         case NORMAL -> {
           if (c == '\'') {
@@ -3392,18 +3450,31 @@ public class JParqPreparedStatement implements PreparedStatement {
             state = ParseState.DOUBLE_QUOTE;
           } else if (c == '-' && i + 1 < sql.length() && sql.charAt(i + 1) == '-') {
             state = ParseState.LINE_COMMENT;
-            i++;
           } else if (c == '/' && i + 1 < sql.length() && sql.charAt(i + 1) == '*') {
             state = ParseState.BLOCK_COMMENT;
-            i++;
           } else if (c == '?') {
             count++;
+          } else if (c == ':' && i + 1 < sql.length() && isParameterStart(sql.charAt(i + 1))) {
+            int start = i + 1;
+            int end = start;
+            while (end < sql.length() && isParameterPart(sql.charAt(end))) {
+              end++;
+            }
+            String name = sql.substring(start, end);
+            count++;
+            nameToIndexes.computeIfAbsent(name, key -> new ArrayList<>()).add(Integer.valueOf(count));
+            rewritten.append('?');
+            i = end - 1;
+            consumed = true;
           }
         }
         case SINGLE_QUOTE -> {
           if (c == '\'') {
             if (i + 1 < sql.length() && sql.charAt(i + 1) == '\'') {
+              rewritten.append(c);
+              rewritten.append(sql.charAt(i + 1));
               i++; // Skip escaped quote
+              consumed = true;
             } else {
               state = ParseState.NORMAL;
             }
@@ -3422,14 +3493,46 @@ public class JParqPreparedStatement implements PreparedStatement {
         case BLOCK_COMMENT -> {
           if (c == '*' && i + 1 < sql.length() && sql.charAt(i + 1) == '/') {
             state = ParseState.NORMAL;
+            rewritten.append(c);
+            rewritten.append(sql.charAt(i + 1));
             i++;
+            consumed = true;
           }
         }
         default -> {
         }
       }
+      if (!consumed) {
+        rewritten.append(c);
+      }
     }
-    return count;
+    Map<String, List<Integer>> immutableNameIndexes = new LinkedHashMap<>();
+    for (Map.Entry<String, List<Integer>> entry : nameToIndexes.entrySet()) {
+      immutableNameIndexes.put(entry.getKey(), List.copyOf(entry.getValue()));
+    }
+    return new ParameterParseResult(rewritten.toString(), Map.copyOf(immutableNameIndexes), count);
+  }
+
+  private boolean isParameterStart(char c) {
+    return Character.isLetter(c) || c == '_';
+  }
+
+  private boolean isParameterPart(char c) {
+    return Character.isLetterOrDigit(c) || c == '_';
+  }
+
+  /**
+   * Captures the result of parsing a SQL string for parameters.
+   *
+   * @param sql
+   *          the rewritten SQL with JDBC positional markers
+   * @param namedParameterIndexes
+   *          map of parameter names to the positional indexes they occupy
+   * @param parameterCount
+   *          the total number of parameters discovered in the SQL
+   */
+  private record ParameterParseResult(String sql, Map<String, List<Integer>> namedParameterIndexes,
+      int parameterCount) {
   }
 
   private String bindParameters() throws SQLException {
@@ -3617,6 +3720,197 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   private enum ParseState {
     NORMAL, SINGLE_QUOTE, DOUBLE_QUOTE, LINE_COMMENT, BLOCK_COMMENT
+  }
+
+  // --- Named Parameter Setters (JParq extension) ---
+  /**
+   * Binds a String value to all occurrences of the specified named parameter.
+   *
+   * @param parameterName
+   *          the name of the parameter without the ':' prefix
+   * @param value
+   *          the value to apply
+   * @throws SQLException
+   *           if the parameter name is unknown
+   */
+  public void setString(String parameterName, String value) throws SQLException {
+    storeNamedParameter(parameterName, value);
+  }
+
+  /**
+   * Binds an int value to all occurrences of the specified named parameter.
+   *
+   * @param parameterName
+   *          the name of the parameter without the ':' prefix
+   * @param value
+   *          the value to apply
+   * @throws SQLException
+   *           if the parameter name is unknown
+   */
+  public void setInt(String parameterName, int value) throws SQLException {
+    storeNamedParameter(parameterName, Integer.valueOf(value));
+  }
+
+  /**
+   * Binds a long value to all occurrences of the specified named parameter.
+   *
+   * @param parameterName
+   *          the name of the parameter without the ':' prefix
+   * @param value
+   *          the value to apply
+   * @throws SQLException
+   *           if the parameter name is unknown
+   */
+  public void setLong(String parameterName, long value) throws SQLException {
+    storeNamedParameter(parameterName, Long.valueOf(value));
+  }
+
+  /**
+   * Binds a double value to all occurrences of the specified named parameter.
+   *
+   * @param parameterName
+   *          the name of the parameter without the ':' prefix
+   * @param value
+   *          the value to apply
+   * @throws SQLException
+   *           if the parameter name is unknown
+   */
+  public void setDouble(String parameterName, double value) throws SQLException {
+    storeNamedParameter(parameterName, Double.valueOf(value));
+  }
+
+  /**
+   * Binds a float value to all occurrences of the specified named parameter.
+   *
+   * @param parameterName
+   *          the name of the parameter without the ':' prefix
+   * @param value
+   *          the value to apply
+   * @throws SQLException
+   *           if the parameter name is unknown
+   */
+  public void setFloat(String parameterName, float value) throws SQLException {
+    storeNamedParameter(parameterName, Float.valueOf(value));
+  }
+
+  /**
+   * Binds a boolean value to all occurrences of the specified named parameter.
+   *
+   * @param parameterName
+   *          the name of the parameter without the ':' prefix
+   * @param value
+   *          the value to apply
+   * @throws SQLException
+   *           if the parameter name is unknown
+   */
+  public void setBoolean(String parameterName, boolean value) throws SQLException {
+    storeNamedParameter(parameterName, Boolean.valueOf(value));
+  }
+
+  /**
+   * Binds a {@link BigDecimal} value to all occurrences of the specified named
+   * parameter.
+   *
+   * @param parameterName
+   *          the name of the parameter without the ':' prefix
+   * @param value
+   *          the value to apply
+   * @throws SQLException
+   *           if the parameter name is unknown
+   */
+  public void setBigDecimal(String parameterName, BigDecimal value) throws SQLException {
+    storeNamedParameter(parameterName, value);
+  }
+
+  /**
+   * Binds a {@link Date} value to all occurrences of the specified named
+   * parameter.
+   *
+   * @param parameterName
+   *          the name of the parameter without the ':' prefix
+   * @param value
+   *          the value to apply
+   * @throws SQLException
+   *           if the parameter name is unknown
+   */
+  public void setDate(String parameterName, Date value) throws SQLException {
+    storeNamedParameter(parameterName, value);
+  }
+
+  /**
+   * Binds a {@link Time} value to all occurrences of the specified named
+   * parameter.
+   *
+   * @param parameterName
+   *          the name of the parameter without the ':' prefix
+   * @param value
+   *          the value to apply
+   * @throws SQLException
+   *           if the parameter name is unknown
+   */
+  public void setTime(String parameterName, Time value) throws SQLException {
+    storeNamedParameter(parameterName, value);
+  }
+
+  /**
+   * Binds a {@link Timestamp} value to all occurrences of the specified named
+   * parameter.
+   *
+   * @param parameterName
+   *          the name of the parameter without the ':' prefix
+   * @param value
+   *          the value to apply
+   * @throws SQLException
+   *           if the parameter name is unknown
+   */
+  public void setTimestamp(String parameterName, Timestamp value) throws SQLException {
+    storeNamedParameter(parameterName, value);
+  }
+
+  /**
+   * Binds a byte array to all occurrences of the specified named parameter.
+   *
+   * @param parameterName
+   *          the name of the parameter without the ':' prefix
+   * @param value
+   *          the value to apply
+   * @throws SQLException
+   *           if the parameter name is unknown
+   */
+  public void setBytes(String parameterName, byte[] value) throws SQLException {
+    storeNamedParameter(parameterName, value);
+  }
+
+  /**
+   * Binds a value to all occurrences of the specified named parameter.
+   *
+   * @param parameterName
+   *          the name of the parameter without the ':' prefix
+   * @param value
+   *          the value to apply
+   * @throws SQLException
+   *           if the parameter name is unknown
+   */
+  public void setObject(String parameterName, Object value) throws SQLException {
+    storeNamedParameter(parameterName, value);
+  }
+
+  /**
+   * Binds {@code null} to all occurrences of the specified named parameter. The
+   * SQL type is accepted for API parity but not used in evaluation.
+   *
+   * @param parameterName
+   *          the name of the parameter without the ':' prefix
+   * @param sqlType
+   *          the SQL type of the parameter (unused)
+   * @throws SQLException
+   *           if the parameter name is unknown
+   */
+  public void setNull(String parameterName, int sqlType) throws SQLException {
+    if (sqlType < 0) {
+      throw new SQLException("SQL type must be non-negative");
+    }
+    storeNamedParameter(parameterName, null);
   }
 
   // --- Parameter Setters (state stored for batching compatibility) ---

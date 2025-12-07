@@ -94,7 +94,7 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertFalse(metaData.supportsConvert(Types.BLOB, Types.INTEGER));
     assertFalse(metaData.supportsBatchUpdates());
     assertFalse(metaData.supportsSavepoints());
-    assertFalse(metaData.supportsNamedParameters());
+    assertTrue(metaData.supportsNamedParameters());
     assertEquals("", metaData.getCatalogSeparator());
     assertEquals("folder", metaData.getSchemaTerm());
     assertEquals("", metaData.getProcedureTerm());
