@@ -167,7 +167,7 @@ class JParqPreparedStatementCoverageTest {
     assertFalse(preparedStatement.isPoolable());
     assertFalse(preparedStatement.isClosed());
     assertNull(preparedStatement.getMetaData());
-    assertNull(preparedStatement.getParameterMetaData());
+    assertEquals(0, preparedStatement.getParameterMetaData().getParameterCount());
     rs.close();
   }
 }

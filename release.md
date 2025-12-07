@@ -3,6 +3,9 @@
 ### 1.2.0, in progress
 - add support for named parameters in prepared statements
 - add support for batch execution in prepared statements
+- Implemented full positional parameter binding for prepared statements with safe literal rendering to block SQL injection.
+- several minor bug fixes and improvements
+- improved test coverage and add more edge case tests
 
 ### 1.1.0, 2025-12-06
 - create a fat jar so the driver can be used in tools that require adding a jar to the classpath

@@ -3919,7 +3919,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
   @Override
   public ParameterMetaData getParameterMetaData() {
-    return null;
+    return new BasicParameterMetaData(parameterCount);
   }
   @Override
   public int executeUpdate() throws SQLException {
@@ -4041,7 +4041,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
   @Override
   public int getResultSetHoldability() {
-    return 0;
+    return ResultSet.CLOSE_CURSORS_AT_COMMIT;
   }
   @Override
   public <T> T unwrap(Class<T> iface) {
@@ -4050,5 +4050,85 @@ public class JParqPreparedStatement implements PreparedStatement {
   @Override
   public boolean isWrapperFor(Class<?> iface) {
     return false;
+  }
+
+  private static final class BasicParameterMetaData implements ParameterMetaData {
+    private final int count;
+
+    BasicParameterMetaData(int count) {
+      this.count = count;
+    }
+
+    @Override
+    public int getParameterCount() {
+      return count;
+    }
+
+    @Override
+    public int isNullable(int param) throws SQLException {
+      validateIndex(param);
+      return parameterNullableUnknown;
+    }
+
+    @Override
+    public boolean isSigned(int param) throws SQLException {
+      validateIndex(param);
+      return true;
+    }
+
+    @Override
+    public int getPrecision(int param) throws SQLException {
+      validateIndex(param);
+      return 0;
+    }
+
+    @Override
+    public int getScale(int param) throws SQLException {
+      validateIndex(param);
+      return 0;
+    }
+
+    @Override
+    public int getParameterType(int param) throws SQLException {
+      validateIndex(param);
+      return Types.VARCHAR;
+    }
+
+    @Override
+    public String getParameterTypeName(int param) throws SQLException {
+      validateIndex(param);
+      return "VARCHAR";
+    }
+
+    @Override
+    public String getParameterClassName(int param) throws SQLException {
+      validateIndex(param);
+      return String.class.getName();
+    }
+
+    @Override
+    public int getParameterMode(int param) throws SQLException {
+      validateIndex(param);
+      return parameterModeIn;
+    }
+
+    @Override
+    public <T> T unwrap(Class<T> iface) throws SQLException {
+      if (iface.isInstance(this)) {
+        return iface.cast(this);
+      }
+      throw new SQLException("No wrapper available for " + iface.getName());
+    }
+
+    @Override
+    public boolean isWrapperFor(Class<?> iface) {
+      return iface.isInstance(this);
+    }
+
+    private void validateIndex(int param) throws SQLException {
+      if (param < 1 || param > count) {
+        throw new SQLException("Parameter index out of range: " + param + " (1.." + count + ")");
+      }
+    }
   }
 }

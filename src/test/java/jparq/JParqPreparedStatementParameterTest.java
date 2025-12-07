@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.sql.Date;
+import java.sql.ParameterMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -108,6 +109,19 @@ class JParqPreparedStatementParameterTest {
         assertTrue(rs.next());
         assertEquals(0, rs.getInt(1));
       }
+    }
+  }
+
+  @Test
+  void exposesBasicParameterMetadata() throws SQLException {
+    try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM mtcars WHERE cyl = ? AND model = ?")) {
+      ParameterMetaData metaData = ps.getParameterMetaData();
+      assertNotNull(metaData);
+      assertEquals(2, metaData.getParameterCount());
+      assertEquals(ParameterMetaData.parameterNullableUnknown, metaData.isNullable(1));
+      assertEquals("VARCHAR", metaData.getParameterTypeName(2));
+      assertEquals(String.class.getName(), metaData.getParameterClassName(1));
+      assertEquals(ParameterMetaData.parameterModeIn, metaData.getParameterMode(2));
     }
   }
 
