@@ -83,4 +83,17 @@ class JParqPreparedStatementParameterTest {
       assertThrows(SQLException.class, ps::executeQuery);
     }
   }
+
+  @Test
+  void syntaxErrorDetectedAtPreparationTime() {
+    // Verify that syntax errors are caught early during prepareStatement(),
+    // not deferred to executeQuery() - this is the key benefit of two-phase
+    // planning
+    SQLException exception = assertThrows(SQLException.class,
+        () -> connection.prepareStatement("SELECT * FORM mtcars WHERE cyl = ?"));
+    assertNotNull(exception.getMessage());
+    assertTrue(exception.getMessage().contains("Failed to prepare query")
+        || exception.getMessage().toLowerCase().contains("syntax")
+        || exception.getMessage().toLowerCase().contains("parse"));
+  }
 }
