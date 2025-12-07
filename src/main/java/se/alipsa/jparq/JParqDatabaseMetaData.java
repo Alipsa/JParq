@@ -2307,7 +2307,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public boolean supportsNamedParameters() throws SQLException {
-    return false; // Named parameters are not supported by this driver.
+    return true;
   }
 
   @Override

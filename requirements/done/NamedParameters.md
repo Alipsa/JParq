@@ -40,7 +40,7 @@ Here are the important things to consider:
   * *Example:* `void setString(String paramName, String value)`
 * **Metadata:** You should consider how to handle parameter metadata. Standard JDBC parameter metadata (obtained via `PreparedStatement.getParameterMetaData()`) is index-based, but a custom implementation could provide name-to-index translation to offer more helpful metadata to the user.
 
-## TODO 
+## Actions 
 - Add support for named parameters as described above.
 - Update JParqDatabaseMetaData.supportsNamedParameters() to return true
 - Add tests to prove that named parameters work as expected in prepared statements.
