@@ -713,7 +713,7 @@ public final class SqlParser {
     String cteBody = sql.substring(cteBodyStart, closingParenIndex).trim();
     String cteName = matcher.group(1);
     Pattern referencePattern = Pattern
-        .compile("(?i)\\b(from|join)\\b\\s+\"?" + Pattern.quote(cteName) + "\"?(\\s+([A-Za-z_][\\w]*|\"[^\"]+\"))?");
+        .compile("(?i)\\b(from|join)\\b\\s+(?:\"" + Pattern.quote(cteName) + "\"|" + Pattern.quote(cteName) + ")(\\s+(?:\"[^\"]+\"|[A-Za-z_][\\w]*))?");
     Matcher reference = referencePattern.matcher(trailing);
     if (!reference.find()) {
       return null;
