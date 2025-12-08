@@ -41,7 +41,8 @@ public final class SqlParser {
       "varchar", "charactervarying", "nvarchar", "string", "text", "clob", "tinyint", "smallint", "int", "integer",
       "signed", "int2", "int4", "bigint", "int8", "float", "real", "float4", "double", "doubleprecision", "float8",
       "numeric", "decimal", "number");
-  private static final Pattern SINGLE_CTE_PATTERN = Pattern.compile("^\\s*with\\s+(?:\"([A-Za-z_][\\w]*)\"|([A-Za-z_][\\w]*))\\s+as\\s*\\(",
+  private static final Pattern SINGLE_CTE_PATTERN = Pattern.compile(
+      "^\\s*with\\s+(?:\"([A-Za-z_][\\w]*)\"|([A-Za-z_][\\w]*))\\s+as\\s*\\(",
       Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
   private SqlParser() {
@@ -712,8 +713,8 @@ public final class SqlParser {
     int cteBodyStart = matcher.end();
     String cteBody = sql.substring(cteBodyStart, closingParenIndex).trim();
     String cteName = matcher.group(1);
-    Pattern referencePattern = Pattern
-        .compile("(?i)\\b(from|join)\\b\\s+(?:\"" + Pattern.quote(cteName) + "\"|" + Pattern.quote(cteName) + ")(\\s+(?:\"[^\"]+\"|[A-Za-z_][\\w]*))?");
+    Pattern referencePattern = Pattern.compile("(?i)\\b(from|join)\\b\\s+(?:\"" + Pattern.quote(cteName) + "\"|"
+        + Pattern.quote(cteName) + ")(\\s+(?:\"[^\"]+\"|[A-Za-z_][\\w]*))?");
     Matcher reference = referencePattern.matcher(trailing);
     if (!reference.find()) {
       return null;
