@@ -1,5 +1,8 @@
 # Version history
 
+### 1.2.1, In Progress
+
+
 ### 1.2.0, 2025-12-08
 - add support for batch execution in prepared statements
 - Implemented full positional parameter binding for prepared statements with safe literal rendering to block SQL injection.
