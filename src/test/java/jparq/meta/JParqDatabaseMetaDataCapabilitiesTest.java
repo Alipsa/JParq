@@ -43,7 +43,7 @@ class JParqDatabaseMetaDataCapabilitiesTest {
   void reportsSupportedCapabilitiesAndDefaults() throws SQLException {
     DatabaseMetaData metaData = connection.getMetaData();
     assertEquals("JParq", metaData.getDatabaseProductName());
-    assertEquals("1.1.0", metaData.getDatabaseProductVersion());
+    assertEquals("1.2.0", metaData.getDatabaseProductVersion());
     assertEquals("se.alipsa.jparq.JParqDriver", metaData.getDriverName());
     assertTrue(metaData.usesLocalFiles());
     assertTrue(metaData.usesLocalFilePerTable());
@@ -117,7 +117,7 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertFalse(metaData.supportsIntegrityEnhancementFacility());
     assertFalse(metaData.supportsStoredFunctionsUsingCallSyntax());
     assertEquals(1, metaData.getDatabaseMajorVersion());
-    assertEquals(1, metaData.getDatabaseMinorVersion());
+    assertEquals(2, metaData.getDatabaseMinorVersion());
     assertEquals(4, metaData.getJDBCMajorVersion());
     assertEquals(3, metaData.getJDBCMinorVersion());
     assertEquals(2, metaData.getSQLStateType());
