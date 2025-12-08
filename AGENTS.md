@@ -1,5 +1,5 @@
 - Read the README.md for basic project understanding.
-- Always create tests to verify any new functionality. Test are in the jparq package. Since the main code is in the se.alipsa.jparq package some methods must be public to allow testing, it is preferred to do this over resorting to reflection.
+- Always create tests to verify any new functionality. Test are in the jparq package (library tests such as test for jsqlparser functionality are outside jparq however). Since the main code is in the se.alipsa.jparq package some methods must be public to allow testing, it is preferred to do this over resorting to reflection.
 - Remember to also update javadocs (all classes and methods must have a description, all params must be listed and return and throws specified when appropriate) where needed.
 - Use spelling rules for American English
 - Avoid using deprecated classes or methods if possible, prefer modern alternatives.
