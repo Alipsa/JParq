@@ -10,7 +10,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import net.sf.jsqlparser.JSQLParserException;
 import net.sf.jsqlparser.expression.*;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
@@ -38,6 +41,8 @@ public final class SqlParser {
       "varchar", "charactervarying", "nvarchar", "string", "text", "clob", "tinyint", "smallint", "int", "integer",
       "signed", "int2", "int4", "bigint", "int8", "float", "real", "float4", "double", "doubleprecision", "float8",
       "numeric", "decimal", "number");
+  private static final Pattern SINGLE_CTE_PATTERN = Pattern.compile("^\\s*with\\s+\"?([A-Za-z_][\\w]*)\"?\\s+as\\s*\\(",
+      Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
   private SqlParser() {
   }
@@ -556,17 +561,50 @@ public final class SqlParser {
   }
 
   private static Query parseQuery(String sql, boolean allowQualifiedWildcards) {
+    String normalizedSql = normalizeSql(sql);
     try {
-      String normalizedSql = stripSqlComments(sql);
-      normalizedSql = FunctionEscapeResolver.resolveJdbcFunctionEscapes(normalizedSql);
-      net.sf.jsqlparser.statement.select.Select stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
-          .parse(normalizedSql);
-      List<CommonTableExpression> ctes = parseWithItems(stmt.getWithItemsList(), allowQualifiedWildcards);
-      Map<Identifier, CommonTableExpression> cteLookup = buildCteLookup(ctes);
-      return parseSelectStatement(stmt, ctes, cteLookup, allowQualifiedWildcards);
+      return parseWithJsqlParser(normalizedSql, allowQualifiedWildcards);
+    } catch (JSQLParserException e) {
+      String compactedSql = compactWhitespace(normalizedSql);
+      try {
+        return parseWithJsqlParser(compactedSql, allowQualifiedWildcards);
+      } catch (JSQLParserException ignored) {
+        // Fall through to the CTE rewrite below
+      }
+      Query fallback = tryParseWithCteWorkaround(normalizedSql, allowQualifiedWildcards);
+      if (fallback != null) {
+        return fallback;
+      }
+      throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
     } catch (Exception e) {
       throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
     }
+  }
+
+  private static Query parseWithJsqlParser(String sql, boolean allowQualifiedWildcards) throws JSQLParserException {
+    net.sf.jsqlparser.statement.select.Select stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
+        .parse(sql);
+    List<CommonTableExpression> ctes = parseWithItems(stmt.getWithItemsList(), allowQualifiedWildcards);
+    Map<Identifier, CommonTableExpression> cteLookup = buildCteLookup(ctes);
+    return parseSelectStatement(stmt, ctes, cteLookup, allowQualifiedWildcards);
+  }
+
+  private static Query tryParseWithCteWorkaround(String normalizedSql, boolean allowQualifiedWildcards) {
+    String rewritten = rewriteSingleCteToDerivedTable(normalizedSql);
+    if (rewritten == null) {
+      return null;
+    }
+    String compacted = compactWhitespace(rewritten);
+    try {
+      return parseWithJsqlParser(compacted, allowQualifiedWildcards);
+    } catch (Exception ex) {
+      throw new IllegalArgumentException("Failed to parse rewritten SQL: " + compacted, ex);
+    }
+  }
+
+  private static String normalizeSql(String sql) {
+    String normalizedSql = stripSqlComments(sql);
+    return FunctionEscapeResolver.resolveJdbcFunctionEscapes(normalizedSql);
   }
 
   private static Query parseSelectStatement(net.sf.jsqlparser.statement.select.Select stmt,
@@ -637,6 +675,159 @@ public final class SqlParser {
       lookup.putIfAbsent(cte.name(), cte);
     }
     return Map.copyOf(lookup);
+  }
+
+  /**
+   * Attempt to inline a single common table expression as a derived table to work
+   * around a JSqlParser bug that rejects window functions in a CTE that is later
+   * joined.
+   *
+   * @param sql
+   *          normalized SQL text with comments stripped
+   * @return rewritten SQL without the WITH clause, or {@code null} if the query
+   *         shape is unsupported
+   */
+  private static String rewriteSingleCteToDerivedTable(String sql) {
+    Matcher matcher = SINGLE_CTE_PATTERN.matcher(sql);
+    if (!matcher.find()) {
+      return null;
+    }
+    int openingParenIndex = matcher.end() - 1;
+    int closingParenIndex = findMatchingParenthesis(sql, openingParenIndex);
+    if (closingParenIndex < 0) {
+      return null;
+    }
+
+    String trailing = sql.substring(closingParenIndex + 1).trim();
+    if (trailing.isEmpty() || trailing.startsWith(",")) {
+      return null;
+    }
+    if (trailing.regionMatches(true, 0, "with", 0, 4)) {
+      return null;
+    }
+    if (!trailing.regionMatches(true, 0, "select", 0, 6)) {
+      return null;
+    }
+
+    int cteBodyStart = matcher.end();
+    String cteBody = sql.substring(cteBodyStart, closingParenIndex).trim();
+    String cteName = matcher.group(1);
+    Pattern referencePattern = Pattern
+        .compile("(?i)\\b(from|join)\\b\\s+\"?" + Pattern.quote(cteName) + "\"?(\\s+([A-Za-z_][\\w]*|\"[^\"]+\"))?");
+    Matcher reference = referencePattern.matcher(trailing);
+    if (!reference.find()) {
+      return null;
+    }
+    String alias = reference.group(3);
+    if (alias == null || alias.isBlank()) {
+      alias = cteName;
+    }
+    String replacement = reference.group(1) + " (" + cteBody + ") " + alias;
+    return reference.replaceFirst(replacement);
+  }
+
+  private static int findMatchingParenthesis(String sql, int openingIndex) {
+    boolean inSingleQuote = false;
+    boolean inDoubleQuote = false;
+    int depth = 0;
+    for (int i = openingIndex; i < sql.length(); i++) {
+      char c = sql.charAt(i);
+      char next = i + 1 < sql.length() ? sql.charAt(i + 1) : '\0';
+
+      if (inSingleQuote) {
+        if (c == '\'' && next == '\'') {
+          i++;
+        } else if (c == '\'') {
+          inSingleQuote = false;
+        }
+        continue;
+      }
+      if (inDoubleQuote) {
+        if (c == '"' && next == '"') {
+          i++;
+        } else if (c == '"') {
+          inDoubleQuote = false;
+        }
+        continue;
+      }
+      if (c == '\'') {
+        inSingleQuote = true;
+        continue;
+      }
+      if (c == '"') {
+        inDoubleQuote = true;
+        continue;
+      }
+      if (c == '(') {
+        depth++;
+      } else if (c == ')') {
+        depth--;
+        if (depth == 0) {
+          return i;
+        }
+        if (depth < 0) {
+          return -1;
+        }
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Collapse consecutive whitespace into single spaces while preserving content
+   * inside quoted string or identifier literals.
+   *
+   * @param sql
+   *          SQL text to normalize
+   * @return whitespace-normalized SQL
+   */
+  private static String compactWhitespace(String sql) {
+    StringBuilder result = new StringBuilder(sql.length());
+    boolean inSingleQuote = false;
+    boolean inDoubleQuote = false;
+    boolean lastWasSpace = false;
+    for (int i = 0; i < sql.length(); i++) {
+      char c = sql.charAt(i);
+      char next = i + 1 < sql.length() ? sql.charAt(i + 1) : '\0';
+
+      if (inSingleQuote) {
+        result.append(c);
+        if (c == '\'' && next == '\'') {
+          result.append(next);
+          i++;
+        } else if (c == '\'') {
+          inSingleQuote = false;
+        }
+        lastWasSpace = false;
+        continue;
+      }
+      if (inDoubleQuote) {
+        result.append(c);
+        if (c == '"' && next == '"') {
+          result.append(next);
+          i++;
+        } else if (c == '"') {
+          inDoubleQuote = false;
+        }
+        lastWasSpace = false;
+        continue;
+      }
+      if (Character.isWhitespace(c)) {
+        if (!lastWasSpace) {
+          result.append(' ');
+          lastWasSpace = true;
+        }
+        continue;
+      }
+      if (c == '\'') {
+        inSingleQuote = true;
+      } else if (c == '"') {
+        inDoubleQuote = true;
+      }
+      result.append(c);
+      lastWasSpace = false;
+    }
+    return result.toString().trim();
   }
 
   private static Identifier identifier(Table table) {
@@ -1862,7 +2053,9 @@ public final class SqlParser {
 
   /**
    * Remove SQL comments from the supplied query string while preserving string
-   * literals.
+   * literals. Block comments are removed entirely; a single separating space is
+   * inserted only when needed to prevent token concatenation (e.g.
+   * {@code SELECT/*c*&#47;FROM} becomes {@code SELECT FROM}).
    *
    * <p>
    * The parser used by the engine does not retain comments, but unstripped
@@ -1888,10 +2081,17 @@ public final class SqlParser {
     boolean inDoubleQuote = false;
     boolean inLineComment = false;
     boolean inBlockComment = false;
+    boolean addSpaceAfterBlock = false;
 
     for (int i = 0; i < sql.length(); i++) {
       char c = sql.charAt(i);
       char next = i + 1 < sql.length() ? sql.charAt(i + 1) : '\0';
+      if (addSpaceAfterBlock) {
+        if (!Character.isWhitespace(c)) {
+          result.append(' ');
+        }
+        addSpaceAfterBlock = false;
+      }
 
       if (inLineComment) {
         if (c == '\n') {
@@ -1903,11 +2103,11 @@ public final class SqlParser {
         continue;
       }
       if (inBlockComment) {
-        if (c == '\n') {
-          result.append(c);
-        }
         if (c == '*' && next == '/') {
           inBlockComment = false;
+          boolean lastCharWhitespace = result.length() > 0
+              && Character.isWhitespace(result.charAt(result.length() - 1));
+          addSpaceAfterBlock = !lastCharWhitespace;
           i++;
         }
         continue;
@@ -1941,6 +2141,8 @@ public final class SqlParser {
       }
       if (c == '/' && next == '*') {
         inBlockComment = true;
+        boolean lastCharWhitespace = result.length() == 0 || Character.isWhitespace(result.charAt(result.length() - 1));
+        addSpaceAfterBlock = !lastCharWhitespace;
         i++;
         continue;
       }
