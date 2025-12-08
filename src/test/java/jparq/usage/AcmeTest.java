@@ -72,9 +72,8 @@ public class AcmeTest {
             "Column names should match the underlying table schema");
         assertEquals(List.of("INTEGER", "VARCHAR", "VARCHAR", "DOUBLE"), columnTypes,
             "Column JDBC types should match the expected Avro mappings");
-        assertEquals(List.of("java.lang.Integer", "java.lang.String", "java.lang.String",
-                "java.lang.Double"), columnClassNames,
-            "Column class names should match the expected Java types for the JDBC types");
+        assertEquals(List.of("java.lang.Integer", "java.lang.String", "java.lang.String", "java.lang.Double"),
+            columnClassNames, "Column class names should match the expected Java types for the JDBC types");
         while (rs.next()) {
           Integer id = rs.getInt("id");
           ids.add(id);
@@ -106,11 +105,11 @@ public class AcmeTest {
                 salary,
                 /* Partition sets the 'window' per employee.
                    Order By puts the latest date first.
-                   Important: Add a tie-breaker (like salary_id) to handle same-date collisions.
+                   Use salary.id as a tie-breaker to handle same-date collisions.
                 */
                 ROW_NUMBER() OVER (
                     PARTITION BY employee
-                    ORDER BY change_date DESC, salary_id DESC
+                    ORDER BY change_date DESC, id DESC
                 ) as rn
             FROM
                 salary
@@ -146,9 +145,8 @@ public class AcmeTest {
             "Column names should match the underlying table schema");
         assertEquals(List.of("INTEGER", "VARCHAR", "VARCHAR", "DOUBLE"), columnTypes,
             "Column JDBC types should match the expected Avro mappings");
-        assertEquals(List.of("java.lang.Integer", "java.lang.String", "java.lang.String",
-                "java.lang.Double"), columnClassNames,
-            "Column class names should match the expected Java types for the JDBC types");
+        assertEquals(List.of("java.lang.Integer", "java.lang.String", "java.lang.String", "java.lang.Double"),
+            columnClassNames, "Column class names should match the expected Java types for the JDBC types");
         while (rs.next()) {
           Integer id = rs.getInt("id");
           ids.add(id);

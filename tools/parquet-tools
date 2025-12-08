@@ -1,6 +1,9 @@
 #!/bin/bash
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cd "$SCRIPT_DIR" || exit
+if command -v jdk21; then
+  . jdk21
+fi
 # --- Configuration ---
 GROUP_ID="org.apache.parquet"
 ARTIFACT_ID="parquet-tools"
