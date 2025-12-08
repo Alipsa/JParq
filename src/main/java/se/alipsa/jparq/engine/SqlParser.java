@@ -41,7 +41,7 @@ public final class SqlParser {
       "varchar", "charactervarying", "nvarchar", "string", "text", "clob", "tinyint", "smallint", "int", "integer",
       "signed", "int2", "int4", "bigint", "int8", "float", "real", "float4", "double", "doubleprecision", "float8",
       "numeric", "decimal", "number");
-  private static final Pattern SINGLE_CTE_PATTERN = Pattern.compile("^\\s*with\\s+\"?([A-Za-z_][\\w]*)\"?\\s+as\\s*\\(",
+  private static final Pattern SINGLE_CTE_PATTERN = Pattern.compile("^\\s*with\\s+(?:\"([A-Za-z_][\\w]*)\"|([A-Za-z_][\\w]*))\\s+as\\s*\\(",
       Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
   private SqlParser() {
