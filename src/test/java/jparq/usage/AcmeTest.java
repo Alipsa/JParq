@@ -38,7 +38,7 @@ public class AcmeTest {
    * representations instead of human readable values.
    */
   @Test
-  void testClassicSubQuery() {
+  public void testClassicSubQuery() {
     String sql = """
         select e.*, s.salary from employees e join salary s on e.id = s.employee
         WHERE
@@ -72,8 +72,83 @@ public class AcmeTest {
             "Column names should match the underlying table schema");
         assertEquals(List.of("INTEGER", "VARCHAR", "VARCHAR", "DOUBLE"), columnTypes,
             "Column JDBC types should match the expected Avro mappings");
-        assertEquals(List.of("java.lang.Integer", "java.lang.String", "java.lang.String", "java.lang.Double"),
-            columnClassNames, "Column class names should match the expected Java types for the JDBC types");
+        assertEquals(List.of("java.lang.Integer", "java.lang.String", "java.lang.String",
+                "java.lang.Double"), columnClassNames,
+            "Column class names should match the expected Java types for the JDBC types");
+        while (rs.next()) {
+          Integer id = rs.getInt("id");
+          ids.add(id);
+          Object firstName = rs.getObject("first_name");
+          assertEquals(String.class, firstName.getClass(),
+              "If the underlying class is String, getObject should return String");
+          String lastName = rs.getString("last_name");
+          Double salary = rs.getDouble("salary");
+          salaries.put(firstName + " " + lastName, salary);
+        }
+        assertEquals(5, ids.size(), "Expected 5 distinct employee ids");
+        assertEquals(180000, salaries.get("Karin Pettersson"));
+        assertEquals(195000, salaries.get("Arne Larsson"));
+        assertEquals(230000, salaries.get("Sixten Svensson"));
+        assertEquals(140000, salaries.get("Tage Lundström"));
+        assertEquals(165000, salaries.get("Per Andersson"));
+      } catch (Exception e) {
+        Assertions.fail(e);
+      }
+    });
+  }
+
+  @Test
+  public void testLatestPerGroupUsingWindow() {
+    String sql = """
+        WITH LatestSalary AS (
+            SELECT
+                employee,
+                salary,
+                /* Partition sets the 'window' per employee.
+                   Order By puts the latest date first.
+                   Important: Add a tie-breaker (like salary_id) to handle same-date collisions.
+                */
+                ROW_NUMBER() OVER (
+                    PARTITION BY employee
+                    ORDER BY change_date DESC, salary_id DESC
+                ) as rn
+            FROM
+                salary
+        )
+        SELECT
+            e.*,
+            ls.salary
+        FROM
+            employees e
+        JOIN
+            LatestSalary ls ON e.id = ls.employee
+        WHERE
+            ls.rn = 1;
+        """;
+    List<Integer> ids = new ArrayList<>();
+    Map<String, Double> salaries = new LinkedHashMap<>();
+    jparqSql.query(sql, rs -> {
+      try {
+        ResultSetMetaData metaData = rs.getMetaData();
+        List<String> columnNames = new ArrayList<>();
+        List<String> columnTypes = new ArrayList<>();
+        List<String> columnClassNames = new ArrayList<>();
+        Map<String, String> headers = new LinkedHashMap<>();
+        for (int i = 1; i <= metaData.getColumnCount(); i++) {
+          String name = metaData.getColumnName(i);
+          String type = metaData.getColumnTypeName(i);
+          columnNames.add(name);
+          columnTypes.add(type);
+          headers.put(name, type);
+          columnClassNames.add(metaData.getColumnClassName(i));
+        }
+        assertEquals(List.of("id", "first_name", "last_name", "salary"), columnNames,
+            "Column names should match the underlying table schema");
+        assertEquals(List.of("INTEGER", "VARCHAR", "VARCHAR", "DOUBLE"), columnTypes,
+            "Column JDBC types should match the expected Avro mappings");
+        assertEquals(List.of("java.lang.Integer", "java.lang.String", "java.lang.String",
+                "java.lang.Double"), columnClassNames,
+            "Column class names should match the expected Java types for the JDBC types");
         while (rs.next()) {
           Integer id = rs.getInt("id");
           ids.add(id);

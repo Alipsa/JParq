@@ -95,7 +95,7 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
     // The JParqPreparedStatement constructor will perform the expensive planning
     // phase.
     try (JParqPreparedStatement pstmt = new JParqPreparedStatement(this, sql)) {
-      this.currentRs = (JParqResultSet) pstmt.executeQuery();
+      this.currentRs = pstmt.executeQuery();
       return currentRs;
     }
   }

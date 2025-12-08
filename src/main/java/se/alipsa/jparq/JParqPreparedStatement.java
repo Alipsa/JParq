@@ -107,6 +107,7 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
  * An implementation of the java.sql.PreparedStatement interface.
  *
  * <h2>Prepared Statement Behavior</h2>
+ *
  * <p>
  * This implementation uses a two-phase approach for parameterized queries:
  * </p>
@@ -119,6 +120,7 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
  * that WHERE clause conditions with parameters can be pushed down to the
  * storage layer for efficient filtering.</li>
  * </ul>
+ *
  * <p>
  * This design trades some preparation-time overhead for correctness and
  * performance:
@@ -134,6 +136,7 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
  * rendering (escaping quotes, hex-encoding binary data) to prevent SQL
  * injection.</li>
  * </ul>
+ *
  * <p>
  * Named parameters using the {@code :name} syntax are rewritten to JDBC
  * positional markers and can be bound via the dedicated setter overloads (for
@@ -3338,9 +3341,11 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Executes the query with bound parameters by re-planning with actual values.
+   *
    * <p>
    * This method performs the second phase of the two-phase prepared statement
    * execution:
+   *
    * </p>
    * <ol>
    * <li>Bind all parameters to their values, rendering them as safe SQL
@@ -3349,6 +3354,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    * <li>Execute the re-planned query, enabling optimizations like predicate
    * pushdown</li>
    * </ol>
+   *
    * <p>
    * Re-planning at execution time is necessary because Parquet filter predicates
    * require actual values (not placeholders) to construct efficient column-level
@@ -3698,6 +3704,7 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Escapes single quotes in a string for SQL literals.
+   *
    * <p>
    * Precondition: {@code value} must not be {@code null}. This is guaranteed by
    * the caller (renderLiteral). If {@code value} is {@code null}, this method
@@ -3735,6 +3742,11 @@ public class JParqPreparedStatement implements PreparedStatement {
     storeNamedParameter(parameterName, value);
   }
 
+  @Override
+  public void setString(int parameterIndex, String x) {
+    storeParameter(parameterIndex, x);
+  }
+
   /**
    * Binds an int value to all occurrences of the specified named parameter.
    *
@@ -3747,6 +3759,11 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   public void setInt(String parameterName, int value) throws SQLException {
     storeNamedParameter(parameterName, value);
+  }
+
+  @Override
+  public void setInt(int parameterIndex, int x) {
+    storeParameter(parameterIndex, x);
   }
 
   /**
@@ -3763,6 +3780,11 @@ public class JParqPreparedStatement implements PreparedStatement {
     storeNamedParameter(parameterName, value);
   }
 
+  @Override
+  public void setLong(int parameterIndex, long x) {
+    storeParameter(parameterIndex, x);
+  }
+
   /**
    * Binds a double value to all occurrences of the specified named parameter.
    *
@@ -3775,6 +3797,11 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   public void setDouble(String parameterName, double value) throws SQLException {
     storeNamedParameter(parameterName, value);
+  }
+
+  @Override
+  public void setDouble(int parameterIndex, double x) {
+    storeParameter(parameterIndex, x);
   }
 
   /**
@@ -3791,6 +3818,11 @@ public class JParqPreparedStatement implements PreparedStatement {
     storeNamedParameter(parameterName, value);
   }
 
+  @Override
+  public void setFloat(int parameterIndex, float x) {
+    storeParameter(parameterIndex, x);
+  }
+
   /**
    * Binds a boolean value to all occurrences of the specified named parameter.
    *
@@ -3803,6 +3835,11 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   public void setBoolean(String parameterName, boolean value) throws SQLException {
     storeNamedParameter(parameterName, value);
+  }
+
+  @Override
+  public void setBoolean(int parameterIndex, boolean x) {
+    storeParameter(parameterIndex, x);
   }
 
   /**
@@ -3820,6 +3857,11 @@ public class JParqPreparedStatement implements PreparedStatement {
     storeNamedParameter(parameterName, value);
   }
 
+  @Override
+  public void setBigDecimal(int parameterIndex, BigDecimal x) {
+    storeParameter(parameterIndex, x);
+  }
+
   /**
    * Binds a {@link Date} value to all occurrences of the specified named
    * parameter.
@@ -3833,6 +3875,16 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   public void setDate(String parameterName, Date value) throws SQLException {
     storeNamedParameter(parameterName, value);
+  }
+
+  @Override
+  public void setDate(int parameterIndex, Date x) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setDate(int parameterIndex, Date x, Calendar cal) {
+    storeParameter(parameterIndex, x);
   }
 
   /**
@@ -3850,6 +3902,16 @@ public class JParqPreparedStatement implements PreparedStatement {
     storeNamedParameter(parameterName, value);
   }
 
+  @Override
+  public void setTime(int parameterIndex, Time x) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setTime(int parameterIndex, Time x, Calendar cal) {
+    storeParameter(parameterIndex, x);
+  }
+
   /**
    * Binds a {@link Timestamp} value to all occurrences of the specified named
    * parameter.
@@ -3863,6 +3925,16 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   public void setTimestamp(String parameterName, Timestamp value) throws SQLException {
     storeNamedParameter(parameterName, value);
+  }
+
+  @Override
+  public void setTimestamp(int parameterIndex, Timestamp x) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setTimestamp(int parameterIndex, Timestamp x, Calendar cal) {
+    storeParameter(parameterIndex, x);
   }
 
   /**
@@ -3879,6 +3951,11 @@ public class JParqPreparedStatement implements PreparedStatement {
     storeNamedParameter(parameterName, value);
   }
 
+  @Override
+  public void setBytes(int parameterIndex, byte[] x) {
+    storeParameter(parameterIndex, x);
+  }
+
   /**
    * Binds a value to all occurrences of the specified named parameter.
    *
@@ -3891,6 +3968,21 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   public void setObject(String parameterName, Object value) throws SQLException {
     storeNamedParameter(parameterName, value);
+  }
+
+  @Override
+  public void setObject(int parameterIndex, Object x, int targetSqlType, int scaleOrLength) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setObject(int parameterIndex, Object x) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setObject(int parameterIndex, Object x, int targetSqlType) {
+    storeParameter(parameterIndex, x);
   }
 
   /**
@@ -3908,199 +4000,161 @@ public class JParqPreparedStatement implements PreparedStatement {
     storeNamedParameter(parameterName, null);
   }
 
-  // --- Parameter Setters (state stored for batching compatibility) ---
-  @Override
-  public void setString(int parameterIndex, String x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setInt(int parameterIndex, int x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setObject(int parameterIndex, Object x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setObject(int parameterIndex, Object x, int targetSqlType) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setObject(int parameterIndex, Object x, int targetSqlType, int scaleOrLength) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void clearParameters() {
-    parameterValues.clear();
-  }
   @Override
   public void setNull(int parameterIndex, int sqlType) {
     storeParameter(parameterIndex, null);
   }
+
   @Override
   public void setNull(int parameterIndex, int sqlType, String typeName) {
     storeParameter(parameterIndex, null);
   }
-  @Override
-  public void setBoolean(int parameterIndex, boolean x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setByte(int parameterIndex, byte x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setShort(int parameterIndex, short x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setLong(int parameterIndex, long x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setFloat(int parameterIndex, float x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setDouble(int parameterIndex, double x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setBigDecimal(int parameterIndex, BigDecimal x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setBytes(int parameterIndex, byte[] x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setDate(int parameterIndex, Date x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setDate(int parameterIndex, Date x, Calendar cal) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setTime(int parameterIndex, Time x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setTime(int parameterIndex, Time x, Calendar cal) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setTimestamp(int parameterIndex, Timestamp x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setTimestamp(int parameterIndex, Timestamp x, Calendar cal) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setAsciiStream(int parameterIndex, InputStream x, int length) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setAsciiStream(int parameterIndex, InputStream x, long length) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setAsciiStream(int parameterIndex, InputStream x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setUnicodeStream(int parameterIndex, InputStream x, int length) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setBinaryStream(int parameterIndex, InputStream x, int length) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setBinaryStream(int parameterIndex, InputStream x, long length) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setBinaryStream(int parameterIndex, InputStream x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setCharacterStream(int parameterIndex, Reader reader, int length) {
-    storeParameter(parameterIndex, reader);
-  }
-  @Override
-  public void setCharacterStream(int parameterIndex, Reader reader, long length) {
-    storeParameter(parameterIndex, reader);
-  }
-  @Override
-  public void setCharacterStream(int parameterIndex, Reader reader) {
-    storeParameter(parameterIndex, reader);
-  }
-  @Override
-  public void setRef(int parameterIndex, Ref x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setBlob(int parameterIndex, Blob x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setBlob(int parameterIndex, InputStream inputStream, long length) {
-    storeParameter(parameterIndex, inputStream);
-  }
-  @Override
-  public void setBlob(int parameterIndex, InputStream inputStream) {
-    storeParameter(parameterIndex, inputStream);
-  }
-  @Override
-  public void setClob(int parameterIndex, Clob x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setClob(int parameterIndex, Reader reader, long length) {
-    storeParameter(parameterIndex, reader);
-  }
-  @Override
-  public void setClob(int parameterIndex, Reader reader) {
-    storeParameter(parameterIndex, reader);
-  }
-  @Override
-  public void setArray(int parameterIndex, Array x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setURL(int parameterIndex, URL x) {
-    storeParameter(parameterIndex, x);
-  }
-  @Override
-  public void setRowId(int parameterIndex, RowId x) {
-    storeParameter(parameterIndex, x);
-  }
+
   @Override
   public void setNString(int parameterIndex, String value) {
     storeParameter(parameterIndex, value);
   }
+
+  @Override
+  public void clearParameters() {
+    parameterValues.clear();
+  }
+
+  @Override
+  public void setByte(int parameterIndex, byte x) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setShort(int parameterIndex, short x) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setAsciiStream(int parameterIndex, InputStream x, int length) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setAsciiStream(int parameterIndex, InputStream x, long length) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setAsciiStream(int parameterIndex, InputStream x) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setUnicodeStream(int parameterIndex, InputStream x, int length) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setBinaryStream(int parameterIndex, InputStream x, int length) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setBinaryStream(int parameterIndex, InputStream x, long length) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setBinaryStream(int parameterIndex, InputStream x) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setCharacterStream(int parameterIndex, Reader reader, int length) {
+    storeParameter(parameterIndex, reader);
+  }
+
+  @Override
+  public void setCharacterStream(int parameterIndex, Reader reader, long length) {
+    storeParameter(parameterIndex, reader);
+  }
+
+  @Override
+  public void setCharacterStream(int parameterIndex, Reader reader) {
+    storeParameter(parameterIndex, reader);
+  }
+
   @Override
   public void setNCharacterStream(int parameterIndex, Reader value, long length) {
     storeParameter(parameterIndex, value);
   }
+
   @Override
   public void setNCharacterStream(int parameterIndex, Reader value) {
     storeParameter(parameterIndex, value);
   }
+
+  @Override
+  public void setRef(int parameterIndex, Ref x) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setBlob(int parameterIndex, Blob x) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setBlob(int parameterIndex, InputStream inputStream, long length) {
+    storeParameter(parameterIndex, inputStream);
+  }
+
+  @Override
+  public void setBlob(int parameterIndex, InputStream inputStream) {
+    storeParameter(parameterIndex, inputStream);
+  }
+
+  @Override
+  public void setClob(int parameterIndex, Clob x) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setClob(int parameterIndex, Reader reader, long length) {
+    storeParameter(parameterIndex, reader);
+  }
+
+  @Override
+  public void setClob(int parameterIndex, Reader reader) {
+    storeParameter(parameterIndex, reader);
+  }
+
   @Override
   public void setNClob(int parameterIndex, NClob value) {
     storeParameter(parameterIndex, value);
   }
+
   @Override
   public void setNClob(int parameterIndex, Reader reader, long length) {
     storeParameter(parameterIndex, reader);
   }
+
   @Override
   public void setNClob(int parameterIndex, Reader reader) {
     storeParameter(parameterIndex, reader);
   }
+
+  @Override
+  public void setArray(int parameterIndex, Array x) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setURL(int parameterIndex, URL x) {
+    storeParameter(parameterIndex, x);
+  }
+
+  @Override
+  public void setRowId(int parameterIndex, RowId x) {
+    storeParameter(parameterIndex, x);
+  }
+
   @Override
   public void setSQLXML(int parameterIndex, SQLXML xmlObject) {
     storeParameter(parameterIndex, xmlObject);
@@ -4206,26 +4260,32 @@ public class JParqPreparedStatement implements PreparedStatement {
   public ResultSetMetaData getMetaData() {
     return null;
   }
+
   @Override
   public ParameterMetaData getParameterMetaData() {
     return new BasicParameterMetaData(parameterCount);
   }
+
   @Override
   public int executeUpdate() throws SQLException {
     throw new SQLFeatureNotSupportedException();
   }
+
   @Override
   public int executeUpdate(String sql) throws SQLException {
     throw new SQLFeatureNotSupportedException();
   }
+
   @Override
   public int executeUpdate(String sql, int autoGeneratedKeys) throws SQLException {
     throw new SQLFeatureNotSupportedException();
   }
+
   @Override
   public int executeUpdate(String sql, int[] columnIndexes) throws SQLException {
     throw new SQLFeatureNotSupportedException();
   }
+
   @Override
   public int executeUpdate(String sql, String[] columnNames) throws SQLException {
     throw new SQLFeatureNotSupportedException();
@@ -4241,101 +4301,128 @@ public class JParqPreparedStatement implements PreparedStatement {
   public boolean execute(String sql) throws SQLException {
     throw new SQLFeatureNotSupportedException();
   }
+
   @Override
   public boolean execute(String sql, int autoGeneratedKeys) throws SQLException {
     throw new SQLFeatureNotSupportedException();
   }
+
   @Override
   public boolean execute(String sql, int[] columnIndexes) throws SQLException {
     throw new SQLFeatureNotSupportedException();
   }
+
   @Override
   public boolean execute(String sql, String[] columnNames) throws SQLException {
     throw new SQLFeatureNotSupportedException();
   }
+
   @Override
   public int getMaxFieldSize() {
     return 0;
   }
+
   @Override
   public void setMaxFieldSize(int max) {
   }
+
   @Override
   public int getMaxRows() {
     return 0;
   }
+
   @Override
   public void setMaxRows(int max) {
   }
+
   @Override
   public void setEscapeProcessing(boolean enable) {
   }
+
   @Override
   public int getQueryTimeout() {
     return 0;
   }
+
   @Override
   public void setQueryTimeout(int seconds) {
   }
+
   @Override
   public void cancel() {
   }
+
   @Override
   public SQLWarning getWarnings() {
     return null;
   }
+
   @Override
   public void clearWarnings() {
   }
+
   @Override
   public void setCursorName(String name) {
   }
+
   @Override
   public int getUpdateCount() {
     return 0;
   }
+
   @Override
   public boolean getMoreResults() {
     return false;
   }
+
   @Override
   public boolean getMoreResults(int current) {
     return false;
   }
+
   @Override
   public void setFetchDirection(int direction) {
   }
+
   @Override
   public int getFetchDirection() {
     return ResultSet.FETCH_FORWARD;
   }
+
   @Override
   public void setFetchSize(int rows) {
   }
+
   @Override
   public int getFetchSize() {
     return 0;
   }
+
   @Override
   public int getResultSetConcurrency() {
     return ResultSet.CONCUR_READ_ONLY;
   }
+
   @Override
   public int getResultSetType() {
     return ResultSet.TYPE_FORWARD_ONLY;
   }
+
   @Override
   public ResultSet getGeneratedKeys() {
     return null;
   }
+
   @Override
   public int getResultSetHoldability() {
     return ResultSet.CLOSE_CURSORS_AT_COMMIT;
   }
+
   @Override
   public <T> T unwrap(Class<T> iface) {
     return null;
   }
+
   @Override
   public boolean isWrapperFor(Class<?> iface) {
     return false;

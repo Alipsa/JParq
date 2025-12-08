@@ -11,6 +11,13 @@ import org.jline.utils.AttributedString;
 public class UserInputHighlighter implements Highlighter {
 
   /**
+   * No-op constructor.
+   */
+  public UserInputHighlighter() {
+    // no-op
+  }
+
+  /**
    * Apply a brighter ANSI color to the current input while ensuring the color is
    * reset afterward.
    *
