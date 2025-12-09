@@ -102,7 +102,7 @@ public class JParqExample {
 
 ### Fat Jar
 
-A "fat" jar, which includes all dependencies, is also created. This is useful when you want to add the driver to the classpath of a tool. The fat jar is named `jparq-x.y.z-fat.jar` i.e. fat is the maven classifier.
+A "fat" jar, which includes all dependencies, is also created. This is useful when you want to add the driver to the classpath of a tool. The fat jar is named `jparq-x.y.z-fat.jar` i.e. fat is the maven classifier. It is available in maven central and in the [releases](https://github.com/Alipsa/JParq/releases) section.
 
 ## JParq CLI
 An interactive command line interface is available for querying Parquet files using JParq. The CLI supports command
@@ -113,7 +113,7 @@ To start the CLI, run the following command, replacing `path/to/jparq.jar` with 
 java -jar path/to/jparq.jar {path to jparq dir}
 ```
 
-To download the fat jar, you can use the following command:
+To download the fat jar, you can either download it from [releases](https://github.com/Alipsa/JParq/releases) or use the following command:
 
 ```shell
 LATEST_VERSION=$(curl -s https://repo1.maven.org/maven2/se/alipsa/jparq/maven-metadata.xml | sed -nE 's/.*<release>(.*)<\/release>.*/\1/p') && \
