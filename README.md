@@ -171,7 +171,7 @@ $
 
 ## SQL Support
 JParq aims to be fully compliant with the read part of the SQL standard (SQL:2016 and earlier). 
-As of version 1.1.1, the support (as far as I know) for the standard is complete. The following is a detailed list of supported features and functions.
+As of version 1.1.1, the support for the standard is complete (as far as I know). The following is a detailed list of supported features and functions.
 
 The following SQL statements are supported:
 - `SELECT` with support for
