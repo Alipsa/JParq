@@ -140,8 +140,8 @@ Once the CLI is started, you can use the following commands:
 
 Example session:
 ```
-$ java -jar target/jparq-1.1.0-fat.jar target/test-classes/acme
-JParq CLI version 1.1.0
+$ java -jar ~/lib/jparq.jar target/test-classes/acme
+JParq CLI version 1.2.0
 Connected to /home/user1/project/JParq/target/test-classes/acme
 jparq(acme)> select * from employees e left join salary s on e.id = salary.employee
 e__id | first_name | last_name  | s__id | employee | salary   | change_date
