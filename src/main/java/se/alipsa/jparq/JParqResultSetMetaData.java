@@ -151,10 +151,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   public String getColumnClassName(int column) {
     Schema.Field field = resolveField(column);
     if (field != null) {
-      String className = JdbcTypeMapper.mapSchemaToJavaClassName(field.schema());
-      if (className != null) {
-        return className;
-      }
+      return JdbcTypeMapper.mapSchemaToJavaClassName(field.schema());
     }
     String computedClassName = resolveComputedColumnClassName(column);
     if (computedClassName != null) {
@@ -231,38 +228,26 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
    */
   private int resolveComputedColumnType(int column) {
     Expression expression = expressionAtColumn(column);
-    if (expression == null) {
-      return Types.OTHER;
-    }
-    if (expression instanceof AnalyticExpression analytic) {
-      return resolveAnalyticFunctionType(analytic);
-    }
-    if (expression instanceof ArrayConstructor) {
-      return Types.ARRAY;
-    }
-    if (expression instanceof net.sf.jsqlparser.expression.Function func && func.getName() != null
-        && "ARRAY".equalsIgnoreCase(func.getName())) {
-      return Types.ARRAY;
-    }
-    return Types.OTHER;
+    return switch (expression) {
+      case AnalyticExpression analytic -> resolveAnalyticFunctionType(analytic);
+      case ArrayConstructor arrayConstructor -> Types.ARRAY;
+      case net.sf.jsqlparser.expression.Function func when func.getName() != null
+          && "ARRAY".equalsIgnoreCase(func.getName()) ->
+        Types.ARRAY;
+      case null, default -> Types.OTHER;
+    };
   }
 
   private String resolveComputedColumnClassName(int column) {
     Expression expression = expressionAtColumn(column);
-    if (expression == null) {
-      return null;
-    }
-    if (expression instanceof AnalyticExpression analytic) {
-      return resolveAnalyticFunctionClassName(analytic);
-    }
-    if (expression instanceof ArrayConstructor) {
-      return List.class.getName();
-    }
-    if (expression instanceof net.sf.jsqlparser.expression.Function func && func.getName() != null
-        && "ARRAY".equalsIgnoreCase(func.getName())) {
-      return List.class.getName();
-    }
-    return null;
+    return switch (expression) {
+      case AnalyticExpression analytic -> resolveAnalyticFunctionClassName(analytic);
+      case ArrayConstructor arrayConstructor -> List.class.getName();
+      case net.sf.jsqlparser.expression.Function func when func.getName() != null
+          && "ARRAY".equalsIgnoreCase(func.getName()) ->
+        List.class.getName();
+      case null, default -> null;
+    };
   }
 
   private Expression expressionAtColumn(int column) {

@@ -285,9 +285,7 @@ public class JParqResultSet extends ResultSetAdapter {
           this.columnOrder.addAll(req); // mutable, safe
         }
         List<String> correlationColumns = this.columnOrder.isEmpty() ? List.of() : List.copyOf(this.columnOrder);
-        Map<String, String> enrichedUnqualifiedMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping,
-            correlationColumns);
-        this.unqualifiedColumnMapping = enrichedUnqualifiedMapping;
+        this.unqualifiedColumnMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping, correlationColumns);
         this.qualifierColumnMapping = CorrelationContextBuilder.build(queryQualifiers, correlationColumns,
             correlationColumns, qualifierMapping);
         List<String> distinctProjection = resolveDistinctColumns(select);
@@ -528,9 +526,7 @@ public class JParqResultSet extends ResultSetAdapter {
         }
       }
       List<String> correlationColumns = buildCorrelationColumns(this.canonicalColumnNames, correlationLabels, proj);
-      Map<String, String> enrichedUnqualifiedMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping,
-          correlationColumns);
-      this.unqualifiedColumnMapping = enrichedUnqualifiedMapping;
+      this.unqualifiedColumnMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping, correlationColumns);
       this.qualifierColumnMapping = CorrelationContextBuilder.build(queryQualifiers, correlationLabels,
           correlationColumns, qualifierMapping);
 
@@ -605,7 +601,6 @@ public class JParqResultSet extends ResultSetAdapter {
     this.aggregateQuery = true;
     this.aggregateRows = rows == null ? new ArrayList<>() : new ArrayList<>(rows);
     this.aggregateSqlTypes = sqlTypes == null ? List.of() : List.copyOf(sqlTypes);
-    this.aggregateRowIndex = -1;
     this.aggregateOnRow = false;
     this.qp = null;
     this.current = null;
@@ -1010,29 +1005,33 @@ public class JParqResultSet extends ResultSetAdapter {
    *         satisfied
    */
   private static Expression pruneExpression(Expression expression, Set<String> availableQualifiers) {
-    if (expression == null) {
-      return null;
-    }
-    if (expression instanceof AndExpression andExpression) {
-      Expression left = pruneExpression(andExpression.getLeftExpression(), availableQualifiers);
-      Expression right = pruneExpression(andExpression.getRightExpression(), availableQualifiers);
-      if (left == null) {
-        return right;
-      }
-      if (right == null) {
-        return left;
-      }
-      andExpression.setLeftExpression(left);
-      andExpression.setRightExpression(right);
-      return andExpression;
-    }
-    if (expression instanceof Parenthesis parenthesis) {
-      Expression inner = pruneExpression(parenthesis.getExpression(), availableQualifiers);
-      if (inner == null) {
+    switch (expression) {
+      case null -> {
         return null;
       }
-      parenthesis.setExpression(inner);
-      return parenthesis;
+      case AndExpression andExpression -> {
+        Expression left = pruneExpression(andExpression.getLeftExpression(), availableQualifiers);
+        Expression right = pruneExpression(andExpression.getRightExpression(), availableQualifiers);
+        if (left == null) {
+          return right;
+        }
+        if (right == null) {
+          return left;
+        }
+        andExpression.setLeftExpression(left);
+        andExpression.setRightExpression(right);
+        return andExpression;
+      }
+      case Parenthesis parenthesis -> {
+        Expression inner = pruneExpression(parenthesis.getExpression(), availableQualifiers);
+        if (inner == null) {
+          return null;
+        }
+        parenthesis.setExpression(inner);
+        return parenthesis;
+      }
+      default -> {
+      }
     }
     Set<String> qualifiersInExpression = collectQualifiers(expression);
     if (qualifiersInExpression.isEmpty()) {
@@ -1211,17 +1210,21 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public String getString(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    if (v == null) {
-      return null;
-    }
-    if (v instanceof byte[] bytes) {
-      return new String(bytes, StandardCharsets.UTF_8);
-    }
-    if (v instanceof ByteBuffer buffer) {
-      ByteBuffer dup = buffer.duplicate();
-      byte[] bytes = new byte[dup.remaining()];
-      dup.get(bytes);
-      return new String(bytes, StandardCharsets.UTF_8);
+    switch (v) {
+      case null -> {
+        return null;
+      }
+      case byte[] bytes -> {
+        return new String(bytes, StandardCharsets.UTF_8);
+      }
+      case ByteBuffer buffer -> {
+        ByteBuffer dup = buffer.duplicate();
+        byte[] bytes = new byte[dup.remaining()];
+        dup.get(bytes);
+        return new String(bytes, StandardCharsets.UTF_8);
+      }
+      default -> {
+      }
     }
     return v.toString();
   }
@@ -1296,16 +1299,12 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public BigDecimal getBigDecimal(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    if (v == null) {
-      return null;
-    }
-    if (v instanceof BigDecimal bd) {
-      return bd;
-    }
-    if (v instanceof Number n) {
-      return new BigDecimal(n.toString());
-    }
-    return new BigDecimal(v.toString());
+    return switch (v) {
+      case null -> null;
+      case BigDecimal bd -> bd;
+      case Number n -> new BigDecimal(n.toString());
+      default -> new BigDecimal(v.toString());
+    };
   }
 
   @Override
@@ -1317,31 +1316,17 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public Date getDate(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    if (v == null) {
-      return null;
-    }
-    if (v instanceof Date) {
-      return (Date) v;
-    }
-    if (v instanceof Timestamp ts) {
-      return new Date(ts.getTime());
-    }
-    if (v instanceof String s) {
-      return Date.valueOf(s);
-    }
-    if (v instanceof Long l) {
-      return new Date(l);
-    }
-    if (v instanceof Double d) {
-      return new Date(d.longValue());
-    }
-    if (v instanceof LocalDateTime l) {
-      return Date.valueOf(l.toLocalDate());
-    }
-    if (v instanceof LocalDate) {
-      return Date.valueOf((LocalDate) v);
-    }
-    throw new SQLException("Unsupported date type: " + v.getClass().getName());
+    return switch (v) {
+      case null -> null;
+      case Date date -> date;
+      case Timestamp ts -> new Date(ts.getTime());
+      case String s -> Date.valueOf(s);
+      case Long l -> new Date(l);
+      case Double d -> new Date(d.longValue());
+      case LocalDateTime l -> Date.valueOf(l.toLocalDate());
+      case LocalDate localDate -> Date.valueOf(localDate);
+      default -> throw new SQLException("Unsupported date type: " + v.getClass().getName());
+    };
   }
 
   @Override
@@ -1352,28 +1337,16 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public Time getTime(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    if (v == null) {
-      return null;
-    }
-    if (v instanceof Timestamp) {
-      return new Time(((Timestamp) v).getTime());
-    }
-    if (v instanceof Time) {
-      return (Time) v;
-    }
-    if (v instanceof LocalTime lt) {
-      return Time.valueOf(lt);
-    }
-    if (v instanceof String s) {
-      return Time.valueOf(s);
-    }
-    if (v instanceof Long l) {
-      return new Time(l);
-    }
-    if (v instanceof Double d) {
-      return new Time(d.longValue());
-    }
-    throw new SQLException("Unsupported time type: " + v.getClass().getName());
+    return switch (v) {
+      case null -> null;
+      case Timestamp timestamp -> new Time(timestamp.getTime());
+      case Time time -> time;
+      case LocalTime lt -> Time.valueOf(lt);
+      case String s -> Time.valueOf(s);
+      case Long l -> new Time(l);
+      case Double d -> new Time(d.longValue());
+      default -> throw new SQLException("Unsupported time type: " + v.getClass().getName());
+    };
   }
 
   @Override
@@ -1384,28 +1357,16 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public Timestamp getTimestamp(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    if (v == null) {
-      return null;
-    }
-    if (v instanceof Timestamp t) {
-      return t;
-    }
-    if (v instanceof Date d) {
-      return new Timestamp(d.getTime());
-    }
-    if (v instanceof String s) {
-      return Timestamp.valueOf(s);
-    }
-    if (v instanceof Long l) {
-      return new Timestamp(l);
-    }
-    if (v instanceof Double d) {
-      return new Timestamp(d.longValue());
-    }
-    if (v instanceof LocalDateTime l) {
-      return Timestamp.valueOf(l);
-    }
-    throw new SQLException("Unsupported timestamp type: " + v.getClass().getName());
+    return switch (v) {
+      case null -> null;
+      case Timestamp t -> t;
+      case Date d -> new Timestamp(d.getTime());
+      case String s -> Timestamp.valueOf(s);
+      case Long l -> new Timestamp(l);
+      case Double d -> new Timestamp(d.longValue());
+      case LocalDateTime l -> Timestamp.valueOf(l);
+      default -> throw new SQLException("Unsupported timestamp type: " + v.getClass().getName());
+    };
   }
 
   @Override
