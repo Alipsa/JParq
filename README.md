@@ -116,8 +116,14 @@ java -jar path/to/jparq.jar {path to jparq dir}
 To download the fat jar, you can use the following command:
 
 ```shell
-LATEST_VERSION=$(curl -s https://repo1.maven.org/maven2/se/alipsa/jparq/maven-metadata.xml | grep -oP '<release>\K[^<]+')
+LATEST_VERSION=$(curl -s https://repo1.maven.org/maven2/se/alipsa/jparq/maven-metadata.xml | sed -nE 's/.*<release>(.*)<\/release>.*/\1/p') && \
 curl -o jparq.jar https://repo1.maven.org/maven2/se/alipsa/jparq/$LATEST_VERSION/jparq-$LATEST_VERSION-fat.jar
+```
+For simpler access you can create a script to it (e.g called jparq) that you put in your ~/bin dir
+
+```shell
+#!/usr/bin/env bash
+java -jar /path/to/jparq.jar $@
 ```
 
 Once the CLI is started, you can use the following commands:
