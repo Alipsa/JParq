@@ -278,15 +278,19 @@ public class JParqConnection implements Connection {
 
   @Override
   public Statement createStatement(int resultSetType, int resultSetConcurrency) throws SQLException {
-    throw new SQLFeatureNotSupportedException(
-        "JParq is a read-only driver; configurable ResultSet type/concurrency is not supported.");
+    if (resultSetType == ResultSet.TYPE_FORWARD_ONLY && resultSetConcurrency == ResultSet.CONCUR_READ_ONLY) {
+      return createStatement();
+    }
+    throw new SQLFeatureNotSupportedException("Only TYPE_FORWARD_ONLY/CONCUR_READ_ONLY result sets are supported.");
   }
 
   @Override
   public Statement createStatement(int resultSetType, int resultSetConcurrency, int resultSetHoldability)
       throws SQLException {
-    throw new SQLFeatureNotSupportedException(
-        "JParq is a read-only driver; configurable ResultSet holdability is not supported.");
+    if (resultSetHoldability != ResultSet.CLOSE_CURSORS_AT_COMMIT) {
+      throw new SQLFeatureNotSupportedException("Only CLOSE_CURSORS_AT_COMMIT holdability is supported.");
+    }
+    return createStatement(resultSetType, resultSetConcurrency);
   }
 
   @Override

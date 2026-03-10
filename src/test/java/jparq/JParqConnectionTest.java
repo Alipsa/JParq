@@ -27,10 +27,28 @@ public class JParqConnectionTest {
   }
 
   @Test
-  void createStatementWithTypeAndConcurrencyIsUnsupported() throws SQLException, URISyntaxException {
+  void createStatementWithTypeAndConcurrencySupportsReadOnlyForwardOnly() throws SQLException, URISyntaxException {
     try (Connection connection = newConnection()) {
+      try (var statement = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
+        Assertions.assertNotNull(statement);
+      }
       Assertions.assertThrows(SQLFeatureNotSupportedException.class,
-          () -> connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY));
+          () -> connection.createStatement(ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY));
+      Assertions.assertThrows(SQLFeatureNotSupportedException.class,
+          () -> connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_UPDATABLE));
+    }
+  }
+
+  @Test
+  void createStatementWithHoldabilitySupportsCloseCursorsAtCommit() throws SQLException, URISyntaxException {
+    try (Connection connection = newConnection()) {
+      try (var statement = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY,
+          ResultSet.CLOSE_CURSORS_AT_COMMIT)) {
+        Assertions.assertNotNull(statement);
+      }
+      Assertions.assertThrows(SQLFeatureNotSupportedException.class,
+          () -> connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY,
+              ResultSet.HOLD_CURSORS_OVER_COMMIT));
     }
   }
 }

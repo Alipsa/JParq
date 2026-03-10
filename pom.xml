@@ -4,7 +4,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>se.alipsa</groupId>
   <artifactId>jparq</artifactId>
-  <version>1.2.1-SNAPSHOT</version>
+  <version>1.3.0-SNAPSHOT</version>
   <name>JDBC Driver for Parquet files</name>
 
   <description>JDBC Driver for reading Parquet files</description>
@@ -30,15 +30,15 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
     <avro.version>1.12.1</avro.version>
-    <checkstyle.version>12.2.0</checkstyle.version>
+    <checkstyle.version>13.3.0</checkstyle.version>
     <checkstyle.plugin.version>3.6.0</checkstyle.plugin.version>
-    <hadoop.version>3.4.2</hadoop.version>
+    <hadoop.version>3.4.3</hadoop.version>
     <jsqlparser.version>5.3</jsqlparser.version>
-    <jackson.version>2.20.1</jackson.version>
+    <jackson.version>2.21.1</jackson.version>
     <jline.version>3.25.1</jline.version>
-    <junit.version>6.0.1</junit.version>
+    <junit.version>6.0.3</junit.version>
     <maven-assembly-plugin.version>3.8.0</maven-assembly-plugin.version>
-    <parquet.version>1.16.0</parquet.version>
+    <parquet.version>1.17.0</parquet.version>
     <pmd.plugin.version>3.28.0</pmd.plugin.version>
     <slf4j.version>2.0.17</slf4j.version>
   </properties>
@@ -243,7 +243,7 @@
     <dependency>
       <groupId>org.mockito</groupId>
       <artifactId>mockito-core</artifactId>
-      <version>5.20.0</version>
+      <version>5.22.0</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
@@ -252,7 +252,7 @@
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>versions-maven-plugin</artifactId>
-        <version>2.20.1</version>
+        <version>2.21.0</version>
         <configuration>
           <rulesUri>file://${basedir}/version-plugin-rules.xml</rulesUri>
         </configuration>
@@ -315,7 +315,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
-        <version>3.14.1</version>
+        <version>3.15.0</version>
         <configuration>
           <release>${maven.compiler.release}</release>
           <compilerArgument>-Xlint:deprecation</compilerArgument>
@@ -324,7 +324,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
-        <version>3.5.4</version>
+        <version>3.5.5</version>
         <configuration>
           <useModulePath>false</useModulePath>
         </configuration>
@@ -332,7 +332,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-failsafe-plugin</artifactId>
-        <version>3.5.4</version>
+        <version>3.5.5</version>
         <configuration>
           <redirectTestOutputToFile>false</redirectTestOutputToFile>
           <useFile>false</useFile>
@@ -518,7 +518,7 @@
       <plugin>
         <groupId>com.diffplug.spotless</groupId>
         <artifactId>spotless-maven-plugin</artifactId>
-        <version>3.1.0</version>
+        <version>3.3.0</version>
         <configuration>
           <java>
             <includes>
@@ -647,7 +647,7 @@
           <plugin>
             <groupId>org.sonatype.central</groupId>
             <artifactId>central-publishing-maven-plugin</artifactId>
-            <version>0.9.0</version>
+            <version>0.10.0</version>
             <extensions>true</extensions>
             <configuration>
               <publishingServerId>central</publishingServerId>
