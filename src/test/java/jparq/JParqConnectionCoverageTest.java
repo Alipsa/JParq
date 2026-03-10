@@ -76,6 +76,7 @@ class JParqConnectionCoverageTest {
     assertThrows(SQLFeatureNotSupportedException.class, () -> connection.createNClob());
     assertThrows(SQLFeatureNotSupportedException.class, () -> connection.createSQLXML());
     assertTrue(connection.isValid(0));
+    assertThrows(SQLException.class, () -> connection.isValid(-1));
     connection.setClientInfo("k", "v");
     connection.setClientInfo(new Properties());
     assertEquals("", connection.getClientInfo("k"));
