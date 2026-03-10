@@ -175,4 +175,11 @@ class JParqPreparedStatementCoverageTest {
     assertEquals(0, preparedStatement.getParameterMetaData().getParameterCount());
     rs.close();
   }
+
+  @Test
+  void reportsClosedWhenConnectionClosesFirst() throws SQLException {
+    assertFalse(preparedStatement.isClosed());
+    connection.close();
+    assertTrue(preparedStatement.isClosed());
+  }
 }

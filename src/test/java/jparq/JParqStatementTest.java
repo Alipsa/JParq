@@ -112,6 +112,13 @@ public class JParqStatementTest {
   }
 
   @Test
+  void testIsClosedWhenConnectionClosesFirst() throws SQLException {
+    assertFalse(statement.isClosed());
+    connection.close();
+    assertTrue(statement.isClosed());
+  }
+
+  @Test
   void testExecute() throws SQLException {
     String sql = "SELECT * FROM test";
     assertTrue(statement.execute(sql));

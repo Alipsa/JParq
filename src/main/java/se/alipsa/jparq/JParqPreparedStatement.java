@@ -4248,7 +4248,7 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   @Override
   public boolean isClosed() {
-    return closed;
+    return closed || stmt.getConn().isClosed();
   }
 
   @Override

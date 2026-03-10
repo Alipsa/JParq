@@ -285,7 +285,7 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
 
   @Override
   public boolean isClosed() throws SQLException {
-    return closed;
+    return closed || conn.isClosed();
   }
 
   @Override
