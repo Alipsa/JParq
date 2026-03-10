@@ -1,7 +1,14 @@
 # Version history
 
-### 1.2.1, In Progress
-
+### 1.3.0, In Progress
+- com.fasterxml.jackson.core:jackson-databind ......... 2.20.1 -> 2.21.1
+- org.apache.hadoop:hadoop-common ....................... 3.4.2 -> 3.4.3
+- org.apache.hadoop:hadoop-mapreduce-client-core ........ 3.4.2 -> 3.4.3
+- org.apache.parquet:parquet-avro ..................... 1.16.0 -> 1.17.0
+- org.apache.parquet:parquet-hadoop ................... 1.16.0 -> 1.17.0
+- org.apache.parquet:parquet-variant .................. 1.16.0 -> 1.17.0
+- org.junit.jupiter:junit-jupiter ....................... 6.0.1 -> 6.0.3
+- org.mockito:mockito-core ............................ 5.20.0 -> 5.22.0
 
 ### 1.2.0, 2025-12-08
 - add support for batch execution in prepared statements
