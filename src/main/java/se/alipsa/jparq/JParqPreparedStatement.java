@@ -183,16 +183,27 @@ public class JParqPreparedStatement implements PreparedStatement {
   private CteResult informationSchemaColumnsResult;
   private final Map<Integer, Object> parameterValues = new LinkedHashMap<>();
   private final List<Map<Integer, Object>> batchedParameters = new ArrayList<>();
+  private final boolean ownsStatement;
   private JParqPreparedStatement boundStatement;
   private boolean closed = false;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
-    this(stmt, sql, Map.of());
+    this(stmt, sql, Map.of(), false);
   }
 
   JParqPreparedStatement(JParqStatement stmt, String sql, Map<Identifier, CteResult> inheritedCtes)
       throws SQLException {
+    this(stmt, sql, inheritedCtes, false);
+  }
+
+  JParqPreparedStatement(JParqStatement stmt, String sql, boolean ownsStatement) throws SQLException {
+    this(stmt, sql, Map.of(), ownsStatement);
+  }
+
+  JParqPreparedStatement(JParqStatement stmt, String sql, Map<Identifier, CteResult> inheritedCtes,
+      boolean ownsStatement) throws SQLException {
     this.stmt = stmt;
+    this.ownsStatement = ownsStatement;
     ParameterParseResult parseResult = parseParameters(sql);
     this.originalSql = parseResult.sql();
     this.parameterCount = parseResult.parameterCount();
@@ -510,7 +521,9 @@ public class JParqPreparedStatement implements PreparedStatement {
       boundStatement.close();
       boundStatement = null;
     }
-    stmt.close();
+    if (ownsStatement) {
+      stmt.close();
+    }
     closed = true;
   }
 

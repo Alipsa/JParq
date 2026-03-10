@@ -77,8 +77,17 @@ public class JParqStatementTest {
     String sql = "SELECT * FROM test";
     ResultSet rs = statement.executeQuery(sql);
     assertNotNull(rs);
+    assertFalse(rs.isClosed());
     assertEquals(rs, statement.getCurrentRs());
     assertEquals(sql, statement.getCurrentSql());
+  }
+
+  @Test
+  void testClosingPreparedStatementFromStatementDoesNotCloseParentStatement() throws SQLException {
+    JParqPreparedStatement preparedStatement = statement.prepare("SELECT * FROM test");
+    preparedStatement.close();
+    assertTrue(preparedStatement.isClosed());
+    assertFalse(statement.isClosed());
   }
 
   @Test

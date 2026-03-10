@@ -408,7 +408,7 @@ public class JParqConnection implements Connection {
 
   @Override
   public JParqPreparedStatement prepareStatement(String sql) throws SQLException {
-    return new JParqStatement(this).prepare(sql);
+    return new JParqPreparedStatement(new JParqStatement(this), sql, true);
   }
 
   @Override
