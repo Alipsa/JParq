@@ -9,6 +9,7 @@ import java.util.Properties;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqDriver;
+import se.alipsa.jparq.JParqVersion;
 
 public class JParqDriverTest {
 
@@ -44,12 +45,12 @@ public class JParqDriverTest {
 
   @Test
   public void testGetMajorVersion() {
-    assertEquals(0, driver.getMajorVersion());
+    assertEquals(JParqVersion.MAJOR, driver.getMajorVersion());
   }
 
   @Test
   public void testGetMinorVersion() {
-    assertEquals(1, driver.getMinorVersion());
+    assertEquals(JParqVersion.MINOR, driver.getMinorVersion());
   }
 
   @Test

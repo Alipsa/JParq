@@ -18,6 +18,7 @@ import java.util.Properties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.JParqVersion;
 
 /** Additional coverage for {@link se.alipsa.jparq.JParqDatabaseMetaData}. */
 class JParqDatabaseMetaDataCapabilitiesTest {
@@ -43,8 +44,11 @@ class JParqDatabaseMetaDataCapabilitiesTest {
   void reportsSupportedCapabilitiesAndDefaults() throws SQLException {
     DatabaseMetaData metaData = connection.getMetaData();
     assertEquals("JParq", metaData.getDatabaseProductName());
-    assertEquals("1.3.0", metaData.getDatabaseProductVersion());
+    assertEquals(JParqVersion.VERSION, metaData.getDatabaseProductVersion());
     assertEquals("se.alipsa.jparq.JParqDriver", metaData.getDriverName());
+    assertEquals(JParqVersion.VERSION, metaData.getDriverVersion());
+    assertEquals(JParqVersion.MAJOR, metaData.getDriverMajorVersion());
+    assertEquals(JParqVersion.MINOR, metaData.getDriverMinorVersion());
     assertTrue(metaData.usesLocalFiles());
     assertTrue(metaData.usesLocalFilePerTable());
     assertFalse(metaData.supportsMixedCaseIdentifiers());
@@ -116,8 +120,8 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertFalse(metaData.supportsMultipleTransactions());
     assertFalse(metaData.supportsIntegrityEnhancementFacility());
     assertFalse(metaData.supportsStoredFunctionsUsingCallSyntax());
-    assertEquals(1, metaData.getDatabaseMajorVersion());
-    assertEquals(2, metaData.getDatabaseMinorVersion());
+    assertEquals(JParqVersion.MAJOR, metaData.getDatabaseMajorVersion());
+    assertEquals(JParqVersion.MINOR, metaData.getDatabaseMinorVersion());
     assertEquals(4, metaData.getJDBCMajorVersion());
     assertEquals(3, metaData.getJDBCMinorVersion());
     assertEquals(2, metaData.getSQLStateType());

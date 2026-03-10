@@ -60,12 +60,12 @@ public class JParqDriver implements Driver {
 
   @Override
   public int getMajorVersion() {
-    return 0;
+    return JParqVersion.MAJOR;
   }
 
   @Override
   public int getMinorVersion() {
-    return 1;
+    return JParqVersion.MINOR;
   }
 
   @Override
