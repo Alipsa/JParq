@@ -71,17 +71,17 @@ class JParqConnectionCoverageTest {
   void defaultFactoriesAndSettings() throws SQLException {
     assertNull(connection.getWarnings());
     connection.clearWarnings();
-    assertNull(connection.createClob());
-    assertNull(connection.createBlob());
-    assertNull(connection.createNClob());
-    assertNull(connection.createSQLXML());
-    assertFalse(connection.isValid(0));
+    assertThrows(SQLFeatureNotSupportedException.class, () -> connection.createClob());
+    assertThrows(SQLFeatureNotSupportedException.class, () -> connection.createBlob());
+    assertThrows(SQLFeatureNotSupportedException.class, () -> connection.createNClob());
+    assertThrows(SQLFeatureNotSupportedException.class, () -> connection.createSQLXML());
+    assertTrue(connection.isValid(0));
     connection.setClientInfo("k", "v");
     connection.setClientInfo(new Properties());
     assertEquals("", connection.getClientInfo("k"));
     assertNotNull(connection.getClientInfo());
-    assertNull(connection.createArrayOf("VARCHAR", new Object[0]));
-    assertNull(connection.createStruct("TYPE", new Object[0]));
+    assertThrows(SQLFeatureNotSupportedException.class, () -> connection.createArrayOf("VARCHAR", new Object[0]));
+    assertThrows(SQLFeatureNotSupportedException.class, () -> connection.createStruct("TYPE", new Object[0]));
     connection.setSchema("PUBLIC");
     assertEquals("", connection.getSchema());
     connection.abort(command -> command.run());
@@ -91,7 +91,13 @@ class JParqConnectionCoverageTest {
     connection.setHoldability(ResultSet.CLOSE_CURSORS_AT_COMMIT);
     connection.setTypeMap(new java.util.HashMap<>());
     assertTrue(connection.getTypeMap().isEmpty());
-    assertNull(connection.unwrap(Object.class));
-    assertFalse(connection.isWrapperFor(Object.class));
+    assertSame(connection, connection.unwrap(JParqConnection.class));
+    assertSame(connection, connection.unwrap(Object.class));
+    assertThrows(SQLException.class, () -> connection.unwrap(Statement.class));
+    assertTrue(connection.isWrapperFor(JParqConnection.class));
+    assertTrue(connection.isWrapperFor(Object.class));
+    assertFalse(connection.isWrapperFor(Statement.class));
+    connection.close();
+    assertFalse(connection.isValid(0));
   }
 }
