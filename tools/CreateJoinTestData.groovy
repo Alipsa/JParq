@@ -29,6 +29,8 @@ File scriptDir = new File(sourceUri).parentFile
 File resourcesDir = new File(scriptDir, '../src/test/resources')
 @Field
 File acmeDir = new File(resourcesDir, 'acme')
+@Field
+File manualDataDir = scriptDir
 
 employees = Matrix.builder('employees').data(
   id: [1,2,3,4,5],
@@ -99,10 +101,10 @@ if (false) {
 println "creating h2 database"
 
 String h2FileName = 'acmeh2'
-File dbFile = new File(resourcesDir, h2FileName)
+File dbFile = new File(manualDataDir, h2FileName)
 def ant = new AntBuilder()
 ant.delete {
-  fileset(dir: resourcesDir) {
+  fileset(dir: manualDataDir) {
     include(name: "$h2FileName*")
   }
 }
