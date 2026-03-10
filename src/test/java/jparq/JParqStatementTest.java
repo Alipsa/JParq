@@ -77,8 +77,17 @@ public class JParqStatementTest {
     String sql = "SELECT * FROM test";
     ResultSet rs = statement.executeQuery(sql);
     assertNotNull(rs);
+    assertFalse(rs.isClosed());
     assertEquals(rs, statement.getCurrentRs());
     assertEquals(sql, statement.getCurrentSql());
+  }
+
+  @Test
+  void testClosingPreparedStatementFromStatementDoesNotCloseParentStatement() throws SQLException {
+    JParqPreparedStatement preparedStatement = statement.prepare("SELECT * FROM test");
+    preparedStatement.close();
+    assertTrue(preparedStatement.isClosed());
+    assertFalse(statement.isClosed());
   }
 
   @Test
@@ -99,6 +108,14 @@ public class JParqStatementTest {
     ResultSet rs = statement.executeQuery(sql);
     statement.close();
     assertTrue(rs.isClosed());
+    assertTrue(statement.isClosed());
+  }
+
+  @Test
+  void testIsClosedWhenConnectionClosesFirst() throws SQLException {
+    assertFalse(statement.isClosed());
+    connection.close();
+    assertTrue(statement.isClosed());
   }
 
   @Test
@@ -148,6 +165,8 @@ public class JParqStatementTest {
     }));
     assertEquals(ResultSet.CLOSE_CURSORS_AT_COMMIT, statement.getResultSetHoldability());
     assertFalse(statement.isClosed());
+    statement.close();
+    assertTrue(statement.isClosed());
     statement.setPoolable(true);
     assertFalse(statement.isPoolable());
     statement.closeOnCompletion();
