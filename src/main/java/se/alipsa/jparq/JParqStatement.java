@@ -17,6 +17,7 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
   private final JParqConnection conn;
   private String currentSql;
   private JParqResultSet currentRs;
+  private boolean closed = false;
 
   /**
    * Constructor for JParqStatement.
@@ -146,6 +147,7 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
     } catch (SQLException ignored) {
       // Ignore
     }
+    closed = true;
   }
 
   @Override
@@ -283,7 +285,7 @@ public class JParqStatement extends BasicThreadFactory.Builder implements Statem
 
   @Override
   public boolean isClosed() throws SQLException {
-    return false;
+    return closed;
   }
 
   @Override

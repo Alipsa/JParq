@@ -184,6 +184,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final Map<Integer, Object> parameterValues = new LinkedHashMap<>();
   private final List<Map<Integer, Object>> batchedParameters = new ArrayList<>();
   private JParqPreparedStatement boundStatement;
+  private boolean closed = false;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
     this(stmt, sql, Map.of());
@@ -509,6 +510,8 @@ public class JParqPreparedStatement implements PreparedStatement {
       boundStatement.close();
       boundStatement = null;
     }
+    stmt.close();
+    closed = true;
   }
 
   private JParqPreparedStatement prepareSubqueryStatement(String sql) throws SQLException {
@@ -4232,7 +4235,7 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   @Override
   public boolean isClosed() {
-    return false;
+    return closed;
   }
 
   @Override

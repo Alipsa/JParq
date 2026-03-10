@@ -99,6 +99,7 @@ public class JParqStatementTest {
     ResultSet rs = statement.executeQuery(sql);
     statement.close();
     assertTrue(rs.isClosed());
+    assertTrue(statement.isClosed());
   }
 
   @Test
@@ -148,6 +149,8 @@ public class JParqStatementTest {
     }));
     assertEquals(ResultSet.CLOSE_CURSORS_AT_COMMIT, statement.getResultSetHoldability());
     assertFalse(statement.isClosed());
+    statement.close();
+    assertTrue(statement.isClosed());
     statement.setPoolable(true);
     assertFalse(statement.isPoolable());
     statement.closeOnCompletion();

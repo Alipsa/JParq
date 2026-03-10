@@ -166,6 +166,8 @@ class JParqPreparedStatementCoverageTest {
     assertFalse(preparedStatement.isCloseOnCompletion());
     assertFalse(preparedStatement.isPoolable());
     assertFalse(preparedStatement.isClosed());
+    preparedStatement.close();
+    assertTrue(preparedStatement.isClosed());
     assertNull(preparedStatement.getMetaData());
     assertEquals(0, preparedStatement.getParameterMetaData().getParameterCount());
     rs.close();
