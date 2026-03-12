@@ -3473,8 +3473,8 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     if (cteResult != null) {
       return new PushdownInfo(false, residual != null, false, false, false, false, residual == null
-          ? "In-memory CTE or information_schema results do not use Parquet predicate pushdown."
-          : "In-memory CTE or information_schema results apply residual filtering in Java (no Parquet predicate pushdown).",
+          ? "In-memory query results (for example CTEs, derived/value/UNNEST tables, or information_schema) do not use Parquet predicate pushdown."
+          : "In-memory query results (for example CTEs, derived/value/UNNEST tables, or information_schema) apply residual filtering in Java (no Parquet predicate pushdown).",
           null, residual == null ? null : residual.toString());
     }
     boolean statsEnabled = isFilterEnabled(configuration, ParquetInputFormat.STATS_FILTERING_ENABLED);

@@ -259,7 +259,20 @@ class JParqPreparedStatementCoverageTest {
       JParqPreparedStatement.PushdownInfo info = pushdownStatement.getPushdownInfo();
       assertFalse(info.parquetPredicateAttached());
       assertTrue(info.residualFilterPresent());
+      assertTrue(info.message().contains("In-memory query results"));
       assertTrue(info.message().contains("residual filtering in Java"));
+      assertEquals("UPPER(model) = 'MAZDA RX4'", info.residualExpressionSummary());
+    }
+  }
+
+  @Test
+  void reportsResidualFilteringForDerivedTables() throws SQLException {
+    try (JParqPreparedStatement pushdownStatement = connection
+        .prepareStatement("SELECT model FROM (SELECT * FROM cars) filtered WHERE UPPER(model) = 'MAZDA RX4'")) {
+      JParqPreparedStatement.PushdownInfo info = pushdownStatement.getPushdownInfo();
+      assertFalse(info.parquetPredicateAttached());
+      assertTrue(info.residualFilterPresent());
+      assertTrue(info.message().contains("In-memory query results"));
       assertEquals("UPPER(model) = 'MAZDA RX4'", info.residualExpressionSummary());
     }
   }
