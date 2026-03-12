@@ -225,4 +225,29 @@ class JParqPreparedStatementCoverageTest {
       assertEquals("cyl = 4", info.residualExpressionSummary());
     }
   }
+
+  @Test
+  void reportsResidualFilteringForJoinQueries() throws SQLException {
+    try (JParqPreparedStatement pushdownStatement = connection.prepareStatement(
+        "SELECT c1.model FROM cars c1 JOIN cars c2 ON c1.cyl = c2.cyl WHERE UPPER(c1.model) = 'MAZDA RX4'")) {
+      JParqPreparedStatement.PushdownInfo info = pushdownStatement.getPushdownInfo();
+      assertFalse(info.parquetPredicateAttached());
+      assertTrue(info.residualFilterPresent());
+      assertTrue(info.message().contains("Join queries"));
+      assertNotNull(info.residualExpressionSummary());
+      assertTrue(info.residualExpressionSummary().contains("UPPER(c1.model) = 'MAZDA RX4'"));
+    }
+  }
+
+  @Test
+  void reportsResidualFilteringForCteQueries() throws SQLException {
+    try (JParqPreparedStatement pushdownStatement = connection.prepareStatement(
+        "WITH filtered AS (SELECT * FROM cars) SELECT model FROM filtered WHERE UPPER(model) = 'MAZDA RX4'")) {
+      JParqPreparedStatement.PushdownInfo info = pushdownStatement.getPushdownInfo();
+      assertFalse(info.parquetPredicateAttached());
+      assertTrue(info.residualFilterPresent());
+      assertTrue(info.message().contains("residual filtering in Java"));
+      assertEquals("UPPER(model) = 'MAZDA RX4'", info.residualExpressionSummary());
+    }
+  }
 }

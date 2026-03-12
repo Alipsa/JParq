@@ -3387,6 +3387,11 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private JParqResultSet executeWithBoundParameters() throws SQLException {
     String boundSql = bindParameters();
+    JParqResultSet currentResultSet = stmt.getCurrentRs();
+    if (currentResultSet != null) {
+      currentResultSet.close();
+      stmt.setCurrentRs(null);
+    }
     if (boundStatement != null) {
       boundStatement.close();
       boundStatement = null;
@@ -3481,11 +3486,6 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (select != null && select.distinct()) {
       return new PushdownInfo(false, residual != null, statsEnabled, columnIndexEnabled, dictionaryEnabled,
           bloomEnabled, "DISTINCT queries currently use residual filtering only.", null,
-          residual == null ? null : residual.toString());
-    }
-    if (avroSchema == null) {
-      return new PushdownInfo(false, residual != null, statsEnabled, columnIndexEnabled, dictionaryEnabled,
-          bloomEnabled, "Parquet schema metadata was unavailable, so filtering remains residual.", null,
           residual == null ? null : residual.toString());
     }
     if (predicate.isPresent()) {
