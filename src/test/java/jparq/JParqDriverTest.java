@@ -45,12 +45,12 @@ public class JParqDriverTest {
 
   @Test
   public void testGetMajorVersion() {
-    assertEquals(JParqVersion.MAJOR, driver.getMajorVersion());
+    assertEquals(JParqVersion.getMajor(), driver.getMajorVersion());
   }
 
   @Test
   public void testGetMinorVersion() {
-    assertEquals(JParqVersion.MINOR, driver.getMinorVersion());
+    assertEquals(JParqVersion.getMinor(), driver.getMinorVersion());
   }
 
   @Test

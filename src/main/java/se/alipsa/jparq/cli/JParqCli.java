@@ -4,14 +4,9 @@ import static se.alipsa.jparq.cli.JParqCliSession.ANSI_RESET;
 import static se.alipsa.jparq.cli.JParqCliSession.PROMPT_COLOR;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.PrintWriter;
-import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Enumeration;
-import java.util.jar.Attributes;
-import java.util.jar.Manifest;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
@@ -21,6 +16,7 @@ import org.jline.terminal.TerminalBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.bridge.SLF4JBridgeHandler;
+import se.alipsa.jparq.JParqVersion;
 
 /**
  * Entry point for the interactive JParq command line interface.
@@ -87,13 +83,12 @@ public final class JParqCli {
 
   /**
    * Ensure the running Java version does not exceed the supported maximum. The
-   * maximum is read from the manifest entry {@code Max-Jdk-Version} or, if set,
-   * the system property {@code jparq.maxJdkVersion}. Throws an
-   * {@link IllegalStateException} when the current runtime is newer than
-   * supported.
+   * maximum is resolved by {@link JParqVersion#getMaxJdkVersion()}. Throws an
+   * {@link IllegalStateException} when the current runtime is newer than the
+   * configured limit.
    */
   public static void validateJavaVersion() {
-    String maxJdk = resolveMaxJdkVersion();
+    String maxJdk = JParqVersion.getMaxJdkVersion();
     if (maxJdk == null || maxJdk.isBlank()) {
       LOG.warn("Max-Jdk-Version not specified; skipping Java version check.");
       return;
@@ -104,38 +99,6 @@ public final class JParqCli {
       throw new IllegalStateException(
           "Java " + Runtime.version() + " is not supported. Maximum supported major version is " + maxFeature + ".");
     }
-  }
-
-  /**
-   * Resolve the maximum supported JDK version from system properties or manifest
-   * entries.
-   *
-   * @return the configured maximum version string, or {@code null} if none is
-   *         available
-   */
-  private static String resolveMaxJdkVersion() {
-    String override = System.getProperty("jparq.maxJdkVersion");
-    if (override != null && !override.isBlank()) {
-      return override;
-    }
-    try {
-      Enumeration<URL> resources = JParqCli.class.getClassLoader().getResources("META-INF/MANIFEST.MF");
-      while (resources.hasMoreElements()) {
-        URL url = resources.nextElement();
-        try (InputStream stream = url.openStream()) {
-          Manifest manifest = new Manifest(stream);
-          Attributes attrs = manifest.getMainAttributes();
-          String title = attrs.getValue("Implementation-Title");
-          String value = attrs.getValue("Max-Jdk-Version");
-          if ("jparq".equalsIgnoreCase(title) && value != null && !value.isBlank()) {
-            return value;
-          }
-        }
-      }
-    } catch (IOException e) {
-      LOG.warn("Unable to read manifest for Max-Jdk-Version: {}", e.getMessage());
-    }
-    return null;
   }
 
   /**
