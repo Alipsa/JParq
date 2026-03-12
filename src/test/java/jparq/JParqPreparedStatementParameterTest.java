@@ -58,6 +58,30 @@ class JParqPreparedStatementParameterTest {
   }
 
   @Test
+  void reportsDeferredThenAppliedPushdownForParameterizedQueries() throws SQLException {
+    try (JParqPreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) FROM mtcars WHERE cyl = ?")) {
+      JParqPreparedStatement.PushdownInfo deferredInfo = ps.getPushdownInfo();
+      assertFalse(deferredInfo.parquetPredicateAttached());
+      assertFalse(deferredInfo.residualFilterPresent());
+      assertTrue(deferredInfo.message().contains("deferred"));
+
+      ps.setInt(1, 4);
+      try (ResultSet rs = ps.executeQuery()) {
+        assertTrue(rs.next());
+        assertEquals(11, rs.getInt(1));
+      }
+
+      JParqPreparedStatement.PushdownInfo boundInfo = ps.getPushdownInfo();
+      assertTrue(boundInfo.parquetPredicateAttached());
+      assertFalse(boundInfo.residualFilterPresent());
+      assertTrue(boundInfo.statisticsFilteringEnabled());
+      assertTrue(boundInfo.columnIndexFilteringEnabled());
+      assertTrue(boundInfo.dictionaryFilteringEnabled());
+      assertTrue(boundInfo.bloomFilteringEnabled());
+    }
+  }
+
+  @Test
   void missingParameterFailsFast() throws SQLException {
     try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM mtcars WHERE cyl = ?")) {
       assertThrows(SQLException.class, ps::executeQuery);
