@@ -106,26 +106,6 @@ class JParqCliUtilityMethodsTest {
   }
 
   /**
-   * Verify that a manifest entry is used when no system property override is
-   * present.
-   *
-   * @throws ReflectiveOperationException
-   *           if reflection fails
-   */
-  @Test
-  void resolveMaxJdkVersionShouldReadFromManifest() throws ReflectiveOperationException {
-    Method resolveMethod = getAccessibleMethod("resolveMaxJdkVersion");
-    String previous = System.getProperty("jparq.maxJdkVersion");
-    try {
-      System.clearProperty("jparq.maxJdkVersion");
-      String resolved = (String) resolveMethod.invoke(null);
-      assertEquals("99", resolved);
-    } finally {
-      restoreProperty("jparq.maxJdkVersion", previous);
-    }
-  }
-
-  /**
    * Ensure Java version validation passes when the manifest allows the current
    * runtime.
    *

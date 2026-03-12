@@ -248,6 +248,21 @@
     </dependency>
   </dependencies>
   <build>
+    <testResources>
+      <testResource>
+        <directory>src/test/resources</directory>
+        <excludes>
+          <exclude>META-INF/MANIFEST.MF</exclude>
+        </excludes>
+      </testResource>
+      <testResource>
+        <directory>src/test/resources</directory>
+        <filtering>true</filtering>
+        <includes>
+          <include>META-INF/MANIFEST.MF</include>
+        </includes>
+      </testResource>
+    </testResources>
     <plugins>
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
@@ -425,6 +440,7 @@
               <Main-Class>se.alipsa.jparq.cli.JParqCli</Main-Class>
               <Implementation-Title>${project.artifactId}</Implementation-Title>
               <Implementation-Version>${project.version}</Implementation-Version>
+              <!-- Hadoop compatibility currently limits JParq to Java 21. -->
               <Max-Jdk-Version>${java.version}</Max-Jdk-Version>
             </manifestEntries>
           </archive>
@@ -449,6 +465,7 @@
               <manifestEntries>
                 <Implementation-Title>${project.artifactId}</Implementation-Title>
                 <Implementation-Version>${project.version}</Implementation-Version>
+                <!-- Hadoop compatibility currently limits JParq to Java 21. -->
                 <Max-Jdk-Version>${java.version}</Max-Jdk-Version>
               </manifestEntries>
             </archive>

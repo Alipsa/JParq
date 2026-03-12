@@ -44,11 +44,11 @@ class JParqDatabaseMetaDataCapabilitiesTest {
   void reportsSupportedCapabilitiesAndDefaults() throws SQLException {
     DatabaseMetaData metaData = connection.getMetaData();
     assertEquals("JParq", metaData.getDatabaseProductName());
-    assertEquals(JParqVersion.VERSION, metaData.getDatabaseProductVersion());
+    assertEquals(JParqVersion.getVersion(), metaData.getDatabaseProductVersion());
     assertEquals("se.alipsa.jparq.JParqDriver", metaData.getDriverName());
-    assertEquals(JParqVersion.VERSION, metaData.getDriverVersion());
-    assertEquals(JParqVersion.MAJOR, metaData.getDriverMajorVersion());
-    assertEquals(JParqVersion.MINOR, metaData.getDriverMinorVersion());
+    assertEquals(JParqVersion.getVersion(), metaData.getDriverVersion());
+    assertEquals(JParqVersion.getMajor(), metaData.getDriverMajorVersion());
+    assertEquals(JParqVersion.getMinor(), metaData.getDriverMinorVersion());
     assertTrue(metaData.usesLocalFiles());
     assertTrue(metaData.usesLocalFilePerTable());
     assertFalse(metaData.supportsMixedCaseIdentifiers());
@@ -120,8 +120,8 @@ class JParqDatabaseMetaDataCapabilitiesTest {
     assertFalse(metaData.supportsMultipleTransactions());
     assertFalse(metaData.supportsIntegrityEnhancementFacility());
     assertFalse(metaData.supportsStoredFunctionsUsingCallSyntax());
-    assertEquals(JParqVersion.MAJOR, metaData.getDatabaseMajorVersion());
-    assertEquals(JParqVersion.MINOR, metaData.getDatabaseMinorVersion());
+    assertEquals(JParqVersion.getMajor(), metaData.getDatabaseMajorVersion());
+    assertEquals(JParqVersion.getMinor(), metaData.getDatabaseMinorVersion());
     assertEquals(4, metaData.getJDBCMajorVersion());
     assertEquals(3, metaData.getJDBCMinorVersion());
     assertEquals(2, metaData.getSQLStateType());

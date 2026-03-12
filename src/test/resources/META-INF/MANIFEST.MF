@@ -1,3 +1,4 @@
 Manifest-Version: 1.0
 Implementation-Title: jparq
+Implementation-Version: ${project.version}
 Max-Jdk-Version: 99

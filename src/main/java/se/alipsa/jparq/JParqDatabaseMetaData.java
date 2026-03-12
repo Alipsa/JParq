@@ -415,7 +415,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getDatabaseProductVersion() {
-    return JParqVersion.VERSION;
+    return JParqVersion.getVersion();
   }
 
   @Override
@@ -425,17 +425,17 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
 
   @Override
   public String getDriverVersion() {
-    return JParqVersion.VERSION;
+    return JParqVersion.getVersion();
   }
 
   @Override
   public int getDriverMajorVersion() {
-    return JParqVersion.MAJOR;
+    return JParqVersion.getMajor();
   }
 
   @Override
   public int getDriverMinorVersion() {
-    return JParqVersion.MINOR;
+    return JParqVersion.getMinor();
   }
 
   @Override
