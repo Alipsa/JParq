@@ -464,27 +464,30 @@ public class JParqConnection implements Connection {
 
   @Override
   public Clob createClob() throws SQLException {
-    return null;
+    throw new SQLFeatureNotSupportedException("Clob is not supported.");
   }
 
   @Override
   public Blob createBlob() throws SQLException {
-    return null;
+    throw new SQLFeatureNotSupportedException("Blob is not supported.");
   }
 
   @Override
   public NClob createNClob() throws SQLException {
-    return null;
+    throw new SQLFeatureNotSupportedException("NClob is not supported.");
   }
 
   @Override
   public SQLXML createSQLXML() throws SQLException {
-    return null;
+    throw new SQLFeatureNotSupportedException("SQLXML is not supported.");
   }
 
   @Override
   public boolean isValid(int timeout) throws SQLException {
-    return false;
+    if (timeout < 0) {
+      throw new SQLException("Timeout must be >= 0.");
+    }
+    return !isClosed();
   }
 
   @Override
@@ -507,12 +510,12 @@ public class JParqConnection implements Connection {
 
   @Override
   public Array createArrayOf(String typeName, Object[] elements) throws SQLException {
-    return null;
+    throw new SQLFeatureNotSupportedException("Array is not supported.");
   }
 
   @Override
   public Struct createStruct(String typeName, Object[] attributes) throws SQLException {
-    return null;
+    throw new SQLFeatureNotSupportedException("Struct is not supported.");
   }
 
   @Override
@@ -539,11 +542,15 @@ public class JParqConnection implements Connection {
 
   @Override
   public <T> T unwrap(Class<T> iface) throws SQLException {
-    return null;
+    if (iface != null && iface.isInstance(this)) {
+      return iface.cast(this);
+    }
+    String typeName = iface == null ? "null" : iface.getName();
+    throw new SQLException("Cannot unwrap to " + typeName);
   }
 
   @Override
   public boolean isWrapperFor(Class<?> iface) throws SQLException {
-    return false;
+    return iface != null && iface.isInstance(this);
   }
 }
