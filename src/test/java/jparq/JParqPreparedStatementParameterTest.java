@@ -82,6 +82,33 @@ class JParqPreparedStatementParameterTest {
   }
 
   @Test
+  void reexecutionReplacesPreviousBoundStatement() throws SQLException {
+    try (JParqPreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) FROM mtcars WHERE cyl = ?")) {
+      ps.setInt(1, 4);
+      ResultSet firstResult = ps.executeQuery();
+      assertTrue(firstResult.next());
+      assertEquals(11, firstResult.getInt(1));
+
+      JParqPreparedStatement firstBound = extractBoundStatement(ps);
+      assertNotNull(firstBound);
+      assertFalse(firstBound.isClosed());
+
+      ps.setInt(1, 6);
+      try (ResultSet secondResult = ps.executeQuery()) {
+        assertTrue(secondResult.next());
+        assertEquals(7, secondResult.getInt(1));
+      }
+
+      assertTrue(firstBound.isClosed());
+      JParqPreparedStatement secondBound = extractBoundStatement(ps);
+      assertNotNull(secondBound);
+      assertNotSame(firstBound, secondBound);
+      assertFalse(secondBound.isClosed());
+      firstResult.close();
+    }
+  }
+
+  @Test
   void missingParameterFailsFast() throws SQLException {
     try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM mtcars WHERE cyl = ?")) {
       assertThrows(SQLException.class, ps::executeQuery);
@@ -257,6 +284,16 @@ class JParqPreparedStatementParameterTest {
         assertTrue(rs.next());
         assertEquals(11, rs.getInt(1));
       }
+    }
+  }
+
+  private JParqPreparedStatement extractBoundStatement(JParqPreparedStatement preparedStatement) throws SQLException {
+    try {
+      var field = JParqPreparedStatement.class.getDeclaredField("boundStatement");
+      field.setAccessible(true);
+      return (JParqPreparedStatement) field.get(preparedStatement);
+    } catch (ReflectiveOperationException e) {
+      throw new SQLException("Failed to inspect bound statement for test assertions", e);
     }
   }
 

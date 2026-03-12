@@ -3387,6 +3387,10 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private JParqResultSet executeWithBoundParameters() throws SQLException {
     String boundSql = bindParameters();
+    if (boundStatement != null) {
+      boundStatement.close();
+      boundStatement = null;
+    }
     boundStatement = new JParqPreparedStatement(stmt, boundSql, inheritedCteContext);
     return boundStatement.executeQuery();
   }
@@ -3455,14 +3459,15 @@ public class JParqPreparedStatement implements PreparedStatement {
           "Set operations are executed without Parquet predicate pushdown.", null, null);
     }
     if (join) {
-      return new PushdownInfo(false, false, false, false, false, false,
+      return new PushdownInfo(false, residual != null, false, false, false, false,
           "Join queries currently apply residual filtering after row assembly.", null,
           residual == null ? null : residual.toString());
     }
     if (cteResult != null) {
-      return new PushdownInfo(false, false, false, false, false, false,
-          "In-memory CTE or information_schema results do not use Parquet predicate pushdown.", null,
-          residual == null ? null : residual.toString());
+      return new PushdownInfo(false, residual != null, false, false, false, false, residual == null
+          ? "In-memory CTE or information_schema results do not use Parquet predicate pushdown."
+          : "In-memory CTE or information_schema results apply residual filtering in Java (no Parquet predicate pushdown).",
+          null, residual == null ? null : residual.toString());
     }
     boolean statsEnabled = isFilterEnabled(configuration, ParquetInputFormat.STATS_FILTERING_ENABLED);
     boolean columnIndexEnabled = isFilterEnabled(configuration, ParquetInputFormat.COLUMN_INDEX_FILTERING_ENABLED);
