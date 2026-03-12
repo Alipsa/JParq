@@ -190,6 +190,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final List<Map<Integer, Object>> batchedParameters = new ArrayList<>();
   private final boolean ownsStatement;
   private JParqPreparedStatement boundStatement;
+  private boolean boundStatementStale;
   private boolean closed = false;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
@@ -426,7 +427,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     this.parquetPredicate = tmpPredicate;
     this.residualExpression = tmpResidual;
     this.pushdownInfo = determinePushdownInfo(hasParameters, tmpSetOperation, tmpJoinQuery, tmpBaseCteResult, tmpConf,
-        tmpSelect, tmpFileAvro, tmpPredicate, tmpResidual);
+        tmpSelect, tmpPredicate, tmpResidual);
     this.path = tmpPath;
     this.file = tmpFile;
     this.tableSchema = tmpSchemaName;
@@ -3397,7 +3398,9 @@ public class JParqPreparedStatement implements PreparedStatement {
       boundStatement = null;
     }
     boundStatement = new JParqPreparedStatement(stmt, boundSql, inheritedCteContext);
-    return boundStatement.executeQuery();
+    JParqResultSet resultSet = boundStatement.executeQuery();
+    boundStatementStale = false;
+    return resultSet;
   }
 
   /**
@@ -3412,7 +3415,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @return immutable pushdown information for this statement
    */
   public PushdownInfo getPushdownInfo() {
-    return boundStatement == null ? pushdownInfo : boundStatement.pushdownInfo;
+    return boundStatement == null || boundStatementStale ? pushdownInfo : boundStatement.pushdownInfo;
   }
 
   /**
@@ -3444,8 +3447,6 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          the Parquet reader configuration, if applicable
    * @param select
    *          the parsed select statement, if applicable
-   * @param avroSchema
-   *          the Avro schema for the Parquet file, if available
    * @param predicate
    *          the optional Parquet predicate
    * @param residual
@@ -3453,8 +3454,8 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @return immutable pushdown information
    */
   private static PushdownInfo determinePushdownInfo(boolean planningDeferred, boolean setOperation, boolean join,
-      CteResult cteResult, Configuration configuration, SqlParser.Select select, Schema avroSchema,
-      Optional<FilterPredicate> predicate, Expression residual) {
+      CteResult cteResult, Configuration configuration, SqlParser.Select select, Optional<FilterPredicate> predicate,
+      Expression residual) {
     if (planningDeferred) {
       return new PushdownInfo(false, false, false, false, false, false,
           "Pushdown planning is deferred until executeQuery() binds parameter values.", null, null);
@@ -3464,8 +3465,10 @@ public class JParqPreparedStatement implements PreparedStatement {
           "Set operations are executed without Parquet predicate pushdown.", null, null);
     }
     if (join) {
-      return new PushdownInfo(false, residual != null, false, false, false, false,
-          "Join queries currently apply residual filtering after row assembly.", null,
+      String message = residual == null
+          ? "Join queries do not support Parquet predicate pushdown and have no residual WHERE clause."
+          : "Join queries do not support Parquet predicate pushdown; residual WHERE clauses are evaluated after row assembly.";
+      return new PushdownInfo(false, residual != null, false, false, false, false, message, null,
           residual == null ? null : residual.toString());
     }
     if (cteResult != null) {
@@ -3530,6 +3533,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (snapshot != null && !snapshot.isEmpty()) {
       parameterValues.putAll(snapshot);
     }
+    boundStatementStale = true;
   }
 
   private void storeParameter(int parameterIndex, Object value) {
@@ -3537,6 +3541,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return;
     }
     parameterValues.put(parameterIndex, value);
+    boundStatementStale = true;
   }
 
   /**
@@ -4210,6 +4215,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   @Override
   public void clearParameters() {
     parameterValues.clear();
+    boundStatementStale = true;
   }
 
   @Override

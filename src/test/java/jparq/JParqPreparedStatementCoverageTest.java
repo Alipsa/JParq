@@ -234,8 +234,21 @@ class JParqPreparedStatementCoverageTest {
       assertFalse(info.parquetPredicateAttached());
       assertTrue(info.residualFilterPresent());
       assertTrue(info.message().contains("Join queries"));
+      assertTrue(info.message().contains("residual WHERE clauses"));
       assertNotNull(info.residualExpressionSummary());
       assertTrue(info.residualExpressionSummary().contains("UPPER(c1.model) = 'MAZDA RX4'"));
+    }
+  }
+
+  @Test
+  void reportsJoinQueriesWithoutResidualFilteringClearly() throws SQLException {
+    try (JParqPreparedStatement pushdownStatement = connection
+        .prepareStatement("SELECT c1.model FROM cars c1 CROSS JOIN cars c2")) {
+      JParqPreparedStatement.PushdownInfo info = pushdownStatement.getPushdownInfo();
+      assertFalse(info.parquetPredicateAttached());
+      assertFalse(info.residualFilterPresent());
+      assertTrue(info.message().contains("have no residual WHERE clause"));
+      assertNull(info.residualExpressionSummary());
     }
   }
 

@@ -82,6 +82,33 @@ class JParqPreparedStatementParameterTest {
   }
 
   @Test
+  void invalidatesBoundPushdownInfoWhenParametersChange() throws SQLException {
+    try (JParqPreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) FROM mtcars WHERE cyl = ?")) {
+      ps.setInt(1, 4);
+      try (ResultSet rs = ps.executeQuery()) {
+        assertTrue(rs.next());
+        assertEquals(11, rs.getInt(1));
+      }
+
+      JParqPreparedStatement.PushdownInfo boundInfo = ps.getPushdownInfo();
+      assertTrue(boundInfo.parquetPredicateAttached());
+      assertFalse(boundInfo.residualFilterPresent());
+
+      ps.setInt(1, 6);
+      JParqPreparedStatement.PushdownInfo updatedInfo = ps.getPushdownInfo();
+      assertFalse(updatedInfo.parquetPredicateAttached());
+      assertFalse(updatedInfo.residualFilterPresent());
+      assertTrue(updatedInfo.message().contains("deferred"));
+
+      ps.clearParameters();
+      JParqPreparedStatement.PushdownInfo clearedInfo = ps.getPushdownInfo();
+      assertFalse(clearedInfo.parquetPredicateAttached());
+      assertFalse(clearedInfo.residualFilterPresent());
+      assertTrue(clearedInfo.message().contains("deferred"));
+    }
+  }
+
+  @Test
   void reexecutionReplacesPreviousBoundStatement() throws SQLException {
     try (JParqPreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) FROM mtcars WHERE cyl = ?")) {
       ps.setInt(1, 4);
