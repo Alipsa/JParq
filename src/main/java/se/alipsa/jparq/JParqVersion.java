@@ -6,6 +6,8 @@ import java.net.URL;
 import java.util.Enumeration;
 import java.util.jar.Attributes;
 import java.util.jar.Manifest;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,6 +24,7 @@ public final class JParqVersion {
   private static final Logger LOG = LoggerFactory.getLogger(JParqVersion.class);
   private static final String IMPLEMENTATION_TITLE = "jparq";
   private static final String MAX_JDK_OVERRIDE_PROPERTY = "jparq.maxJdkVersion";
+  private static final Pattern SEMANTIC_VERSION_PATTERN = Pattern.compile("^(\\d+)\\.(\\d+)\\.(\\d+)(?:[.-].*)?$");
   private static final ManifestMetadata METADATA = loadManifestMetadata();
 
   private JParqVersion() {
@@ -139,14 +142,17 @@ public final class JParqVersion {
     if (implementationVersion == null) {
       return null;
     }
-    String normalizedVersion = normalizeVersion(implementationVersion);
-    String[] parts = normalizedVersion.split("\\.");
-    if (parts.length < 3) {
-      throw new IllegalStateException(
-          "Implementation-Version must contain major.minor.patch but was '" + implementationVersion + "'.");
+    if (implementationVersion.contains("${")) {
+      LOG.warn("Skipping unresolved JParq Implementation-Version placeholder: {}", implementationVersion);
+      return null;
     }
-    return new ManifestMetadata(normalizedVersion, Integer.parseInt(parts[0]), Integer.parseInt(parts[1]),
-        Integer.parseInt(parts[2]), trimToNull(attributes.getValue("Max-Jdk-Version")));
+    SemanticVersion version = parseSemanticVersion(implementationVersion);
+    if (version == null) {
+      LOG.warn("Skipping unsupported JParq Implementation-Version: {}", implementationVersion);
+      return null;
+    }
+    return new ManifestMetadata(version.version(), version.major(), version.minor(), version.patch(),
+        trimToNull(attributes.getValue("Max-Jdk-Version")));
   }
 
   /**
@@ -158,11 +164,9 @@ public final class JParqVersion {
     Package pkg = JParqVersion.class.getPackage();
     String implementationVersion = pkg == null ? null : trimToNull(pkg.getImplementationVersion());
     if (implementationVersion != null) {
-      String normalizedVersion = normalizeVersion(implementationVersion);
-      String[] parts = normalizedVersion.split("\\.");
-      if (parts.length >= 3) {
-        return new ManifestMetadata(normalizedVersion, Integer.parseInt(parts[0]), Integer.parseInt(parts[1]),
-            Integer.parseInt(parts[2]), null);
+      SemanticVersion version = parseSemanticVersion(implementationVersion);
+      if (version != null) {
+        return new ManifestMetadata(version.version(), version.major(), version.minor(), version.patch(), null);
       }
     }
     LOG.warn("JParq manifest metadata not found; defaulting version information to 0.0.0.");
@@ -170,19 +174,21 @@ public final class JParqVersion {
   }
 
   /**
-   * Normalize a manifest implementation version for semantic version reporting.
+   * Parse a manifest implementation version for semantic version reporting.
    *
    * @param implementationVersion
    *          the raw implementation version
-   * @return the normalized semantic version without a trailing {@code -SNAPSHOT}
-   *         suffix
+   * @return the parsed semantic version, or {@code null} when the value does not
+   *         begin with {@code major.minor.patch}
    */
-  private static String normalizeVersion(String implementationVersion) {
+  private static SemanticVersion parseSemanticVersion(String implementationVersion) {
     String trimmedVersion = implementationVersion.trim();
-    if (trimmedVersion.endsWith("-SNAPSHOT")) {
-      return trimmedVersion.substring(0, trimmedVersion.length() - "-SNAPSHOT".length());
+    Matcher matcher = SEMANTIC_VERSION_PATTERN.matcher(trimmedVersion);
+    if (!matcher.matches()) {
+      return null;
     }
-    return trimmedVersion;
+    return new SemanticVersion(matcher.group(1) + "." + matcher.group(2) + "." + matcher.group(3),
+        Integer.parseInt(matcher.group(1)), Integer.parseInt(matcher.group(2)), Integer.parseInt(matcher.group(3)));
   }
 
   /**
@@ -215,5 +221,20 @@ public final class JParqVersion {
    *          the maximum supported JDK version
    */
   private record ManifestMetadata(String version, int major, int minor, int patch, String maxJdkVersion) {
+  }
+
+  /**
+   * Immutable parsed semantic version components.
+   *
+   * @param version
+   *          the normalized semantic version string
+   * @param major
+   *          the major version number
+   * @param minor
+   *          the minor version number
+   * @param patch
+   *          the patch version number
+   */
+  private record SemanticVersion(String version, int major, int minor, int patch) {
   }
 }

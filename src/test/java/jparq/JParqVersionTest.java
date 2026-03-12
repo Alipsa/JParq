@@ -1,7 +1,9 @@
 package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Method;
 import java.net.URL;
@@ -25,10 +27,12 @@ class JParqVersionTest {
     String previous = System.getProperty("jparq.maxJdkVersion");
     try {
       System.clearProperty("jparq.maxJdkVersion");
-      assertEquals("1.3.0", JParqVersion.getVersion());
-      assertEquals(1, JParqVersion.getMajor());
-      assertEquals(3, JParqVersion.getMinor());
-      assertEquals(0, JParqVersion.getPatch());
+      String version = JParqVersion.getVersion();
+      assertNotNull(version);
+      assertFalse(version.contains("-SNAPSHOT"));
+      assertFalse(version.contains("${"));
+      assertTrue(version.matches("\\d+\\.\\d+\\.\\d+"));
+      assertEquals(version, JParqVersion.getMajor() + "." + JParqVersion.getMinor() + "." + JParqVersion.getPatch());
       assertEquals("99", JParqVersion.getMaxJdkVersion());
     } finally {
       restoreProperty("jparq.maxJdkVersion", previous);
@@ -50,32 +54,41 @@ class JParqVersionTest {
   }
 
   /**
-   * Verify unreadable manifest entries are skipped and snapshot suffixes are
-   * removed during parsing.
+   * Verify unreadable and unresolved manifest entries are skipped so a later
+   * valid manifest can still be used.
    *
    * @param tempDir
-   *          temporary directory for the synthetic manifest
+   *          temporary directory for the synthetic manifests
    * @throws ReflectiveOperationException
    *           if reflective access fails
    * @throws java.io.IOException
-   *           if the manifest file cannot be written
+   *           if the manifest files cannot be written
    */
   @Test
-  void loadManifestMetadataShouldSkipUnreadableResources(@TempDir Path tempDir)
+  void loadManifestMetadataShouldSkipUnreadableAndUnresolvedResources(@TempDir Path tempDir)
       throws ReflectiveOperationException, java.io.IOException {
     Method loadMethod = JParqVersion.class.getDeclaredMethod("loadManifestMetadata", java.util.Enumeration.class);
     loadMethod.setAccessible(true);
-    Path manifestPath = tempDir.resolve("MANIFEST.MF");
-    Files.writeString(manifestPath, """
+    Path unresolvedManifestPath = tempDir.resolve("unresolved.MF");
+    Files.writeString(unresolvedManifestPath, """
+        Manifest-Version: 1.0
+        Implementation-Title: jparq
+        Implementation-Version: ${project.version}
+        Max-Jdk-Version: 99
+        """);
+    Path validManifestPath = tempDir.resolve("valid.MF");
+    Files.writeString(validManifestPath, """
         Manifest-Version: 1.0
         Implementation-Title: jparq
         Implementation-Version: 4.5.6-SNAPSHOT
         Max-Jdk-Version: 55
         """);
     URL unreadable = new URL("jar:file:/definitely-missing.jar!/META-INF/MANIFEST.MF");
-    URL valid = manifestPath.toUri().toURL();
+    URL unresolved = unresolvedManifestPath.toUri().toURL();
+    URL valid = validManifestPath.toUri().toURL();
 
-    Object metadata = loadMethod.invoke(null, java.util.Collections.enumeration(List.of(unreadable, valid)));
+    Object metadata = loadMethod.invoke(null,
+        java.util.Collections.enumeration(List.of(unreadable, unresolved, valid)));
 
     assertNotNull(metadata);
     assertEquals("4.5.6", invokeMetadataAccessor(metadata, "version"));
@@ -83,6 +96,27 @@ class JParqVersionTest {
     assertEquals(5, invokeMetadataAccessor(metadata, "minor"));
     assertEquals(6, invokeMetadataAccessor(metadata, "patch"));
     assertEquals("55", invokeMetadataAccessor(metadata, "maxJdkVersion"));
+  }
+
+  /**
+   * Verify version qualifiers are ignored once the leading numeric semantic
+   * version has been parsed.
+   *
+   * @throws ReflectiveOperationException
+   *           if reflective access fails
+   */
+  @Test
+  void parseSemanticVersionShouldIgnoreQualifiers() throws ReflectiveOperationException {
+    Method parseMethod = JParqVersion.class.getDeclaredMethod("parseSemanticVersion", String.class);
+    parseMethod.setAccessible(true);
+
+    Object semanticVersion = parseMethod.invoke(null, "7.8.9-RC1");
+
+    assertNotNull(semanticVersion);
+    assertEquals("7.8.9", invokeMetadataAccessor(semanticVersion, "version"));
+    assertEquals(7, invokeMetadataAccessor(semanticVersion, "major"));
+    assertEquals(8, invokeMetadataAccessor(semanticVersion, "minor"));
+    assertEquals(9, invokeMetadataAccessor(semanticVersion, "patch"));
   }
 
   /**

@@ -19,6 +19,7 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqDriver;
+import se.alipsa.jparq.JParqVersion;
 
 /**
  * A simple command processor that executes JParq queries and CLI commands.
@@ -436,24 +437,14 @@ public class JParqCliSession implements Closeable {
   }
 
   /**
-   * Resolve the CLI version from the package manifest.
+   * Resolve the CLI version from the shared JParq runtime metadata.
    *
-   * @return the implementation version, or {@value #UNKNOWN_VERSION} when not
-   *         available
+   * @return the normalized implementation version, or {@value #UNKNOWN_VERSION}
+   *         when not available
    */
   public static String cliVersion() {
-    Package pkg = JParqCliSession.class.getPackage();
-    if (pkg != null) {
-      String implementationVersion = pkg.getImplementationVersion();
-      if (implementationVersion != null && !implementationVersion.isBlank()) {
-        return implementationVersion;
-      }
-    }
-    String sysVersion = System.getProperty("jparq.version");
-    if (sysVersion != null && !sysVersion.isBlank()) {
-      return sysVersion;
-    }
-    return UNKNOWN_VERSION;
+    String version = JParqVersion.getVersion();
+    return "0.0.0".equals(version) ? UNKNOWN_VERSION : version;
   }
 
   private String currentDirectoryName() {

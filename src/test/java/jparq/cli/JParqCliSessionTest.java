@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Locale;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.JParqVersion;
 import se.alipsa.jparq.cli.JParqCliSession;
 
 /**
@@ -35,7 +36,7 @@ class JParqCliSessionTest {
       output = outBuffer.toString();
       assertTrue(output.contains("JDBC URL: jdbc:jparq:" + DATA_DIR));
       assertTrue(output.contains("Base directory:"));
-      assertTrue(output.contains("Version:"));
+      assertTrue(output.contains("Version: " + JParqVersion.getVersion()));
       outBuffer.getBuffer().setLength(0);
 
       session.handleLine("/list");

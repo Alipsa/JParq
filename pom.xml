@@ -440,7 +440,7 @@
               <Main-Class>se.alipsa.jparq.cli.JParqCli</Main-Class>
               <Implementation-Title>${project.artifactId}</Implementation-Title>
               <Implementation-Version>${project.version}</Implementation-Version>
-              <!-- Hadoop compatibility currently limits JParq to Java 21. -->
+              <!-- Hadoop compatibility currently determines JParq's maximum supported Java version (configured via the java.version property). -->
               <Max-Jdk-Version>${java.version}</Max-Jdk-Version>
             </manifestEntries>
           </archive>
@@ -465,7 +465,7 @@
               <manifestEntries>
                 <Implementation-Title>${project.artifactId}</Implementation-Title>
                 <Implementation-Version>${project.version}</Implementation-Version>
-                <!-- Hadoop compatibility currently limits JParq to Java 21. -->
+                <!-- Hadoop compatibility currently determines JParq's maximum supported Java version (configured via the java.version property). -->
                 <Max-Jdk-Version>${java.version}</Max-Jdk-Version>
               </manifestEntries>
             </archive>
