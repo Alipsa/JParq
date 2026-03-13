@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Method;
+import java.net.URI;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -83,7 +84,7 @@ class JParqVersionTest {
         Implementation-Version: 4.5.6-SNAPSHOT
         Max-Jdk-Version: 55
         """);
-    URL unreadable = new URL("jar:file:/definitely-missing.jar!/META-INF/MANIFEST.MF");
+    URL unreadable = URI.create("jar:file:/definitely-missing.jar!/META-INF/MANIFEST.MF").toURL();
     URL unresolved = unresolvedManifestPath.toUri().toURL();
     URL valid = validManifestPath.toUri().toURL();
 

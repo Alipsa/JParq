@@ -21,8 +21,8 @@ import java.util.Map;
 import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
-import net.sf.jsqlparser.expression.Parenthesis;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
+import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.OrderByElement;
@@ -1022,13 +1022,16 @@ public class JParqResultSet extends ResultSetAdapter {
         andExpression.setRightExpression(right);
         return andExpression;
       }
-      case Parenthesis parenthesis -> {
-        Expression inner = pruneExpression(parenthesis.getExpression(), availableQualifiers);
+      case ParenthesedExpressionList<?> parenthesizedExpressionList -> {
+        if (parenthesizedExpressionList.isEmpty()) {
+          return null;
+        }
+        Expression inner = pruneExpression((Expression) parenthesizedExpressionList.getFirst(), availableQualifiers);
         if (inner == null) {
           return null;
         }
-        parenthesis.setExpression(inner);
-        return parenthesis;
+        setFirstParenthesizedExpression(parenthesizedExpressionList, inner);
+        return parenthesizedExpressionList;
       }
       default -> {
       }
@@ -1043,6 +1046,20 @@ public class JParqResultSet extends ResultSetAdapter {
       }
     }
     return expression;
+  }
+
+  /**
+   * Replace the single wrapped expression inside a parenthesized expression list.
+   *
+   * @param parenthesizedExpressionList
+   *          the parenthesized expression container
+   * @param expression
+   *          the expression to store
+   */
+  @SuppressWarnings("unchecked")
+  private static void setFirstParenthesizedExpression(ParenthesedExpressionList<?> parenthesizedExpressionList,
+      Expression expression) {
+    ((ParenthesedExpressionList<Expression>) parenthesizedExpressionList).set(0, expression);
   }
 
   /**

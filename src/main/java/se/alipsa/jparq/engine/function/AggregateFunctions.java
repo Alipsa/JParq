@@ -33,7 +33,6 @@ import net.sf.jsqlparser.expression.JdbcNamedParameter;
 import net.sf.jsqlparser.expression.JdbcParameter;
 import net.sf.jsqlparser.expression.NotExpression;
 import net.sf.jsqlparser.expression.NullValue;
-import net.sf.jsqlparser.expression.Parenthesis;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimeValue;
@@ -57,6 +56,7 @@ import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
 import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.expression.operators.relational.MinorThan;
 import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals;
+import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
@@ -861,8 +861,15 @@ public final class AggregateFunctions {
     if (first instanceof NotExpression leftNot) {
       return expressionsEquivalent(leftNot.getExpression(), ((NotExpression) second).getExpression());
     }
-    if (first instanceof Parenthesis leftParenthesis) {
-      return expressionsEquivalent(leftParenthesis.getExpression(), ((Parenthesis) second).getExpression());
+    if (first instanceof ParenthesedExpressionList<?> leftParenthesizedExpressionList) {
+      ParenthesedExpressionList<?> rightParenthesizedExpressionList = (ParenthesedExpressionList<?>) second;
+      Expression leftExpression = leftParenthesizedExpressionList.isEmpty()
+          ? null
+          : (Expression) leftParenthesizedExpressionList.getFirst();
+      Expression rightExpression = rightParenthesizedExpressionList.isEmpty()
+          ? null
+          : (Expression) rightParenthesizedExpressionList.getFirst();
+      return expressionsEquivalent(leftExpression, rightExpression);
     }
     if (first instanceof CastExpression leftCast) {
       CastExpression rightCast = (CastExpression) second;
