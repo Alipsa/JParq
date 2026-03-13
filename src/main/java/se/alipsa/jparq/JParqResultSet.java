@@ -1,5 +1,6 @@
 package se.alipsa.jparq;
 
+import java.lang.reflect.InvocationTargetException;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -65,6 +66,7 @@ import se.alipsa.jparq.model.ResultSetAdapter;
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqResultSet extends ResultSetAdapter {
 
+  private static final String LEGACY_PARENTHESIS_CLASS = "net.sf.jsqlparser.expression.Parenthesis";
   private final List<String> physicalColumnOrder; // may be null
   private final QueryProcessor qp;
   private GenericRecord current;
@@ -1023,18 +1025,30 @@ public class JParqResultSet extends ResultSetAdapter {
         return andExpression;
       }
       case ParenthesedExpressionList<?> parenthesizedExpressionList -> {
-        if (parenthesizedExpressionList.isEmpty()) {
-          return null;
+        if (parenthesizedExpressionList.size() == 1) {
+          Expression inner = pruneExpression((Expression) parenthesizedExpressionList.getFirst(), availableQualifiers);
+          if (inner == null) {
+            return null;
+          }
+          ParenthesedExpressionList<Expression> rewritten = new ParenthesedExpressionList<>();
+          rewritten.add(inner);
+          return rewritten;
         }
-        Expression inner = pruneExpression((Expression) parenthesizedExpressionList.getFirst(), availableQualifiers);
-        if (inner == null) {
-          return null;
-        }
-        setFirstParenthesizedExpression(parenthesizedExpressionList, inner);
-        return parenthesizedExpressionList;
       }
       default -> {
       }
+    }
+    if (isLegacyParenthesis(expression)) {
+      Expression inner = extractLegacyParenthesizedExpression(expression);
+      if (inner == null) {
+        return null;
+      }
+      Expression pruned = pruneExpression(inner, availableQualifiers);
+      if (pruned == null) {
+        return null;
+      }
+      setLegacyParenthesizedExpression(expression, pruned);
+      return expression;
     }
     Set<String> qualifiersInExpression = collectQualifiers(expression);
     if (qualifiersInExpression.isEmpty()) {
@@ -1049,17 +1063,52 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
-   * Replace the single wrapped expression inside a parenthesized expression list.
+   * Determine whether the supplied expression is JSqlParser's legacy
+   * {@code Parenthesis} wrapper.
    *
-   * @param parenthesizedExpressionList
-   *          the parenthesized expression container
    * @param expression
-   *          the expression to store
+   *          expression to inspect
+   * @return {@code true} if the expression is the legacy parenthesis wrapper
    */
-  @SuppressWarnings("unchecked")
-  private static void setFirstParenthesizedExpression(ParenthesedExpressionList<?> parenthesizedExpressionList,
-      Expression expression) {
-    ((ParenthesedExpressionList<Expression>) parenthesizedExpressionList).set(0, expression);
+  private static boolean isLegacyParenthesis(Expression expression) {
+    return expression != null && LEGACY_PARENTHESIS_CLASS.equals(expression.getClass().getName());
+  }
+
+  /**
+   * Extract the wrapped expression from JSqlParser's legacy {@code Parenthesis}
+   * node without directly referencing the deprecated type.
+   *
+   * @param expression
+   *          parenthesized expression wrapper
+   * @return the wrapped expression
+   * @throws IllegalStateException
+   *           if the legacy wrapper cannot be accessed reflectively
+   */
+  private static Expression extractLegacyParenthesizedExpression(Expression expression) {
+    try {
+      return (Expression) expression.getClass().getMethod("getExpression").invoke(expression);
+    } catch (IllegalAccessException | InvocationTargetException | NoSuchMethodException e) {
+      throw new IllegalStateException("Unable to access legacy Parenthesis expression", e);
+    }
+  }
+
+  /**
+   * Replace the wrapped expression inside JSqlParser's legacy {@code Parenthesis}
+   * node without directly referencing the deprecated type.
+   *
+   * @param expression
+   *          parenthesized expression wrapper
+   * @param nestedExpression
+   *          expression to store
+   * @throws IllegalStateException
+   *           if the legacy wrapper cannot be updated reflectively
+   */
+  private static void setLegacyParenthesizedExpression(Expression expression, Expression nestedExpression) {
+    try {
+      expression.getClass().getMethod("setExpression", Expression.class).invoke(expression, nestedExpression);
+    } catch (IllegalAccessException | InvocationTargetException | NoSuchMethodException e) {
+      throw new IllegalStateException("Unable to update legacy Parenthesis expression", e);
+    }
   }
 
   /**
