@@ -13,6 +13,7 @@
 - replaced unsupported connection factory sentinel values with proper JDBC exceptions and wrapper behavior
 - aligned driver, CLI, and metadata version reporting with manifest-derived runtime metadata
 - expanded Parquet pushdown observability with documented `PushdownInfo` reporting and broader pruning coverage tests
+- `JParqStatement` no longer exposes its accidental `BasicThreadFactory.Builder` inheritance; downstream code should not rely on that implementation detail
 
 ### 1.2.0, 2025-12-08
 - add support for batch execution in prepared statements

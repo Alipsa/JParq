@@ -1,7 +1,6 @@
 package se.alipsa.jparq.engine.function;
 
 import java.io.IOException;
-import java.lang.reflect.InvocationTargetException;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.sql.Date;
@@ -70,6 +69,7 @@ import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.Identifier;
+import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.Operation;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.RecordReader;
@@ -85,8 +85,6 @@ import se.alipsa.jparq.helper.LiteralConverter;
  * Utilities for detecting and evaluating aggregate functions in SELECT lists.
  */
 public final class AggregateFunctions {
-
-  private static final String LEGACY_PARENTHESIS_CLASS = "net.sf.jsqlparser.expression.Parenthesis";
 
   private AggregateFunctions() {
   }
@@ -877,9 +875,8 @@ public final class AggregateFunctions {
       }
       return true;
     }
-    if (isLegacyParenthesis(first)) {
-      return expressionsEquivalent(extractLegacyParenthesizedExpression(first),
-          extractLegacyParenthesizedExpression(second));
+    if (LegacyParenthesisSupport.isLegacyParenthesis(first)) {
+      return expressionsEquivalent(LegacyParenthesisSupport.extract(first), LegacyParenthesisSupport.extract(second));
     }
     if (first instanceof CastExpression leftCast) {
       CastExpression rightCast = (CastExpression) second;
@@ -910,36 +907,6 @@ public final class AggregateFunctions {
       return Objects.equals(leftParam.getIndex(), ((JdbcParameter) second).getIndex());
     }
     return Objects.equals(first.toString(), second.toString());
-  }
-
-  /**
-   * Determine whether the supplied expression is JSqlParser's legacy
-   * {@code Parenthesis} wrapper.
-   *
-   * @param expression
-   *          expression to inspect
-   * @return {@code true} if the expression is the legacy parenthesis wrapper
-   */
-  private static boolean isLegacyParenthesis(Expression expression) {
-    return expression != null && LEGACY_PARENTHESIS_CLASS.equals(expression.getClass().getName());
-  }
-
-  /**
-   * Extract the wrapped expression from JSqlParser's legacy {@code Parenthesis}
-   * node without directly referencing the deprecated type.
-   *
-   * @param expression
-   *          parenthesized expression wrapper
-   * @return the wrapped expression
-   * @throws IllegalStateException
-   *           if the legacy wrapper cannot be accessed reflectively
-   */
-  private static Expression extractLegacyParenthesizedExpression(Expression expression) {
-    try {
-      return (Expression) expression.getClass().getMethod("getExpression").invoke(expression);
-    } catch (IllegalAccessException | InvocationTargetException | NoSuchMethodException e) {
-      throw new IllegalStateException("Unable to access legacy Parenthesis expression", e);
-    }
   }
 
   private static boolean binaryExpressionsEquivalent(BinaryExpression left, BinaryExpression right) {
