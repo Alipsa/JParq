@@ -9,6 +9,10 @@
 - org.apache.parquet:parquet-variant .................. 1.16.0 -> 1.17.0
 - org.junit.jupiter:junit-jupiter ....................... 6.0.1 -> 6.0.3
 - org.mockito:mockito-core ............................ 5.20.0 -> 5.22.0
+- improved JDBC compliance for supported statement creation overloads, statement closed-state reporting, and connection validation
+- replaced unsupported connection factory sentinel values with proper JDBC exceptions and wrapper behavior
+- aligned driver, CLI, and metadata version reporting with manifest-derived runtime metadata
+- expanded Parquet pushdown observability with documented `PushdownInfo` reporting and broader pruning coverage tests
 
 ### 1.2.0, 2025-12-08
 - add support for batch execution in prepared statements
