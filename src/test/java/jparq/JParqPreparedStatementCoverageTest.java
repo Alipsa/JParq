@@ -182,4 +182,98 @@ class JParqPreparedStatementCoverageTest {
     connection.close();
     assertTrue(preparedStatement.isClosed());
   }
+
+  @Test
+  void reportsPushdownInfoForSupportedPredicates() throws SQLException {
+    try (JParqPreparedStatement pushdownStatement = connection
+        .prepareStatement("SELECT model FROM cars WHERE cyl = 4")) {
+      JParqPreparedStatement.PushdownInfo info = pushdownStatement.getPushdownInfo();
+      assertTrue(info.parquetPredicateAttached());
+      assertFalse(info.residualFilterPresent());
+      assertTrue(info.statisticsFilteringEnabled());
+      assertTrue(info.columnIndexFilteringEnabled());
+      assertTrue(info.dictionaryFilteringEnabled());
+      assertTrue(info.bloomFilteringEnabled());
+      assertTrue(info.message().contains("Parquet predicate attached"));
+    }
+  }
+
+  @Test
+  void reportsResidualFilteringForUnsupportedPredicates() throws SQLException {
+    try (JParqPreparedStatement pushdownStatement = connection
+        .prepareStatement("SELECT model FROM cars WHERE UPPER(model) = 'MAZDA RX4'")) {
+      JParqPreparedStatement.PushdownInfo info = pushdownStatement.getPushdownInfo();
+      assertFalse(info.parquetPredicateAttached());
+      assertTrue(info.residualFilterPresent());
+      assertTrue(info.statisticsFilteringEnabled());
+      assertTrue(info.columnIndexFilteringEnabled());
+      assertTrue(info.dictionaryFilteringEnabled());
+      assertTrue(info.bloomFilteringEnabled());
+      assertTrue(info.message().contains("not fully pushdownable"));
+      assertEquals("UPPER(model) = 'MAZDA RX4'", info.residualExpressionSummary());
+    }
+  }
+
+  @Test
+  void reportsResidualFilteringForDistinctQueries() throws SQLException {
+    try (JParqPreparedStatement pushdownStatement = connection
+        .prepareStatement("SELECT DISTINCT cyl FROM cars WHERE cyl = 4")) {
+      JParqPreparedStatement.PushdownInfo info = pushdownStatement.getPushdownInfo();
+      assertFalse(info.parquetPredicateAttached());
+      assertTrue(info.residualFilterPresent());
+      assertTrue(info.message().contains("DISTINCT"));
+      assertEquals("cyl = 4", info.residualExpressionSummary());
+    }
+  }
+
+  @Test
+  void reportsResidualFilteringForJoinQueries() throws SQLException {
+    try (JParqPreparedStatement pushdownStatement = connection.prepareStatement(
+        "SELECT c1.model FROM cars c1 JOIN cars c2 ON c1.cyl = c2.cyl WHERE UPPER(c1.model) = 'MAZDA RX4'")) {
+      JParqPreparedStatement.PushdownInfo info = pushdownStatement.getPushdownInfo();
+      assertFalse(info.parquetPredicateAttached());
+      assertTrue(info.residualFilterPresent());
+      assertTrue(info.message().contains("Join queries"));
+      assertTrue(info.message().contains("residual WHERE clauses"));
+      assertNotNull(info.residualExpressionSummary());
+      assertTrue(info.residualExpressionSummary().contains("UPPER(c1.model) = 'MAZDA RX4'"));
+    }
+  }
+
+  @Test
+  void reportsJoinQueriesWithoutResidualFilteringClearly() throws SQLException {
+    try (JParqPreparedStatement pushdownStatement = connection
+        .prepareStatement("SELECT c1.model FROM cars c1 CROSS JOIN cars c2")) {
+      JParqPreparedStatement.PushdownInfo info = pushdownStatement.getPushdownInfo();
+      assertFalse(info.parquetPredicateAttached());
+      assertFalse(info.residualFilterPresent());
+      assertTrue(info.message().contains("have no residual WHERE clause"));
+      assertNull(info.residualExpressionSummary());
+    }
+  }
+
+  @Test
+  void reportsResidualFilteringForCteQueries() throws SQLException {
+    try (JParqPreparedStatement pushdownStatement = connection.prepareStatement(
+        "WITH filtered AS (SELECT * FROM cars) SELECT model FROM filtered WHERE UPPER(model) = 'MAZDA RX4'")) {
+      JParqPreparedStatement.PushdownInfo info = pushdownStatement.getPushdownInfo();
+      assertFalse(info.parquetPredicateAttached());
+      assertTrue(info.residualFilterPresent());
+      assertTrue(info.message().contains("In-memory query results"));
+      assertTrue(info.message().contains("residual filtering in Java"));
+      assertEquals("UPPER(model) = 'MAZDA RX4'", info.residualExpressionSummary());
+    }
+  }
+
+  @Test
+  void reportsResidualFilteringForDerivedTables() throws SQLException {
+    try (JParqPreparedStatement pushdownStatement = connection
+        .prepareStatement("SELECT model FROM (SELECT * FROM cars) filtered WHERE UPPER(model) = 'MAZDA RX4'")) {
+      JParqPreparedStatement.PushdownInfo info = pushdownStatement.getPushdownInfo();
+      assertFalse(info.parquetPredicateAttached());
+      assertTrue(info.residualFilterPresent());
+      assertTrue(info.message().contains("In-memory query results"));
+      assertEquals("UPPER(model) = 'MAZDA RX4'", info.residualExpressionSummary());
+    }
+  }
 }

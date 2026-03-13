@@ -62,7 +62,10 @@ import org.apache.hadoop.fs.Path;
 import org.apache.parquet.avro.AvroReadSupport;
 import org.apache.parquet.filter2.compat.FilterCompat;
 import org.apache.parquet.filter2.predicate.FilterPredicate;
+import org.apache.parquet.hadoop.ParquetInputFormat;
 import org.apache.parquet.hadoop.ParquetReader;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
@@ -151,6 +154,7 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
     "PMD.AvoidCatchingGenericException"
 })
 public class JParqPreparedStatement implements PreparedStatement {
+  private static final Logger LOG = LoggerFactory.getLogger(JParqPreparedStatement.class);
   private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE;
   private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ISO_LOCAL_TIME;
   private static final DateTimeFormatter TIMESTAMP_FORMAT = DateTimeFormatter
@@ -164,6 +168,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final Configuration conf;
   private final Optional<FilterPredicate> parquetPredicate;
   private final Expression residualExpression;
+  private final PushdownInfo pushdownInfo;
   private final Path path;
   private final File file;
   private final String tableSchema;
@@ -185,6 +190,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final List<Map<Integer, Object>> batchedParameters = new ArrayList<>();
   private final boolean ownsStatement;
   private JParqPreparedStatement boundStatement;
+  private boolean boundStatementStale;
   private boolean closed = false;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
@@ -217,7 +223,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     List<SqlParser.TableReference> tmpTableRefs;
     boolean tmpJoinQuery;
     Configuration tmpConf = null;
-    Schema tmpFileAvro;
+    Schema tmpFileAvro = null;
     Optional<FilterPredicate> tmpPredicate = Optional.empty();
     Expression tmpResidual = null;
     Path tmpPath = null;
@@ -362,9 +368,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             tmpPredicate = Optional.empty();
           } else {
             tmpConf = new Configuration(false);
-            tmpConf.setBoolean("parquet.filter.statistics.enabled", true);
-            tmpConf.setBoolean("parquet.read.filter.columnindex.enabled", true);
-            tmpConf.setBoolean("parquet.filter.dictionary.enabled", true);
+            configureParquetFiltering(tmpConf);
 
             String targetTable = baseRef != null ? baseRef.tableName() : tmpSelect.table();
             String targetSchema = baseRef != null ? baseRef.schemaName() : null;
@@ -422,6 +426,8 @@ public class JParqPreparedStatement implements PreparedStatement {
     this.conf = tmpConf;
     this.parquetPredicate = tmpPredicate;
     this.residualExpression = tmpResidual;
+    this.pushdownInfo = determinePushdownInfo(hasParameters, tmpSetOperation, tmpJoinQuery, tmpBaseCteResult, tmpConf,
+        tmpSelect, tmpPredicate, tmpResidual);
     this.path = tmpPath;
     this.file = tmpFile;
     this.tableSchema = tmpSchemaName;
@@ -430,6 +436,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     this.cteResults = tmpCteResults;
     this.valueTableResults = tmpValueTables;
     this.baseCteResult = tmpBaseCteResult;
+    logPushdownInfo(this.pushdownInfo);
   }
 
   /**
@@ -1271,9 +1278,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       JParqConnection.TableLocation tableLocation = stmt.getConn().resolveTable(ref.schemaName(), tableName);
       Path tablePath = new Path(tableLocation.file().toURI());
       Configuration tableConf = new Configuration(false);
-      tableConf.setBoolean("parquet.filter.statistics.enabled", true);
-      tableConf.setBoolean("parquet.read.filter.columnindex.enabled", true);
-      tableConf.setBoolean("parquet.filter.dictionary.enabled", true);
+      configureParquetFiltering(tableConf);
       Schema tableSchema;
       try {
         tableSchema = ParquetSchemas.readAvroSchema(tablePath, tableConf);
@@ -2475,9 +2480,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       JParqConnection.TableLocation location = stmt.getConn().resolveTable(ref.schemaName(), ref.tableName());
       Path path = new Path(location.file().toURI());
       Configuration tableConf = new Configuration(false);
-      tableConf.setBoolean("parquet.filter.statistics.enabled", true);
-      tableConf.setBoolean("parquet.read.filter.columnindex.enabled", true);
-      tableConf.setBoolean("parquet.filter.dictionary.enabled", true);
+      configureParquetFiltering(tableConf);
       try {
         return ParquetSchemas.readAvroSchema(path, tableConf);
       } catch (IOException e) {
@@ -3385,8 +3388,144 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private JParqResultSet executeWithBoundParameters() throws SQLException {
     String boundSql = bindParameters();
+    JParqResultSet currentResultSet = stmt.getCurrentRs();
+    if (currentResultSet != null) {
+      currentResultSet.close();
+      stmt.setCurrentRs(null);
+    }
+    if (boundStatement != null) {
+      boundStatement.close();
+      boundStatement = null;
+    }
     boundStatement = new JParqPreparedStatement(stmt, boundSql, inheritedCteContext);
-    return boundStatement.executeQuery();
+    JParqResultSet resultSet = boundStatement.executeQuery();
+    boundStatementStale = false;
+    return resultSet;
+  }
+
+  /**
+   * Get the Parquet pushdown plan associated with this prepared statement.
+   *
+   * <p>
+   * For parameterized statements, execution may create a bound child statement
+   * with a more specific plan after parameters are rendered to SQL literals. In
+   * that case the bound statement's pushdown info is returned.
+   * </p>
+   *
+   * @return immutable pushdown information for this statement
+   */
+  public PushdownInfo getPushdownInfo() {
+    return boundStatement == null || boundStatementStale ? pushdownInfo : boundStatement.pushdownInfo;
+  }
+
+  /**
+   * Configure Parquet reader pruning features that apply when a filter predicate
+   * is attached.
+   *
+   * @param configuration
+   *          the Hadoop configuration to update
+   */
+  private static void configureParquetFiltering(Configuration configuration) {
+    configuration.setBoolean(ParquetInputFormat.STATS_FILTERING_ENABLED, true);
+    configuration.setBoolean(ParquetInputFormat.COLUMN_INDEX_FILTERING_ENABLED, true);
+    configuration.setBoolean(ParquetInputFormat.DICTIONARY_FILTERING_ENABLED, true);
+    configuration.setBoolean(ParquetInputFormat.BLOOM_FILTERING_ENABLED, true);
+  }
+
+  /**
+   * Build pushdown information for the prepared statement.
+   *
+   * @param planningDeferred
+   *          whether pushdown planning is deferred until execution
+   * @param setOperation
+   *          whether the statement is a set operation
+   * @param join
+   *          whether the statement is a join query
+   * @param cteResult
+   *          the base CTE result when the query is served from memory
+   * @param configuration
+   *          the Parquet reader configuration, if applicable
+   * @param select
+   *          the parsed select statement, if applicable
+   * @param predicate
+   *          the optional Parquet predicate
+   * @param residual
+   *          the residual expression evaluated in Java
+   * @return immutable pushdown information
+   */
+  private static PushdownInfo determinePushdownInfo(boolean planningDeferred, boolean setOperation, boolean join,
+      CteResult cteResult, Configuration configuration, SqlParser.Select select, Optional<FilterPredicate> predicate,
+      Expression residual) {
+    if (planningDeferred) {
+      return new PushdownInfo(false, false, false, false, false, false,
+          "Pushdown planning is deferred until executeQuery() binds parameter values.", null, null);
+    }
+    if (setOperation) {
+      return new PushdownInfo(false, false, false, false, false, false,
+          "Set operations are executed without Parquet predicate pushdown.", null, null);
+    }
+    if (join) {
+      String message = residual == null
+          ? "Join queries do not support Parquet predicate pushdown and have no residual WHERE clause."
+          : "Join queries do not support Parquet predicate pushdown; residual WHERE clauses are evaluated after row assembly.";
+      return new PushdownInfo(false, residual != null, false, false, false, false, message, null,
+          residual == null ? null : residual.toString());
+    }
+    if (cteResult != null) {
+      return new PushdownInfo(false, residual != null, false, false, false, false, residual == null
+          ? "In-memory query results (for example CTEs, derived/value/UNNEST tables, or information_schema) do not use Parquet predicate pushdown."
+          : "In-memory query results (for example CTEs, derived/value/UNNEST tables, or information_schema) apply residual filtering in Java (no Parquet predicate pushdown).",
+          null, residual == null ? null : residual.toString());
+    }
+    boolean statsEnabled = isFilterEnabled(configuration, ParquetInputFormat.STATS_FILTERING_ENABLED);
+    boolean columnIndexEnabled = isFilterEnabled(configuration, ParquetInputFormat.COLUMN_INDEX_FILTERING_ENABLED);
+    boolean dictionaryEnabled = isFilterEnabled(configuration, ParquetInputFormat.DICTIONARY_FILTERING_ENABLED);
+    boolean bloomEnabled = isFilterEnabled(configuration, ParquetInputFormat.BLOOM_FILTERING_ENABLED);
+    Expression where = select == null ? null : select.where();
+    if (where == null) {
+      return new PushdownInfo(false, false, statsEnabled, columnIndexEnabled, dictionaryEnabled, bloomEnabled,
+          "No WHERE clause was provided for Parquet predicate pushdown.", null, null);
+    }
+    if (select != null && select.distinct()) {
+      return new PushdownInfo(false, residual != null, statsEnabled, columnIndexEnabled, dictionaryEnabled,
+          bloomEnabled, "DISTINCT queries currently use residual filtering only.", null,
+          residual == null ? null : residual.toString());
+    }
+    if (predicate.isPresent()) {
+      return new PushdownInfo(true, residual != null, statsEnabled, columnIndexEnabled, dictionaryEnabled, bloomEnabled,
+          residual == null
+              ? "Parquet predicate attached; pruning can use statistics, column indexes, dictionaries, and bloom filters."
+              : "Parquet predicate attached; residual filtering still runs in Java.",
+          predicate.get().toString(), residual == null ? null : residual.toString());
+    }
+    return new PushdownInfo(false, residual != null, statsEnabled, columnIndexEnabled, dictionaryEnabled, bloomEnabled,
+        "WHERE clause is not fully pushdownable; applying residual filtering in Java.", null,
+        residual == null ? null : residual.toString());
+  }
+
+  /**
+   * Check whether a Parquet filtering option is enabled.
+   *
+   * @param configuration
+   *          the configuration to inspect
+   * @param key
+   *          the configuration key
+   * @return {@code true} when the key is enabled
+   */
+  private static boolean isFilterEnabled(Configuration configuration, String key) {
+    return configuration != null && configuration.getBoolean(key, false);
+  }
+
+  /**
+   * Emit a debug summary of the prepared statement's pushdown plan.
+   *
+   * @param info
+   *          the pushdown information to log
+   */
+  private void logPushdownInfo(PushdownInfo info) {
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Pushdown plan for SQL [{}]: {}", originalSql, info.summary());
+    }
   }
 
   private void restoreParameters(Map<Integer, Object> snapshot) {
@@ -3394,6 +3533,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (snapshot != null && !snapshot.isEmpty()) {
       parameterValues.putAll(snapshot);
     }
+    boundStatementStale = true;
   }
 
   private void storeParameter(int parameterIndex, Object value) {
@@ -3401,6 +3541,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return;
     }
     parameterValues.put(parameterIndex, value);
+    boundStatementStale = true;
   }
 
   /**
@@ -3553,6 +3694,46 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private record ParameterParseResult(String sql, Map<String, List<Integer>> namedParameterIndexes,
       int parameterCount) {
+  }
+
+  /**
+   * Immutable summary of how a prepared statement will use Parquet filtering.
+   *
+   * @param parquetPredicateAttached
+   *          whether a Parquet filter predicate was attached to the reader
+   * @param residualFilterPresent
+   *          whether residual filtering still runs in Java
+   * @param statisticsFilteringEnabled
+   *          whether row-group statistics pruning is enabled
+   * @param columnIndexFilteringEnabled
+   *          whether column-index/page pruning is enabled
+   * @param dictionaryFilteringEnabled
+   *          whether dictionary pruning is enabled
+   * @param bloomFilteringEnabled
+   *          whether bloom-filter pruning is enabled
+   * @param message
+   *          human-readable summary of the pushdown plan
+   * @param parquetPredicateSummary
+   *          string representation of the Parquet predicate, if any
+   * @param residualExpressionSummary
+   *          string representation of the residual expression, if any
+   */
+  public record PushdownInfo(boolean parquetPredicateAttached, boolean residualFilterPresent,
+      boolean statisticsFilteringEnabled, boolean columnIndexFilteringEnabled, boolean dictionaryFilteringEnabled,
+      boolean bloomFilteringEnabled, String message, String parquetPredicateSummary, String residualExpressionSummary) {
+
+    /**
+     * Build a one-line debug summary of the pushdown plan.
+     *
+     * @return summary text for logging
+     */
+    public String summary() {
+      return "predicateAttached=" + parquetPredicateAttached + ", residual=" + residualFilterPresent + ", stats="
+          + statisticsFilteringEnabled + ", columnIndex=" + columnIndexFilteringEnabled + ", dictionary="
+          + dictionaryFilteringEnabled + ", bloom=" + bloomFilteringEnabled + ", message=" + message
+          + (parquetPredicateSummary == null ? "" : ", predicate=" + parquetPredicateSummary)
+          + (residualExpressionSummary == null ? "" : ", residualExpression=" + residualExpressionSummary);
+    }
   }
 
   private String bindParameters() throws SQLException {
@@ -4034,6 +4215,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   @Override
   public void clearParameters() {
     parameterValues.clear();
+    boundStatementStale = true;
   }
 
   @Override

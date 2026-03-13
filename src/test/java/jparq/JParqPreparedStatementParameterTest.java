@@ -58,6 +58,76 @@ class JParqPreparedStatementParameterTest {
   }
 
   @Test
+  void reportsDeferredThenAppliedPushdownForParameterizedQueries() throws SQLException {
+    try (JParqPreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) FROM mtcars WHERE cyl = ?")) {
+      JParqPreparedStatement.PushdownInfo deferredInfo = ps.getPushdownInfo();
+      assertFalse(deferredInfo.parquetPredicateAttached());
+      assertFalse(deferredInfo.residualFilterPresent());
+      assertTrue(deferredInfo.message().contains("deferred"));
+
+      ps.setInt(1, 4);
+      try (ResultSet rs = ps.executeQuery()) {
+        assertTrue(rs.next());
+        assertEquals(11, rs.getInt(1));
+      }
+
+      JParqPreparedStatement.PushdownInfo boundInfo = ps.getPushdownInfo();
+      assertTrue(boundInfo.parquetPredicateAttached());
+      assertFalse(boundInfo.residualFilterPresent());
+      assertTrue(boundInfo.statisticsFilteringEnabled());
+      assertTrue(boundInfo.columnIndexFilteringEnabled());
+      assertTrue(boundInfo.dictionaryFilteringEnabled());
+      assertTrue(boundInfo.bloomFilteringEnabled());
+    }
+  }
+
+  @Test
+  void invalidatesBoundPushdownInfoWhenParametersChange() throws SQLException {
+    try (JParqPreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) FROM mtcars WHERE cyl = ?")) {
+      ps.setInt(1, 4);
+      try (ResultSet rs = ps.executeQuery()) {
+        assertTrue(rs.next());
+        assertEquals(11, rs.getInt(1));
+      }
+
+      JParqPreparedStatement.PushdownInfo boundInfo = ps.getPushdownInfo();
+      assertTrue(boundInfo.parquetPredicateAttached());
+      assertFalse(boundInfo.residualFilterPresent());
+
+      ps.setInt(1, 6);
+      JParqPreparedStatement.PushdownInfo updatedInfo = ps.getPushdownInfo();
+      assertFalse(updatedInfo.parquetPredicateAttached());
+      assertFalse(updatedInfo.residualFilterPresent());
+      assertTrue(updatedInfo.message().contains("deferred"));
+
+      ps.clearParameters();
+      JParqPreparedStatement.PushdownInfo clearedInfo = ps.getPushdownInfo();
+      assertFalse(clearedInfo.parquetPredicateAttached());
+      assertFalse(clearedInfo.residualFilterPresent());
+      assertTrue(clearedInfo.message().contains("deferred"));
+    }
+  }
+
+  @Test
+  void reexecutionReplacesPreviousBoundStatement() throws SQLException {
+    try (JParqPreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) FROM mtcars WHERE cyl = ?")) {
+      ps.setInt(1, 4);
+      try (ResultSet firstResult = ps.executeQuery()) {
+        assertTrue(firstResult.next());
+        assertEquals(11, firstResult.getInt(1));
+
+        ps.setInt(1, 6);
+        try (ResultSet secondResult = ps.executeQuery()) {
+          assertTrue(firstResult.isClosed());
+          assertSame(secondResult, ps.getResultSet());
+          assertTrue(secondResult.next());
+          assertEquals(7, secondResult.getInt(1));
+        }
+      }
+    }
+  }
+
+  @Test
   void missingParameterFailsFast() throws SQLException {
     try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM mtcars WHERE cyl = ?")) {
       assertThrows(SQLException.class, ps::executeQuery);
