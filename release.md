@@ -8,7 +8,7 @@
 - org.apache.parquet:parquet-hadoop ................... 1.16.0 -> 1.17.0
 - org.apache.parquet:parquet-variant .................. 1.16.0 -> 1.17.0
 - org.junit.jupiter:junit-jupiter ....................... 6.0.1 -> 6.0.3
-- org.mockito:mockito-core ............................ 5.20.0 -> 5.22.0
+- org.mockito:mockito-core ............................ 5.20.0 -> 5.23.0
 - improved JDBC compliance for supported statement creation overloads, statement closed-state reporting, and connection validation
 - replaced unsupported connection factory sentinel values with proper JDBC exceptions and wrapper behavior
 - aligned driver, CLI, and metadata version reporting with manifest-derived runtime metadata
