@@ -23,6 +23,7 @@ import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimeValue;
 import net.sf.jsqlparser.expression.TimestampValue;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
+import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.AllColumns;
@@ -73,6 +74,23 @@ class AggregateFunctionsHelperTest {
     Expression parenthesis = CCJSqlParserUtil.parseExpression("(hp)");
     Expression plainColumn = CCJSqlParserUtil.parseExpression("hp");
     assertFalse(expressionsEquivalent(parenthesis, plainColumn), "Different expression classes should not match");
+
+    Expression matchingParenthesis = CCJSqlParserUtil.parseExpression("(hp)");
+    Expression differentParenthesis = CCJSqlParserUtil.parseExpression("(mpg)");
+    assertTrue(expressionsEquivalent(parenthesis, matchingParenthesis));
+    assertFalse(expressionsEquivalent(parenthesis, differentParenthesis));
+
+    ParenthesedExpressionList<Expression> tupleA = new ParenthesedExpressionList<>(
+        CCJSqlParserUtil.parseExpression("hp"), CCJSqlParserUtil.parseExpression("mpg"));
+    ParenthesedExpressionList<Expression> tupleB = new ParenthesedExpressionList<>(
+        CCJSqlParserUtil.parseExpression("hp"), CCJSqlParserUtil.parseExpression("mpg"));
+    ParenthesedExpressionList<Expression> tupleC = new ParenthesedExpressionList<>(
+        CCJSqlParserUtil.parseExpression("hp"), CCJSqlParserUtil.parseExpression("wt"));
+    ParenthesedExpressionList<Expression> tupleD = new ParenthesedExpressionList<>(
+        CCJSqlParserUtil.parseExpression("hp"));
+    assertTrue(expressionsEquivalent(tupleA, tupleB));
+    assertFalse(expressionsEquivalent(tupleA, tupleC));
+    assertFalse(expressionsEquivalent(tupleA, tupleD));
   }
 
   @Test

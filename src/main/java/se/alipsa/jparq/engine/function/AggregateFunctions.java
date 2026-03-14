@@ -33,7 +33,6 @@ import net.sf.jsqlparser.expression.JdbcNamedParameter;
 import net.sf.jsqlparser.expression.JdbcParameter;
 import net.sf.jsqlparser.expression.NotExpression;
 import net.sf.jsqlparser.expression.NullValue;
-import net.sf.jsqlparser.expression.Parenthesis;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimeValue;
@@ -57,6 +56,7 @@ import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
 import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.expression.operators.relational.MinorThan;
 import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals;
+import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
@@ -69,6 +69,7 @@ import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.Identifier;
+import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.Operation;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.RecordReader;
@@ -861,8 +862,21 @@ public final class AggregateFunctions {
     if (first instanceof NotExpression leftNot) {
       return expressionsEquivalent(leftNot.getExpression(), ((NotExpression) second).getExpression());
     }
-    if (first instanceof Parenthesis leftParenthesis) {
-      return expressionsEquivalent(leftParenthesis.getExpression(), ((Parenthesis) second).getExpression());
+    if (first instanceof ParenthesedExpressionList<?> leftParenthesizedExpressionList) {
+      ParenthesedExpressionList<?> rightParenthesizedExpressionList = (ParenthesedExpressionList<?>) second;
+      if (leftParenthesizedExpressionList.size() != rightParenthesizedExpressionList.size()) {
+        return false;
+      }
+      for (int i = 0; i < leftParenthesizedExpressionList.size(); i++) {
+        if (!expressionsEquivalent((Expression) leftParenthesizedExpressionList.get(i),
+            (Expression) rightParenthesizedExpressionList.get(i))) {
+          return false;
+        }
+      }
+      return true;
+    }
+    if (LegacyParenthesisSupport.isLegacyParenthesis(first)) {
+      return expressionsEquivalent(LegacyParenthesisSupport.extract(first), LegacyParenthesisSupport.extract(second));
     }
     if (first instanceof CastExpression leftCast) {
       CastExpression rightCast = (CastExpression) second;

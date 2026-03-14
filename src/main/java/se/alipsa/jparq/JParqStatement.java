@@ -6,13 +6,12 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLWarning;
 import java.sql.Statement;
-import org.apache.commons.lang3.concurrent.BasicThreadFactory;
 
 /** An implementation of the java.sql.Statement interface. */
 @SuppressWarnings({
     "checkstyle:AbbreviationAsWordInName", "checkstyle:OverloadMethodsDeclarationOrder"
 })
-public class JParqStatement extends BasicThreadFactory.Builder implements Statement {
+public class JParqStatement implements Statement {
 
   private final JParqConnection conn;
   private String currentSql;

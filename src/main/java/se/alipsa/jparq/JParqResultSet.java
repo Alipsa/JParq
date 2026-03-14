@@ -1,5 +1,4 @@
 package se.alipsa.jparq;
-
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -21,8 +20,8 @@ import java.util.Map;
 import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
-import net.sf.jsqlparser.expression.Parenthesis;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
+import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.OrderByElement;
@@ -36,6 +35,7 @@ import se.alipsa.jparq.engine.CorrelationContextBuilder;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.JoinRecordReader;
+import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.QueryProcessor;
 import se.alipsa.jparq.engine.RecordReader;
@@ -64,7 +64,6 @@ import se.alipsa.jparq.model.ResultSetAdapter;
 /** An implementation of the java.sql.ResultSet interface. */
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqResultSet extends ResultSetAdapter {
-
   private final List<String> physicalColumnOrder; // may be null
   private final QueryProcessor qp;
   private GenericRecord current;
@@ -1022,16 +1021,31 @@ public class JParqResultSet extends ResultSetAdapter {
         andExpression.setRightExpression(right);
         return andExpression;
       }
-      case Parenthesis parenthesis -> {
-        Expression inner = pruneExpression(parenthesis.getExpression(), availableQualifiers);
-        if (inner == null) {
-          return null;
+      case ParenthesedExpressionList<?> parenthesizedExpressionList -> {
+        if (parenthesizedExpressionList.size() == 1) {
+          Expression inner = pruneExpression((Expression) parenthesizedExpressionList.getFirst(), availableQualifiers);
+          if (inner == null) {
+            return null;
+          }
+          ParenthesedExpressionList<Expression> rewritten = new ParenthesedExpressionList<>();
+          rewritten.add(inner);
+          return rewritten;
         }
-        parenthesis.setExpression(inner);
-        return parenthesis;
       }
       default -> {
       }
+    }
+    if (LegacyParenthesisSupport.isLegacyParenthesis(expression)) {
+      Expression inner = LegacyParenthesisSupport.extract(expression);
+      if (inner == null) {
+        return null;
+      }
+      Expression pruned = pruneExpression(inner, availableQualifiers);
+      if (pruned == null) {
+        return null;
+      }
+      LegacyParenthesisSupport.replace(expression, pruned);
+      return expression;
     }
     Set<String> qualifiersInExpression = collectQualifiers(expression);
     if (qualifiersInExpression.isEmpty()) {
