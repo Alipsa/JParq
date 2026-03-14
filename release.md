@@ -1,6 +1,6 @@
 # Version history
 
-### 1.3.0, 2026-03-13
+### 1.3.0, 2026-03-14
 - com.fasterxml.jackson.core:jackson-databind ......... 2.20.1 -> 2.21.1
 - org.apache.hadoop:hadoop-common ....................... 3.4.2 -> 3.4.3
 - org.apache.hadoop:hadoop-mapreduce-client-core ........ 3.4.2 -> 3.4.3
