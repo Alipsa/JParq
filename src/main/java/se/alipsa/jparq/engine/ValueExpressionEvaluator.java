@@ -26,6 +26,7 @@ import net.sf.jsqlparser.expression.JsonFunction;
 import net.sf.jsqlparser.expression.JsonFunctionExpression;
 import net.sf.jsqlparser.expression.JsonFunctionType;
 import net.sf.jsqlparser.expression.JsonKeyValuePair;
+import net.sf.jsqlparser.expression.NotExpression;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TranscodingFunction;
@@ -37,6 +38,14 @@ import net.sf.jsqlparser.expression.operators.arithmetic.Division;
 import net.sf.jsqlparser.expression.operators.arithmetic.Modulo;
 import net.sf.jsqlparser.expression.operators.arithmetic.Multiplication;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
+import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
+import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
+import net.sf.jsqlparser.expression.operators.relational.Between;
+import net.sf.jsqlparser.expression.operators.relational.ComparisonOperator;
+import net.sf.jsqlparser.expression.operators.relational.ExistsExpression;
+import net.sf.jsqlparser.expression.operators.relational.InExpression;
+import net.sf.jsqlparser.expression.operators.relational.IsDistinctExpression;
+import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
 import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
@@ -301,11 +310,12 @@ public final class ValueExpressionEvaluator {
     if (expression instanceof ArrayConstructor array) {
       return functionSupport.evaluate(array, record);
     }
-    if (expression instanceof LikeExpression like) {
-      return evaluateLike(like, record);
-    }
-    if (expression instanceof SimilarToExpression similar) {
-      return evaluateSimilar(similar, record);
+    if (expression instanceof NotExpression || expression instanceof AndExpression || expression instanceof OrExpression
+        || expression instanceof ComparisonOperator || expression instanceof IsDistinctExpression
+        || expression instanceof IsNullExpression || expression instanceof ExistsExpression
+        || expression instanceof InExpression || expression instanceof Between || expression instanceof LikeExpression
+        || expression instanceof SimilarToExpression) {
+      return conditionEvaluator(record).evalTruth(expression, record);
     }
     if (expression instanceof JsonFunction json) {
       return evaluateJsonFunction(json, record);
@@ -482,16 +492,22 @@ public final class ValueExpressionEvaluator {
     return evalInternal(elseExpr, record);
   }
 
+  /** Evaluates CASE WHEN using the SQL TRUE selection boundary. */
   private boolean evaluateCondition(Expression condition, GenericRecord record) {
-    if (condition == null) {
-      return false;
-    }
+    return condition != null && conditionEvaluator(record).eval(condition, record);
+  }
+
+  /**
+   * Lazily creates the predicate evaluator shared by CASE WHEN and Boolean
+   * values.
+   */
+  private ExpressionEvaluator conditionEvaluator(GenericRecord record) {
     if (conditionEvaluator == null) {
       Schema schemaToUse = schema != null ? schema : record.getSchema();
       conditionEvaluator = new ExpressionEvaluator(schemaToUse, subqueryExecutor, outerQualifiers,
           qualifierColumnMapping, unqualifiedColumnMapping);
     }
-    return conditionEvaluator.eval(condition, record);
+    return conditionEvaluator;
   }
 
   private static boolean valuesEqual(Object left, Object right) {
@@ -503,56 +519,6 @@ public final class ValueExpressionEvaluator {
     } catch (Exception e) {
       return left.equals(right);
     }
-  }
-
-  private Object evaluateLike(LikeExpression like, GenericRecord record) {
-    Object left = evalInternal(like.getLeftExpression(), record);
-    Object right = evalInternal(like.getRightExpression(), record);
-    String input = toStringValue(left);
-    String pattern = toStringValue(right);
-    if (input == null || pattern == null) {
-      return false;
-    }
-    LikeExpression.KeyWord keyWord = like.getLikeKeyWord();
-    LikeExpression.KeyWord effectiveKeyword = keyWord == null ? LikeExpression.KeyWord.LIKE : keyWord;
-    Character escapeChar = null;
-    if (like.getEscape() != null) {
-      Object escapeVal = evalInternal(like.getEscape(), record);
-      String escape = toStringValue(escapeVal);
-      if (escape != null && !escape.isEmpty()) {
-        if (escape.length() != 1) {
-          throw new IllegalArgumentException("LIKE escape clause must be a single character");
-        }
-        escapeChar = escape.charAt(0);
-      }
-    }
-    if (effectiveKeyword == LikeExpression.KeyWord.SIMILAR_TO) {
-      boolean matches = StringFunctions.similarTo(input, pattern, escapeChar);
-      return like.isNot() != matches;
-    }
-    boolean caseInsensitive = effectiveKeyword == LikeExpression.KeyWord.ILIKE;
-    boolean matches = StringFunctions.like(input, pattern, caseInsensitive, escapeChar);
-    return like.isNot() != matches;
-  }
-
-  private Object evaluateSimilar(SimilarToExpression similar, GenericRecord record) {
-    Object left = evalInternal(similar.getLeftExpression(), record);
-    Object right = evalInternal(similar.getRightExpression(), record);
-    String input = toStringValue(left);
-    String pattern = toStringValue(right);
-    if (input == null || pattern == null) {
-      return false;
-    }
-    String escape = similar.getEscape();
-    Character escapeChar = null;
-    if (escape != null && !escape.isEmpty()) {
-      if (escape.length() != 1) {
-        throw new IllegalArgumentException("SIMILAR TO escape clause must be a single character");
-      }
-      escapeChar = escape.charAt(0);
-    }
-    boolean matches = StringFunctions.similarTo(input, pattern, escapeChar);
-    return similar.isNot() != matches;
   }
 
   private Object evaluateJsonFunction(JsonFunction json, GenericRecord record) {
