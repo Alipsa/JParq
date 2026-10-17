@@ -72,6 +72,7 @@ import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.InMemoryRecordReader;
+import se.alipsa.jparq.engine.JoinPredicatePlanner;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
 import se.alipsa.jparq.engine.ParquetRecordReaderAdapter;
@@ -168,7 +169,9 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final Configuration conf;
   private final Optional<FilterPredicate> parquetPredicate;
   private final Expression residualExpression;
+  private final Schema fileAvroSchema;
   private final PushdownInfo pushdownInfo;
+  private final Map<Integer, FilterPredicate> joinPredicates;
   private final Path path;
   private final File file;
   private final String tableSchema;
@@ -399,9 +402,11 @@ public class JParqPreparedStatement implements PreparedStatement {
             aggregatePlan = AggregateFunctions.plan(tmpSelect);
             configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf);
 
-            if (!tmpSelect.distinct() && tmpFileAvro != null && tmpSelect.where() != null) {
-              tmpPredicate = ParquetFilterBuilder.build(tmpFileAvro, tmpSelect.where());
-              tmpResidual = ParquetFilterBuilder.residual(tmpFileAvro, tmpSelect.where());
+            if (stmt.getConn().isPredicatePushdown() && (baseRef == null || baseRef.tableSample() == null)
+                && tmpFileAvro != null && tmpSelect.where() != null) {
+              var split = ParquetFilterBuilder.split(tmpFileAvro, tmpSelect.where());
+              tmpPredicate = split.predicate();
+              tmpResidual = split.residual();
             } else {
               tmpPredicate = Optional.empty();
               tmpResidual = tmpSelect.where();
@@ -426,14 +431,23 @@ public class JParqPreparedStatement implements PreparedStatement {
     this.conf = tmpConf;
     this.parquetPredicate = tmpPredicate;
     this.residualExpression = tmpResidual;
-    this.pushdownInfo = determinePushdownInfo(hasParameters, tmpSetOperation, tmpJoinQuery, tmpBaseCteResult, tmpConf,
-        tmpSelect, tmpPredicate, tmpResidual);
+    this.fileAvroSchema = tmpFileAvro;
+    this.cteResults = tmpCteResults;
+    this.joinPredicates = tmpJoinQuery ? planJoinPredicates() : Map.of();
+    PushdownInfo plannedPushdown = determinePushdownInfo(hasParameters, tmpSetOperation, tmpJoinQuery, tmpBaseCteResult,
+        tmpConf, tmpSelect, tmpPredicate, tmpResidual);
+    this.pushdownInfo = stmt.getConn().isProjectionPushdown()
+        ? plannedPushdown
+        : new PushdownInfo(plannedPushdown.parquetPredicateAttached(), plannedPushdown.residualFilterPresent(),
+            plannedPushdown.statisticsFilteringEnabled(), plannedPushdown.columnIndexFilteringEnabled(),
+            plannedPushdown.dictionaryFilteringEnabled(), plannedPushdown.bloomFilteringEnabled(),
+            plannedPushdown.message() + " Projection pushdown disabled by connection property.",
+            plannedPushdown.parquetPredicateSummary(), plannedPushdown.residualExpressionSummary());
     this.path = tmpPath;
     this.file = tmpFile;
     this.tableSchema = tmpSchemaName;
     this.tableCatalog = stmt.getConn().getCatalog();
     this.baseTableLocation = tmpBaseLocation;
-    this.cteResults = tmpCteResults;
     this.valueTableResults = tmpValueTables;
     this.baseCteResult = tmpBaseCteResult;
     logPushdownInfo(this.pushdownInfo);
@@ -485,7 +499,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           }
 
           ParquetReader<GenericRecord> parquetReader = builder.build();
-          reader = new ParquetRecordReaderAdapter(parquetReader);
+          reader = new ParquetRecordReaderAdapter(parquetReader, fileAvroSchema);
           resultTableName = baseTableLocation != null ? baseTableLocation.tableName() : file.getName();
         }
         if (!joinQuery) {
@@ -1201,6 +1215,37 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
   }
 
+  /** Plans single-table WHERE conjuncts before opening join inputs. */
+  private Map<Integer, FilterPredicate> planJoinPredicates() throws SQLException {
+    if (!stmt.getConn().isPredicatePushdown() || parsedSelect.where() == null) {
+      return Map.of();
+    }
+    List<Schema> schemas = new ArrayList<>();
+    for (var reference : tableReferences) {
+      Schema schema = null;
+      if (reference.subquery() == null && reference.commonTableExpression() == null && reference.valueTable() == null
+          && reference.unnest() == null && !InformationSchemaTables.matchesTableReference(reference.tableName())
+          && !InformationSchemaColumns.matchesTableReference(reference.tableName())
+          && resolveCteResultByName(reference.tableName(), cteResults) == null) {
+        var location = stmt.getConn().resolveTable(reference.schemaName(), reference.tableName());
+        try {
+          schema = ParquetSchemas.readAvroSchema(new Path(location.file().toURI()), new Configuration(false));
+        } catch (IOException exception) {
+          throw new SQLException("Failed to read join input schema", exception);
+        }
+      }
+      schemas.add(schema);
+    }
+    Map<Integer, FilterPredicate> predicates = new LinkedHashMap<>();
+    for (int index = 0; index < tableReferences.size(); index++) {
+      var predicate = JoinPredicatePlanner.plan(parsedSelect.where(), tableReferences, schemas, index);
+      if (predicate.isPresent()) {
+        predicates.put(index, predicate.get());
+      }
+    }
+    return Map.copyOf(predicates);
+  }
+
   private JoinRecordReader buildJoinReader() throws SQLException {
     List<JoinRecordReader.JoinTable> tables = new ArrayList<>();
     Map<String, Integer> qualifierIndex = new LinkedHashMap<>();
@@ -1287,8 +1332,13 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       validateJoinTableColumns(tableSchema, ref);
       List<GenericRecord> rows = new ArrayList<>();
-      try (ParquetReader<GenericRecord> tableReader = ParquetReader
-          .<GenericRecord>builder(new AvroReadSupport<>(), tablePath).withConf(tableConf).build()) {
+      ParquetReader.Builder<GenericRecord> tableBuilder = ParquetReader
+          .<GenericRecord>builder(new AvroReadSupport<>(), tablePath).withConf(tableConf);
+      FilterPredicate predicate = joinPredicates.get(tables.size());
+      if (predicate != null) {
+        tableBuilder.withFilter(FilterCompat.get(predicate));
+      }
+      try (RecordReader tableReader = new ParquetRecordReaderAdapter(tableBuilder.build(), tableSchema)) {
         GenericRecord record = tableReader.read();
         while (record != null) {
           rows.add(record);
@@ -2983,28 +3033,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return;
     }
 
-    if (!select.orderBy().isEmpty() || !select.preOrderBy().isEmpty()) {
-      return;
-    }
-
-    if (selectColumns != null) {
-      Set<String> orderColumns = new LinkedHashSet<>();
-      for (SqlParser.OrderKey key : select.orderBy()) {
-        if (key != null && key.column() != null) {
-          orderColumns.add(key.column());
-        }
-      }
-      for (SqlParser.OrderKey key : select.preOrderBy()) {
-        if (key != null && key.column() != null) {
-          orderColumns.add(key.column());
-        }
-      }
-      if (!orderColumns.isEmpty() && !selectColumns.containsAll(orderColumns)) {
-        return;
-      }
-    }
-
-    if (!requiredColumns.isEmpty()) {
+    if (stmt.getConn().isProjectionPushdown() && !requiredColumns.isEmpty()) {
       Schema avroProjection = AvroProjections.project(schema, requiredColumns);
       AvroReadSupport.setRequestedProjection(configuration, avroProjection);
       AvroReadSupport.setAvroReadSchema(configuration, avroProjection);
@@ -3425,7 +3454,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @param configuration
    *          the Hadoop configuration to update
    */
-  private static void configureParquetFiltering(Configuration configuration) {
+  public static void configureParquetFiltering(Configuration configuration) {
     configuration.setBoolean(ParquetInputFormat.STATS_FILTERING_ENABLED, true);
     configuration.setBoolean(ParquetInputFormat.COLUMN_INDEX_FILTERING_ENABLED, true);
     configuration.setBoolean(ParquetInputFormat.DICTIONARY_FILTERING_ENABLED, true);
@@ -3453,9 +3482,13 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          the residual expression evaluated in Java
    * @return immutable pushdown information
    */
-  private static PushdownInfo determinePushdownInfo(boolean planningDeferred, boolean setOperation, boolean join,
+  private PushdownInfo determinePushdownInfo(boolean planningDeferred, boolean setOperation, boolean join,
       CteResult cteResult, Configuration configuration, SqlParser.Select select, Optional<FilterPredicate> predicate,
       Expression residual) {
+    if (!stmt.getConn().isPredicatePushdown()) {
+      return new PushdownInfo(false, residual != null, false, false, false, false,
+          "Predicate pushdown disabled by connection property.", null, residual == null ? null : residual.toString());
+    }
     if (planningDeferred) {
       return new PushdownInfo(false, false, false, false, false, false,
           "Pushdown planning is deferred until executeQuery() binds parameter values.", null, null);
@@ -3466,15 +3499,16 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     if (join) {
       String message = residual == null
-          ? "Join queries do not support Parquet predicate pushdown and have no residual WHERE clause."
-          : "Join queries do not support Parquet predicate pushdown; residual WHERE clauses are evaluated after row assembly.";
-      return new PushdownInfo(false, residual != null, false, false, false, false, message, null,
-          residual == null ? null : residual.toString());
+          ? "Join queries have no residual WHERE clause."
+          : "Join queries evaluate residual WHERE clauses after row assembly.";
+      return new PushdownInfo(!joinPredicates.isEmpty(), residual != null, true, true, true, true, message,
+          joinPredicates.isEmpty() ? null : joinPredicates.toString(), residual == null ? null : residual.toString());
     }
     if (cteResult != null) {
-      return new PushdownInfo(false, residual != null, false, false, false, false, residual == null
-          ? "In-memory query results (for example CTEs, derived/value/UNNEST tables, or information_schema) do not use Parquet predicate pushdown."
-          : "In-memory query results (for example CTEs, derived/value/UNNEST tables, or information_schema) apply residual filtering in Java (no Parquet predicate pushdown).",
+      return new PushdownInfo(false, residual != null, false, false, false, false,
+          residual == null
+              ? "In-memory query results do not use Parquet predicate pushdown."
+              : "In-memory query results apply residual filtering in Java.",
           null, residual == null ? null : residual.toString());
     }
     boolean statsEnabled = isFilterEnabled(configuration, ParquetInputFormat.STATS_FILTERING_ENABLED);
@@ -3486,15 +3520,15 @@ public class JParqPreparedStatement implements PreparedStatement {
       return new PushdownInfo(false, false, statsEnabled, columnIndexEnabled, dictionaryEnabled, bloomEnabled,
           "No WHERE clause was provided for Parquet predicate pushdown.", null, null);
     }
-    if (select != null && select.distinct()) {
+    if (select != null && select.tableReferences().stream().anyMatch(reference -> reference.tableSample() != null)) {
       return new PushdownInfo(false, residual != null, statsEnabled, columnIndexEnabled, dictionaryEnabled,
-          bloomEnabled, "DISTINCT queries currently use residual filtering only.", null,
+          bloomEnabled, "Predicate pushdown disabled for TABLESAMPLE; sampling precedes WHERE.", null,
           residual == null ? null : residual.toString());
     }
     if (predicate.isPresent()) {
       return new PushdownInfo(true, residual != null, statsEnabled, columnIndexEnabled, dictionaryEnabled, bloomEnabled,
           residual == null
-              ? "Parquet predicate attached; pruning can use statistics, column indexes, dictionaries, and bloom filters."
+              ? "Parquet predicate attached; statistics, page indexes, dictionaries, and bloom filters can prune rows."
               : "Parquet predicate attached; residual filtering still runs in Java.",
           predicate.get().toString(), residual == null ? null : residual.toString());
     }

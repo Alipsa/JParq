@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
+import se.alipsa.jparq.engine.AvroCoercions;
 
 /**
  * Utility methods for mapping Avro schemas to JDBC metadata representations.
@@ -64,8 +65,7 @@ public final class JdbcTypeMapper {
           ? Types.DATE
           : base.getLogicalType() instanceof LogicalTypes.TimeMillis ? Types.TIME : Types.INTEGER);
       case LONG -> {
-        if (base.getLogicalType() instanceof LogicalTypes.TimestampMillis
-            || base.getLogicalType() instanceof LogicalTypes.TimestampMicros) {
+        if (AvroCoercions.isTimestamp(base)) {
           yield Types.TIMESTAMP;
         }
         if (base.getLogicalType() instanceof LogicalTypes.TimeMicros) {
@@ -77,6 +77,9 @@ public final class JdbcTypeMapper {
       case DOUBLE -> Types.DOUBLE;
       case BOOLEAN -> Types.BOOLEAN;
       case BYTES, FIXED -> {
+        if (AvroCoercions.isFloat16(base)) {
+          yield Types.REAL;
+        }
         if (base.getLogicalType() instanceof LogicalTypes.Decimal) {
           yield Types.DECIMAL;
         }
@@ -114,8 +117,7 @@ public final class JdbcTypeMapper {
         yield Integer.class.getName();
       }
       case LONG -> {
-        if (base.getLogicalType() instanceof LogicalTypes.TimestampMillis
-            || base.getLogicalType() instanceof LogicalTypes.TimestampMicros) {
+        if (AvroCoercions.isTimestamp(base)) {
           yield Timestamp.class.getName();
         }
         if (base.getLogicalType() instanceof LogicalTypes.TimeMicros) {
@@ -126,8 +128,13 @@ public final class JdbcTypeMapper {
       case FLOAT -> Float.class.getName();
       case DOUBLE -> Double.class.getName();
       case BOOLEAN -> Boolean.class.getName();
-      case BYTES, FIXED ->
-        (base.getLogicalType() instanceof LogicalTypes.Decimal) ? BigDecimal.class.getName() : byte[].class.getName();
+      case BYTES,
+          FIXED ->
+        AvroCoercions.isFloat16(base)
+            ? Float.class.getName()
+            : (base.getLogicalType() instanceof LogicalTypes.Decimal)
+                ? BigDecimal.class.getName()
+                : byte[].class.getName();
       case RECORD -> Map.class.getName();
       case ARRAY -> List.class.getName();
       case MAP -> Map.class.getName();

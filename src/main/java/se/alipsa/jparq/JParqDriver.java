@@ -53,8 +53,11 @@ public class JParqDriver implements Driver {
 
   @Override
   public DriverPropertyInfo[] getPropertyInfo(String url, Properties info) {
+    Properties properties = info == null ? new Properties() : info;
     return new DriverPropertyInfo[]{
-        new DriverPropertyInfo("caseSensitive", info.getProperty("caseSensitive", "false"))
+        new DriverPropertyInfo("caseSensitive", properties.getProperty("caseSensitive", "false")),
+        new DriverPropertyInfo("predicatePushdown", properties.getProperty("predicatePushdown", "true")),
+        new DriverPropertyInfo("projectionPushdown", properties.getProperty("projectionPushdown", "true"))
     };
   }
 

@@ -10,6 +10,8 @@ import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Map;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
@@ -26,6 +28,53 @@ import org.apache.avro.generic.GenericRecord;
 public final class AvroCoercions {
 
   private AvroCoercions() {
+  }
+
+  /**
+   * Tests whether a schema represents any supported timestamp precision.
+   * 
+   * @param schema
+   *          the non-null schema
+   * @return whether it has a timestamp logical type
+   */
+  public static boolean isTimestamp(Schema schema) {
+    String name = schema.getProp("logicalType");
+    return name != null && (name.startsWith("timestamp-") || name.startsWith("local-timestamp-"));
+  }
+
+  /**
+   * Tests whether timestamps store wall-clock values without a time zone.
+   * 
+   * @param schema
+   *          the non-null schema
+   * @return whether timestamps are local
+   */
+  public static boolean isLocalTimestamp(Schema schema) {
+    String name = schema.getProp("logicalType");
+    return name != null && name.startsWith("local-timestamp-");
+  }
+
+  /**
+   * Returns the physical timestamp units per second.
+   * 
+   * @param schema
+   *          the timestamp schema
+   * @return 1000, 1000000, or 1000000000
+   */
+  public static long timestampUnits(Schema schema) {
+    String name = schema.getProp("logicalType");
+    return name.endsWith("nanos") ? 1_000_000_000L : name.endsWith("micros") ? 1_000_000L : 1000L;
+  }
+
+  /**
+   * Identifies Parquet half-precision floating point values.
+   * 
+   * @param schema
+   *          the non-null schema
+   * @return whether the physical fixed bytes encode float16
+   */
+  public static boolean isFloat16(Schema schema) {
+    return "float16".equals(schema.getProp("jparq.logicalType"));
   }
 
   /**
@@ -61,6 +110,13 @@ public final class AvroCoercions {
       return null;
     }
     Schema effective = effectiveSchema(s);
+    if (effective.getLogicalType() instanceof LogicalTypes.Decimal) {
+      try {
+        return new BigDecimal(lit.toString());
+      } catch (NumberFormatException exception) {
+        return lit;
+      }
+    }
     switch (effective.getType()) {
       case STRING, ENUM:
         return lit.toString();
@@ -88,8 +144,7 @@ public final class AvroCoercions {
       }
 
       case LONG: {
-        if (effective.getLogicalType() instanceof LogicalTypes.TimestampMillis
-            || effective.getLogicalType() instanceof LogicalTypes.TimestampMicros) {
+        if (isTimestamp(effective)) {
           if (lit instanceof Timestamp) {
             return lit;
           }
@@ -121,7 +176,10 @@ public final class AvroCoercions {
         if (lit instanceof Boolean) {
           return lit;
         }
-        return Boolean.parseBoolean(lit.toString());
+        if ("true".equalsIgnoreCase(lit.toString()) || "false".equalsIgnoreCase(lit.toString())) {
+          return Boolean.parseBoolean(lit.toString());
+        }
+        return lit;
 
       default:
         return lit; // bytes/arrays/etc. not coerced for WHERE in this minimal impl
@@ -197,13 +255,14 @@ public final class AvroCoercions {
         }
         return ((Number) v).intValue();
       case LONG:
-        if (effective.getLogicalType() instanceof LogicalTypes.TimestampMillis
-            || effective.getLogicalType() instanceof LogicalTypes.TimestampMicros) {
+        if (isTimestamp(effective)) {
           long epoch = ((Number) v).longValue();
-          if (effective.getLogicalType() instanceof LogicalTypes.TimestampMicros) {
-            epoch /= 1000L;
-          }
-          return Timestamp.from(Instant.ofEpochMilli(epoch));
+          long units = timestampUnits(effective);
+          Instant instant = Instant.ofEpochSecond(Math.floorDiv(epoch, units),
+              Math.floorMod(epoch, units) * (1_000_000_000L / units));
+          return isLocalTimestamp(effective)
+              ? Timestamp.valueOf(LocalDateTime.ofInstant(instant, ZoneOffset.UTC))
+              : Timestamp.from(instant);
         }
         return ((Number) v).longValue();
       case FLOAT:
@@ -245,6 +304,10 @@ public final class AvroCoercions {
         }
         return v;
       case FIXED:
+        if (isFloat16(effective) && v instanceof GenericData.Fixed fixed) {
+          byte[] bytes = fixed.bytes();
+          return Float.float16ToFloat((short) ((bytes[0] & 255) | (bytes[1] & 255) << 8));
+        }
         if (effective.getLogicalType() instanceof LogicalTypes.Decimal) {
           LogicalTypes.Decimal dec = (LogicalTypes.Decimal) effective.getLogicalType();
           byte[] bytes = ((GenericData.Fixed) v).bytes();

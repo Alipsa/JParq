@@ -1300,6 +1300,11 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   @Override
+  public float getFloat(String columnLabel) throws SQLException {
+    return getFloat(findColumn(columnLabel));
+  }
+
+  @Override
   public double getDouble(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
     return v == null ? 0d : ((Number) v).doubleValue();
@@ -1319,6 +1324,16 @@ public class JParqResultSet extends ResultSetAdapter {
       case Number n -> new BigDecimal(n.toString());
       default -> new BigDecimal(v.toString());
     };
+  }
+
+  @Override
+  public BigDecimal getBigDecimal(String columnLabel) throws SQLException {
+    return getBigDecimal(findColumn(columnLabel));
+  }
+
+  @Override
+  public byte[] getBytes(String columnLabel) throws SQLException {
+    return getBytes(findColumn(columnLabel));
   }
 
   @Override

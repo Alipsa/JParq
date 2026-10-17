@@ -38,7 +38,11 @@ public class JParqDriverTest {
   @Test
   public void testGetPropertyInfo() {
     DriverPropertyInfo[] info = driver.getPropertyInfo("jdbc:jparq:/some/path", new Properties());
-    assertEquals(1, info.length);
+    assertEquals(3, info.length);
+    assertEquals("predicatePushdown", info[1].name);
+    assertEquals("true", info[1].value);
+    assertEquals("projectionPushdown", info[2].name);
+    assertEquals("true", info[2].value);
     assertEquals("caseSensitive", info[0].name);
     assertEquals("false", info[0].value);
   }

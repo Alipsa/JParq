@@ -567,6 +567,14 @@ public final class QueryProcessor implements AutoCloseable {
         return orderByEvaluator.eval(key.expression(), record);
       }
     }
+    if (key.column() != null && key.column().matches("[0-9]+")) {
+      int ordinal = Integer.parseInt(key.column());
+      if (ordinal < 1 || ordinal > schema.getFields().size()) {
+        throw new IllegalArgumentException("ORDER BY position is outside the select list: " + ordinal);
+      }
+      Schema.Field field = schema.getFields().get(ordinal - 1);
+      return AvroCoercions.unwrap(record.get(field.name()), field.schema());
+    }
     Schema.Field field = schema.getField(key.column());
     String lookupName = key.column();
     if (field == null) {

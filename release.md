@@ -1,7 +1,18 @@
 # Version history
 
 ### 1.4.0
-- **Behavior change:** predicates involving NULL follow SQL three-valued logic. WHERE, JOIN ON, HAVING, CASE WHEN, Boolean projections, and quantified subqueries preserve UNKNOWN until the selection boundary. Negations and NOT IN on nullable columns may return fewer rows.
+- Support Hugging Face optimized Parquet files written with content-defined chunking and page indexes, verified with committed PyArrow 21.0.0 fixtures and physical page-pruning tests.
+- Fix predicate pushdown for SQL NULL negations, date and timestamp bounds, column-name casing, fractional integer bounds, and out-of-range numeric literals.
+- Push supported `AND` terms independently, add NULL checks and string-prefix `LIKE` ranges, and support logical-type bounds in `BETWEEN` and `IN`.
+- Enable predicate pushdown with `DISTINCT` and safe single-table join conditions; retain the full post-join filter.
+- Read only required columns with `ORDER BY`, retaining sort, alias, ordinal, and correlated-subquery dependencies.
+- Read nanosecond and local timestamps and float16 values; preserve logical types in JDBC metadata without reading data rows.
+- Add `predicatePushdown` and `projectionPushdown` connection properties (both default to `true`), reported by CLI `/info` and statement pushdown diagnostics.
+- CLI `/describe` now reports row groups, row counts, and page-index availability.
+- **Behavior change:** predicates involving NULL follow SQL three-valued logic, including WHERE, JOIN ON, HAVING, CASE WHEN, and Boolean projections. Negations and `NOT IN` on nullable columns may return fewer rows.
+- **Behavior change:** microsecond and nanosecond timestamps retain full precision. Equality and range comparisons that previously matched due to millisecond truncation may return different rows.
+- **Behavior change:** sampled tables disable predicate pushdown so `TABLESAMPLE` runs before `WHERE`. Repeatable sample membership is independent of the pushdown setting.
+- Resolve `ORDER BY` ordinals to select-list positions and preserve exact numeric literals beyond the signed-long range.
 
 ### 1.3.0, 2026-03-14
 - com.fasterxml.jackson.core:jackson-databind ......... 2.20.1 -> 2.21.1

@@ -56,9 +56,36 @@ public final class ParquetSchemas {
 
       // Fallback: derive Avro schema from the Parquet schema
       MessageType parquetSchema = meta.getSchema();
-      Schema schema = new AvroSchemaConverter().convert(parquetSchema);
+      conf.setBoolean(AvroSchemaConverter.ADD_LIST_ELEMENT_RECORDS, false);
+      Schema schema = new AvroSchemaConverter(conf).convert(parquetSchema);
+      restoreLogicalTypes(schema, parquetSchema);
       Set<String> binaryStrings = detectBinaryStringFields(parquetSchema, meta.getKeyValueMetaData());
       return normalizeStringTypes(schema, binaryStrings);
+    }
+  }
+
+  /**
+   * Restores annotations that parquet-avro does not yet carry into Avro schemas.
+   */
+  private static void restoreLogicalTypes(Schema schema, Type parquet) {
+    Schema base = AvroCoercions.effectiveSchema(schema);
+    if (parquet.isPrimitive()) {
+      if (base.getLogicalType() instanceof LogicalTypes.Decimal) {
+        base.addProp("jparq.physicalType", parquet.asPrimitiveType().getPrimitiveTypeName().name());
+      }
+      LogicalTypeAnnotation annotation = parquet.getLogicalTypeAnnotation();
+      if (annotation instanceof LogicalTypeAnnotation.TimestampLogicalTypeAnnotation timestamp
+          && timestamp.getUnit() == LogicalTypeAnnotation.TimeUnit.NANOS) {
+        base.addProp("logicalType", timestamp.isAdjustedToUTC() ? "timestamp-nanos" : "local-timestamp-nanos");
+      } else if (annotation instanceof LogicalTypeAnnotation.Float16LogicalTypeAnnotation) {
+        base.addProp("jparq.logicalType", "float16");
+      }
+    } else if (base.getType() == Schema.Type.RECORD) {
+      for (Schema.Field field : base.getFields()) {
+        if (parquet.asGroupType().containsField(field.name())) {
+          restoreLogicalTypes(field.schema(), parquet.asGroupType().getType(field.name()));
+        }
+      }
     }
   }
 

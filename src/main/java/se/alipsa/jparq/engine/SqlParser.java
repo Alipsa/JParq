@@ -2025,6 +2025,17 @@ public final class SqlParser {
           keyText = ex.toString();
         }
 
+        if (ex instanceof LongValue ordinal) {
+          int position = ordinal.getBigIntegerValue().intValueExact();
+          if (position < 1 || !labels.isEmpty() && position > labels.size()) {
+            throw new IllegalArgumentException("ORDER BY position is outside the select list: " + position);
+          }
+          if (!labels.isEmpty()) {
+            keyText = labels.get(position - 1);
+          }
+          expressionReference = null;
+        }
+
         // If it's an alias used in SELECT, map to the physical column name
         String physicalKey = aliasToPhysical.getOrDefault(keyText, keyText);
 

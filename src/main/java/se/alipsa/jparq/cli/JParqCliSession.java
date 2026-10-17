@@ -276,6 +276,17 @@ public class JParqCliSession implements Closeable {
         out.println(column.column() + pad(nameWidth - column.column().length()) + " | " + typeText
             + pad(typeWidth - typeText.length()) + " | " + (column.nullable() ? "YES" : "NO"));
       }
+      if (connection instanceof JParqConnection jparq) {
+        var location = jparq.resolveTable(schema, table);
+        try {
+          var info = se.alipsa.jparq.engine.ParquetFileInfo.read(new org.apache.hadoop.fs.Path(location.file().toURI()),
+              new org.apache.hadoop.conf.Configuration(false));
+          out.println("Row groups: " + info.rowGroups().size() + ", rows: " + info.rowCount());
+          out.println("Page index: " + (info.pageIndexPresent() ? "present" : "absent or partial"));
+        } catch (java.io.IOException exception) {
+          throw new SQLException("Unable to read Parquet footer", exception);
+        }
+      }
       out.flush();
     } catch (SQLException e) {
       err.println("Failed to describe table: " + e.getMessage());
@@ -396,6 +407,8 @@ public class JParqCliSession implements Closeable {
     if (connection instanceof JParqConnection jparqConn) {
       out.println("Base directory: " + jparqConn.getBaseDir().getAbsolutePath());
       out.println("Case sensitive: " + jparqConn.isCaseSensitive());
+      out.println("Predicate pushdown: " + jparqConn.isPredicatePushdown());
+      out.println("Projection pushdown: " + jparqConn.isProjectionPushdown());
     }
     try {
       out.println("Connection closed: " + connection.isClosed());

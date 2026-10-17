@@ -3,13 +3,21 @@ package se.alipsa.jparq.engine;
 import static org.apache.parquet.filter2.predicate.FilterApi.*;
 import static se.alipsa.jparq.engine.ExpressionEvaluator.unwrapParenthesis;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.sql.Date;
+import java.sql.Timestamp;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import net.sf.jsqlparser.JSQLParserException;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.NotExpression;
+import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
 import net.sf.jsqlparser.expression.operators.relational.Between;
@@ -18,12 +26,16 @@ import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.GreaterThan;
 import net.sf.jsqlparser.expression.operators.relational.GreaterThanEquals;
 import net.sf.jsqlparser.expression.operators.relational.InExpression;
+import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
+import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.expression.operators.relational.MinorThan;
 import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals;
 import net.sf.jsqlparser.expression.operators.relational.NotEqualsTo;
+import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
+import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
+import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
-import org.apache.parquet.filter2.predicate.FilterApi;
 import org.apache.parquet.filter2.predicate.FilterPredicate;
 import org.apache.parquet.io.api.Binary;
 import se.alipsa.jparq.helper.LiteralConverter;
@@ -50,7 +62,7 @@ public final class ParquetFilterBuilder {
     if (where == null) {
       return Optional.empty();
     }
-    return tryBuild(avroSchema, unwrapParenthesis(where));
+    return tryBuild(avroSchema, normalize(where, false));
   }
 
   /**
@@ -64,7 +76,7 @@ public final class ParquetFilterBuilder {
    *         empty otherwise
    */
   private static Optional<FilterPredicate> tryBuild(Schema schema, Expression expression) {
-    Expression exp = unwrapParenthesis(expression);
+    Expression exp = unwrap(expression);
 
     if (exp instanceof AndExpression and) {
       var l = tryBuild(schema, and.getLeftExpression());
@@ -82,17 +94,30 @@ public final class ParquetFilterBuilder {
       }
       return Optional.empty();
     }
-    if (exp instanceof NotExpression not) {
-      var inner = tryBuild(schema, not.getExpression());
-      return inner.map(FilterApi::not);
+    if (exp instanceof IsNullExpression isNull && isNull.getLeftExpression() instanceof Column col) {
+      Schema.Field field = findFieldCaseInsensitive(schema, col.getColumnName());
+      if (field == null) {
+        return Optional.empty();
+      }
+      Schema base = AvroCoercions.effectiveSchema(field.schema());
+      String name = field.name();
+      FilterPredicate predicate = switch (base.getType()) {
+        case INT -> isNull.isNot() ? notEq(intColumn(name), null) : eq(intColumn(name), null);
+        case LONG -> isNull.isNot() ? notEq(longColumn(name), null) : eq(longColumn(name), null);
+        case FLOAT -> isNull.isNot() ? notEq(floatColumn(name), null) : eq(floatColumn(name), null);
+        case DOUBLE -> isNull.isNot() ? notEq(doubleColumn(name), null) : eq(doubleColumn(name), null);
+        case BOOLEAN -> isNull.isNot() ? notEq(booleanColumn(name), null) : eq(booleanColumn(name), null);
+        case STRING -> isNull.isNot() ? notEq(binaryColumn(name), null) : eq(binaryColumn(name), null);
+        default -> null;
+      };
+      return Optional.ofNullable(predicate);
     }
-
     if (exp instanceof Between b) {
       var ge = comparison(schema, new GreaterThanEquals(b.getLeftExpression(), b.getBetweenExpressionStart()));
       var le = comparison(schema, new MinorThanEquals(b.getLeftExpression(), b.getBetweenExpressionEnd()));
       if (ge.isPresent() && le.isPresent()) {
         FilterPredicate p = and(ge.get(), le.get());
-        return Optional.of(b.isNot() ? not(p) : p);
+        return Optional.of(p);
       }
       return Optional.empty();
     }
@@ -116,7 +141,7 @@ public final class ParquetFilterBuilder {
       for (int i = 1; i < eqs.size(); i++) {
         disj = or(disj, eqs.get(i));
       }
-      return Optional.of(in.isNot() ? not(disj) : disj);
+      return Optional.of(disj);
     }
 
     return comparison(schema, exp);
@@ -208,29 +233,131 @@ public final class ParquetFilterBuilder {
       return Optional.empty();
     }
 
-    if (litExpr instanceof AnyComparisonExpression) {
+    if (!isLiteral(litExpr)) {
       return Optional.empty();
     }
 
     Schema effective = AvroCoercions.effectiveSchema(f.schema());
+    col = f.name();
     Object lit = LiteralConverter.toLiteral(litExpr);
+    if (!(litExpr instanceof StringValue)) {
+      try {
+        lit = new BigDecimal(litExpr.toString());
+      } catch (NumberFormatException ignored) {
+        /* Keep nonnumeric literals. */ }
+    }
     Object coerced = AvroCoercions.coerceLiteral(lit, effective);
     if (coerced == null) {
-      return Optional.empty(); // don’t push null semantics
+      return Optional.empty();
     }
-
-    return switch (effective.getType()) {
-      case INT -> Optional.ofNullable(buildInt(intColumn(col), op, ((Number) coerced).intValue()));
-      case LONG -> Optional.ofNullable(buildLong(longColumn(col), op, ((Number) coerced).longValue()));
-      case FLOAT -> Optional.ofNullable(buildFloat(floatColumn(col), op, ((Number) coerced).floatValue()));
-      case DOUBLE -> Optional.ofNullable(buildDouble(doubleColumn(col), op, ((Number) coerced).doubleValue()));
-      case BOOLEAN -> Optional.ofNullable(buildBoolean(booleanColumn(col), op, (Boolean) coerced));
-      case STRING -> {
-        Binary b = Binary.fromString(coerced.toString());
-        yield Optional.ofNullable(buildBinary(binaryColumn(col), op, b));
+    try {
+      if (effective.getLogicalType() instanceof LogicalTypes.Decimal decimal) {
+        return decimalPredicate(effective, decimal, col, op, lit);
       }
-      default -> Optional.empty();
-    };
+      if (LogicalTypes.date().equals(effective.getLogicalType())) {
+        if (!(coerced instanceof Date date)) {
+          return Optional.empty();
+        }
+        coerced = date.toLocalDate().toEpochDay();
+      } else if (AvroCoercions.isTimestamp(effective)) {
+        if (!(coerced instanceof Timestamp timestamp)) {
+          return Optional.empty();
+        }
+        long seconds = AvroCoercions.isLocalTimestamp(effective)
+            ? timestamp.toLocalDateTime().toEpochSecond(ZoneOffset.UTC)
+            : timestamp.toInstant().getEpochSecond();
+        long units = AvroCoercions.timestampUnits(effective);
+        coerced = BigDecimal.valueOf(seconds).multiply(BigDecimal.valueOf(units))
+            .add(BigDecimal.valueOf(timestamp.getNanos()).multiply(BigDecimal.valueOf(units)).movePointLeft(9));
+      }
+      return switch (effective.getType()) {
+        case INT -> {
+          BigDecimal bound = integralBound(coerced, op, Integer.MIN_VALUE, Integer.MAX_VALUE);
+          yield bound == null
+              ? Optional.empty()
+              : Optional.ofNullable(buildInt(intColumn(col), op, bound.intValueExact()));
+        }
+        case LONG -> {
+          BigDecimal bound = integralBound(coerced, op, Long.MIN_VALUE, Long.MAX_VALUE);
+          yield bound == null
+              ? Optional.empty()
+              : Optional.ofNullable(buildLong(longColumn(col), op, bound.longValueExact()));
+        }
+        case FLOAT -> coerced instanceof Number number && Float.isFinite(number.floatValue())
+            ? Optional.ofNullable(buildFloat(floatColumn(col), op, number.floatValue()))
+            : Optional.empty();
+        case DOUBLE -> coerced instanceof Number number && Double.isFinite(number.doubleValue())
+            ? Optional.ofNullable(buildDouble(doubleColumn(col), op, number.doubleValue()))
+            : Optional.empty();
+        case BOOLEAN -> coerced instanceof Boolean bool
+            ? Optional.ofNullable(buildBoolean(booleanColumn(col), op, bool))
+            : Optional.empty();
+        case STRING -> Optional.ofNullable(buildBinary(binaryColumn(col), op, Binary.fromString(coerced.toString())));
+        default -> Optional.empty();
+      };
+    } catch (ArithmeticException | NumberFormatException exception) {
+      return Optional.empty();
+    }
+  }
+
+  /**
+   * Restricts translation to literal values rather than SQL functions or computed
+   * operands.
+   */
+  private static boolean isLiteral(Expression expression) {
+    if (expression instanceof net.sf.jsqlparser.expression.CastExpression cast) {
+      return isLiteral(cast.getLeftExpression());
+    }
+    if (expression instanceof net.sf.jsqlparser.expression.SignedExpression signed) {
+      return isLiteral(signed.getExpression());
+    }
+    return expression instanceof StringValue || expression instanceof net.sf.jsqlparser.expression.LongValue
+        || expression instanceof net.sf.jsqlparser.expression.DoubleValue
+        || expression instanceof net.sf.jsqlparser.expression.BooleanValue
+        || expression instanceof net.sf.jsqlparser.expression.DateValue
+        || expression instanceof net.sf.jsqlparser.expression.TimestampValue
+        || expression instanceof net.sf.jsqlparser.expression.NullValue;
+  }
+
+  /** Converts exact decimal values to their Parquet physical representation. */
+  private static Optional<FilterPredicate> decimalPredicate(Schema schema, LogicalTypes.Decimal decimal, String column,
+      BinaryExpression op, Object literal) {
+    BigDecimal value = new BigDecimal(literal.toString()).setScale(decimal.getScale(), RoundingMode.UNNECESSARY);
+    if (value.precision() > decimal.getPrecision()) {
+      return Optional.empty();
+    }
+    var unscaled = value.unscaledValue();
+    String physical = schema.getProp("jparq.physicalType");
+    if ("INT32".equals(physical)) {
+      return Optional.ofNullable(buildInt(intColumn(column), op, unscaled.intValueExact()));
+    }
+    if ("INT64".equals(physical)) {
+      return Optional.ofNullable(buildLong(longColumn(column), op, unscaled.longValueExact()));
+    }
+    if (schema.getType() != Schema.Type.BYTES && schema.getType() != Schema.Type.FIXED
+        || schema.getType() == Schema.Type.FIXED && unscaled.toByteArray().length > schema.getFixedSize()) {
+      return Optional.empty();
+    }
+    return Optional
+        .of(userDefined(binaryColumn(column), new DecimalBinaryPredicate(unscaled, op.getStringExpression())));
+  }
+
+  /** Rounds an integral bound without truncation or overflow. */
+  private static BigDecimal integralBound(Object value, BinaryExpression op, long min, long max) {
+    if (!(value instanceof Number)) {
+      return null;
+    }
+    BigDecimal number = new BigDecimal(value.toString());
+    if (number.compareTo(BigDecimal.valueOf(min)) < 0 || number.compareTo(BigDecimal.valueOf(max)) > 0) {
+      return null;
+    }
+    String operator = op.getStringExpression();
+    if (("=".equals(operator) || "<>".equals(operator) || "!=".equals(operator))
+        && number.stripTrailingZeros().scale() > 0) {
+      return null;
+    }
+    return number.setScale(0,
+        "<".equals(operator) || ">=".equals(operator) ? RoundingMode.CEILING : RoundingMode.FLOOR);
   }
 
   /**
@@ -252,7 +379,7 @@ public final class ParquetFilterBuilder {
       case ">" -> gt(c, v);
       case "<=" -> ltEq(c, v);
       case ">=" -> gtEq(c, v);
-      case "<>", "!=" -> notEq(c, v);
+      case "<>", "!=" -> and(notEq(c, v), notEq(c, null));
       default -> null;
     };
   }
@@ -276,7 +403,7 @@ public final class ParquetFilterBuilder {
       case ">" -> gt(c, v);
       case "<=" -> ltEq(c, v);
       case ">=" -> gtEq(c, v);
-      case "<>", "!=" -> notEq(c, v);
+      case "<>", "!=" -> and(notEq(c, v), notEq(c, null));
       default -> null;
     };
   }
@@ -300,7 +427,7 @@ public final class ParquetFilterBuilder {
       case ">" -> gt(c, v);
       case "<=" -> ltEq(c, v);
       case ">=" -> gtEq(c, v);
-      case "<>", "!=" -> notEq(c, v);
+      case "<>", "!=" -> and(notEq(c, v), notEq(c, null));
       default -> null;
     };
   }
@@ -324,7 +451,7 @@ public final class ParquetFilterBuilder {
       case ">" -> gt(c, v);
       case "<=" -> ltEq(c, v);
       case ">=" -> gtEq(c, v);
-      case "<>", "!=" -> notEq(c, v);
+      case "<>", "!=" -> and(notEq(c, v), notEq(c, null));
       default -> null;
     };
   }
@@ -344,7 +471,7 @@ public final class ParquetFilterBuilder {
       BinaryExpression op, boolean v) {
     return switch (op.getStringExpression()) {
       case "=" -> eq(c, v);
-      case "<>", "!=" -> notEq(c, v);
+      case "<>", "!=" -> and(notEq(c, v), notEq(c, null));
       default -> null; // no ordering for booleans
     };
   }
@@ -364,7 +491,7 @@ public final class ParquetFilterBuilder {
       BinaryExpression op, Binary v) {
     return switch (op.getStringExpression()) {
       case "=" -> eq(c, v);
-      case "<>", "!=" -> notEq(c, v);
+      case "<>", "!=" -> and(notEq(c, v), notEq(c, null));
       case "<" -> lt(c, v);
       case ">" -> gt(c, v);
       case "<=" -> ltEq(c, v);
@@ -374,30 +501,183 @@ public final class ParquetFilterBuilder {
   }
 
   /**
-   * True if we could build a predicate for the whole WHERE expression tree.
-   *
-   * @param avroSchema
-   *          the Avro schema of the Parquet data
-   * @param where
-   *          the WHERE expression
-   * @return true if the expression can be fully pushed down
+   * Predicate and residual planned atomically so no conjunct is lost.
+   * 
+   * @param predicate
+   *          the optional physical predicate
+   * @param residual
+   *          the remaining SQL predicate, or null
    */
-  public static boolean covers(Schema avroSchema, Expression where) {
-    return build(avroSchema, where).isPresent();
+  public record PushdownSplit(Optional<FilterPredicate> predicate, Expression residual) {
   }
 
   /**
-   * Residual expression to evaluate in Java after Parquet filtering. Simple
-   * version: if fully covered, return null (no residual), otherwise return
-   * original WHERE.
-   *
-   * @param avroSchema
-   *          the Avro schema of the Parquet data
+   * Splits supported AND terms from residual expressions. OR remains atomic.
+   * 
+   * @param schema
+   *          the Avro file schema
    * @param where
-   *          the WHERE expression
-   * @return residual expression, or null if none
+   *          the SQL predicate, or null
+   * @return a predicate and its residual
    */
-  public static Expression residual(Schema avroSchema, Expression where) {
-    return covers(avroSchema, where) ? null : where;
+  public static PushdownSplit split(Schema schema, Expression where) {
+    return splitNormalized(schema, where == null ? null : normalize(where, false));
+  }
+
+  /** Splits an expression already in negation normal form. */
+  private static PushdownSplit splitNormalized(Schema schema, Expression expression) {
+    if (expression == null) {
+      return new PushdownSplit(Optional.empty(), null);
+    }
+    Expression exp = unwrap(expression);
+    if (exp instanceof AndExpression and) {
+      PushdownSplit left = splitNormalized(schema, and.getLeftExpression());
+      PushdownSplit right = splitNormalized(schema, and.getRightExpression());
+      Optional<FilterPredicate> predicate = left.predicate().isEmpty()
+          ? right.predicate()
+          : right.predicate().isEmpty()
+              ? left.predicate()
+              : Optional.of(and(left.predicate().get(), right.predicate().get()));
+      Expression residual = left.residual() == null
+          ? right.residual()
+          : right.residual() == null ? left.residual() : new AndExpression(left.residual(), right.residual());
+      return new PushdownSplit(predicate, residual);
+    }
+    Optional<FilterPredicate> exact = tryBuild(schema, exp);
+    if (exact.isPresent()) {
+      return new PushdownSplit(exact, null);
+    }
+    return new PushdownSplit(prefixPredicate(schema, exp), exp);
+  }
+
+  /**
+   * Builds a conservative unsigned UTF-8 prefix range while retaining LIKE in
+   * Java.
+   */
+  private static Optional<FilterPredicate> prefixPredicate(Schema schema, Expression expression) {
+    if (!(expression instanceof LikeExpression like) || like.isNot() || like.getEscape() != null
+        || like.getLikeKeyWord() != null && like.getLikeKeyWord() != LikeExpression.KeyWord.LIKE
+        || !(like.getLeftExpression() instanceof Column column)
+        || !(like.getRightExpression() instanceof StringValue pattern)) {
+      return Optional.empty();
+    }
+    Schema.Field field = findFieldCaseInsensitive(schema, column.getColumnName());
+    if (field == null || AvroCoercions.effectiveSchema(field.schema()).getType() != Schema.Type.STRING) {
+      return Optional.empty();
+    }
+    int wildcard = pattern.getValue().indexOf('%');
+    if (wildcard <= 0) {
+      return Optional.empty();
+    }
+    String prefix = pattern.getValue().substring(0, wildcard);
+    if (prefix.indexOf('_') >= 0) {
+      return Optional.empty();
+    }
+    byte[] bytes = prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    FilterPredicate lower = gtEq(binaryColumn(field.name()), Binary.fromConstantByteArray(bytes));
+    int last = bytes.length - 1;
+    while (last >= 0 && (bytes[last] & 255) == 255) {
+      last--;
+    }
+    if (last < 0) {
+      return Optional.of(lower);
+    }
+    byte[] upper = Arrays.copyOf(bytes, last + 1);
+    upper[last]++;
+    return Optional.of(and(lower, lt(binaryColumn(field.name()), Binary.fromConstantByteArray(upper))));
+  }
+
+  /** Unwraps both modern and legacy parenthesized scalar expressions. */
+  private static Expression unwrap(Expression expression) {
+    Expression result = unwrapParenthesis(expression);
+    while (result instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
+      result = unwrapParenthesis(list.getFirst());
+    }
+    return result;
+  }
+
+  /**
+   * Produces SQL negation normal form without mutating the query's expression
+   * tree.
+   */
+  private static Expression normalize(Expression expression, boolean negative) {
+    Expression exp = unwrap(expression);
+    if (exp instanceof NotExpression not) {
+      return normalize(not.getExpression(), !negative);
+    }
+    if (exp instanceof AndExpression and) {
+      Expression left = normalize(and.getLeftExpression(), negative);
+      Expression right = normalize(and.getRightExpression(), negative);
+      return negative ? new OrExpression(left, right) : new AndExpression(left, right);
+    }
+    if (exp instanceof OrExpression or) {
+      Expression left = normalize(or.getLeftExpression(), negative);
+      Expression right = normalize(or.getRightExpression(), negative);
+      return negative ? new AndExpression(left, right) : new OrExpression(left, right);
+    }
+    if (exp instanceof Between between && (negative || between.isNot())) {
+      boolean inverse = negative != between.isNot();
+      Expression lower = inverse
+          ? new MinorThan(between.getLeftExpression(), between.getBetweenExpressionStart())
+          : new GreaterThanEquals(between.getLeftExpression(), between.getBetweenExpressionStart());
+      Expression upper = inverse
+          ? new GreaterThan(between.getLeftExpression(), between.getBetweenExpressionEnd())
+          : new MinorThanEquals(between.getLeftExpression(), between.getBetweenExpressionEnd());
+      return inverse ? new OrExpression(lower, upper) : new AndExpression(lower, upper);
+    }
+    if (exp instanceof InExpression in && (negative || in.isNot())
+        && in.getRightExpression() instanceof ExpressionList<?> list && !list.isEmpty() && list.size() <= 20) {
+      // A NULL list member must keep the entire IN in Java.
+      if (list.stream().anyMatch(value -> LiteralConverter.toLiteral(value) == null)) {
+        return negative ? new NotExpression(exp) : exp;
+      }
+      boolean inverse = negative != in.isNot();
+      Expression result = null;
+      for (Expression value : list) {
+        Expression term = inverse
+            ? new NotEqualsTo(in.getLeftExpression(), value)
+            : new EqualsTo(in.getLeftExpression(), value);
+        result = result == null ? term : inverse ? new AndExpression(result, term) : new OrExpression(result, term);
+      }
+      return result;
+    }
+    if (!negative) {
+      return exp;
+    }
+    if (exp instanceof BinaryExpression binary) {
+      if (binary.getLeftExpression() instanceof AnyComparisonExpression
+          || binary.getRightExpression() instanceof AnyComparisonExpression) {
+        return new NotExpression(exp);
+      }
+      BinaryExpression inverse = switch (binary.getStringExpression()) {
+        case "=" -> new NotEqualsTo();
+        case "<>", "!=" -> new EqualsTo();
+        case "<" -> new GreaterThanEquals();
+        case ">" -> new MinorThanEquals();
+        case "<=" -> new GreaterThan();
+        case ">=" -> new MinorThan();
+        default -> null;
+      };
+      if (inverse != null) {
+        inverse.setLeftExpression(binary.getLeftExpression());
+        inverse.setRightExpression(binary.getRightExpression());
+        return inverse;
+      }
+    }
+    if (exp instanceof IsNullExpression || exp instanceof LikeExpression) {
+      try {
+        Expression copy = CCJSqlParserUtil.parseCondExpression(exp.toString());
+        if (copy instanceof IsNullExpression isNull) {
+          isNull.setNot(!isNull.isNot());
+        }
+        if (copy instanceof LikeExpression like) {
+          like.setNot(!like.isNot());
+        }
+        return copy;
+      } catch (JSQLParserException exception) {
+        return new NotExpression(exp);
+      }
+    }
+    return new NotExpression(exp);
   }
 }
