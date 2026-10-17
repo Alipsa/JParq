@@ -1,7 +1,7 @@
 # Version history
 
 ### 1.4.0
-- **Behavior change:** predicates involving NULL follow SQL three-valued logic. WHERE, JOIN ON, HAVING, CASE WHEN, Boolean projections, and quantified subqueries preserve UNKNOWN until the selection boundary. Negations and NOT IN on nullable columns may return fewer rows.
+- **Behavior change:** predicates involving NULL follow SQL three-valued logic. WHERE, JOIN ON, HAVING, CASE WHEN, Boolean projections, and quantified subqueries preserve UNKNOWN until the selection boundary, so negations and NOT IN on nullable columns may return fewer rows. This applies to predicates evaluated by the Java engine; predicates fully pushed down to Parquet are unchanged until the optimized Parquet reader ships.
 
 ### 1.3.0, 2026-03-14
 - com.fasterxml.jackson.core:jackson-databind ......... 2.20.1 -> 2.21.1

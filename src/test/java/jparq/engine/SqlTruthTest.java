@@ -3,15 +3,22 @@ package jparq.engine;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Arrays;
+import java.util.IdentityHashMap;
 import java.util.List;
+import net.sf.jsqlparser.expression.AnalyticExpression;
+import net.sf.jsqlparser.expression.CastExpression;
+import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
+import org.apache.avro.generic.GenericRecord;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.SqlTruth;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
+import se.alipsa.jparq.engine.window.WindowState;
 
 /** Tests SQL UNKNOWN preservation independently of Parquet pushdown. */
 class SqlTruthTest {
@@ -124,7 +131,83 @@ class SqlTruthTest {
         + " WHERE n NOT IN (SELECT n FROM (VALUES (1), (3), (CAST(NULL AS INTEGER))) AS b(n))"));
   }
 
-  /** Collects a numeric JDBC projection from an in-memory VALUES query. */
+  /**
+   * Confirms that a failed comparison (NaN operand) in a quantified comparison is
+   * UNKNOWN instead of throwing.
+   */
+  @Test
+  void anyAllComparisonFailuresAreUnknown() throws Exception {
+    String input = "(VALUES (1), (2), (3), (4)) AS t(id)";
+    String others = "(VALUES (1.0)) AS t2(x)";
+    String caseExpr = "CASE WHEN id = 1 THEN ACOS(2) ELSE 2.0 END";
+    assertEquals(List.of(2L, 3L, 4L),
+        query("SELECT id FROM " + input + " WHERE " + caseExpr + " > ALL (SELECT x FROM " + others + ") ORDER BY id"));
+    assertEquals(List.of(2L, 3L, 4L),
+        query("SELECT id FROM " + input + " WHERE " + caseExpr + " > ANY (SELECT x FROM " + others + ") ORDER BY id"));
+  }
+
+  /**
+   * Confirms that NOT IN against an empty subquery keeps every group in HAVING,
+   * mirroring the WHERE boundary.
+   */
+  @Test
+  void havingInEmptySubqueryKeepsAllGroups() throws Exception {
+    String input = "(VALUES (1, 1), (2, 2)) AS t(g, n)";
+    String others = "(VALUES (1)) AS t2(x)";
+    assertEquals(List.of(1L, 2L), query("SELECT g FROM " + input + " GROUP BY g HAVING MAX(n) NOT IN (SELECT x FROM "
+        + others + " WHERE 1 = 0) ORDER BY g"));
+    assertEquals(List.of(),
+        query("SELECT g FROM " + input + " GROUP BY g HAVING MAX(n) IN (SELECT x FROM " + others + " WHERE 1 = 0)"));
+  }
+
+  /**
+   * Confirms that boolean columns work as Boolean projections, including NULL
+   * (UNKNOWN) results.
+   */
+  @Test
+  void booleanColumnsWorkInBooleanProjections() throws Exception {
+    String input = "(VALUES (TRUE, 1), (FALSE, 2), (CAST(NULL AS BOOLEAN), 3)) AS t(active, n)";
+    assertEquals(Arrays.asList(false, true, null), queryObjects("SELECT NOT active FROM " + input));
+    assertEquals(Arrays.asList(false, false, null), queryObjects("SELECT active AND n > 1 FROM " + input));
+  }
+
+  /**
+   * Confirms that window functions keep working inside predicates and Boolean
+   * projections by sharing the projection's precomputed window state.
+   */
+  @Test
+  void windowFunctionsWorkInsideBooleanProjections() throws Exception {
+    Schema schema = SchemaBuilder.record("ids").fields().requiredInt("id").endRecord();
+    var row = new GenericData.Record(schema);
+    row.put("id", 1);
+    var like = (LikeExpression) CCJSqlParserUtil
+        .parseCondExpression("CAST(ROW_NUMBER() OVER (ORDER BY id) AS VARCHAR) LIKE '1%'");
+    var notLike = (LikeExpression) CCJSqlParserUtil
+        .parseCondExpression("CAST(ROW_NUMBER() OVER (ORDER BY id) AS VARCHAR) NOT LIKE '1%'");
+
+    var rowNumberMap = new IdentityHashMap<GenericRecord, Long>();
+    rowNumberMap.put(row, 1L);
+    var rowNumberState = new IdentityHashMap<AnalyticExpression, IdentityHashMap<GenericRecord, Long>>();
+    rowNumberState.put((AnalyticExpression) ((CastExpression) like.getLeftExpression()).getLeftExpression(),
+        rowNumberMap);
+    rowNumberState.put((AnalyticExpression) ((CastExpression) notLike.getLeftExpression()).getLeftExpression(),
+        rowNumberMap);
+    var windowState = WindowState.builder().rowNumberValues(rowNumberState).build();
+
+    var values = new ValueExpressionEvaluator(schema, null, CorrelationMappings.empty(), windowState);
+    assertEquals(Boolean.TRUE, values.eval(like, row));
+    assertEquals(Boolean.FALSE, values.eval(notLike, row));
+  }
+
+  /**
+   * Collects a numeric JDBC projection from an in-memory VALUES query.
+   *
+   * @param sql
+   *          the SQL text to execute
+   * @return the first column values as {@code Long} results
+   * @throws Exception
+   *           if executing the query fails
+   */
   private List<Long> query(String sql) throws Exception {
     var result = new java.util.ArrayList<Long>();
     try (var connection = java.sql.DriverManager.getConnection("jdbc:jparq:" + directory);
@@ -132,6 +215,27 @@ class SqlTruthTest {
         var rows = statement.executeQuery(sql)) {
       while (rows.next()) {
         result.add(rows.getLong(1));
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Collects a JDBC projection as raw objects from an in-memory VALUES query.
+   *
+   * @param sql
+   *          the SQL text to execute
+   * @return the first column values of the result set
+   * @throws Exception
+   *           if executing the query fails
+   */
+  private List<Object> queryObjects(String sql) throws Exception {
+    var result = new java.util.ArrayList<Object>();
+    try (var connection = java.sql.DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var rows = statement.executeQuery(sql)) {
+      while (rows.next()) {
+        result.add(rows.getObject(1));
       }
     }
     return result;

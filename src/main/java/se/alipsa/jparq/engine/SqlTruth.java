@@ -49,4 +49,46 @@ public final class SqlTruth {
     }
     return left == null || right == null ? null : Boolean.FALSE;
   }
+
+  /**
+   * Computes the SQL {@code [NOT] IN} result from the outcome of comparing the
+   * left value against every candidate.
+   *
+   * @param found
+   *          whether any candidate equaled the left value
+   * @param unknown
+   *          whether any candidate comparison was UNKNOWN (the left value or a
+   *          candidate was NULL)
+   * @param negated
+   *          whether the predicate was {@code NOT IN}
+   * @return TRUE when a candidate matched, FALSE when nothing matched and no
+   *         comparison was UNKNOWN, otherwise {@code null} for UNKNOWN
+   */
+  public static Boolean in(boolean found, boolean unknown, boolean negated) {
+    if (found) {
+      return !negated;
+    }
+    return unknown ? null : negated;
+  }
+
+  /**
+   * Determines whether two values are SQL DISTINCT.
+   *
+   * @param left
+   *          the left value (may be {@code null})
+   * @param right
+   *          the right value (may be {@code null})
+   * @return {@code true} when exactly one value is {@code null} or the values
+   *         compare as unequal, including when they cannot be compared
+   */
+  public static boolean isDistinctFrom(Object left, Object right) {
+    if (left == null || right == null) {
+      return left != right;
+    }
+    try {
+      return ExpressionEvaluator.typedCompare(left, right) != 0;
+    } catch (RuntimeException e) {
+      return true;
+    }
+  }
 }

@@ -2083,25 +2083,19 @@ public final class AggregateFunctions {
 
     private Boolean evalIn(InExpression in) {
       Object leftVal = value(in.getLeftExpression());
-      if (leftVal == null) {
-        return null;
-      }
       Expression right = in.getRightExpression();
       if (right instanceof ExpressionList<?> list) {
         boolean found = false;
         boolean unknown = false;
         for (Expression e : list) {
           Object candidate = value(e);
-          unknown |= candidate == null;
-          if (candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
+          unknown |= leftVal == null || candidate == null;
+          if (leftVal != null && candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
             found = true;
             break;
           }
         }
-        if (found) {
-          return !in.isNot();
-        }
-        return unknown ? null : Boolean.valueOf(in.isNot());
+        return SqlTruth.in(found, unknown, in.isNot());
       }
       if (right instanceof Select subSelect) {
         if (subqueryExecutor == null) {
@@ -2116,16 +2110,13 @@ public final class AggregateFunctions {
         boolean found = false;
         boolean unknown = false;
         for (Object candidate : subqueryValues) {
-          unknown |= candidate == null;
-          if (candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
+          unknown |= leftVal == null || candidate == null;
+          if (leftVal != null && candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
             found = true;
             break;
           }
         }
-        if (found) {
-          return !in.isNot();
-        }
-        return unknown ? null : Boolean.valueOf(in.isNot());
+        return SqlTruth.in(found, unknown, in.isNot());
       }
       throw new IllegalArgumentException("Unsupported IN expression in HAVING clause: " + in);
     }
@@ -2181,18 +2172,18 @@ public final class AggregateFunctions {
 
     private Boolean evalBinary(BinaryExpression be) {
       String op = be.getStringExpression();
+      Object left = value(be.getLeftExpression());
+      Object right = value(be.getRightExpression());
       if (be instanceof net.sf.jsqlparser.expression.operators.relational.IsDistinctExpression distinct) {
-        Object left = value(be.getLeftExpression());
-        Object right = value(be.getRightExpression());
-        boolean same = left == null
-            ? right == null
-            : right != null && ExpressionEvaluator.typedCompare(left, right) == 0;
-        return distinct.isNot() == same;
+        return distinct.isNot() != SqlTruth.isDistinctFrom(left, right);
       }
-      if (value(be.getLeftExpression()) == null || value(be.getRightExpression()) == null) {
+      if (left == null || right == null) {
         return null;
       }
-      int cmp = compare(be.getLeftExpression(), be.getRightExpression());
+      Integer cmp = compare(left, right);
+      if (cmp == null) {
+        return null;
+      }
       return switch (op) {
         case "=" -> cmp == 0;
         case "<" -> cmp < 0;
@@ -2204,13 +2195,22 @@ public final class AggregateFunctions {
       };
     }
 
-    private int compare(Expression left, Expression right) {
-      Object leftVal = value(left);
-      Object rightVal = value(right);
-      if (leftVal == null || rightVal == null) {
-        return -1;
+    /**
+     * Compare two pre-evaluated values, mapping uncomparable operands (e.g. NaN) to
+     * UNKNOWN.
+     *
+     * @param leftVal
+     *          the evaluated left-hand value
+     * @param rightVal
+     *          the evaluated right-hand value
+     * @return the comparison result, or {@code null} when the comparison is UNKNOWN
+     */
+    private Integer compare(Object leftVal, Object rightVal) {
+      try {
+        return ExpressionEvaluator.typedCompare(leftVal, rightVal);
+      } catch (RuntimeException e) {
+        return null;
       }
-      return ExpressionEvaluator.typedCompare(leftVal, rightVal);
     }
 
     private Object value(Expression expression) {
