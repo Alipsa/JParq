@@ -45,7 +45,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.NullValue;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
@@ -70,6 +72,7 @@ import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.CorrelationMappings;
+import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.InMemoryRecordReader;
 import se.alipsa.jparq.engine.JoinRecordReader;
@@ -1791,6 +1794,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         columnValues.add(row.get(i));
       }
       ValueColumnType columnType = determineColumnType(columnValues);
+      if (columnValues.stream().allMatch(Objects::isNull) && isBooleanValueColumn(valueTable, i)) {
+        columnType = ValueColumnType.BOOLEAN;
+      }
       columnTypes.add(columnType);
       valueSchemas.add(schemaForColumnType(columnType, columnValues));
     }
@@ -1853,6 +1859,33 @@ public class JParqPreparedStatement implements PreparedStatement {
       return interval.toString();
     }
     return value;
+  }
+
+  /**
+   * Recognizes explicitly Boolean VALUES columns even when every value is NULL.
+   *
+   * @param table
+   *          the VALUES definition
+   * @param column
+   *          the zero-based column index
+   * @return whether every typed expression is a Boolean cast and at least one
+   *         such cast is present
+   */
+  private boolean isBooleanValueColumn(ValueTableDefinition table, int column) {
+    boolean booleanCast = false;
+    for (List<Expression> row : table.rows()) {
+      Expression expression = ExpressionEvaluator.unwrapParenthesis(row.get(column));
+      if (expression instanceof NullValue) {
+        continue;
+      }
+      if (!(expression instanceof CastExpression cast) || cast.getColDataType() == null
+          || !("BOOLEAN".equalsIgnoreCase(cast.getColDataType().getDataType())
+              || "BOOL".equalsIgnoreCase(cast.getColDataType().getDataType()))) {
+        return false;
+      }
+      booleanCast = true;
+    }
+    return booleanCast;
   }
 
   private ValueColumnType determineColumnType(List<Object> values) {
@@ -3467,14 +3500,18 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (join) {
       String message = residual == null
           ? "Join queries do not support Parquet predicate pushdown and have no residual WHERE clause."
-          : "Join queries do not support Parquet predicate pushdown; residual WHERE clauses are evaluated after row assembly.";
+          : "Join queries do not support Parquet predicate pushdown; "
+              + "residual WHERE clauses are evaluated after row assembly.";
       return new PushdownInfo(false, residual != null, false, false, false, false, message, null,
           residual == null ? null : residual.toString());
     }
     if (cteResult != null) {
-      return new PushdownInfo(false, residual != null, false, false, false, false, residual == null
-          ? "In-memory query results (for example CTEs, derived/value/UNNEST tables, or information_schema) do not use Parquet predicate pushdown."
-          : "In-memory query results (for example CTEs, derived/value/UNNEST tables, or information_schema) apply residual filtering in Java (no Parquet predicate pushdown).",
+      return new PushdownInfo(false, residual != null, false, false, false, false,
+          residual == null
+              ? "In-memory query results (for example CTEs, derived/value/UNNEST tables, or information_schema) "
+                  + "do not use Parquet predicate pushdown."
+              : "In-memory query results (for example CTEs, derived/value/UNNEST tables, or information_schema) "
+                  + "apply residual filtering in Java (no Parquet predicate pushdown).",
           null, residual == null ? null : residual.toString());
     }
     boolean statsEnabled = isFilterEnabled(configuration, ParquetInputFormat.STATS_FILTERING_ENABLED);
@@ -3494,7 +3531,8 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (predicate.isPresent()) {
       return new PushdownInfo(true, residual != null, statsEnabled, columnIndexEnabled, dictionaryEnabled, bloomEnabled,
           residual == null
-              ? "Parquet predicate attached; pruning can use statistics, column indexes, dictionaries, and bloom filters."
+              ? "Parquet predicate attached; pruning can use statistics, column indexes, "
+                  + "dictionaries, and bloom filters."
               : "Parquet predicate attached; residual filtering still runs in Java.",
           predicate.get().toString(), residual == null ? null : residual.toString());
     }
