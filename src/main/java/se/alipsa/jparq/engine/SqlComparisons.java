@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.util.Arrays;
+import java.util.Set;
 
 /**
  * SQL value comparisons shared by the expression evaluators.
@@ -15,6 +16,7 @@ import java.util.Arrays;
  * </p>
  */
 public final class SqlComparisons {
+  private static final Set<String> SUPPORTED_OPERATORS = Set.of("=", "<", ">", "<=", ">=", "<>", "!=");
 
   private SqlComparisons() {
   }
@@ -93,9 +95,12 @@ public final class SqlComparisons {
    *          comparison result, or {@code null} for UNKNOWN
    * @return {@code true} or {@code false} when decisive, {@code null} for UNKNOWN
    * @throws IllegalArgumentException
-   *           if a known comparison result has an unsupported operator
+   *           if the operator is unsupported, even for an UNKNOWN result
    */
   public static Boolean compare(String operator, Integer cmp) {
+    if (!SUPPORTED_OPERATORS.contains(operator)) {
+      throw new IllegalArgumentException("Unsupported operator: " + operator);
+    }
     if (cmp == null) {
       return null;
     }

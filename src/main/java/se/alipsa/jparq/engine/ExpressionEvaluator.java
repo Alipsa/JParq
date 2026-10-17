@@ -230,6 +230,14 @@ public final class ExpressionEvaluator {
       return evalBinary(be, rec);
     }
 
+    if (expr instanceof Column column) {
+      String qualifier = column.getTable() == null ? null : column.getTable().getName();
+      Schema columnSchema = fieldSchemas.get(canonicalFieldName(qualifier, column.getColumnName()));
+      if (columnSchema != null && AvroCoercions.effectiveSchema(columnSchema).getType() != Schema.Type.BOOLEAN) {
+        throw new IllegalArgumentException("Unsupported predicate: " + expr);
+      }
+    }
+
     // Fallback for value expressions used as predicates (e.g. boolean columns):
     // evaluate the value and interpret it as a SQL truth value. Anything that
     // does not evaluate to TRUE, FALSE, or NULL is not a valid predicate.
@@ -237,7 +245,7 @@ public final class ExpressionEvaluator {
     if (value == null || value instanceof Boolean) {
       return (Boolean) value;
     }
-    throw new IllegalArgumentException("Unsupported WHERE expression: " + expr);
+    throw new IllegalArgumentException("Unsupported predicate: " + expr);
   }
 
   /**
@@ -252,8 +260,7 @@ public final class ExpressionEvaluator {
    */
   private Boolean evalIsBoolean(IsBooleanExpression isBoolean, GenericRecord rec) {
     Boolean truth = evalTruth(isBoolean.getLeftExpression(), rec);
-    boolean matches = isBoolean.isTrue() ? Boolean.TRUE.equals(truth) : Boolean.FALSE.equals(truth);
-    return isBoolean.isNot() != matches;
+    return SqlTruth.is(truth, isBoolean.isTrue(), isBoolean.isNot());
   }
 
   // -------------------------
@@ -355,10 +362,8 @@ public final class ExpressionEvaluator {
     Expression right = in.getRightExpression();
 
     if (right instanceof ExpressionList<?> list) {
-      List<Object> candidates = new java.util.ArrayList<>(list.size());
-      for (Expression e : list) {
-        candidates.add(coerceLiteralToColumnType(operand(e, rec).value, left.schemaOrNull));
-      }
+      Iterable<Object> candidates = () -> list.stream()
+          .map(e -> coerceLiteralToColumnType(operand(e, rec).value, left.schemaOrNull)).iterator();
       return SqlTruth.in(left.value, candidates, in.isNot());
     }
     if (right instanceof net.sf.jsqlparser.statement.select.Select subSelect) {
@@ -366,10 +371,8 @@ public final class ExpressionEvaluator {
         throw new IllegalStateException("IN subqueries require a subquery executor");
       }
       List<Object> values = subqueryExecutor.execute(subSelect).firstColumnValues();
-      List<Object> candidates = new java.util.ArrayList<>(values.size());
-      for (Object value : values) {
-        candidates.add(coerceLiteralToColumnType(value, left.schemaOrNull));
-      }
+      Iterable<Object> candidates = () -> values.stream()
+          .map(value -> coerceLiteralToColumnType(value, left.schemaOrNull)).iterator();
       return SqlTruth.in(left.value, candidates, in.isNot());
     }
     return false;
@@ -600,13 +603,18 @@ public final class ExpressionEvaluator {
   }
 
   /**
-   * Compare two values using SQL-style type coercion rules.
+   * Compare two values using SQL-style type coercion rules. This compatibility
+   * entry point delegates to {@link SqlComparisons}.
    *
    * @param l
    *          left-hand value
    * @param r
    *          right-hand value
    * @return negative when {@code l < r}, zero when equal, positive when greater
+   * @throws IllegalArgumentException
+   *           if the values cannot be compared
+   * @throws NullPointerException
+   *           if either value is null
    * @see SqlComparisons#typedCompare(Object, Object)
    */
   public static int typedCompare(Object l, Object r) {

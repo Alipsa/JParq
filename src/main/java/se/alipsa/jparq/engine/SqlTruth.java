@@ -19,6 +19,22 @@ public final class SqlTruth {
   }
 
   /**
+   * Tests a truth value with SQL {@code IS [NOT] TRUE/FALSE} semantics.
+   *
+   * @param truth
+   *          the operand, or null for UNKNOWN
+   * @param target
+   *          whether the target is TRUE rather than FALSE
+   * @param negated
+   *          whether the predicate includes NOT
+   * @return whether the operand matches the target, inverted when negated; never
+   *         UNKNOWN
+   */
+  public static boolean is(Boolean truth, boolean target, boolean negated) {
+    return negated != Boolean.valueOf(target).equals(truth);
+  }
+
+  /**
    * Computes SQL conjunction.
    * 
    * @param left

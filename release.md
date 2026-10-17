@@ -3,7 +3,7 @@
 ### 1.4.0
 - Reject non-Boolean predicates rather than treating them as UNKNOWN, and support `IS [NOT] TRUE/FALSE` in WHERE, HAVING, and Boolean projections.
 - Evaluate `BETWEEN` through the SQL conjunction truth table, including NULL bounds, and handle incomparable values consistently in comparisons, `IN`, `BETWEEN`, and quantified predicates. Identical NaN values are not distinct.
-- Fix duplicate first rows in windowed Boolean projections without an outer `ORDER BY`, verified through JDBC.
+- Fix duplicate first rows in queries with window functions and no outer `ORDER BY` or `OFFSET`, which also affected `LIMIT` and aggregates over such queries.
 - **Behavior change:** predicates involving NULL follow SQL three-valued logic. WHERE, JOIN ON, HAVING, CASE WHEN, Boolean projections, and quantified subqueries preserve UNKNOWN until the selection boundary, so negations and NOT IN on nullable columns may return fewer rows. This applies to predicates evaluated by the Java engine; predicates fully pushed down to Parquet are unchanged until the optimized Parquet reader ships.
 
 ### 1.3.0, 2026-03-14

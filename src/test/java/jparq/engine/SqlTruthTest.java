@@ -16,6 +16,7 @@ import org.apache.avro.generic.GenericRecord;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
+import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlTruth;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.window.WindowState;
@@ -57,6 +58,10 @@ class SqlTruthTest {
     };
     for (int i = 0; i < operands.length; i++) {
       assertEquals(not[i], SqlTruth.not(operands[i]));
+      assertEquals(Boolean.TRUE.equals(operands[i]), SqlTruth.is(operands[i], true, false));
+      assertEquals(!Boolean.TRUE.equals(operands[i]), SqlTruth.is(operands[i], true, true));
+      assertEquals(Boolean.FALSE.equals(operands[i]), SqlTruth.is(operands[i], false, false));
+      assertEquals(!Boolean.FALSE.equals(operands[i]), SqlTruth.is(operands[i], false, true));
       for (int j = 0; j < operands.length; j++) {
         assertEquals(and[i][j], SqlTruth.and(operands[i], operands[j]));
         assertEquals(or[i][j], SqlTruth.or(operands[i], operands[j]));
@@ -169,31 +174,67 @@ class SqlTruthTest {
     String input = "(VALUES (TRUE, 1), (FALSE, 2), (CAST(NULL AS BOOLEAN), 3)) AS t(active, n)";
     assertEquals(Arrays.asList(false, true, null), queryObjects("SELECT NOT active FROM " + input));
     assertEquals(Arrays.asList(false, false, null), queryObjects("SELECT active AND n > 1 FROM " + input));
+    String nullInput = "(VALUES (CAST(NULL AS BOOLEAN))) AS t(active)";
+    assertEquals(List.of(), query("SELECT 1 FROM " + nullInput + " WHERE active"));
+    assertEquals(List.of(1L), query("SELECT 1 FROM " + nullInput + " WHERE active IS NOT TRUE"));
+    assertEquals(List.of(), query("SELECT 1 FROM " + nullInput + " WHERE NULL"));
+    assertEquals(Arrays.asList(null, null),
+        queryObjects("SELECT NOT active FROM (VALUES (NULL), (CAST(NULL AS BOOL))) AS t(active)"));
   }
 
   /**
-   * Confirms that predicates that do not evaluate to a Boolean or NULL are
-   * rejected instead of silently excluding every row.
+   * Confirms that non-Boolean columns and operators are rejected even when their
+   * operands are NULL.
    */
   @Test
   void invalidPredicatesThrowInsteadOfSilentlyExcludingRows() throws Exception {
-    Schema schema = SchemaBuilder.record("mix").fields().requiredInt("id").optionalInt("n").requiredString("s")
+    Schema schema = SchemaBuilder.record("mix").fields().requiredInt("id").optionalInt("n").optionalString("s")
         .endRecord();
     var row = new GenericData.Record(schema);
     row.put("id", 1);
     row.put("n", Integer.valueOf(1));
     row.put("s", "a");
     var evaluator = new ExpressionEvaluator(schema);
-    for (String expression : List.of("n", "s", "1")) {
+    for (String expression : List.of("n", "s", "1", "n + 1", "s || 'x'")) {
       var predicate = CCJSqlParserUtil.parseCondExpression(expression);
       assertThrows(IllegalArgumentException.class, () -> evaluator.eval(predicate, row), expression);
+      var nullRow = new GenericData.Record(schema);
+      nullRow.put("id", 1);
+      assertThrows(IllegalArgumentException.class, () -> evaluator.eval(predicate, nullRow), expression);
     }
-    String input = "(VALUES (1, 1, 'a'), (2, 2, 'b')) AS t(id, n, s)";
-    for (String expression : List.of("n", "s", "1")) {
-      assertThrows(java.sql.SQLException.class, () -> query("SELECT id FROM " + input + " WHERE " + expression));
-      assertThrows(java.sql.SQLException.class,
-          () -> query("SELECT id FROM " + input + " GROUP BY id, n, s HAVING " + expression));
+    for (String input : List.of("(VALUES (1, 1, 'a'), (2, 2, 'b')) AS t(id, n, s)",
+        "(VALUES (1, CAST(NULL AS INTEGER), CAST(NULL AS VARCHAR))) AS t(id, n, s)")) {
+      for (String expression : List.of("n", "t.n", "s", "1", "n + 1", "s || 'x'")) {
+        assertThrows(java.sql.SQLException.class, () -> query("SELECT id FROM " + input + " WHERE " + expression));
+        assertThrows(java.sql.SQLException.class,
+            () -> query("SELECT id FROM " + input + " GROUP BY id, n, s HAVING " + expression));
+      }
+      assertThrows(IllegalArgumentException.class, () -> query("SELECT CASE WHEN n THEN 1 ELSE 0 END FROM " + input));
+      assertThrows(IllegalArgumentException.class, () -> queryObjects("SELECT NOT s FROM " + input));
     }
+  }
+
+  /** Checks that operator validation precedes UNKNOWN propagation. */
+  @Test
+  void unsupportedOperatorsThrowForUnknownComparisons() {
+    for (String operator : List.of("+", "-", "*", "/", "||")) {
+      assertThrows(IllegalArgumentException.class, () -> SqlComparisons.compare(operator, null), operator);
+      assertThrows(IllegalArgumentException.class, () -> SqlComparisons.compare(operator, 0), operator);
+    }
+    for (String operator : List.of("=", "!=", "<>", "<", ">", "<=", ">=")) {
+      assertNull(SqlComparisons.compare(operator, null), operator);
+    }
+  }
+
+  /** Ensures that IN stops evaluating candidates after a decisive match. */
+  @Test
+  void inListsSkipCandidatesAfterFirstMatch() throws Exception {
+    String input = "(VALUES (1)) AS t(id)";
+    String candidates = "(NULL, 1, CAST('invalid' AS INTEGER))";
+    assertEquals(List.of(1L), query("SELECT id FROM " + input + " WHERE id IN " + candidates));
+    assertEquals(List.of(), query("SELECT id FROM " + input + " WHERE id NOT IN " + candidates));
+    assertEquals(List.of(1L), query("SELECT MAX(id) FROM " + input + " HAVING MAX(id) IN " + candidates));
+    assertEquals(List.of(), query("SELECT MAX(id) FROM " + input + " HAVING MAX(id) NOT IN " + candidates));
   }
 
   /**

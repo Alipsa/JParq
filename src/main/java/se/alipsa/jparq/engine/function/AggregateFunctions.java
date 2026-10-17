@@ -1321,7 +1321,7 @@ public final class AggregateFunctions {
         if (hasNull) {
           continue;
         }
-        int cmp = ExpressionEvaluator.typedCompare(lv, rv);
+        int cmp = SqlComparisons.typedCompare(lv, rv);
         if (cmp != 0) {
           return key.asc() ? cmp : -cmp;
         }
@@ -1892,7 +1892,7 @@ public final class AggregateFunctions {
         extremum = value;
         return;
       }
-      int cmp = ExpressionEvaluator.typedCompare(value, extremum);
+      int cmp = SqlComparisons.typedCompare(value, extremum);
       if ((isMax && cmp > 0) || (!isMax && cmp < 0)) {
         extremum = value;
       }
@@ -2055,8 +2055,7 @@ public final class AggregateFunctions {
       }
       if (expr instanceof IsBooleanExpression isBoolean) {
         Boolean truth = evalTruth(isBoolean.getLeftExpression());
-        boolean matches = isBoolean.isTrue() ? Boolean.TRUE.equals(truth) : Boolean.FALSE.equals(truth);
-        return isBoolean.isNot() != matches;
+        return SqlTruth.is(truth, isBoolean.isTrue(), isBoolean.isNot());
       }
       if (expr instanceof Between between) {
         Object val = value(between.getLeftExpression());
@@ -2088,10 +2087,7 @@ public final class AggregateFunctions {
       Object leftVal = value(in.getLeftExpression());
       Expression right = in.getRightExpression();
       if (right instanceof ExpressionList<?> list) {
-        List<Object> candidates = new ArrayList<>(list.size());
-        for (Expression e : list) {
-          candidates.add(value(e));
-        }
+        Iterable<Object> candidates = () -> list.stream().map(this::value).iterator();
         return SqlTruth.in(leftVal, candidates, in.isNot());
       }
       if (right instanceof Select subSelect) {
