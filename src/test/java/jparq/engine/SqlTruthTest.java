@@ -247,6 +247,8 @@ class SqlTruthTest {
     assertEquals(List.of(2L), query(grouped + "NOT active ORDER BY id"));
     assertEquals(List.of(1L), query(grouped + "active AND id > 0 ORDER BY id"));
     assertEquals(List.of(2L, 3L), query(grouped + "active IS NOT TRUE ORDER BY id"));
+    assertEquals(List.of(1L),
+        query("SELECT id FROM " + input + " WHERE id > 0 GROUP BY id, active HAVING t.ACTIVE ORDER BY id"));
     String nullInput = "(VALUES (1, CAST(NULL AS BOOLEAN))) AS t(id, active)";
     assertEquals(List.of(), query("SELECT id FROM " + nullInput + " GROUP BY id, active HAVING active"));
     assertEquals(List.of(1L), query("SELECT id FROM " + nullInput + " GROUP BY id, active HAVING active IS NOT TRUE"));

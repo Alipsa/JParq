@@ -21,6 +21,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.CaseExpression;
@@ -77,6 +78,7 @@ import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.LiteralConverter;
 
 /**
@@ -1201,19 +1203,23 @@ public final class AggregateFunctions {
     }
 
     Map<GroupKey, GroupState> states = new LinkedHashMap<>();
-    ExpressionEvaluator whereEval = null;
+    Predicate<Column> booleanColumn = column -> false;
 
     try (RecordReader autoClose = reader) {
       GenericRecord rec = autoClose.read();
       Schema schema = null;
+      ExpressionEvaluator whereEval = null;
       ValueExpressionEvaluator valueEval = null;
 
       while (rec != null) {
         if (schema == null) {
           schema = rec.getSchema();
-          if (residual != null || having != null) {
+          if (residual != null) {
             whereEval = new ExpressionEvaluator(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
                 unqualifiedColumnMapping);
+          }
+          if (having != null) {
+            booleanColumn = booleanColumnPredicate(schema, qualifierColumnMapping, unqualifiedColumnMapping);
           }
           CorrelationMappings mappings = new CorrelationMappings(outerQualifiers, qualifierColumnMapping,
               unqualifiedColumnMapping, normalizedCorrelationContext);
@@ -1273,7 +1279,7 @@ public final class AggregateFunctions {
       boolean include = true;
       if (normalizedHaving != null) {
         HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues, labelLookup, subqueryExecutor,
-            outerQualifiers, normalizedCorrelationContext, state.groupingSetIndex(), whereEval);
+            outerQualifiers, normalizedCorrelationContext, state.groupingSetIndex(), booleanColumn);
         include = evaluator.eval(normalizedHaving);
       }
       if (include) {
@@ -1997,6 +2003,34 @@ public final class AggregateFunctions {
     return Types.OTHER;
   }
 
+  /**
+   * Creates a Boolean type check using source metadata and column mappings.
+   *
+   * @param schema
+   *          the source record schema
+   * @param qualifierColumnMapping
+   *          qualifier-to-column mappings
+   * @param unqualifiedColumnMapping
+   *          mappings for unique unqualified columns
+   * @return a schema-backed Boolean column predicate
+   */
+  private static Predicate<Column> booleanColumnPredicate(Schema schema,
+      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping) {
+    Map<String, String> columnIndex = new HashMap<>();
+    for (Schema.Field field : schema.getFields()) {
+      columnIndex.put(Identifier.lookupKey(field.name()), field.name());
+    }
+    Map<String, Map<String, String>> qualified = ColumnMappingUtil.normaliseQualifierMapping(qualifierColumnMapping);
+    Map<String, String> unqualified = ColumnMappingUtil.normaliseUnqualifiedMapping(unqualifiedColumnMapping);
+    return column -> {
+      String qualifier = column.getTable() == null ? null : column.getTable().getName();
+      String canonical = ColumnMappingUtil.canonicalFieldName(qualifier, column.getColumnName(), qualified, unqualified,
+          columnIndex);
+      Schema.Field field = schema.getField(canonical);
+      return field != null && JdbcTypeMapper.nonNullSchema(field.schema()).getType() == Schema.Type.BOOLEAN;
+    };
+  }
+
   private static final class HavingEvaluator {
     private final AggregatePlan plan;
     private final List<Object> aggregateValues;
@@ -2006,12 +2040,11 @@ public final class AggregateFunctions {
     private final Map<String, Map<String, String>> correlationContext;
     private final int groupingSetIndex;
     private final Map<String, Integer> groupIndexLookup;
-    private final ExpressionEvaluator sourceEvaluator;
+    private final Predicate<Column> booleanColumn;
 
     HavingEvaluator(AggregatePlan plan, List<Object> aggregateValues, Map<String, Object> labelLookup,
         SubqueryExecutor subqueryExecutor, List<String> correlatedQualifiers,
-        Map<String, Map<String, String>> correlationContext, int groupingSetIndex,
-        ExpressionEvaluator sourceEvaluator) {
+        Map<String, Map<String, String>> correlationContext, int groupingSetIndex, Predicate<Column> booleanColumn) {
       this.plan = plan;
       this.aggregateValues = aggregateValues;
       this.labelLookup = Collections.unmodifiableMap(new HashMap<>(labelLookup));
@@ -2021,7 +2054,7 @@ public final class AggregateFunctions {
           .normaliseQualifierMapping(correlationContext == null ? Map.of() : correlationContext);
       this.groupingSetIndex = groupingSetIndex;
       this.groupIndexLookup = groupIndexLookup(plan.groupExpressions());
-      this.sourceEvaluator = sourceEvaluator;
+      this.booleanColumn = Objects.requireNonNull(booleanColumn, "booleanColumn");
     }
 
     boolean eval(Expression expression) {
@@ -2083,9 +2116,8 @@ public final class AggregateFunctions {
       if (expr instanceof BinaryExpression be) {
         return evalBinary(be);
       }
-      if (expr instanceof Column column
-          && (sourceEvaluator == null || findGroupIndex(column, groupIndexLookup, plan.groupExpressions()) == null
-              || !sourceEvaluator.isBooleanColumn(column))) {
+      if (expr instanceof Column column && (findGroupIndex(column, groupIndexLookup, plan.groupExpressions()) == null
+          || !booleanColumn.test(column))) {
         throw new IllegalArgumentException("Unsupported predicate: " + expr);
       }
       Object result = value(expr);

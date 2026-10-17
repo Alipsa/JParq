@@ -251,7 +251,7 @@ public final class ExpressionEvaluator {
    *          the column reference to resolve in this evaluator's schema
    * @return whether the resolved column has Boolean type
    */
-  public boolean isBooleanColumn(Column column) {
+  private boolean isBooleanColumn(Column column) {
     String qualifier = column.getTable() == null ? null : column.getTable().getName();
     Schema columnSchema = fieldSchemas.get(canonicalFieldName(qualifier, column.getColumnName()));
     return columnSchema != null && AvroCoercions.effectiveSchema(columnSchema).getType() == Schema.Type.BOOLEAN;
