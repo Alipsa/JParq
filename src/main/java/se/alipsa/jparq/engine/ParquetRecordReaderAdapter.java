@@ -10,12 +10,14 @@ import org.apache.parquet.hadoop.ParquetReader;
 
 /**
  * Adapts a {@link ParquetReader} to the {@link RecordReader} abstraction.
+ * Records are copied only when their projected field schemas need enrichment.
  */
 public final class ParquetRecordReaderAdapter implements RecordReader {
 
   private final ParquetReader<GenericRecord> delegate;
   private final Schema fileSchema;
   private Schema projectedSchema;
+  private boolean copyRequired;
 
   /**
    * Create a new adapter for the supplied {@link ParquetReader}.
@@ -52,6 +54,15 @@ public final class ParquetRecordReaderAdapter implements RecordReader {
         names.add(field.name());
       }
       projectedSchema = AvroProjections.project(fileSchema, names);
+      for (var field : projectedSchema.getFields()) {
+        if (!field.schema().equals(raw.getSchema().getField(field.name()).schema())) {
+          copyRequired = true;
+          break;
+        }
+      }
+    }
+    if (!copyRequired) {
+      return raw;
     }
     GenericRecord record = new GenericData.Record(projectedSchema);
     for (var field : projectedSchema.getFields()) {

@@ -214,6 +214,10 @@ class OptimizedPredicateTest {
         var statement = connection.prepareStatement("SELECT a.id FROM a JOIN b ON a.id = b.id WHERE a.id = 3")) {
       assertTrue(statement.getPushdownInfo().parquetPredicateAttached());
       assertTrue(statement.getPushdownInfo().residualFilterPresent());
+      assertTrue(statement.getPushdownInfo().statisticsFilteringEnabled());
+      assertTrue(statement.getPushdownInfo().columnIndexFilteringEnabled());
+      assertTrue(statement.getPushdownInfo().dictionaryFilteringEnabled());
+      assertTrue(statement.getPushdownInfo().bloomFilteringEnabled());
     }
     write("nullids", new Long[]{
         1L, null, null, 4L
@@ -282,6 +286,39 @@ class OptimizedPredicateTest {
     expect("SELECT id FROM a ORDER BY n DESC NULLS LAST", List.of(4L, 3L, 1L, 2L));
     expect("SELECT id AS number FROM a ORDER BY number DESC", List.of(4L, 3L, 2L, 1L));
     expect("SELECT id FROM a ORDER BY 1 DESC", List.of(4L, 3L, 2L, 1L));
+    for (boolean projection : new boolean[]{
+        true, false
+    }) {
+      try (
+          var connection = DriverManager.getConnection("jdbc:jparq:" + directory + "?projectionPushdown=" + projection);
+          var statement = connection.createStatement()) {
+        for (String order : List.of("(SELECT COUNT(*) FROM b WHERE b.id < a.n)",
+            "EXISTS (SELECT 1 FROM b WHERE b.id < a.n)")) {
+          try (var result = statement.executeQuery("SELECT id FROM a ORDER BY " + order + ", id")) {
+            for (long id : new long[]{
+                1, 2, 3, 4
+            }) {
+              assertTrue(result.next());
+              assertEquals(id, result.getLong(1));
+            }
+            assertFalse(result.next());
+          }
+        }
+        try (var result = statement.executeQuery("SELECT * FROM a ORDER BY 2 DESC NULLS LAST")) {
+          assertEquals(3, result.getMetaData().getColumnCount());
+          for (long id : new long[]{
+              4, 3, 1, 2
+          }) {
+            assertTrue(result.next());
+            assertEquals(id, result.getLong(1));
+            for (int column = 1; column <= 3; column++) {
+              result.getObject(column);
+            }
+          }
+          assertFalse(result.next());
+        }
+      }
+    }
     expect("SELECT (SELECT b.n FROM b WHERE b.id = a.id) AS number FROM a ORDER BY number",
         java.util.Arrays.asList(1L, 3L, null, null));
   }

@@ -113,10 +113,11 @@ public final class ParquetFilterBuilder {
       return Optional.ofNullable(predicate);
     }
     if (exp instanceof Between b) {
-      // The upper bound rejects NaN, so the lower bound may use an operator that NaN
-      // satisfies.
-      var ge = comparison(schema, new GreaterThanEquals(b.getLeftExpression(), b.getBetweenExpressionStart()), false);
-      var le = comparison(schema, new MinorThanEquals(b.getLeftExpression(), b.getBetweenExpressionEnd()), false);
+      // Only a column on the left guarantees that the upper bound rejects NaN.
+      boolean standalone = !(b.getLeftExpression() instanceof Column);
+      var ge = comparison(schema, new GreaterThanEquals(b.getLeftExpression(), b.getBetweenExpressionStart()),
+          standalone);
+      var le = comparison(schema, new MinorThanEquals(b.getLeftExpression(), b.getBetweenExpressionEnd()), standalone);
       if (ge.isPresent() && le.isPresent()) {
         FilterPredicate p = and(ge.get(), le.get());
         return Optional.of(p);

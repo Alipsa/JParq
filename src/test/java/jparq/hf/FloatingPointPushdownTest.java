@@ -84,17 +84,20 @@ class FloatingPointPushdownTest {
    */
   static Stream<Case> groupCases() {
     String t = "float_groups";
-    return Stream.of(both(t, "d > 3", ids(2, 5, 6, 7, 8)), both(t, "d > 100", ids(2, 5, 6, 7)),
-        both(t, "100 < d", ids(2, 5, 6, 7)), both(t, "d >= 500", ids(2, 5, 6, 7)),
-        both(t, "d >= 4", ids(2, 5, 6, 7, 8)), both(t, "d <> 1", ids(2, 3, 4, 5, 6, 7, 8)),
-        both(t, "NOT (d < 5)", ids(2, 5, 6, 7)), both(t, "NOT (d <= 3)", ids(2, 5, 6, 7, 8)),
-        both(t, "NOT (d = 1)", ids(2, 3, 4, 5, 6, 7, 8)), both(t, "d < 3", ids(1, 3)), both(t, "d <= 3", ids(1, 3, 4)),
-        both(t, "d = 3", ids(4)), both(t, "d = 1", ids(1)), both(t, "d IN (1.0, 2.0)", ids(1, 3)),
-        both(t, "d NOT IN (1.0, 2.0)", ids(2, 4, 5, 6, 7, 8)), both(t, "d BETWEEN 2 AND 4", ids(3, 4, 8)),
-        both(t, "d NOT BETWEEN 2 AND 4", ids(1, 2, 5, 6, 7)), both(t, "d > 3 AND id > 0", ids(2, 5, 6, 7, 8)),
-        both(t, "d > 100 AND id >= 5", ids(5, 6, 7)), both(t, "d > 100 OR id = 1", ids(1, 2, 5, 6, 7)),
-        both(t, "d < 2 OR d > 100", ids(1, 2, 5, 6, 7)), both(t, "d IS NULL", ids()),
-        both(t, "d IS NOT NULL", range(1, 8))).flatMap(stream -> stream);
+    return Stream
+        .of(both(t, "d > 3", ids(2, 5, 6, 7, 8)), both(t, "d > 100", ids(2, 5, 6, 7)),
+            both(t, "100 < d", ids(2, 5, 6, 7)), both(t, "d >= 500", ids(2, 5, 6, 7)),
+            both(t, "d >= 4", ids(2, 5, 6, 7, 8)), both(t, "d <> 1", ids(2, 3, 4, 5, 6, 7, 8)),
+            both(t, "NOT (d < 5)", ids(2, 5, 6, 7)), both(t, "NOT (d <= 3)", ids(2, 5, 6, 7, 8)),
+            both(t, "NOT (d = 1)", ids(2, 3, 4, 5, 6, 7, 8)), both(t, "d < 3", ids(1, 3)),
+            both(t, "d <= 3", ids(1, 3, 4)), both(t, "d = 3", ids(4)), both(t, "d = 1", ids(1)),
+            both(t, "d IN (1.0, 2.0)", ids(1, 3)), both(t, "d NOT IN (1.0, 2.0)", ids(2, 4, 5, 6, 7, 8)),
+            both(t, "d BETWEEN 2 AND 4", ids(3, 4, 8)), both(t, "d NOT BETWEEN 2 AND 4", ids(1, 2, 5, 6, 7)),
+            both(t, "d > 3 AND id > 0", ids(2, 5, 6, 7, 8)), both(t, "d > 100 AND id >= 5", ids(5, 6, 7)),
+            both(t, "d > 100 OR id = 1", ids(1, 2, 5, 6, 7)), both(t, "d < 2 OR d > 100", ids(1, 2, 5, 6, 7)),
+            both(t, "d IS NULL", ids()), both(t, "100 BETWEEN id AND d", ids(2, 5, 6, 7)),
+            both(t, "100 NOT BETWEEN id AND d", ids(1, 3, 4, 8)), both(t, "d IS NOT NULL", range(1, 8)))
+        .flatMap(stream -> stream);
   }
 
   /**

@@ -25,6 +25,7 @@ import org.apache.parquet.ParquetReadOptions;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.metadata.ParquetMetadata;
 import org.apache.parquet.hadoop.util.HadoopInputFile;
+import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 
@@ -527,7 +528,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         List<String> columnTypeHints = columnMetadata.columnTypeHints();
         Map<String, String> columnRemarks = columnMetadata.columnRemarks();
         try {
-          Schema fileSchema = se.alipsa.jparq.engine.ParquetSchemas.readAvroSchema(hPath, conf);
+          Schema fileSchema = ParquetSchemas.readAvroSchema(hPath, conf);
           int pos = 1;
           int columnIndex = 0;
           for (Schema.Field field : fileSchema.getFields()) {

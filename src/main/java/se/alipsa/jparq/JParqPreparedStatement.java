@@ -295,6 +295,8 @@ public class JParqPreparedStatement implements PreparedStatement {
           AggregateFunctions.AggregatePlan aggregatePlan = null;
 
           if (tmpJoinQuery) {
+            tmpConf = new Configuration(false);
+            configureParquetFiltering(tmpConf);
             tmpResidual = tmpSelect.where();
           } else if (baseRef != null && baseRef.valueTable() != null) {
             CteResult resolved = materializeValueTable(baseRef.valueTable(), deriveValueTableName(baseRef));
@@ -1253,7 +1255,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   private JoinRecordReader buildJoinReader() throws SQLException {
     List<JoinRecordReader.JoinTable> tables = new ArrayList<>();
     Map<String, Integer> qualifierIndex = new LinkedHashMap<>();
-    for (SqlParser.TableReference ref : tableReferences) {
+    for (int referenceIndex = 0; referenceIndex < tableReferences.size(); referenceIndex++) {
+      SqlParser.TableReference ref = tableReferences.get(referenceIndex);
       if (ref.unnest() != null) {
         if (tables.isEmpty()) {
           throw new SQLException("UNNEST requires a preceding table reference");
@@ -1326,8 +1329,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       JParqConnection.TableLocation tableLocation = stmt.getConn().resolveTable(ref.schemaName(), tableName);
       Path tablePath = new Path(tableLocation.file().toURI());
-      Configuration tableConf = new Configuration(false);
-      configureParquetFiltering(tableConf);
+      Configuration tableConf = new Configuration(conf);
       Schema tableSchema;
       try {
         tableSchema = ParquetSchemas.readAvroSchema(tablePath, tableConf);
@@ -1338,7 +1340,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       List<GenericRecord> rows = new ArrayList<>();
       ParquetReader.Builder<GenericRecord> tableBuilder = ParquetReader
           .<GenericRecord>builder(new AvroReadSupport<>(), tablePath).withConf(tableConf);
-      FilterPredicate predicate = joinPredicates.get(tables.size());
+      FilterPredicate predicate = joinPredicates.get(referenceIndex);
       if (predicate != null) {
         tableBuilder.withFilter(FilterCompat.get(predicate));
       }
@@ -3104,6 +3106,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     for (SqlParser.OrderKey key : select.orderBy()) {
       if (key.expression() != null) {
         addColumns(needed, ColumnsUsed.inWhere(key.expression()));
+        collectColumnReferencesFromExpression(key.expression(), qualifiers, primaryQualifier, needed, referenced);
       } else if (!isOrdinalReference(key.column()) && !isGroupingFunctionReference(key.column())) {
         addColumn(needed, key.column());
       }
@@ -3111,6 +3114,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     for (SqlParser.OrderKey key : select.preOrderBy()) {
       if (key.expression() != null) {
         addColumns(needed, ColumnsUsed.inWhere(key.expression()));
+        collectColumnReferencesFromExpression(key.expression(), qualifiers, primaryQualifier, needed, referenced);
       } else if (!isOrdinalReference(key.column()) && !isGroupingFunctionReference(key.column())) {
         addColumn(needed, key.column());
       }
@@ -3531,12 +3535,17 @@ public class JParqPreparedStatement implements PreparedStatement {
       return new PushdownInfo(false, false, false, false, false, false,
           "Set operations are executed without Parquet predicate pushdown.", null, null);
     }
+    boolean statsEnabled = isFilterEnabled(configuration, ParquetInputFormat.STATS_FILTERING_ENABLED);
+    boolean columnIndexEnabled = isFilterEnabled(configuration, ParquetInputFormat.COLUMN_INDEX_FILTERING_ENABLED);
+    boolean dictionaryEnabled = isFilterEnabled(configuration, ParquetInputFormat.DICTIONARY_FILTERING_ENABLED);
+    boolean bloomEnabled = isFilterEnabled(configuration, ParquetInputFormat.BLOOM_FILTERING_ENABLED);
     if (join) {
       String message = residual == null
           ? "Join queries have no residual WHERE clause."
           : "Join queries evaluate residual WHERE clauses after row assembly.";
-      return new PushdownInfo(!joinPredicates.isEmpty(), residual != null, true, true, true, true, message,
-          joinPredicates.isEmpty() ? null : joinPredicates.toString(), residual == null ? null : residual.toString());
+      return new PushdownInfo(!joinPredicates.isEmpty(), residual != null, statsEnabled, columnIndexEnabled,
+          dictionaryEnabled, bloomEnabled, message, joinPredicates.isEmpty() ? null : joinPredicates.toString(),
+          residual == null ? null : residual.toString());
     }
     if (cteResult != null) {
       return new PushdownInfo(false, residual != null, false, false, false, false,
@@ -3545,10 +3554,6 @@ public class JParqPreparedStatement implements PreparedStatement {
               : "In-memory query results apply residual filtering in Java.",
           null, residual == null ? null : residual.toString());
     }
-    boolean statsEnabled = isFilterEnabled(configuration, ParquetInputFormat.STATS_FILTERING_ENABLED);
-    boolean columnIndexEnabled = isFilterEnabled(configuration, ParquetInputFormat.COLUMN_INDEX_FILTERING_ENABLED);
-    boolean dictionaryEnabled = isFilterEnabled(configuration, ParquetInputFormat.DICTIONARY_FILTERING_ENABLED);
-    boolean bloomEnabled = isFilterEnabled(configuration, ParquetInputFormat.BLOOM_FILTERING_ENABLED);
     Expression where = select == null ? null : select.where();
     if (where == null) {
       return new PushdownInfo(false, false, statsEnabled, columnIndexEnabled, dictionaryEnabled, bloomEnabled,

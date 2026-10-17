@@ -321,14 +321,14 @@ public class JParqResultSet extends ResultSetAdapter {
       }
       if (select.orderBy() != null) {
         for (SqlParser.OrderKey orderKey : select.orderBy()) {
-          if (orderKey != null && orderKey.column() != null) {
+          if (orderKey != null && orderKey.column() != null && !orderKey.column().matches("[0-9]+")) {
             requiredColumns.add(orderKey.column());
           }
         }
       }
       if (select.preOrderBy() != null) {
         for (SqlParser.OrderKey orderKey : select.preOrderBy()) {
-          if (orderKey != null && orderKey.column() != null) {
+          if (orderKey != null && orderKey.column() != null && !orderKey.column().matches("[0-9]+")) {
             requiredColumns.add(orderKey.column());
           }
         }
