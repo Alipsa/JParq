@@ -237,6 +237,39 @@ class SqlTruthTest {
     assertEquals(List.of(), query("SELECT MAX(id) FROM " + input + " HAVING MAX(id) NOT IN " + candidates));
   }
 
+  /** Checks bare Boolean grouping columns with TRUE, FALSE, and NULL values. */
+  @Test
+  void havingAcceptsBooleanGroupingColumns() throws Exception {
+    String input = "(VALUES (1, TRUE), (2, FALSE), (3, CAST(NULL AS BOOLEAN))) AS t(id, active)";
+    String grouped = "SELECT id FROM " + input + " GROUP BY id, active HAVING ";
+    assertEquals(List.of(1L), query(grouped + "active ORDER BY id"));
+    assertEquals(List.of(1L), query(grouped + "t.active ORDER BY id"));
+    assertEquals(List.of(2L), query(grouped + "NOT active ORDER BY id"));
+    assertEquals(List.of(1L), query(grouped + "active AND id > 0 ORDER BY id"));
+    assertEquals(List.of(2L, 3L), query(grouped + "active IS NOT TRUE ORDER BY id"));
+    String nullInput = "(VALUES (1, CAST(NULL AS BOOLEAN))) AS t(id, active)";
+    assertEquals(List.of(), query("SELECT id FROM " + nullInput + " GROUP BY id, active HAVING active"));
+    assertEquals(List.of(1L), query("SELECT id FROM " + nullInput + " GROUP BY id, active HAVING active IS NOT TRUE"));
+  }
+
+  /** Checks NULL membership without evaluating any candidate expressions. */
+  @Test
+  void nullInOperandsSkipCandidateEvaluation() throws Exception {
+    for (boolean negated : List.of(false, true)) {
+      assertNull(SqlTruth.in(null, List.of(1, 2), candidate -> {
+        throw new AssertionError("A NULL operand must not evaluate candidates");
+      }, negated));
+      assertEquals(negated, SqlTruth.in(null, List.of(), negated));
+      assertNull(SqlTruth.in(null, List.of(1, 2), negated));
+    }
+    String input = "(VALUES (1, CAST(NULL AS INTEGER))) AS t(id, n)";
+    String candidates = "(CAST('invalid' AS INTEGER), 1)";
+    for (String operator : List.of("IN", "NOT IN")) {
+      assertEquals(List.of(), query("SELECT id FROM " + input + " WHERE n " + operator + " " + candidates));
+      assertEquals(List.of(), query("SELECT MAX(n) FROM " + input + " HAVING MAX(n) " + operator + " " + candidates));
+    }
+  }
+
   /**
    * Confirms that IS [NOT] TRUE/FALSE inspects the three-valued truth of the
    * operand, including UNKNOWN.

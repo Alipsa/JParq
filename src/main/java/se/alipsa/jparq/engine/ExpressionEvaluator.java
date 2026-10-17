@@ -230,12 +230,8 @@ public final class ExpressionEvaluator {
       return evalBinary(be, rec);
     }
 
-    if (expr instanceof Column column) {
-      String qualifier = column.getTable() == null ? null : column.getTable().getName();
-      Schema columnSchema = fieldSchemas.get(canonicalFieldName(qualifier, column.getColumnName()));
-      if (columnSchema != null && AvroCoercions.effectiveSchema(columnSchema).getType() != Schema.Type.BOOLEAN) {
-        throw new IllegalArgumentException("Unsupported predicate: " + expr);
-      }
+    if (expr instanceof Column column && !isBooleanColumn(column)) {
+      throw new IllegalArgumentException("Unsupported predicate: " + expr);
     }
 
     // Fallback for value expressions used as predicates (e.g. boolean columns):
@@ -246,6 +242,19 @@ public final class ExpressionEvaluator {
       return (Boolean) value;
     }
     throw new IllegalArgumentException("Unsupported predicate: " + expr);
+  }
+
+  /**
+   * Checks the declared type of a column, including nullable Boolean unions.
+   *
+   * @param column
+   *          the column reference to resolve in this evaluator's schema
+   * @return whether the resolved column has Boolean type
+   */
+  public boolean isBooleanColumn(Column column) {
+    String qualifier = column.getTable() == null ? null : column.getTable().getName();
+    Schema columnSchema = fieldSchemas.get(canonicalFieldName(qualifier, column.getColumnName()));
+    return columnSchema != null && AvroCoercions.effectiveSchema(columnSchema).getType() == Schema.Type.BOOLEAN;
   }
 
   /**
@@ -362,18 +371,15 @@ public final class ExpressionEvaluator {
     Expression right = in.getRightExpression();
 
     if (right instanceof ExpressionList<?> list) {
-      Iterable<Object> candidates = () -> list.stream()
-          .map(e -> coerceLiteralToColumnType(operand(e, rec).value, left.schemaOrNull)).iterator();
-      return SqlTruth.in(left.value, candidates, in.isNot());
+      return SqlTruth.in(left.value, list, e -> coerceLiteralToColumnType(operand(e, rec).value, left.schemaOrNull),
+          in.isNot());
     }
     if (right instanceof net.sf.jsqlparser.statement.select.Select subSelect) {
       if (subqueryExecutor == null) {
         throw new IllegalStateException("IN subqueries require a subquery executor");
       }
       List<Object> values = subqueryExecutor.execute(subSelect).firstColumnValues();
-      Iterable<Object> candidates = () -> values.stream()
-          .map(value -> coerceLiteralToColumnType(value, left.schemaOrNull)).iterator();
-      return SqlTruth.in(left.value, candidates, in.isNot());
+      return SqlTruth.in(left.value, values, value -> coerceLiteralToColumnType(value, left.schemaOrNull), in.isNot());
     }
     return false;
   }

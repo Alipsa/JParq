@@ -1201,17 +1201,17 @@ public final class AggregateFunctions {
     }
 
     Map<GroupKey, GroupState> states = new LinkedHashMap<>();
+    ExpressionEvaluator whereEval = null;
 
     try (RecordReader autoClose = reader) {
       GenericRecord rec = autoClose.read();
       Schema schema = null;
-      ExpressionEvaluator whereEval = null;
       ValueExpressionEvaluator valueEval = null;
 
       while (rec != null) {
         if (schema == null) {
           schema = rec.getSchema();
-          if (residual != null) {
+          if (residual != null || having != null) {
             whereEval = new ExpressionEvaluator(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
                 unqualifiedColumnMapping);
           }
@@ -1273,7 +1273,7 @@ public final class AggregateFunctions {
       boolean include = true;
       if (normalizedHaving != null) {
         HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues, labelLookup, subqueryExecutor,
-            outerQualifiers, normalizedCorrelationContext, state.groupingSetIndex());
+            outerQualifiers, normalizedCorrelationContext, state.groupingSetIndex(), whereEval);
         include = evaluator.eval(normalizedHaving);
       }
       if (include) {
@@ -2006,10 +2006,12 @@ public final class AggregateFunctions {
     private final Map<String, Map<String, String>> correlationContext;
     private final int groupingSetIndex;
     private final Map<String, Integer> groupIndexLookup;
+    private final ExpressionEvaluator sourceEvaluator;
 
     HavingEvaluator(AggregatePlan plan, List<Object> aggregateValues, Map<String, Object> labelLookup,
         SubqueryExecutor subqueryExecutor, List<String> correlatedQualifiers,
-        Map<String, Map<String, String>> correlationContext, int groupingSetIndex) {
+        Map<String, Map<String, String>> correlationContext, int groupingSetIndex,
+        ExpressionEvaluator sourceEvaluator) {
       this.plan = plan;
       this.aggregateValues = aggregateValues;
       this.labelLookup = Collections.unmodifiableMap(new HashMap<>(labelLookup));
@@ -2019,6 +2021,7 @@ public final class AggregateFunctions {
           .normaliseQualifierMapping(correlationContext == null ? Map.of() : correlationContext);
       this.groupingSetIndex = groupingSetIndex;
       this.groupIndexLookup = groupIndexLookup(plan.groupExpressions());
+      this.sourceEvaluator = sourceEvaluator;
     }
 
     boolean eval(Expression expression) {
@@ -2080,15 +2083,23 @@ public final class AggregateFunctions {
       if (expr instanceof BinaryExpression be) {
         return evalBinary(be);
       }
-      throw new IllegalArgumentException("Unsupported HAVING expression: " + expr);
+      if (expr instanceof Column column
+          && (sourceEvaluator == null || findGroupIndex(column, groupIndexLookup, plan.groupExpressions()) == null
+              || !sourceEvaluator.isBooleanColumn(column))) {
+        throw new IllegalArgumentException("Unsupported predicate: " + expr);
+      }
+      Object result = value(expr);
+      if (result == null || result instanceof Boolean) {
+        return (Boolean) result;
+      }
+      throw new IllegalArgumentException("Unsupported predicate: " + expr);
     }
 
     private Boolean evalIn(InExpression in) {
       Object leftVal = value(in.getLeftExpression());
       Expression right = in.getRightExpression();
       if (right instanceof ExpressionList<?> list) {
-        Iterable<Object> candidates = () -> list.stream().map(this::value).iterator();
-        return SqlTruth.in(leftVal, candidates, in.isNot());
+        return SqlTruth.in(leftVal, list, this::value, in.isNot());
       }
       if (right instanceof Select subSelect) {
         if (subqueryExecutor == null) {

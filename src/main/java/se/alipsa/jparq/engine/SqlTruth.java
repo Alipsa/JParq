@@ -1,6 +1,7 @@
 package se.alipsa.jparq.engine;
 
 import java.util.Objects;
+import java.util.function.Function;
 
 /** SQL Boolean operations, using null to represent UNKNOWN. */
 public final class SqlTruth {
@@ -96,7 +97,8 @@ public final class SqlTruth {
    * @param leftValue
    *          the value to match (may be {@code null})
    * @param candidates
-   *          the candidate values, already coerced to the left value's type
+   *          the candidate values, already coerced to the left value's type;
+   *          evaluated only until the result is decisive
    * @param negated
    *          whether the predicate was {@code NOT IN}
    * @return the membership result, inverted when negated; UNKNOWN when no
@@ -104,10 +106,34 @@ public final class SqlTruth {
    *         yields FALSE for IN and TRUE for NOT IN, even for a NULL left value
    */
   public static Boolean in(Object leftValue, Iterable<?> candidates, boolean negated) {
+    return in(leftValue, candidates, Function.identity(), negated);
+  }
+
+  /**
+   * Computes membership while evaluating candidates only as needed.
+   *
+   * @param <T>
+   *          the candidate representation
+   * @param leftValue
+   *          the value to match, or null for UNKNOWN
+   * @param candidates
+   *          candidate expressions or values
+   * @param evaluate
+   *          evaluates and coerces one candidate
+   * @param negated
+   *          whether the predicate includes NOT
+   * @return the SQL membership result; a NULL left operand is UNKNOWN for a
+   *         nonempty input without evaluating any candidates
+   */
+  public static <T> Boolean in(Object leftValue, Iterable<T> candidates, Function<? super T, ?> evaluate,
+      boolean negated) {
+    if (leftValue == null) {
+      return candidates.iterator().hasNext() ? null : negated;
+    }
     boolean found = false;
     boolean unknown = false;
-    for (Object candidate : candidates) {
-      Integer cmp = SqlComparisons.compareOrUnknown(leftValue, candidate);
+    for (T candidate : candidates) {
+      Integer cmp = SqlComparisons.compareOrUnknown(leftValue, evaluate.apply(candidate));
       if (cmp == null) {
         unknown = true;
         continue;
