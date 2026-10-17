@@ -19,15 +19,13 @@ import java.util.Map;
 import java.util.Set;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
-import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.parquet.ParquetReadOptions;
-import org.apache.parquet.avro.AvroParquetReader;
 import org.apache.parquet.hadoop.ParquetFileReader;
-import org.apache.parquet.hadoop.ParquetReader;
 import org.apache.parquet.hadoop.metadata.ParquetMetadata;
 import org.apache.parquet.hadoop.util.HadoopInputFile;
+import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 
@@ -529,17 +527,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         ColumnMetadata columnMetadata = readColumnMetadata(hPath, conf);
         List<String> columnTypeHints = columnMetadata.columnTypeHints();
         Map<String, String> columnRemarks = columnMetadata.columnRemarks();
-        try (ParquetReader<GenericRecord> reader = AvroParquetReader
-            .<GenericRecord>builder(HadoopInputFile.fromPath(hPath, conf)).build()) {
-
-          GenericRecord rec = reader.read();
-          if (rec == null) {
-            continue; // empty file
-          }
-
+        try {
+          Schema fileSchema = ParquetSchemas.readAvroSchema(hPath, conf);
           int pos = 1;
           int columnIndex = 0;
-          for (Schema.Field field : rec.getSchema().getFields()) {
+          for (Schema.Field field : fileSchema.getFields()) {
             int fieldIndex = columnIndex++;
             String columnName = field.name();
             if (columnPattern.regex() != null
@@ -979,11 +971,9 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     }
     return switch (jdbcType) {
       case Types.TIMESTAMP, Types.TIMESTAMP_WITH_TIMEZONE -> {
-        if (baseSchema.getLogicalType() instanceof LogicalTypes.TimestampMicros) {
-          yield 6;
-        }
-        if (baseSchema.getLogicalType() instanceof LogicalTypes.TimestampMillis) {
-          yield 3;
+        if (se.alipsa.jparq.engine.AvroCoercions.isTimestamp(baseSchema)) {
+          long units = se.alipsa.jparq.engine.AvroCoercions.timestampUnits(baseSchema);
+          yield units == 1_000_000_000L ? 9 : units == 1_000_000L ? 6 : 3;
         }
         yield null;
       }

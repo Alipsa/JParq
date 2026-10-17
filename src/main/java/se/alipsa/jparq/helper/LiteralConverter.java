@@ -43,10 +43,14 @@ public class LiteralConverter {
       return sv.getValue();
     }
     if (e instanceof LongValue lv) {
-      return lv.getBigIntegerValue().longValue();
+      var value = lv.getBigIntegerValue();
+      if (value.bitLength() < 64) {
+        return value.longValue();
+      }
+      return new BigDecimal(value);
     }
     if (e instanceof DoubleValue dv) {
-      return new BigDecimal(dv.getValue());
+      return new BigDecimal(dv.toString());
     }
     if (e instanceof SignedExpression se) {
       return toSignedLiteral(se);

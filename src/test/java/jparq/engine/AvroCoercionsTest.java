@@ -22,6 +22,53 @@ import se.alipsa.jparq.engine.Identifier;
 /** Unit tests for {@link AvroCoercions}. */
 class AvroCoercionsTest {
 
+  /**
+   * Ensures negative epochs use floor division and local timestamps retain their
+   * wall clock.
+   */
+  @Test
+  void unwrapsAllTimestampPrecisionsBeforeTheEpoch() {
+    var previous = java.util.TimeZone.getDefault();
+    java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("America/New_York"));
+    try {
+      for (String precision : java.util.List.of("millis", "micros", "nanos")) {
+        for (boolean local : new boolean[]{
+            true, false
+        }) {
+          Schema timestamp = Schema.create(Schema.Type.LONG);
+          timestamp.addProp("logicalType", (local ? "local-" : "") + "timestamp-" + precision);
+          long nanos = precision.equals("millis") ? 1_000_000L : precision.equals("micros") ? 1000L : 1L;
+          var instant = java.time.Instant.ofEpochSecond(0, -nanos);
+          Timestamp expected = local
+              ? Timestamp.valueOf(java.time.LocalDateTime.ofInstant(instant, java.time.ZoneOffset.UTC))
+              : Timestamp.from(instant);
+          assertEquals(expected, AvroCoercions.unwrap(-1L, timestamp));
+          assertEquals(expected, AvroCoercions.coerceLiteral(expected.toString(), timestamp));
+        }
+      }
+    } finally {
+      java.util.TimeZone.setDefault(previous);
+    }
+  }
+
+  /**
+   * Tests the half-float decoder for signs, subnormal values, infinities, and
+   * NaN.
+   */
+  @Test
+  void unwrapsFloat16SpecialValues() {
+    Schema half = SchemaBuilder.fixed("half").size(2);
+    half.addProp("jparq.logicalType", "float16");
+    for (short bits : new short[]{
+        0, 1, (short) 0xbe00, 0x7c00, (short) 0xfc00, 0x7e00
+    }) {
+      var value = new GenericData.Fixed(half, new byte[]{
+          (byte) bits, (byte) (bits >>> 8)
+      });
+      assertEquals(Float.float16ToFloat(bits), AvroCoercions.unwrap(value, half));
+    }
+  }
+
   @Test
   void coercesLiteralsForDatesAndTimestamps() {
     Schema dateSchema = LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));

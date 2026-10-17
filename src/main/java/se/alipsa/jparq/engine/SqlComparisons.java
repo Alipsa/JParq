@@ -11,12 +11,18 @@ import java.util.Set;
  *
  * <p>
  * Comparisons follow SQL-style type coercion rules. A {@code null} return value
- * represents SQL UNKNOWN, used both for NULL operands and for values that
- * cannot be compared (e.g. NaN).
+ * represents SQL UNKNOWN, used for NULL operands and for values that cannot be
+ * compared. Floating-point values use one total order, matching PostgreSQL and
+ * DuckDB: {@code -Infinity < every finite value < +Infinity < NaN}, where NaN
+ * equals NaN and {@code -0.0} equals {@code 0.0}.
  * </p>
  */
 public final class SqlComparisons {
   private static final Set<String> SUPPORTED_OPERATORS = Set.of("=", "<", ">", "<=", ">=", "<>", "!=");
+  private static final int RANK_NEGATIVE_INFINITY = 0;
+  private static final int RANK_FINITE = 1;
+  private static final int RANK_POSITIVE_INFINITY = 2;
+  private static final int RANK_NAN = 3;
 
   private SqlComparisons() {
   }
@@ -29,14 +35,12 @@ public final class SqlComparisons {
    * @param r
    *          non-null right-hand value
    * @return negative when {@code l < r}, zero when equal, positive when greater
-   * @throws IllegalArgumentException
-   *           if the values cannot be compared, such as non-finite numbers
    * @throws NullPointerException
    *           if either value is null
    */
   public static int typedCompare(Object l, Object r) {
-    if (l instanceof Number && r instanceof Number) {
-      return new BigDecimal(l.toString()).compareTo(new BigDecimal(r.toString()));
+    if (l instanceof Number ln && r instanceof Number rn) {
+      return compareNumbers(ln, rn);
     }
     if (l instanceof Boolean && r instanceof Boolean) {
       return Boolean.compare((Boolean) l, (Boolean) r);
@@ -65,6 +69,51 @@ public final class SqlComparisons {
   }
 
   /**
+   * Compare two numbers using the total order shared by the Java engine and
+   * Parquet pushdown: {@code -Infinity < finite values < +Infinity < NaN}. NaN
+   * equals NaN and {@code -0.0} equals {@code 0.0}. Finite values are compared
+   * exactly as decimals.
+   *
+   * @param left
+   *          left-hand number
+   * @param right
+   *          right-hand number
+   * @return negative when {@code left < right}, zero when equal, positive when
+   *         greater
+   * @throws NullPointerException
+   *           if either number is null
+   */
+  public static int compareNumbers(Number left, Number right) {
+    int leftRank = rank(left);
+    int rightRank = rank(right);
+    if (leftRank != RANK_FINITE || rightRank != RANK_FINITE) {
+      return Integer.compare(leftRank, rightRank);
+    }
+    return new BigDecimal(left.toString()).compareTo(new BigDecimal(right.toString()));
+  }
+
+  /**
+   * Classify a number as negative infinity, finite, positive infinity or NaN.
+   *
+   * @param number
+   *          the number to classify
+   * @return the rank of the number in the floating-point order
+   */
+  private static int rank(Number number) {
+    if (!(number instanceof Double || number instanceof Float)) {
+      return RANK_FINITE;
+    }
+    double value = number.doubleValue();
+    if (Double.isNaN(value)) {
+      return RANK_NAN;
+    }
+    if (Double.isInfinite(value)) {
+      return value > 0 ? RANK_POSITIVE_INFINITY : RANK_NEGATIVE_INFINITY;
+    }
+    return RANK_FINITE;
+  }
+
+  /**
    * Compare two values, mapping SQL UNKNOWN to {@code null}.
    *
    * @param left
@@ -72,7 +121,7 @@ public final class SqlComparisons {
    * @param right
    *          right-hand value (may be {@code null})
    * @return the comparison result, or {@code null} when either side is NULL or
-   *         the values cannot be compared (e.g. NaN)
+   *         the values cannot be compared
    */
   public static Integer compareOrUnknown(Object left, Object right) {
     if (left == null || right == null) {

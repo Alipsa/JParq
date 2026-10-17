@@ -219,10 +219,10 @@ class JParqPreparedStatementCoverageTest {
     try (JParqPreparedStatement pushdownStatement = connection
         .prepareStatement("SELECT DISTINCT cyl FROM cars WHERE cyl = 4")) {
       JParqPreparedStatement.PushdownInfo info = pushdownStatement.getPushdownInfo();
-      assertFalse(info.parquetPredicateAttached());
-      assertTrue(info.residualFilterPresent());
-      assertTrue(info.message().contains("DISTINCT"));
-      assertEquals("cyl = 4", info.residualExpressionSummary());
+      assertTrue(info.parquetPredicateAttached());
+      assertFalse(info.residualFilterPresent());
+      assertNotNull(info.parquetPredicateSummary());
+      assertNull(info.residualExpressionSummary());
     }
   }
 

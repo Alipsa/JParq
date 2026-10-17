@@ -321,14 +321,14 @@ public class JParqResultSet extends ResultSetAdapter {
       }
       if (select.orderBy() != null) {
         for (SqlParser.OrderKey orderKey : select.orderBy()) {
-          if (orderKey != null && orderKey.column() != null) {
+          if (orderKey != null && orderKey.column() != null && !orderKey.column().matches("[0-9]+")) {
             requiredColumns.add(orderKey.column());
           }
         }
       }
       if (select.preOrderBy() != null) {
         for (SqlParser.OrderKey orderKey : select.preOrderBy()) {
-          if (orderKey != null && orderKey.column() != null) {
+          if (orderKey != null && orderKey.column() != null && !orderKey.column().matches("[0-9]+")) {
             requiredColumns.add(orderKey.column());
           }
         }
@@ -1302,6 +1302,11 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   @Override
+  public float getFloat(String columnLabel) throws SQLException {
+    return getFloat(findColumn(columnLabel));
+  }
+
+  @Override
   public double getDouble(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
     return v == null ? 0d : ((Number) v).doubleValue();
@@ -1321,6 +1326,16 @@ public class JParqResultSet extends ResultSetAdapter {
       case Number n -> new BigDecimal(n.toString());
       default -> new BigDecimal(v.toString());
     };
+  }
+
+  @Override
+  public BigDecimal getBigDecimal(String columnLabel) throws SQLException {
+    return getBigDecimal(findColumn(columnLabel));
+  }
+
+  @Override
+  public byte[] getBytes(String columnLabel) throws SQLException {
+    return getBytes(findColumn(columnLabel));
   }
 
   @Override

@@ -99,6 +99,50 @@ public class JParqExample {
   jdbc:jparq:/home/user/data?caseSensitive=true
   ```
 - Paths may be specified directly or using the `file://` prefix.
+- `predicatePushdown` — defaults to `true`. Set to `false` to evaluate the entire `WHERE` clause in Java.
+- `projectionPushdown` — defaults to `true`. Set to `false` to read every column, while still validating column names.
+  ```text
+  jdbc:jparq:/home/user/data?predicatePushdown=false&projectionPushdown=false
+  ```
+
+### Hugging Face optimized Parquet
+
+JParq reads ordinary and Hugging Face optimized Parquet files, including files written by PyArrow with
+content-defined chunking (CDC). CDC changes page boundaries; it does not require a special reader. When a file
+contains a page index, JParq uses it automatically with supported predicates to skip pages within row groups.
+The CLI `/describe <table>` reports row groups, row counts, and page-index availability. `/info` reports the
+connection's pushdown settings.
+
+Pushdown supports column-to-literal comparisons, `BETWEEN`, `IN` (up to 20 literals), `IS NULL`, `IS NOT NULL`,
+and supported `AND`/`OR`/`NOT` combinations. Supported terms of an `AND` are pushed independently; an `OR` must
+be fully supported. A case-sensitive string `LIKE 'prefix%'` can use a UTF-8 prefix range, with the exact pattern
+still evaluated in Java. `ILIKE`, escaped patterns, and prefixes containing `_` remain in Java. Date, timestamp,
+and exactly representable decimal literals are supported; incompatible or out-of-range bounds remain in Java.
+`DISTINCT` queries can use filters too.
+
+Floating-point values use one order everywhere, with and without pushdown, matching PostgreSQL and DuckDB:
+`-Infinity` < every finite value < `+Infinity` < `NaN`, where `NaN = NaN` and `-0.0 = 0.0`. Comparisons with
+`NaN` and infinities are therefore TRUE or FALSE rather than UNKNOWN, and `ORDER BY`, `MIN` and `MAX` place `NaN`
+last. PyArrow leaves `NaN` out of Parquet statistics, so on `FLOAT` and `DOUBLE` columns only `<`, `<=`, `=`,
+`IN` and `BETWEEN` against a non-zero literal are pushed down; `>`, `>=`, `<>`, `NOT IN` and `NOT BETWEEN` are
+evaluated in Java. Arithmetic on `NaN` or infinities and `DISTINCT`/`GROUP BY` of `-0.0` versus `0.0` are not
+yet covered.
+
+Single-table conditions in a join's `WHERE` can filter individual inputs. Unqualified columns must resolve to
+one input. Outer-join filtering preserves NULL-extended rows, and merged `FULL JOIN ... USING` columns remain
+in the final filter. The complete `WHERE` is always evaluated after the join. Predicate pushdown is disabled
+for sampled inputs: `TABLESAMPLE` chooses from the unfiltered input before `WHERE`, so `REPEATABLE` samples
+are independent of the pushdown setting. `ORDER BY` projections retain sorting and correlated-subquery inputs
+while excluding unrelated columns such as embedded media.
+
+Nanosecond timestamps, local timestamps, float16, lists, and image structs are readable. UTC-adjusted timestamps
+are returned as `java.sql.Timestamp` instants; local timestamps retain their stored wall-clock values in the
+JVM's default time zone. Microsecond and nanosecond precision is preserved. Lists are available through
+`ResultSet.getObject`, and structs through their JSON string representation. Dataset shards are separate tables;
+automatic Hugging Face shard grouping is outside this feature.
+
+Small PyArrow fixtures are committed, so Maven does not need Python. Regeneration instructions and the exact
+PyArrow dependency are in `tools/createHfOptimizedData.py`.
 
 ### Fat Jar
 
@@ -162,7 +206,7 @@ $
 
 - **Driver scope** — Read-only. Only `SELECT` statements are supported; `executeUpdate`/DML, generated keys, and updatable result sets are not implemented. Result sets are `TYPE_FORWARD_ONLY`, `CONCUR_READ_ONLY` with `CLOSE_CURSORS_AT_COMMIT` holdability.
 - **Prepared statements** — SQL is planned when the `PreparedStatement` is created. Positional `?` parameters are bound via the standard `setXxx` methods and rendered as safe SQL literals (named parameters are also supported). Parameter metadata is available but reports generic `VARCHAR`/`IN` characteristics because actual typing occurs at execution. Only forward-only/read-only statements with `CLOSE_CURSORS_AT_COMMIT` holdability are accepted; overloads requesting other result-set types or generated keys/column-based key selection throw `SQLFeatureNotSupportedException`. Prepared-statement batching without a SQL argument is supported for convenience and reports `SUCCESS_NO_INFO` counts per entry. `Statement` batching and `addBatch(String)` remain unsupported.
-- **Parquet predicate pushdown** — When a query targets a Parquet-backed table with readable schema metadata and the full `WHERE` clause can be translated by `ParquetFilterBuilder`, JParq attaches a Parquet `FilterPredicate` and enables statistics, column-index, dictionary, and bloom-filter pruning. Supported shapes are column-vs-literal comparisons (`=`, `!=`, `<`, `<=`, `>`, `>=`), `BETWEEN`, `IN` with up to 20 literals, and `AND`/`OR`/`NOT` compositions where every branch is pushdownable. Predicates involving functions, `LIKE`, column-to-column comparisons, subqueries, unsupported types, or mixed pushdownable/non-pushdownable trees fall back to residual filtering in Java. `JParqPreparedStatement.getPushdownInfo()` exposes which path a prepared statement uses.
+- **Parquet predicate pushdown** — JParq attaches supported `WHERE` predicates to Parquet readers and enables statistics, column-index, dictionary, and bloom-filter pruning. Supported `AND` terms can be pushed independently, with unsupported terms evaluated in Java. See the Hugging Face optimized Parquet section above for supported operators and join/sample behavior. `JParqPreparedStatement.getPushdownInfo()` reports the attached predicate and the remaining residual filter.
 - **Transactions and sessions** — The connection is always read-only with `TRANSACTION_NONE`; `commit`, `rollback`, and savepoints are no-ops. `getAutoCommit()` always returns `true`, and changing isolation level, holdability, or poolability is not supported.
 - **Metadata** — `DatabaseMetaData` exposes tables and columns derived from the base directory and subdirectories (schemas); the catalog is the base directory name. Callable statements, stored procedures, and custom type mappings are not supported.
 - **Other JDBC surfaces** — `CallableStatement`, `createClob`/`createBlob`/`createArrayOf`, network timeout, and client-info features are not implemented. Connection validation via `isValid()` returns `true` while the connection is open and `false` after it is closed.

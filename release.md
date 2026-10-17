@@ -1,11 +1,24 @@
 # Version history
 
 ### 1.4.0
+- Support Hugging Face optimized Parquet files written with content-defined chunking and page indexes, verified with committed PyArrow 21.0.0 fixtures and physical page-pruning tests.
+- Fix predicate pushdown for SQL NULL negations, date and timestamp bounds, column-name casing, fractional integer bounds, and out-of-range numeric literals.
+- Push supported `AND` terms independently, add NULL checks and string-prefix `LIKE` ranges, and support logical-type bounds in `BETWEEN` and `IN`.
+- Enable predicate pushdown with `DISTINCT` and safe single-table join conditions; retain the full post-join filter.
+- Read only required columns with `ORDER BY`, retaining sort, alias, ordinal, and correlated-subquery dependencies.
+- Read nanosecond and local timestamps and float16 values; preserve logical types in JDBC metadata without reading data rows.
+- Add `predicatePushdown` and `projectionPushdown` connection properties (both default to `true`), reported by CLI `/info` and statement pushdown diagnostics.
+- CLI `/describe` now reports row groups, row counts, and page-index availability.
 - Boolean columns can be used directly as predicates (`WHERE active`, `NOT active`, `CASE WHEN active`, and `HAVING active` on grouping columns); non-Boolean predicates are rejected.
 - Support `IS [NOT] TRUE/FALSE` in WHERE, HAVING, and Boolean projections.
-- Evaluate `BETWEEN` through the SQL conjunction truth table, including NULL bounds, and handle incomparable values consistently in comparisons, `IN`, `BETWEEN`, and quantified predicates. Identical NaN values are not distinct.
+- Evaluate `BETWEEN` through the SQL conjunction truth table, including NULL bounds.
+- Order floating-point values consistently in comparisons, `IN`, `BETWEEN`, quantified predicates, `IS [NOT] DISTINCT FROM`, `ORDER BY`, `MIN`, and `MAX`, which no longer throw for `NaN` or infinities.
 - Fix duplicate first rows in queries with window functions and no outer `ORDER BY` or `OFFSET`, which also affected `LIMIT` and aggregates over such queries.
-- **Behavior change:** predicates involving NULL follow SQL three-valued logic. WHERE, JOIN ON, HAVING, CASE WHEN, Boolean projections, and quantified subqueries preserve UNKNOWN until the selection boundary, so negations and NOT IN on nullable columns may return fewer rows. This applies to predicates evaluated by the Java engine; predicates fully pushed down to Parquet are unchanged until the optimized Parquet reader ships.
+- **Behavior change:** predicates involving NULL follow SQL three-valued logic. WHERE, JOIN ON, HAVING, CASE WHEN, Boolean projections, and quantified subqueries preserve UNKNOWN until the selection boundary, so negations and NOT IN on nullable columns may return fewer rows. This applies to predicates evaluated by the Java engine and to predicates pushed down to Parquet.
+- **Behavior change:** comparisons with `NaN` and infinities return TRUE or FALSE instead of UNKNOWN. Values are ordered `-Infinity` < finite < `+Infinity` < `NaN` (`NaN = NaN`, `-0.0 = 0.0`), `NaN` sorts above all numbers, and results no longer depend on the `predicatePushdown` setting. On `FLOAT` and `DOUBLE` columns only `<`, `<=`, `=`, `IN`, and `BETWEEN` against non-zero literals exactly representable in the column type are pushed to Parquet. Known limitations: arithmetic on `NaN` or infinities still fails, and `DISTINCT`/`GROUP BY` keep `-0.0` and `0.0` separate.
+- **Behavior change:** microsecond and nanosecond timestamps retain full precision. Equality and range comparisons that previously matched due to millisecond truncation may return different rows.
+- **Behavior change:** sampled tables disable predicate pushdown so `TABLESAMPLE` runs before `WHERE`. Repeatable sample membership is independent of the pushdown setting.
+- Resolve `ORDER BY` ordinals to select-list positions and preserve exact numeric literals beyond the signed-long range.
 
 ### 1.3.0, 2026-03-14
 - com.fasterxml.jackson.core:jackson-databind ......... 2.20.1 -> 2.21.1

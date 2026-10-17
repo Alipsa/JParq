@@ -36,6 +36,8 @@ public class JParqConnection implements Connection {
 
   private final File baseDir;
   private final boolean caseSensitive;
+  private final boolean predicatePushdown;
+  private final boolean projectionPushdown;
   private boolean closed = false;
   /** Default schema used when no explicit schema is provided. */
   public static final String DEFAULT_SCHEMA = "PUBLIC";
@@ -67,6 +69,8 @@ public class JParqConnection implements Connection {
     }
 
     this.caseSensitive = Boolean.parseBoolean(qprops.getProperty("caseSensitive", "false"));
+    this.predicatePushdown = Boolean.parseBoolean(qprops.getProperty("predicatePushdown", "true"));
+    this.projectionPushdown = Boolean.parseBoolean(qprops.getProperty("projectionPushdown", "true"));
 
     if (path.startsWith("file://")) {
       path = path.substring("file://".length());
@@ -268,6 +272,24 @@ public class JParqConnection implements Connection {
    */
   public boolean isCaseSensitive() {
     return caseSensitive;
+  }
+
+  /**
+   * Reports whether Parquet predicate filtering is enabled.
+   * 
+   * @return true if predicate pushdown is enabled
+   */
+  public boolean isPredicatePushdown() {
+    return predicatePushdown;
+  }
+
+  /**
+   * Reports whether Parquet column projection is enabled.
+   * 
+   * @return true if projection pushdown is enabled
+   */
+  public boolean isProjectionPushdown() {
+    return projectionPushdown;
   }
 
   // --- Connection API ---

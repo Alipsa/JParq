@@ -2,7 +2,6 @@ package se.alipsa.jparq.cli;
 
 import java.io.Closeable;
 import java.io.PrintWriter;
-import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -17,9 +16,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.stream.Collectors;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqDriver;
 import se.alipsa.jparq.JParqVersion;
+import se.alipsa.jparq.engine.ParquetFileInfo;
 
 /**
  * A simple command processor that executes JParq queries and CLI commands.
@@ -165,7 +167,7 @@ public class JParqCliSession implements Closeable {
       return;
     }
     try {
-      Path path = Paths.get(baseDir.trim()).toAbsolutePath().normalize();
+      var path = Paths.get(baseDir.trim()).toAbsolutePath().normalize();
       connect(path.toString());
     } catch (Exception e) {
       err.println("Failed to resolve path: " + e.getMessage());
@@ -275,6 +277,16 @@ public class JParqCliSession implements Closeable {
         String typeText = column.type() + "(" + column.size() + ")";
         out.println(column.column() + pad(nameWidth - column.column().length()) + " | " + typeText
             + pad(typeWidth - typeText.length()) + " | " + (column.nullable() ? "YES" : "NO"));
+      }
+      if (connection instanceof JParqConnection jparq) {
+        var location = jparq.resolveTable(schema, table);
+        try {
+          var info = ParquetFileInfo.read(new Path(location.file().toURI()), new Configuration(false));
+          out.println("Row groups: " + info.rowGroups().size() + ", rows: " + info.rowCount());
+          out.println("Page index: " + (info.pageIndexPresent() ? "present" : "absent or partial"));
+        } catch (java.io.IOException exception) {
+          throw new SQLException("Unable to read Parquet footer", exception);
+        }
       }
       out.flush();
     } catch (SQLException e) {
@@ -396,6 +408,8 @@ public class JParqCliSession implements Closeable {
     if (connection instanceof JParqConnection jparqConn) {
       out.println("Base directory: " + jparqConn.getBaseDir().getAbsolutePath());
       out.println("Case sensitive: " + jparqConn.isCaseSensitive());
+      out.println("Predicate pushdown: " + jparqConn.isPredicatePushdown());
+      out.println("Projection pushdown: " + jparqConn.isProjectionPushdown());
     }
     try {
       out.println("Connection closed: " + connection.isClosed());
@@ -451,8 +465,8 @@ public class JParqCliSession implements Closeable {
     if (connectedDirectory == null || connectedDirectory.isBlank()) {
       return null;
     }
-    Path path = Paths.get(connectedDirectory);
-    Path name = path.getFileName();
+    var path = Paths.get(connectedDirectory);
+    var name = path.getFileName();
     return name == null ? connectedDirectory : name.toString();
   }
 
