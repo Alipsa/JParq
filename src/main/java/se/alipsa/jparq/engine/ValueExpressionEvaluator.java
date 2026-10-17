@@ -44,6 +44,7 @@ import net.sf.jsqlparser.expression.operators.relational.Between;
 import net.sf.jsqlparser.expression.operators.relational.ComparisonOperator;
 import net.sf.jsqlparser.expression.operators.relational.ExistsExpression;
 import net.sf.jsqlparser.expression.operators.relational.InExpression;
+import net.sf.jsqlparser.expression.operators.relational.IsBooleanExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsDistinctExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
 import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
@@ -312,9 +313,9 @@ public final class ValueExpressionEvaluator {
     }
     if (expression instanceof NotExpression || expression instanceof AndExpression || expression instanceof OrExpression
         || expression instanceof ComparisonOperator || expression instanceof IsDistinctExpression
-        || expression instanceof IsNullExpression || expression instanceof ExistsExpression
-        || expression instanceof InExpression || expression instanceof Between || expression instanceof LikeExpression
-        || expression instanceof SimilarToExpression) {
+        || expression instanceof IsNullExpression || expression instanceof IsBooleanExpression
+        || expression instanceof ExistsExpression || expression instanceof InExpression || expression instanceof Between
+        || expression instanceof LikeExpression || expression instanceof SimilarToExpression) {
       return conditionEvaluator(record).evalTruth(expression, record);
     }
     if (expression instanceof JsonFunction json) {
@@ -492,7 +493,16 @@ public final class ValueExpressionEvaluator {
     return evalInternal(elseExpr, record);
   }
 
-  /** Evaluates CASE WHEN using the SQL TRUE selection boundary. */
+  /**
+   * Evaluates a CASE WHEN condition using the SQL TRUE selection boundary.
+   *
+   * @param condition
+   *          the WHEN condition (may be {@code null})
+   * @param record
+   *          the current record
+   * @return {@code true} only when the condition is SQL TRUE; UNKNOWN and
+   *         {@code null} conditions do not match
+   */
   private boolean evaluateCondition(Expression condition, GenericRecord record) {
     return condition != null && conditionEvaluator(record).eval(condition, record);
   }
@@ -500,12 +510,18 @@ public final class ValueExpressionEvaluator {
   /**
    * Lazily creates the predicate evaluator shared by CASE WHEN and Boolean
    * values.
+   *
+   * @param record
+   *          the current record, used to resolve the schema when the evaluator
+   *          was created without one
+   * @return the shared evaluator, carrying this evaluator's window state so
+   *         analytic expressions keep working inside predicates
    */
   private ExpressionEvaluator conditionEvaluator(GenericRecord record) {
     if (conditionEvaluator == null) {
       Schema schemaToUse = schema != null ? schema : record.getSchema();
       conditionEvaluator = new ExpressionEvaluator(schemaToUse, subqueryExecutor, outerQualifiers,
-          qualifierColumnMapping, unqualifiedColumnMapping);
+          qualifierColumnMapping, unqualifiedColumnMapping, windowState);
     }
     return conditionEvaluator;
   }

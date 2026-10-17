@@ -9,7 +9,11 @@
 - Read nanosecond and local timestamps and float16 values; preserve logical types in JDBC metadata without reading data rows.
 - Add `predicatePushdown` and `projectionPushdown` connection properties (both default to `true`), reported by CLI `/info` and statement pushdown diagnostics.
 - CLI `/describe` now reports row groups, row counts, and page-index availability.
-- **Behavior change:** predicates involving NULL follow SQL three-valued logic, including WHERE, JOIN ON, HAVING, CASE WHEN, and Boolean projections. Negations and `NOT IN` on nullable columns may return fewer rows.
+- Boolean columns can be used directly as predicates (`WHERE active`, `NOT active`, `CASE WHEN active`, and `HAVING active` on grouping columns); non-Boolean predicates are rejected.
+- Support `IS [NOT] TRUE/FALSE` in WHERE, HAVING, and Boolean projections.
+- Evaluate `BETWEEN` through the SQL conjunction truth table, including NULL bounds, and handle incomparable values consistently in comparisons, `IN`, `BETWEEN`, and quantified predicates. Identical NaN values are not distinct.
+- Fix duplicate first rows in queries with window functions and no outer `ORDER BY` or `OFFSET`, which also affected `LIMIT` and aggregates over such queries.
+- **Behavior change:** predicates involving NULL follow SQL three-valued logic. WHERE, JOIN ON, HAVING, CASE WHEN, Boolean projections, and quantified subqueries preserve UNKNOWN until the selection boundary, so negations and NOT IN on nullable columns may return fewer rows. This applies to predicates evaluated by the Java engine and to predicates pushed down to Parquet.
 - **Behavior change:** microsecond and nanosecond timestamps retain full precision. Equality and range comparisons that previously matched due to millisecond truncation may return different rows.
 - **Behavior change:** sampled tables disable predicate pushdown so `TABLESAMPLE` runs before `WHERE`. Repeatable sample membership is independent of the pushdown setting.
 - Resolve `ORDER BY` ordinals to select-list positions and preserve exact numeric literals beyond the signed-long range.

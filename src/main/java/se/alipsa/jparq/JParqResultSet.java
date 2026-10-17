@@ -534,7 +534,9 @@ public class JParqResultSet extends ResultSetAdapter {
       final boolean match = effectiveResidual == null || evaluator.eval(effectiveResidual, first);
 
       var order = select.orderBy();
-      boolean usePrefetchedAsCurrent = match && select.offset() == 0;
+      // Window processing buffers the first row too, so consume it through the
+      // processor exactly once.
+      boolean usePrefetchedAsCurrent = match && select.offset() == 0 && (windowPlan == null || windowPlan.isEmpty());
       if (order == null || order.isEmpty()) {
         int initialEmitted = usePrefetchedAsCurrent ? 1 : 0;
         List<String> distinctProjection = resolveDistinctColumns(select);

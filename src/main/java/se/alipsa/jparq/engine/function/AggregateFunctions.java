@@ -21,6 +21,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.CaseExpression;
@@ -49,6 +50,7 @@ import net.sf.jsqlparser.expression.operators.relational.Between;
 import net.sf.jsqlparser.expression.operators.relational.ExistsExpression;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.InExpression;
+import net.sf.jsqlparser.expression.operators.relational.IsBooleanExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
 import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
@@ -68,6 +70,7 @@ import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.Operation;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.RecordReader;
+import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.OrderKey;
 import se.alipsa.jparq.engine.SqlTruth;
@@ -75,6 +78,7 @@ import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.LiteralConverter;
 
 /**
@@ -1199,6 +1203,7 @@ public final class AggregateFunctions {
     }
 
     Map<GroupKey, GroupState> states = new LinkedHashMap<>();
+    Predicate<Column> booleanColumn = column -> false;
 
     try (RecordReader autoClose = reader) {
       GenericRecord rec = autoClose.read();
@@ -1212,6 +1217,9 @@ public final class AggregateFunctions {
           if (residual != null) {
             whereEval = new ExpressionEvaluator(schema, subqueryExecutor, outerQualifiers, qualifierColumnMapping,
                 unqualifiedColumnMapping);
+          }
+          if (having != null) {
+            booleanColumn = booleanColumnPredicate(schema, qualifierColumnMapping, unqualifiedColumnMapping);
           }
           CorrelationMappings mappings = new CorrelationMappings(outerQualifiers, qualifierColumnMapping,
               unqualifiedColumnMapping, normalizedCorrelationContext);
@@ -1271,7 +1279,7 @@ public final class AggregateFunctions {
       boolean include = true;
       if (normalizedHaving != null) {
         HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues, labelLookup, subqueryExecutor,
-            outerQualifiers, normalizedCorrelationContext, state.groupingSetIndex());
+            outerQualifiers, normalizedCorrelationContext, state.groupingSetIndex(), booleanColumn);
         include = evaluator.eval(normalizedHaving);
       }
       if (include) {
@@ -1319,7 +1327,7 @@ public final class AggregateFunctions {
         if (hasNull) {
           continue;
         }
-        int cmp = ExpressionEvaluator.typedCompare(lv, rv);
+        int cmp = SqlComparisons.typedCompare(lv, rv);
         if (cmp != 0) {
           return key.asc() ? cmp : -cmp;
         }
@@ -1890,7 +1898,7 @@ public final class AggregateFunctions {
         extremum = value;
         return;
       }
-      int cmp = ExpressionEvaluator.typedCompare(value, extremum);
+      int cmp = SqlComparisons.typedCompare(value, extremum);
       if ((isMax && cmp > 0) || (!isMax && cmp < 0)) {
         extremum = value;
       }
@@ -1995,6 +2003,34 @@ public final class AggregateFunctions {
     return Types.OTHER;
   }
 
+  /**
+   * Creates a Boolean type check using source metadata and column mappings.
+   *
+   * @param schema
+   *          the source record schema
+   * @param qualifierColumnMapping
+   *          qualifier-to-column mappings
+   * @param unqualifiedColumnMapping
+   *          mappings for unique unqualified columns
+   * @return a schema-backed Boolean column predicate
+   */
+  private static Predicate<Column> booleanColumnPredicate(Schema schema,
+      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping) {
+    Map<String, String> columnIndex = new HashMap<>();
+    for (Schema.Field field : schema.getFields()) {
+      columnIndex.put(Identifier.lookupKey(field.name()), field.name());
+    }
+    Map<String, Map<String, String>> qualified = ColumnMappingUtil.normaliseQualifierMapping(qualifierColumnMapping);
+    Map<String, String> unqualified = ColumnMappingUtil.normaliseUnqualifiedMapping(unqualifiedColumnMapping);
+    return column -> {
+      String qualifier = column.getTable() == null ? null : column.getTable().getName();
+      String canonical = ColumnMappingUtil.canonicalFieldName(qualifier, column.getColumnName(), qualified, unqualified,
+          columnIndex);
+      Schema.Field field = schema.getField(canonical);
+      return field != null && JdbcTypeMapper.nonNullSchema(field.schema()).getType() == Schema.Type.BOOLEAN;
+    };
+  }
+
   private static final class HavingEvaluator {
     private final AggregatePlan plan;
     private final List<Object> aggregateValues;
@@ -2004,10 +2040,11 @@ public final class AggregateFunctions {
     private final Map<String, Map<String, String>> correlationContext;
     private final int groupingSetIndex;
     private final Map<String, Integer> groupIndexLookup;
+    private final Predicate<Column> booleanColumn;
 
     HavingEvaluator(AggregatePlan plan, List<Object> aggregateValues, Map<String, Object> labelLookup,
         SubqueryExecutor subqueryExecutor, List<String> correlatedQualifiers,
-        Map<String, Map<String, String>> correlationContext, int groupingSetIndex) {
+        Map<String, Map<String, String>> correlationContext, int groupingSetIndex, Predicate<Column> booleanColumn) {
       this.plan = plan;
       this.aggregateValues = aggregateValues;
       this.labelLookup = Collections.unmodifiableMap(new HashMap<>(labelLookup));
@@ -2017,6 +2054,7 @@ public final class AggregateFunctions {
           .normaliseQualifierMapping(correlationContext == null ? Map.of() : correlationContext);
       this.groupingSetIndex = groupingSetIndex;
       this.groupIndexLookup = groupIndexLookup(plan.groupExpressions());
+      this.booleanColumn = Objects.requireNonNull(booleanColumn, "booleanColumn");
     }
 
     boolean eval(Expression expression) {
@@ -2051,17 +2089,17 @@ public final class AggregateFunctions {
         boolean isNullVal = operand == null;
         return isNull.isNot() != isNullVal;
       }
+      if (expr instanceof IsBooleanExpression isBoolean) {
+        Boolean truth = evalTruth(isBoolean.getLeftExpression());
+        return SqlTruth.is(truth, isBoolean.isTrue(), isBoolean.isNot());
+      }
       if (expr instanceof Between between) {
         Object val = value(between.getLeftExpression());
         Object low = value(between.getBetweenExpressionStart());
         Object high = value(between.getBetweenExpressionEnd());
-        if (val == null || low == null || high == null) {
-          return null;
-        }
-        int cmpLow = ExpressionEvaluator.typedCompare(val, low);
-        int cmpHigh = ExpressionEvaluator.typedCompare(val, high);
-        boolean in = cmpLow >= 0 && cmpHigh <= 0;
-        return between.isNot() != in;
+        Boolean in = SqlTruth.and(SqlComparisons.compare(">=", SqlComparisons.compareOrUnknown(val, low)),
+            SqlComparisons.compare("<=", SqlComparisons.compareOrUnknown(val, high)));
+        return between.isNot() ? SqlTruth.not(in) : in;
       }
       if (expr instanceof InExpression in) {
         return evalIn(in);
@@ -2078,30 +2116,22 @@ public final class AggregateFunctions {
       if (expr instanceof BinaryExpression be) {
         return evalBinary(be);
       }
-      throw new IllegalArgumentException("Unsupported HAVING expression: " + expr);
+      if (expr instanceof Column column && (findGroupIndex(column, groupIndexLookup, plan.groupExpressions()) == null
+          || !booleanColumn.test(column))) {
+        throw new IllegalArgumentException("Unsupported predicate: " + expr);
+      }
+      Object result = value(expr);
+      if (result == null || result instanceof Boolean) {
+        return (Boolean) result;
+      }
+      throw new IllegalArgumentException("Unsupported predicate: " + expr);
     }
 
     private Boolean evalIn(InExpression in) {
       Object leftVal = value(in.getLeftExpression());
-      if (leftVal == null) {
-        return null;
-      }
       Expression right = in.getRightExpression();
       if (right instanceof ExpressionList<?> list) {
-        boolean found = false;
-        boolean unknown = false;
-        for (Expression e : list) {
-          Object candidate = value(e);
-          unknown |= candidate == null;
-          if (candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
-            found = true;
-            break;
-          }
-        }
-        if (found) {
-          return !in.isNot();
-        }
-        return unknown ? null : Boolean.valueOf(in.isNot());
+        return SqlTruth.in(leftVal, list, this::value, in.isNot());
       }
       if (right instanceof Select subSelect) {
         if (subqueryExecutor == null) {
@@ -2112,20 +2142,7 @@ public final class AggregateFunctions {
         SubqueryExecutor.SubqueryResult result = rewritten.correlated()
             ? subqueryExecutor.executeRaw(rewritten.sql())
             : subqueryExecutor.execute(subSelect);
-        List<Object> subqueryValues = result.firstColumnValues();
-        boolean found = false;
-        boolean unknown = false;
-        for (Object candidate : subqueryValues) {
-          unknown |= candidate == null;
-          if (candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
-            found = true;
-            break;
-          }
-        }
-        if (found) {
-          return !in.isNot();
-        }
-        return unknown ? null : Boolean.valueOf(in.isNot());
+        return SqlTruth.in(leftVal, result.firstColumnValues(), in.isNot());
       }
       throw new IllegalArgumentException("Unsupported IN expression in HAVING clause: " + in);
     }
@@ -2181,36 +2198,12 @@ public final class AggregateFunctions {
 
     private Boolean evalBinary(BinaryExpression be) {
       String op = be.getStringExpression();
+      Object left = value(be.getLeftExpression());
+      Object right = value(be.getRightExpression());
       if (be instanceof net.sf.jsqlparser.expression.operators.relational.IsDistinctExpression distinct) {
-        Object left = value(be.getLeftExpression());
-        Object right = value(be.getRightExpression());
-        boolean same = left == null
-            ? right == null
-            : right != null && ExpressionEvaluator.typedCompare(left, right) == 0;
-        return distinct.isNot() == same;
+        return distinct.isNot() != SqlTruth.isDistinctFrom(left, right);
       }
-      if (value(be.getLeftExpression()) == null || value(be.getRightExpression()) == null) {
-        return null;
-      }
-      int cmp = compare(be.getLeftExpression(), be.getRightExpression());
-      return switch (op) {
-        case "=" -> cmp == 0;
-        case "<" -> cmp < 0;
-        case ">" -> cmp > 0;
-        case "<=" -> cmp <= 0;
-        case ">=" -> cmp >= 0;
-        case "<>", "!=" -> cmp != 0;
-        default -> throw new IllegalArgumentException("Unsupported operator in HAVING clause: " + op);
-      };
-    }
-
-    private int compare(Expression left, Expression right) {
-      Object leftVal = value(left);
-      Object rightVal = value(right);
-      if (leftVal == null || rightVal == null) {
-        return -1;
-      }
-      return ExpressionEvaluator.typedCompare(leftVal, rightVal);
+      return SqlComparisons.compare(op, SqlComparisons.compareOrUnknown(left, right));
     }
 
     private Object value(Expression expression) {
