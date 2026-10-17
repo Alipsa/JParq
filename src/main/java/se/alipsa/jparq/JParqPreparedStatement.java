@@ -83,6 +83,7 @@ import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SamplingRecordReader;
+import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.QualifiedExpansionColumn;
 import se.alipsa.jparq.engine.SqlParser.ValueTableDefinition;
@@ -1057,7 +1058,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private int compareSetValues(Object left, Object right) {
     if (left instanceof Number lNum && right instanceof Number rNum) {
-      return new BigDecimal(lNum.toString()).compareTo(new BigDecimal(rNum.toString()));
+      return SqlComparisons.compareNumbers(lNum, rNum);
     }
     if (left instanceof Boolean lBool && right instanceof Boolean rBool) {
       return Boolean.compare(lBool, rBool);

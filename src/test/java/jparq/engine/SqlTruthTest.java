@@ -137,18 +137,23 @@ class SqlTruthTest {
   }
 
   /**
-   * Confirms that a failed comparison (NaN operand) in a quantified comparison is
-   * UNKNOWN instead of throwing.
+   * Confirms that NaN is the largest value in quantified comparisons, so a NaN
+   * operand is decisive instead of UNKNOWN.
    */
   @Test
-  void anyAllComparisonFailuresAreUnknown() throws Exception {
+  void quantifiedComparisonsOrderNaNAboveNumbers() throws Exception {
     String input = "(VALUES (1), (2), (3), (4)) AS t(id)";
     String others = "(VALUES (1.0)) AS t2(x)";
     String caseExpr = "CASE WHEN id = 1 THEN ACOS(2) ELSE 2.0 END";
-    assertEquals(List.of(2L, 3L, 4L),
+    assertEquals(List.of(1L, 2L, 3L, 4L),
         query("SELECT id FROM " + input + " WHERE " + caseExpr + " > ALL (SELECT x FROM " + others + ") ORDER BY id"));
-    assertEquals(List.of(2L, 3L, 4L),
+    assertEquals(List.of(1L, 2L, 3L, 4L),
         query("SELECT id FROM " + input + " WHERE " + caseExpr + " > ANY (SELECT x FROM " + others + ") ORDER BY id"));
+    String larger = "(VALUES (3.0)) AS t3(x)";
+    assertEquals(List.of(1L),
+        query("SELECT id FROM " + input + " WHERE " + caseExpr + " > ALL (SELECT x FROM " + larger + ") ORDER BY id"));
+    assertEquals(List.of(2L, 3L, 4L),
+        query("SELECT id FROM " + input + " WHERE " + caseExpr + " < ALL (SELECT x FROM " + larger + ") ORDER BY id"));
   }
 
   /**
@@ -314,26 +319,29 @@ class SqlTruthTest {
   }
 
   /**
-   * Confirms that uncomparable values (NaN) are UNKNOWN for IN and BETWEEN, while
-   * identical NaNs remain not distinct.
+   * Confirms that NaN is ordered above every number and equals itself in IN,
+   * BETWEEN, DISTINCT, HAVING, and subquery predicates.
    */
   @Test
-  void nanComparisonsAreUnknownAcrossAllPredicateKinds() throws Exception {
+  void nanComparisonsAreOrderedAboveNumbersAcrossAllPredicateKinds() throws Exception {
     String input = "(VALUES (1), (2)) AS t(id)";
     assertEquals(List.of(), query("SELECT id FROM " + input + " WHERE ACOS(2) IN (1.0, 2.0)"));
-    assertEquals(List.of(), query("SELECT id FROM " + input + " WHERE ACOS(2) NOT IN (1.0, 2.0)"));
+    assertEquals(List.of(1L, 2L), query("SELECT id FROM " + input + " WHERE ACOS(2) NOT IN (1.0, 2.0)"));
     assertEquals(List.of(), query("SELECT id FROM " + input + " WHERE ACOS(2) BETWEEN 0 AND 5"));
-    assertEquals(List.of(), query("SELECT id FROM " + input + " WHERE ACOS(2) NOT BETWEEN 0 AND 5"));
+    assertEquals(List.of(1L, 2L), query("SELECT id FROM " + input + " WHERE ACOS(2) NOT BETWEEN 0 AND 5"));
     assertEquals(List.of(1L, 2L), query("SELECT id FROM " + input + " WHERE ACOS(2) IS NOT DISTINCT FROM ACOS(2)"));
     assertEquals(List.of(), query("SELECT id FROM " + input + " WHERE ACOS(2) IS DISTINCT FROM ACOS(2)"));
     assertEquals(List.of(1L, 2L), query("SELECT id FROM " + input + " WHERE 2.0 IN (1.0, 2.0)"));
     assertEquals(List.of(1L, 2L), query("SELECT id FROM " + input + " WHERE 2.0 BETWEEN 0 AND 5"));
+    assertEquals(List.of(1L, 2L), query("SELECT id FROM " + input + " WHERE ACOS(2) = ACOS(2)"));
+    assertEquals(List.of(1L, 2L), query("SELECT id FROM " + input + " WHERE ACOS(2) > 1.0E300"));
+    assertEquals(List.of(), query("SELECT id FROM " + input + " WHERE ACOS(2) < 1.0E300"));
     String doubles = "(VALUES (1, CAST(1 AS DOUBLE)), (2, ACOS(2)), "
         + "(3, CAST(2 AS DOUBLE)), (4, CAST(4 AS DOUBLE))) AS t(id, dbl)";
     assertEquals(List.of(1L, 3L), query("SELECT id FROM " + doubles + " WHERE dbl IN (1.0, 2.0) ORDER BY id"));
     assertEquals(List.of(1L, 2L, 3L, 4L),
         query("SELECT id FROM " + doubles + " WHERE dbl IS NOT DISTINCT FROM dbl ORDER BY id"));
-    assertEquals(List.of(1L, 3L, 4L),
+    assertEquals(List.of(1L, 2L, 3L, 4L),
         query("SELECT id FROM " + doubles + " GROUP BY id HAVING MAX(dbl) > 0 ORDER BY id"));
     assertEquals(List.of(1L, 3L),
         query("SELECT id FROM " + doubles + " GROUP BY id HAVING MAX(dbl) IN (1.0, 2.0) ORDER BY id"));
@@ -341,11 +349,65 @@ class SqlTruthTest {
         query("SELECT id FROM " + doubles + " GROUP BY id HAVING MAX(dbl) BETWEEN 0 AND 5 ORDER BY id"));
     String candidates = "(SELECT candidate FROM (VALUES (CAST(1 AS DOUBLE)), (CAST(2 AS DOUBLE)), "
         + "(ACOS(2))) AS q(candidate))";
-    assertEquals(List.of(1L, 3L), query("SELECT id FROM " + doubles + " WHERE dbl IN " + candidates + " ORDER BY id"));
-    assertEquals(List.of(), query("SELECT id FROM " + doubles + " WHERE dbl NOT IN " + candidates));
-    assertEquals(List.of(1L, 3L),
+    assertEquals(List.of(1L, 2L, 3L),
+        query("SELECT id FROM " + doubles + " WHERE dbl IN " + candidates + " ORDER BY id"));
+    assertEquals(List.of(4L), query("SELECT id FROM " + doubles + " WHERE dbl NOT IN " + candidates));
+    assertEquals(List.of(1L, 2L, 3L),
         query("SELECT id FROM " + doubles + " GROUP BY id HAVING MAX(dbl) IN " + candidates + " ORDER BY id"));
-    assertEquals(List.of(), query("SELECT id FROM " + doubles + " GROUP BY id HAVING MAX(dbl) NOT IN " + candidates));
+    assertEquals(List.of(4L), query("SELECT id FROM " + doubles + " GROUP BY id HAVING MAX(dbl) NOT IN " + candidates));
+    assertEquals(List.of(1L, 3L, 4L, 2L), query("SELECT id FROM " + doubles + " ORDER BY dbl"));
+    assertEquals(List.of(2L, 4L, 3L, 1L), query("SELECT id FROM " + doubles + " ORDER BY dbl DESC"));
+  }
+
+  /**
+   * Checks the shared numeric order: -Infinity, finite values, +Infinity, NaN,
+   * with NaN equal to NaN and -0.0 equal to 0.0 for every numeric type.
+   */
+  @Test
+  void numbersFollowOneTotalOrder() {
+    Number[] ascending = {
+        Double.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, -1e300, -1, -0.5f, 0, 1L, 1.5, new java.math.BigDecimal("2"),
+        1e300, Double.POSITIVE_INFINITY, Float.POSITIVE_INFINITY, Double.NaN, Float.NaN
+    };
+    for (int i = 0; i < ascending.length; i++) {
+      for (int j = 0; j < ascending.length; j++) {
+        int expected = Integer.signum(Integer.compare(rank(i), rank(j)));
+        assertEquals(expected, Integer.signum(SqlComparisons.typedCompare(ascending[i], ascending[j])),
+            ascending[i] + " vs " + ascending[j]);
+        assertEquals(expected, Integer.signum(SqlComparisons.compareNumbers(ascending[i], ascending[j])));
+        assertEquals(expected, Integer.signum(ExpressionEvaluator.typedCompare(ascending[i], ascending[j])));
+        assertEquals(expected, Integer.signum(SqlComparisons.compareOrUnknown(ascending[i], ascending[j])));
+      }
+    }
+    assertEquals(0, SqlComparisons.compareNumbers(-0.0, 0.0));
+    assertEquals(0, SqlComparisons.compareNumbers(0.0f, -0.0));
+    assertEquals(0, SqlComparisons.compareNumbers(-0.0f, 0));
+    assertEquals(0, SqlComparisons.compareNumbers(Float.NaN, Double.NaN));
+    assertEquals(0, SqlComparisons.compareNumbers(Float.POSITIVE_INFINITY, Double.POSITIVE_INFINITY));
+    assertEquals(0, SqlComparisons.compareNumbers(Float.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY));
+    assertEquals(Boolean.TRUE, SqlComparisons.compare("<", SqlComparisons.compareOrUnknown(1e300, Double.NaN)));
+    assertEquals(Boolean.TRUE, SqlComparisons.compare("=", SqlComparisons.compareOrUnknown(Double.NaN, Double.NaN)));
+    assertNull(SqlComparisons.compareOrUnknown(Double.NaN, null));
+  }
+
+  /**
+   * Groups the numbers of {@link #numbersFollowOneTotalOrder()} into equal ranks.
+   */
+  private static int rank(int index) {
+    // -Inf (2), -1e300, -1, -0.5, 0, 1, 1.5, 2, 1e300, +Inf (2), NaN (2)
+    return switch (index) {
+      case 0, 1 -> 0;
+      case 2 -> 1;
+      case 3 -> 2;
+      case 4 -> 3;
+      case 5 -> 4;
+      case 6 -> 5;
+      case 7 -> 6;
+      case 8 -> 7;
+      case 9 -> 8;
+      case 10, 11 -> 9;
+      default -> 10;
+    };
   }
 
   /**

@@ -26,6 +26,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.OrderingUtil;
+import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.helper.LiteralConverter;
@@ -2543,8 +2544,8 @@ public final class WindowFunctions {
    *         positive
    */
   public static int compareValues(Object left, Object right) {
-    if (left instanceof Number && right instanceof Number) {
-      return new BigDecimal(left.toString()).compareTo(new BigDecimal(right.toString()));
+    if (left instanceof Number ln && right instanceof Number rn) {
+      return SqlComparisons.compareNumbers(ln, rn);
     }
     if (left instanceof Boolean && right instanceof Boolean) {
       return Boolean.compare((Boolean) left, (Boolean) right);

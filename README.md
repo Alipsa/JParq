@@ -120,6 +120,14 @@ still evaluated in Java. `ILIKE`, escaped patterns, and prefixes containing `_` 
 and exactly representable decimal literals are supported; incompatible or out-of-range bounds remain in Java.
 `DISTINCT` queries can use filters too.
 
+Floating-point values use one order everywhere, with and without pushdown, matching PostgreSQL and DuckDB:
+`-Infinity` < every finite value < `+Infinity` < `NaN`, where `NaN = NaN` and `-0.0 = 0.0`. Comparisons with
+`NaN` and infinities are therefore TRUE or FALSE rather than UNKNOWN, and `ORDER BY`, `MIN` and `MAX` place `NaN`
+last. PyArrow leaves `NaN` out of Parquet statistics, so on `FLOAT` and `DOUBLE` columns only `<`, `<=`, `=`,
+`IN` and `BETWEEN` against a non-zero literal are pushed down; `>`, `>=`, `<>`, `NOT IN` and `NOT BETWEEN` are
+evaluated in Java. Arithmetic on `NaN` or infinities and `DISTINCT`/`GROUP BY` of `-0.0` versus `0.0` are not
+yet covered.
+
 Single-table conditions in a join's `WHERE` can filter individual inputs. Unqualified columns must resolve to
 one input. Outer-join filtering preserves NULL-extended rows, and merged `FULL JOIN ... USING` columns remain
 in the final filter. The complete `WHERE` is always evaluated after the join. Predicate pushdown is disabled

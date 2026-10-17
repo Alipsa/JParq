@@ -113,8 +113,10 @@ public final class ParquetFilterBuilder {
       return Optional.ofNullable(predicate);
     }
     if (exp instanceof Between b) {
-      var ge = comparison(schema, new GreaterThanEquals(b.getLeftExpression(), b.getBetweenExpressionStart()));
-      var le = comparison(schema, new MinorThanEquals(b.getLeftExpression(), b.getBetweenExpressionEnd()));
+      // The upper bound rejects NaN, so the lower bound may use an operator that NaN
+      // satisfies.
+      var ge = comparison(schema, new GreaterThanEquals(b.getLeftExpression(), b.getBetweenExpressionStart()), false);
+      var le = comparison(schema, new MinorThanEquals(b.getLeftExpression(), b.getBetweenExpressionEnd()), false);
       if (ge.isPresent() && le.isPresent()) {
         FilterPredicate p = and(ge.get(), le.get());
         return Optional.of(p);
@@ -131,7 +133,7 @@ public final class ParquetFilterBuilder {
       }
       List<FilterPredicate> eqs = new ArrayList<>();
       for (Expression val : list) {
-        var eq = comparison(schema, new EqualsTo(in.getLeftExpression(), val));
+        var eq = comparison(schema, new EqualsTo(in.getLeftExpression(), val), true);
         if (eq.isEmpty()) {
           return Optional.empty();
         }
@@ -144,7 +146,7 @@ public final class ParquetFilterBuilder {
       return Optional.of(disj);
     }
 
-    return comparison(schema, exp);
+    return comparison(schema, exp, true);
   }
 
   private static Schema.Field findFieldCaseInsensitive(Schema schema, String name) {
@@ -169,9 +171,13 @@ public final class ParquetFilterBuilder {
    *          the Avro schema of the Parquet data
    * @param e
    *          the expression to translate
+   * @param standalone
+   *          {@code true} when the comparison is pushed on its own, so it must
+   *          not match NaN on FLOAT and DOUBLE columns (which PyArrow leaves out
+   *          of the statistics); {@code false} when another conjunct rejects NaN
    * @return optional FilterPredicate if pushdownable; empty otherwise
    */
-  private static Optional<FilterPredicate> comparison(Schema schema, Expression e) {
+  private static Optional<FilterPredicate> comparison(Schema schema, Expression e, boolean standalone) {
     if (!(e instanceof BinaryExpression be)) {
       return Optional.empty();
     }
@@ -183,10 +189,10 @@ public final class ParquetFilterBuilder {
     boolean rightIsCol = r instanceof Column;
 
     if (leftIsCol && !rightIsCol) {
-      return buildColOpLit(schema, (Column) l, be, r);
+      return buildColOpLit(schema, (Column) l, be, r, standalone);
     } else if (!leftIsCol && rightIsCol) {
       // swap: lit <op> col => col <op-swapped> lit
-      return buildColOpLit(schema, (Column) r, swap(be), l);
+      return buildColOpLit(schema, (Column) r, swap(be), l, standalone);
     }
     return Optional.empty();
   }
@@ -222,11 +228,14 @@ public final class ParquetFilterBuilder {
    *          the operator (already adjusted for operand order)
    * @param operand
    *          the literal expression, possibly wrapped in parentheses
+   * @param standalone
+   *          whether the comparison is pushed on its own (see
+   *          {@link #comparison(Schema, Expression, boolean)})
    * @return optional FilterPredicate; empty if schema/type or operator is
    *         unsupported
    */
   private static Optional<FilterPredicate> buildColOpLit(Schema avroSchema, Column colExpr, BinaryExpression op,
-      Expression operand) {
+      Expression operand, boolean standalone) {
     String col = colExpr.getColumnName();
     Expression litExpr = unwrap(operand);
     Schema.Field f = findFieldCaseInsensitive(avroSchema, col);
@@ -284,12 +293,18 @@ public final class ParquetFilterBuilder {
               ? Optional.empty()
               : Optional.ofNullable(buildLong(longColumn(col), op, bound.longValueExact()));
         }
-        case FLOAT -> coerced instanceof Number number && Float.isFinite(number.floatValue())
-            ? Optional.ofNullable(buildFloat(floatColumn(col), op, number.floatValue()))
-            : Optional.empty();
-        case DOUBLE -> coerced instanceof Number number && Double.isFinite(number.doubleValue())
-            ? Optional.ofNullable(buildDouble(doubleColumn(col), op, number.doubleValue()))
-            : Optional.empty();
+        case FLOAT -> {
+          Float value = floatLiteral(coerced);
+          yield value == null || !floatingOperatorAllowed(op, standalone)
+              ? Optional.empty()
+              : Optional.ofNullable(buildFloat(floatColumn(col), op, value));
+        }
+        case DOUBLE -> {
+          Double value = doubleLiteral(coerced);
+          yield value == null || !floatingOperatorAllowed(op, standalone)
+              ? Optional.empty()
+              : Optional.ofNullable(buildDouble(doubleColumn(col), op, value));
+        }
         case BOOLEAN -> coerced instanceof Boolean bool
             ? Optional.ofNullable(buildBoolean(booleanColumn(col), op, bool))
             : Optional.empty();
@@ -299,6 +314,67 @@ public final class ParquetFilterBuilder {
     } catch (ArithmeticException | NumberFormatException exception) {
       return Optional.empty();
     }
+  }
+
+  /**
+   * Convert a literal to the exact float the column compares against.
+   *
+   * @param coerced
+   *          the coerced literal
+   * @return the float value, or {@code null} when pushing it down could disagree
+   *         with the Java engine: a non-numeric, non-finite or zero value (the
+   *         record-level filter orders {@code -0.0} below {@code 0.0}), or a
+   *         decimal that is not the shortest representation of the float
+   */
+  private static Float floatLiteral(Object coerced) {
+    if (!(coerced instanceof BigDecimal exact)) {
+      return null;
+    }
+    float value = exact.floatValue();
+    if (!Float.isFinite(value) || value == 0.0f || new BigDecimal(Float.toString(value)).compareTo(exact) != 0) {
+      return null;
+    }
+    return value;
+  }
+
+  /**
+   * Convert a literal to the exact double the column compares against.
+   *
+   * @param coerced
+   *          the coerced literal
+   * @return the double value, or {@code null} when pushing it down could disagree
+   *         with the Java engine: a non-numeric, non-finite or zero value (the
+   *         record-level filter orders {@code -0.0} below {@code 0.0}), or a
+   *         decimal that is not the shortest representation of the double
+   */
+  private static Double doubleLiteral(Object coerced) {
+    if (!(coerced instanceof BigDecimal exact)) {
+      return null;
+    }
+    double value = exact.doubleValue();
+    if (!Double.isFinite(value) || value == 0.0 || new BigDecimal(Double.toString(value)).compareTo(exact) != 0) {
+      return null;
+    }
+    return value;
+  }
+
+  /**
+   * Check that a floating-point comparison can be pushed down. NaN is the largest
+   * value in the SQL order but PyArrow leaves it out of row-group and page
+   * statistics, so a standalone {@code >}, {@code >=} or {@code <>} could skip
+   * pages whose only matching rows are NaN.
+   *
+   * @param op
+   *          the comparison operator
+   * @param standalone
+   *          whether no other conjunct rejects NaN
+   * @return {@code true} if the operator may be pushed down
+   */
+  private static boolean floatingOperatorAllowed(BinaryExpression op, boolean standalone) {
+    return !standalone || switch (op.getStringExpression()) {
+      case "=", "<", "<=" -> true;
+      default -> false;
+    };
   }
 
   /**
