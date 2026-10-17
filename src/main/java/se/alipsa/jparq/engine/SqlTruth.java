@@ -1,5 +1,7 @@
 package se.alipsa.jparq.engine;
 
+import java.util.Objects;
+
 /** SQL Boolean operations, using null to represent UNKNOWN. */
 public final class SqlTruth {
   private SqlTruth() {
@@ -58,17 +60,48 @@ public final class SqlTruth {
    *          whether any candidate equaled the left value
    * @param unknown
    *          whether any candidate comparison was UNKNOWN (the left value or a
-   *          candidate was NULL)
+   *          candidate was NULL or could not be compared)
    * @param negated
    *          whether the predicate was {@code NOT IN}
-   * @return TRUE when a candidate matched, FALSE when nothing matched and no
-   *         comparison was UNKNOWN, otherwise {@code null} for UNKNOWN
+   * @return the membership result, inverted when negated; {@code null} when
+   *         nothing matched and a comparison was UNKNOWN
    */
   public static Boolean in(boolean found, boolean unknown, boolean negated) {
     if (found) {
       return !negated;
     }
     return unknown ? null : negated;
+  }
+
+  /**
+   * Computes the SQL {@code [NOT] IN} result by comparing the left value against
+   * every candidate.
+   *
+   * @param leftValue
+   *          the value to match (may be {@code null})
+   * @param candidates
+   *          the candidate values, already coerced to the left value's type
+   * @param negated
+   *          whether the predicate was {@code NOT IN}
+   * @return the membership result, inverted when negated; UNKNOWN when no
+   *         candidate matches and a comparison is UNKNOWN. An empty collection
+   *         yields FALSE for IN and TRUE for NOT IN, even for a NULL left value
+   */
+  public static Boolean in(Object leftValue, Iterable<?> candidates, boolean negated) {
+    boolean found = false;
+    boolean unknown = false;
+    for (Object candidate : candidates) {
+      Integer cmp = SqlComparisons.compareOrUnknown(leftValue, candidate);
+      if (cmp == null) {
+        unknown = true;
+        continue;
+      }
+      if (cmp == 0) {
+        found = true;
+        break;
+      }
+    }
+    return in(found, unknown, negated);
   }
 
   /**
@@ -85,10 +118,10 @@ public final class SqlTruth {
     if (left == null || right == null) {
       return left != right;
     }
-    try {
-      return ExpressionEvaluator.typedCompare(left, right) != 0;
-    } catch (RuntimeException e) {
-      return true;
+    if (Objects.equals(left, right)) {
+      return false;
     }
+    Integer cmp = SqlComparisons.compareOrUnknown(left, right);
+    return cmp == null || cmp != 0;
   }
 }

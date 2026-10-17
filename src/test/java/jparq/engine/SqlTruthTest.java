@@ -172,6 +172,107 @@ class SqlTruthTest {
   }
 
   /**
+   * Confirms that predicates that do not evaluate to a Boolean or NULL are
+   * rejected instead of silently excluding every row.
+   */
+  @Test
+  void invalidPredicatesThrowInsteadOfSilentlyExcludingRows() throws Exception {
+    Schema schema = SchemaBuilder.record("mix").fields().requiredInt("id").optionalInt("n").requiredString("s")
+        .endRecord();
+    var row = new GenericData.Record(schema);
+    row.put("id", 1);
+    row.put("n", Integer.valueOf(1));
+    row.put("s", "a");
+    var evaluator = new ExpressionEvaluator(schema);
+    for (String expression : List.of("n", "s", "1")) {
+      var predicate = CCJSqlParserUtil.parseCondExpression(expression);
+      assertThrows(IllegalArgumentException.class, () -> evaluator.eval(predicate, row), expression);
+    }
+    String input = "(VALUES (1, 1, 'a'), (2, 2, 'b')) AS t(id, n, s)";
+    for (String expression : List.of("n", "s", "1")) {
+      assertThrows(java.sql.SQLException.class, () -> query("SELECT id FROM " + input + " WHERE " + expression));
+      assertThrows(java.sql.SQLException.class,
+          () -> query("SELECT id FROM " + input + " GROUP BY id, n, s HAVING " + expression));
+    }
+  }
+
+  /**
+   * Confirms that IS [NOT] TRUE/FALSE inspects the three-valued truth of the
+   * operand, including UNKNOWN.
+   */
+  @Test
+  void isTruePredicatesFollowThreeValuedLogic() throws Exception {
+    String input = "(VALUES (1, 1), (2, CAST(NULL AS INTEGER)), (3, 3), (4, 4)) AS t(id, n)";
+    assertEquals(List.of(3L, 4L), query("SELECT id FROM " + input + " WHERE (n > 1) IS TRUE ORDER BY id"));
+    assertEquals(List.of(1L, 2L), query("SELECT id FROM " + input + " WHERE (n > 1) IS NOT TRUE ORDER BY id"));
+    assertEquals(List.of(1L), query("SELECT id FROM " + input + " WHERE (n > 1) IS FALSE ORDER BY id"));
+    assertEquals(List.of(2L, 3L, 4L), query("SELECT id FROM " + input + " WHERE (n > 1) IS NOT FALSE ORDER BY id"));
+    assertEquals(List.of(false, true, true, true), queryObjects("SELECT (n > 1) IS NOT FALSE FROM " + input));
+    assertEquals(List.of(3L, 4L),
+        query("SELECT id FROM " + input + " GROUP BY id HAVING (MAX(n) > 1) IS TRUE ORDER BY id"));
+    assertEquals(List.of(1L, 2L),
+        query("SELECT id FROM " + input + " GROUP BY id HAVING (MAX(n) > 1) IS NOT TRUE ORDER BY id"));
+  }
+
+  /**
+   * Confirms that BETWEEN with a NULL bound follows the AND truth table, so NOT
+   * BETWEEN can be TRUE when one bound comparison is FALSE.
+   */
+  @Test
+  void betweenWithNullBoundFollowsAndTruthTable() throws Exception {
+    String input = "(VALUES (1), (2), (3), (4)) AS t(id)";
+    assertEquals(List.of(3L, 4L),
+        query("SELECT id FROM " + input + " WHERE id + 0 NOT BETWEEN CAST(NULL AS INTEGER) AND 2 ORDER BY id"));
+    assertEquals(List.of(3L, 4L),
+        query("SELECT id FROM " + input + " WHERE NOT (id + 0 >= CAST(NULL AS INTEGER) AND id + 0 <= 2) ORDER BY id"));
+    String groups = "(VALUES (1, 1), (2, 2), (3, 3), (4, 4)) AS t(g, n)";
+    assertEquals(List.of(3L, 4L), query(
+        "SELECT g FROM " + groups + " GROUP BY g HAVING MAX(n) NOT BETWEEN CAST(NULL AS INTEGER) AND 2 ORDER BY g"));
+    assertEquals(List.of(3L, 4L), query("SELECT g FROM " + groups
+        + " GROUP BY g HAVING NOT (MAX(n) >= CAST(NULL AS INTEGER) AND MAX(n) <= 2) ORDER BY g"));
+    assertEquals(List.of(1L),
+        query("SELECT id FROM " + input + " WHERE id + 0 NOT BETWEEN 2 AND CAST(NULL AS INTEGER) ORDER BY id"));
+    assertEquals(List.of(),
+        query("SELECT id FROM " + input + " WHERE id + 0 NOT BETWEEN CAST(NULL AS INTEGER) AND CAST(NULL AS INTEGER)"));
+    assertEquals(List.of(false, false, false, false), queryObjects("SELECT id + 0 BETWEEN 5 AND NULL FROM " + input));
+  }
+
+  /**
+   * Confirms that uncomparable values (NaN) are UNKNOWN for IN and BETWEEN, while
+   * identical NaNs remain not distinct.
+   */
+  @Test
+  void nanComparisonsAreUnknownAcrossAllPredicateKinds() throws Exception {
+    String input = "(VALUES (1), (2)) AS t(id)";
+    assertEquals(List.of(), query("SELECT id FROM " + input + " WHERE ACOS(2) IN (1.0, 2.0)"));
+    assertEquals(List.of(), query("SELECT id FROM " + input + " WHERE ACOS(2) NOT IN (1.0, 2.0)"));
+    assertEquals(List.of(), query("SELECT id FROM " + input + " WHERE ACOS(2) BETWEEN 0 AND 5"));
+    assertEquals(List.of(), query("SELECT id FROM " + input + " WHERE ACOS(2) NOT BETWEEN 0 AND 5"));
+    assertEquals(List.of(1L, 2L), query("SELECT id FROM " + input + " WHERE ACOS(2) IS NOT DISTINCT FROM ACOS(2)"));
+    assertEquals(List.of(), query("SELECT id FROM " + input + " WHERE ACOS(2) IS DISTINCT FROM ACOS(2)"));
+    assertEquals(List.of(1L, 2L), query("SELECT id FROM " + input + " WHERE 2.0 IN (1.0, 2.0)"));
+    assertEquals(List.of(1L, 2L), query("SELECT id FROM " + input + " WHERE 2.0 BETWEEN 0 AND 5"));
+    String doubles = "(VALUES (1, CAST(1 AS DOUBLE)), (2, ACOS(2)), "
+        + "(3, CAST(2 AS DOUBLE)), (4, CAST(4 AS DOUBLE))) AS t(id, dbl)";
+    assertEquals(List.of(1L, 3L), query("SELECT id FROM " + doubles + " WHERE dbl IN (1.0, 2.0) ORDER BY id"));
+    assertEquals(List.of(1L, 2L, 3L, 4L),
+        query("SELECT id FROM " + doubles + " WHERE dbl IS NOT DISTINCT FROM dbl ORDER BY id"));
+    assertEquals(List.of(1L, 3L, 4L),
+        query("SELECT id FROM " + doubles + " GROUP BY id HAVING MAX(dbl) > 0 ORDER BY id"));
+    assertEquals(List.of(1L, 3L),
+        query("SELECT id FROM " + doubles + " GROUP BY id HAVING MAX(dbl) IN (1.0, 2.0) ORDER BY id"));
+    assertEquals(List.of(1L, 3L, 4L),
+        query("SELECT id FROM " + doubles + " GROUP BY id HAVING MAX(dbl) BETWEEN 0 AND 5 ORDER BY id"));
+    String candidates = "(SELECT candidate FROM (VALUES (CAST(1 AS DOUBLE)), (CAST(2 AS DOUBLE)), "
+        + "(ACOS(2))) AS q(candidate))";
+    assertEquals(List.of(1L, 3L), query("SELECT id FROM " + doubles + " WHERE dbl IN " + candidates + " ORDER BY id"));
+    assertEquals(List.of(), query("SELECT id FROM " + doubles + " WHERE dbl NOT IN " + candidates));
+    assertEquals(List.of(1L, 3L),
+        query("SELECT id FROM " + doubles + " GROUP BY id HAVING MAX(dbl) IN " + candidates + " ORDER BY id"));
+    assertEquals(List.of(), query("SELECT id FROM " + doubles + " GROUP BY id HAVING MAX(dbl) NOT IN " + candidates));
+  }
+
+  /**
    * Confirms that window functions keep working inside predicates and Boolean
    * projections by sharing the projection's precomputed window state.
    */
@@ -197,6 +298,8 @@ class SqlTruthTest {
     var values = new ValueExpressionEvaluator(schema, null, CorrelationMappings.empty(), windowState);
     assertEquals(Boolean.TRUE, values.eval(like, row));
     assertEquals(Boolean.FALSE, values.eval(notLike, row));
+    assertEquals(List.of(true, false), queryObjects(
+        "SELECT CAST(ROW_NUMBER() OVER (ORDER BY id) AS VARCHAR)" + " LIKE '1%' FROM (VALUES (1), (2)) AS t(id)"));
   }
 
   /**

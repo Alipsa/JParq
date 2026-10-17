@@ -49,6 +49,7 @@ import net.sf.jsqlparser.expression.operators.relational.Between;
 import net.sf.jsqlparser.expression.operators.relational.ExistsExpression;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.InExpression;
+import net.sf.jsqlparser.expression.operators.relational.IsBooleanExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
 import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
@@ -68,6 +69,7 @@ import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.Operation;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.RecordReader;
+import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.OrderKey;
 import se.alipsa.jparq.engine.SqlTruth;
@@ -2051,17 +2053,18 @@ public final class AggregateFunctions {
         boolean isNullVal = operand == null;
         return isNull.isNot() != isNullVal;
       }
+      if (expr instanceof IsBooleanExpression isBoolean) {
+        Boolean truth = evalTruth(isBoolean.getLeftExpression());
+        boolean matches = isBoolean.isTrue() ? Boolean.TRUE.equals(truth) : Boolean.FALSE.equals(truth);
+        return isBoolean.isNot() != matches;
+      }
       if (expr instanceof Between between) {
         Object val = value(between.getLeftExpression());
         Object low = value(between.getBetweenExpressionStart());
         Object high = value(between.getBetweenExpressionEnd());
-        if (val == null || low == null || high == null) {
-          return null;
-        }
-        int cmpLow = ExpressionEvaluator.typedCompare(val, low);
-        int cmpHigh = ExpressionEvaluator.typedCompare(val, high);
-        boolean in = cmpLow >= 0 && cmpHigh <= 0;
-        return between.isNot() != in;
+        Boolean in = SqlTruth.and(SqlComparisons.compare(">=", SqlComparisons.compareOrUnknown(val, low)),
+            SqlComparisons.compare("<=", SqlComparisons.compareOrUnknown(val, high)));
+        return between.isNot() ? SqlTruth.not(in) : in;
       }
       if (expr instanceof InExpression in) {
         return evalIn(in);
@@ -2085,17 +2088,11 @@ public final class AggregateFunctions {
       Object leftVal = value(in.getLeftExpression());
       Expression right = in.getRightExpression();
       if (right instanceof ExpressionList<?> list) {
-        boolean found = false;
-        boolean unknown = false;
+        List<Object> candidates = new ArrayList<>(list.size());
         for (Expression e : list) {
-          Object candidate = value(e);
-          unknown |= leftVal == null || candidate == null;
-          if (leftVal != null && candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
-            found = true;
-            break;
-          }
+          candidates.add(value(e));
         }
-        return SqlTruth.in(found, unknown, in.isNot());
+        return SqlTruth.in(leftVal, candidates, in.isNot());
       }
       if (right instanceof Select subSelect) {
         if (subqueryExecutor == null) {
@@ -2106,17 +2103,7 @@ public final class AggregateFunctions {
         SubqueryExecutor.SubqueryResult result = rewritten.correlated()
             ? subqueryExecutor.executeRaw(rewritten.sql())
             : subqueryExecutor.execute(subSelect);
-        List<Object> subqueryValues = result.firstColumnValues();
-        boolean found = false;
-        boolean unknown = false;
-        for (Object candidate : subqueryValues) {
-          unknown |= leftVal == null || candidate == null;
-          if (leftVal != null && candidate != null && ExpressionEvaluator.typedCompare(leftVal, candidate) == 0) {
-            found = true;
-            break;
-          }
-        }
-        return SqlTruth.in(found, unknown, in.isNot());
+        return SqlTruth.in(leftVal, result.firstColumnValues(), in.isNot());
       }
       throw new IllegalArgumentException("Unsupported IN expression in HAVING clause: " + in);
     }
@@ -2177,40 +2164,7 @@ public final class AggregateFunctions {
       if (be instanceof net.sf.jsqlparser.expression.operators.relational.IsDistinctExpression distinct) {
         return distinct.isNot() != SqlTruth.isDistinctFrom(left, right);
       }
-      if (left == null || right == null) {
-        return null;
-      }
-      Integer cmp = compare(left, right);
-      if (cmp == null) {
-        return null;
-      }
-      return switch (op) {
-        case "=" -> cmp == 0;
-        case "<" -> cmp < 0;
-        case ">" -> cmp > 0;
-        case "<=" -> cmp <= 0;
-        case ">=" -> cmp >= 0;
-        case "<>", "!=" -> cmp != 0;
-        default -> throw new IllegalArgumentException("Unsupported operator in HAVING clause: " + op);
-      };
-    }
-
-    /**
-     * Compare two pre-evaluated values, mapping uncomparable operands (e.g. NaN) to
-     * UNKNOWN.
-     *
-     * @param leftVal
-     *          the evaluated left-hand value
-     * @param rightVal
-     *          the evaluated right-hand value
-     * @return the comparison result, or {@code null} when the comparison is UNKNOWN
-     */
-    private Integer compare(Object leftVal, Object rightVal) {
-      try {
-        return ExpressionEvaluator.typedCompare(leftVal, rightVal);
-      } catch (RuntimeException e) {
-        return null;
-      }
+      return SqlComparisons.compare(op, SqlComparisons.compareOrUnknown(left, right));
     }
 
     private Object value(Expression expression) {

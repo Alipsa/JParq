@@ -44,6 +44,7 @@ import net.sf.jsqlparser.expression.operators.relational.Between;
 import net.sf.jsqlparser.expression.operators.relational.ComparisonOperator;
 import net.sf.jsqlparser.expression.operators.relational.ExistsExpression;
 import net.sf.jsqlparser.expression.operators.relational.InExpression;
+import net.sf.jsqlparser.expression.operators.relational.IsBooleanExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsDistinctExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
 import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
@@ -312,9 +313,9 @@ public final class ValueExpressionEvaluator {
     }
     if (expression instanceof NotExpression || expression instanceof AndExpression || expression instanceof OrExpression
         || expression instanceof ComparisonOperator || expression instanceof IsDistinctExpression
-        || expression instanceof IsNullExpression || expression instanceof ExistsExpression
-        || expression instanceof InExpression || expression instanceof Between || expression instanceof LikeExpression
-        || expression instanceof SimilarToExpression) {
+        || expression instanceof IsNullExpression || expression instanceof IsBooleanExpression
+        || expression instanceof ExistsExpression || expression instanceof InExpression || expression instanceof Between
+        || expression instanceof LikeExpression || expression instanceof SimilarToExpression) {
       return conditionEvaluator(record).evalTruth(expression, record);
     }
     if (expression instanceof JsonFunction json) {

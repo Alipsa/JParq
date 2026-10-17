@@ -3467,14 +3467,18 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (join) {
       String message = residual == null
           ? "Join queries do not support Parquet predicate pushdown and have no residual WHERE clause."
-          : "Join queries do not support Parquet predicate pushdown; residual WHERE clauses are evaluated after row assembly.";
+          : "Join queries do not support Parquet predicate pushdown; "
+              + "residual WHERE clauses are evaluated after row assembly.";
       return new PushdownInfo(false, residual != null, false, false, false, false, message, null,
           residual == null ? null : residual.toString());
     }
     if (cteResult != null) {
-      return new PushdownInfo(false, residual != null, false, false, false, false, residual == null
-          ? "In-memory query results (for example CTEs, derived/value/UNNEST tables, or information_schema) do not use Parquet predicate pushdown."
-          : "In-memory query results (for example CTEs, derived/value/UNNEST tables, or information_schema) apply residual filtering in Java (no Parquet predicate pushdown).",
+      return new PushdownInfo(false, residual != null, false, false, false, false,
+          residual == null
+              ? "In-memory query results (for example CTEs, derived/value/UNNEST tables, or information_schema) "
+                  + "do not use Parquet predicate pushdown."
+              : "In-memory query results (for example CTEs, derived/value/UNNEST tables, or information_schema) "
+                  + "apply residual filtering in Java (no Parquet predicate pushdown).",
           null, residual == null ? null : residual.toString());
     }
     boolean statsEnabled = isFilterEnabled(configuration, ParquetInputFormat.STATS_FILTERING_ENABLED);
@@ -3494,7 +3498,8 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (predicate.isPresent()) {
       return new PushdownInfo(true, residual != null, statsEnabled, columnIndexEnabled, dictionaryEnabled, bloomEnabled,
           residual == null
-              ? "Parquet predicate attached; pruning can use statistics, column indexes, dictionaries, and bloom filters."
+              ? "Parquet predicate attached; pruning can use statistics, column indexes, "
+                  + "dictionaries, and bloom filters."
               : "Parquet predicate attached; residual filtering still runs in Java.",
           predicate.get().toString(), residual == null ? null : residual.toString());
     }
