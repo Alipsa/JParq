@@ -176,8 +176,8 @@ public final class ParquetFilterBuilder {
       return Optional.empty();
     }
 
-    Expression l = be.getLeftExpression();
-    Expression r = be.getRightExpression();
+    Expression l = unwrap(be.getLeftExpression());
+    Expression r = unwrap(be.getRightExpression());
 
     boolean leftIsCol = l instanceof Column;
     boolean rightIsCol = r instanceof Column;
@@ -220,14 +220,15 @@ public final class ParquetFilterBuilder {
    *          the column expression
    * @param op
    *          the operator (already adjusted for operand order)
-   * @param litExpr
-   *          the literal expression
+   * @param operand
+   *          the literal expression, possibly wrapped in parentheses
    * @return optional FilterPredicate; empty if schema/type or operator is
    *         unsupported
    */
   private static Optional<FilterPredicate> buildColOpLit(Schema avroSchema, Column colExpr, BinaryExpression op,
-      Expression litExpr) {
+      Expression operand) {
     String col = colExpr.getColumnName();
+    Expression litExpr = unwrap(operand);
     Schema.Field f = findFieldCaseInsensitive(avroSchema, col);
     if (f == null) {
       return Optional.empty();
