@@ -59,8 +59,12 @@ inherited-CTE lookup by name.
 reversed OR operands, parentheses, AND/OR precedence, negation, NOT IN, and uncorrelated IN. A second inner
 table uses `g = (id + 1) % 5`, making the correlated IN result empty while its disjunction still returns the
 89 range matches. Coverage includes derived tables, CTEs, UNION ALL multiplicities, JOIN WHERE/ON, HAVING,
-SUM/CASE, literal IN lists, and an IN list containing a Boolean expression. Every SQL case runs with all four
-predicate/projection pushdown combinations. `SubqueryCorrelationCachingTest` asserts that 1,000 outer rows
+SUM/CASE, literal IN lists, and an IN list containing a Boolean expression. The original 100-row
+reproducer and row-dependent result controls run under all four predicate/projection pushdown combinations.
+Detailed precedence variants run once with default connection settings over a 20-row fixture (ids 0–19,
+with the same grouping pattern), whose disjunction returns 14 identifiers: 0–4 and 11–19. Query-scope
+checks use that compact fixture under all four pushdown combinations. The 100-row CTE shadowing and
+derived-table regressions retain their full pushdown matrix. `SubqueryCorrelationCachingTest` asserts that 1,000 outer rows
 require one uncorrelated-IN analysis. `StatementCancellationTest` checks outer result identity and SQLState
 57014 when EXISTS and correlated IN/OR are canceled between `next()` calls.
 `UnqualifiedSubqueryCorrelationTest` checks the HAVING regression, the formerly unsupported WHERE forms,
@@ -86,3 +90,10 @@ Separate pre-existing bugs reported on origin/main and reproduced by temporary r
 are tracked as [FROM-less recursive CTE anchors (#190)](https://github.com/Alipsa/JParq/issues/190) and
 [derived integer-expression SUM type consistency (#191)](https://github.com/Alipsa/JParq/issues/191).
 The probes were removed; these follow-ups are not fixes included in PR #189.
+
+Longer-term reuse of prepared execution shapes for correlated subqueries is tracked in
+[#192](https://github.com/Alipsa/JParq/issues/192). The test-only reduction in repeated precedence checks
+and compact fixtures does not change query execution or add a prepared-statement cache.
+
+A local Java 21 full-suite run measured `CorrelatedInOrTest` at 23.8 seconds after the test-only reduction,
+versus 53.3 seconds in the preceding full-suite report. These are observations, not timing assertions.

@@ -16,6 +16,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.avro.AvroParquetWriter;
 import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -62,6 +63,10 @@ class CorrelatedInOrTest {
     }
   }
 
+  /**
+   * Checks the original 94-row reproducer and row-dependent controls in every
+   * pushdown mode.
+   */
   @ParameterizedTest
   @CsvSource({
       "true,true", "true,false", "false,true", "false,false"
@@ -77,23 +82,46 @@ class CorrelatedInOrTest {
       Set<Integer> expected = new HashSet<>(matchingIn);
       expected.addAll(matchingRange);
       assertEquals(94, expected.size());
-      String combined = correlated + " OR b.id > 10";
-      var parsed = se.alipsa.jparq.engine.SqlParser.parseSelect("SELECT b.id FROM big b WHERE " + combined);
-      assertInstanceOf(net.sf.jsqlparser.expression.operators.conditional.OrExpression.class, parsed.where());
-      assertEquals(expected, ids(conn, combined), parsed.where().toString());
-      assertEquals(expected, ids(conn, "b.id > 10 OR " + correlated));
-      assertEquals(expected, ids(conn, "(" + correlated + ") OR b.id > 10"));
-      assertTrue(ids(conn, correlated + " AND b.id > 10").isEmpty());
-      assertEquals(matchingIn, ids(conn, correlated + " AND b.id < 10"));
-      assertEquals(14, ids(conn, correlated + " AND b.id < 10 OR b.id > 90").size());
-      assertEquals(6, ids(conn, "NOT (" + combined + ")").size());
-      assertEquals(14, ids(conn, correlated + " OR b.id > 10 AND b.id < 20").size());
-      assertEquals(14, ids(conn, "(" + combined + ") AND b.id < 20").size());
-      assertEquals(95, ids(conn, correlated.replace(" IN ", " NOT IN ") + " OR b.id > 10").size());
+      assertEquals(expected, ids(conn, correlated + " OR b.id > 10"));
       String shifted = "b.id IN (SELECT s2.id FROM shifted s2 WHERE s2.g = b.g)";
-      assertTrue(ids(conn, shifted).isEmpty(), "Correlations must use each outer row rather than the first result");
       assertEquals(matchingRange, ids(conn, shifted + " OR b.id > 10"));
-      assertEquals(matchingIn, ids(conn, "b.id IN (SELECT s2.id FROM shifted s2)"));
+    }
+  }
+
+  /**
+   * Checks precedence variants once over 20 rows while retaining each logical
+   * boundary.
+   */
+  @Test
+  void precedenceVariantsPreserveCorrelationAndBooleanGrouping() throws Exception {
+    write("compact", 20, 0);
+    try (var conn = DriverManager.getConnection("jdbc:jparq:" + base)) {
+      String correlated = "b.id IN (SELECT s2.id FROM small s2 WHERE s2.g = b.g)";
+      Set<Integer> matchingIn = ids(conn, "compact", correlated);
+      Set<Integer> matchingRange = ids(conn, "compact", "b.id > 10");
+      assertEquals(Set.of(0, 1, 2, 3, 4), matchingIn);
+      assertEquals(9, matchingRange.size());
+      Set<Integer> expected = new HashSet<>(matchingIn);
+      expected.addAll(matchingRange);
+      assertEquals(14, expected.size());
+      String combined = correlated + " OR b.id > 10";
+      var parsed = se.alipsa.jparq.engine.SqlParser.parseSelect("SELECT b.id FROM compact b WHERE " + combined);
+      assertInstanceOf(net.sf.jsqlparser.expression.operators.conditional.OrExpression.class, parsed.where());
+      assertEquals(expected, ids(conn, "compact", combined), parsed.where().toString());
+      assertEquals(expected, ids(conn, "compact", "b.id > 10 OR " + correlated));
+      assertEquals(expected, ids(conn, "compact", "(" + correlated + ") OR b.id > 10"));
+      assertTrue(ids(conn, "compact", correlated + " AND b.id > 10").isEmpty());
+      assertEquals(matchingIn, ids(conn, "compact", correlated + " AND b.id < 10"));
+      assertEquals(6, ids(conn, "compact", correlated + " AND b.id < 10 OR b.id > 18").size());
+      assertEquals(6, ids(conn, "compact", "NOT (" + combined + ")").size());
+      assertEquals(9, ids(conn, "compact", correlated + " OR b.id > 10 AND b.id < 15").size());
+      assertEquals(9, ids(conn, "compact", "(" + combined + ") AND b.id < 15").size());
+      assertEquals(15, ids(conn, "compact", correlated.replace(" IN ", " NOT IN ") + " OR b.id > 10").size());
+      String shifted = "b.id IN (SELECT s2.id FROM shifted s2 WHERE s2.g = b.g)";
+      assertTrue(ids(conn, "compact", shifted).isEmpty(),
+          "Correlations must use each outer row rather than the first result");
+      assertEquals(matchingRange, ids(conn, "compact", shifted + " OR b.id > 10"));
+      assertEquals(matchingIn, ids(conn, "compact", "b.id IN (SELECT s2.id FROM shifted s2)"));
     }
   }
 
@@ -102,44 +130,46 @@ class CorrelatedInOrTest {
       "true,true", "true,false", "false,true", "false,false"
   })
   void inPrecedenceIsPreservedAcrossEveryQueryScope(boolean predicate, boolean projection) throws Exception {
+    write("compact", 20, 0);
     try (var conn = DriverManager.getConnection(
         "jdbc:jparq:" + base + "?predicatePushdown=" + predicate + "&projectionPushdown=" + projection)) {
       String condition = "b.id IN (SELECT id FROM small) OR b.id > 10";
-      Set<Integer> expected = ids(conn, condition);
-      assertEquals(94, expected.size());
-      for (String query : List.of("SELECT id FROM (SELECT b.id FROM big b WHERE " + condition + ") t",
-          "WITH t AS (SELECT b.id FROM big b WHERE " + condition + ") SELECT id FROM t",
-          "SELECT b.id FROM big b JOIN small s ON b.g = s.g WHERE " + condition,
-          "SELECT b.id FROM big b JOIN small s ON b.g = s.g AND (" + condition + ")",
-          "SELECT b.id FROM big b GROUP BY b.id HAVING " + condition)) {
+      Set<Integer> expected = ids(conn, "compact", condition);
+      assertEquals(14, expected.size());
+      for (String query : List.of("SELECT id FROM (SELECT b.id FROM compact b WHERE " + condition + ") t",
+          "WITH t AS (SELECT b.id FROM compact b WHERE " + condition + ") SELECT id FROM t",
+          "SELECT b.id FROM compact b JOIN small s ON b.g = s.g WHERE " + condition,
+          "SELECT b.id FROM compact b JOIN small s ON b.g = s.g AND (" + condition + ")",
+          "SELECT b.id FROM compact b GROUP BY b.id HAVING " + condition)) {
         assertEquals(expected, new HashSet<>(queryIds(conn, query)), query);
       }
       for (String nestedCondition : List.of("b.id IN (SELECT s2.id FROM small s2 WHERE s2.g = b.g) OR b.id > 10",
           "b.id IN (0,1,2,3,4) OR b.id > 10")) {
-        for (String query : List.of("SELECT id FROM (SELECT b.id FROM big b WHERE " + nestedCondition + ") t",
-            "WITH t AS (SELECT b.id FROM big b WHERE " + nestedCondition + ") SELECT id FROM t",
-            "SELECT b.id FROM big b JOIN small s ON b.g = s.g WHERE " + nestedCondition,
-            "SELECT b.id FROM big b JOIN small s ON b.g = s.g AND (" + nestedCondition + ")")) {
+        for (String query : List.of("SELECT id FROM (SELECT b.id FROM compact b WHERE " + nestedCondition + ") t",
+            "WITH t AS (SELECT b.id FROM compact b WHERE " + nestedCondition + ") SELECT id FROM t",
+            "SELECT b.id FROM compact b JOIN small s ON b.g = s.g WHERE " + nestedCondition,
+            "SELECT b.id FROM compact b JOIN small s ON b.g = s.g AND (" + nestedCondition + ")")) {
           assertEquals(expected, new HashSet<>(queryIds(conn, query)), query);
         }
       }
-      List<Integer> union = queryIds(conn, "SELECT b.id FROM big b WHERE b.id IN (SELECT id FROM small) "
-          + "OR b.id > 98 UNION ALL SELECT id FROM small");
+      List<Integer> union = queryIds(conn, "SELECT b.id FROM compact b WHERE b.id IN (SELECT id FROM small) "
+          + "OR b.id > 18 UNION ALL SELECT id FROM small");
       assertEquals(11, union.size());
-      assertEquals(1, java.util.Collections.frequency(union, 99));
+      assertEquals(1, java.util.Collections.frequency(union, 19));
       for (int id = 0; id < 5; id++) {
         assertEquals(2, java.util.Collections.frequency(union, id));
       }
       try (var stmt = conn.createStatement();
-          var result = stmt.executeQuery("SELECT SUM(CASE WHEN " + condition + " THEN 1 ELSE 0 END) AS n FROM big b")) {
+          var result = stmt
+              .executeQuery("SELECT SUM(CASE WHEN " + condition + " THEN 1 ELSE 0 END) AS n FROM compact b")) {
         assertTrue(result.next());
-        assertEquals(94, result.getInt(1));
+        assertEquals(14, result.getInt(1));
       }
-      assertEquals(expected, ids(conn, "b.id IN (0,1,2,3,4) OR b.id > 10"));
-      assertEquals(expected, ids(conn, "b.id > 10 OR b.id IN (0,1,2,3,4)"));
-      assertEquals(90, ids(conn, "b.id IN (0) OR b.id > 10").size());
-      assertEquals(95, ids(conn, "b.id NOT IN (0,1,2,3,4) OR b.id > 10").size());
-      assertEquals(89, ids(conn, "(b.id > 10) IN (TRUE OR FALSE)").size());
+      assertEquals(expected, ids(conn, "compact", "b.id IN (0,1,2,3,4) OR b.id > 10"));
+      assertEquals(expected, ids(conn, "compact", "b.id > 10 OR b.id IN (0,1,2,3,4)"));
+      assertEquals(10, ids(conn, "compact", "b.id IN (0) OR b.id > 10").size());
+      assertEquals(15, ids(conn, "compact", "b.id NOT IN (0,1,2,3,4) OR b.id > 10").size());
+      assertEquals(9, ids(conn, "compact", "(b.id > 10) IN (TRUE OR FALSE)").size());
     }
   }
 
@@ -250,6 +280,23 @@ class CorrelatedInOrTest {
    *           if execution fails
    */
   private static Set<Integer> ids(Connection conn, String predicate) throws Exception {
-    return new HashSet<>(queryIds(conn, "SELECT b.id FROM big b WHERE " + predicate));
+    return ids(conn, "big", predicate);
+  }
+
+  /**
+   * Reads predicate matches from a selected fixture table.
+   *
+   * @param conn
+   *          query connection
+   * @param table
+   *          fixture table name
+   * @param predicate
+   *          outer WHERE predicate
+   * @return matching identifiers
+   * @throws Exception
+   *           if execution fails
+   */
+  private static Set<Integer> ids(Connection conn, String table, String predicate) throws Exception {
+    return new HashSet<>(queryIds(conn, "SELECT b.id FROM " + table + " b WHERE " + predicate));
   }
 }

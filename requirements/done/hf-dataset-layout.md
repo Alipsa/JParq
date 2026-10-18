@@ -541,7 +541,7 @@ between correlated EXISTS or IN calls therefore reaches the live outer result. T
 quoted-name casing and unqualified dotted-name limitations remain as specified, and the default layout
 preserves single-file discovery.
 
-`mvn spotless:apply clean verify` passed on Java 21: 1,126 unit tests (one case-sensitive-filesystem test
+`mvn spotless:apply clean verify` passed on Java 21: 1,127 unit tests (one case-sensitive-filesystem test
 skipped on the case-insensitive local volume), plus all 3 integration tests. Checkstyle reported zero
 violations; PMD, Spotless, and coverage checks passed. The new layout tests cover grouping, errors, symlinks,
 all four pushdown settings, independent physical pruning on both indexed shards, record names/enriched types,
