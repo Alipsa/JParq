@@ -269,10 +269,10 @@ public class JParqPreparedStatement implements PreparedStatement {
           tmpSetOperation = false;
           tmpTableRefs = tmpSelect.tableReferences();
           SqlParser.TableReference baseRef = tmpTableRefs.isEmpty() ? null : tmpTableRefs.getFirst();
-          boolean baseIsDerivedTable = baseRef != null && baseRef.subquery() != null;
+          boolean baseIsDerivedTable = baseRef != null && baseRef.isDerivedTable();
           tmpJoinQuery = tmpSelect.hasMultipleTables();
 
-          boolean baseIsCte = baseRef != null && (baseRef.commonTableExpression() != null
+          boolean baseIsCte = baseRef != null && !baseIsDerivedTable && (baseRef.commonTableExpression() != null
               || resolveCteResultByName(baseRef.tableName(), tmpCteResults) != null);
           boolean baseIsInformationSchemaTables = baseRef != null
               && InformationSchemaTables.matchesTableReference(baseRef.tableName());
@@ -1388,7 +1388,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       CteResult cteResult = null;
       if (ref.commonTableExpression() != null) {
         cteResult = resolveCteResult(ref.commonTableExpression(), cteResults);
-      } else if (ref.tableName() != null) {
+      } else if (!ref.isDerivedTable() && ref.tableName() != null) {
         cteResult = resolveCteResultByName(ref.tableName(), cteResults);
       }
       if (cteResult != null) {
@@ -1400,7 +1400,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
         continue;
       }
-      if (ref.subquery() != null) {
+      if (ref.isDerivedTable()) {
         JoinRecordReader.JoinTable table = ref.lateral()
             ? materializeLateralSubqueryTable(ref, tables, qualifierIndex)
             : materializeSubqueryTable(ref);
@@ -3178,7 +3178,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     List<SqlParser.TableReference> refs = select.tableReferences();
     if (refs != null) {
-      boolean hasDerivedTable = refs.stream().anyMatch(ref -> ref != null && ref.subquery() != null);
+      boolean hasDerivedTable = refs.stream().anyMatch(ref -> ref != null && ref.isDerivedTable());
       if (hasDerivedTable) {
         return;
       }

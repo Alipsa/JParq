@@ -13,6 +13,18 @@ import se.alipsa.jparq.engine.SqlParser;
 /** Tests for CTE parsing support in {@link SqlParser}. */
 class SqlParserCteTest {
 
+  @Test
+  void derivedPlanUsesItsOwnCteDeclaration() {
+    var query = SqlParser.parseSelect("WITH a AS (SELECT id FROM small) "
+        + "SELECT COUNT(*) FROM (WITH a AS (SELECT id FROM big) SELECT id FROM a) t");
+    var derived = query.tableReferences().getFirst().subquery();
+    assertTrue(query.tableReferences().getFirst().isDerivedTable());
+    assertFalse(derived.tableReferences().getFirst().isDerivedTable());
+    var local = derived.tableReferences().getFirst().commonTableExpression();
+    assertEquals("big", ((SqlParser.Select) local.query()).table());
+    assertEquals("small", ((SqlParser.Select) query.commonTableExpressions().getFirst().query()).table());
+  }
+
   /** Verifies that materialized scopes never produce legacy pre-stage options. */
   @Test
   void materializedOperationsStayInsideTheirOwnScope() {

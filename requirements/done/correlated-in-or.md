@@ -48,7 +48,10 @@ its cancellation state even when started during iteration.
 A separate pre-existing CTE scoping defect was fixed during review: the correlation rewriter retained WITH,
 but parsing a parenthesized SELECT discarded declarations attached to its inner SELECT. The parser now
 enters each SELECT's WITH scope before unwrapping or parsing its body. Local CTEs override physical tables
-and inherited CTE names; duplicate declarations within a single WITH scope remain errors.
+and inherited CTE names; duplicate declarations within a single WITH scope remain errors. Derived FROM
+inputs use the same scope-aware parser and are identified by their own SQL, since a CTE reference also
+stores a parsed subquery plan. Standalone and join execution execute a derived input before attempting
+inherited-CTE lookup by name.
 
 ## Verification
 
@@ -70,3 +73,7 @@ Nested CTE regressions in `CorrelatedInOrTest` cover the 100-row reproducer with
 correlations, EXISTS and IN, CTE column aliases, an uncorrelated control, inherited-name shadowing, and
 duplicate declarations under all four pushdown combinations. `CorrelatedScopeTest` checks that rewritten,
 parenthesized SQL retains its CTE declarations in the parsed plan.
+Derived-table regressions check the 100-row count, the scalar wrapper, joins with the derived input on
+either side, CTE column aliases and filtering, exact identifiers, and preservation of the five-row outer
+CTE under all four pushdown combinations. Parser tests confirm that the derived plan links to the local
+CTE definition rather than the outer one.

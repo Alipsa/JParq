@@ -403,8 +403,9 @@ public final class SqlParser {
    * @param joinCondition
    *          expression defining the join condition (may be {@code null})
    * @param subquery
-   *          parsed representation of the subquery backing this table reference
-   *          (may be {@code null})
+   *          parsed representation backing a derived table or a CTE reference
+   *          (may be {@code null}); use {@link TableReference#isDerivedTable()}
+   *          to distinguish an independently materialized FROM subquery
    * @param subquerySql
    *          textual SQL used to materialize the derived table (may be
    *          {@code null})
@@ -431,6 +432,14 @@ public final class SqlParser {
       Expression joinCondition, Select subquery, String subquerySql, CommonTableExpression commonTableExpression,
       List<String> usingColumns, ValueTableDefinition valueTable, UnnestDefinition unnest, boolean lateral,
       TableSampleDefinition tableSample) {
+    /**
+     * Identifies a FROM subquery by its own SQL, rather than a CTE's stored plan.
+     *
+     * @return true when this reference must execute its own derived-table SQL
+     */
+    public boolean isDerivedTable() {
+      return subquerySql != null;
+    }
   }
 
   /**
@@ -1325,7 +1334,7 @@ public final class SqlParser {
     if (innerPlain == null) {
       throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
     }
-    Select innerSelect = parsePlainSelect(innerPlain, ctes, cteLookup, allowQualifiedWildcards);
+    Select innerSelect = (Select) parseSelectStatement(innerPlain, ctes, cteLookup, allowQualifiedWildcards);
     String alias = null;
     if (aliasNode != null && aliasNode.getName() != null && !aliasNode.getName().isBlank()) {
       alias = aliasNode.getName();

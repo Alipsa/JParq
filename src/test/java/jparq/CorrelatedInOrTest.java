@@ -171,6 +171,32 @@ class CorrelatedInOrTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void derivedCteTakesPrecedenceOverTheInheritedName(boolean predicate, boolean projection) throws Exception {
+    try (var conn = DriverManager.getConnection(
+        "jdbc:jparq:" + base + "?predicatePushdown=" + predicate + "&projectionPushdown=" + projection)) {
+      String outer = "WITH a AS (SELECT id FROM small) ";
+      String derived = "(WITH a AS (SELECT id FROM big) SELECT id FROM a) t";
+      for (String query : List.of(outer + "SELECT COUNT(*) FROM " + derived,
+          outer + "SELECT (SELECT COUNT(*) FROM " + derived + ") AS n FROM small LIMIT 1",
+          outer + "SELECT COUNT(*) FROM " + derived + " JOIN big b ON b.id = t.id",
+          outer + "SELECT COUNT(*) FROM big b JOIN " + derived + " ON b.id = t.id",
+          outer + "SELECT COUNT(*) FROM (WITH a(q) AS (SELECT id FROM big) SELECT q FROM a) t WHERE t.q >= 0")) {
+        try (var statement = conn.createStatement(); var result = statement.executeQuery(query)) {
+          assertTrue(result.next(), query);
+          assertEquals(100, result.getInt(1), query);
+          assertFalse(result.next(), query);
+        }
+      }
+      assertEquals(new HashSet<>(queryIds(conn, "SELECT id FROM big")),
+          new HashSet<>(queryIds(conn, outer + "SELECT t.id FROM " + derived)));
+      assertEquals(5, queryIds(conn, outer + "SELECT id FROM a").size());
+    }
+  }
+
   /**
    * Reads SQL output while retaining duplicates from set operations.
    *
