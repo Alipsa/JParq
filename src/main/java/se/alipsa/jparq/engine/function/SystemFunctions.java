@@ -8,7 +8,7 @@ import java.util.Deque;
  */
 public final class SystemFunctions {
 
-  private static final ThreadLocal<Deque<SystemContext>> CONTEXT = ThreadLocal.withInitial(ArrayDeque::new);
+  private static final ThreadLocal<Deque<ContextScope>> CONTEXT = ThreadLocal.withInitial(ArrayDeque::new);
 
   private SystemFunctions() {
   }
@@ -19,8 +19,8 @@ public final class SystemFunctions {
    * @return the database identifier or {@code "JParq"} when unknown
    */
   public static String database() {
-    SystemContext ctx = currentContext();
-    return ctx != null && ctx.databaseName() != null && !ctx.databaseName().isBlank() ? ctx.databaseName() : "JParq";
+    ContextScope ctx = currentContext();
+    return ctx != null && ctx.databaseName != null && !ctx.databaseName.isBlank() ? ctx.databaseName : "JParq";
   }
 
   /**
@@ -30,9 +30,9 @@ public final class SystemFunctions {
    *         unavailable
    */
   public static String user() {
-    SystemContext ctx = currentContext();
+    ContextScope ctx = currentContext();
     String systemUser = System.getProperty("user.name");
-    return ctx != null && ctx.userName() != null && !ctx.userName().isBlank() ? ctx.userName() : systemUser;
+    return ctx != null && ctx.userName != null && !ctx.userName.isBlank() ? ctx.userName : systemUser;
   }
 
   /**
@@ -57,32 +57,88 @@ public final class SystemFunctions {
    *          the user identifier to expose via {@code USER()}
    */
   public static void setContext(String databaseName, String userName) {
-    CONTEXT.get().push(new SystemContext(databaseName, userName));
+    openContext(databaseName, userName);
   }
 
   /**
    * Clear any system context previously installed for the current thread.
    */
   public static void clearContext() {
-    Deque<SystemContext> stack = CONTEXT.get();
-    if (stack.isEmpty()) {
-      CONTEXT.remove();
-    } else {
-      stack.pop();
-      if (stack.isEmpty()) {
-        CONTEXT.remove();
-      }
+    Deque<ContextScope> stack = CONTEXT.get();
+    pruneClosed(stack);
+    if (!stack.isEmpty()) {
+      stack.pop().close();
     }
   }
 
-  private static SystemContext currentContext() {
-    Deque<SystemContext> stack = CONTEXT.get();
-    if (stack == null || stack.isEmpty()) {
-      return null;
+  /**
+   * Installs a context with an identity that can be closed from another thread.
+   *
+   * @param databaseName
+   *          database identifier
+   * @param userName
+   *          current user
+   * @return idempotent handle for exactly this context
+   */
+  public static ContextScope openContext(String databaseName, String userName) {
+    Deque<ContextScope> stack = CONTEXT.get();
+    pruneClosed(stack);
+    ContextScope context = new ContextScope(databaseName, userName);
+    // pruneClosed may remove the ThreadLocal when the stack was empty.
+    CONTEXT.set(stack);
+    stack.push(context);
+    return context;
+  }
+
+  /**
+   * Removes closed handles only from the calling thread's own context stack.
+   *
+   * @param stack
+   *          calling thread's context stack
+   */
+  private static void pruneClosed(Deque<ContextScope> stack) {
+    stack.removeIf(context -> context.closed);
+    if (stack.isEmpty()) {
+      CONTEXT.remove();
     }
+  }
+
+  /**
+   * Resolves the current live context, including after cross-thread cancellation.
+   *
+   * @return top live context or null
+   */
+  private static ContextScope currentContext() {
+    Deque<ContextScope> stack = CONTEXT.get();
+    pruneClosed(stack);
     return stack.peek();
   }
 
-  private record SystemContext(String databaseName, String userName) {
+  /**
+   * An identity-bearing context that never pops another thread's live context.
+   */
+  public static final class ContextScope implements AutoCloseable {
+    private final String databaseName;
+    private final String userName;
+    private volatile boolean closed;
+
+    /**
+     * Records the function values for one execution.
+     *
+     * @param databaseName
+     *          database identifier
+     * @param userName
+     *          current user
+     */
+    private ContextScope(String databaseName, String userName) {
+      this.databaseName = databaseName;
+      this.userName = userName;
+    }
+
+    @Override
+    public void close() {
+      closed = true;
+      pruneClosed(CONTEXT.get());
+    }
   }
 }

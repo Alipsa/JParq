@@ -77,6 +77,7 @@ import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
 import se.alipsa.jparq.engine.ParquetTable;
 import se.alipsa.jparq.engine.ProjectionFields;
+import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SamplingRecordReader;
 import se.alipsa.jparq.engine.SqlComparisons;
@@ -422,27 +423,55 @@ public class JParqPreparedStatement implements PreparedStatement {
   @SuppressWarnings("PMD.CloseResource")
   @Override
   public JParqResultSet executeQuery() throws SQLException {
+    try (JParqStatement.ExecutionScope execution = stmt.beginExecution()) {
+      var cancellation = execution.cancellation();
+      cancellation.checkCanceled();
+      try {
+        return executeQuery(cancellation);
+      } catch (SQLException | RuntimeException exception) {
+        cancellation.checkCanceled();
+        throw exception;
+      }
+    }
+  }
+
+  /**
+   * Executes under the cancellation state shared by all nested query work.
+   *
+   * @param cancellation
+   *          execution cancellation state
+   * @return completed or streaming result
+   * @throws SQLException
+   *           if execution fails or is canceled
+   */
+  // The context handle must outlive this call when ownership passes to the
+  // result.
+  @SuppressWarnings("PMD.UseTryWithResources")
+  private JParqResultSet executeQuery(QueryCancellation cancellation) throws SQLException {
     if (hasParameters) {
       return executeWithBoundParameters();
     }
     Connection conn = getConnection();
     JParqDatabaseMetaData metaData = (JParqDatabaseMetaData) conn.getMetaData();
-    SystemFunctions.setContext(conn.getCatalog(), metaData.getUserName());
+    var context = SystemFunctions.openContext(conn.getCatalog(), metaData.getUserName());
+    boolean transferred = false;
     try {
       if (setOperationQuery) {
         JParqResultSet rs = executeSetOperation();
-        stmt.setCurrentRs(rs);
+        publishResult(rs, cancellation, context);
+        transferred = true;
         return rs;
       }
       RecordReader reader;
       String resultTableName;
       String resultSchema = tableSchema;
+      Schema resultMetadata;
       SqlParser.TableReference baseRef = (tableReferences == null || tableReferences.isEmpty())
           ? null
           : tableReferences.getFirst();
       try {
         if (joinQuery) {
-          reader = buildJoinReader();
+          reader = buildJoinReader(cancellation);
           resultTableName = buildJoinTableName();
           resultSchema = null;
         } else if (baseCteResult != null) {
@@ -456,8 +485,13 @@ public class JParqPreparedStatement implements PreparedStatement {
           reader = validatedTable(baseTableLocation, conf).open(conf, parquetPredicate.orElse(null));
           resultTableName = baseTableLocation.tableName();
         }
+        resultMetadata = reader instanceof JoinRecordReader joinReader ? joinReader.schema() : fileAvroSchema;
+        reader = cancellation.track(reader);
         if (!joinQuery) {
-          reader = applyTableSample(baseRef == null ? null : baseRef.tableSample(), reader);
+          RecordReader sampled = applyTableSample(baseRef == null ? null : baseRef.tableSample(), reader);
+          if (sampled != reader) {
+            reader = cancellation.track(sampled);
+          }
         }
       } catch (SQLException e) {
         throw e;
@@ -476,7 +510,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       try {
         rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, tableCatalog, residualExpression,
             labels, physical, subqueryExecutor);
-        rs.setMetadataSchema(reader instanceof JoinRecordReader joinReader ? joinReader.schema() : fileAvroSchema);
+        rs.setMetadataSchema(resultMetadata);
       } catch (SQLException | RuntimeException exception) {
         try {
           reader.close();
@@ -486,11 +520,37 @@ public class JParqPreparedStatement implements PreparedStatement {
         throw exception;
       }
 
-      stmt.setCurrentRs(rs);
+      publishResult(rs, cancellation, context);
+      transferred = true;
       return rs;
-    } catch (SQLException | RuntimeException e) {
-      SystemFunctions.clearContext();
-      throw e;
+    } finally {
+      if (!transferred) {
+        context.close();
+      }
+    }
+  }
+
+  /**
+   * Attaches execution ownership before exposing a result to the statement.
+   *
+   * @param result
+   *          completed result
+   * @param cancellation
+   *          execution cancellation state
+   * @param context
+   *          this execution's function context
+   * @throws SQLException
+   *           if cancellation raced result construction
+   */
+  private void publishResult(JParqResultSet result, QueryCancellation cancellation,
+      SystemFunctions.ContextScope context) throws SQLException {
+    result.setExecutionContext(cancellation, context);
+    try {
+      cancellation.checkCanceled();
+      stmt.setCurrentRs(result);
+    } catch (SQLException exception) {
+      result.close();
+      throw exception;
     }
   }
 
@@ -1241,10 +1301,20 @@ public class JParqPreparedStatement implements PreparedStatement {
     return Map.copyOf(predicates);
   }
 
-  private JoinRecordReader buildJoinReader() throws SQLException {
+  /**
+   * Loads join inputs under the current execution's cancellation state.
+   *
+   * @param cancellation
+   *          shared execution state
+   * @return materialized join reader
+   * @throws SQLException
+   *           if loading fails or execution is canceled
+   */
+  private JoinRecordReader buildJoinReader(QueryCancellation cancellation) throws SQLException {
     List<JoinRecordReader.JoinTable> tables = new ArrayList<>();
     Map<String, Integer> qualifierIndex = new LinkedHashMap<>();
     for (int referenceIndex = 0; referenceIndex < tableReferences.size(); referenceIndex++) {
+      cancellation.checkCanceled();
       SqlParser.TableReference ref = tableReferences.get(referenceIndex);
       if (ref.unnest() != null) {
         if (tables.isEmpty()) {
@@ -1323,7 +1393,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       validateJoinTableColumns(tableSchema, ref);
       List<GenericRecord> rows = new ArrayList<>();
       FilterPredicate predicate = joinPredicates.get(referenceIndex);
-      try (RecordReader tableReader = input.open(tableConf, predicate)) {
+      try (RecordReader tableReader = cancellation.track(input.open(tableConf, predicate))) {
         GenericRecord record = tableReader.read();
         while (record != null) {
           rows.add(record);

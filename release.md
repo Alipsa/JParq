@@ -3,7 +3,8 @@
 ### 1.4.0
 - Add opt-in `datasetLayout=hf` multi-file tables for named Hugging Face shards and numeric directory layouts, with strict discovery, lazy schema validation, per-shard pushdown, and aggregated CLI diagnostics; the default `none` layout preserves single-file discovery.
 - Reuse shard validation within each prepared statement and discover the catalog once per column-metadata request; report incompatible shard schemas with the differing field path.
-- Make `Statement.cancel()` return without waiting for an active physical read. An in-flight JDBC `next()` throws `SQLException` when cancellation is observed; cleanup follows the current physical read, which with a pushed-down filter can span a shard.
+- Honor `Statement.cancel()` during aggregation, sorting, join loading, and nested execution, as well as in-flight JDBC `next()` calls. Cancellation returns without waiting for an active physical read and the executing call throws `SQLException`; cleanup follows the current physical read, which with a pushed-down filter can span a shard.
+- Keep SQL `USER()`/`DATABASE()` contexts isolated during cross-thread cancellation and make result-set closure idempotent.
 - **Behavior change:** unreadable table schemas now fail when a statement is prepared, including in the default `none` layout, instead of continuing without pushdown.
 - Make CLI `/describe` resolve literal schema/table names before querying column metadata, escaping JDBC wildcards so similarly named tables cannot mix columns or cause unrelated validation failures.
 - Support Hugging Face optimized Parquet files written with content-defined chunking and page indexes, verified with committed PyArrow 21.0.0 fixtures and physical page-pruning tests.

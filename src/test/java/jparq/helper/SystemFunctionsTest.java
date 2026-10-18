@@ -25,6 +25,21 @@ class SystemFunctionsTest {
   }
 
   @Test
+  void closingContextHandlesOutOfOrderNeverPopsAnotherLiveContext() {
+    try (var outer = SystemFunctions.openContext("outer", "alice");
+        var inner = SystemFunctions.openContext("inner", "bob")) {
+      outer.close();
+      outer.close();
+      assertEquals("inner", SystemFunctions.database());
+      assertEquals("bob", SystemFunctions.user());
+      inner.close();
+      inner.close();
+      assertEquals("JParq", SystemFunctions.database());
+      assertEquals(System.getProperty("user.name"), SystemFunctions.user());
+    }
+  }
+
+  @Test
   void ifNullReturnsFirstNonNull() {
     assertEquals("first", SystemFunctions.ifNull("first", "second"));
     assertEquals("fallback", SystemFunctions.ifNull(null, "fallback"));

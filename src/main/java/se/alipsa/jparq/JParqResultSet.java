@@ -18,6 +18,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
@@ -36,6 +37,7 @@ import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.ParquetSchemas;
+import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.QueryProcessor;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
@@ -75,6 +77,9 @@ public class JParqResultSet extends ResultSetAdapter {
   private boolean aggregateOnRow = false;
   private volatile boolean closed = false;
   private volatile boolean canceled;
+  private final AtomicBoolean resourcesClosed = new AtomicBoolean();
+  private QueryCancellation cancellation;
+  private SystemFunctions.ContextScope systemContext;
   private int rowNum = 0;
   private boolean lastWasNull = false;
 
@@ -495,12 +500,33 @@ public class JParqResultSet extends ResultSetAdapter {
    *           if the result set is closed or was canceled
    */
   private void ensureOpen() throws SQLException {
+    if (cancellation != null) {
+      try {
+        cancellation.checkCanceled();
+      } catch (SQLException exception) {
+        close();
+        throw exception;
+      }
+    }
     if (canceled) {
       throw new SQLException("Statement was canceled");
     }
     if (closed) {
       throw new SQLException("ResultSet closed");
     }
+  }
+
+  /**
+   * Transfers execution context ownership to this result.
+   *
+   * @param cancellation
+   *          shared query cancellation state
+   * @param context
+   *          handle belonging to this result's function context
+   */
+  void setExecutionContext(QueryCancellation cancellation, SystemFunctions.ContextScope context) {
+    this.cancellation = cancellation;
+    this.systemContext = context;
   }
 
   /**
@@ -1089,14 +1115,16 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public void close() throws SQLException {
     closed = true;
-    try {
+    if (!resourcesClosed.compareAndSet(false, true)) {
+      return;
+    }
+    var context = systemContext;
+    try (context) {
       if (qp != null) {
         qp.close();
       }
     } catch (Exception ignore) {
       // intentionally ignored
-    } finally {
-      SystemFunctions.clearContext();
     }
   }
 

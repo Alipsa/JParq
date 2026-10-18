@@ -187,8 +187,10 @@ gaps are allowed but duplicate numeric indices are errors. Both layouts scan in 
 SQL row order still requires `ORDER BY`. Bounds, DISTINCT, aggregation, windows, joins, and repeatable sampling
 operate over the whole logical input. Each shard retains predicate and projection pushdown, its own physical
 read schema and enriched logical types, and at most one shard reader is open per logical input.
-`Statement.cancel()` requests closure without waiting for an active physical read. An in-flight `next()`
-throws `SQLException` when that read returns, instead of silently reporting end of results. The reading thread
+`Statement.cancel()` applies while `executeQuery()` is aggregating, sorting, loading joins, or executing nested
+queries, as well as after a result has been returned. It requests closure without waiting for an active physical
+read. The executing `executeQuery()` or in-flight `next()` throws `SQLException` when cancellation is observed,
+instead of returning a partial aggregate or silently reporting end of results. The reading thread
 closes its input before opening another shard. A pushed-down record filter can make the current physical read
 span the rest of a shard; cancellation does not interrupt a decoder in use.
 
