@@ -5,7 +5,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
@@ -95,6 +97,73 @@ class CorrelatedInOrTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void inPrecedenceIsPreservedAcrossEveryQueryScope(boolean predicate, boolean projection) throws Exception {
+    try (var conn = DriverManager.getConnection(
+        "jdbc:jparq:" + base + "?predicatePushdown=" + predicate + "&projectionPushdown=" + projection)) {
+      String condition = "b.id IN (SELECT id FROM small) OR b.id > 10";
+      Set<Integer> expected = ids(conn, condition);
+      assertEquals(94, expected.size());
+      for (String query : List.of("SELECT id FROM (SELECT b.id FROM big b WHERE " + condition + ") t",
+          "WITH t AS (SELECT b.id FROM big b WHERE " + condition + ") SELECT id FROM t",
+          "SELECT b.id FROM big b JOIN small s ON b.g = s.g WHERE " + condition,
+          "SELECT b.id FROM big b JOIN small s ON b.g = s.g AND (" + condition + ")",
+          "SELECT b.id FROM big b GROUP BY b.id HAVING " + condition)) {
+        assertEquals(expected, new HashSet<>(queryIds(conn, query)), query);
+      }
+      for (String nestedCondition : List.of("b.id IN (SELECT s2.id FROM small s2 WHERE s2.g = b.g) OR b.id > 10",
+          "b.id IN (0,1,2,3,4) OR b.id > 10")) {
+        for (String query : List.of("SELECT id FROM (SELECT b.id FROM big b WHERE " + nestedCondition + ") t",
+            "WITH t AS (SELECT b.id FROM big b WHERE " + nestedCondition + ") SELECT id FROM t",
+            "SELECT b.id FROM big b JOIN small s ON b.g = s.g WHERE " + nestedCondition,
+            "SELECT b.id FROM big b JOIN small s ON b.g = s.g AND (" + nestedCondition + ")")) {
+          assertEquals(expected, new HashSet<>(queryIds(conn, query)), query);
+        }
+      }
+      List<Integer> union = queryIds(conn, "SELECT b.id FROM big b WHERE b.id IN (SELECT id FROM small) "
+          + "OR b.id > 98 UNION ALL SELECT id FROM small");
+      assertEquals(11, union.size());
+      assertEquals(1, java.util.Collections.frequency(union, 99));
+      for (int id = 0; id < 5; id++) {
+        assertEquals(2, java.util.Collections.frequency(union, id));
+      }
+      try (var stmt = conn.createStatement();
+          var result = stmt.executeQuery("SELECT SUM(CASE WHEN " + condition + " THEN 1 ELSE 0 END) AS n FROM big b")) {
+        assertTrue(result.next());
+        assertEquals(94, result.getInt(1));
+      }
+      assertEquals(expected, ids(conn, "b.id IN (0,1,2,3,4) OR b.id > 10"));
+      assertEquals(expected, ids(conn, "b.id > 10 OR b.id IN (0,1,2,3,4)"));
+      assertEquals(90, ids(conn, "b.id IN (0) OR b.id > 10").size());
+      assertEquals(95, ids(conn, "b.id NOT IN (0,1,2,3,4) OR b.id > 10").size());
+      assertEquals(89, ids(conn, "(b.id > 10) IN (TRUE OR FALSE)").size());
+    }
+  }
+
+  /**
+   * Reads SQL output while retaining duplicates from set operations.
+   *
+   * @param conn
+   *          query connection
+   * @param sql
+   *          complete query
+   * @return identifiers in scan order
+   * @throws Exception
+   *           if execution fails
+   */
+  private static List<Integer> queryIds(Connection conn, String sql) throws Exception {
+    try (var stmt = conn.createStatement(); var result = stmt.executeQuery(sql)) {
+      List<Integer> values = new ArrayList<>();
+      while (result.next()) {
+        values.add(result.getInt(1));
+      }
+      return values;
+    }
+  }
+
   /**
    * Reads a predicate's matching outer identifiers.
    *
@@ -107,13 +176,6 @@ class CorrelatedInOrTest {
    *           if execution fails
    */
   private static Set<Integer> ids(Connection conn, String predicate) throws Exception {
-    try (var stmt = conn.createStatement();
-        var result = stmt.executeQuery("SELECT b.id FROM big b WHERE " + predicate)) {
-      Set<Integer> ids = new HashSet<>();
-      while (result.next()) {
-        ids.add(result.getInt(1));
-      }
-      return ids;
-    }
+    return new HashSet<>(queryIds(conn, "SELECT b.id FROM big b WHERE " + predicate));
   }
 }

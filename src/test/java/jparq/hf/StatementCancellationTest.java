@@ -231,6 +231,43 @@ class StatementCancellationTest {
     };
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "EXISTS (SELECT 1 FROM small s2 WHERE s2.g = b.g)",
+      "b.id IN (SELECT s2.id FROM small s2 WHERE s2.g = b.g) OR b.id > 10"
+  })
+  void cancellationBetweenNextCallsTargetsTheOuterResult(String predicate) throws Exception {
+    Schema schema = new Schema.Parser().parse("""
+        {"type":"record","name":"Grouped","fields":[{"name":"id","type":"int"},{"name":"g","type":"int"}]}
+        """);
+    for (String table : java.util.List.of("big", "small")) {
+      var conf = new Configuration(false);
+      var path = new org.apache.hadoop.fs.Path(base.resolve(table + ".parquet").toUri());
+      try (var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(path, conf))
+          .withSchema(schema).withConf(conf).build()) {
+        for (int id = 0; id < (table.equals("big") ? 30 : 5); id++) {
+          var row = new GenericData.Record(schema);
+          row.put("id", id);
+          row.put("g", id % 5);
+          writer.write(row);
+        }
+      }
+    }
+    try (var conn = DriverManager.getConnection("jdbc:jparq:" + base);
+        var statement = conn.createStatement();
+        var result = statement.executeQuery("SELECT b.id FROM big b WHERE " + predicate)) {
+      for (int row = 0; row < 10; row++) {
+        assertTrue(result.next());
+        assertSame(result, statement.getResultSet());
+      }
+      statement.cancel();
+      assertSame(result, statement.getResultSet());
+      SQLException failure = assertThrows(SQLException.class, result::next);
+      assertEquals("Statement was canceled", failure.getMessage());
+      assertEquals(QueryCancellation.SQL_STATE, failure.getSQLState());
+    }
+  }
+
   @Test
   void cancellationInsideACorrelatedSubqueryRetainsItsJdbcIdentity() throws Exception {
     Files.copy(base.resolve("train.parquet"), base.resolve("small.parquet"));

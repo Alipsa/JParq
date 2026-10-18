@@ -186,6 +186,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   private JParqPreparedStatement boundStatement;
   private boolean boundStatementStale;
   private boolean closed = false;
+  private boolean nested;
+  private QueryCancellation inheritedCancellation;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
     this(stmt, sql, Map.of(), false);
@@ -423,7 +425,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   @SuppressWarnings("PMD.CloseResource")
   @Override
   public JParqResultSet executeQuery() throws SQLException {
-    try (JParqStatement.ExecutionScope execution = stmt.beginExecution()) {
+    try (JParqStatement.ExecutionScope execution = stmt.beginExecution(inheritedCancellation)) {
       var cancellation = execution.cancellation();
       cancellation.checkCanceled();
       try {
@@ -505,7 +507,8 @@ public class JParqPreparedStatement implements PreparedStatement {
       final List<String> physical = parsedSelect.labels().isEmpty() ? null : parsedSelect.columnNames();
       // Create the result set, passing reader, select plan, residual filter,
       // plus projection labels and physical names (for metadata & value lookups)
-      SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
+      SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(),
+          sql -> prepareSubqueryStatement(sql, cteResults, cancellation));
       JParqResultSet rs;
       try {
         rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, tableCatalog, residualExpression,
@@ -530,6 +533,12 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
   }
 
+  @Override
+  public ResultSet executeQuery(String sql) throws SQLException {
+    throw new SQLFeatureNotSupportedException(
+        "A PreparedStatement cannot execute a new query string. Use the no-arg executeQuery().");
+  }
+
   /**
    * Attaches execution ownership before exposing a result to the statement.
    *
@@ -547,17 +556,13 @@ public class JParqPreparedStatement implements PreparedStatement {
     result.setExecutionContext(cancellation, context);
     try {
       cancellation.checkCanceled();
-      stmt.setCurrentRs(result);
+      if (!nested) {
+        stmt.setCurrentRs(result);
+      }
     } catch (SQLException exception) {
       result.close();
       throw exception;
     }
-  }
-
-  @Override
-  public ResultSet executeQuery(String sql) throws SQLException {
-    throw new SQLFeatureNotSupportedException(
-        "A PreparedStatement cannot execute a new query string. Use the no-arg executeQuery().");
   }
 
   @Override
@@ -573,14 +578,35 @@ public class JParqPreparedStatement implements PreparedStatement {
     closed = true;
   }
 
-  private JParqPreparedStatement prepareSubqueryStatement(String sql) throws SQLException {
-    return prepareSubqueryStatement(sql, cteResults);
-  }
-
   private JParqPreparedStatement prepareSubqueryStatement(String sql, Map<Identifier, CteResult> cteContext)
       throws SQLException {
+    return prepareSubqueryStatement(sql, cteContext, inheritedCancellation);
+  }
+
+  /**
+   * Prepares nested work without publishing its private result on the outer
+   * statement.
+   *
+   * @param sql
+   *          nested SQL
+   * @param cteContext
+   *          inherited CTE values
+   * @param cancellation
+   *          outer execution state, including during result iteration
+   * @return nested prepared statement
+   * @throws SQLException
+   *           if preparation fails or execution is canceled
+   */
+  private JParqPreparedStatement prepareSubqueryStatement(String sql, Map<Identifier, CteResult> cteContext,
+      QueryCancellation cancellation) throws SQLException {
     Map<Identifier, CteResult> inherited = cteContext == null ? Map.of() : cteContext;
-    return new JParqPreparedStatement(stmt, sql, inherited);
+    try (var execution = stmt.beginExecution(cancellation)) {
+      execution.cancellation().checkCanceled();
+      var prepared = new JParqPreparedStatement(stmt, sql, inherited);
+      prepared.nested = true;
+      prepared.inheritedCancellation = execution.cancellation();
+      return prepared;
+    }
   }
 
   private RecordReader applyTableSample(SqlParser.TableSampleDefinition sample, RecordReader reader)
@@ -627,7 +653,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     int columnCount = -1;
     for (SqlParser.SetComponent component : components) {
       List<List<Object>> componentData = new ArrayList<>();
-      try (JParqPreparedStatement prepared = new JParqPreparedStatement(stmt, component.sql(), cteResults);
+      try (JParqPreparedStatement prepared = prepareSubqueryStatement(component.sql(), cteResults);
           ResultSet rs = prepared.executeQuery()) {
         ResultSetMetaData meta = rs.getMetaData();
         if (labels == null) {
@@ -1409,7 +1435,9 @@ public class JParqPreparedStatement implements PreparedStatement {
       registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
     }
     try {
-      JoinRecordReader joinReader = new JoinRecordReader(tables);
+      var executor = new SubqueryExecutor(stmt.getConn(),
+          sql -> prepareSubqueryStatement(sql, cteResults, cancellation));
+      JoinRecordReader joinReader = new JoinRecordReader(tables, executor);
       expandJoinQualifiedWildcards(joinReader);
       return joinReader;
     } catch (IllegalArgumentException e) {
@@ -2973,7 +3001,7 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   private CteResult executeCteQuery(String sql, Map<Identifier, CteResult> context, Identifier tableName,
       List<String> columnAliases) throws SQLException {
-    try (JParqPreparedStatement prepared = new JParqPreparedStatement(stmt, sql, context);
+    try (JParqPreparedStatement prepared = prepareSubqueryStatement(sql, context);
         ResultSet rs = prepared.executeQuery()) {
       String recordName = tableName == null ? null : tableName.text();
       return consumeResultSet(rs, recordName, columnAliases);
@@ -3368,6 +3396,8 @@ public class JParqPreparedStatement implements PreparedStatement {
       boundStatement = null;
     }
     boundStatement = new JParqPreparedStatement(stmt, boundSql, inheritedCteContext);
+    boundStatement.nested = nested;
+    boundStatement.inheritedCancellation = inheritedCancellation;
     JParqResultSet resultSet = boundStatement.executeQuery();
     boundStatementStale = false;
     return resultSet;

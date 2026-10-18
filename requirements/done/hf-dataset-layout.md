@@ -535,11 +535,13 @@ planning/materialization, shared across nested work, and reset for each new top-
 closure is idempotent; identity-bearing system-function context handles never pop a different thread's live
 context and closed handles are pruned on the owning thread's next context access. Cancellation exceptions use
 SQLState `57014`; JDBC iteration unwraps evaluator/subquery causes to rethrow the original marked exception,
-including correlated subqueries started after the original execution scope has ended. The existing
+including correlated subqueries started after the original execution scope has ended. These subqueries
+inherit the outer cancellation state and never replace the outer statement's current result; cancellation
+between correlated EXISTS or IN calls therefore reaches the live outer result. The existing
 quoted-name casing and unqualified dotted-name limitations remain as specified, and the default layout
 preserves single-file discovery.
 
-`mvn spotless:apply clean verify` passed on Java 21: 1,079 unit tests (one case-sensitive-filesystem test
+`mvn spotless:apply clean verify` passed on Java 21: 1,086 unit tests (one case-sensitive-filesystem test
 skipped on the case-insensitive local volume), plus all 3 integration tests. Checkstyle reported zero
 violations; PMD, Spotless, and coverage checks passed. The new layout tests cover grouping, errors, symlinks,
 all four pushdown settings, independent physical pruning on both indexed shards, record names/enriched types,

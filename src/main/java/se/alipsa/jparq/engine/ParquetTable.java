@@ -165,6 +165,21 @@ public final class ParquetTable {
   }
 
   /**
+   * Opens a sequential reader using an injectable physical reader factory.
+   *
+   * @param configuration
+   *          per-input configuration
+   * @param predicate
+   *          optional Parquet predicate, or null
+   * @param factory
+   *          physical reader factory
+   * @return reader owning all subsequently opened physical readers
+   */
+  public RecordReader open(Configuration configuration, FilterPredicate predicate, ShardReaderFactory factory) {
+    return new SequentialReader(shards, new Configuration(configuration), predicate, factory);
+  }
+
+  /**
    * Opens one physical shard reader with its own enriched schema.
    *
    * @param shard
@@ -204,21 +219,6 @@ public final class ParquetTable {
      *           if the shard cannot be opened
      */
     RecordReader open(Shard shard, Configuration configuration, FilterPredicate predicate) throws IOException;
-  }
-
-  /**
-   * Opens a sequential reader using an injectable physical reader factory.
-   *
-   * @param configuration
-   *          per-input configuration
-   * @param predicate
-   *          optional Parquet predicate, or null
-   * @param factory
-   *          physical reader factory
-   * @return reader owning all subsequently opened physical readers
-   */
-  public RecordReader open(Configuration configuration, FilterPredicate predicate, ShardReaderFactory factory) {
-    return new SequentialReader(shards, new Configuration(configuration), predicate, factory);
   }
 
   /**

@@ -4,6 +4,7 @@ import static se.alipsa.jparq.engine.AvroCoercions.coerceLiteral;
 
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -51,6 +52,7 @@ public final class ExpressionEvaluator {
   private final ValueExpressionEvaluator literalEvaluator;
   private final SubqueryExecutor subqueryExecutor;
   private final List<String> outerQualifiers;
+  private final Map<net.sf.jsqlparser.statement.select.Select, Boolean> subqueryCorrelations = new IdentityHashMap<>();
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
 
@@ -412,9 +414,14 @@ public final class ExpressionEvaluator {
    */
   private SubqueryExecutor.SubqueryResult executeCorrelatedSubquery(net.sf.jsqlparser.statement.select.Select subSelect,
       GenericRecord rec) {
+    if (Boolean.FALSE.equals(subqueryCorrelations.get(subSelect))) {
+      return subqueryExecutor.execute(subSelect);
+    }
+    // Outer join labels do not establish that an unqualified inner column is
+    // correlated. Only references bound to an outer qualifier can be substituted.
     CorrelatedSubqueryRewriter.Result rewritten = SubqueryCorrelatedFiltersIsolator.isolate(subSelect, outerQualifiers,
-        correlationColumns(), qualifierColumnMapping,
-        (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
+        Set.of(), qualifierColumnMapping, (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
+    subqueryCorrelations.put(subSelect, rewritten.correlated());
     return rewritten.correlated() ? subqueryExecutor.executeRaw(rewritten.sql()) : subqueryExecutor.execute(subSelect);
   }
 

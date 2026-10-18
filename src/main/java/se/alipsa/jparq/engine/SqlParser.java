@@ -16,11 +16,8 @@ import java.util.stream.Collectors;
 import net.sf.jsqlparser.JSQLParserException;
 import net.sf.jsqlparser.expression.*;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
-import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
-import net.sf.jsqlparser.expression.operators.relational.InExpression;
-import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.parser.SimpleNode;
 import net.sf.jsqlparser.parser.Token;
@@ -606,6 +603,7 @@ public final class SqlParser {
   private static Query parseWithJsqlParser(String sql, boolean allowQualifiedWildcards) throws JSQLParserException {
     net.sf.jsqlparser.statement.select.Select stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
         .parse(sql);
+    SqlExpressionNormalizer.normalize(stmt);
     List<CommonTableExpression> ctes = parseWithItems(stmt.getWithItemsList(), allowQualifiedWildcards);
     Map<Identifier, CommonTableExpression> cteLookup = buildCteLookup(ctes);
     return parseSelectStatement(stmt, ctes, cteLookup, allowQualifiedWildcards);
@@ -891,47 +889,6 @@ public final class SqlParser {
     return cteLookup.get(identifier);
   }
 
-  /**
-   * Restores Boolean operators that JSqlParser 5.3 absorbs into an IN subquery's
-   * right operand, such as x IN (SELECT ...) OR y. Only a leading subquery may be
-   * lifted; expressions inside an IN value list keep their own grouping.
-   *
-   * @param expression
-   *          parsed predicate
-   * @return predicate with IN binding before AND and OR
-   */
-  private static Expression normalizeSubqueryInPrecedence(Expression expression) {
-    if (expression instanceof InExpression in
-        && (in.getRightExpression() instanceof AndExpression || in.getRightExpression() instanceof OrExpression)) {
-      BinaryExpression booleanExpression = (BinaryExpression) in.getRightExpression();
-      BinaryExpression leading = booleanExpression;
-      while (leading.getLeftExpression() instanceof AndExpression
-          || leading.getLeftExpression() instanceof OrExpression) {
-        leading = (BinaryExpression) leading.getLeftExpression();
-      }
-      if (leading.getLeftExpression() instanceof ParenthesedSelect) {
-        in.setRightExpression(leading.getLeftExpression());
-        leading.setLeftExpression(in);
-        return normalizeSubqueryInPrecedence(booleanExpression);
-      }
-    }
-    if (expression instanceof AndExpression || expression instanceof OrExpression) {
-      BinaryExpression binary = (BinaryExpression) expression;
-      binary.setLeftExpression(normalizeSubqueryInPrecedence(binary.getLeftExpression()));
-      binary.setRightExpression(normalizeSubqueryInPrecedence(binary.getRightExpression()));
-    } else if (expression instanceof NotExpression not) {
-      not.setExpression(normalizeSubqueryInPrecedence(not.getExpression()));
-    } else if (expression instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
-      ParenthesedExpressionList<Expression> rewritten = new ParenthesedExpressionList<>();
-      rewritten.add(normalizeSubqueryInPrecedence(list.getFirst()));
-      return rewritten;
-    } else if (LegacyParenthesisSupport.isLegacyParenthesis(expression)) {
-      LegacyParenthesisSupport.replace(expression,
-          normalizeSubqueryInPrecedence(LegacyParenthesisSupport.extract(expression)));
-    }
-    return expression;
-  }
-
   private static Select parsePlainSelect(PlainSelect ps, List<CommonTableExpression> ctes,
       Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
     FromInfo fromInfo = parseFromItem(ps.getFromItem(), ctes, cteLookup, allowQualifiedWildcards);
@@ -978,8 +935,8 @@ public final class SqlParser {
     }
 
     Expression joinCondition = combineJoinConditions(joinInfos, tableRefs);
-    Expression combinedWhere = normalizeSubqueryInPrecedence(combineExpressions(joinCondition, whereExpr));
-    Expression combinedHaving = normalizeSubqueryInPrecedence(havingExpr);
+    Expression combinedWhere = combineExpressions(joinCondition, whereExpr);
+    Expression combinedHaving = havingExpr;
 
     List<String> labelsCopy = List.copyOf(labels);
     List<String> physicalCopy = Collections.unmodifiableList(new ArrayList<>(physicalCols));

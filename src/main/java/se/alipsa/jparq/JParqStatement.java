@@ -117,9 +117,23 @@ public class JParqStatement implements Statement {
    * @throws SQLException
    *           if another thread is executing this statement
    */
-  synchronized ExecutionScope beginExecution() throws SQLException {
+  ExecutionScope beginExecution() throws SQLException {
+    return beginExecution(null);
+  }
+
+  /**
+   * Starts nested work using the outer result's cancellation state during
+   * iteration.
+   *
+   * @param inherited
+   *          outer cancellation state, or null for a fresh execution
+   * @return execution scope
+   * @throws SQLException
+   *           if another thread is executing this statement
+   */
+  synchronized ExecutionScope beginExecution(QueryCancellation inherited) throws SQLException {
     if (executionDepth == 0) {
-      activeExecution = new QueryCancellation();
+      activeExecution = inherited == null ? new QueryCancellation() : inherited;
       executionOwner = Thread.currentThread();
     } else if (executionOwner != Thread.currentThread()) {
       throw new SQLException("Statement is already executing on another thread");

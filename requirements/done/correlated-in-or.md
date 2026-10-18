@@ -23,16 +23,26 @@ returned 5 rows, and the range predicate alone returned 89 rows.
 ## Cause and implementation
 
 JSqlParser 5.3 can parse this as an `InExpression` whose right operand is an `OrExpression`, absorbing the
-Boolean tail outside the parenthesized subquery. The driver now restores IN's precedence before predicate
-execution, including AND/OR chains, negation, and parentheses. Boolean expressions inside an IN value list
-retain their existing grouping.
+Boolean tail outside the parenthesized subquery or value list. `SqlExpressionNormalizer` now restores IN's
+precedence throughout the parsed statement before CTEs, derived tables, or set-operation branches are
+extracted. It writes replacement roots back to WHERE, HAVING, JOIN ON, and SELECT-list owners, including
+CASE/function arguments, AND/OR chains, negation, and parentheses. Boolean expressions actually inside an IN
+value list retain their existing grouping. JOIN ON evaluation receives a subquery executor. Unqualified
+inner columns are not replaced merely because the outer join or grouping context contains the same name.
 
 The predicate evaluator also rewrites correlated IN subqueries with the current outer row's correlation
 context, using the same helper as EXISTS, rather than executing them as uncorrelated cached queries.
+Whether a predicate subquery is uncorrelated is retained per AST node so subsequent rows reuse its cached
+result without repeating correlation analysis. Nested statements preserve the outer JDBC result and inherit
+its cancellation state even when started during iteration.
 
 ## Verification
 
 `src/test/java/jparq/CorrelatedInOrTest.java` checks the exact 94-row result, independent predicate controls,
 reversed OR operands, parentheses, AND/OR precedence, negation, NOT IN, and uncorrelated IN. A second inner
 table uses `g = (id + 1) % 5`, making the correlated IN result empty while its disjunction still returns the
-89 range matches. Every case runs with all four predicate/projection pushdown combinations.
+89 range matches. Coverage includes derived tables, CTEs, UNION ALL multiplicities, JOIN WHERE/ON, HAVING,
+SUM/CASE, literal IN lists, and an IN list containing a Boolean expression. Every SQL case runs with all four
+predicate/projection pushdown combinations. `SubqueryCorrelationCachingTest` asserts that 1,000 outer rows
+require one uncorrelated-IN analysis. `StatementCancellationTest` checks outer result identity and SQLState
+57014 when EXISTS and correlated IN/OR are canceled between `next()` calls.
