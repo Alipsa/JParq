@@ -197,6 +197,26 @@ class CorrelatedInOrTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void derivedQueriesOverInheritedCtesKeepFiltersAndProjections(boolean predicate, boolean projection)
+      throws Exception {
+    try (var conn = DriverManager.getConnection(
+        "jdbc:jparq:" + base + "?predicatePushdown=" + predicate + "&projectionPushdown=" + projection)) {
+      String outer = "WITH a AS (SELECT id FROM small) ";
+      String filtered = "(SELECT id FROM a WHERE id > 2) t";
+      assertEquals(List.of(2), queryIds(conn, outer + "SELECT COUNT(*) FROM " + filtered));
+      assertEquals(List.of(2),
+          queryIds(conn, outer + "SELECT COUNT(*) FROM " + filtered + " JOIN small s ON s.id = t.id"));
+      assertEquals(Set.of(3, 4), new HashSet<>(queryIds(conn, outer + "SELECT t.id FROM " + filtered)));
+      // Assert the numeric value; aggregate type consistency is a separate issue.
+      assertEquals(List.of(10), queryIds(conn, outer + "SELECT SUM(x) FROM (SELECT id * 1 AS x FROM a) t"));
+      assertEquals(List.of(100), queryIds(conn, outer + "SELECT COUNT(*) FROM (SELECT id FROM big) a"));
+    }
+  }
+
   /**
    * Reads SQL output while retaining duplicates from set operations.
    *

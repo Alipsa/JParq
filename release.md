@@ -9,6 +9,7 @@
 - Resolve unqualified subquery columns against inner inputs before falling back to the outer row or HAVING group, consistently across IN, EXISTS, scalar, and ANY/ALL subqueries; retain these outer dependencies during projection pushdown.
 - Bind information_schema subquery columns using their fixed schemas without catalog scans; keep unqualified names in the inner scope when its input columns cannot be determined.
 - Preserve WITH declarations inside parenthesized subqueries and derived tables, so local CTE names take precedence over physical tables and inherited CTEs; continue rejecting duplicate declarations in one WITH scope.
+- Preserve filters and computed projections in derived tables over CTEs, including joined derived inputs.
 - Keep SQL `USER()`/`DATABASE()` contexts isolated during cross-thread cancellation and make result-set closure idempotent.
 - **Behavior change:** unreadable table schemas now fail when a statement is prepared, including in the default `none` layout, instead of continuing without pushdown.
 - Make CLI `/describe` resolve literal schema/table names before querying column metadata, escaping JDBC wildcards so similarly named tables cannot mix columns or cause unrelated validation failures.

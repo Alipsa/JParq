@@ -77,3 +77,12 @@ Derived-table regressions check the 100-row count, the scalar wrapper, joins wit
 either side, CTE column aliases and filtering, exact identifiers, and preservation of the five-row outer
 CTE under all four pushdown combinations. Parser tests confirm that the derived plan links to the local
 CTE definition rather than the outer one.
+
+Additional derived-table controls retain filters over inherited CTEs (count 2 directly and through a join),
+computed projections (SUM value 10), and an alias matching an outer CTE name (count 100). The SUM control
+checks the value without asserting the currently inconsistent JDBC type.
+
+Separate pre-existing bugs reported on origin/main and reproduced by temporary review probes at `616b58e`
+are tracked as [FROM-less recursive CTE anchors (#190)](https://github.com/Alipsa/JParq/issues/190) and
+[derived integer-expression SUM type consistency (#191)](https://github.com/Alipsa/JParq/issues/191).
+The probes were removed; these follow-ups are not fixes included in PR #189.
