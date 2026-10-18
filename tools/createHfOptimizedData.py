@@ -86,6 +86,45 @@ def write_float_fixtures(target):
         print(f"{path.name}: {metadata.num_rows} rows, {metadata.num_row_groups} groups, {path.stat().st_size} bytes")
 
 
+def write_layout_fixtures(target):
+    """Write numeric/directory, hashed, empty, incompatible and CDC shard layouts."""
+    target.mkdir(parents=True, exist_ok=True)
+    table = create_table()
+    # Each indexed shard has two row groups and many pages for physical pruning checks.
+    for index in range(2):
+        shard = table.slice(index * 8192, 8192)
+        for relative in (f"data/train-{index}-of-2-a{index}.parquet",
+                         f"default/train/{index:04d}.parquet"):
+            path = target / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            pq.write_table(shard, path, row_group_size=4096, data_page_size=1024, write_batch_size=64,
+                           write_page_index=True,
+                           use_content_defined_chunking={"min_chunk_size": 1024, "max_chunk_size": 4096})
+    pq.write_table(table, target / "equivalent.parquet", row_group_size=4096)
+    pq.write_table(table.slice(0, 0), target / "empty.parquet")
+    mismatch = target / "mismatch"
+    mismatch.mkdir(exist_ok=True)
+    pq.write_table(table.slice(0, 2), mismatch / "bad-0-of-2.parquet")
+    pq.write_table(pa.table({"id": ["incompatible"]}), mismatch / "bad-1-of-2.parquet")
+    pq.write_table(table.slice(0, 2), target / "plain.parquet", write_page_index=False)
+    recordnames = target / "recordnames"
+    recordnames.mkdir(exist_ok=True)
+    physical = pa.schema([pa.field("id", pa.int32(), nullable=False),
+                          pa.field("nested", pa.struct([pa.field("label", pa.string(), nullable=False)]),
+                                   nullable=False), pa.field("unused", pa.string(), nullable=False)])
+    for index, name in enumerate(("First", "Last")):
+        avro = {"type": "record", "name": name, "namespace": f"fixture.{name}", "fields": [
+            {"name": "id", "type": "int"},
+            {"name": "nested", "type": {"type": "record", "name": f"Nested{name}",
+                                       "fields": [{"name": "label", "type": "string"}]}},
+            {"name": "unused", "type": "string"}]}
+        values = pa.Table.from_pylist([{"id": index + 1, "nested": {"label": f"row-{index + 1}"},
+                                       "unused": "ignored"}], schema=physical)
+        values = values.replace_schema_metadata({b"parquet.avro.schema": json.dumps(avro).encode()})
+        pq.write_table(values, recordnames / f"named-{index}-of-2.parquet", write_page_index=True)
+
+
+
 def main():
     """Write and validate indexed CDC, ordinary and floating-point Parquet files."""
     if pa.__version__ != "21.0.0":
@@ -110,6 +149,7 @@ def main():
         assert pq.read_table(path).equals(table), path
         print(f"{path.name}: {metadata.num_rows} rows, {metadata.num_row_groups} groups, {path.stat().st_size} bytes")
     write_float_fixtures(target)
+    write_layout_fixtures(target.parent / "hf-layout")
 
 
 if __name__ == "__main__":

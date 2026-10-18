@@ -38,7 +38,9 @@ public class JParqDriverTest {
   @Test
   public void testGetPropertyInfo() {
     DriverPropertyInfo[] info = driver.getPropertyInfo("jdbc:jparq:/some/path", new Properties());
-    assertEquals(3, info.length);
+    assertEquals(4, info.length);
+    assertEquals("datasetLayout", info[3].name);
+    assertEquals("none", info[3].value);
     assertEquals("predicatePushdown", info[1].name);
     assertEquals("true", info[1].value);
     assertEquals("projectionPushdown", info[2].name);

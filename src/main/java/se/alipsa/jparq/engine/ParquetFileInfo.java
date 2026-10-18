@@ -33,10 +33,26 @@ public record ParquetFileInfo(List<RowGroup> rowGroups) {
    *          the number of rows
    * @param columnIndex
    *          whether every column chunk has a column index
+   * @param anyIndex
+   *          whether any column chunk has either index
    * @param offsetIndex
    *          whether every column chunk has an offset index
    */
-  public record RowGroup(long rowCount, boolean columnIndex, boolean offsetIndex) {
+  public record RowGroup(long rowCount, boolean columnIndex, boolean offsetIndex, boolean anyIndex) {
+    /**
+     * Preserves the original constructor for callers with complete-index flags.
+     * 
+     * @param rowCount
+     *          row count
+     * @param columnIndex
+     *          all chunks have column indexes
+     * @param offsetIndex
+     *          all chunks have offset indexes
+     */
+    public RowGroup(long rowCount, boolean columnIndex, boolean offsetIndex) {
+      this(rowCount, columnIndex, offsetIndex, columnIndex || offsetIndex);
+    }
+
   }
 
   /**
@@ -56,11 +72,13 @@ public record ParquetFileInfo(List<RowGroup> rowGroups) {
       for (var group : reader.getFooter().getBlocks()) {
         boolean columnIndex = !group.getColumns().isEmpty();
         boolean offsetIndex = columnIndex;
+        boolean anyIndex = false;
         for (var column : group.getColumns()) {
           columnIndex &= column.getColumnIndexReference() != null;
           offsetIndex &= column.getOffsetIndexReference() != null;
+          anyIndex |= column.getColumnIndexReference() != null || column.getOffsetIndexReference() != null;
         }
-        groups.add(new RowGroup(group.getRowCount(), columnIndex, offsetIndex));
+        groups.add(new RowGroup(group.getRowCount(), columnIndex, offsetIndex, anyIndex));
       }
     }
     return new ParquetFileInfo(groups);
@@ -73,6 +91,18 @@ public record ParquetFileInfo(List<RowGroup> rowGroups) {
    */
   public long rowCount() {
     return rowGroups.stream().mapToLong(RowGroup::rowCount).sum();
+  }
+
+  /**
+   * Summarizes page indexes across all chunks, including partially indexed files.
+   * 
+   * @return present, absent, or partial
+   */
+  public String pageIndexStatus() {
+    if (pageIndexPresent()) {
+      return "present";
+    }
+    return rowGroups.stream().anyMatch(RowGroup::anyIndex) ? "partial" : "absent";
   }
 
   /**

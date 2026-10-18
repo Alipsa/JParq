@@ -98,6 +98,12 @@ public class JParqExample {
   ```text
   jdbc:jparq:/home/user/data?caseSensitive=true
   ```
+- `datasetLayout` — defaults to `none` (one physical file per table). Set to `hf` to group Hugging Face shards
+  and numeric directory layouts into logical tables. Values are case-insensitive (`HF` and `None` work);
+  empty, whitespace-padded, and unknown values fail connection creation with the allowed values.
+  ```text
+  jdbc:jparq:/datasets/example?datasetLayout=hf
+  ```
 - Paths may be specified directly or using the `file://` prefix.
 - `predicatePushdown` — defaults to `true`. Set to `false` to evaluate the entire `WHERE` clause in Java.
 - `projectionPushdown` — defaults to `true`. Set to `false` to read every column, while still validating column names.
@@ -138,11 +144,92 @@ while excluding unrelated columns such as embedded media.
 Nanosecond timestamps, local timestamps, float16, lists, and image structs are readable. UTC-adjusted timestamps
 are returned as `java.sql.Timestamp` instants; local timestamps retain their stored wall-clock values in the
 JVM's default time zone. Microsecond and nanosecond precision is preserved. Lists are available through
-`ResultSet.getObject`, and structs through their JSON string representation. Dataset shards are separate tables;
-automatic Hugging Face shard grouping is outside this feature.
+`ResultSet.getObject`, and structs through their JSON string representation. Shards remain separate tables by
+default; opt into logical multi-file tables with `datasetLayout=hf` as described below.
 
 Small PyArrow fixtures are committed, so Maven does not need Python. Regeneration instructions and the exact
 PyArrow dependency are in `tools/createHfOptimizedData.py`.
+
+### Hugging Face dataset layouts
+
+The detailed requirements and verification record are in [hf-dataset-layout.md](requirements/done/hf-dataset-layout.md).
+
+With `datasetLayout=hf`, point the URL at the dataset root to expose these layouts:
+
+| Relative files | Logical table |
+| --- | --- |
+| `data/train-0-of-2.parquet`, `data/train-1-of-2.parquet` | `data.train` |
+| `default/train/0000.parquet`, `default/train/0001.parquet` | `default.train` |
+| `train-0-of-1-a1b2.parquet` | `PUBLIC.train` |
+
+Direct base files belong to `PUBLIC`. An immediate child containing only numeric Parquet files and no visible
+child directories becomes a `PUBLIC` table, rather than a schema. Otherwise it remains a schema, whose direct
+files and eligible immediate numeric directories become tables. README files do not disqualify a directory;
+a visible `partial-train/` child or nonnumeric Parquet file does. Empty directories are schemas, not tables.
+All dot-prefixed entries are ignored in HF mode, including `.cache/` and `.ipynb_checkpoints/`. The explicitly
+chosen base is honored even if its own name starts with a dot. The default `none` layout retains its existing behavior.
+
+Pointing at `default/` in the example exposes `PUBLIC.train` without a `train` schema. Pointing at `data/`
+exposes named splits as `PUBLIC` tables. Dataset-root `data/config/train-*.parquet` is too deep and is not
+discovered; point at `data/` to expose `config.train`. There are no nested schemas or deeper traversal.
+Pointing at `default/train/` itself exposes its individual `PUBLIC.0000`/`PUBLIC.0001` files.
+
+Named shards match this exact regex (optional hexadecimal hash suffix):
+
+```regex
+^(?<split>[A-Za-z0-9_][A-Za-z0-9_.-]*)-(?<index>[0-9]+)-of-(?<total>[0-9]+)(?:-(?<hash>[0-9a-fA-F]+))?\.(?i:parquet)$
+```
+
+A group requires a positive common total and exactly one index from zero through total minus one. Missing,
+duplicate (including padded/hash variants), out-of-range, and disagreeing-total shards fail discovery.
+Nonmatching filenames remain ordinary single-file tables. Directory-table names match `^[0-9]+\.(?i:parquet)$`;
+gaps are allowed but duplicate numeric indices are errors. Both layouts scan in numeric order (`9` before `10`).
+SQL row order still requires `ORDER BY`. Bounds, DISTINCT, aggregation, windows, joins, and repeatable sampling
+operate over the whole logical input. Each shard retains predicate and projection pushdown, its own physical
+read schema and enriched logical types, and at most one shard reader is open per logical input.
+
+File and directory symlinks are followed, including visible `.parquet` links to extensionless cache blobs outside
+the base. Names and discovery depth come from the visible paths. Dot-prefixed links are ignored; other dangling
+non-Parquet links such as README are ignored unless they resolve to directories. Visible invalid `.parquet`
+links fail discovery. Unlistable discovered directories fail too. HF mode rejects table-source collisions
+(single file, group, or directory) and normalized schema collisions, even for empty/README-only schema directories.
+Case variants collide with `caseSensitive=false`; they remain distinct with `true` on supporting filesystems.
+A base directory table is assigned only the table role, so its own name does not also create a schema.
+
+Discovery reads no footers and is catalog-wide: one incomplete group, naming collision, or broken Parquet link
+fails even an unrelated table query or filtered catalog listing. Repairing it lets the next discovery succeed.
+Schema validation is lazy and compares field names/order, types, nullability, containers, enum symbols, fixed
+sizes, and logical-type parameters recursively. Union branch order, record names/namespaces, docs, defaults,
+and nonsemantic writer metadata may differ. There is no schema widening or evolution. Each query input is
+fully validated before returning rows. An incompatible group does not prevent a healthy physical-table query.
+
+`getTables`, CLI `/list`, and `information_schema.tables` read remarks from the first file only, without full
+shard validation. First-file footer I/O errors can still fail a listing. `getColumns` validates every shard
+of every matching table; `/describe` and queries validate their selected inputs. Every `information_schema.columns`
+query materializes all catalog columns before SQL `WHERE`: even a filter naming a healthy table fails if another
+table is incompatible. Wildcard `getColumns(null, null, "%", "%")` has the same scope. Column requests cost a
+footer read per included shard, repeated for new statements; no shared validation cache is used. A direct
+`getColumns` call restricted to a healthy table remains independent. Table/column remarks come from the first
+numeric file. `/describe` sums files, row groups, and unfiltered row counts and reports page indexes as `present`
+(all chunks have both indexes), `absent` (none have either, including no chunks), or `partial` (anything else).
+
+Dots and hyphens can occur in table names. Use schema-qualified SQL for dotted names:
+`data."train.v2"` or `PUBLIC."train.v2"`. The existing parser does not resolve unqualified `"train.v2"`, even
+with an alias. Unqualified `"train-extra"` and `"train-extra" t` work. With the default `caseSensitive=false`,
+lowercase both schema and table names before quoting names obtained from listings: listed `Train-X` becomes
+`data."train-x"`. Leave `PUBLIC` unquoted or use `"public"`; quoted `"PUBLIC"` does not resolve in this mode.
+With `caseSensitive=true`, use exact listed spelling, such as `data."Train-X"` or `"PUBLIC"."train.v2"`.
+Blindly quoting original mixed-case listed names is therefore unsuitable with the default setting.
+
+CLI `/describe` takes literal names and escapes JDBC metadata wildcards (`_`, `%`, and the escape character)
+before requesting columns. It describes one exact table, using `PUBLIC` when no schema is given. Its plain
+command syntax splits at the first dot: `/describe data.train.v2` describes table `train.v2` in schema `data`.
+For a dotted PUBLIC table use `/describe PUBLIC.train.v2`; `/describe train.v2` means schema `train`, table
+`v2`. These command arguments use no SQL quotes. `/describe train-extra` needs no schema for a PUBLIC table.
+
+`TableLocation` now has an immutable nonempty `List<File> files` record component. Its original single-file
+constructor and `file()` accessor remain available; `file()` returns only the first file. Code inspecting record
+components must account for this change, and logical-table consumers should use `files()`.
 
 ### Fat Jar
 

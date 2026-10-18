@@ -22,6 +22,7 @@ import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqDriver;
 import se.alipsa.jparq.JParqVersion;
 import se.alipsa.jparq.engine.ParquetFileInfo;
+import se.alipsa.jparq.engine.ParquetTable;
 
 /**
  * A simple command processor that executes JParq queries and CLI commands.
@@ -250,8 +251,14 @@ public class JParqCliSession implements Closeable {
     }
     try {
       DatabaseMetaData metaData = connection.getMetaData();
+      JParqConnection.TableLocation location = connection instanceof JParqConnection jparq
+          ? jparq.resolveTable(schema, table)
+          : null;
+      String escape = metaData.getSearchStringEscape();
+      String schemaPattern = literalPattern(location == null ? schema : location.schemaName(), escape);
+      String tablePattern = literalPattern(location == null ? table : location.tableName(), escape);
       List<ColumnMeta> columns = new ArrayList<>();
-      try (ResultSet rs = metaData.getColumns(null, schema, table, "%")) {
+      try (ResultSet rs = metaData.getColumns(null, schemaPattern, tablePattern, "%")) {
         while (rs.next()) {
           String columnName = rs.getString("COLUMN_NAME");
           String typeName = rs.getString("TYPE_NAME");
@@ -278,12 +285,17 @@ public class JParqCliSession implements Closeable {
         out.println(column.column() + pad(nameWidth - column.column().length()) + " | " + typeText
             + pad(typeWidth - typeText.length()) + " | " + (column.nullable() ? "YES" : "NO"));
       }
-      if (connection instanceof JParqConnection jparq) {
-        var location = jparq.resolveTable(schema, table);
+      if (location != null) {
+        ParquetTable.validate(location, new Configuration(false));
         try {
-          var info = ParquetFileInfo.read(new Path(location.file().toURI()), new Configuration(false));
-          out.println("Row groups: " + info.rowGroups().size() + ", rows: " + info.rowCount());
-          out.println("Page index: " + (info.pageIndexPresent() ? "present" : "absent or partial"));
+          List<ParquetFileInfo.RowGroup> groups = new ArrayList<>();
+          for (var file : location.files()) {
+            groups.addAll(ParquetFileInfo.read(new Path(file.toURI()), new Configuration(false)).rowGroups());
+          }
+          var info = new ParquetFileInfo(groups);
+          out.println(
+              "Files: " + location.files().size() + ", Row groups: " + groups.size() + ", rows: " + info.rowCount());
+          out.println("Page index: " + info.pageIndexStatus());
         } catch (java.io.IOException exception) {
           throw new SQLException("Unable to read Parquet footer", exception);
         }
@@ -293,6 +305,13 @@ public class JParqCliSession implements Closeable {
       err.println("Failed to describe table: " + e.getMessage());
       err.flush();
     }
+  }
+
+  /** Escapes a literal identifier for JDBC metadata pattern matching. */
+  private static String literalPattern(String name, String escape) {
+    return name == null
+        ? null
+        : name.replace(escape, escape + escape).replace("_", escape + "_").replace("%", escape + "%");
   }
 
   private boolean ensureConnected() {

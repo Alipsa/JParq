@@ -181,7 +181,10 @@ public class JParqStatement implements Statement {
   }
 
   @Override
-  public void cancel() {
+  public void cancel() throws SQLException {
+    if (currentRs != null) {
+      currentRs.close();
+    }
   }
 
   @Override

@@ -15,7 +15,8 @@ import java.util.logging.Logger;
  *
  * <p>
  * Each .parquet file in the directory is exposed as a table named by its base
- * filename (without extension).
+ * filename (without extension). The opt-in datasetLayout=hf property groups
+ * named shards and numeric directory tables into multi-file logical tables.
  */
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqDriver implements Driver {
@@ -57,7 +58,8 @@ public class JParqDriver implements Driver {
     return new DriverPropertyInfo[]{
         new DriverPropertyInfo("caseSensitive", properties.getProperty("caseSensitive", "false")),
         new DriverPropertyInfo("predicatePushdown", properties.getProperty("predicatePushdown", "true")),
-        new DriverPropertyInfo("projectionPushdown", properties.getProperty("projectionPushdown", "true"))
+        new DriverPropertyInfo("projectionPushdown", properties.getProperty("projectionPushdown", "true")),
+        new DriverPropertyInfo("datasetLayout", properties.getProperty("datasetLayout", "none"))
     };
   }
 

@@ -25,7 +25,7 @@ import org.apache.parquet.ParquetReadOptions;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.metadata.ParquetMetadata;
 import org.apache.parquet.hadoop.util.HadoopInputFile;
-import se.alipsa.jparq.engine.ParquetSchemas;
+import se.alipsa.jparq.engine.ParquetTable;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 
@@ -451,6 +451,22 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   private static final List<String> COLUMN_REMARK_PREFIXES = List.of("parquet.column.comment.", "column.comment.",
       "parquet.column.description.", "column.description.", "parquet.column.doc.", "column.doc.");
 
+  /**
+   * Lists logical tables, reading remarks only from each table's first file. Does
+   * not validate other shard schemas; discovery errors remain catalog-wide.
+   * 
+   * @param catalog
+   *          catalog filter
+   * @param schemaPattern
+   *          JDBC schema pattern
+   * @param tableNamePattern
+   *          JDBC table pattern
+   * @param types
+   *          accepted table types
+   * @return matching logical tables and first-file remarks
+   * @throws SQLException
+   *           for discovery or first-file footer errors
+   */
   @Override
   public ResultSet getTables(String catalog, String schemaPattern, String tableNamePattern, String[] types)
       throws SQLException {
@@ -501,6 +517,23 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     }, rows);
   }
 
+  /**
+   * Reports representative columns after validating every shard of every matching
+   * table. Broad patterns therefore validate the whole catalog before returning
+   * any rows.
+   * 
+   * @param catalog
+   *          catalog filter
+   * @param schemaPattern
+   *          JDBC schema pattern
+   * @param tableNamePattern
+   *          JDBC table pattern
+   * @param columnNamePattern
+   *          JDBC column pattern
+   * @return validated columns with first-file remarks and type hints
+   * @throws SQLException
+   *           for discovery, footer, or schema compatibility errors
+   */
   @SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
   @Override
   public ResultSet getColumns(String catalog, String schemaPattern, String tableNamePattern, String columnNamePattern)
@@ -524,11 +557,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         File file = location.file();
         String resolvedSchemaName = formatSchemaName(location.schemaName());
         hPath = new Path(file.toURI());
+        Schema fileSchema = ParquetTable.validate(location, conf).schema();
         ColumnMetadata columnMetadata = readColumnMetadata(hPath, conf);
         List<String> columnTypeHints = columnMetadata.columnTypeHints();
         Map<String, String> columnRemarks = columnMetadata.columnRemarks();
         try {
-          Schema fileSchema = ParquetSchemas.readAvroSchema(hPath, conf);
           int pos = 1;
           int columnIndex = 0;
           for (Schema.Field field : fileSchema.getFields()) {

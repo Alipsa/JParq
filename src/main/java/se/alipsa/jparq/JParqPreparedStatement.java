@@ -1,6 +1,5 @@
 package se.alipsa.jparq;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
@@ -60,12 +59,9 @@ import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.Path;
 import org.apache.parquet.avro.AvroReadSupport;
-import org.apache.parquet.filter2.compat.FilterCompat;
 import org.apache.parquet.filter2.predicate.FilterPredicate;
 import org.apache.parquet.hadoop.ParquetInputFormat;
-import org.apache.parquet.hadoop.ParquetReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import se.alipsa.jparq.engine.AvroProjections;
@@ -79,8 +75,7 @@ import se.alipsa.jparq.engine.JoinPredicatePlanner;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
-import se.alipsa.jparq.engine.ParquetRecordReaderAdapter;
-import se.alipsa.jparq.engine.ParquetSchemas;
+import se.alipsa.jparq.engine.ParquetTable;
 import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SamplingRecordReader;
@@ -167,8 +162,6 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final Schema fileAvroSchema;
   private final PushdownInfo pushdownInfo;
   private final Map<Integer, FilterPredicate> joinPredicates;
-  private final Path path;
-  private final File file;
   private final String tableSchema;
   private final String tableCatalog;
   private final JParqConnection.TableLocation baseTableLocation;
@@ -224,8 +217,6 @@ public class JParqPreparedStatement implements PreparedStatement {
     Schema tmpFileAvro = null;
     Optional<FilterPredicate> tmpPredicate = Optional.empty();
     Expression tmpResidual = null;
-    Path tmpPath = null;
-    File tmpFile = null;
     JParqConnection.TableLocation tmpBaseLocation = null;
     String tmpSchemaName = null;
     CteResult tmpBaseCteResult = null;
@@ -364,16 +355,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             String targetSchema = baseRef != null ? baseRef.schemaName() : null;
             tmpBaseLocation = stmt.getConn().resolveTable(targetSchema, targetTable);
             tmpSchemaName = formatSchemaForMetadata(tmpBaseLocation.schemaName());
-            tmpFile = tmpBaseLocation.file();
-            tmpPath = new Path(tmpFile.toURI());
-
-            Schema avro;
-            try {
-              avro = ParquetSchemas.readAvroSchema(tmpPath, tmpConf);
-            } catch (IOException ignore) {
-              /* No schema -> no pushdown */
-              avro = null;
-            }
+            Schema avro = ParquetTable.validate(tmpBaseLocation, tmpConf).schema();
 
             tmpFileAvro = avro;
 
@@ -430,8 +412,6 @@ public class JParqPreparedStatement implements PreparedStatement {
             plannedPushdown.dictionaryFilteringEnabled(), plannedPushdown.bloomFilteringEnabled(),
             plannedPushdown.message() + " Projection pushdown disabled by connection property.",
             plannedPushdown.parquetPredicateSummary(), plannedPushdown.residualExpressionSummary());
-    this.path = tmpPath;
-    this.file = tmpFile;
     this.tableSchema = tmpSchemaName;
     this.tableCatalog = stmt.getConn().getCatalog();
     this.baseTableLocation = tmpBaseLocation;
@@ -478,16 +458,8 @@ public class JParqPreparedStatement implements PreparedStatement {
           }
           reader = new InMemoryRecordReader(baseCteResult.rows(), baseCteResult.schema(), resultTableName);
         } else {
-          ParquetReader.Builder<GenericRecord> builder = ParquetReader
-              .<GenericRecord>builder(new AvroReadSupport<>(), path).withConf(conf);
-
-          if (parquetPredicate.isPresent()) {
-            builder = builder.withFilter(FilterCompat.get(parquetPredicate.get()));
-          }
-
-          ParquetReader<GenericRecord> parquetReader = builder.build();
-          reader = new ParquetRecordReaderAdapter(parquetReader, fileAvroSchema);
-          resultTableName = baseTableLocation != null ? baseTableLocation.tableName() : file.getName();
+          reader = ParquetTable.validate(baseTableLocation, conf).open(conf, parquetPredicate.orElse(null));
+          resultTableName = baseTableLocation.tableName();
         }
         if (!joinQuery) {
           reader = applyTableSample(baseRef == null ? null : baseRef.tableSample(), reader);
@@ -505,9 +477,19 @@ public class JParqPreparedStatement implements PreparedStatement {
       // Create the result set, passing reader, select plan, residual filter,
       // plus projection labels and physical names (for metadata & value lookups)
       SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
-      JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, tableCatalog,
-          residualExpression, labels, physical, subqueryExecutor);
-      rs.setMetadataSchema(reader instanceof JoinRecordReader joinReader ? joinReader.schema() : fileAvroSchema);
+      JParqResultSet rs;
+      try {
+        rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, tableCatalog, residualExpression,
+            labels, physical, subqueryExecutor);
+        rs.setMetadataSchema(reader instanceof JoinRecordReader joinReader ? joinReader.schema() : fileAvroSchema);
+      } catch (SQLException | RuntimeException exception) {
+        try {
+          reader.close();
+        } catch (IOException closeException) {
+          exception.addSuppressed(closeException);
+        }
+        throw exception;
+      }
 
       stmt.setCurrentRs(rs);
       return rs;
@@ -1229,11 +1211,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           && !InformationSchemaColumns.matchesTableReference(reference.tableName())
           && resolveCteResultByName(reference.tableName(), cteResults) == null) {
         var location = stmt.getConn().resolveTable(reference.schemaName(), reference.tableName());
-        try {
-          schema = ParquetSchemas.readAvroSchema(new Path(location.file().toURI()), new Configuration(false));
-        } catch (IOException exception) {
-          throw new SQLException("Failed to read join input schema", exception);
-        }
+        schema = ParquetTable.validate(location, new Configuration(false)).schema();
       }
       schemas.add(schema);
     }
@@ -1323,29 +1301,19 @@ public class JParqPreparedStatement implements PreparedStatement {
         throw new SQLException("JOIN requires explicit table names");
       }
       JParqConnection.TableLocation tableLocation = stmt.getConn().resolveTable(ref.schemaName(), tableName);
-      Path tablePath = new Path(tableLocation.file().toURI());
       Configuration tableConf = new Configuration(conf);
-      Schema tableSchema;
-      try {
-        tableSchema = ParquetSchemas.readAvroSchema(tablePath, tableConf);
-      } catch (IOException e) {
-        throw new SQLException("Failed to read schema for table " + tableName, e);
-      }
+      ParquetTable input = ParquetTable.validate(tableLocation, tableConf);
+      Schema tableSchema = input.schema();
       validateJoinTableColumns(tableSchema, ref);
       List<GenericRecord> rows = new ArrayList<>();
-      ParquetReader.Builder<GenericRecord> tableBuilder = ParquetReader
-          .<GenericRecord>builder(new AvroReadSupport<>(), tablePath).withConf(tableConf);
       FilterPredicate predicate = joinPredicates.get(referenceIndex);
-      if (predicate != null) {
-        tableBuilder.withFilter(FilterCompat.get(predicate));
-      }
-      try (RecordReader tableReader = new ParquetRecordReaderAdapter(tableBuilder.build(), tableSchema)) {
+      try (RecordReader tableReader = input.open(tableConf, predicate)) {
         GenericRecord record = tableReader.read();
         while (record != null) {
           rows.add(record);
           record = tableReader.read();
         }
-      } catch (Exception e) {
+      } catch (IOException e) {
         throw new SQLException("Failed to read data for table " + tableName, e);
       }
       rows = applySampleToRows(ref.tableSample(), rows);
@@ -2559,14 +2527,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         return cte.schema();
       }
       JParqConnection.TableLocation location = stmt.getConn().resolveTable(ref.schemaName(), ref.tableName());
-      Path path = new Path(location.file().toURI());
       Configuration tableConf = new Configuration(false);
       configureParquetFiltering(tableConf);
-      try {
-        return ParquetSchemas.readAvroSchema(path, tableConf);
-      } catch (IOException e) {
-        throw new SQLException("Failed to read schema for table '" + ref.tableName() + "'", e);
-      }
+      return ParquetTable.validate(location, tableConf).schema();
     }
     return null;
   }
@@ -4474,7 +4437,11 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   @Override
-  public void cancel() {
+  public void cancel() throws SQLException {
+    if (boundStatement != null) {
+      boundStatement.cancel();
+    }
+    stmt.cancel();
   }
 
   @Override

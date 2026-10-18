@@ -476,6 +476,11 @@ public class JParqResultSet extends ResultSetAdapter {
       rowNum++;
       return true;
     } catch (Exception e) {
+      try {
+        close();
+      } catch (SQLException closeException) {
+        e.addSuppressed(closeException);
+      }
       throw new SQLException(e);
     }
   }

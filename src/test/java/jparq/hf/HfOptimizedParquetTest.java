@@ -10,18 +10,12 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.TimeZone;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import org.apache.parquet.HadoopReadOptions;
-import org.apache.parquet.filter2.compat.FilterCompat;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.util.HadoopInputFile;
 import org.junit.jupiter.api.Test;
-import se.alipsa.jparq.JParqPreparedStatement;
 import se.alipsa.jparq.engine.ParquetFileInfo;
-import se.alipsa.jparq.engine.ParquetFilterBuilder;
-import se.alipsa.jparq.engine.ParquetSchemas;
 
 /** Verifies that the committed PyArrow fixtures exercise indexed CDC pages. */
 class HfOptimizedParquetTest {
@@ -156,16 +150,7 @@ class HfOptimizedParquetTest {
    */
   private long filteredCount(String name, String condition) throws Exception {
     Path path = new Path(getClass().getResource("/hf/" + name + ".parquet").toURI());
-    Configuration configuration = new Configuration(false);
-    JParqPreparedStatement.configureParquetFiltering(configuration);
-    var schema = ParquetSchemas.readAvroSchema(path, configuration);
-    var predicate = ParquetFilterBuilder.split(schema, CCJSqlParserUtil.parseCondExpression(condition)).predicate();
-    assertTrue(predicate.isPresent());
-    var options = HadoopReadOptions.builder(configuration, path).withRecordFilter(FilterCompat.get(predicate.get()))
-        .build();
-    try (var reader = ParquetFileReader.open(HadoopInputFile.fromPath(path, configuration), options)) {
-      return reader.getFilteredRecordCount();
-    }
+    return ParquetPruning.filteredCount(path, condition);
   }
 
   /** Verifies footer diagnostics and CLI output on nested PyArrow files. */
