@@ -213,6 +213,23 @@ class HfDiscoveryTest {
   }
 
   @Test
+  void collisionNormalizationMatchesResolutionAndKeepsSchemaTableComponentsSeparate() throws Exception {
+    touch("train.parquet");
+    Path padded = touch(" train .parquet");
+    try (var conn = connect("datasetLayout=hf")) {
+      assertThrows(SQLException.class, conn::listTables);
+    }
+    Files.delete(padded);
+    touch("a|b/c.parquet");
+    touch("a/b|c.parquet");
+    try (var conn = connect("datasetLayout=hf")) {
+      assertEquals(3, conn.listTables().size());
+      assertEquals("c", conn.resolveTable("a|b", "c").tableName());
+      assertEquals("b|c", conn.resolveTable("a", "b|c").tableName());
+    }
+  }
+
+  @Test
   void tableLocationsRetainSingleFileCompatibilityAndImmutableLists() {
     File file = base.resolve("first.parquet").toFile();
     var location = new TableLocation("PUBLIC", "t", file);

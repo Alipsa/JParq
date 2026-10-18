@@ -199,14 +199,7 @@ public class JParqConnection implements Connection {
   }
 
   private String normalize(String name) {
-    Identifier identifier = Identifier.of(name);
-    if (identifier == null) {
-      return "";
-    }
-    if (caseSensitive || identifier.quoted()) {
-      return identifier.text();
-    }
-    return identifier.normalized();
+    return Identifier.normalize(name, caseSensitive);
   }
 
   private String validateTableName(String tableName) throws SQLException {

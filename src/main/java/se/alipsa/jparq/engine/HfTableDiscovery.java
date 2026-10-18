@@ -23,7 +23,7 @@ public final class HfTableDiscovery {
           + "(?:-(?<hash>[0-9a-fA-F]+))?\\.(?i:parquet)$");
   private static final Pattern NUMERIC = Pattern.compile("^[0-9]+\\.(?i:parquet)$");
   private final boolean caseSensitive;
-  private final Map<String, TableLocation> tables = new LinkedHashMap<>();
+  private final Map<List<String>, TableLocation> tables = new LinkedHashMap<>();
   private final Map<String, String> schemas = new LinkedHashMap<>();
   private final Map<String, File> schemaSources = new LinkedHashMap<>();
 
@@ -171,7 +171,7 @@ public final class HfTableDiscovery {
   }
 
   private void add(TableLocation location) throws SQLException {
-    String name = key(location.schemaName()) + "|" + key(location.tableName());
+    List<String> name = List.of(key(location.schemaName()), key(location.tableName()));
     TableLocation previous = tables.putIfAbsent(name, location);
     if (previous != null) {
       throw new SQLException("Table collision for " + name + ": " + previous.files() + " and " + location.files());
@@ -179,7 +179,7 @@ public final class HfTableDiscovery {
   }
 
   private String key(String name) {
-    return caseSensitive ? name : name.toLowerCase(Locale.ROOT);
+    return Identifier.normalize(name, caseSensitive);
   }
 
   /**
