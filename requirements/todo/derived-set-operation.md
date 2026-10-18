@@ -19,5 +19,5 @@ Add regression tests in the `jparq` package for derived `UNION` and `UNION ALL`,
 filters, ordering, empty inputs, and duplicate handling.
 
 This is a separate pre-existing defect from computed Boolean type preservation in
-[v1.4.0-issues.md](v1.4.0-issues.md). Top-level set-operation Boolean typing remains covered by that issue's
-[plan](v1.4.0-issues-plan.md); resolving the derived set-operation exception is outside that plan.
+[v1.4.0-issues.md](../done/v1.4.0-issues.md). Top-level set-operation Boolean typing remains covered by that issue's
+[plan](../done/v1.4.0-issues-plan.md); resolving the derived set-operation exception is outside that plan.
