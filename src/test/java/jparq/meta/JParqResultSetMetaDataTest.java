@@ -15,6 +15,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -318,6 +319,25 @@ class JParqResultSetMetaDataTest {
     var emptyMetadata = createMetadataWithExpression(null, List.of("c"), Collections.singletonList(null),
         List.of(CCJSqlParserUtil.parseExpression("n > 1")));
     assertEquals(Types.BOOLEAN, emptyMetadata.getColumnType(1));
+
+    Schema joinSchema = new Schema.Parser().parse("""
+        {"type":"record","name":"joined","fields":[
+          {"name":"a__ab","type":["null","boolean"]},
+          {"name":"b__ab","type":["null","int"]}]}
+        """);
+    for (String sql : List.of("CASE WHEN a.id > 0 THEN b.ab END", "COALESCE(b.ab, NULL)", "COALESCE(ab, NULL)",
+        "COALESCE(missing.ab, NULL)")) {
+      var metadata = createMetadataWithExpression(joinSchema, List.of("x", "ab"), Arrays.asList(null, "a__ab"),
+          List.of(CCJSqlParserUtil.parseExpression(sql), CCJSqlParserUtil.parseExpression("a.ab")));
+      Assertions.assertNotEquals(Types.BOOLEAN, metadata.getColumnType(1), sql);
+      Assertions.assertNotEquals(Boolean.class.getName(), metadata.getColumnClassName(1), sql);
+      assertEquals(Types.BOOLEAN, metadata.getColumnType(2), sql);
+    }
+    for (String sql : List.of("CASE WHEN a.id > 0 THEN a.ab END", "COALESCE(a.ab, NULL)")) {
+      var metadata = createMetadataWithExpression(joinSchema, List.of("x"), Collections.singletonList(null),
+          List.of(CCJSqlParserUtil.parseExpression(sql)));
+      assertEquals(Types.BOOLEAN, metadata.getColumnType(1), sql);
+    }
   }
 
   @Test

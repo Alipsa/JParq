@@ -54,6 +54,103 @@ class Version140RegressionTest {
   }
 
   /**
+   * Writes a join input whose same-named column has a different source type.
+   *
+   * @throws Exception
+   *           if the fixture cannot be written
+   */
+  @BeforeEach
+  void createJoinFixture() throws Exception {
+    var schema = SchemaBuilder.record("join_rows").fields().requiredLong("id").optionalInt("ab").endRecord();
+    var file = new org.apache.hadoop.fs.Path(directory.resolve("p.parquet").toUri());
+    try (var writer = AvroParquetWriter
+        .<GenericRecord>builder(HadoopOutputFile.fromPath(file, new Configuration(false))).withSchema(schema).build()) {
+      for (int i = 0; i < 4; i++) {
+        var record = new GenericData.Record(schema);
+        record.put("id", i + 1L);
+        record.put("ab", i * 10);
+        writer.write(record);
+      }
+    }
+  }
+
+  /**
+   * Metadata inference resolves source qualifiers rather than output aliases.
+   *
+   * @throws Exception
+   *           if a query fails
+   */
+  @Test
+  void joinComputedMetadataKeepsSourceTypes() throws Exception {
+    for (boolean projection : List.of(true, false)) {
+      for (boolean predicate : List.of(true, false)) {
+        for (String expression : List.of("CASE WHEN a.id > 0 THEN b.ab END", "COALESCE(b.ab, NULL)")) {
+          try (var connection = DriverManager.getConnection(url(projection, predicate));
+              var statement = connection.createStatement();
+              var result = statement.executeQuery(
+                  "SELECT " + expression + " AS x, a.ab AS ab FROM o a JOIN p b ON a.id = b.id ORDER BY b.id")) {
+            assertNotEquals(Types.BOOLEAN, result.getMetaData().getColumnType(1), expression);
+            assertNotEquals(Boolean.class.getName(), result.getMetaData().getColumnClassName(1), expression);
+            assertEquals(Types.BOOLEAN, result.getMetaData().getColumnType(2), expression);
+            for (int i = 0; i < 4; i++) {
+              assertTrue(result.next(), expression);
+              assertEquals(i * 10, result.getObject(1), expression);
+            }
+            assertFalse(result.next(), expression);
+            assertNotEquals(Types.BOOLEAN, result.getMetaData().getColumnType(1), expression);
+          }
+        }
+        try (var connection = DriverManager.getConnection(url(projection, predicate));
+            var statement = connection.createStatement();
+            var result = statement.executeQuery(
+                "SELECT COALESCE(a.ab, NULL) AS x, b.ab AS ab " + "FROM o a JOIN p b ON a.id = b.id ORDER BY a.id")) {
+          assertEquals(Types.BOOLEAN, result.getMetaData().getColumnType(1));
+          assertEquals(Boolean.class.getName(), result.getMetaData().getColumnClassName(1));
+          assertEquals(Types.INTEGER, result.getMetaData().getColumnType(2));
+        }
+      }
+    }
+  }
+
+  /**
+   * Empty joins expose the same source schema with either pushdown setting.
+   *
+   * @throws Exception
+   *           if a query fails
+   */
+  @Test
+  void emptyJoinMetadataDoesNotDependOnPushdown() throws Exception {
+    for (boolean projection : List.of(true, false)) {
+      for (boolean predicate : List.of(true, false)) {
+        for (String selection : List.of("b.ab", "*", "b.*", "COALESCE(a.ab, NULL) AS c")) {
+          try (var connection = DriverManager.getConnection(url(projection, predicate));
+              var statement = connection.createStatement();
+              var result = statement
+                  .executeQuery("SELECT " + selection + " FROM o a JOIN p b ON a.id = b.id WHERE a.id > 99")) {
+            var metadata = result.getMetaData();
+            List<Integer> types = switch (selection) {
+              case "*" ->
+                List.of(Types.BIGINT, Types.VARCHAR, Types.INTEGER, Types.BOOLEAN, Types.BIGINT, Types.INTEGER);
+              case "b.*" -> List.of(Types.BIGINT, Types.INTEGER);
+              case "b.ab" -> List.of(Types.INTEGER);
+              default -> List.of(Types.BOOLEAN);
+            };
+            assertEquals(types.size(), metadata.getColumnCount(), selection);
+            for (int c = 1; c <= types.size(); c++) {
+              assertEquals(types.get(c - 1), metadata.getColumnType(c), selection);
+            }
+            assertFalse(result.next(), selection);
+            assertEquals(types.size(), result.getMetaData().getColumnCount(), selection);
+            for (int c = 1; c <= types.size(); c++) {
+              assertEquals(types.get(c - 1), result.getMetaData().getColumnType(c), selection);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
    * Verifies that CTE materialization applies inner row bounds once.
    *
    * @throws Exception

@@ -507,7 +507,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
       JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, tableCatalog,
           residualExpression, labels, physical, subqueryExecutor);
-      rs.setMetadataSchema(fileAvroSchema);
+      rs.setMetadataSchema(reader instanceof JoinRecordReader joinReader ? joinReader.schema() : fileAvroSchema);
 
       stmt.setCurrentRs(rs);
       return rs;

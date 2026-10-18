@@ -16,6 +16,7 @@
 - Fix duplicate first rows in queries with window functions and no outer `ORDER BY` or `OFFSET`, which also affected `LIMIT` and aggregates over such queries.
 - Execute derived-table sorting and row bounds only in their own query scope, fixing correlated sorting when the qualifier matches the base table name; preserve inner aliases that shadow outer qualifiers.
 - Preserve computed Boolean types and SQL NULL values through derived tables, CTEs, and top-level set operations; keep metadata stable for empty and exhausted results.
+- Resolve computed join metadata against qualified source columns; preserve the combined schema for empty joins independently of predicate pushdown and exclude hidden predicate inputs from wildcard output.
 - Support `IS [NOT] UNKNOWN` in predicates, Boolean projections, and HAVING.
 - Apply CTE ordering, DISTINCT, and row bounds only in their own query scope; preserve materialized values and column aliases in wildcard projections, including empty results.
 - Evaluate DISTINCT over computed projections after window calculation and before final ordering and row bounds; retain unselected navigation-window inputs during projection pushdown.

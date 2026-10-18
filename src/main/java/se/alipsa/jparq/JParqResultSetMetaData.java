@@ -13,6 +13,9 @@ import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.BooleanExpressions;
+import se.alipsa.jparq.engine.ColumnMappingUtil;
+import se.alipsa.jparq.engine.CorrelationMappings;
+import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 
@@ -28,8 +31,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   private final String tableSchema;
   private final String tableCatalog;
   private final List<Expression> expressions;
-  private final Map<String, Integer> caseInsensitiveColumnIndex;
   private final Map<String, Schema.Field> schemaFieldLookup;
+  private final CorrelationMappings sourceMappings;
 
   /**
    * Constructor: labels (aliases) + physical names (null entries allowed).
@@ -55,6 +58,35 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   public JParqResultSetMetaData(Schema schema, List<String> labels, List<String> physicalNames,
       List<String> canonicalNames, String tableName, String tableSchema, String tableCatalog,
       List<Expression> expressions) {
+    this(schema, labels, physicalNames, canonicalNames, tableName, tableSchema, tableCatalog, expressions, null);
+  }
+
+  /**
+   * Creates metadata using source mappings independently of output aliases.
+   *
+   * @param schema
+   *          source Avro schema, including for empty results
+   * @param labels
+   *          output labels in projection order
+   * @param physicalNames
+   *          underlying column names, or {@code null}
+   * @param canonicalNames
+   *          canonical projection names, or {@code null}
+   * @param tableName
+   *          table name
+   * @param tableSchema
+   *          owning schema, or {@code null}
+   * @param tableCatalog
+   *          owning catalog, or {@code null}
+   * @param expressions
+   *          SELECT expressions in projection order
+   * @param sourceMappings
+   *          reader mappings without output aliases, or {@code null} to resolve
+   *          directly against schema field names
+   */
+  public JParqResultSetMetaData(Schema schema, List<String> labels, List<String> physicalNames,
+      List<String> canonicalNames, String tableName, String tableSchema, String tableCatalog,
+      List<Expression> expressions, CorrelationMappings sourceMappings) {
     this.schema = schema;
     this.labels = labels == null ? List.of() : List.copyOf(labels);
     this.physicalNames = physicalNames == null ? null : Collections.unmodifiableList(new ArrayList<>(physicalNames));
@@ -63,9 +95,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     this.tableSchema = tableSchema;
     this.tableCatalog = tableCatalog;
     this.expressions = expressions == null ? List.of() : List.copyOf(expressions);
-    this.caseInsensitiveColumnIndex = ColumnNameLookup.buildCaseInsensitiveIndex(this.labels.size(),
-        this.canonicalNames, this.physicalNames, this.labels);
     this.schemaFieldLookup = schema == null ? Map.of() : buildSchemaFieldLookup(schema);
+    this.sourceMappings = sourceMappings;
   }
 
   @Override
@@ -234,7 +265,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   private int resolveComputedColumnType(int column) {
     Expression expression = expressionAtColumn(column);
     if (BooleanExpressions.isBoolean(expression, reference -> {
-      Schema.Field field = lookupFieldByName(reference.getColumnName());
+      Schema.Field field = resolveSourceField(reference);
       return field != null && JdbcTypeMapper.mapSchemaToJdbcType(field.schema()) == Types.BOOLEAN;
     })) {
       return Types.BOOLEAN;
@@ -324,11 +355,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     if (!(argument instanceof Column lagColumn)) {
       return Types.OTHER;
     }
-    String columnName = lagColumn.getColumnName();
-    if (columnName == null) {
-      return Types.OTHER;
-    }
-    Schema.Field baseField = lookupFieldByName(columnName);
+    Schema.Field baseField = resolveSourceField(lagColumn);
     if (baseField == null) {
       return Types.OTHER;
     }
@@ -343,34 +370,42 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     if (!(argument instanceof Column lagColumn)) {
       return null;
     }
-    String columnName = lagColumn.getColumnName();
-    if (columnName == null) {
-      return null;
-    }
-    Schema.Field baseField = lookupFieldByName(columnName);
+    Schema.Field baseField = resolveSourceField(lagColumn);
     if (baseField == null) {
       return null;
     }
     return JdbcTypeMapper.mapSchemaToJavaClassName(baseField.schema());
   }
 
-  private Schema.Field lookupFieldByName(String name) {
-    if (schema == null || name == null) {
+  /**
+   * Resolves a source reference without consulting result labels. Unknown or
+   * ambiguous references cannot establish a computed expression's type.
+   *
+   * @param column
+   *          qualified or unqualified source column
+   * @return the source field, or {@code null} when resolution is uncertain
+   */
+  private Schema.Field resolveSourceField(Column column) {
+    if (schema == null || column == null || column.getColumnName() == null || column.getColumnName().isBlank()) {
       return null;
     }
-    Schema.Field direct = fieldBySchemaName(name);
-    if (direct != null) {
-      return direct;
+    String name = column.getColumnName();
+    String qualifier = column.getTable() == null ? null : column.getTable().getName();
+    if (sourceMappings != null && (!sourceMappings.qualifierColumnMapping().isEmpty()
+        || !sourceMappings.unqualifiedColumnMapping().isEmpty())) {
+      try {
+        String canonical = ColumnMappingUtil.canonicalFieldName(qualifier, name,
+            sourceMappings.qualifierColumnMapping(), sourceMappings.unqualifiedColumnMapping(), Map.of());
+        return fieldBySchemaName(canonical);
+      } catch (IllegalArgumentException unresolved) {
+        return null;
+      }
     }
-    Integer columnIndex = caseInsensitiveColumnIndex.get(ColumnNameLookup.normalizeKey(name));
-    if (columnIndex == null) {
-      return null;
+    Identifier owner = Identifier.of(qualifier);
+    if (owner != null) {
+      return fieldBySchemaName(owner.text() + "__" + Identifier.of(name).text());
     }
-    String canonical = canonicalName(columnIndex);
-    if (canonical == null) {
-      return null;
-    }
-    return fieldBySchemaName(canonical);
+    return fieldBySchemaName(name);
   }
 
   private Schema.Field fieldBySchemaName(String name) {
