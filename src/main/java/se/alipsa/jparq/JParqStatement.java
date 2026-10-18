@@ -180,11 +180,17 @@ public class JParqStatement implements Statement {
   public void setQueryTimeout(int seconds) {
   }
 
+  /**
+   * Cancels the current result, including a next() call already reading input.
+   *
+   * @throws SQLException
+   *           if closing the current result fails
+   */
   @Override
   public void cancel() throws SQLException {
     JParqResultSet result = currentRs;
     if (result != null) {
-      result.close();
+      result.cancel();
     }
   }
 

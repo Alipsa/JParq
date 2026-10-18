@@ -74,6 +74,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private int aggregateRowIndex = -1;
   private boolean aggregateOnRow = false;
   private volatile boolean closed = false;
+  private volatile boolean canceled;
   private int rowNum = 0;
   private boolean lastWasNull = false;
 
@@ -444,9 +445,7 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public boolean next() throws SQLException {
-    if (closed) {
-      throw new SQLException("ResultSet closed");
-    }
+    ensureOpen();
     if (aggregateQuery) {
       if (aggregateRows == null || aggregateRows.isEmpty()) {
         aggregateOnRow = false;
@@ -470,6 +469,7 @@ public class JParqResultSet extends ResultSetAdapter {
         return true;
       }
       current = qp.nextMatching();
+      ensureOpen();
       if (current == null) {
         return false;
       }
@@ -481,8 +481,38 @@ public class JParqResultSet extends ResultSetAdapter {
       } catch (SQLException closeException) {
         e.addSuppressed(closeException);
       }
+      if (e instanceof SQLException sqlException) {
+        throw sqlException;
+      }
       throw new SQLException(e);
     }
+  }
+
+  /**
+   * Rejects access after closure or statement cancellation.
+   *
+   * @throws SQLException
+   *           if the result set is closed or was canceled
+   */
+  private void ensureOpen() throws SQLException {
+    if (canceled) {
+      throw new SQLException("Statement was canceled");
+    }
+    if (closed) {
+      throw new SQLException("ResultSet closed");
+    }
+  }
+
+  /**
+   * Marks this result as canceled before closing its input. An in-flight next()
+   * throws when its current read returns, even if that read reports no row.
+   *
+   * @throws SQLException
+   *           if closing fails
+   */
+  public void cancel() throws SQLException {
+    canceled = true;
+    close();
   }
 
   private Object value(int idx) throws SQLException {

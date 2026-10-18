@@ -6,6 +6,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
@@ -221,16 +222,17 @@ public final class ParquetTable {
   }
 
   /**
-   * Opens each adapter with that shard's own full enriched schema. Read and close
-   * share a monitor so closure cannot interrupt a decoder. A cancellation request
-   * is published before acquiring the monitor, stopping the scan at the next
-   * physical row or shard boundary.
+   * Opens each adapter with that shard's own full enriched schema. Closing
+   * publishes a request without waiting for an active decoder; that read closes
+   * its input when it returns, before opening another shard. A pushed-down record
+   * filter can make one physical read span the rest of a shard.
    */
   private static final class SequentialReader implements RecordReader {
     private final List<Shard> shards;
     private final Configuration configuration;
     private final FilterPredicate predicate;
     private final ShardReaderFactory factory;
+    private final ReentrantLock readLock = new ReentrantLock();
     private volatile boolean cancelRequested;
     private int nextShard;
     private RecordReader active;
@@ -245,7 +247,8 @@ public final class ParquetTable {
     }
 
     @Override
-    public synchronized GenericRecord read() throws IOException {
+    public GenericRecord read() throws IOException {
+      readLock.lock();
       try {
         while (!closed && !cancelRequested) {
           if (active == null) {
@@ -280,13 +283,23 @@ public final class ParquetTable {
           exception.addSuppressed(closeException);
         }
         throw exception;
+      } finally {
+        readLock.unlock();
+        // A request can arrive after the final check but before unlock. Retrying
+        // after releasing the lock prevents that race from leaving input open.
+        if (cancelRequested) {
+          close();
+        }
       }
     }
 
     @Override
     public void close() throws IOException {
       cancelRequested = true;
-      synchronized (this) {
+      if (!readLock.tryLock()) {
+        return;
+      }
+      try {
         closed = true;
         if (active != null) {
           try {
@@ -295,6 +308,8 @@ public final class ParquetTable {
             active = null;
           }
         }
+      } finally {
+        readLock.unlock();
       }
     }
   }
