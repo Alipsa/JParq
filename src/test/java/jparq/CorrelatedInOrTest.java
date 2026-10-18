@@ -143,6 +143,34 @@ class CorrelatedInOrTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void subqueryCteShadowsThePhysicalTable(boolean predicate, boolean projection) throws Exception {
+    try (var conn = DriverManager.getConnection(
+        "jdbc:jparq:" + base + "?predicatePushdown=" + predicate + "&projectionPushdown=" + projection)) {
+      Set<Integer> expected = new HashSet<>(queryIds(conn, "SELECT id FROM big"));
+      for (String reference : List.of("b.id", "id")) {
+        assertEquals(expected, ids(conn,
+            "EXISTS (WITH small AS (SELECT id AS q FROM big) " + "SELECT 1 FROM small WHERE q = " + reference + ")"));
+        assertEquals(expected, ids(conn,
+            "b.id IN (WITH small(q) AS (SELECT id FROM big) " + "SELECT q FROM small WHERE q = " + reference + ")"));
+      }
+      assertEquals(expected,
+          ids(conn, "EXISTS (WITH small AS (SELECT id AS q FROM big) SELECT 1 FROM small WHERE q = 99)"));
+      assertEquals(expected,
+          new HashSet<>(
+              queryIds(conn, "WITH small AS (SELECT id FROM big WHERE id < 2) SELECT b.id FROM big b WHERE EXISTS "
+                  + "(WITH small AS (SELECT id AS q FROM big) SELECT 1 FROM small WHERE q = b.id)")));
+      try (var statement = conn.createStatement()) {
+        var failure = assertThrows(java.sql.SQLException.class, () -> statement
+            .executeQuery("WITH small AS (SELECT id FROM big), small AS (SELECT id FROM big) SELECT id FROM small"));
+        assertTrue(failure.getCause().getMessage().contains("Duplicate CTE"));
+      }
+    }
+  }
+
   /**
    * Reads SQL output while retaining duplicates from set operations.
    *

@@ -604,9 +604,7 @@ public final class SqlParser {
     net.sf.jsqlparser.statement.select.Select stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
         .parse(sql);
     SqlExpressionNormalizer.normalize(stmt);
-    List<CommonTableExpression> ctes = parseWithItems(stmt.getWithItemsList(), allowQualifiedWildcards);
-    Map<Identifier, CommonTableExpression> cteLookup = buildCteLookup(ctes);
-    return parseSelectStatement(stmt, ctes, cteLookup, allowQualifiedWildcards);
+    return parseSelectStatement(stmt, List.of(), Map.of(), allowQualifiedWildcards);
   }
 
   private static Query tryParseWithCteWorkaround(String normalizedSql, boolean allowQualifiedWildcards) {
@@ -627,9 +625,49 @@ public final class SqlParser {
     return FunctionEscapeResolver.resolveJdbcFunctionEscapes(normalizedSql);
   }
 
+  /**
+   * Enters a SELECT's WITH scope before parsing its body or unwrapping it.
+   *
+   * @param stmt
+   *          parsed SELECT
+   * @param ctes
+   *          inherited CTE declarations
+   * @param cteLookup
+   *          inherited declarations indexed by name
+   * @param allowQualifiedWildcards
+   *          whether qualified wildcards may remain unresolved
+   * @return parsed query with local declarations taking precedence
+   */
   private static Query parseSelectStatement(net.sf.jsqlparser.statement.select.Select stmt,
       List<CommonTableExpression> ctes, Map<Identifier, CommonTableExpression> cteLookup,
       boolean allowQualifiedWildcards) {
+    List<CommonTableExpression> declared = parseWithItems(stmt.getWithItemsList(), allowQualifiedWildcards);
+    if (declared.isEmpty()) {
+      return parseSelectBody(stmt, ctes, cteLookup, allowQualifiedWildcards);
+    }
+    Set<Identifier> localNames = declared.stream().map(CommonTableExpression::name).collect(Collectors.toSet());
+    List<CommonTableExpression> scoped = new ArrayList<>();
+    ctes.stream().filter(cte -> !localNames.contains(cte.name())).forEach(scoped::add);
+    scoped.addAll(declared);
+    List<CommonTableExpression> visible = List.copyOf(scoped);
+    return parseSelectBody(stmt, visible, buildCteLookup(visible), allowQualifiedWildcards);
+  }
+
+  /**
+   * Parses a SELECT body after its own WITH declarations have entered scope.
+   *
+   * @param stmt
+   *          SELECT body, possibly parenthesized
+   * @param ctes
+   *          visible CTE declarations
+   * @param cteLookup
+   *          visible declarations indexed by identifier
+   * @param allowQualifiedWildcards
+   *          whether qualified wildcards may remain in the result
+   * @return parsed query plan
+   */
+  private static Query parseSelectBody(net.sf.jsqlparser.statement.select.Select stmt, List<CommonTableExpression> ctes,
+      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
     if (stmt instanceof ParenthesedSelect parenthesed) {
       return parseSelectStatement(parenthesed.getSelect(), ctes, cteLookup, allowQualifiedWildcards);
     }

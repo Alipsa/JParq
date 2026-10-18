@@ -2910,6 +2910,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (ctes == null || ctes.isEmpty()) {
       return;
     }
+    Set<Identifier> declared = new LinkedHashSet<>();
     for (SqlParser.CommonTableExpression cte : ctes) {
       if (cte == null) {
         continue;
@@ -2918,7 +2919,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (key == null) {
         throw new SQLException("CTE definition is missing a name");
       }
-      if (target.containsKey(key)) {
+      if (!declared.add(key)) {
         throw new SQLException("Duplicate CTE name detected: " + cte.name().text());
       }
       CteResult result = evaluateCte(cte, target);

@@ -45,6 +45,11 @@ Whether a predicate subquery is uncorrelated is retained per AST node so subsequ
 result without repeating correlation analysis. Nested statements preserve the outer JDBC result and inherit
 its cancellation state even when started during iteration.
 
+A separate pre-existing CTE scoping defect was fixed during review: the correlation rewriter retained WITH,
+but parsing a parenthesized SELECT discarded declarations attached to its inner SELECT. The parser now
+enters each SELECT's WITH scope before unwrapping or parsing its body. Local CTEs override physical tables
+and inherited CTE names; duplicate declarations within a single WITH scope remain errors.
+
 ## Verification
 
 `src/test/java/jparq/CorrelatedInOrTest.java` checks the exact 94-row result, independent predicate controls,
@@ -61,3 +66,7 @@ combinations, plus both information_schema views with colliding outer names, pre
 qualified/correlated controls. `SubqueryColumnResolutionTest` verifies scan-free virtual binding,
 conservative handling and caching of unknown inputs, and outer fallback for known inputs without the name.
 The analysis-count test also checks that source columns are resolved once for 1,000 rows.
+Nested CTE regressions in `CorrelatedInOrTest` cover the 100-row reproducer with qualified and unqualified
+correlations, EXISTS and IN, CTE column aliases, an uncorrelated control, inherited-name shadowing, and
+duplicate declarations under all four pushdown combinations. `CorrelatedScopeTest` checks that rewritten,
+parenthesized SQL retains its CTE declarations in the parsed plan.
