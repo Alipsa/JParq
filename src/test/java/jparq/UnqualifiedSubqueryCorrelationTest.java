@@ -41,15 +41,69 @@ class UnqualifiedSubqueryCorrelationTest {
   private void write(String table, String first, String second, int count) throws Exception {
     Schema schema = org.apache.avro.SchemaBuilder.record("Row").fields().requiredInt(first).requiredInt(second)
         .endRecord();
+    writeRecords(table, schema, count, (row, id) -> {
+      row.put(first, id);
+      row.put(second, id % 5);
+    });
+  }
+
+  /**
+   * Writes fixture records using the supplied field initializer.
+   *
+   * @param table
+   *          fixture table name
+   * @param schema
+   *          record schema
+   * @param count
+   *          number of records
+   * @param initialize
+   *          assigns fields for each row index
+   * @throws Exception
+   *           if writing fails
+   */
+  private void writeRecords(String table, Schema schema, int count,
+      java.util.function.BiConsumer<GenericRecord, Integer> initialize) throws Exception {
     var conf = new Configuration(false);
     var file = new org.apache.hadoop.fs.Path(base.resolve(table + ".parquet").toUri());
     try (var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(file, conf)).withSchema(schema)
         .withConf(conf).build()) {
       for (int id = 0; id < count; id++) {
         var row = new GenericData.Record(schema);
-        row.put(first, id);
-        row.put(second, id % 5);
+        initialize.accept(row, id);
         writer.write(row);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void informationSchemaNamesRemainBoundInsideTheSubquery(boolean predicate, boolean projection) throws Exception {
+    Schema schema = org.apache.avro.SchemaBuilder.record("CatalogNames").fields().requiredString("table_name")
+        .requiredInt("x").endRecord();
+    writeRecords("t2", schema, 10, (row, id) -> {
+      row.put("table_name", "not_small");
+      row.put("x", id);
+    });
+    write("small", "id", "g", 1);
+    Set<Integer> expected = Set.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
+    try (var conn = connect(predicate, projection)) {
+      for (String view : java.util.List.of("tables", "columns")) {
+        String select = "SELECT t.x FROM t2 t WHERE EXISTS (SELECT 1 FROM information_schema." + view;
+        String sql = select + " WHERE table_name = 'small')";
+        try (var prepared = conn.prepareStatement(sql); var result = prepared.executeQuery()) {
+          Set<Integer> actual = new HashSet<>();
+          while (result.next()) {
+            actual.add(result.getInt(1));
+          }
+          assertEquals(expected, actual);
+        }
+        assertEquals(expected, ids(conn, sql));
+        assertEquals(expected, ids(conn, select + " it WHERE it.table_name = 'small')"));
+        assertEquals(expected, ids(conn, select + " WHERE table_name = 'small' AND x >= 0)"));
+        assertEquals(expected, ids(conn, "SELECT t.x FROM t2 t GROUP BY t.x HAVING EXISTS "
+            + "(SELECT 1 FROM information_schema." + view + " WHERE table_name = 'small')"));
       }
     }
   }

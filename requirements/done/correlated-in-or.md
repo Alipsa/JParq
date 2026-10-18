@@ -31,7 +31,11 @@ value list retain their existing grouping. JOIN ON evaluation receives a subquer
 inner columns are not replaced merely because the outer join or grouping context contains the same name.
 Unqualified names absent from every inner scope resolve to available outer row or grouping columns.
 `SubqueryExecutor` resolves and retains each inner scope's source columns lazily within the statement, using
-physical schemas retained by the prepared plan, CTE columns, and derived projections. The shared rewrite
+physical schemas retained by the prepared plan, CTE columns, derived projections, and fixed
+information_schema schemas. Resolving virtual column names does not materialize or scan the catalog.
+Unknown inputs are distinct from known inputs with no columns. Unknown table/function inputs, unresolved
+schemas, and uncertainty within joins or derived wildcards keep unqualified references inner, while
+explicit outer qualifiers still resolve. Both known and unknown results are retained within the statement. The shared rewrite
 path applies this inner-first rule to IN, EXISTS, scalar subqueries, and ANY/ALL. Projection planning uses
 the same resolver to retain unqualified outer dependencies before reading data.
 
@@ -53,4 +57,7 @@ require one uncorrelated-IN analysis. `StatementCancellationTest` checks outer r
 57014 when EXISTS and correlated IN/OR are canceled between `next()` calls.
 `UnqualifiedSubqueryCorrelationTest` checks the HAVING regression, the formerly unsupported WHERE forms,
 inner-column shadowing, derived/CTE inputs, scalar and quantified subqueries under all four pushdown
-combinations. The analysis-count test also checks that source columns are resolved once for 1,000 rows.
+combinations, plus both information_schema views with colliding outer names, prepared execution, and
+qualified/correlated controls. `SubqueryColumnResolutionTest` verifies scan-free virtual binding,
+conservative handling and caching of unknown inputs, and outer fallback for known inputs without the name.
+The analysis-count test also checks that source columns are resolved once for 1,000 rows.

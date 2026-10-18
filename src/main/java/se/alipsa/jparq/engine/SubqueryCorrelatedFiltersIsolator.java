@@ -65,7 +65,7 @@ public final class SubqueryCorrelatedFiltersIsolator {
    * @param valueResolver
    *          resolver for current outer values
    * @param localColumns
-   *          columns bound in each inner scope
+   *          columns bound in each inner scope, or null when unknown
    * @return rewritten SQL and correlation references
    */
   public static CorrelatedSubqueryRewriter.Result isolate(Select subSelect, Collection<String> outerQualifiers,

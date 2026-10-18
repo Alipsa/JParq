@@ -94,6 +94,8 @@ public class JParqExample {
 
 Subqueries resolve unqualified column names in their inner scopes first, then in the outer row or grouping
 context when the inner inputs have no matching column. This also applies to correlations in `HAVING`.
+Virtual information_schema tables use their fixed schemas for name binding. If an inner input's columns
+cannot be determined, unqualified names remain inner; use an explicit qualifier for outer references.
 
 ### Connection options
 

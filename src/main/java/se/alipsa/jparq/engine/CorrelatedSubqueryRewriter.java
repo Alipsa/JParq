@@ -148,7 +148,8 @@ public final class CorrelatedSubqueryRewriter {
    * @param valueResolver
    *          current outer values
    * @param localColumns
-   *          lazy resolver for columns visible in an inner query scope
+   *          lazy resolver for columns visible in an inner query scope; null
+   *          means unknown
    * @return SQL with only references unbound in the inner scopes substituted
    */
   public static Result rewrite(Select select, Collection<String> outerQualifiers, Set<String> correlatedColumns,
@@ -243,7 +244,10 @@ public final class CorrelatedSubqueryRewriter {
         if (!unqualified.contains(normalizedColumn)) {
           return false;
         }
-        if (columnScopes.stream().anyMatch(scope -> localColumns.apply(scope).contains(normalizedColumn))) {
+        if (columnScopes.stream().anyMatch(scope -> {
+          Set<String> names = localColumns.apply(scope);
+          return names == null || names.contains(normalizedColumn);
+        })) {
           return false;
         }
         appendCorrelatedLiteral(null, columnName, valueResolver.apply(null, columnName));

@@ -2626,7 +2626,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *
    * @param table
    *          local table reference
-   * @return its unqualified source columns
+   * @return its unqualified source columns, or null when unknown
    */
   private Set<String> subqueryTableColumns(Table table) {
     return subqueryTableColumns(table, cteResults, conf);
@@ -2641,9 +2641,13 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          CTEs available during planning
    * @param configuration
    *          physical input configuration
-   * @return source column names
+   * @return source column names, or null when unknown
    */
   private Set<String> subqueryTableColumns(Table table, Map<Identifier, CteResult> ctes, Configuration configuration) {
+    Set<String> virtual = SubqueryExecutor.virtualColumns(table);
+    if (virtual != null) {
+      return virtual;
+    }
     try {
       CteResult cte = resolveCteResultByName(table.getName(), ctes);
       Schema schema;
@@ -2655,7 +2659,10 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       return schema.getFields().stream().map(Schema.Field::name).collect(java.util.stream.Collectors.toSet());
     } catch (SQLException exception) {
-      throw new IllegalStateException("Failed to resolve subquery columns for " + table, exception);
+      if (QueryCancellation.findCancellation(exception).isPresent()) {
+        throw new IllegalStateException("Canceled while resolving subquery columns", exception);
+      }
+      return null;
     }
   }
 

@@ -11,6 +11,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
@@ -20,6 +21,8 @@ import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.*;
 import org.apache.hadoop.conf.Configuration;
 import se.alipsa.jparq.JParqConnection;
+import se.alipsa.jparq.meta.InformationSchemaColumns;
+import se.alipsa.jparq.meta.InformationSchemaTables;
 
 /**
  * Utility for evaluating sub queries using the same {@link JParqConnection} as
@@ -31,8 +34,8 @@ public final class SubqueryExecutor {
   private final Map<String, SubqueryResult> cache = new ConcurrentHashMap<>();
   private final StatementFactory statementFactory;
   private final Function<Table, Set<String>> tableColumns;
-  private final Map<PlainSelect, Set<String>> scopeColumns = new IdentityHashMap<>();
-  private final Map<String, Set<String>> sourceColumns = new ConcurrentHashMap<>();
+  private final Map<PlainSelect, Optional<Set<String>>> scopeColumns = new IdentityHashMap<>();
+  private final Map<String, Optional<Set<String>>> sourceColumns = new ConcurrentHashMap<>();
 
   /**
    * Create a new executor bound to the provided connection.
@@ -66,7 +69,8 @@ public final class SubqueryExecutor {
    * @param statementFactory
    *          nested statement factory, or null
    * @param tableColumns
-   *          source column resolver, or null to resolve physical tables
+   *          source column resolver returning null for unknown inputs, or null to
+   *          resolve physical tables
    */
   public SubqueryExecutor(JParqConnection connection, StatementFactory statementFactory,
       Function<Table, Set<String>> tableColumns) {
@@ -122,20 +126,66 @@ public final class SubqueryExecutor {
   }
 
   /**
+   * Resolves fixed virtual-table columns without scanning the catalog.
+   *
+   * @param table
+   *          table reference
+   * @return raw field names, or null when this is not a supported virtual table
+   */
+  public static Set<String> virtualColumns(Table table) {
+    org.apache.avro.Schema schema;
+    if (InformationSchemaTables.matchesQualifiedName(table.getSchemaName(), table.getName(),
+        table.getFullyQualifiedName())) {
+      schema = InformationSchemaTables.schema();
+    } else if (InformationSchemaColumns.matchesQualifiedName(table.getSchemaName(), table.getName(),
+        table.getFullyQualifiedName())) {
+      schema = InformationSchemaColumns.schema();
+    } else {
+      return null;
+    }
+    return schema.getFields().stream().map(org.apache.avro.Schema.Field::name)
+        .collect(java.util.stream.Collectors.toSet());
+  }
+
+  /**
    * Collects normalized names from all local inputs once per query scope.
    *
    * @param select
    *          inner query scope
-   * @return columns bound by its FROM inputs
+   * @return columns bound by its FROM inputs, or null if any input is unknown
    */
   private Set<String> localColumns(PlainSelect select) {
-    return scopeColumns.computeIfAbsent(select, scope -> {
-      Set<String> names = new LinkedHashSet<>(inputColumns(scope.getFromItem(), scope));
-      if (scope.getJoins() != null) {
-        scope.getJoins().forEach(join -> names.addAll(inputColumns(join.getRightItem(), scope)));
+    return scopeColumns.computeIfAbsent(select, scope -> joinedColumns(scope.getFromItem(), scope.getJoins(), scope))
+        .orElse(null);
+  }
+
+  /**
+   * Combines input names while retaining uncertainty from any join operand.
+   *
+   * @param first
+   *          leading input
+   * @param joins
+   *          subsequent inputs, or null
+   * @param scope
+   *          declaring query scope
+   * @return known names, or empty when any source is unknown
+   */
+  private Optional<Set<String>> joinedColumns(FromItem first, List<Join> joins, PlainSelect scope) {
+    Optional<Set<String>> initial = inputColumns(first, scope);
+    if (initial.isEmpty()) {
+      return Optional.empty();
+    }
+    Set<String> names = new LinkedHashSet<>(initial.orElseThrow());
+    if (joins != null) {
+      for (Join join : joins) {
+        Optional<Set<String>> next = inputColumns(join.getRightItem(), scope);
+        if (next.isEmpty()) {
+          return Optional.empty();
+        }
+        names.addAll(next.orElseThrow());
       }
-      return Set.copyOf(names);
-    });
+    }
+    return Optional.of(Set.copyOf(names));
   }
 
   /**
@@ -145,16 +195,16 @@ public final class SubqueryExecutor {
    *          local FROM input
    * @param scope
    *          query declaring that input
-   * @return normalized source columns
+   * @return known normalized names, or empty when the input cannot be resolved
    */
-  private Set<String> inputColumns(FromItem input, PlainSelect scope) {
+  private Optional<Set<String>> inputColumns(FromItem input, PlainSelect scope) {
     if (input == null) {
-      return Set.of();
+      return Optional.of(Set.of());
     }
     if (input.getAlias() != null && input.getAlias().getAliasColumns() != null
         && !input.getAlias().getAliasColumns().isEmpty()) {
-      return input.getAlias().getAliasColumns().stream().map(alias -> Identifier.lookupKey(alias.name))
-          .collect(java.util.stream.Collectors.toSet());
+      return Optional.of(input.getAlias().getAliasColumns().stream().map(alias -> Identifier.lookupKey(alias.name))
+          .collect(java.util.stream.Collectors.toSet()));
     }
     if (input instanceof Table table) {
       if (scope.getWithItemsList() != null) {
@@ -164,20 +214,17 @@ public final class SubqueryExecutor {
           }
         }
       }
-      return sourceColumns.computeIfAbsent(table.getFullyQualifiedName(), name -> tableColumns.apply(table).stream()
-          .map(Identifier::lookupKey).collect(java.util.stream.Collectors.toSet()));
+      return sourceColumns.computeIfAbsent(table.getFullyQualifiedName(),
+          name -> Optional.ofNullable(tableColumns.apply(table)).map(
+              columns -> columns.stream().map(Identifier::lookupKey).collect(java.util.stream.Collectors.toSet())));
     }
     if (input instanceof ParenthesedSelect derived) {
       return outputColumns(derived.getSelect());
     }
     if (input instanceof ParenthesedFromItem group) {
-      Set<String> names = new LinkedHashSet<>(inputColumns(group.getFromItem(), scope));
-      if (group.getJoins() != null) {
-        group.getJoins().forEach(join -> names.addAll(inputColumns(join.getRightItem(), scope)));
-      }
-      return Set.copyOf(names);
+      return joinedColumns(group.getFromItem(), group.getJoins(), scope);
     }
-    return Set.of();
+    return Optional.empty();
   }
 
   /**
@@ -185,12 +232,12 @@ public final class SubqueryExecutor {
    *
    * @param cte
    *          CTE declaration
-   * @return normalized exported names
+   * @return known exported names, or empty when its output is unknown
    */
-  private Set<String> cteColumns(WithItem<?> cte) {
+  private Optional<Set<String>> cteColumns(WithItem<?> cte) {
     if (cte.getWithItemList() != null && !cte.getWithItemList().isEmpty()) {
-      return cte.getWithItemList().stream().map(item -> Identifier.lookupKey(item.toString()))
-          .collect(java.util.stream.Collectors.toSet());
+      return Optional.of(cte.getWithItemList().stream().map(item -> Identifier.lookupKey(item.toString()))
+          .collect(java.util.stream.Collectors.toSet()));
     }
     return outputColumns(cte.getSelect());
   }
@@ -200,44 +247,58 @@ public final class SubqueryExecutor {
    *
    * @param select
    *          derived query
-   * @return normalized output names
+   * @return known output names, or empty when they cannot all be determined
    */
-  private Set<String> outputColumns(Select select) {
+  private Optional<Set<String>> outputColumns(Select select) {
     if (select instanceof ParenthesedSelect nested) {
       return outputColumns(nested.getSelect());
     }
     if (select instanceof SetOperationList set) {
       return outputColumns(set.getSelects().getFirst());
     }
+    if (!(select instanceof PlainSelect plain)) {
+      return Optional.empty();
+    }
     Set<String> names = new LinkedHashSet<>();
-    if (select instanceof PlainSelect plain) {
-      for (var item : plain.getSelectItems()) {
-        if (item.getAlias() != null) {
-          names.add(Identifier.lookupKey(item.getAlias().getName()));
-        } else if (item.getExpression() instanceof Column column) {
-          names.add(Identifier.lookupKey(column.getColumnName()));
-        } else if (item.getExpression() instanceof AllColumns) {
-          names.addAll(localColumns(plain));
+    for (var item : plain.getSelectItems()) {
+      if (item.getAlias() != null) {
+        names.add(Identifier.lookupKey(item.getAlias().getName()));
+      } else if (item.getExpression() instanceof Column column) {
+        names.add(Identifier.lookupKey(column.getColumnName()));
+      } else if (item.getExpression() instanceof AllColumns) {
+        Set<String> inputs = localColumns(plain);
+        if (inputs == null) {
+          return Optional.empty();
         }
+        names.addAll(inputs);
+      } else {
+        names.add(Identifier.lookupKey(item.getExpression().toString()));
       }
     }
-    return Set.copyOf(names);
+    return Optional.of(Set.copyOf(names));
   }
 
   /**
-   * Resolves a physical source when no prepared-plan schema resolver is supplied.
+   * Resolves virtual and physical sources without an injected schema resolver.
    *
    * @param table
-   *          physical table reference
-   * @return source field names
+   *          source table reference
+   * @return source field names, or null when the source cannot be resolved
    */
   private Set<String> physicalColumns(Table table) {
+    Set<String> virtual = virtualColumns(table);
+    if (virtual != null) {
+      return virtual;
+    }
     try {
       var location = connection.resolveTable(table.getSchemaName(), table.getName());
       return ParquetTable.validate(location, new Configuration(false)).schema().getFields().stream()
           .map(org.apache.avro.Schema.Field::name).collect(java.util.stream.Collectors.toSet());
     } catch (SQLException exception) {
-      throw new IllegalStateException("Failed to resolve subquery columns for " + table, exception);
+      if (QueryCancellation.findCancellation(exception).isPresent()) {
+        throw new IllegalStateException("Canceled while resolving subquery columns", exception);
+      }
+      return null;
     }
   }
 
