@@ -52,6 +52,7 @@ import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.InExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsBooleanExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
+import net.sf.jsqlparser.expression.operators.relational.IsUnknownExpression;
 import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
@@ -2088,6 +2089,9 @@ public final class AggregateFunctions {
         Object operand = value(isNull.getLeftExpression());
         boolean isNullVal = operand == null;
         return isNull.isNot() != isNullVal;
+      }
+      if (expr instanceof IsUnknownExpression unknown) {
+        return unknown.isNot() != (evalTruth(unknown.getLeftExpression()) == null);
       }
       if (expr instanceof IsBooleanExpression isBoolean) {
         Boolean truth = evalTruth(isBoolean.getLeftExpression());

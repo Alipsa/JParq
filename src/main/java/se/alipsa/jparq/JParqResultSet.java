@@ -24,7 +24,6 @@ import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
-import net.sf.jsqlparser.statement.select.OrderByElement;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.AvroCoercions;
@@ -44,18 +43,6 @@ import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
 import se.alipsa.jparq.engine.function.SystemFunctions;
-import se.alipsa.jparq.engine.window.AvgWindow;
-import se.alipsa.jparq.engine.window.CountWindow;
-import se.alipsa.jparq.engine.window.CumeDistWindow;
-import se.alipsa.jparq.engine.window.DenseRankWindow;
-import se.alipsa.jparq.engine.window.MaxWindow;
-import se.alipsa.jparq.engine.window.MinWindow;
-import se.alipsa.jparq.engine.window.NthValueWindow;
-import se.alipsa.jparq.engine.window.NtileWindow;
-import se.alipsa.jparq.engine.window.PercentRankWindow;
-import se.alipsa.jparq.engine.window.RankWindow;
-import se.alipsa.jparq.engine.window.RowNumberWindow;
-import se.alipsa.jparq.engine.window.SumWindow;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.engine.window.WindowState;
@@ -76,6 +63,8 @@ public class JParqResultSet extends ResultSetAdapter {
   private final SubqueryExecutor subqueryExecutor;
   private final List<String> queryQualifiers;
   private ValueExpressionEvaluator projectionEvaluator;
+  private Schema metadataSchema;
+  private final CorrelationMappings metadataSourceMappings;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
   private WindowState windowState;
@@ -190,6 +179,7 @@ public class JParqResultSet extends ResultSetAdapter {
       qualifierMapping = ColumnMappingUtil.normaliseQualifierMapping(mappingProvider.qualifierColumnMapping());
       unqualifiedMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(mappingProvider.unqualifiedColumnMapping());
     }
+    this.metadataSourceMappings = CorrelationMappings.of(queryQualifiers, qualifierMapping, unqualifiedMapping);
     Map<String, String> normalizedUnqualifiedMapping = unqualifiedMapping;
     Set<String> availableQualifiers = new LinkedHashSet<>(qualifierMapping.keySet());
     if (availableQualifiers.isEmpty() && !this.queryQualifiers.isEmpty()) {
@@ -289,12 +279,10 @@ public class JParqResultSet extends ResultSetAdapter {
             correlationColumns, qualifierMapping);
         List<String> distinctProjection = resolveDistinctColumns(select);
         QueryProcessor.Options options = QueryProcessor.Options.builder().distinct(select.distinct())
-            .distinctColumns(distinctProjection).distinctBeforePreLimit(select.innerDistinct())
-            .subqueryExecutor(subqueryExecutor).preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
-            .outerQualifiers(queryQualifiers).qualifierColumnMapping(this.qualifierColumnMapping)
-            .unqualifiedColumnMapping(this.unqualifiedColumnMapping)
-            .preStageDistinctColumns(select.innerDistinctColumns()).offset(select.offset())
-            .preOffset(select.preOffset()).windowPlan(windowPlan).orderByExpressions(orderByExpressions);
+            .distinctColumns(distinctProjection).distinctExpressions(select.expressions())
+            .subqueryExecutor(subqueryExecutor).outerQualifiers(queryQualifiers)
+            .qualifierColumnMapping(this.qualifierColumnMapping).unqualifiedColumnMapping(this.unqualifiedColumnMapping)
+            .offset(select.offset()).windowPlan(windowPlan).orderByExpressions(orderByExpressions);
         List<String> projectionColumns = requestedColumns;
         if (projectionColumns == null || projectionColumns.isEmpty()) {
           projectionColumns = select.columns();
@@ -307,10 +295,14 @@ public class JParqResultSet extends ResultSetAdapter {
       }
 
       var schema = first.getSchema();
+      this.metadataSchema = schema;
 
       // Compute physical projection from schema; only add if we don’t already have
       // labels
       List<String> proj = QueryProcessor.computeProjection(requestedColumns, schema);
+      if (this.columnOrder.isEmpty()) {
+        this.columnOrder.addAll(proj);
+      }
       Set<String> requiredColumns = new LinkedHashSet<>(proj);
       requiredColumns.addAll(ColumnsUsed.inWhere(effectiveResidual));
       requiredColumns.addAll(ColumnsUsed.inWhere(select.having()));
@@ -326,165 +318,9 @@ public class JParqResultSet extends ResultSetAdapter {
           }
         }
       }
-      if (select.preOrderBy() != null) {
-        for (SqlParser.OrderKey orderKey : select.preOrderBy()) {
-          if (orderKey != null && orderKey.column() != null && !orderKey.column().matches("[0-9]+")) {
-            requiredColumns.add(orderKey.column());
-          }
-        }
-      }
-      if (windowPlan != null && !windowPlan.isEmpty()) {
-        for (RowNumberWindow window : windowPlan.rowNumberWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-        }
-        for (RankWindow window : windowPlan.rankWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-        }
-        for (DenseRankWindow window : windowPlan.denseRankWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-        }
-        for (PercentRankWindow window : windowPlan.percentRankWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-        }
-        for (CumeDistWindow window : windowPlan.cumeDistWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-        }
-        for (NtileWindow window : windowPlan.ntileWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-          Expression bucketExpression = window.bucketExpression();
-          if (bucketExpression != null) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(bucketExpression, queryQualifiers));
-          }
-        }
-        for (CountWindow window : windowPlan.countWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-          Expression argument = window.argument();
-          if (argument != null) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(argument, queryQualifiers));
-          }
-        }
-        for (SumWindow window : windowPlan.sumWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-          Expression argument = window.argument();
-          if (argument != null) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(argument, queryQualifiers));
-          }
-        }
-        for (AvgWindow window : windowPlan.avgWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-          Expression argument = window.argument();
-          if (argument != null) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(argument, queryQualifiers));
-          }
-        }
-        for (MaxWindow window : windowPlan.maxWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-          Expression argument = window.argument();
-          if (argument != null) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(argument, queryQualifiers));
-          }
-        }
-        for (MinWindow window : windowPlan.minWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-          Expression argument = window.argument();
-          if (argument != null) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(argument, queryQualifiers));
-          }
-        }
-        for (NthValueWindow window : windowPlan.nthValueWindows()) {
-          for (Expression partition : window.partitionExpressions()) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(partition, queryQualifiers));
-          }
-          for (OrderByElement order : window.orderByElements()) {
-            if (order != null && order.getExpression() != null) {
-              requiredColumns.addAll(SqlParser.collectQualifiedColumns(order.getExpression(), queryQualifiers));
-            }
-          }
-          Expression valueExpression = window.valueExpression();
-          if (valueExpression != null) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(valueExpression, queryQualifiers));
-          }
-          Expression nthExpression = window.nthExpression();
-          if (nthExpression != null) {
-            requiredColumns.addAll(SqlParser.collectQualifiedColumns(nthExpression, queryQualifiers));
-          }
+      if (windowPlan != null) {
+        for (Expression input : windowPlan.inputExpressions()) {
+          requiredColumns.addAll(SqlParser.collectQualifiedColumns(input, queryQualifiers));
         }
       }
       if (schema != null) {
@@ -511,9 +347,6 @@ public class JParqResultSet extends ResultSetAdapter {
         requiredColumns = remapped;
       }
       proj = new ArrayList<>(requiredColumns);
-      if (this.columnOrder.isEmpty()) {
-        this.columnOrder.addAll(proj); // keep mutable
-      }
       List<String> correlationLabels = this.columnOrder.isEmpty()
           ? new ArrayList<>(proj)
           : new ArrayList<>(this.columnOrder);
@@ -536,30 +369,26 @@ public class JParqResultSet extends ResultSetAdapter {
       var order = select.orderBy();
       // Window processing buffers the first row too, so consume it through the
       // processor exactly once.
-      boolean usePrefetchedAsCurrent = match && select.offset() == 0 && (windowPlan == null || windowPlan.isEmpty());
+      boolean usePrefetchedAsCurrent = match && select.limit() != 0 && select.offset() == 0
+          && (windowPlan == null || windowPlan.isEmpty());
       if (order == null || order.isEmpty()) {
         int initialEmitted = usePrefetchedAsCurrent ? 1 : 0;
         List<String> distinctProjection = resolveDistinctColumns(select);
         QueryProcessor.Options options = QueryProcessor.Options.builder().schema(schema).initialEmitted(initialEmitted)
-            .distinct(select.distinct()).distinctColumns(distinctProjection)
-            .distinctBeforePreLimit(select.innerDistinct()).firstAlreadyRead(first).subqueryExecutor(subqueryExecutor)
-            .preLimit(select.preLimit()).preOrderBy(select.preOrderBy())
-            .preStageDistinctColumns(select.innerDistinctColumns()).outerQualifiers(queryQualifiers)
+            .distinct(select.distinct()).distinctColumns(distinctProjection).distinctExpressions(select.expressions())
+            .firstAlreadyRead(first).subqueryExecutor(subqueryExecutor).outerQualifiers(queryQualifiers)
             .qualifierColumnMapping(this.qualifierColumnMapping).unqualifiedColumnMapping(this.unqualifiedColumnMapping)
-            .offset(select.offset()).preOffset(select.preOffset()).windowPlan(windowPlan)
-            .orderByExpressions(orderByExpressions);
+            .offset(select.offset()).windowPlan(windowPlan).orderByExpressions(orderByExpressions);
         this.qp = new QueryProcessor(reader, proj, effectiveResidual, select.limit(), options);
         this.current = usePrefetchedAsCurrent ? first : qp.nextMatching();
         this.windowState = qp.windowState();
       } else {
         List<String> distinctProjection = resolveDistinctColumns(select);
         QueryProcessor.Options options = QueryProcessor.Options.builder().schema(schema).distinct(select.distinct())
-            .distinctColumns(distinctProjection).distinctBeforePreLimit(select.innerDistinct()).orderBy(order)
-            .firstAlreadyRead(first).subqueryExecutor(subqueryExecutor).preLimit(select.preLimit())
-            .preOrderBy(select.preOrderBy()).preStageDistinctColumns(select.innerDistinctColumns())
-            .outerQualifiers(queryQualifiers).qualifierColumnMapping(this.qualifierColumnMapping)
-            .unqualifiedColumnMapping(this.unqualifiedColumnMapping).offset(select.offset())
-            .preOffset(select.preOffset()).windowPlan(windowPlan).orderByExpressions(orderByExpressions);
+            .distinctColumns(distinctProjection).distinctExpressions(select.expressions()).orderBy(order)
+            .firstAlreadyRead(first).subqueryExecutor(subqueryExecutor).outerQualifiers(queryQualifiers)
+            .qualifierColumnMapping(this.qualifierColumnMapping).unqualifiedColumnMapping(this.unqualifiedColumnMapping)
+            .offset(select.offset()).windowPlan(windowPlan).orderByExpressions(orderByExpressions);
         this.qp = new QueryProcessor(reader, proj, effectiveResidual, select.limit(), options);
         this.current = qp.nextMatching();
         this.windowState = qp.windowState();
@@ -594,6 +423,7 @@ public class JParqResultSet extends ResultSetAdapter {
     this.selectExpressions = List.of();
     this.subqueryExecutor = null;
     this.queryQualifiers = List.of();
+    this.metadataSourceMappings = CorrelationMappings.of(List.of(), Map.of(), Map.of());
     this.qualifierColumnMapping = Map.of();
     this.unqualifiedColumnMapping = Map.of();
     this.columnOrder = new ArrayList<>(columnLabels);
@@ -1191,16 +1021,33 @@ public class JParqResultSet extends ResultSetAdapter {
     return value;
   }
 
+  /**
+   * Supplies the planned schema when no record was available to establish
+   * metadata, including wildcard column labels for empty results.
+   *
+   * @param schema
+   *          the source schema, including for empty results
+   */
+  void setMetadataSchema(Schema schema) {
+    if (metadataSchema == null) {
+      metadataSchema = schema;
+    }
+    if (!aggregateQuery && columnOrder.isEmpty() && selectExpressions.isEmpty() && schema != null) {
+      for (Schema.Field field : schema.getFields()) {
+        columnOrder.add(field.name());
+      }
+    }
+  }
+
   @Override
   public ResultSetMetaData getMetaData() {
     if (aggregateQuery) {
       List<Integer> types = aggregateSqlTypes == null ? List.of() : aggregateSqlTypes;
       return new AggregateResultSetMetaData(columnOrder, types, tableName, tableSchema, tableCatalog);
     }
-    var schema = (current == null) ? null : current.getSchema();
-    var normalized = ParquetSchemas.normalizeStringTypes(schema);
+    var normalized = ParquetSchemas.normalizeStringTypes(metadataSchema);
     return new JParqResultSetMetaData(normalized, columnOrder, physicalColumnOrder, canonicalColumnNames, tableName,
-        tableSchema, tableCatalog, selectExpressions);
+        tableSchema, tableCatalog, selectExpressions, metadataSourceMappings);
   }
 
   @SuppressWarnings("PMD.EmptyCatchBlock")

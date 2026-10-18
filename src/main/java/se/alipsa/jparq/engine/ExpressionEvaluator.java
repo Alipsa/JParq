@@ -23,6 +23,7 @@ import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.InExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsBooleanExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
+import net.sf.jsqlparser.expression.operators.relational.IsUnknownExpression;
 import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
@@ -203,6 +204,9 @@ public final class ExpressionEvaluator {
     // Null checks, LIKE, BETWEEN, IN
     if (expr instanceof IsNullExpression isNull) {
       return evalIsNull(isNull, rec);
+    }
+    if (expr instanceof IsUnknownExpression unknown) {
+      return unknown.isNot() != (evalTruth(unknown.getLeftExpression(), rec) == null);
     }
     if (expr instanceof IsBooleanExpression isBoolean) {
       return evalIsBoolean(isBoolean, rec);

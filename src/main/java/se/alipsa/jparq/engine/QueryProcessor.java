@@ -35,6 +35,7 @@ public final class QueryProcessor implements AutoCloseable {
   private final List<SqlParser.OrderKey> preOrderBy;
   private final boolean hasPreStage;
   private final List<String> distinctColumns;
+  private final List<Expression> distinctExpressions;
   private final List<String> preStageDistinctColumns;
   private final List<String> outerQualifiers;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
@@ -57,7 +58,7 @@ public final class QueryProcessor implements AutoCloseable {
   private int preOffsetApplied;
   private GenericRecord prefetched;
   private final Set<List<Object>> distinctSeen;
-  private ValueExpressionEvaluator orderByEvaluator;
+  private ValueExpressionEvaluator valueEvaluator;
 
   /**
    * Builder-style options for configuring {@link QueryProcessor} instances.
@@ -77,6 +78,7 @@ public final class QueryProcessor implements AutoCloseable {
     private int preOffset;
     private List<SqlParser.OrderKey> preOrderBy = List.of();
     private List<String> distinctColumns;
+    private List<Expression> distinctExpressions = List.of();
     private List<String> preStageDistinctColumns = List.of();
     private List<String> outerQualifiers = List.of();
     private Map<String, Map<String, String>> qualifierColumnMapping = Map.of();
@@ -109,7 +111,8 @@ public final class QueryProcessor implements AutoCloseable {
     }
 
     /**
-     * Record how many rows were already emitted before the processor was created.
+     * Record how many rows were already emitted before streaming processing.
+     * Buffering ignores this hint because it consumes the supplied first row.
      *
      * @param initialEmitted
      *          number of rows already emitted
@@ -305,6 +308,19 @@ public final class QueryProcessor implements AutoCloseable {
     }
 
     /**
+     * Provides the SELECT expressions in projection order for DISTINCT keys. Empty
+     * expressions retain physical-column key evaluation.
+     *
+     * @param expressions
+     *          projection expressions, or {@code null}
+     * @return this options instance
+     */
+    public Options distinctExpressions(List<Expression> expressions) {
+      this.distinctExpressions = expressions == null ? List.of() : List.copyOf(expressions);
+      return this;
+    }
+
+    /**
      * Provide canonical names for unqualified columns that remain unique after a
      * join.
      *
@@ -373,6 +389,7 @@ public final class QueryProcessor implements AutoCloseable {
     this.hasPreStage = (this.preLimit >= 0) || !this.preOrderBy.isEmpty() || (this.preOffset > 0);
     List<String> distinctCols = opts.distinctColumns == null ? this.projection : opts.distinctColumns;
     this.distinctColumns = distinctCols;
+    this.distinctExpressions = opts.distinctExpressions;
     this.preStageDistinctColumns = (opts.preStageDistinctColumns == null || opts.preStageDistinctColumns.isEmpty())
         ? distinctCols
         : opts.preStageDistinctColumns;
@@ -395,6 +412,10 @@ public final class QueryProcessor implements AutoCloseable {
     }
 
     if (!this.orderBy.isEmpty() || hasPreStage || windowed) {
+      // Buffered input includes firstAlreadyRead; it has not been emitted from
+      // this processor, regardless of the caller's streaming-prefetch hint.
+      this.emitted = 0;
+      this.skipped = 0;
       bufferAndSort(firstAlreadyRead, opts.schema);
       this.prefetched = null;
     }
@@ -469,17 +490,17 @@ public final class QueryProcessor implements AutoCloseable {
         }
       }
 
-      if (distinct && !buf.isEmpty() && !distinctApplied) {
-        buf = applyDistinct(buf);
-      }
-
       if (windowed) {
         if (sortSchema == null && !buf.isEmpty()) {
           sortSchema = buf.getFirst().getSchema();
         }
         windowState = WindowFunctions.compute(windowPlan, buf, sortSchema, subqueryExecutor, outerQualifiers,
             qualifierColumnMapping, unqualifiedColumnMapping);
-        orderByEvaluator = null;
+        valueEvaluator = null;
+      }
+
+      if (distinct && !buf.isEmpty() && !distinctApplied) {
+        buf = applyDistinct(buf);
       }
 
       // sort by ORDER BY keys if we have schema and >1 row
@@ -552,19 +573,25 @@ public final class QueryProcessor implements AutoCloseable {
     return Map.copyOf(normalized);
   }
 
-  private void ensureOrderByEvaluator(Schema schema) {
-    if (orderByEvaluator == null && schema != null) {
+  /**
+   * Creates the shared projection-key and ordering evaluator when needed.
+   *
+   * @param schema
+   *          source schema, or {@code null} when input is empty
+   */
+  private void ensureValueEvaluator(Schema schema) {
+    if (valueEvaluator == null && schema != null) {
       CorrelationMappings mappings = new CorrelationMappings(outerQualifiers, qualifierColumnMapping,
           unqualifiedColumnMapping, qualifierColumnMapping);
-      orderByEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, mappings, windowState());
+      valueEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, mappings, windowState());
     }
   }
 
   private Object resolveOrderValue(GenericRecord record, Schema schema, SqlParser.OrderKey key) {
     if (key.expression() != null) {
-      ensureOrderByEvaluator(schema);
-      if (orderByEvaluator != null) {
-        return orderByEvaluator.eval(key.expression(), record);
+      ensureValueEvaluator(schema);
+      if (valueEvaluator != null) {
+        return valueEvaluator.eval(key.expression(), record);
       }
     }
     if (key.column() != null && key.column().matches("[0-9]+")) {
@@ -588,8 +615,8 @@ public final class QueryProcessor implements AutoCloseable {
     }
     Expression expression = orderExpressionFor(key.column());
     if (expression != null) {
-      ensureOrderByEvaluator(schema);
-      return orderByEvaluator.eval(expression, record);
+      ensureValueEvaluator(schema);
+      return valueEvaluator.eval(expression, record);
     }
     return null;
   }
@@ -744,7 +771,7 @@ public final class QueryProcessor implements AutoCloseable {
     if (!distinct) {
       return true;
     }
-    List<Object> key = distinctKey(rec, distinctColumns);
+    List<Object> key = projectedDistinctKey(rec);
     return distinctSeen.add(key);
   }
 
@@ -764,7 +791,7 @@ public final class QueryProcessor implements AutoCloseable {
     List<GenericRecord> unique = new ArrayList<>(records.size());
     Set<List<Object>> seen = new LinkedHashSet<>();
     for (GenericRecord rec : records) {
-      List<Object> key = distinctKey(rec, distinctColumns);
+      List<Object> key = projectedDistinctKey(rec);
       if (seen.add(key)) {
         unique.add(rec);
       }
@@ -775,6 +802,36 @@ public final class QueryProcessor implements AutoCloseable {
     return unique;
   }
 
+  /**
+   * Evaluates the SELECT tuple in positional order, including duplicate labels.
+   * The shared evaluator retains the window state keyed by source record
+   * identity.
+   *
+   * @param rec
+   *          source record
+   * @return projected values with SQL NULLs preserved
+   */
+  private List<Object> projectedDistinctKey(GenericRecord rec) {
+    if (distinctExpressions.isEmpty()) {
+      return distinctKey(rec, distinctColumns);
+    }
+    ensureValueEvaluator(rec.getSchema());
+    List<Object> key = new ArrayList<>(distinctExpressions.size());
+    for (Expression expression : distinctExpressions) {
+      key.add(valueEvaluator.eval(expression, rec));
+    }
+    return key;
+  }
+
+  /**
+   * Builds a physical-column key for wildcard projections and legacy options.
+   *
+   * @param rec
+   *          source record
+   * @param columns
+   *          physical fields
+   * @return values with SQL NULLs preserved
+   */
   private List<Object> distinctKey(GenericRecord rec, List<String> columns) {
     List<Object> key = new ArrayList<>(columns.size());
     for (String col : columns) {

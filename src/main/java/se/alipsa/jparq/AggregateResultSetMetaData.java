@@ -4,6 +4,7 @@ import java.sql.JDBCType;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 
 /**
@@ -87,6 +88,14 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter {
   @Override
   public String getColumnTypeName(int column) {
     return JDBCType.valueOf(getColumnType(column)).getName();
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public String getColumnClassName(int column) {
+    return JdbcTypeMapper.mapJdbcTypeToClassName(getColumnType(column));
   }
 
   @Override

@@ -77,6 +77,7 @@ import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.InMemoryRecordReader;
 import se.alipsa.jparq.engine.JoinPredicatePlanner;
 import se.alipsa.jparq.engine.JoinRecordReader;
+import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
 import se.alipsa.jparq.engine.ParquetRecordReaderAdapter;
 import se.alipsa.jparq.engine.ParquetSchemas;
@@ -92,16 +93,6 @@ import se.alipsa.jparq.engine.UnnestTableBuilder;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
 import se.alipsa.jparq.engine.function.SystemFunctions;
-import se.alipsa.jparq.engine.window.AvgWindow;
-import se.alipsa.jparq.engine.window.CumeDistWindow;
-import se.alipsa.jparq.engine.window.DenseRankWindow;
-import se.alipsa.jparq.engine.window.MaxWindow;
-import se.alipsa.jparq.engine.window.MinWindow;
-import se.alipsa.jparq.engine.window.NtileWindow;
-import se.alipsa.jparq.engine.window.PercentRankWindow;
-import se.alipsa.jparq.engine.window.RankWindow;
-import se.alipsa.jparq.engine.window.RowNumberWindow;
-import se.alipsa.jparq.engine.window.SumWindow;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.engine.window.WindowState;
@@ -335,16 +326,6 @@ public class JParqPreparedStatement implements PreparedStatement {
                 tmpCteResults);
             tmpBaseCteResult = new CteResult(data.schema(), data.rows());
             tmpFileAvro = data.schema();
-            int innerOffset = Math.max(0, baseRef.subquery().offset());
-            if (innerOffset > 0) {
-              tmpSelect = new SqlParser.Select(tmpSelect.labels(), tmpSelect.columnNames(), tmpSelect.table(),
-                  tmpSelect.tableAlias(), tmpSelect.where(), tmpSelect.limit(),
-                  Math.max(0, tmpSelect.offset() - innerOffset), tmpSelect.orderBy(), tmpSelect.distinct(),
-                  tmpSelect.innerDistinct(), tmpSelect.innerDistinctColumns(), tmpSelect.expressions(),
-                  tmpSelect.expressionOrder(), tmpSelect.qualifiedWildcards(), tmpSelect.groupByExpressions(),
-                  tmpSelect.groupingSets(), tmpSelect.having(), tmpSelect.preLimit(), 0, tmpSelect.preOrderBy(),
-                  tmpSelect.tableReferences(), tmpSelect.commonTableExpressions());
-            }
             aggregatePlan = AggregateFunctions.plan(tmpSelect);
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
@@ -526,6 +507,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
       JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, tableCatalog,
           residualExpression, labels, physical, subqueryExecutor);
+      rs.setMetadataSchema(reader instanceof JoinRecordReader joinReader ? joinReader.schema() : fileAvroSchema);
 
       stmt.setCurrentRs(rs);
       return rs;
@@ -807,7 +789,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       if ((index < 0 && order.expression() == null) || index >= labels.size()) {
         throw new SQLException("Set operation ORDER BY column index out of range: " + (index + 1));
       }
-      resolved.add(new ResolvedSetOrder(index, order.asc(), order.expression()));
+      resolved.add(new ResolvedSetOrder(index, order.asc(), order.expression(), order.nullOrdering()));
     }
     ValueExpressionEvaluator evaluator = null;
     Schema setOrderSchema = null;
@@ -1036,12 +1018,15 @@ public class JParqPreparedStatement implements PreparedStatement {
       Object rv = right.get(i);
       int cmp;
       if (lv == null || rv == null) {
-        cmp = (lv == null ? 1 : 0) - (rv == null ? 1 : 0);
+        cmp = OrderingUtil.compareNulls(lv, rv, order.asc(), order.nullOrdering());
       } else {
         cmp = compareSetValues(lv, rv);
+        if (!order.asc()) {
+          cmp = -cmp;
+        }
       }
       if (cmp != 0) {
-        return order.asc() ? cmp : -cmp;
+        return cmp;
       }
     }
     return 0;
@@ -1198,8 +1183,18 @@ public class JParqPreparedStatement implements PreparedStatement {
   /**
    * Internal representation of a set operation ORDER BY directive once column
    * positions have been resolved.
+   *
+   * @param index
+   *          resolved output position
+   * @param asc
+   *          whether to sort ascending
+   * @param expression
+   *          computed ordering expression, or {@code null}
+   * @param nullOrdering
+   *          explicit NULL placement, or {@code null} for the default
    */
-  private record ResolvedSetOrder(int index, boolean asc, Expression expression) {
+  private record ResolvedSetOrder(int index, boolean asc, Expression expression,
+      OrderByElement.NullOrdering nullOrdering) {
   }
 
   private record SortableSetRow(List<Object> row, List<Object> keys) {
@@ -3120,151 +3115,10 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
     }
     WindowPlan windowPlan = WindowFunctions.plan(select.expressions());
-    if (windowPlan != null && !windowPlan.isEmpty()) {
-      for (RowNumberWindow window : windowPlan.rowNumberWindows()) {
-        for (Expression partition : window.partitionExpressions()) {
-          collectColumnReferencesFromExpression(partition, qualifiers, primaryQualifier, needed, referenced);
-          addColumns(needed, ColumnsUsed.inWhere(partition));
-        }
-        for (OrderByElement order : window.orderByElements()) {
-          if (order != null && order.getExpression() != null) {
-            collectColumnReferencesFromExpression(order.getExpression(), qualifiers, primaryQualifier, needed);
-            addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
-          }
-        }
-      }
-      for (RankWindow window : windowPlan.rankWindows()) {
-        for (Expression partition : window.partitionExpressions()) {
-          collectColumnReferencesFromExpression(partition, qualifiers, primaryQualifier, needed, referenced);
-          addColumns(needed, ColumnsUsed.inWhere(partition));
-        }
-        for (OrderByElement order : window.orderByElements()) {
-          if (order != null && order.getExpression() != null) {
-            collectColumnReferencesFromExpression(order.getExpression(), qualifiers, primaryQualifier, needed);
-            addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
-          }
-        }
-      }
-      for (DenseRankWindow window : windowPlan.denseRankWindows()) {
-        for (Expression partition : window.partitionExpressions()) {
-          collectColumnReferencesFromExpression(partition, qualifiers, primaryQualifier, needed, referenced);
-          addColumns(needed, ColumnsUsed.inWhere(partition));
-        }
-        for (OrderByElement order : window.orderByElements()) {
-          if (order != null && order.getExpression() != null) {
-            collectColumnReferencesFromExpression(order.getExpression(), qualifiers, primaryQualifier, needed);
-            addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
-          }
-        }
-      }
-      for (PercentRankWindow window : windowPlan.percentRankWindows()) {
-        for (Expression partition : window.partitionExpressions()) {
-          collectColumnReferencesFromExpression(partition, qualifiers, primaryQualifier, needed, referenced);
-          addColumns(needed, ColumnsUsed.inWhere(partition));
-        }
-        for (OrderByElement order : window.orderByElements()) {
-          if (order != null && order.getExpression() != null) {
-            collectColumnReferencesFromExpression(order.getExpression(), qualifiers, primaryQualifier, needed);
-            addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
-          }
-        }
-      }
-      for (CumeDistWindow window : windowPlan.cumeDistWindows()) {
-        for (Expression partition : window.partitionExpressions()) {
-          collectColumnReferencesFromExpression(partition, qualifiers, primaryQualifier, needed, referenced);
-          addColumns(needed, ColumnsUsed.inWhere(partition));
-        }
-        for (OrderByElement order : window.orderByElements()) {
-          if (order != null && order.getExpression() != null) {
-            collectColumnReferencesFromExpression(order.getExpression(), qualifiers, primaryQualifier, needed);
-            addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
-          }
-        }
-      }
-      for (NtileWindow window : windowPlan.ntileWindows()) {
-        for (Expression partition : window.partitionExpressions()) {
-          collectColumnReferencesFromExpression(partition, qualifiers, primaryQualifier, needed, referenced);
-          addColumns(needed, ColumnsUsed.inWhere(partition));
-        }
-        for (OrderByElement order : window.orderByElements()) {
-          if (order != null && order.getExpression() != null) {
-            collectColumnReferencesFromExpression(order.getExpression(), qualifiers, primaryQualifier, needed);
-            addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
-          }
-        }
-        Expression bucketExpression = window.bucketExpression();
-        if (bucketExpression != null) {
-          collectColumnReferencesFromExpression(bucketExpression, qualifiers, primaryQualifier, needed, referenced);
-          addColumns(needed, ColumnsUsed.inWhere(bucketExpression));
-        }
-      }
-      for (SumWindow window : windowPlan.sumWindows()) {
-        for (Expression partition : window.partitionExpressions()) {
-          collectColumnReferencesFromExpression(partition, qualifiers, primaryQualifier, needed, referenced);
-          addColumns(needed, ColumnsUsed.inWhere(partition));
-        }
-        for (OrderByElement order : window.orderByElements()) {
-          if (order != null && order.getExpression() != null) {
-            collectColumnReferencesFromExpression(order.getExpression(), qualifiers, primaryQualifier, needed);
-            addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
-          }
-        }
-        Expression argument = window.argument();
-        if (argument != null) {
-          collectColumnReferencesFromExpression(argument, qualifiers, primaryQualifier, needed, referenced);
-          addColumns(needed, ColumnsUsed.inWhere(argument));
-        }
-      }
-      for (AvgWindow window : windowPlan.avgWindows()) {
-        for (Expression partition : window.partitionExpressions()) {
-          collectColumnReferencesFromExpression(partition, qualifiers, primaryQualifier, needed, referenced);
-          addColumns(needed, ColumnsUsed.inWhere(partition));
-        }
-        for (OrderByElement order : window.orderByElements()) {
-          if (order != null && order.getExpression() != null) {
-            collectColumnReferencesFromExpression(order.getExpression(), qualifiers, primaryQualifier, needed);
-            addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
-          }
-        }
-        Expression argument = window.argument();
-        if (argument != null) {
-          collectColumnReferencesFromExpression(argument, qualifiers, primaryQualifier, needed, referenced);
-          addColumns(needed, ColumnsUsed.inWhere(argument));
-        }
-      }
-      for (MinWindow window : windowPlan.minWindows()) {
-        for (Expression partition : window.partitionExpressions()) {
-          collectColumnReferencesFromExpression(partition, qualifiers, primaryQualifier, needed, referenced);
-          addColumns(needed, ColumnsUsed.inWhere(partition));
-        }
-        for (OrderByElement order : window.orderByElements()) {
-          if (order != null && order.getExpression() != null) {
-            collectColumnReferencesFromExpression(order.getExpression(), qualifiers, primaryQualifier, needed);
-            addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
-          }
-        }
-        Expression argument = window.argument();
-        if (argument != null) {
-          collectColumnReferencesFromExpression(argument, qualifiers, primaryQualifier, needed, referenced);
-          addColumns(needed, ColumnsUsed.inWhere(argument));
-        }
-      }
-      for (MaxWindow window : windowPlan.maxWindows()) {
-        for (Expression partition : window.partitionExpressions()) {
-          collectColumnReferencesFromExpression(partition, qualifiers, primaryQualifier, needed);
-          addColumns(needed, ColumnsUsed.inWhere(partition));
-        }
-        for (OrderByElement order : window.orderByElements()) {
-          if (order != null && order.getExpression() != null) {
-            collectColumnReferencesFromExpression(order.getExpression(), qualifiers, primaryQualifier, needed);
-            addColumns(needed, ColumnsUsed.inWhere(order.getExpression()));
-          }
-        }
-        Expression argument = window.argument();
-        if (argument != null) {
-          collectColumnReferencesFromExpression(argument, qualifiers, primaryQualifier, needed);
-          addColumns(needed, ColumnsUsed.inWhere(argument));
-        }
+    if (windowPlan != null) {
+      for (Expression input : windowPlan.inputExpressions()) {
+        collectColumnReferencesFromExpression(input, qualifiers, primaryQualifier, needed, referenced);
+        addColumns(needed, ColumnsUsed.inWhere(input));
       }
     }
     if (aggregatePlan != null) {

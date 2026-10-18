@@ -283,8 +283,26 @@ public final class SqlParser {
    *          descending
    * @param expression
    *          the ORDER BY expression when not a simple column reference
+   * @param nullOrdering
+   *          explicit NULL placement, or {@code null} for the default
    */
-  public record SetOrder(Integer columnIndex, String columnLabel, boolean asc, Expression expression) {
+  public record SetOrder(Integer columnIndex, String columnLabel, boolean asc, Expression expression,
+      OrderByElement.NullOrdering nullOrdering) {
+    /**
+     * Creates an order directive using default NULL placement.
+     *
+     * @param columnIndex
+     *          1-based position, or {@code null}
+     * @param columnLabel
+     *          output label, or {@code null}
+     * @param asc
+     *          whether to sort ascending
+     * @param expression
+     *          computed sort expression, or {@code null}
+     */
+    public SetOrder(Integer columnIndex, String columnLabel, boolean asc, Expression expression) {
+      this(columnIndex, columnLabel, asc, expression, null);
+    }
   }
 
   /**
@@ -882,50 +900,12 @@ public final class SqlParser {
     if (tableRefs.size() == 1) {
       stripQualifier(whereExpr, qualifiers(tableRefs));
     }
-    int outerLimit = computeLimit(ps);
-    int outerOffset = computeOffset(ps);
-    Select inner = fromInfo.innerSelect();
-    int innerLimit = inner == null ? -1 : inner.limit();
-    int innerOffset = inner == null ? 0 : inner.offset();
-
-    int limit;
-    if (outerLimit >= 0 && innerLimit >= 0) {
-      limit = Math.min(outerLimit, innerLimit);
-    } else if (outerLimit >= 0) {
-      limit = outerLimit;
-    } else {
-      limit = innerLimit;
-    }
-
-    int offset = outerOffset;
-    if (innerOffset > 0) {
-      offset += innerOffset;
-    }
-
+    // Derived tables and CTEs materialize their own relational operations.
+    // The consuming SELECT uses only its own bounds, ordering, and DISTINCT.
+    final int limit = computeLimit(ps);
+    final int offset = computeOffset(ps);
     List<OrderKey> orderKeys = computeOrderKeys(ps, projection.labels(), projection.physicalCols(), tableRefs);
-    boolean outerRequestedOrder = orderKeys != null && !orderKeys.isEmpty();
-    if ((orderKeys == null || orderKeys.isEmpty()) && inner != null) {
-      orderKeys = inner.orderBy();
-    }
-    List<OrderKey> preOrderBy = List.of();
-    if (inner != null && outerRequestedOrder) {
-      List<OrderKey> innerOrder = inner.orderBy();
-      if (innerOrder != null && !innerOrder.isEmpty() && orderKeys != innerOrder) {
-        preOrderBy = innerOrder;
-      }
-    }
-
-    final boolean outerDistinct = ps.getDistinct() != null;
-    final boolean innerDistinct = inner != null && inner.distinct();
-
-    int preLimit = -1;
-    int preOffset = 0;
-    if (innerLimit >= 0 && outerRequestedOrder) {
-      preLimit = innerLimit;
-    }
-    if (innerOffset > 0 && (outerRequestedOrder || preLimit >= 0 || outerDistinct)) {
-      preOffset = innerOffset;
-    }
+    final boolean distinct = ps.getDistinct() != null;
 
     List<String> labels = projection.labels();
     List<String> physicalCols = projection.physicalCols();
@@ -933,17 +913,12 @@ public final class SqlParser {
     List<Integer> expressionOrder = projection.expressionOrder();
 
     if (projection.selectAll()) {
-      if (fromInfo.innerSelect() != null && (tableRefs == null || tableRefs.size() <= 1)) {
-        labels = fromInfo.innerSelect().labels();
-        physicalCols = fromInfo.innerSelect().columnNames();
-        expressions = fromInfo.innerSelect().expressions();
-        expressionOrder = fromInfo.innerSelect().expressionOrder();
-      } else {
-        labels = List.of();
-        physicalCols = List.of();
-        expressions = List.of();
-        expressionOrder = List.of();
-      }
+      // Expand from the input schema at execution time. Inner expressions have
+      // already been evaluated, and CTE output aliases may rename their fields.
+      labels = List.of();
+      physicalCols = List.of();
+      expressions = List.of();
+      expressionOrder = List.of();
     }
 
     if (physicalCols == null) {
@@ -952,8 +927,6 @@ public final class SqlParser {
     if (orderKeys == null) {
       orderKeys = List.of();
     }
-
-    boolean distinct = outerDistinct || innerDistinct;
 
     Expression havingExpr = ps.getHaving();
     if (tableRefs.size() == 1) {
@@ -967,18 +940,16 @@ public final class SqlParser {
     List<String> labelsCopy = List.copyOf(labels);
     List<String> physicalCopy = Collections.unmodifiableList(new ArrayList<>(physicalCols));
     List<OrderKey> orderCopy = List.copyOf(orderKeys);
-    List<OrderKey> preOrderCopy = List.copyOf(preOrderBy);
     List<Expression> expressionCopy = List.copyOf(expressions);
     List<Integer> expressionOrderCopy = List.copyOf(expressionOrder);
     List<QualifiedWildcard> wildcardCopy = List.copyOf(projection.qualifiedWildcards());
-    List<String> innerDistinctCols = innerDistinct && inner != null ? List.copyOf(inner.columnNames()) : List.of();
 
     GroupByInfo groupByInfo = parseGroupBy(ps.getGroupBy(), tableRefs);
 
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
-        offset, orderCopy, distinct, innerDistinct, innerDistinctCols, expressionCopy, expressionOrderCopy,
-        wildcardCopy, groupByInfo.expressions(), groupByInfo.groupingSets(), combinedHaving, preLimit, preOffset,
-        preOrderCopy, tableRefs, List.copyOf(ctes));
+        offset, orderCopy, distinct, false, List.of(), expressionCopy, expressionOrderCopy, wildcardCopy,
+        groupByInfo.expressions(), groupByInfo.groupingSets(), combinedHaving, -1, 0, List.of(), tableRefs,
+        List.copyOf(ctes));
   }
 
   private static Select parseValuesSelect(Values values, List<CommonTableExpression> ctes,
@@ -1085,7 +1056,7 @@ public final class SqlParser {
         orderExpression = expression;
       }
       boolean asc = !element.isAscDescPresent() || element.isAsc();
-      orders.add(new SetOrder(columnIndex, columnLabel, asc, orderExpression));
+      orders.add(new SetOrder(columnIndex, columnLabel, asc, orderExpression, element.getNullOrdering()));
     }
     return List.copyOf(orders);
   }
