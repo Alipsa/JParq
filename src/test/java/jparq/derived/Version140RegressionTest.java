@@ -20,8 +20,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-/** Parquet-backed regressions for the three v1.4.0 issues. */
-class Issue140RegressionTest {
+/** Parquet-backed regressions for JParq version 1.4.0. */
+class Version140RegressionTest {
   @TempDir
   Path directory;
 
@@ -48,6 +48,187 @@ class Issue140RegressionTest {
           record.put("n", i == 1 ? null : i + 1);
           record.put("ab", i == 1 ? null : i > 1);
           writer.write(record);
+        }
+      }
+    }
+  }
+
+  /**
+   * Verifies that CTE materialization applies inner row bounds once.
+   *
+   * @throws Exception
+   *           if a query fails
+   */
+  @Test
+  void cteBoundsBelongToTheirOwnScope() throws Exception {
+    for (String body : List.of("SELECT id FROM o ORDER BY id OFFSET 1 ROWS",
+        "SELECT id FROM o ORDER BY id LIMIT 2 OFFSET 1 ROWS")) {
+      List<Long> ascending = body.contains("LIMIT") ? List.of(2L, 3L) : List.of(2L, 3L, 4L);
+      expectIds("WITH x AS (" + body + ") SELECT id FROM x", ascending, true);
+      expectIds("WITH x AS (" + body + ") SELECT id FROM x ORDER BY id", ascending);
+      expectIds("SELECT id FROM (" + body + ") x ORDER BY id", ascending);
+    }
+    expectIds("WITH x AS (SELECT id FROM o ORDER BY id LIMIT 2 OFFSET 1 ROWS) " + "SELECT id FROM x ORDER BY id DESC",
+        List.of(3L, 2L));
+    expectIds("WITH x AS (SELECT id FROM o OFFSET 2 ROWS) SELECT COUNT(*) FROM x", List.of(2L));
+    expectIds("WITH x AS (SELECT id FROM o ORDER BY id LIMIT 3 OFFSET 1 ROWS) "
+        + "SELECT id FROM x WHERE id > 2 ORDER BY id DESC LIMIT 1 OFFSET 1 ROWS", List.of(3L));
+    expectIds("WITH x(k) AS (SELECT id FROM o ORDER BY id LIMIT 2 OFFSET 1 ROWS), "
+        + "y AS (SELECT k FROM x ORDER BY k DESC LIMIT 1) SELECT k FROM y", List.of(3L));
+    expectIds("WITH x AS (SELECT id FROM o LIMIT 0) SELECT id FROM x", List.of());
+    expectIds("WITH x AS (SELECT id FROM o OFFSET 8 ROWS) SELECT id FROM x", List.of());
+    expectIds("WITH x AS (SELECT id FROM empty) SELECT id FROM x", List.of());
+    expectIds("WITH x AS (SELECT id FROM single OFFSET 0 ROWS) SELECT id FROM x", List.of(1L));
+    expectIds("WITH x AS (SELECT id FROM o ORDER BY id LIMIT 2 OFFSET 1 ROWS) "
+        + "SELECT a.id FROM x a JOIN x b ON a.id = b.id ORDER BY a.id", List.of(2L, 3L));
+    expectIds("WITH x AS (SELECT DISTINCT ab FROM o LIMIT 3) SELECT COUNT(*) FROM x", List.of(3L));
+    expectIds("WITH x AS (SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn FROM o "
+        + "ORDER BY id LIMIT 2 OFFSET 1 ROWS) SELECT rn FROM x ORDER BY rn", List.of(2L, 3L));
+  }
+
+  /**
+   * Wildcards read materialized output names and computed values.
+   *
+   * @throws Exception
+   *           if a query fails
+   */
+  @Test
+  void cteWildcardsPreserveMaterializedValues() throws Exception {
+    expectRows(
+        "WITH x(k, r) AS (SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn FROM o "
+            + "ORDER BY id LIMIT 2 OFFSET 1 ROWS) SELECT * FROM x ORDER BY k",
+        List.of(List.of(2L, 2L), List.of(3L, 3L)));
+    expectRows(
+        "WITH x AS (SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn FROM o "
+            + "ORDER BY id LIMIT 2 OFFSET 1 ROWS) SELECT * FROM x ORDER BY id",
+        List.of(List.of(2L, 2L), List.of(3L, 3L)));
+    expectRows("SELECT * FROM (SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn FROM o "
+        + "ORDER BY id LIMIT 2 OFFSET 1 ROWS) x ORDER BY id", List.of(List.of(2L, 2L), List.of(3L, 3L)));
+    expectRows("WITH x(k) AS (SELECT id FROM empty) SELECT * FROM x", List.of());
+    for (boolean projection : List.of(true, false)) {
+      try (var connection = DriverManager.getConnection(url(projection, true));
+          var statement = connection.createStatement();
+          var result = statement.executeQuery("WITH x(k) AS (SELECT id FROM empty) SELECT * FROM x")) {
+        assertEquals(1, result.getMetaData().getColumnCount());
+        assertEquals("k", result.getMetaData().getColumnLabel(1));
+        assertEquals(Types.BIGINT, result.getMetaData().getColumnType(1));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Verifies computed DISTINCT keys after windows and before final row bounds.
+   *
+   * @throws Exception
+   *           if a query fails
+   */
+  @Test
+  void distinctUsesEvaluatedWindowProjections() throws Exception {
+    expectRows("SELECT DISTINCT id, ROW_NUMBER() OVER (ORDER BY id) AS rn FROM o ORDER BY id",
+        List.of(List.of(1L, 1L), List.of(2L, 2L), List.of(3L, 3L), List.of(4L, 4L)));
+    expectRows("SELECT DISTINCT id, ROW_NUMBER() OVER (ORDER BY id) FROM o ORDER BY id LIMIT 2",
+        List.of(List.of(1L, 1L), List.of(2L, 2L)));
+    expectRows("SELECT DISTINCT COUNT(*) OVER () AS id, id FROM o ORDER BY 2",
+        List.of(List.of(4L, 1L), List.of(4L, 2L), List.of(4L, 3L), List.of(4L, 4L)));
+    expectIds("SELECT DISTINCT COUNT(*) OVER () AS total FROM o", List.of(4L));
+    expectIds("SELECT DISTINCT COUNT(*) OVER (PARTITION BY id > 2) AS total FROM o", List.of(2L));
+    expectIds("SELECT DISTINCT COUNT(*) OVER () AS total FROM o WHERE id > 1", List.of(3L));
+    expectIds("SELECT DISTINCT COUNT(*) OVER () AS total FROM empty", List.of());
+    expectIds("SELECT DISTINCT COUNT(*) OVER () AS total FROM single", List.of(1L));
+    expectIds("SELECT DISTINCT COUNT(*) OVER () AS total FROM o LIMIT 0", List.of());
+    expectIds("SELECT DISTINCT RANK() OVER (ORDER BY ab) AS r FROM o ORDER BY r", List.of(1L, 2L, 4L));
+    expectRows("SELECT DISTINCT LAG(n) OVER (ORDER BY id) AS previous FROM o ORDER BY previous",
+        Arrays.asList(List.of(1), List.of(3), Arrays.asList((Object) null)));
+    expectRows("SELECT DISTINCT LEAD(n, 1, CAST(id AS INTEGER)) OVER (ORDER BY id) AS following "
+        + "FROM o ORDER BY following", Arrays.asList(List.of(3), List.of(4), Arrays.asList((Object) null)));
+    expectIds("SELECT DISTINCT FIRST_VALUE(n) OVER (ORDER BY id) AS first FROM o", List.of(1L));
+    expectBooleans("SELECT DISTINCT COUNT(*) OVER () > 2 AS c FROM o", List.of(true));
+    expectBooleans("SELECT DISTINCT ab AS c FROM o ORDER BY c", Arrays.asList(false, true, null));
+    expectIds("SELECT DISTINCT id / id AS k FROM o ORDER BY k", List.of(1L));
+    expectIds("SELECT DISTINCT COUNT(*) OVER () AS total FROM o ORDER BY total OFFSET 1 ROWS", List.of());
+    expectIds("SELECT DISTINCT rn FROM (SELECT ROW_NUMBER() OVER (ORDER BY id) AS rn FROM o) x "
+        + "ORDER BY rn DESC LIMIT 2 OFFSET 1 ROWS", List.of(3L, 2L));
+  }
+
+  /**
+   * Verifies explicit and default NULL placement in set-operation ordering.
+   *
+   * @throws Exception
+   *           if a query fails
+   */
+  @Test
+  void setOrderingPreservesNullDirectives() throws Exception {
+    var directives = List.of("ASC NULLS FIRST", "ASC NULLS LAST", "DESC NULLS FIRST", "DESC NULLS LAST");
+    List<List<Boolean>> expected = List.of(Arrays.asList(null, false, true), Arrays.asList(false, true, null),
+        Arrays.asList(null, true, false), Arrays.asList(true, false, null));
+    List<List<Integer>> numeric = List.of(Arrays.asList(null, 1, 3, 4), Arrays.asList(1, 3, 4, null),
+        Arrays.asList(null, 4, 3, 1), Arrays.asList(4, 3, 1, null));
+    for (int i = 0; i < directives.size(); i++) {
+      expectRows("SELECT n FROM o UNION SELECT n FROM empty ORDER BY 1 " + directives.get(i),
+          numeric.get(i).stream().map(value -> Arrays.asList((Object) value)).toList());
+      for (String key : List.of("c", "1", "NOT c")) {
+        var values = key.equals("NOT c")
+            ? expected.get(i).stream().map(v -> v == null ? null : !v).toList()
+            : expected.get(i);
+        expectBooleans("SELECT n > 1 AS c FROM o UNION SELECT n > 3 FROM o ORDER BY " + key + " " + directives.get(i),
+            values);
+      }
+    }
+    expectBooleans("SELECT n > 1 AS c FROM o UNION SELECT n > 3 FROM o ORDER BY c", Arrays.asList(false, true, null));
+    expectBooleans("SELECT n > 1 AS c FROM o UNION SELECT n > 3 FROM o ORDER BY c DESC",
+        Arrays.asList(null, true, false));
+    for (String op : List.of("UNION ALL", "INTERSECT", "INTERSECT ALL", "EXCEPT", "EXCEPT ALL")) {
+      List<Boolean> values = switch (op) {
+        case "UNION ALL" -> Arrays.asList(null, null, false, false, false, true, true, true);
+        case "INTERSECT", "INTERSECT ALL" -> Arrays.asList(null, false, true);
+        case "EXCEPT ALL" -> List.of(true);
+        default -> List.of();
+      };
+      expectBooleans("SELECT n > 1 AS c FROM o " + op + " SELECT n > 3 FROM o " + "ORDER BY c ASC NULLS FIRST", values);
+    }
+    expectBooleans(
+        "SELECT n > 1 AS c FROM o UNION SELECT n > 3 FROM o " + "ORDER BY c NULLS FIRST LIMIT 2 OFFSET 1 ROWS",
+        List.of(false, true));
+    expectBooleans(
+        "SELECT ab AS c FROM o WHERE id = 2 UNION ALL SELECT ab FROM o WHERE id = 2 " + "ORDER BY c DESC NULLS LAST",
+        Arrays.asList(null, null));
+    expectBooleans("SELECT ab AS c FROM empty UNION SELECT ab FROM empty ORDER BY c NULLS FIRST", List.of());
+    expectRows(
+        "SELECT ab AS c, id FROM o UNION ALL SELECT ab, id FROM empty "
+            + "ORDER BY c ASC NULLS FIRST, id DESC NULLS LAST",
+        List.of(Arrays.asList(null, 2L), List.of(false, 1L), List.of(true, 4L), List.of(true, 3L)));
+  }
+
+  /**
+   * Checks complete projected tuples under each independent pushdown setting.
+   *
+   * @param sql
+   *          query to execute
+   * @param expected
+   *          expected tuples
+   * @throws Exception
+   *           if execution fails
+   */
+  private void expectRows(String sql, List<List<Object>> expected) throws Exception {
+    for (boolean projection : List.of(true, false)) {
+      for (boolean predicate : List.of(true, false)) {
+        try (var connection = DriverManager.getConnection(url(projection, predicate));
+            var statement = connection.createStatement();
+            var result = statement.executeQuery(sql)) {
+          if (!expected.isEmpty()) {
+            assertEquals(expected.getFirst().size(), result.getMetaData().getColumnCount(), sql);
+          }
+          var rows = new ArrayList<List<Object>>();
+          while (result.next()) {
+            var row = new ArrayList<Object>();
+            for (int c = 1; c <= result.getMetaData().getColumnCount(); c++) {
+              row.add(result.getObject(c));
+            }
+            rows.add(row);
+          }
+          assertEquals(expected, rows, sql);
+          assertFalse(result.next(), sql);
         }
       }
     }

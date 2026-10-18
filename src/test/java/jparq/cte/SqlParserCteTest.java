@@ -1,6 +1,7 @@
 package jparq.cte;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -11,6 +12,28 @@ import se.alipsa.jparq.engine.SqlParser;
 
 /** Tests for CTE parsing support in {@link SqlParser}. */
 class SqlParserCteTest {
+
+  /** Verifies that materialized scopes never produce legacy pre-stage options. */
+  @Test
+  void materializedOperationsStayInsideTheirOwnScope() {
+    for (String sql : List.of(
+        "WITH x AS (SELECT DISTINCT id FROM o ORDER BY id LIMIT 2 OFFSET 1 ROWS) "
+            + "SELECT id FROM x ORDER BY id DESC LIMIT 1 OFFSET 1 ROWS",
+        "SELECT id FROM (SELECT DISTINCT id FROM o ORDER BY id LIMIT 2 OFFSET 1 ROWS) x "
+            + "ORDER BY id DESC LIMIT 1 OFFSET 1 ROWS")) {
+      var select = SqlParser.parseSelect(sql);
+      assertEquals(1, select.limit());
+      assertEquals(1, select.offset());
+      assertFalse(select.distinct());
+      assertFalse(select.innerDistinct());
+      assertTrue(select.innerDistinctColumns().isEmpty());
+      assertEquals(-1, select.preLimit());
+      assertEquals(0, select.preOffset());
+      assertTrue(select.preOrderBy().isEmpty());
+      assertEquals(1, select.orderBy().size());
+      assertFalse(select.orderBy().getFirst().asc());
+    }
+  }
 
   @Test
   void parseSelectCapturesCommonTableExpressions() {

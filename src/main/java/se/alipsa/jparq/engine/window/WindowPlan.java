@@ -2,6 +2,8 @@ package se.alipsa.jparq.engine.window;
 
 import java.util.ArrayList;
 import java.util.List;
+import net.sf.jsqlparser.expression.AnalyticExpression;
+import net.sf.jsqlparser.expression.Expression;
 
 /**
  * Description of analytic window operations that must be computed prior to
@@ -80,6 +82,58 @@ public final class WindowPlan {
         && sumWindows.isEmpty() && avgWindows.isEmpty() && minWindows.isEmpty() && maxWindows.isEmpty()
         && lagWindows.isEmpty() && leadWindows.isEmpty() && nthValueWindows.isEmpty() && firstValueWindows.isEmpty()
         && lastValueWindows.isEmpty();
+  }
+
+  /**
+   * Returns source expressions required to compute every planned window.
+   *
+   * @return arguments, partition keys, ordering keys, offsets, and defaults
+   */
+  public List<Expression> inputExpressions() {
+    List<Expression> inputs = new ArrayList<>();
+    rowNumberWindows.forEach(window -> addInputs(window.expression(), inputs));
+    rankWindows.forEach(window -> addInputs(window.expression(), inputs));
+    denseRankWindows.forEach(window -> addInputs(window.expression(), inputs));
+    percentRankWindows.forEach(window -> addInputs(window.expression(), inputs));
+    cumeDistWindows.forEach(window -> addInputs(window.expression(), inputs));
+    ntileWindows.forEach(window -> addInputs(window.expression(), inputs));
+    countWindows.forEach(window -> addInputs(window.expression(), inputs));
+    sumWindows.forEach(window -> addInputs(window.expression(), inputs));
+    avgWindows.forEach(window -> addInputs(window.expression(), inputs));
+    minWindows.forEach(window -> addInputs(window.expression(), inputs));
+    maxWindows.forEach(window -> addInputs(window.expression(), inputs));
+    lagWindows.forEach(window -> addInputs(window.expression(), inputs));
+    leadWindows.forEach(window -> addInputs(window.expression(), inputs));
+    nthValueWindows.forEach(window -> addInputs(window.expression(), inputs));
+    firstValueWindows.forEach(window -> addInputs(window.expression(), inputs));
+    lastValueWindows.forEach(window -> addInputs(window.expression(), inputs));
+    return List.copyOf(inputs);
+  }
+
+  /**
+   * Collects source expressions without treating the analytic output as a field.
+   *
+   * @param analytic
+   *          window expression
+   * @param inputs
+   *          destination for non-null input expressions
+   */
+  private static void addInputs(AnalyticExpression analytic, List<Expression> inputs) {
+    if (analytic.getExpression() != null) {
+      inputs.add(analytic.getExpression());
+    }
+    if (analytic.getOffset() != null) {
+      inputs.add(analytic.getOffset());
+    }
+    if (analytic.getDefaultValue() != null) {
+      inputs.add(analytic.getDefaultValue());
+    }
+    if (analytic.getPartitionExpressionList() != null) {
+      inputs.addAll(analytic.getPartitionExpressionList());
+    }
+    if (analytic.getOrderByElements() != null) {
+      analytic.getOrderByElements().forEach(order -> inputs.add(order.getExpression()));
+    }
   }
 
   /**
