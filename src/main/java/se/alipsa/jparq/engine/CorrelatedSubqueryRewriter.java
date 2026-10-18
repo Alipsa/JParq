@@ -1,6 +1,8 @@
 package se.alipsa.jparq.engine;
 
+import java.util.ArrayDeque;
 import java.util.Collection;
+import java.util.Deque;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Objects;
@@ -22,7 +24,9 @@ import net.sf.jsqlparser.expression.TimeValue;
 import net.sf.jsqlparser.expression.TimestampValue;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
+import net.sf.jsqlparser.statement.select.FromItem;
 import net.sf.jsqlparser.statement.select.ParenthesedSelect;
+import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.select.SelectVisitor;
 import net.sf.jsqlparser.util.deparser.ExpressionDeParser;
@@ -152,6 +156,8 @@ public final class CorrelatedSubqueryRewriter {
     Set<String> correlatedColumnRefs = new LinkedHashSet<>();
     Set<QualifiedColumn> correlatedRefs = new LinkedHashSet<>();
 
+    Deque<Set<String>> localScopes = new ArrayDeque<>();
+    Set<String> locallyBound = new LinkedHashSet<>();
     ExpressionDeParser expressionDeParser = new ExpressionDeParser() {
       @Override
       public <S> StringBuilder visit(Column column, S context) {
@@ -183,7 +189,8 @@ public final class CorrelatedSubqueryRewriter {
         String qualifierPart = colName.substring(0, dot);
         String columnPart = colName.substring(dot + 1);
         String normalizedQualifier = normalizeIdentifier(qualifierPart);
-        if (normalizedQualifier == null || !normalized.contains(normalizedQualifier)) {
+        if (normalizedQualifier == null || !normalized.contains(normalizedQualifier)
+            || localScopes.stream().anyMatch(scope -> scope.contains(normalizedQualifier))) {
           return false;
         }
         appendCorrelatedLiteral(normalizedQualifier, columnPart, valueResolver.apply(normalizedQualifier, columnPart));
@@ -196,7 +203,8 @@ public final class CorrelatedSubqueryRewriter {
         };
         for (String candidate : candidates) {
           String normalizedCandidate = normalizeIdentifier(candidate);
-          if (normalizedCandidate != null && normalized.contains(normalizedCandidate)) {
+          if (normalizedCandidate != null && normalized.contains(normalizedCandidate)
+              && localScopes.stream().noneMatch(scope -> scope.contains(normalizedCandidate))) {
             appendCorrelatedLiteral(normalizedCandidate, column.getColumnName(),
                 valueResolver.apply(normalizedCandidate, column.getColumnName()));
             return true;
@@ -207,7 +215,7 @@ public final class CorrelatedSubqueryRewriter {
 
       private boolean inlineUnqualifiedColumn(Column column) {
         String columnName = column.getColumnName();
-        if (unqualified.isEmpty() || columnName == null) {
+        if (column.getTable() != null || unqualified.isEmpty() || columnName == null) {
           return false;
         }
         String normalizedColumn = normalizeIdentifier(columnName);
@@ -227,7 +235,23 @@ public final class CorrelatedSubqueryRewriter {
       }
     };
 
-    SelectDeParser selectDeParser = new SelectDeParser(expressionDeParser, buffer);
+    SelectDeParser selectDeParser = new SelectDeParser(expressionDeParser, buffer) {
+      @Override
+      public <S> StringBuilder visit(PlainSelect plain, S context) {
+        Set<String> bindings = new LinkedHashSet<>();
+        addLocalQualifier(bindings, plain.getFromItem());
+        if (plain.getJoins() != null) {
+          plain.getJoins().forEach(join -> addLocalQualifier(bindings, join.getRightItem()));
+        }
+        localScopes.push(bindings);
+        locallyBound.addAll(bindings);
+        try {
+          return super.visit(plain, context);
+        } finally {
+          localScopes.pop();
+        }
+      }
+    };
     expressionDeParser.setSelectVisitor(selectDeParser);
     expressionDeParser.setBuilder(buffer);
     selectDeParser.setBuilder(buffer);
@@ -239,7 +263,10 @@ public final class CorrelatedSubqueryRewriter {
       sqlText = "(" + sqlText + ")";
     }
     if (!correlated.get()) {
-      FallbackResult fallback = inlineCorrelatedLiterals(sqlText, normalized, valueResolver);
+      // Text fallback has no scope information, so exclude every local binding.
+      Set<String> fallbackQualifiers = new LinkedHashSet<>(normalized);
+      fallbackQualifiers.removeAll(locallyBound);
+      FallbackResult fallback = inlineCorrelatedLiterals(sqlText, fallbackQualifiers, valueResolver);
       if (fallback.correlated()) {
         correlated.set(true);
         correlatedColumnRefs.addAll(fallback.columns());
@@ -248,6 +275,27 @@ public final class CorrelatedSubqueryRewriter {
       }
     }
     return new Result(sqlText, correlated.get(), Set.copyOf(correlatedColumnRefs), Set.copyOf(correlatedRefs));
+  }
+
+  /**
+   * Adds the qualifier bound by a FROM item; an alias hides its table name.
+   *
+   * @param qualifiers
+   *          the normalized local bindings
+   * @param item
+   *          the table or derived input
+   */
+  private static void addLocalQualifier(Set<String> qualifiers, FromItem item) {
+    if (item == null) {
+      return;
+    }
+    String name = item.getAlias() != null
+        ? item.getAlias().getName()
+        : item instanceof Table table ? table.getName() : null;
+    String normalized = normalizeIdentifier(name);
+    if (normalized != null) {
+      qualifiers.add(normalized);
+    }
   }
 
   private record FallbackResult(String sql, boolean correlated, Set<String> columns, Set<QualifiedColumn> references) {

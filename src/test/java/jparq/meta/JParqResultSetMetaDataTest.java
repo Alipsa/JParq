@@ -22,6 +22,7 @@ import jparq.usage.AcmeTest;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.junit.jupiter.api.Assertions;
@@ -284,6 +285,39 @@ class JParqResultSetMetaDataTest {
     List<String> canonical = physicalNames;
     return new JParqResultSetMetaData(schema, labels, physicalNames, canonical, "test", "PUBLIC", "CATALOG",
         expressions);
+  }
+
+  /**
+   * Resolves Boolean types from expression structure without inspecting rows.
+   *
+   * @throws Exception
+   *           if an expression cannot be parsed
+   */
+  @Test
+  void computedBooleanMetadataIsStatic() throws Exception {
+    Schema schema = new Schema.Parser().parse("""
+        {"type":"record","name":"booleans","fields":[
+          {"name":"ab","type":["null","boolean"]},
+          {"name":"n","type":["null","int"]}]}
+        """);
+    for (String sql : List.of("TRUE", "(n > 1)", "n = 1", "n <> 1", "n BETWEEN 1 AND 3", "n IN (1, 3)", "n IS NULL",
+        "ab IS TRUE", "ab IS UNKNOWN", "NOT ab", "ab AND TRUE", "ab OR FALSE", "CAST((n > 1) AS BOOLEAN)",
+        "CAST(NULL AS BOOLEAN)", "CASE WHEN n > 1 THEN ab ELSE NULL END", "COALESCE(NULL, ab, FALSE)")) {
+      var metadata = createMetadataWithExpression(schema, List.of("c"), Collections.singletonList(null),
+          List.of(CCJSqlParserUtil.parseExpression(sql)));
+      assertEquals(Types.BOOLEAN, metadata.getColumnType(1), sql);
+      assertEquals("BOOLEAN", metadata.getColumnTypeName(1), sql);
+      assertEquals(Boolean.class.getName(), metadata.getColumnClassName(1), sql);
+    }
+    for (String sql : List.of("'true'", "'false'", "CASE WHEN n > 1 THEN 'true' ELSE 'false' END",
+        "COALESCE(NULL, 'true')")) {
+      var metadata = createMetadataWithExpression(schema, List.of("c"), Collections.singletonList(null),
+          List.of(CCJSqlParserUtil.parseExpression(sql)));
+      Assertions.assertNotEquals(Types.BOOLEAN, metadata.getColumnType(1), sql);
+    }
+    var emptyMetadata = createMetadataWithExpression(null, List.of("c"), Collections.singletonList(null),
+        List.of(CCJSqlParserUtil.parseExpression("n > 1")));
+    assertEquals(Types.BOOLEAN, emptyMetadata.getColumnType(1));
   }
 
   @Test

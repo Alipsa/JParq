@@ -26,7 +26,6 @@ import net.sf.jsqlparser.expression.JsonFunction;
 import net.sf.jsqlparser.expression.JsonFunctionExpression;
 import net.sf.jsqlparser.expression.JsonFunctionType;
 import net.sf.jsqlparser.expression.JsonKeyValuePair;
-import net.sf.jsqlparser.expression.NotExpression;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TranscodingFunction;
@@ -38,18 +37,7 @@ import net.sf.jsqlparser.expression.operators.arithmetic.Division;
 import net.sf.jsqlparser.expression.operators.arithmetic.Modulo;
 import net.sf.jsqlparser.expression.operators.arithmetic.Multiplication;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
-import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
-import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
-import net.sf.jsqlparser.expression.operators.relational.Between;
-import net.sf.jsqlparser.expression.operators.relational.ComparisonOperator;
-import net.sf.jsqlparser.expression.operators.relational.ExistsExpression;
-import net.sf.jsqlparser.expression.operators.relational.InExpression;
-import net.sf.jsqlparser.expression.operators.relational.IsBooleanExpression;
-import net.sf.jsqlparser.expression.operators.relational.IsDistinctExpression;
-import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
-import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
-import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.statement.create.table.ColDataType;
 import org.apache.avro.Schema;
@@ -311,11 +299,7 @@ public final class ValueExpressionEvaluator {
     if (expression instanceof ArrayConstructor array) {
       return functionSupport.evaluate(array, record);
     }
-    if (expression instanceof NotExpression || expression instanceof AndExpression || expression instanceof OrExpression
-        || expression instanceof ComparisonOperator || expression instanceof IsDistinctExpression
-        || expression instanceof IsNullExpression || expression instanceof IsBooleanExpression
-        || expression instanceof ExistsExpression || expression instanceof InExpression || expression instanceof Between
-        || expression instanceof LikeExpression || expression instanceof SimilarToExpression) {
+    if (BooleanExpressions.isPredicate(expression)) {
       return conditionEvaluator(record).evalTruth(expression, record);
     }
     if (expression instanceof JsonFunction json) {

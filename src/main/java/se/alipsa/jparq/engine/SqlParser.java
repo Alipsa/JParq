@@ -884,7 +884,11 @@ public final class SqlParser {
     }
     int outerLimit = computeLimit(ps);
     int outerOffset = computeOffset(ps);
-    Select inner = fromInfo.innerSelect();
+    // A derived table executes its own ordering and row bounds during
+    // materialization.
+    // Reapplying them here would evaluate inner correlations against projected
+    // rows.
+    Select inner = fromInfo.subquerySql() == null ? fromInfo.innerSelect() : null;
     int innerLimit = inner == null ? -1 : inner.limit();
     int innerOffset = inner == null ? 0 : inner.offset();
 

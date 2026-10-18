@@ -76,6 +76,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private final SubqueryExecutor subqueryExecutor;
   private final List<String> queryQualifiers;
   private ValueExpressionEvaluator projectionEvaluator;
+  private Schema metadataSchema;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
   private WindowState windowState;
@@ -307,6 +308,7 @@ public class JParqResultSet extends ResultSetAdapter {
       }
 
       var schema = first.getSchema();
+      this.metadataSchema = schema;
 
       // Compute physical projection from schema; only add if we don’t already have
       // labels
@@ -1191,14 +1193,26 @@ public class JParqResultSet extends ResultSetAdapter {
     return value;
   }
 
+  /**
+   * Supplies the planned schema when no record was available to establish
+   * metadata.
+   *
+   * @param schema
+   *          the source schema, including for empty results
+   */
+  void setMetadataSchema(Schema schema) {
+    if (metadataSchema == null) {
+      metadataSchema = schema;
+    }
+  }
+
   @Override
   public ResultSetMetaData getMetaData() {
     if (aggregateQuery) {
       List<Integer> types = aggregateSqlTypes == null ? List.of() : aggregateSqlTypes;
       return new AggregateResultSetMetaData(columnOrder, types, tableName, tableSchema, tableCatalog);
     }
-    var schema = (current == null) ? null : current.getSchema();
-    var normalized = ParquetSchemas.normalizeStringTypes(schema);
+    var normalized = ParquetSchemas.normalizeStringTypes(metadataSchema);
     return new JParqResultSetMetaData(normalized, columnOrder, physicalColumnOrder, canonicalColumnNames, tableName,
         tableSchema, tableCatalog, selectExpressions);
   }

@@ -12,6 +12,7 @@ import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
+import se.alipsa.jparq.engine.BooleanExpressions;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 
@@ -128,13 +129,14 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
 
   @Override
   public int getColumnType(int column) {
-    if (schema == null) {
-      return Types.OTHER;
+    int computedType = resolveComputedColumnType(column);
+    // A computed Boolean alias may have the same name as a source field.
+    if (computedType == Types.BOOLEAN) {
+      return computedType;
     }
-
     Schema.Field field = resolveField(column);
     if (field == null) {
-      return resolveComputedColumnType(column);
+      return computedType;
     }
     return JdbcTypeMapper.mapSchemaToJdbcType(field.schema());
   }
@@ -149,6 +151,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
    */
   @Override
   public String getColumnClassName(int column) {
+    if (getColumnType(column) == Types.BOOLEAN) {
+      return Boolean.class.getName();
+    }
     Schema.Field field = resolveField(column);
     if (field != null) {
       return JdbcTypeMapper.mapSchemaToJavaClassName(field.schema());
@@ -220,7 +225,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
 
   /**
    * Determine the JDBC type for a computed column when no Avro schema field is
-   * available. At present only analytic window functions are recognised.
+   * available, including Boolean predicates, arrays, and analytic functions.
    *
    * @param column
    *          the 1-based column index from the result set
@@ -228,6 +233,12 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
    */
   private int resolveComputedColumnType(int column) {
     Expression expression = expressionAtColumn(column);
+    if (BooleanExpressions.isBoolean(expression, reference -> {
+      Schema.Field field = lookupFieldByName(reference.getColumnName());
+      return field != null && JdbcTypeMapper.mapSchemaToJdbcType(field.schema()) == Types.BOOLEAN;
+    })) {
+      return Types.BOOLEAN;
+    }
     return switch (expression) {
       case AnalyticExpression analytic -> resolveAnalyticFunctionType(analytic);
       case ArrayConstructor arrayConstructor -> Types.ARRAY;

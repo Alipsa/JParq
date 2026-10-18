@@ -335,16 +335,6 @@ public class JParqPreparedStatement implements PreparedStatement {
                 tmpCteResults);
             tmpBaseCteResult = new CteResult(data.schema(), data.rows());
             tmpFileAvro = data.schema();
-            int innerOffset = Math.max(0, baseRef.subquery().offset());
-            if (innerOffset > 0) {
-              tmpSelect = new SqlParser.Select(tmpSelect.labels(), tmpSelect.columnNames(), tmpSelect.table(),
-                  tmpSelect.tableAlias(), tmpSelect.where(), tmpSelect.limit(),
-                  Math.max(0, tmpSelect.offset() - innerOffset), tmpSelect.orderBy(), tmpSelect.distinct(),
-                  tmpSelect.innerDistinct(), tmpSelect.innerDistinctColumns(), tmpSelect.expressions(),
-                  tmpSelect.expressionOrder(), tmpSelect.qualifiedWildcards(), tmpSelect.groupByExpressions(),
-                  tmpSelect.groupingSets(), tmpSelect.having(), tmpSelect.preLimit(), 0, tmpSelect.preOrderBy(),
-                  tmpSelect.tableReferences(), tmpSelect.commonTableExpressions());
-            }
             aggregatePlan = AggregateFunctions.plan(tmpSelect);
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
@@ -526,6 +516,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
       JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, tableCatalog,
           residualExpression, labels, physical, subqueryExecutor);
+      rs.setMetadataSchema(fileAvroSchema);
 
       stmt.setCurrentRs(rs);
       return rs;
