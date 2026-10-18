@@ -2,9 +2,12 @@ package se.alipsa.jparq.engine;
 
 import java.io.IOException;
 import java.sql.SQLException;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.avro.generic.GenericRecord;
@@ -14,9 +17,39 @@ import org.apache.avro.generic.GenericRecord;
  * results.
  */
 public final class QueryCancellation {
+  /** SQLState identifying a canceled query. */
+  public static final String SQL_STATE = "57014";
   private static final String CANCELED_MESSAGE = "Statement was canceled";
   private final Set<RecordReader> readers = new HashSet<>();
   private volatile boolean canceled;
+
+  /**
+   * Creates the JDBC exception used at every cancellation boundary.
+   *
+   * @return cancellation exception with SQLState 57014
+   */
+  public static SQLException canceledException() {
+    return new SQLException(CANCELED_MESSAGE, SQL_STATE);
+  }
+
+  /**
+   * Finds a marked cancellation through evaluator and subquery wrappers.
+   *
+   * @param failure
+   *          exception chain to inspect
+   * @return the original cancellation exception, if present
+   */
+  public static Optional<SQLException> findCancellation(Throwable failure) {
+    Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+    Throwable current = failure;
+    while (current != null && visited.add(current)) {
+      if (current instanceof SQLException sql && SQL_STATE.equals(sql.getSQLState())) {
+        return Optional.of(sql);
+      }
+      current = current.getCause();
+    }
+    return Optional.empty();
+  }
 
   /**
    * Rejects continued execution after a cancellation request.
@@ -26,7 +59,7 @@ public final class QueryCancellation {
    */
   public void checkCanceled() throws SQLException {
     if (canceled) {
-      throw new SQLException(CANCELED_MESSAGE);
+      throw canceledException();
     }
   }
 
@@ -50,9 +83,9 @@ public final class QueryCancellation {
     try {
       tracked.close();
     } catch (IOException exception) {
-      throw new SQLException(CANCELED_MESSAGE, exception);
+      throw new SQLException(CANCELED_MESSAGE, SQL_STATE, exception);
     }
-    throw new SQLException(CANCELED_MESSAGE);
+    throw canceledException();
   }
 
   /**
@@ -73,7 +106,7 @@ public final class QueryCancellation {
         input.close();
       } catch (IOException exception) {
         if (failure == null) {
-          failure = new SQLException("Failed to close canceled input", exception);
+          failure = new SQLException("Failed to close canceled input", SQL_STATE, exception);
         } else {
           failure.addSuppressed(exception);
         }
@@ -115,7 +148,7 @@ public final class QueryCancellation {
      */
     private void checkReadCanceled() throws IOException {
       if (canceled) {
-        throw new IOException(CANCELED_MESSAGE);
+        throw new IOException(CANCELED_MESSAGE, canceledException());
       }
     }
 

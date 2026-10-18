@@ -101,6 +101,7 @@ class ParquetTableCancellationTest {
         ExecutionException failure = assertThrows(ExecutionException.class, () -> reading.get(5, TimeUnit.SECONDS));
         SQLException canceled = assertInstanceOf(SQLException.class, failure.getCause());
         assertEquals("Statement was canceled", canceled.getMessage());
+        assertEquals("57014", canceled.getSQLState());
         assertEquals("Statement was canceled", assertThrows(SQLException.class, result::next).getMessage());
         assertEquals(1, scan.opens.get());
         assertEquals(1, scan.closes.get());

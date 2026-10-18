@@ -12,6 +12,21 @@ import se.alipsa.jparq.engine.RecordReader;
 /** Checks registration races and ownership of canceled query inputs. */
 class QueryCancellationTest {
   @Test
+  void cancellationMarkersSurviveWrappersAndDoNotMisclassifyRealFailures() {
+    SQLException original = QueryCancellation.canceledException();
+    assertEquals("57014", original.getSQLState());
+    assertSame(original,
+        QueryCancellation
+            .findCancellation(new IllegalStateException("Failed to execute sub query", new IOException(original)))
+            .orElseThrow());
+    assertTrue(QueryCancellation.findCancellation(new SQLException("Statement was canceled", "42000")).isEmpty());
+    Exception first = new Exception();
+    Exception second = new Exception(first);
+    first.initCause(second);
+    assertTrue(QueryCancellation.findCancellation(first).isEmpty());
+  }
+
+  @Test
   void lateRegistrationClosesTheInputAndFailsBeforeAnyRowsAreRead() throws Exception {
     var cancellation = new QueryCancellation();
     var input = mock(RecordReader.class);

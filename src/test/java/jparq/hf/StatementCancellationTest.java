@@ -32,6 +32,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.ParquetTable;
+import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.function.SystemFunctions;
 
@@ -134,6 +135,7 @@ class StatementCancellationTest {
         }
         ExecutionException failure = assertThrows(ExecutionException.class, () -> running.get(10, TimeUnit.SECONDS));
         assertEquals("Statement was canceled", assertInstanceOf(SQLException.class, failure.getCause()).getMessage());
+        assertEquals(QueryCancellation.SQL_STATE, ((SQLException) failure.getCause()).getSQLState());
         assertEquals(1, closes.get());
         // A fresh execution must not inherit the canceled state.
         try (var result = execute(statement, prepared ? sql : "SELECT id FROM train ORDER BY id")) {
@@ -227,6 +229,63 @@ class StatementCancellationTest {
         closes.incrementAndGet();
       }
     };
+  }
+
+  @Test
+  void cancellationInsideACorrelatedSubqueryRetainsItsJdbcIdentity() throws Exception {
+    Files.copy(base.resolve("train.parquet"), base.resolve("small.parquet"));
+    var started = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    try (var conn = DriverManager.getConnection("jdbc:jparq:" + base);
+        var statement = conn.createStatement();
+        var result = statement
+            .executeQuery("SELECT b.id FROM train b WHERE EXISTS " + "(SELECT 1 FROM small s2 WHERE s2.id = b.id)")) {
+      assertTrue(result.next());
+      assertEquals(0, result.getInt(1));
+      var running = new FutureTask<Boolean>(() -> {
+        try (var tables = mockStatic(ParquetTable.class, CALLS_REAL_METHODS)) {
+          tables.when(() -> ParquetTable.validate(any(), any())).thenAnswer(invocation -> {
+            ParquetTable table = (ParquetTable) invocation.callRealMethod();
+            ParquetTable observed = spy(table);
+            doAnswer(open -> table.open(open.getArgument(0), open.getArgument(1),
+                (shard, conf, predicate) -> new RecordReader() {
+                  @Override
+                  public GenericRecord read() throws IOException {
+                    started.countDown();
+                    try {
+                      if (!release.await(10, TimeUnit.SECONDS)) {
+                        throw new IOException("Timed out waiting for correlated cancellation");
+                      }
+                    } catch (InterruptedException exception) {
+                      Thread.currentThread().interrupt();
+                      throw new IOException(exception);
+                    }
+                    return null;
+                  }
+
+                  @Override
+                  public void close() {
+                  }
+                })).when(observed).open(any(Configuration.class), nullable(FilterPredicate.class));
+            return observed;
+          });
+          return result.next();
+        }
+      });
+      Thread.ofPlatform().start(running);
+      try {
+        assertTrue(started.await(10, TimeUnit.SECONDS));
+        statement.cancel();
+      } finally {
+        release.countDown();
+      }
+      ExecutionException failure = assertThrows(ExecutionException.class, () -> running.get(10, TimeUnit.SECONDS));
+      SQLException cancellation = assertInstanceOf(SQLException.class, failure.getCause());
+      assertEquals("Statement was canceled", cancellation.getMessage());
+      assertEquals(QueryCancellation.SQL_STATE, cancellation.getSQLState());
+      assertTrue(result.isClosed());
+      assertEquals(QueryCancellation.SQL_STATE, assertThrows(SQLException.class, result::next).getSQLState());
+    }
   }
 
   @Test

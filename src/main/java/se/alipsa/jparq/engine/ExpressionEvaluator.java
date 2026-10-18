@@ -382,7 +382,7 @@ public final class ExpressionEvaluator {
       if (subqueryExecutor == null) {
         throw new IllegalStateException("IN subqueries require a subquery executor");
       }
-      List<Object> values = subqueryExecutor.execute(subSelect).firstColumnValues();
+      List<Object> values = executeCorrelatedSubquery(subSelect, rec).firstColumnValues();
       return SqlTruth.in(left.value, values, value -> coerceLiteralToColumnType(value, left.schemaOrNull), in.isNot());
     }
     return false;
@@ -395,14 +395,27 @@ public final class ExpressionEvaluator {
     if (!(exists.getRightExpression() instanceof net.sf.jsqlparser.statement.select.Select subSelect)) {
       throw new IllegalArgumentException("EXISTS requires a subquery");
     }
+    SubqueryExecutor.SubqueryResult result = executeCorrelatedSubquery(subSelect, rec);
+    boolean hasRows = !result.rows().isEmpty();
+    return exists.isNot() != hasRows;
+  }
+
+  /**
+   * Executes IN and EXISTS subqueries in the current outer row's correlation
+   * context.
+   *
+   * @param subSelect
+   *          subquery to execute
+   * @param rec
+   *          current outer record
+   * @return row-dependent subquery result
+   */
+  private SubqueryExecutor.SubqueryResult executeCorrelatedSubquery(net.sf.jsqlparser.statement.select.Select subSelect,
+      GenericRecord rec) {
     CorrelatedSubqueryRewriter.Result rewritten = SubqueryCorrelatedFiltersIsolator.isolate(subSelect, outerQualifiers,
         correlationColumns(), qualifierColumnMapping,
         (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
-    SubqueryExecutor.SubqueryResult result = rewritten.correlated()
-        ? subqueryExecutor.executeRaw(rewritten.sql())
-        : subqueryExecutor.execute(subSelect);
-    boolean hasRows = !result.rows().isEmpty();
-    return exists.isNot() != hasRows;
+    return rewritten.correlated() ? subqueryExecutor.executeRaw(rewritten.sql()) : subqueryExecutor.execute(subSelect);
   }
 
   private Boolean evalBinary(BinaryExpression be, GenericRecord rec) {

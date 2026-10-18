@@ -486,6 +486,11 @@ public class JParqResultSet extends ResultSetAdapter {
       } catch (SQLException closeException) {
         e.addSuppressed(closeException);
       }
+      var canceledFailure = QueryCancellation.findCancellation(e);
+      if (canceledFailure.isPresent()) {
+        canceled = true;
+        throw canceledFailure.get();
+      }
       if (e instanceof SQLException sqlException) {
         throw sqlException;
       }
@@ -509,7 +514,7 @@ public class JParqResultSet extends ResultSetAdapter {
       }
     }
     if (canceled) {
-      throw new SQLException("Statement was canceled");
+      throw QueryCancellation.canceledException();
     }
     if (closed) {
       throw new SQLException("ResultSet closed");

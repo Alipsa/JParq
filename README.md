@@ -190,7 +190,8 @@ read schema and enriched logical types, and at most one shard reader is open per
 `Statement.cancel()` applies while `executeQuery()` is aggregating, sorting, loading joins, or executing nested
 queries, as well as after a result has been returned. It requests closure without waiting for an active physical
 read. The executing `executeQuery()` or in-flight `next()` throws `SQLException` when cancellation is observed,
-instead of returning a partial aggregate or silently reporting end of results. The reading thread
+instead of returning a partial aggregate or silently reporting end of results. Cancellation exceptions use
+SQLState `57014`, including cancellation inside a correlated subquery evaluated during iteration. The reading thread
 closes its input before opening another shard. A pushed-down record filter can make the current physical read
 span the rest of a shard; cancellation does not interrupt a decoder in use.
 

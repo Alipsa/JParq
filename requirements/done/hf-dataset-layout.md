@@ -533,11 +533,13 @@ closes its input before opening another shard; a pushed-down filter can make one
 of a shard. Physical closure remains serialized with reads. Execution cancellation is registered before
 planning/materialization, shared across nested work, and reset for each new top-level execution. Result-set
 closure is idempotent; identity-bearing system-function context handles never pop a different thread's live
-context and closed handles are pruned on the owning thread's next context access. The existing
+context and closed handles are pruned on the owning thread's next context access. Cancellation exceptions use
+SQLState `57014`; JDBC iteration unwraps evaluator/subquery causes to rethrow the original marked exception,
+including correlated subqueries started after the original execution scope has ended. The existing
 quoted-name casing and unqualified dotted-name limitations remain as specified, and the default layout
 preserves single-file discovery.
 
-`mvn spotless:apply clean verify` passed on Java 21: 1,073 unit tests (one case-sensitive-filesystem test
+`mvn spotless:apply clean verify` passed on Java 21: 1,079 unit tests (one case-sensitive-filesystem test
 skipped on the case-insensitive local volume), plus all 3 integration tests. Checkstyle reported zero
 violations; PMD, Spotless, and coverage checks passed. The new layout tests cover grouping, errors, symlinks,
 all four pushdown settings, independent physical pruning on both indexed shards, record names/enriched types,
