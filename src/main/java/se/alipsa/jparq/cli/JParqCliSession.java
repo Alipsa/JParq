@@ -22,7 +22,6 @@ import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqDriver;
 import se.alipsa.jparq.JParqVersion;
 import se.alipsa.jparq.engine.ParquetFileInfo;
-import se.alipsa.jparq.engine.ParquetTable;
 
 /**
  * A simple command processor that executes JParq queries and CLI commands.
@@ -286,7 +285,6 @@ public class JParqCliSession implements Closeable {
             + pad(typeWidth - typeText.length()) + " | " + (column.nullable() ? "YES" : "NO"));
       }
       if (location != null) {
-        ParquetTable.validate(location, new Configuration(false));
         try {
           List<ParquetFileInfo.RowGroup> groups = new ArrayList<>();
           for (var file : location.files()) {

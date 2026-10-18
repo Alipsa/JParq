@@ -33,10 +33,10 @@ public record ParquetFileInfo(List<RowGroup> rowGroups) {
    *          the number of rows
    * @param columnIndex
    *          whether every column chunk has a column index
-   * @param anyIndex
-   *          whether any column chunk has either index
    * @param offsetIndex
    *          whether every column chunk has an offset index
+   * @param anyIndex
+   *          whether any column chunk has either index
    */
   public record RowGroup(long rowCount, boolean columnIndex, boolean offsetIndex, boolean anyIndex) {
     /**

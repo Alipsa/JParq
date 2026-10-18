@@ -447,6 +447,137 @@ class HfDatasetLayoutTest {
   }
 
   @Test
+  void preparedPlansValidateEachPhysicalInputOnlyOnce() throws Exception {
+    List<String> reads = new ArrayList<>();
+    try (var schemas = org.mockito.Mockito.mockStatic(ParquetSchemas.class, org.mockito.Mockito.CALLS_REAL_METHODS);
+        var conn = connect(true, true)) {
+      schemas.when(
+          () -> ParquetSchemas.readAvroSchema(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+          .thenAnswer(invocation -> {
+            reads.add(invocation.getArgument(0).toString());
+            return invocation.callRealMethod();
+          });
+      for (String sql : List.of("SELECT id FROM data.train",
+          "SELECT a.id FROM data.train a JOIN data.train b ON a.id = b.id WHERE a.id > 1")) {
+        reads.clear();
+        try (var prepared = conn.prepareStatement(sql)) {
+          assertEquals(3, reads.size());
+          for (int attempt = 0; attempt < 2; attempt++) {
+            try (var result = prepared.executeQuery()) {
+              assertTrue(result.next());
+              while (result.next()) {
+                // Consume every shard, including the empty one.
+              }
+            }
+            assertEquals(3, reads.size(), "Execution must reuse this plan's validated inputs");
+          }
+        }
+      }
+      reads.clear();
+      try (var none = DriverManager.getConnection("jdbc:jparq:" + base);
+          var prepared = none.prepareStatement("SELECT id FROM single")) {
+        assertEquals(1, reads.size());
+        try (var result = prepared.executeQuery()) {
+          assertTrue(result.next());
+        }
+        assertEquals(1, reads.size());
+      }
+      reads.clear();
+      try (var cli = new JParqCliSession(new PrintWriter(new StringWriter()), new PrintWriter(new StringWriter()))) {
+        cli.connectDirectory(base + "?datasetLayout=hf");
+        cli.handleLine("/describe data.train");
+        assertEquals(3, reads.size(), "Describe must rely on getColumns validation");
+      }
+    }
+  }
+
+  @Test
+  void columnMetadataDiscoversTheCatalogOnlyOnce() throws Exception {
+    try (var conn = org.mockito.Mockito.spy((JParqConnection) connect(true, true))) {
+      try (var columns = conn.getMetaData().getColumns(null, null, "%", "%")) {
+        assertTrue(columns.next());
+      }
+      org.mockito.Mockito.verify(conn, org.mockito.Mockito.times(1)).listTables();
+      org.mockito.Mockito.verify(conn, org.mockito.Mockito.never()).resolveTable(org.mockito.ArgumentMatchers.any(),
+          org.mockito.ArgumentMatchers.any());
+    }
+  }
+
+  @Test
+  void mismatchesIdentifyNestedFieldsAndNullabilityWithoutDumpingSchemas() throws Exception {
+    Schema original = schema("Original");
+    Schema wrong = new Schema.Parser().parse(original.toString().replace("\"string\"", "\"int\""));
+    assertEquals("nested.label: STRING vs INT", LogicalSchemas.firstDifference(original, wrong).orElseThrow());
+    Schema required = new Schema.Parser()
+        .parse(original.toString().replace("[\"null\",\"int\"]", "\"int\"").replace(",\"default\":null", ""));
+    assertEquals("n: nullable vs required", LogicalSchemas.firstDifference(original, required).orElseThrow());
+    assertTrue(LogicalSchemas.firstDifference(original, schema("OtherNames")).isEmpty());
+    Schema text = original.getField("nested").schema();
+    Schema integer = new Schema.Parser()
+        .parse(schema("IntegerBranch").getField("nested").schema().toString().replace("\"string\"", "\"int\""));
+    Schema longInteger = new Schema.Parser()
+        .parse(schema("LongBranch").getField("nested").schema().toString().replace("\"string\"", "\"long\""));
+    assertEquals("label: STRING vs LONG", LogicalSchemas
+        .firstDifference(Schema.createUnion(text, integer), Schema.createUnion(integer, longInteger)).orElseThrow());
+    var location = new JParqConnection.TableLocation("data", "bad",
+        List.of(base.resolve("reference.parquet").toFile(), base.resolve("offending.parquet").toFile()));
+    SQLException failure = assertThrows(SQLException.class,
+        () -> ParquetTable.validate(location, new Configuration(false),
+            (path, configuration) -> path.getName().equals("reference.parquet") ? original : wrong));
+    assertTrue(failure.getMessage().contains("nested.label: STRING vs INT"));
+    assertTrue(failure.getMessage().contains("reference.parquet"));
+    assertTrue(failure.getMessage().contains("offending.parquet"));
+    assertFalse(failure.getMessage().contains("\"fields\""));
+  }
+
+  @Test
+  void unreadableSchemasFailAtPrepareTimeInTheDefaultLayout() throws Exception {
+    Files.writeString(base.resolve("corrupt.parquet"), "not a parquet footer");
+    try (var conn = DriverManager.getConnection("jdbc:jparq:" + base)) {
+      assertThrows(SQLException.class, () -> conn.prepareStatement("SELECT * FROM corrupt"));
+    }
+  }
+
+  @Test
+  void concurrentReaderCloseIsSafeDuringShardTransitions() throws Exception {
+    try (var conn = (JParqConnection) connect(true, true);
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+      var table = ParquetTable.validate(conn.resolveTable("data", "train"), new Configuration(false));
+      for (int attempt = 0; attempt < 30; attempt++) {
+        try (var reader = table.open(new Configuration(false), null)) {
+          var start = new java.util.concurrent.CountDownLatch(1);
+          var reading = executor.submit(() -> {
+            start.await();
+            while (reader.read() != null) {
+              Thread.yield();
+            }
+            return null;
+          });
+          var closing = executor.submit(() -> {
+            start.await();
+            reader.close();
+            return null;
+          });
+          start.countDown();
+          reading.get(10, java.util.concurrent.TimeUnit.SECONDS);
+          closing.get(10, java.util.concurrent.TimeUnit.SECONDS);
+          assertNull(reader.read());
+        }
+      }
+      try (var statement = conn.createStatement()) {
+        var result = statement.executeQuery("SELECT id FROM data.train");
+        assertTrue(result.next());
+        executor.submit(() -> {
+          statement.cancel();
+          return null;
+        }).get(10, java.util.concurrent.TimeUnit.SECONDS);
+        assertTrue(result.isClosed());
+        assertThrows(SQLException.class, result::next);
+      }
+    }
+  }
+
+  @Test
   void symlinkDataReadsFollowTargetsOutsideTheVisibleBase() throws Exception {
     Path outside = Files.createTempDirectory("jparq-layout-target");
     try {

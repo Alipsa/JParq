@@ -267,7 +267,10 @@ Validate lazily when a selected logical table is opened/planned for execution or
 is requested. Direct `getColumns` calls validate every shard of each table matching their catalog/schema/table
 arguments; `/describe` and table execution validate their inputs. Do not validate all tables during an ordinary
 unrelated filesystem-table query. Listing names through `listTables` alone reads no footers and does not
-validate schemas.
+validate schemas. Reuse validated `ParquetTable` instances within a prepared statement, including join
+planning, schema inference, and repeated executions; new prepared statements validate independently.
+`getColumns` discovers the catalog once and uses each matching `TableLocation` directly. `/describe` relies
+on `getColumns` for validation and does not repeat it before reading aggregate footer diagnostics.
 
 `getTables` is an explicit exception to full validation: it always reads remarks and JDBC provides no switch
 to omit them. Read remarks from the first file only, without checking the other shards or validating their
@@ -516,10 +519,12 @@ or LIMIT/OFFSET.
 Completed on 2026-10-18. `HfTableDiscovery` performs bounded, footer-free discovery; `ParquetTable`
 validates logical schemas and owns sequential per-shard readers, configurations, and adapters. All SELECT,
 join, schema-inference, column-metadata, and CLI paths use the logical file list. No shared schema-validation
-cache was introduced. The existing quoted-name casing and unqualified dotted-name limitations remain as
-specified, and the default layout preserves single-file discovery.
+cache was introduced. Prepared plans retain their validated inputs, column metadata uses one discovery
+pass, and CLI diagnostics reuse column validation. Mismatch diagnostics name the first differing field path
+and type/nullability; reader closure is serialized with physical reads for cancellation safety. The existing
+quoted-name casing and unqualified dotted-name limitations remain as specified, and the default layout preserves single-file discovery.
 
-`mvn spotless:apply clean verify` passed on Java 21: 1,044 unit tests (one case-sensitive-filesystem test
+`mvn spotless:apply clean verify` passed on Java 21: 1,049 unit tests (one case-sensitive-filesystem test
 skipped on the case-insensitive local volume), plus all 3 integration tests. Checkstyle reported zero
 violations; PMD, Spotless, and coverage checks passed. The new layout tests cover grouping, errors, symlinks,
 all four pushdown settings, independent physical pruning on both indexed shards, record names/enriched types,

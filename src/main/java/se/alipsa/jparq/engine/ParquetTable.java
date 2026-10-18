@@ -91,10 +91,12 @@ public final class ParquetTable {
     for (File file : location.files()) {
       try {
         Schema schema = schemaReader.read(new Path(file.toURI()), new Configuration(configuration));
-        if (!shards.isEmpty() && !LogicalSchemas.compatible(shards.getFirst().schema(), schema)) {
-          throw new SQLException("Incompatible shard schema for " + location.schemaName() + "." + location.tableName()
-              + ": reference " + shards.getFirst().file() + " " + shards.getFirst().schema() + "; offending " + file
-              + " " + schema + " (field/type/nullability mismatch)");
+        if (!shards.isEmpty()) {
+          var difference = LogicalSchemas.firstDifference(shards.getFirst().schema(), schema);
+          if (difference.isPresent()) {
+            throw new SQLException("Incompatible shard schema for " + location.schemaName() + "." + location.tableName()
+                + ": reference " + shards.getFirst().file() + "; offending " + file + "; " + difference.get());
+          }
         }
         shards.add(new Shard(file, schema));
       } catch (IOException exception) {
@@ -162,7 +164,11 @@ public final class ParquetTable {
     return new SequentialReader(shards, new Configuration(configuration), predicate);
   }
 
-  /** Opens each adapter with that shard's own full enriched schema. */
+  /**
+   * Opens each adapter with that shard's own full enriched schema. Read and close
+   * share a monitor so cancellation waits for the current physical read and
+   * cannot close a decoder in use or race a shard transition.
+   */
   private static final class SequentialReader implements RecordReader {
     private final List<Shard> shards;
     private final Configuration configuration;
@@ -178,7 +184,7 @@ public final class ParquetTable {
     }
 
     @Override
-    public GenericRecord read() throws IOException {
+    public synchronized GenericRecord read() throws IOException {
       try {
         while (!closed) {
           if (active == null) {
@@ -213,7 +219,7 @@ public final class ParquetTable {
     }
 
     @Override
-    public void close() throws IOException {
+    public synchronized void close() throws IOException {
       closed = true;
       if (active != null) {
         try {

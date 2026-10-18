@@ -165,6 +165,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final String tableSchema;
   private final String tableCatalog;
   private final JParqConnection.TableLocation baseTableLocation;
+  // Validation belongs to this prepared plan, never to a connection-wide cache.
+  private final Map<JParqConnection.TableLocation, ParquetTable> validatedTables = new LinkedHashMap<>();
   private final boolean joinQuery;
   private final List<SqlParser.TableReference> tableReferences;
   private final boolean setOperationQuery;
@@ -355,14 +357,11 @@ public class JParqPreparedStatement implements PreparedStatement {
             String targetSchema = baseRef != null ? baseRef.schemaName() : null;
             tmpBaseLocation = stmt.getConn().resolveTable(targetSchema, targetTable);
             tmpSchemaName = formatSchemaForMetadata(tmpBaseLocation.schemaName());
-            Schema avro = ParquetTable.validate(tmpBaseLocation, tmpConf).schema();
+            Schema avro = validatedTable(tmpBaseLocation, tmpConf).schema();
 
             tmpFileAvro = avro;
 
             if (!tmpSelect.qualifiedWildcards().isEmpty()) {
-              if (tmpFileAvro == null) {
-                throw new SQLException("Unable to resolve schema for qualified wildcard projection");
-              }
               Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
                   baseRef, tmpFileAvro);
               tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
@@ -372,7 +371,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf);
 
             if (stmt.getConn().isPredicatePushdown() && (baseRef == null || baseRef.tableSample() == null)
-                && tmpFileAvro != null && tmpSelect.where() != null) {
+                && tmpSelect.where() != null) {
               var split = ParquetFilterBuilder.split(tmpFileAvro, tmpSelect.where());
               tmpPredicate = split.predicate();
               tmpResidual = split.residual();
@@ -381,10 +380,6 @@ public class JParqPreparedStatement implements PreparedStatement {
               tmpResidual = tmpSelect.where();
             }
 
-            if (tmpBaseCteResult == null && tmpFileAvro == null) {
-              // Guard to avoid NPE later when schema resolution fails completely
-              throw new SQLException("Unable to resolve schema for table " + tmpSelect.table());
-            }
           }
         }
       }
@@ -458,7 +453,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           }
           reader = new InMemoryRecordReader(baseCteResult.rows(), baseCteResult.schema(), resultTableName);
         } else {
-          reader = ParquetTable.validate(baseTableLocation, conf).open(conf, parquetPredicate.orElse(null));
+          reader = validatedTable(baseTableLocation, conf).open(conf, parquetPredicate.orElse(null));
           resultTableName = baseTableLocation.tableName();
         }
         if (!joinQuery) {
@@ -1198,6 +1193,27 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
   }
 
+  /**
+   * Reuses validated physical schemas within this prepared plan.
+   *
+   * @param location
+   *          logical input table
+   * @param configuration
+   *          footer reader configuration
+   * @return the plan's validated table
+   * @throws SQLException
+   *           if a shard cannot be read or has an incompatible schema
+   */
+  private ParquetTable validatedTable(JParqConnection.TableLocation location, Configuration configuration)
+      throws SQLException {
+    ParquetTable table = validatedTables.get(location);
+    if (table == null) {
+      table = ParquetTable.validate(location, configuration);
+      validatedTables.put(location, table);
+    }
+    return table;
+  }
+
   /** Plans single-table WHERE conjuncts before opening join inputs. */
   private Map<Integer, FilterPredicate> planJoinPredicates() throws SQLException {
     if (!stmt.getConn().isPredicatePushdown() || parsedSelect.where() == null) {
@@ -1211,7 +1227,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           && !InformationSchemaColumns.matchesTableReference(reference.tableName())
           && resolveCteResultByName(reference.tableName(), cteResults) == null) {
         var location = stmt.getConn().resolveTable(reference.schemaName(), reference.tableName());
-        schema = ParquetTable.validate(location, new Configuration(false)).schema();
+        schema = validatedTable(location, new Configuration(false)).schema();
       }
       schemas.add(schema);
     }
@@ -1302,7 +1318,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       JParqConnection.TableLocation tableLocation = stmt.getConn().resolveTable(ref.schemaName(), tableName);
       Configuration tableConf = new Configuration(conf);
-      ParquetTable input = ParquetTable.validate(tableLocation, tableConf);
+      ParquetTable input = validatedTable(tableLocation, tableConf);
       Schema tableSchema = input.schema();
       validateJoinTableColumns(tableSchema, ref);
       List<GenericRecord> rows = new ArrayList<>();
@@ -2529,7 +2545,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       JParqConnection.TableLocation location = stmt.getConn().resolveTable(ref.schemaName(), ref.tableName());
       Configuration tableConf = new Configuration(false);
       configureParquetFiltering(tableConf);
-      return ParquetTable.validate(location, tableConf).schema();
+      return validatedTable(location, tableConf).schema();
     }
     return null;
   }

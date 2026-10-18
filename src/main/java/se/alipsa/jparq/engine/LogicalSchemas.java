@@ -4,7 +4,10 @@ import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import org.apache.avro.Schema;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 
 /**
  * Compares logical field structure independently of writer names and metadata.
@@ -25,6 +28,115 @@ public final class LogicalSchemas {
   public static boolean compatible(Schema first, Schema second) {
     return structure(ParquetSchemas.normalizeStringTypes(first), new IdentityHashMap<>())
         .equals(structure(ParquetSchemas.normalizeStringTypes(second), new IdentityHashMap<>()));
+  }
+
+  /**
+   * Describes the first logical difference without dumping complete schemas.
+   *
+   * @param first
+   *          reference schema
+   * @param second
+   *          candidate schema
+   * @return field path and difference, or empty for compatible schemas
+   */
+  public static Optional<String> firstDifference(Schema first, Schema second) {
+    return Optional.ofNullable(difference(ParquetSchemas.normalizeStringTypes(first),
+        ParquetSchemas.normalizeStringTypes(second), "", new IdentityHashMap<>()));
+  }
+
+  private static String difference(Schema first, Schema second, String path, Map<Schema, Schema> ancestors) {
+    if (compatible(first, second) || ancestors.get(first) == second) {
+      return null;
+    }
+    String label = path.isEmpty() ? "<root>" : path;
+    boolean firstNullable = JdbcTypeMapper.isNullable(first);
+    boolean secondNullable = JdbcTypeMapper.isNullable(second);
+    if (firstNullable != secondNullable) {
+      return label + ": " + (firstNullable ? "nullable vs required" : "required vs nullable");
+    }
+    if (first.getType() != second.getType()) {
+      return label + ": " + first.getType() + " vs " + second.getType();
+    }
+    ancestors.put(first, second);
+    try {
+      for (String property : List.of("logicalType", "jparq.logicalType", "precision", "scale")) {
+        if (!Objects.equals(first.getObjectProp(property), second.getObjectProp(property))) {
+          return label + ": " + property + " " + first.getObjectProp(property) + " vs "
+              + second.getObjectProp(property);
+        }
+      }
+      switch (first.getType()) {
+        case RECORD -> {
+          List<Schema.Field> left = first.getFields();
+          List<Schema.Field> right = second.getFields();
+          for (int index = 0; index < Math.max(left.size(), right.size()); index++) {
+            if (index >= left.size()) {
+              return childPath(path, right.get(index).name()) + ": unexpected field";
+            }
+            if (index >= right.size()) {
+              return childPath(path, left.get(index).name()) + ": missing field";
+            }
+            Schema.Field field = left.get(index);
+            Schema.Field other = right.get(index);
+            String fieldPath = childPath(path, field.name());
+            if (!field.name().equals(other.name())) {
+              return fieldPath + ": expected field " + field.name() + " vs " + other.name() + " at position " + index;
+            }
+            String mismatch = difference(field.schema(), other.schema(), fieldPath, ancestors);
+            if (mismatch != null) {
+              return mismatch;
+            }
+          }
+        }
+        case ARRAY -> {
+          return difference(first.getElementType(), second.getElementType(), label + "[]", ancestors);
+        }
+        case MAP -> {
+          return difference(first.getValueType(), second.getValueType(), label + "{}", ancestors);
+        }
+        case UNION -> {
+          List<Schema> remaining = new ArrayList<>(second.getTypes());
+          List<Schema> unmatched = new ArrayList<>();
+          for (Schema member : first.getTypes()) {
+            Schema match = remaining.stream().filter(other -> compatible(member, other)).findFirst().orElse(null);
+            if (match == null) {
+              unmatched.add(member);
+            } else {
+              remaining.remove(match);
+            }
+          }
+          for (Schema member : unmatched) {
+            Schema candidate = remaining.stream().filter(other -> other.getType() == member.getType()).findFirst()
+                .orElse(null);
+            if (candidate == null) {
+              return label + ": missing union member " + member.getType();
+            }
+            String mismatch = difference(member, candidate, path, ancestors);
+            if (mismatch != null) {
+              return mismatch;
+            }
+          }
+          return label + ": union members " + first.getTypes().stream().map(Schema::getType).toList() + " vs "
+              + second.getTypes().stream().map(Schema::getType).toList();
+        }
+        case FIXED -> {
+          return label + ": fixed size " + first.getFixedSize() + " vs " + second.getFixedSize();
+        }
+        case ENUM -> {
+          return label + ": enum symbols " + first.getEnumSymbols() + " vs " + second.getEnumSymbols();
+        }
+        default -> {
+          // Primitive differences are reported above.
+        }
+      }
+      return null;
+    } finally {
+      ancestors.remove(first);
+    }
+  }
+
+  private static String childPath(String parent, String field) {
+    return parent.isEmpty() ? field : parent + "." + field;
   }
 
   private static String structure(Schema schema, Map<Schema, Integer> ancestors) {

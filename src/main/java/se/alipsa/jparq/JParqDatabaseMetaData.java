@@ -544,57 +544,60 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     boolean caseSensitive = conn.isCaseSensitive();
     PatternSpec columnPattern = buildPattern(columnNamePattern, caseSensitive);
 
-    try (ResultSet tables = getTables(catalog, schemaPattern, tableNamePattern, new String[]{
-        "TABLE"
-    })) {
+    PatternSpec tablePattern = buildPattern(tableNamePattern, caseSensitive);
+    PatternSpec schemaPatternSpec = buildPattern(schemaPattern, caseSensitive);
+    String tableCatalog = (catalog != null && !catalog.isBlank()) ? catalog : conn.getCatalog();
+    for (JParqConnection.TableLocation location : conn.listTables()) {
+      if (schemaPatternSpec.regex() != null
+          && !matchesRegex(schemaPatternSpec.regex(), location.schemaName(), schemaPatternSpec.caseSensitive())) {
+        continue;
+      }
+      String table = location.tableName();
+      if (tablePattern.regex() != null && !matchesRegex(tablePattern.regex(), table, tablePattern.caseSensitive())) {
+        continue;
+      }
+      String tableType = "TABLE";
       Path hPath;
-      while (tables.next()) {
-        String tableCatalog = tables.getString("TABLE_CAT");
-        String tableSchema = tables.getString("TABLE_SCHEM");
-        String table = tables.getString("TABLE_NAME");
-        String tableType = tables.getString("TABLE_TYPE");
-        JParqConnection.TableLocation location = conn.resolveTable(tableSchema, table);
-        File file = location.file();
-        String resolvedSchemaName = formatSchemaName(location.schemaName());
-        hPath = new Path(file.toURI());
-        Schema fileSchema = ParquetTable.validate(location, conf).schema();
-        ColumnMetadata columnMetadata = readColumnMetadata(hPath, conf);
-        List<String> columnTypeHints = columnMetadata.columnTypeHints();
-        Map<String, String> columnRemarks = columnMetadata.columnRemarks();
-        try {
-          int pos = 1;
-          int columnIndex = 0;
-          for (Schema.Field field : fileSchema.getFields()) {
-            int fieldIndex = columnIndex++;
-            String columnName = field.name();
-            if (columnPattern.regex() != null
-                && !matchesRegex(columnPattern.regex(), columnName, columnPattern.caseSensitive())) {
-              continue;
-            }
-            Schema baseSchema = JdbcTypeMapper.nonNullSchema(field.schema());
-            int jdbcType = JdbcTypeMapper.mapSchemaToJdbcType(field.schema());
-            if (!columnTypeHints.isEmpty() && fieldIndex < columnTypeHints.size()) {
-              int hintedType = JdbcTypeMapper.mapJavaClassNameToJdbcType(columnTypeHints.get(fieldIndex));
-              if (hintedType != Types.OTHER) {
-                jdbcType = hintedType;
-              }
-            }
-            String typeName = JDBCType.valueOf(jdbcType).getName();
-            String isNullable = JdbcTypeMapper.isNullable(field.schema()) ? "YES" : "NO";
-            Integer charMaxLength = resolveCharacterMaximumLength(jdbcType, baseSchema);
-            Integer numericPrecision = resolveNumericPrecision(jdbcType, baseSchema);
-            Integer numericScale = resolveNumericScale(jdbcType, baseSchema);
-            Integer datetimePrecision = resolveDatetimePrecision(jdbcType, baseSchema);
-            String columnDefault = resolveColumnDefault(field);
-            String columnRemark = resolveColumnRemark(field, columnRemarks);
-            rows.add(new Object[]{
-                tableCatalog, resolvedSchemaName, table, tableType, columnName, pos++, isNullable, jdbcType, typeName,
-                charMaxLength, numericPrecision, numericScale, null, columnDefault, datetimePrecision, columnRemark
-            });
+      File file = location.file();
+      String resolvedSchemaName = formatSchemaName(location.schemaName());
+      hPath = new Path(file.toURI());
+      Schema fileSchema = ParquetTable.validate(location, conf).schema();
+      ColumnMetadata columnMetadata = readColumnMetadata(hPath, conf);
+      List<String> columnTypeHints = columnMetadata.columnTypeHints();
+      Map<String, String> columnRemarks = columnMetadata.columnRemarks();
+      try {
+        int pos = 1;
+        int columnIndex = 0;
+        for (Schema.Field field : fileSchema.getFields()) {
+          int fieldIndex = columnIndex++;
+          String columnName = field.name();
+          if (columnPattern.regex() != null
+              && !matchesRegex(columnPattern.regex(), columnName, columnPattern.caseSensitive())) {
+            continue;
           }
-        } catch (Exception e) {
-          throw new SQLException(e);
+          Schema baseSchema = JdbcTypeMapper.nonNullSchema(field.schema());
+          int jdbcType = JdbcTypeMapper.mapSchemaToJdbcType(field.schema());
+          if (!columnTypeHints.isEmpty() && fieldIndex < columnTypeHints.size()) {
+            int hintedType = JdbcTypeMapper.mapJavaClassNameToJdbcType(columnTypeHints.get(fieldIndex));
+            if (hintedType != Types.OTHER) {
+              jdbcType = hintedType;
+            }
+          }
+          String typeName = JDBCType.valueOf(jdbcType).getName();
+          String isNullable = JdbcTypeMapper.isNullable(field.schema()) ? "YES" : "NO";
+          Integer charMaxLength = resolveCharacterMaximumLength(jdbcType, baseSchema);
+          Integer numericPrecision = resolveNumericPrecision(jdbcType, baseSchema);
+          Integer numericScale = resolveNumericScale(jdbcType, baseSchema);
+          Integer datetimePrecision = resolveDatetimePrecision(jdbcType, baseSchema);
+          String columnDefault = resolveColumnDefault(field);
+          String columnRemark = resolveColumnRemark(field, columnRemarks);
+          rows.add(new Object[]{
+              tableCatalog, resolvedSchemaName, table, tableType, columnName, pos++, isNullable, jdbcType, typeName,
+              charMaxLength, numericPrecision, numericScale, null, columnDefault, datetimePrecision, columnRemark
+          });
         }
+      } catch (Exception e) {
+        throw new SQLException(e);
       }
     }
 

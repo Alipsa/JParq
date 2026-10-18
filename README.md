@@ -201,7 +201,9 @@ fails even an unrelated table query or filtered catalog listing. Repairing it le
 Schema validation is lazy and compares field names/order, types, nullability, containers, enum symbols, fixed
 sizes, and logical-type parameters recursively. Union branch order, record names/namespaces, docs, defaults,
 and nonsemantic writer metadata may differ. There is no schema widening or evolution. Each query input is
-fully validated before returning rows. An incompatible group does not prevent a healthy physical-table query.
+fully validated before returning rows. A prepared statement reuses its validated schemas across executions;
+validation is not shared between prepared statements. An incompatible group does not prevent a healthy
+physical-table query.
 
 `getTables`, CLI `/list`, and `information_schema.tables` read remarks from the first file only, without full
 shard validation. First-file footer I/O errors can still fail a listing. `getColumns` validates every shard

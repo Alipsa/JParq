@@ -15,7 +15,7 @@ public class JParqStatement implements Statement {
 
   private final JParqConnection conn;
   private String currentSql;
-  private JParqResultSet currentRs;
+  private volatile JParqResultSet currentRs;
   private boolean closed = false;
 
   /**
@@ -182,8 +182,9 @@ public class JParqStatement implements Statement {
 
   @Override
   public void cancel() throws SQLException {
-    if (currentRs != null) {
-      currentRs.close();
+    JParqResultSet result = currentRs;
+    if (result != null) {
+      result.close();
     }
   }
 

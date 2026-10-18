@@ -73,7 +73,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private final List<Integer> aggregateSqlTypes;
   private int aggregateRowIndex = -1;
   private boolean aggregateOnRow = false;
-  private boolean closed = false;
+  private volatile boolean closed = false;
   private int rowNum = 0;
   private boolean lastWasNull = false;
 
