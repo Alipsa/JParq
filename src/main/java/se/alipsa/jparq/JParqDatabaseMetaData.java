@@ -483,21 +483,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         typeFilter = null;
       }
     }
-    boolean caseSensitive = conn.isCaseSensitive();
-    PatternSpec tablePattern = buildPattern(tableNamePattern, caseSensitive);
-    PatternSpec schemaPatternSpec = buildPattern(schemaPattern, caseSensitive);
     Configuration conf = new Configuration(false);
     String effectiveCatalog = (catalog != null && !catalog.isBlank()) ? catalog : conn.getCatalog();
-    for (JParqConnection.TableLocation location : conn.listTables()) {
+    for (JParqConnection.TableLocation location : matchingLocations(schemaPattern, tableNamePattern)) {
       String schemaName = location.schemaName();
-      if (schemaPatternSpec.regex() != null
-          && !matchesRegex(schemaPatternSpec.regex(), schemaName, schemaPatternSpec.caseSensitive())) {
-        continue;
-      }
       String base = location.tableName();
-      if (tablePattern.regex() != null && !matchesRegex(tablePattern.regex(), base, tablePattern.caseSensitive())) {
-        continue;
-      }
       String tableType = "TABLE";
       if (typeFilter != null && !typeFilter.contains(tableType.toUpperCase(Locale.ROOT))) {
         continue;
@@ -515,6 +505,30 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE", "REMARKS", "TYPE_CAT", "TYPE_SCHEM", "TYPE_NAME",
         "SELF_REFERENCING_COL_NAME", "REF_GENERATION"
     }, rows);
+  }
+
+  /**
+   * Discovers the catalog once and filters logical tables using JDBC patterns.
+   *
+   * @param schemaPattern
+   *          JDBC schema pattern
+   * @param tableNamePattern
+   *          JDBC table pattern
+   * @return matching logical table locations in discovery order
+   * @throws SQLException
+   *           if catalog discovery fails
+   */
+  private List<JParqConnection.TableLocation> matchingLocations(String schemaPattern, String tableNamePattern)
+      throws SQLException {
+    boolean caseSensitive = conn.isCaseSensitive();
+    PatternSpec table = buildPattern(tableNamePattern, caseSensitive);
+    PatternSpec schema = buildPattern(schemaPattern, caseSensitive);
+    return conn.listTables().stream()
+        .filter(location -> schema.regex() == null
+            || matchesRegex(schema.regex(), location.schemaName(), schema.caseSensitive()))
+        .filter(location -> table.regex() == null
+            || matchesRegex(table.regex(), location.tableName(), table.caseSensitive()))
+        .toList();
   }
 
   /**
@@ -544,18 +558,9 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     boolean caseSensitive = conn.isCaseSensitive();
     PatternSpec columnPattern = buildPattern(columnNamePattern, caseSensitive);
 
-    PatternSpec tablePattern = buildPattern(tableNamePattern, caseSensitive);
-    PatternSpec schemaPatternSpec = buildPattern(schemaPattern, caseSensitive);
     String tableCatalog = (catalog != null && !catalog.isBlank()) ? catalog : conn.getCatalog();
-    for (JParqConnection.TableLocation location : conn.listTables()) {
-      if (schemaPatternSpec.regex() != null
-          && !matchesRegex(schemaPatternSpec.regex(), location.schemaName(), schemaPatternSpec.caseSensitive())) {
-        continue;
-      }
+    for (JParqConnection.TableLocation location : matchingLocations(schemaPattern, tableNamePattern)) {
       String table = location.tableName();
-      if (tablePattern.regex() != null && !matchesRegex(tablePattern.regex(), table, tablePattern.caseSensitive())) {
-        continue;
-      }
       String tableType = "TABLE";
       Path hPath;
       File file = location.file();

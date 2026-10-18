@@ -91,12 +91,11 @@ public final class ParquetTable {
     for (File file : location.files()) {
       try {
         Schema schema = schemaReader.read(new Path(file.toURI()), new Configuration(configuration));
-        if (!shards.isEmpty()) {
-          var difference = LogicalSchemas.firstDifference(shards.getFirst().schema(), schema);
-          if (difference.isPresent()) {
-            throw new SQLException("Incompatible shard schema for " + location.schemaName() + "." + location.tableName()
-                + ": reference " + shards.getFirst().file() + "; offending " + file + "; " + difference.get());
-          }
+        if (!shards.isEmpty() && !LogicalSchemas.compatible(shards.getFirst().schema(), schema)) {
+          String detail = LogicalSchemas.firstDifference(shards.getFirst().schema(), schema)
+              .orElse("logical structure differs");
+          throw new SQLException("Incompatible shard schema for " + location.schemaName() + "." + location.tableName()
+              + ": reference " + shards.getFirst().file() + "; offending " + file + "; " + detail);
         }
         shards.add(new Shard(file, schema));
       } catch (IOException exception) {
@@ -161,52 +160,118 @@ public final class ParquetTable {
    * @return reader owning all subsequently opened physical readers
    */
   public RecordReader open(Configuration configuration, FilterPredicate predicate) {
-    return new SequentialReader(shards, new Configuration(configuration), predicate);
+    return open(configuration, predicate, ParquetTable::openShard);
+  }
+
+  /**
+   * Opens one physical shard reader with its own enriched schema.
+   *
+   * @param shard
+   *          physical input and its own schema
+   * @param configuration
+   *          input reader configuration
+   * @param predicate
+   *          optional Parquet predicate, or null
+   * @return adapter owning the physical reader
+   * @throws IOException
+   *           if the shard cannot be opened
+   */
+  private static RecordReader openShard(Shard shard, Configuration configuration, FilterPredicate predicate)
+      throws IOException {
+    var builder = ParquetReader.<GenericRecord>builder(new AvroReadSupport<>(), new Path(shard.file().toURI()))
+        .withConf(configurationFor(shard, configuration));
+    if (predicate != null) {
+      builder.withFilter(FilterCompat.get(predicate));
+    }
+    return new ParquetRecordReaderAdapter(builder.build(), shard.schema());
+  }
+
+  /** Opens physical shard readers, injectable for observing reader ownership. */
+  @FunctionalInterface
+  public interface ShardReaderFactory {
+    /**
+     * Opens a reader for one validated shard.
+     *
+     * @param shard
+     *          validated physical input and its own full schema
+     * @param configuration
+     *          input reader configuration
+     * @param predicate
+     *          optional Parquet predicate, or null
+     * @return physical reader owned by the sequential reader
+     * @throws IOException
+     *           if the shard cannot be opened
+     */
+    RecordReader open(Shard shard, Configuration configuration, FilterPredicate predicate) throws IOException;
+  }
+
+  /**
+   * Opens a sequential reader using an injectable physical reader factory.
+   *
+   * @param configuration
+   *          per-input configuration
+   * @param predicate
+   *          optional Parquet predicate, or null
+   * @param factory
+   *          physical reader factory
+   * @return reader owning all subsequently opened physical readers
+   */
+  public RecordReader open(Configuration configuration, FilterPredicate predicate, ShardReaderFactory factory) {
+    return new SequentialReader(shards, new Configuration(configuration), predicate, factory);
   }
 
   /**
    * Opens each adapter with that shard's own full enriched schema. Read and close
-   * share a monitor so cancellation waits for the current physical read and
-   * cannot close a decoder in use or race a shard transition.
+   * share a monitor so closure cannot interrupt a decoder. A cancellation request
+   * is published before acquiring the monitor, stopping the scan at the next
+   * physical row or shard boundary.
    */
   private static final class SequentialReader implements RecordReader {
     private final List<Shard> shards;
     private final Configuration configuration;
     private final FilterPredicate predicate;
+    private final ShardReaderFactory factory;
+    private volatile boolean cancelRequested;
     private int nextShard;
     private RecordReader active;
     private boolean closed;
 
-    private SequentialReader(List<Shard> shards, Configuration configuration, FilterPredicate predicate) {
+    private SequentialReader(List<Shard> shards, Configuration configuration, FilterPredicate predicate,
+        ShardReaderFactory factory) {
       this.shards = shards;
       this.configuration = configuration;
       this.predicate = predicate;
+      this.factory = factory;
     }
 
     @Override
     public synchronized GenericRecord read() throws IOException {
       try {
-        while (!closed) {
+        while (!closed && !cancelRequested) {
           if (active == null) {
             if (nextShard == shards.size()) {
               close();
               return null;
             }
             Shard shard = shards.get(nextShard++);
-            var builder = ParquetReader.<GenericRecord>builder(new AvroReadSupport<>(), new Path(shard.file().toURI()))
-                .withConf(configurationFor(shard, configuration));
-            if (predicate != null) {
-              builder.withFilter(FilterCompat.get(predicate));
-            }
-            active = new ParquetRecordReaderAdapter(builder.build(), shard.schema());
+            active = factory.open(shard, configuration, predicate);
+          }
+          if (cancelRequested) {
+            close();
+            return null;
           }
           GenericRecord row = active.read();
+          if (cancelRequested) {
+            close();
+            return null;
+          }
           if (row != null) {
             return row;
           }
           active.close();
           active = null;
         }
+        close();
         return null;
       } catch (IOException | RuntimeException exception) {
         try {
@@ -219,13 +284,16 @@ public final class ParquetTable {
     }
 
     @Override
-    public synchronized void close() throws IOException {
-      closed = true;
-      if (active != null) {
-        try {
-          active.close();
-        } finally {
-          active = null;
+    public void close() throws IOException {
+      cancelRequested = true;
+      synchronized (this) {
+        closed = true;
+        if (active != null) {
+          try {
+            active.close();
+          } finally {
+            active = null;
+          }
         }
       }
     }

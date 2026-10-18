@@ -109,15 +109,14 @@ public final class LogicalSchemas {
             Schema candidate = remaining.stream().filter(other -> other.getType() == member.getType()).findFirst()
                 .orElse(null);
             if (candidate == null) {
-              return label + ": missing union member " + member.getType();
+              return unionDifference(label, first, second);
             }
             String mismatch = difference(member, candidate, path, ancestors);
             if (mismatch != null) {
               return mismatch;
             }
           }
-          return label + ": union members " + first.getTypes().stream().map(Schema::getType).toList() + " vs "
-              + second.getTypes().stream().map(Schema::getType).toList();
+          return unionDifference(label, first, second);
         }
         case FIXED -> {
           return label + ": fixed size " + first.getFixedSize() + " vs " + second.getFixedSize();
@@ -133,6 +132,22 @@ public final class LogicalSchemas {
     } finally {
       ancestors.remove(first);
     }
+  }
+
+  /**
+   * Describes both branch sets when a union alternative has no matching type.
+   *
+   * @param path
+   *          differing field path
+   * @param first
+   *          reference union
+   * @param second
+   *          candidate union
+   * @return branch types from both schemas
+   */
+  private static String unionDifference(String path, Schema first, Schema second) {
+    return path + ": union members " + first.getTypes().stream().map(Schema::getType).toList() + " vs "
+        + second.getTypes().stream().map(Schema::getType).toList();
   }
 
   private static String childPath(String parent, String field) {

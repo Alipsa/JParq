@@ -500,6 +500,23 @@ class HfDatasetLayoutTest {
       org.mockito.Mockito.verify(conn, org.mockito.Mockito.times(1)).listTables();
       org.mockito.Mockito.verify(conn, org.mockito.Mockito.never()).resolveTable(org.mockito.ArgumentMatchers.any(),
           org.mockito.ArgumentMatchers.any());
+      org.mockito.Mockito.clearInvocations(conn);
+      try (var tables = conn.getMetaData().getTables(null, "d_t_", "tr%", null)) {
+        assertTrue(tables.next());
+        assertEquals("DATA", tables.getString("TABLE_SCHEM"));
+        assertEquals("train", tables.getString("TABLE_NAME"));
+        assertFalse(tables.next());
+      }
+      try (var columns = conn.getMetaData().getColumns(null, "d_t_", "tr%", "%")) {
+        int count = 0;
+        while (columns.next()) {
+          assertEquals("DATA", columns.getString("TABLE_SCHEM"));
+          assertEquals("train", columns.getString("TABLE_NAME"));
+          count++;
+        }
+        assertEquals(4, count);
+      }
+      org.mockito.Mockito.verify(conn, org.mockito.Mockito.times(2)).listTables();
     }
   }
 
@@ -511,6 +528,10 @@ class HfDatasetLayoutTest {
     Schema required = new Schema.Parser()
         .parse(original.toString().replace("[\"null\",\"int\"]", "\"int\"").replace(",\"default\":null", ""));
     assertEquals("n: nullable vs required", LogicalSchemas.firstDifference(original, required).orElseThrow());
+    Schema nullableLong = new Schema.Parser()
+        .parse(original.toString().replace("[\"null\",\"int\"]", "[\"null\",\"long\"]"));
+    assertEquals("n: union members [NULL, INT] vs [NULL, LONG]",
+        LogicalSchemas.firstDifference(original, nullableLong).orElseThrow());
     assertTrue(LogicalSchemas.firstDifference(original, schema("OtherNames")).isEmpty());
     Schema text = original.getField("nested").schema();
     Schema integer = new Schema.Parser()
@@ -528,6 +549,22 @@ class HfDatasetLayoutTest {
     assertTrue(failure.getMessage().contains("reference.parquet"));
     assertTrue(failure.getMessage().contains("offending.parquet"));
     assertFalse(failure.getMessage().contains("\"fields\""));
+  }
+
+  @Test
+  void compatibilityRejectsBadShardsEvenWhenNoDiagnosticIsAvailable() throws Exception {
+    Schema first = schema("Reference");
+    Schema second = new Schema.Parser().parse(first.toString().replace("\"string\"", "\"int\""));
+    var location = new JParqConnection.TableLocation("data", "bad",
+        List.of(base.resolve("first.parquet").toFile(), base.resolve("second.parquet").toFile()));
+    try (var diagnostics = org.mockito.Mockito.mockStatic(LogicalSchemas.class,
+        org.mockito.Mockito.CALLS_REAL_METHODS)) {
+      diagnostics.when(() -> LogicalSchemas.firstDifference(first, second)).thenReturn(java.util.Optional.empty());
+      SQLException failure = assertThrows(SQLException.class, () -> ParquetTable.validate(location,
+          new Configuration(false), (path, conf) -> path.getName().equals("first.parquet") ? first : second));
+      assertTrue(failure.getMessage().contains("Incompatible shard schema"));
+      assertTrue(failure.getMessage().contains("logical structure differs"));
+    }
   }
 
   @Test

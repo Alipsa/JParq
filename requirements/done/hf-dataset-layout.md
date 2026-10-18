@@ -521,10 +521,13 @@ validates logical schemas and owns sequential per-shard readers, configurations,
 join, schema-inference, column-metadata, and CLI paths use the logical file list. No shared schema-validation
 cache was introduced. Prepared plans retain their validated inputs, column metadata uses one discovery
 pass, and CLI diagnostics reuse column validation. Mismatch diagnostics name the first differing field path
-and type/nullability; reader closure is serialized with physical reads for cancellation safety. The existing
-quoted-name casing and unqualified dotted-name limitations remain as specified, and the default layout preserves single-file discovery.
+and type/nullability; schema compatibility remains the acceptance gate even without a diagnostic.
+Cancellation is published before waiting for an active physical read, preventing later-shard scans and
+suppressing rows returned after the request while keeping decoder closure serialized with reads. The existing
+quoted-name casing and unqualified dotted-name limitations remain as specified, and the default layout
+preserves single-file discovery.
 
-`mvn spotless:apply clean verify` passed on Java 21: 1,049 unit tests (one case-sensitive-filesystem test
+`mvn spotless:apply clean verify` passed on Java 21: 1,052 unit tests (one case-sensitive-filesystem test
 skipped on the case-insensitive local volume), plus all 3 integration tests. Checkstyle reported zero
 violations; PMD, Spotless, and coverage checks passed. The new layout tests cover grouping, errors, symlinks,
 all four pushdown settings, independent physical pruning on both indexed shards, record names/enriched types,
