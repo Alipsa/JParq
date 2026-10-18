@@ -25,13 +25,17 @@ class SubqueryCorrelationCachingTest {
     Schema schema = new Schema.Parser().parse("""
         {"type":"record","name":"Input","fields":[{"name":"id","type":"int"}]}
         """);
-    var executor = mock(SubqueryExecutor.class);
-    when(executor.execute(any())).thenReturn(new SubqueryExecutor.SubqueryResult(List.of("id"), List.of(List.of(1))));
+    var schemaLookups = new AtomicInteger();
+    var executor = spy(new SubqueryExecutor(mock(se.alipsa.jparq.JParqConnection.class), null, table -> {
+      schemaLookups.incrementAndGet();
+      return java.util.Set.of("id");
+    }));
+    doReturn(new SubqueryExecutor.SubqueryResult(List.of("id"), List.of(List.of(1)))).when(executor).execute(any());
     var evaluator = new ExpressionEvaluator(schema, executor, List.of("big", "b"), Map.of(), Map.of());
     var where = SqlParser.parseSelect("SELECT id FROM big b WHERE id IN (SELECT id FROM small)").where();
     var analyses = new AtomicInteger();
     try (var isolator = mockStatic(SubqueryCorrelatedFiltersIsolator.class, CALLS_REAL_METHODS)) {
-      isolator.when(() -> SubqueryCorrelatedFiltersIsolator.isolate(any(), any(), any(), any(), any()))
+      isolator.when(() -> SubqueryCorrelatedFiltersIsolator.isolate(any(), any(), any(), any(), any(), any()))
           .thenAnswer(invocation -> {
             analyses.incrementAndGet();
             return invocation.callRealMethod();
@@ -42,6 +46,7 @@ class SubqueryCorrelationCachingTest {
         assertEquals(id == 1, evaluator.eval(where, row));
       }
       assertEquals(1, analyses.get());
+      assertEquals(1, schemaLookups.get());
       verify(executor, never()).executeRaw(any());
     }
   }

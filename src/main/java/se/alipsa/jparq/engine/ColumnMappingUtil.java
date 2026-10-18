@@ -1,9 +1,11 @@
 package se.alipsa.jparq.engine;
 
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Utility methods for handling qualifier-aware column mappings when resolving
@@ -12,6 +14,26 @@ import java.util.Objects;
 public final class ColumnMappingUtil {
 
   private ColumnMappingUtil() {
+  }
+
+  /**
+   * Collects physical names and projection aliases eligible for outer fallback.
+   * Inner schemas must still be checked before substituting any candidate.
+   *
+   * @param fieldIndex
+   *          normalized names of physical fields
+   * @param unqualified
+   *          unqualified outer column mappings
+   * @param qualified
+   *          qualifier mappings, including projection aliases
+   * @return normalized candidate column names
+   */
+  public static Set<String> correlationColumns(Map<String, String> fieldIndex, Map<String, String> unqualified,
+      Map<String, Map<String, String>> qualified) {
+    Set<String> names = new LinkedHashSet<>(fieldIndex.keySet());
+    names.addAll(unqualified.keySet());
+    qualified.values().forEach(mapping -> names.addAll(mapping.keySet()));
+    return Set.copyOf(names);
   }
 
   /**

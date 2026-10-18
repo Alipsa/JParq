@@ -92,6 +92,9 @@ public class JParqExample {
 }
 ```
 
+Subqueries resolve unqualified column names in their inner scopes first, then in the outer row or grouping
+context when the inner inputs have no matching column. This also applies to correlations in `HAVING`.
+
 ### Connection options
 
 - `caseSensitive` — defaults to `false`. Set to `true` to make table-name resolution case-sensitive.

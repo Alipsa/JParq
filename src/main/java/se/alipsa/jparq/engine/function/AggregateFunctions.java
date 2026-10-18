@@ -2141,8 +2141,8 @@ public final class AggregateFunctions {
         if (subqueryExecutor == null) {
           throw new IllegalStateException("IN subqueries require a subquery executor");
         }
-        CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
-            correlationQualifiers(), Set.of(), (qualifier, column) -> correlatedValue(qualifier, column));
+        CorrelatedSubqueryRewriter.Result rewritten = subqueryExecutor.rewrite(subSelect, correlationQualifiers(),
+            correlationColumns(), correlationContext, (qualifier, column) -> correlatedValue(qualifier, column));
         SubqueryExecutor.SubqueryResult result = rewritten.correlated()
             ? subqueryExecutor.executeRaw(rewritten.sql())
             : subqueryExecutor.execute(subSelect);
@@ -2158,8 +2158,8 @@ public final class AggregateFunctions {
       if (!(exists.getRightExpression() instanceof Select subSelect)) {
         throw new IllegalArgumentException("EXISTS requires a subquery");
       }
-      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
-          correlationQualifiers(), Set.of(), (qualifier, column) -> correlatedValue(qualifier, column));
+      CorrelatedSubqueryRewriter.Result rewritten = subqueryExecutor.rewrite(subSelect, correlationQualifiers(),
+          correlationColumns(), correlationContext, (qualifier, column) -> correlatedValue(qualifier, column));
       SubqueryExecutor.SubqueryResult result = rewritten.correlated()
           ? subqueryExecutor.executeRaw(rewritten.sql())
           : subqueryExecutor.execute(subSelect);
@@ -2263,8 +2263,8 @@ public final class AggregateFunctions {
       if (subqueryExecutor == null) {
         throw new IllegalStateException("Scalar subqueries require a subquery executor");
       }
-      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect,
-          correlationQualifiers(), correlationColumns(), (qualifier, column) -> correlatedValue(qualifier, column));
+      CorrelatedSubqueryRewriter.Result rewritten = subqueryExecutor.rewrite(subSelect, correlationQualifiers(),
+          correlationColumns(), correlationContext, (qualifier, column) -> correlatedValue(qualifier, column));
       SubqueryExecutor.SubqueryResult result = rewritten.correlated()
           ? subqueryExecutor.executeRaw(rewritten.sql())
           : subqueryExecutor.execute(subSelect);

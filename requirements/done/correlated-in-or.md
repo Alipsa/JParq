@@ -29,6 +29,11 @@ extracted. It writes replacement roots back to WHERE, HAVING, JOIN ON, and SELEC
 CASE/function arguments, AND/OR chains, negation, and parentheses. Boolean expressions actually inside an IN
 value list retain their existing grouping. JOIN ON evaluation receives a subquery executor. Unqualified
 inner columns are not replaced merely because the outer join or grouping context contains the same name.
+Unqualified names absent from every inner scope resolve to available outer row or grouping columns.
+`SubqueryExecutor` resolves and retains each inner scope's source columns lazily within the statement, using
+physical schemas retained by the prepared plan, CTE columns, and derived projections. The shared rewrite
+path applies this inner-first rule to IN, EXISTS, scalar subqueries, and ANY/ALL. Projection planning uses
+the same resolver to retain unqualified outer dependencies before reading data.
 
 The predicate evaluator also rewrites correlated IN subqueries with the current outer row's correlation
 context, using the same helper as EXISTS, rather than executing them as uncorrelated cached queries.
@@ -46,3 +51,6 @@ SUM/CASE, literal IN lists, and an IN list containing a Boolean expression. Ever
 predicate/projection pushdown combinations. `SubqueryCorrelationCachingTest` asserts that 1,000 outer rows
 require one uncorrelated-IN analysis. `StatementCancellationTest` checks outer result identity and SQLState
 57014 when EXISTS and correlated IN/OR are canceled between `next()` calls.
+`UnqualifiedSubqueryCorrelationTest` checks the HAVING regression, the formerly unsupported WHERE forms,
+inner-column shadowing, derived/CTE inputs, scalar and quantified subqueries under all four pushdown
+combinations. The analysis-count test also checks that source columns are resolved once for 1,000 rows.

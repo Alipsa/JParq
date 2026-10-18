@@ -11,6 +11,12 @@ import se.alipsa.jparq.engine.ColumnMappingUtil;
 class ColumnMappingUtilTest {
 
   @Test
+  void correlationCandidatesIncludePhysicalNamesAndProjectionAliases() {
+    assertEquals(java.util.Set.of("U:id", "U:g", "U:grp"), ColumnMappingUtil.correlationColumns(
+        Map.of("U:id", "id", "U:g", "g"), Map.of("U:id", "id"), Map.of("U:b", Map.of("U:g", "g", "U:grp", "g"))));
+  }
+
+  @Test
   void canonicalOrderColumnResolvesQualifiedMappings() {
     Map<String, Map<String, String>> qualifierMapping = ColumnMappingUtil
         .normaliseQualifierMapping(Map.of("Cars", Map.of("MPG", "cars__mpg")));

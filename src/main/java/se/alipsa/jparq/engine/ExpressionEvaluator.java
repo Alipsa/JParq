@@ -5,7 +5,6 @@ import static se.alipsa.jparq.engine.AvroCoercions.coerceLiteral;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -417,10 +416,9 @@ public final class ExpressionEvaluator {
     if (Boolean.FALSE.equals(subqueryCorrelations.get(subSelect))) {
       return subqueryExecutor.execute(subSelect);
     }
-    // Outer join labels do not establish that an unqualified inner column is
-    // correlated. Only references bound to an outer qualifier can be substituted.
-    CorrelatedSubqueryRewriter.Result rewritten = SubqueryCorrelatedFiltersIsolator.isolate(subSelect, outerQualifiers,
-        Set.of(), qualifierColumnMapping, (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
+    CorrelatedSubqueryRewriter.Result rewritten = subqueryExecutor.rewrite(subSelect, outerQualifiers,
+        correlationColumns(), qualifierColumnMapping,
+        (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
     subqueryCorrelations.put(subSelect, rewritten.correlated());
     return rewritten.correlated() ? subqueryExecutor.executeRaw(rewritten.sql()) : subqueryExecutor.execute(subSelect);
   }
@@ -528,14 +526,9 @@ public final class ExpressionEvaluator {
    */
   private List<Object> fetchAnyAllValues(AnyComparisonExpression anyExpr, GenericRecord rec) {
     net.sf.jsqlparser.statement.select.Select subSelect = anyExpr.getSelect();
-    // For correlated subqueries, resolveColumnValue fetches the value of a
-    // referenced column
-    // from the current outer record (rec). This is critical for correct ANY/ALL
-    // evaluation semantics,
-    // as correlated column references must be resolved in the context of the
-    // current row.
-    CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, outerQualifiers,
-        correlationColumns(), (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
+    CorrelatedSubqueryRewriter.Result rewritten = subqueryExecutor.rewrite(subSelect, outerQualifiers,
+        correlationColumns(), qualifierColumnMapping,
+        (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
 
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
@@ -577,21 +570,7 @@ public final class ExpressionEvaluator {
   }
 
   private Set<String> correlationColumns() {
-    if (qualifierColumnMapping.isEmpty()) {
-      return Set.of();
-    }
-    Set<String> columns = new LinkedHashSet<>();
-    for (Map.Entry<String, Map<String, String>> entry : qualifierColumnMapping.entrySet()) {
-      Map<String, String> mapping = entry.getValue();
-      if (mapping != null) {
-        for (String key : mapping.keySet()) {
-          if (!caseInsensitiveIndex.containsKey(key)) {
-            columns.add(key);
-          }
-        }
-      }
-    }
-    return Set.copyOf(columns);
+    return ColumnMappingUtil.correlationColumns(caseInsensitiveIndex, unqualifiedColumnMapping, qualifierColumnMapping);
   }
 
   private Operand operand(Expression e, GenericRecord rec) {

@@ -371,7 +371,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             }
 
             aggregatePlan = AggregateFunctions.plan(tmpSelect);
-            configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf);
+            configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf, tmpCteResults);
 
             if (stmt.getConn().isPredicatePushdown() && (baseRef == null || baseRef.tableSample() == null)
                 && tmpSelect.where() != null) {
@@ -508,7 +508,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       // Create the result set, passing reader, select plan, residual filter,
       // plus projection labels and physical names (for metadata & value lookups)
       SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(),
-          sql -> prepareSubqueryStatement(sql, cteResults, cancellation));
+          sql -> prepareSubqueryStatement(sql, cteResults, cancellation), this::subqueryTableColumns);
       JParqResultSet rs;
       try {
         rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, tableCatalog, residualExpression,
@@ -1436,7 +1436,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     try {
       var executor = new SubqueryExecutor(stmt.getConn(),
-          sql -> prepareSubqueryStatement(sql, cteResults, cancellation));
+          sql -> prepareSubqueryStatement(sql, cteResults, cancellation), this::subqueryTableColumns);
       JoinRecordReader joinReader = new JoinRecordReader(tables, executor);
       expandJoinQualifiedWildcards(joinReader);
       return joinReader;
@@ -2621,6 +2621,44 @@ public class JParqPreparedStatement implements PreparedStatement {
     return schemaForTableReference(match);
   }
 
+  /**
+   * Resolves a subquery input using retained physical or inherited CTE schemas.
+   *
+   * @param table
+   *          local table reference
+   * @return its unqualified source columns
+   */
+  private Set<String> subqueryTableColumns(Table table) {
+    return subqueryTableColumns(table, cteResults, conf);
+  }
+
+  /**
+   * Resolves input columns while the owning prepared plan is being constructed.
+   *
+   * @param table
+   *          local source
+   * @param ctes
+   *          CTEs available during planning
+   * @param configuration
+   *          physical input configuration
+   * @return source column names
+   */
+  private Set<String> subqueryTableColumns(Table table, Map<Identifier, CteResult> ctes, Configuration configuration) {
+    try {
+      CteResult cte = resolveCteResultByName(table.getName(), ctes);
+      Schema schema;
+      if (cte != null) {
+        schema = cte.schema();
+      } else {
+        var location = stmt.getConn().resolveTable(table.getSchemaName(), table.getName());
+        schema = validatedTable(location, configuration == null ? new Configuration(false) : configuration).schema();
+      }
+      return schema.getFields().stream().map(Schema.Field::name).collect(java.util.stream.Collectors.toSet());
+    } catch (SQLException exception) {
+      throw new IllegalStateException("Failed to resolve subquery columns for " + table, exception);
+    }
+  }
+
   private Schema schemaForTableReference(SqlParser.TableReference ref) throws SQLException {
     if (ref == null) {
       return null;
@@ -3114,12 +3152,15 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   private void configureProjectionPushdown(SqlParser.Select select, Schema schema,
-      AggregateFunctions.AggregatePlan aggregatePlan, Configuration configuration) throws SQLException {
+      AggregateFunctions.AggregatePlan aggregatePlan, Configuration configuration, Map<Identifier, CteResult> ctes)
+      throws SQLException {
     if (schema == null || configuration == null || select == null) {
       return;
     }
 
     ColumnRequirement columnRequirement = requiredColumns(select, aggregatePlan);
+    collectSubqueryDependencies(select, schema, columnRequirement.required(),
+        new SubqueryExecutor(stmt.getConn(), null, table -> subqueryTableColumns(table, ctes, configuration)));
     Set<String> requiredColumns = columnRequirement.required();
     validateRequiredColumns(schema, requiredColumns, select.table(), select.labels(), select.columnNames(),
         columnRequirement.referenced());
@@ -3145,6 +3186,53 @@ public class JParqPreparedStatement implements PreparedStatement {
       Schema avroProjection = AvroProjections.project(schema, requiredColumns);
       AvroReadSupport.setRequestedProjection(configuration, avroProjection);
       AvroReadSupport.setAvroReadSchema(configuration, avroProjection);
+    }
+  }
+
+  /**
+   * Retains unqualified outer dependencies before projecting the physical input.
+   *
+   * @param select
+   *          outer query plan
+   * @param schema
+   *          full outer schema
+   * @param required
+   *          required-column accumulator
+   * @param resolver
+   *          scope-aware subquery schema resolver
+   */
+  private void collectSubqueryDependencies(SqlParser.Select select, Schema schema, Set<String> required,
+      SubqueryExecutor resolver) {
+    Set<String> candidates = schema.getFields().stream().map(Schema.Field::name)
+        .collect(java.util.stream.Collectors.toSet());
+    var baseRef = select.tableReferences().isEmpty() ? null : select.tableReferences().getFirst();
+    List<String> qualifiers = qualifierList(baseRef, false);
+    final var visitor = new net.sf.jsqlparser.expression.ExpressionVisitorAdapter<Void>() {
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.expression.AnyComparisonExpression any, S context) {
+        return visit(any.getSelect(), context);
+      }
+
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.statement.select.Select nested, S context) {
+        addColumns(required, resolver.rewrite(nested, qualifiers, candidates, Map.of(), (qualifier, column) -> null)
+            .correlatedColumns());
+        return null;
+      }
+
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.statement.select.ParenthesedSelect nested, S context) {
+        return visit((net.sf.jsqlparser.statement.select.Select) nested, context);
+      }
+    };
+    List<Expression> expressions = new ArrayList<>(select.expressions());
+    expressions.add(select.where());
+    expressions.add(select.having());
+    select.orderBy().forEach(key -> expressions.add(key.expression()));
+    for (Expression expression : expressions) {
+      if (expression != null) {
+        expression.accept(visitor, null);
+      }
     }
   }
 

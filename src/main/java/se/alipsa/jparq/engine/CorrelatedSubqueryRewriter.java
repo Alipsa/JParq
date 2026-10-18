@@ -133,6 +133,26 @@ public final class CorrelatedSubqueryRewriter {
    */
   public static Result rewrite(Select select, Collection<String> outerQualifiers, Set<String> correlatedColumns,
       BiFunction<String, String, Object> valueResolver) {
+    return rewrite(select, outerQualifiers, correlatedColumns, valueResolver, plain -> Set.of());
+  }
+
+  /**
+   * Rewrites outer references while giving every inner scope's columns priority.
+   *
+   * @param select
+   *          subquery to rewrite
+   * @param outerQualifiers
+   *          outer table qualifiers
+   * @param correlatedColumns
+   *          candidate unqualified outer columns
+   * @param valueResolver
+   *          current outer values
+   * @param localColumns
+   *          lazy resolver for columns visible in an inner query scope
+   * @return SQL with only references unbound in the inner scopes substituted
+   */
+  public static Result rewrite(Select select, Collection<String> outerQualifiers, Set<String> correlatedColumns,
+      BiFunction<String, String, Object> valueResolver, Function<PlainSelect, Set<String>> localColumns) {
     Objects.requireNonNull(select, "select");
     Objects.requireNonNull(valueResolver, "valueResolver");
     if (outerQualifiers == null || outerQualifiers.isEmpty()) {
@@ -157,6 +177,7 @@ public final class CorrelatedSubqueryRewriter {
     Set<QualifiedColumn> correlatedRefs = new LinkedHashSet<>();
 
     Deque<Set<String>> localScopes = new ArrayDeque<>();
+    Deque<PlainSelect> columnScopes = new ArrayDeque<>();
     Set<String> locallyBound = new LinkedHashSet<>();
     ExpressionDeParser expressionDeParser = new ExpressionDeParser() {
       @Override
@@ -222,6 +243,9 @@ public final class CorrelatedSubqueryRewriter {
         if (!unqualified.contains(normalizedColumn)) {
           return false;
         }
+        if (columnScopes.stream().anyMatch(scope -> localColumns.apply(scope).contains(normalizedColumn))) {
+          return false;
+        }
         appendCorrelatedLiteral(null, columnName, valueResolver.apply(null, columnName));
         return true;
       }
@@ -244,11 +268,13 @@ public final class CorrelatedSubqueryRewriter {
           plain.getJoins().forEach(join -> addLocalQualifier(bindings, join.getRightItem()));
         }
         localScopes.push(bindings);
+        columnScopes.push(plain);
         locallyBound.addAll(bindings);
         try {
           return super.visit(plain, context);
         } finally {
           localScopes.pop();
+          columnScopes.pop();
         }
       }
     };

@@ -6,6 +6,7 @@
 - Honor `Statement.cancel()` during aggregation, sorting, join loading, and nested execution, as well as in-flight JDBC `next()` calls. Cancellation returns without waiting for an active physical read and the executing call throws `SQLException`; cleanup follows the current physical read, which with a pushed-down filter can span a shard.
 - Report query cancellation with SQLState `57014`, preserve the original cancellation exception through correlated-subquery evaluation, and keep the outer result and cancellation state active between subquery calls.
 - Preserve IN precedence for subqueries and value lists throughout derived tables, CTEs, set operations, joins, HAVING, and computed expressions. Evaluate correlated IN with each outer row's values and analyze uncorrelated IN only once per predicate node.
+- Resolve unqualified subquery columns against inner inputs before falling back to the outer row or HAVING group, consistently across IN, EXISTS, scalar, and ANY/ALL subqueries; retain these outer dependencies during projection pushdown.
 - Keep SQL `USER()`/`DATABASE()` contexts isolated during cross-thread cancellation and make result-set closure idempotent.
 - **Behavior change:** unreadable table schemas now fail when a statement is prepared, including in the default `none` layout, instead of continuing without pushdown.
 - Make CLI `/describe` resolve literal schema/table names before querying column metadata, escaping JDBC wildcards so similarly named tables cannot mix columns or cause unrelated validation failures.
