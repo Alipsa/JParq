@@ -323,14 +323,13 @@ class JParqPackagedDriverIT {
   }
 
   /**
-   * Verifies JParq's license survives in both artifacts and each dependency license
-   * and notice survives assembly, including suffixed filenames.
+   * Verifies JParq's license survives in both artifacts and each dependency
+   * license and notice survives assembly, including suffixed filenames.
    */
   @Test
   void dependencyAttributions() throws Exception {
     String classpath = Files.readString(Path.of(required("runtimeClasspathFile"))).trim();
-    String projectLicense = Files.readString(Path.of(required("resources")).resolve("../../../LICENSE").normalize())
-        .replace("\r\n", "\n").strip();
+    String projectLicense = Files.readString(Path.of(required("projectLicense"))).replace("\r\n", "\n").strip();
     for (Path packaged : List.of(artifact, Path.of(required("thinArtifact")))) {
       try (JarFile jar = new JarFile(packaged.toFile())) {
         assertEquals(projectLicense, archiveText(jar, jar.getJarEntry("LICENSE")),

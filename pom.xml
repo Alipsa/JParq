@@ -391,6 +391,7 @@
             <jparq.it.probeSource>${project.basedir}/src/test/java/jparq/probe/PackagedDriverProbe.java</jparq.it.probeSource>
             <jparq.it.testClasses>${project.build.testOutputDirectory}</jparq.it.testClasses>
             <jparq.it.resources>${project.basedir}/src/test/resources</jparq.it.resources>
+            <jparq.it.projectLicense>${project.basedir}/LICENSE</jparq.it.projectLicense>
             <org.slf4j.simpleLogger.defaultLogLevel>info</org.slf4j.simpleLogger.defaultLogLevel>
             <org.slf4j.simpleLogger.log.jparq.PredicatePushdownPerfFS>debug</org.slf4j.simpleLogger.log.jparq.PredicatePushdownPerfFS>
           </systemPropertyVariables>

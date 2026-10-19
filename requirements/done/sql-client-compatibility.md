@@ -217,10 +217,15 @@ Reviewed fat-JAR SHA-256 checksums (before adding JParq's own root `LICENSE`):
 - Linux: `39c0fb36bcd64ab424a4846281f650a3c782e190897058fa6b2353a823dc589d`
 - Windows: `f60dee2aa23d715bb628c954ccaaef0982142e57a6a6cd0b1d4c4507b2ab4195`
 
-The subsequent root-license resource change passed full `mvn verify` on macOS
-ARM64 / Java 21 with Workbench/J enabled: 1,243 unit tests and 17 integration
-cases, with one expected skip in each group. Coverage, Checkstyle, PMD,
-Spotless, and Javadoc passed. The artifact test checks JParq's complete license
+The root-license resource verification was followed by a Javadoc edit that
+introduced a Spotless violation in commit `fa23d6b`; the reported pass did not
+cover that final edit. The follow-up applies formatting and passes the project
+license path explicitly through plugin-level Failsafe configuration instead of
+deriving it from the fixture directory. After formatting, a fresh full
+`mvn verify` with Workbench/J enabled passed on macOS ARM64 / Java 21:
+1,243 unit tests and 17 integration cases, with one expected skip in each group.
+Coverage, Checkstyle, PMD, Spotless, and Javadoc passed on the final Java sources.
+The artifact test checks JParq's complete license
 in both JARs and all dependency license/notice text in the combined file.
 Linux, Windows, and the alternate runtimes were not rerun for this resource-only
 follow-up; their results above apply to the earlier artifacts.
