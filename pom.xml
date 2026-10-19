@@ -4,7 +4,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>se.alipsa</groupId>
   <artifactId>jparq</artifactId>
-  <version>1.3.0</version>
+  <version>1.4.0</version>
   <name>JDBC Driver for Parquet files</name>
 
   <description>JDBC Driver for reading Parquet files</description>
@@ -26,6 +26,8 @@
   </scm>
   <properties>
     <java.version>21</java.version>
+    <jparq.it.javaHome>${java.home}</jparq.it.javaHome>
+    <jparq.it.sqlWorkbenchJar></jparq.it.sqlWorkbenchJar>
     <maven.compiler.release>${java.version}</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
@@ -248,6 +250,17 @@
     </dependency>
   </dependencies>
   <build>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <resource>
+        <directory>${project.basedir}</directory>
+        <includes>
+          <include>LICENSE</include>
+        </includes>
+      </resource>
+    </resources>
     <testResources>
       <testResource>
         <directory>src/test/resources</directory>
@@ -264,6 +277,22 @@
       </testResource>
     </testResources>
     <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>3.11.0</version>
+        <executions>
+          <execution>
+            <id>packaged-probe-dependencies</id>
+            <phase>generate-test-resources</phase>
+            <goals><goal>build-classpath</goal></goals>
+            <configuration>
+              <includeScope>runtime</includeScope>
+              <outputFile>${project.build.directory}/runtime-classpath.txt</outputFile>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>versions-maven-plugin</artifactId>
@@ -293,7 +322,7 @@
                 <requireJavaVersion>
                   <version>[${java.version},23)</version>
                   <level>ERROR</level>
-                  <message>Please use Java &gt;= ${java.version} and &lt;= 23</message>
+                  <message>Please use Java &gt;= ${java.version} and &lt; 23 to build JParq</message>
                 </requireJavaVersion>
               </rules>
             </configuration>
@@ -353,6 +382,16 @@
           <useFile>false</useFile>
           <skipTests>false</skipTests>
           <systemPropertyVariables>
+            <jparq.it.runtimeClasspathFile>${project.build.directory}/runtime-classpath.txt</jparq.it.runtimeClasspathFile>
+            <jparq.it.javaHome>${jparq.it.javaHome}</jparq.it.javaHome>
+            <jparq.it.sqlWorkbenchJar>${jparq.it.sqlWorkbenchJar}</jparq.it.sqlWorkbenchJar>
+            <jparq.it.artifact>${project.build.directory}/${project.build.finalName}-fat.jar</jparq.it.artifact>
+            <jparq.it.thinArtifact>${project.build.directory}/${project.build.finalName}.jar</jparq.it.thinArtifact>
+            <jparq.it.compilerRelease>${maven.compiler.release}</jparq.it.compilerRelease>
+            <jparq.it.probeSource>${project.basedir}/src/test/java/jparq/probe/PackagedDriverProbe.java</jparq.it.probeSource>
+            <jparq.it.testClasses>${project.build.testOutputDirectory}</jparq.it.testClasses>
+            <jparq.it.resources>${project.basedir}/src/test/resources</jparq.it.resources>
+            <jparq.it.projectLicense>${project.basedir}/LICENSE</jparq.it.projectLicense>
             <org.slf4j.simpleLogger.defaultLogLevel>info</org.slf4j.simpleLogger.defaultLogLevel>
             <org.slf4j.simpleLogger.log.jparq.PredicatePushdownPerfFS>debug</org.slf4j.simpleLogger.log.jparq.PredicatePushdownPerfFS>
           </systemPropertyVariables>
@@ -467,6 +506,7 @@
                 <Implementation-Version>${project.version}</Implementation-Version>
                 <!-- Hadoop compatibility currently determines JParq's maximum supported Java version (configured via the java.version property). -->
                 <Max-Jdk-Version>${java.version}</Max-Jdk-Version>
+                <Multi-Release>true</Multi-Release>
               </manifestEntries>
             </archive>
             <descriptors>
@@ -537,6 +577,7 @@
         <artifactId>spotless-maven-plugin</artifactId>
         <version>3.10.4</version>
         <configuration>
+          <lineEndings>UNIX</lineEndings>
           <java>
             <includes>
               <include>src/main/java/**/*.java</include>

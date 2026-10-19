@@ -68,7 +68,8 @@ public record ParquetFileInfo(List<RowGroup> rowGroups) {
    */
   public static ParquetFileInfo read(Path path, Configuration configuration) throws IOException {
     List<RowGroup> groups = new ArrayList<>();
-    try (ParquetFileReader reader = ParquetFileReader.open(HadoopInputFile.fromPath(path, configuration))) {
+    try (ParquetFileReader reader = ParquetFileReader
+        .open(HadoopInputFile.fromPath(path, HadoopConfigurations.copy(configuration)))) {
       for (var group : reader.getFooter().getBlocks()) {
         boolean columnIndex = !group.getColumns().isEmpty();
         boolean offsetIndex = columnIndex;

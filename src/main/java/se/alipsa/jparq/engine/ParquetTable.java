@@ -91,7 +91,7 @@ public final class ParquetTable {
     List<Shard> shards = new ArrayList<>();
     for (File file : location.files()) {
       try {
-        Schema schema = schemaReader.read(new Path(file.toURI()), new Configuration(configuration));
+        Schema schema = schemaReader.read(new Path(file.toURI()), HadoopConfigurations.copy(configuration));
         if (!shards.isEmpty() && !LogicalSchemas.compatible(shards.getFirst().schema(), schema)) {
           String detail = LogicalSchemas.firstDifference(shards.getFirst().schema(), schema)
               .orElse("logical structure differs");
@@ -134,7 +134,7 @@ public final class ParquetTable {
    * @return per-file configuration with per-file projection and read schemas
    */
   public static Configuration configurationFor(Shard shard, Configuration input) {
-    Configuration result = new Configuration(input);
+    Configuration result = HadoopConfigurations.copy(input);
     result.setBoolean(AvroSchemaConverter.ADD_LIST_ELEMENT_RECORDS, false);
     String requested = input.get(AvroReadSupport.AVRO_REQUESTED_PROJECTION);
     result.unset(AvroReadSupport.AVRO_REQUESTED_PROJECTION);
@@ -176,7 +176,7 @@ public final class ParquetTable {
    * @return reader owning all subsequently opened physical readers
    */
   public RecordReader open(Configuration configuration, FilterPredicate predicate, ShardReaderFactory factory) {
-    return new SequentialReader(shards, new Configuration(configuration), predicate, factory);
+    return new SequentialReader(shards, HadoopConfigurations.copy(configuration), predicate, factory);
   }
 
   /**

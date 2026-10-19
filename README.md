@@ -31,7 +31,9 @@ conversion. If you want to convert data types, use CAST instead.
 
 ## Requirements
 
-- Java 21 (higher is not supported due to Hadoop restrictions)
+- Java 21. This matches the client runtime supported by
+  [Hadoop 3.5.0](https://hadoop.apache.org/docs/r3.5.0/index.html). Java 25 passes JParq's test suite on macOS ARM64 and can be
+  used on a best-effort basis, but Hadoop 3.5.0 does not officially support it.
 - Parquet files stored in a directory accessible from the JVM running the driver
 
 ## Installation
@@ -254,6 +256,58 @@ components must account for this change, and logical-table consumers should use 
 
 A "fat" jar, which includes all dependencies, is also created. This is useful when you want to add the driver to the classpath of a tool. The fat jar is named `jparq-x.y.z-fat.jar` i.e. fat is the maven classifier. It is available in maven central and in the [releases](https://github.com/Alipsa/JParq/releases) section.
 
+## SQL clients
+
+Use `jparq-x.y.z-fat.jar` as a custom/generic JDBC driver. The ordinary JAR requires all runtime dependencies;
+adding that small JAR alone is insufficient for connections and queries.
+
+| Setting | Value |
+| --- | --- |
+| Driver class | `se.alipsa.jparq.JParqDriver` |
+| JDBC URL | `jdbc:jparq:/absolute/path/to/parquet-directory` |
+| Windows URL example | `jdbc:jparq:C:/data/parquet` |
+| Credentials | Leave username and password empty |
+| Client JVM | Java 21 supported; Java 25 best effort; Java 17 cannot load the driver |
+
+Check the Java runtime running the client, including any bundled JVM. JParq remains compiled for Java 21;
+a scanner running on Java 17 can reject its classes before offering a driver selection. Java 25 results do not
+extend Hadoop's official Java support. Use read-only, forward-only result sets when the client offers that choice.
+
+These setup recipes use the clients' custom-driver facilities; their GUI workflows have **not** been verified.
+SQL Workbench/J build 133 also has a tested headless batch integration (see the verification record).
+
+- **DBeaver:** in Database → Driver Manager, create a generic driver named JParq. Add the fat JAR under Libraries,
+  set the driver class above, and use the complete JDBC URL when creating a connection.
+  See [DBeaver's driver manager documentation](https://dbeaver.com/docs/dbeaver/Driver-Manager/).
+- **DbVisualizer:** create a user driver from the Custom template in Driver Manager, add the fat JAR, set Driver
+  Class, and configure a connection with the JDBC URL above.
+  See [DbVisualizer's installation guide](https://www.dbvis.com/docs/ug/reference-material/installing-a-jdbc-driver/).
+- **SQuirreL SQL:** create a driver definition with the fat JAR on its extra classpath and the class above;
+  create an alias using that driver and the complete JDBC URL.
+- **SQL Workbench/J:** add a driver definition with the fat JAR and class above, then select it in a connection
+  profile and enter the complete JDBC URL.
+
+Browse schemas, tables, and columns, then try `SELECT * FROM salary LIMIT 5` when the directory contains
+`salary.parquet`. Close and reconnect to check the client's full workflow. If discovery or browsing fails,
+record the client version, its actual Java version, the JAR version, and the full exception. A successful
+isolated JDBC probe does not establish compatibility with a specific GUI client's generated SQL or scanner.
+
+The [compatibility verification record](requirements/done/sql-client-compatibility.md) lists tested runtimes,
+platforms, loader scenarios, and remaining limits, including x64 coverage.
+
+SQL Workbench/J can run scripts without a GUI. To include its real client loader and batch execution in the
+packaged-driver tests, install it separately from the
+[official download](https://sql-workbench.eu/downloads.html), build JParq, then run:
+
+```sh
+mvn -Dit.test=JParqPackagedDriverIT -Djparq.it.sqlWorkbenchJar=/path/to/sqlworkbench.jar failsafe:integration-test failsafe:verify
+```
+
+The optional test lists schemas/tables, describes columns, queries all fixture codecs, opens a second batch
+session, and checks that a deliberate query failure aborts the script. Without this property it is reported
+as skipped. It uses the selected `jparq.it.javaHome` runtime and needs Java 21 or later for build 133.
+The client is not bundled, downloaded during Maven builds, or added to JParq's application classpath.
+
 ## JParq CLI
 An interactive command line interface is available for querying Parquet files using JParq. The CLI supports command
 history and basic line editing features. It also includes several commands starting with a slash (/) for controlling the CLI itself.
@@ -291,7 +345,7 @@ Once the CLI is started, you can use the following commands:
 Example session:
 ```
 $ java -jar ~/lib/jparq.jar target/test-classes/acme
-JParq CLI version 1.3.0
+JParq CLI version 1.4.0
 Connected to /home/user1/project/JParq/target/test-classes/acme
 jparq(acme)> select * from employees e left join salary s on e.id = salary.employee
 e__id | first_name | last_name  | s__id | employee | salary   | change_date
