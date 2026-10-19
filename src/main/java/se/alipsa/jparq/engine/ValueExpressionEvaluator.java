@@ -430,8 +430,8 @@ public final class ValueExpressionEvaluator {
     if (subqueryExecutor == null) {
       throw new IllegalStateException("Scalar subqueries require a subquery executor");
     }
-    CorrelatedSubqueryRewriter.Result rewritten = SubqueryCorrelatedFiltersIsolator.isolate(subSelect,
-        correlationQualifiers(), correlationColumns(), correlationContext,
+    CorrelatedSubqueryRewriter.Result rewritten = subqueryExecutor.rewrite(subSelect, correlationQualifiers(),
+        correlationColumns(), correlationContext,
         (qualifier, column) -> resolveCorrelatedValue(qualifier, column, record));
     SubqueryExecutor.SubqueryResult result = rewritten.correlated()
         ? subqueryExecutor.executeRaw(rewritten.sql())
@@ -712,21 +712,8 @@ public final class ValueExpressionEvaluator {
   }
 
   private Set<String> correlationColumns() {
-    if (effectiveQualifierMapping.isEmpty()) {
-      return Set.of();
-    }
-    Set<String> columns = new LinkedHashSet<>();
-    for (Map<String, String> mapping : effectiveQualifierMapping.values()) {
-      if (mapping == null) {
-        continue;
-      }
-      for (String key : mapping.keySet()) {
-        if (!caseInsensitiveIndex.containsKey(key)) {
-          columns.add(key);
-        }
-      }
-    }
-    return Set.copyOf(columns);
+    return ColumnMappingUtil.correlationColumns(caseInsensitiveIndex, unqualifiedColumnMapping,
+        effectiveQualifierMapping);
   }
 
   private String canonicalFieldName(String qualifier, String columnName) {

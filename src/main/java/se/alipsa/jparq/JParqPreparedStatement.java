@@ -1,6 +1,5 @@
 package se.alipsa.jparq;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
@@ -60,12 +59,9 @@ import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.Path;
 import org.apache.parquet.avro.AvroReadSupport;
-import org.apache.parquet.filter2.compat.FilterCompat;
 import org.apache.parquet.filter2.predicate.FilterPredicate;
 import org.apache.parquet.hadoop.ParquetInputFormat;
-import org.apache.parquet.hadoop.ParquetReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import se.alipsa.jparq.engine.AvroProjections;
@@ -79,9 +75,9 @@ import se.alipsa.jparq.engine.JoinPredicatePlanner;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
-import se.alipsa.jparq.engine.ParquetRecordReaderAdapter;
-import se.alipsa.jparq.engine.ParquetSchemas;
+import se.alipsa.jparq.engine.ParquetTable;
 import se.alipsa.jparq.engine.ProjectionFields;
+import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SamplingRecordReader;
 import se.alipsa.jparq.engine.SqlComparisons;
@@ -167,11 +163,11 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final Schema fileAvroSchema;
   private final PushdownInfo pushdownInfo;
   private final Map<Integer, FilterPredicate> joinPredicates;
-  private final Path path;
-  private final File file;
   private final String tableSchema;
   private final String tableCatalog;
   private final JParqConnection.TableLocation baseTableLocation;
+  // Validation belongs to this prepared plan, never to a connection-wide cache.
+  private final Map<JParqConnection.TableLocation, ParquetTable> validatedTables = new LinkedHashMap<>();
   private final boolean joinQuery;
   private final List<SqlParser.TableReference> tableReferences;
   private final boolean setOperationQuery;
@@ -190,6 +186,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   private JParqPreparedStatement boundStatement;
   private boolean boundStatementStale;
   private boolean closed = false;
+  private boolean nested;
+  private QueryCancellation inheritedCancellation;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
     this(stmt, sql, Map.of(), false);
@@ -224,8 +222,6 @@ public class JParqPreparedStatement implements PreparedStatement {
     Schema tmpFileAvro = null;
     Optional<FilterPredicate> tmpPredicate = Optional.empty();
     Expression tmpResidual = null;
-    Path tmpPath = null;
-    File tmpFile = null;
     JParqConnection.TableLocation tmpBaseLocation = null;
     String tmpSchemaName = null;
     CteResult tmpBaseCteResult = null;
@@ -273,10 +269,10 @@ public class JParqPreparedStatement implements PreparedStatement {
           tmpSetOperation = false;
           tmpTableRefs = tmpSelect.tableReferences();
           SqlParser.TableReference baseRef = tmpTableRefs.isEmpty() ? null : tmpTableRefs.getFirst();
-          boolean baseIsDerivedTable = baseRef != null && baseRef.subquery() != null;
+          boolean baseIsDerivedTable = baseRef != null && baseRef.isDerivedTable();
           tmpJoinQuery = tmpSelect.hasMultipleTables();
 
-          boolean baseIsCte = baseRef != null && (baseRef.commonTableExpression() != null
+          boolean baseIsCte = baseRef != null && !baseIsDerivedTable && (baseRef.commonTableExpression() != null
               || resolveCteResultByName(baseRef.tableName(), tmpCteResults) != null);
           boolean baseIsInformationSchemaTables = baseRef != null
               && InformationSchemaTables.matchesTableReference(baseRef.tableName());
@@ -364,33 +360,21 @@ public class JParqPreparedStatement implements PreparedStatement {
             String targetSchema = baseRef != null ? baseRef.schemaName() : null;
             tmpBaseLocation = stmt.getConn().resolveTable(targetSchema, targetTable);
             tmpSchemaName = formatSchemaForMetadata(tmpBaseLocation.schemaName());
-            tmpFile = tmpBaseLocation.file();
-            tmpPath = new Path(tmpFile.toURI());
-
-            Schema avro;
-            try {
-              avro = ParquetSchemas.readAvroSchema(tmpPath, tmpConf);
-            } catch (IOException ignore) {
-              /* No schema -> no pushdown */
-              avro = null;
-            }
+            Schema avro = validatedTable(tmpBaseLocation, tmpConf).schema();
 
             tmpFileAvro = avro;
 
             if (!tmpSelect.qualifiedWildcards().isEmpty()) {
-              if (tmpFileAvro == null) {
-                throw new SQLException("Unable to resolve schema for qualified wildcard projection");
-              }
               Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
                   baseRef, tmpFileAvro);
               tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
             }
 
             aggregatePlan = AggregateFunctions.plan(tmpSelect);
-            configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf);
+            configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf, tmpCteResults);
 
             if (stmt.getConn().isPredicatePushdown() && (baseRef == null || baseRef.tableSample() == null)
-                && tmpFileAvro != null && tmpSelect.where() != null) {
+                && tmpSelect.where() != null) {
               var split = ParquetFilterBuilder.split(tmpFileAvro, tmpSelect.where());
               tmpPredicate = split.predicate();
               tmpResidual = split.residual();
@@ -399,10 +383,6 @@ public class JParqPreparedStatement implements PreparedStatement {
               tmpResidual = tmpSelect.where();
             }
 
-            if (tmpBaseCteResult == null && tmpFileAvro == null) {
-              // Guard to avoid NPE later when schema resolution fails completely
-              throw new SQLException("Unable to resolve schema for table " + tmpSelect.table());
-            }
           }
         }
       }
@@ -430,8 +410,6 @@ public class JParqPreparedStatement implements PreparedStatement {
             plannedPushdown.dictionaryFilteringEnabled(), plannedPushdown.bloomFilteringEnabled(),
             plannedPushdown.message() + " Projection pushdown disabled by connection property.",
             plannedPushdown.parquetPredicateSummary(), plannedPushdown.residualExpressionSummary());
-    this.path = tmpPath;
-    this.file = tmpFile;
     this.tableSchema = tmpSchemaName;
     this.tableCatalog = stmt.getConn().getCatalog();
     this.baseTableLocation = tmpBaseLocation;
@@ -447,27 +425,55 @@ public class JParqPreparedStatement implements PreparedStatement {
   @SuppressWarnings("PMD.CloseResource")
   @Override
   public JParqResultSet executeQuery() throws SQLException {
+    try (JParqStatement.ExecutionScope execution = stmt.beginExecution(inheritedCancellation)) {
+      var cancellation = execution.cancellation();
+      cancellation.checkCanceled();
+      try {
+        return executeQuery(cancellation);
+      } catch (SQLException | RuntimeException exception) {
+        cancellation.checkCanceled();
+        throw exception;
+      }
+    }
+  }
+
+  /**
+   * Executes under the cancellation state shared by all nested query work.
+   *
+   * @param cancellation
+   *          execution cancellation state
+   * @return completed or streaming result
+   * @throws SQLException
+   *           if execution fails or is canceled
+   */
+  // The context handle must outlive this call when ownership passes to the
+  // result.
+  @SuppressWarnings("PMD.UseTryWithResources")
+  private JParqResultSet executeQuery(QueryCancellation cancellation) throws SQLException {
     if (hasParameters) {
       return executeWithBoundParameters();
     }
     Connection conn = getConnection();
     JParqDatabaseMetaData metaData = (JParqDatabaseMetaData) conn.getMetaData();
-    SystemFunctions.setContext(conn.getCatalog(), metaData.getUserName());
+    var context = SystemFunctions.openContext(conn.getCatalog(), metaData.getUserName());
+    boolean transferred = false;
     try {
       if (setOperationQuery) {
         JParqResultSet rs = executeSetOperation();
-        stmt.setCurrentRs(rs);
+        publishResult(rs, cancellation, context);
+        transferred = true;
         return rs;
       }
       RecordReader reader;
       String resultTableName;
       String resultSchema = tableSchema;
+      Schema resultMetadata;
       SqlParser.TableReference baseRef = (tableReferences == null || tableReferences.isEmpty())
           ? null
           : tableReferences.getFirst();
       try {
         if (joinQuery) {
-          reader = buildJoinReader();
+          reader = buildJoinReader(cancellation);
           resultTableName = buildJoinTableName();
           resultSchema = null;
         } else if (baseCteResult != null) {
@@ -478,19 +484,16 @@ public class JParqPreparedStatement implements PreparedStatement {
           }
           reader = new InMemoryRecordReader(baseCteResult.rows(), baseCteResult.schema(), resultTableName);
         } else {
-          ParquetReader.Builder<GenericRecord> builder = ParquetReader
-              .<GenericRecord>builder(new AvroReadSupport<>(), path).withConf(conf);
-
-          if (parquetPredicate.isPresent()) {
-            builder = builder.withFilter(FilterCompat.get(parquetPredicate.get()));
-          }
-
-          ParquetReader<GenericRecord> parquetReader = builder.build();
-          reader = new ParquetRecordReaderAdapter(parquetReader, fileAvroSchema);
-          resultTableName = baseTableLocation != null ? baseTableLocation.tableName() : file.getName();
+          reader = validatedTable(baseTableLocation, conf).open(conf, parquetPredicate.orElse(null));
+          resultTableName = baseTableLocation.tableName();
         }
+        resultMetadata = reader instanceof JoinRecordReader joinReader ? joinReader.schema() : fileAvroSchema;
+        reader = cancellation.track(reader);
         if (!joinQuery) {
-          reader = applyTableSample(baseRef == null ? null : baseRef.tableSample(), reader);
+          RecordReader sampled = applyTableSample(baseRef == null ? null : baseRef.tableSample(), reader);
+          if (sampled != reader) {
+            reader = cancellation.track(sampled);
+          }
         }
       } catch (SQLException e) {
         throw e;
@@ -504,16 +507,29 @@ public class JParqPreparedStatement implements PreparedStatement {
       final List<String> physical = parsedSelect.labels().isEmpty() ? null : parsedSelect.columnNames();
       // Create the result set, passing reader, select plan, residual filter,
       // plus projection labels and physical names (for metadata & value lookups)
-      SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(), this::prepareSubqueryStatement);
-      JParqResultSet rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, tableCatalog,
-          residualExpression, labels, physical, subqueryExecutor);
-      rs.setMetadataSchema(reader instanceof JoinRecordReader joinReader ? joinReader.schema() : fileAvroSchema);
+      SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(),
+          sql -> prepareSubqueryStatement(sql, cteResults, cancellation), this::subqueryTableColumns);
+      JParqResultSet rs;
+      try {
+        rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, tableCatalog, residualExpression,
+            labels, physical, subqueryExecutor);
+        rs.setMetadataSchema(resultMetadata);
+      } catch (SQLException | RuntimeException exception) {
+        try {
+          reader.close();
+        } catch (IOException closeException) {
+          exception.addSuppressed(closeException);
+        }
+        throw exception;
+      }
 
-      stmt.setCurrentRs(rs);
+      publishResult(rs, cancellation, context);
+      transferred = true;
       return rs;
-    } catch (SQLException | RuntimeException e) {
-      SystemFunctions.clearContext();
-      throw e;
+    } finally {
+      if (!transferred) {
+        context.close();
+      }
     }
   }
 
@@ -521,6 +537,32 @@ public class JParqPreparedStatement implements PreparedStatement {
   public ResultSet executeQuery(String sql) throws SQLException {
     throw new SQLFeatureNotSupportedException(
         "A PreparedStatement cannot execute a new query string. Use the no-arg executeQuery().");
+  }
+
+  /**
+   * Attaches execution ownership before exposing a result to the statement.
+   *
+   * @param result
+   *          completed result
+   * @param cancellation
+   *          execution cancellation state
+   * @param context
+   *          this execution's function context
+   * @throws SQLException
+   *           if cancellation raced result construction
+   */
+  private void publishResult(JParqResultSet result, QueryCancellation cancellation,
+      SystemFunctions.ContextScope context) throws SQLException {
+    result.setExecutionContext(cancellation, context);
+    try {
+      cancellation.checkCanceled();
+      if (!nested) {
+        stmt.setCurrentRs(result);
+      }
+    } catch (SQLException exception) {
+      result.close();
+      throw exception;
+    }
   }
 
   @Override
@@ -536,14 +578,35 @@ public class JParqPreparedStatement implements PreparedStatement {
     closed = true;
   }
 
-  private JParqPreparedStatement prepareSubqueryStatement(String sql) throws SQLException {
-    return prepareSubqueryStatement(sql, cteResults);
-  }
-
   private JParqPreparedStatement prepareSubqueryStatement(String sql, Map<Identifier, CteResult> cteContext)
       throws SQLException {
+    return prepareSubqueryStatement(sql, cteContext, inheritedCancellation);
+  }
+
+  /**
+   * Prepares nested work without publishing its private result on the outer
+   * statement.
+   *
+   * @param sql
+   *          nested SQL
+   * @param cteContext
+   *          inherited CTE values
+   * @param cancellation
+   *          outer execution state, including during result iteration
+   * @return nested prepared statement
+   * @throws SQLException
+   *           if preparation fails or execution is canceled
+   */
+  private JParqPreparedStatement prepareSubqueryStatement(String sql, Map<Identifier, CteResult> cteContext,
+      QueryCancellation cancellation) throws SQLException {
     Map<Identifier, CteResult> inherited = cteContext == null ? Map.of() : cteContext;
-    return new JParqPreparedStatement(stmt, sql, inherited);
+    try (var execution = stmt.beginExecution(cancellation)) {
+      execution.cancellation().checkCanceled();
+      var prepared = new JParqPreparedStatement(stmt, sql, inherited);
+      prepared.nested = true;
+      prepared.inheritedCancellation = execution.cancellation();
+      return prepared;
+    }
   }
 
   private RecordReader applyTableSample(SqlParser.TableSampleDefinition sample, RecordReader reader)
@@ -590,7 +653,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     int columnCount = -1;
     for (SqlParser.SetComponent component : components) {
       List<List<Object>> componentData = new ArrayList<>();
-      try (JParqPreparedStatement prepared = new JParqPreparedStatement(stmt, component.sql(), cteResults);
+      try (JParqPreparedStatement prepared = prepareSubqueryStatement(component.sql(), cteResults);
           ResultSet rs = prepared.executeQuery()) {
         ResultSetMetaData meta = rs.getMetaData();
         if (labels == null) {
@@ -1216,6 +1279,27 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
   }
 
+  /**
+   * Reuses validated physical schemas within this prepared plan.
+   *
+   * @param location
+   *          logical input table
+   * @param configuration
+   *          footer reader configuration
+   * @return the plan's validated table
+   * @throws SQLException
+   *           if a shard cannot be read or has an incompatible schema
+   */
+  private ParquetTable validatedTable(JParqConnection.TableLocation location, Configuration configuration)
+      throws SQLException {
+    ParquetTable table = validatedTables.get(location);
+    if (table == null) {
+      table = ParquetTable.validate(location, configuration);
+      validatedTables.put(location, table);
+    }
+    return table;
+  }
+
   /** Plans single-table WHERE conjuncts before opening join inputs. */
   private Map<Integer, FilterPredicate> planJoinPredicates() throws SQLException {
     if (!stmt.getConn().isPredicatePushdown() || parsedSelect.where() == null) {
@@ -1229,11 +1313,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           && !InformationSchemaColumns.matchesTableReference(reference.tableName())
           && resolveCteResultByName(reference.tableName(), cteResults) == null) {
         var location = stmt.getConn().resolveTable(reference.schemaName(), reference.tableName());
-        try {
-          schema = ParquetSchemas.readAvroSchema(new Path(location.file().toURI()), new Configuration(false));
-        } catch (IOException exception) {
-          throw new SQLException("Failed to read join input schema", exception);
-        }
+        schema = validatedTable(location, new Configuration(false)).schema();
       }
       schemas.add(schema);
     }
@@ -1247,10 +1327,20 @@ public class JParqPreparedStatement implements PreparedStatement {
     return Map.copyOf(predicates);
   }
 
-  private JoinRecordReader buildJoinReader() throws SQLException {
+  /**
+   * Loads join inputs under the current execution's cancellation state.
+   *
+   * @param cancellation
+   *          shared execution state
+   * @return materialized join reader
+   * @throws SQLException
+   *           if loading fails or execution is canceled
+   */
+  private JoinRecordReader buildJoinReader(QueryCancellation cancellation) throws SQLException {
     List<JoinRecordReader.JoinTable> tables = new ArrayList<>();
     Map<String, Integer> qualifierIndex = new LinkedHashMap<>();
     for (int referenceIndex = 0; referenceIndex < tableReferences.size(); referenceIndex++) {
+      cancellation.checkCanceled();
       SqlParser.TableReference ref = tableReferences.get(referenceIndex);
       if (ref.unnest() != null) {
         if (tables.isEmpty()) {
@@ -1298,7 +1388,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       CteResult cteResult = null;
       if (ref.commonTableExpression() != null) {
         cteResult = resolveCteResult(ref.commonTableExpression(), cteResults);
-      } else if (ref.tableName() != null) {
+      } else if (!ref.isDerivedTable() && ref.tableName() != null) {
         cteResult = resolveCteResultByName(ref.tableName(), cteResults);
       }
       if (cteResult != null) {
@@ -1310,7 +1400,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
         continue;
       }
-      if (ref.subquery() != null) {
+      if (ref.isDerivedTable()) {
         JoinRecordReader.JoinTable table = ref.lateral()
             ? materializeLateralSubqueryTable(ref, tables, qualifierIndex)
             : materializeSubqueryTable(ref);
@@ -1323,29 +1413,19 @@ public class JParqPreparedStatement implements PreparedStatement {
         throw new SQLException("JOIN requires explicit table names");
       }
       JParqConnection.TableLocation tableLocation = stmt.getConn().resolveTable(ref.schemaName(), tableName);
-      Path tablePath = new Path(tableLocation.file().toURI());
       Configuration tableConf = new Configuration(conf);
-      Schema tableSchema;
-      try {
-        tableSchema = ParquetSchemas.readAvroSchema(tablePath, tableConf);
-      } catch (IOException e) {
-        throw new SQLException("Failed to read schema for table " + tableName, e);
-      }
+      ParquetTable input = validatedTable(tableLocation, tableConf);
+      Schema tableSchema = input.schema();
       validateJoinTableColumns(tableSchema, ref);
       List<GenericRecord> rows = new ArrayList<>();
-      ParquetReader.Builder<GenericRecord> tableBuilder = ParquetReader
-          .<GenericRecord>builder(new AvroReadSupport<>(), tablePath).withConf(tableConf);
       FilterPredicate predicate = joinPredicates.get(referenceIndex);
-      if (predicate != null) {
-        tableBuilder.withFilter(FilterCompat.get(predicate));
-      }
-      try (RecordReader tableReader = new ParquetRecordReaderAdapter(tableBuilder.build(), tableSchema)) {
+      try (RecordReader tableReader = cancellation.track(input.open(tableConf, predicate))) {
         GenericRecord record = tableReader.read();
         while (record != null) {
           rows.add(record);
           record = tableReader.read();
         }
-      } catch (Exception e) {
+      } catch (IOException e) {
         throw new SQLException("Failed to read data for table " + tableName, e);
       }
       rows = applySampleToRows(ref.tableSample(), rows);
@@ -1355,7 +1435,9 @@ public class JParqPreparedStatement implements PreparedStatement {
       registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
     }
     try {
-      JoinRecordReader joinReader = new JoinRecordReader(tables);
+      var executor = new SubqueryExecutor(stmt.getConn(),
+          sql -> prepareSubqueryStatement(sql, cteResults, cancellation), this::subqueryTableColumns);
+      JoinRecordReader joinReader = new JoinRecordReader(tables, executor);
       expandJoinQualifiedWildcards(joinReader);
       return joinReader;
     } catch (IllegalArgumentException e) {
@@ -2539,6 +2621,51 @@ public class JParqPreparedStatement implements PreparedStatement {
     return schemaForTableReference(match);
   }
 
+  /**
+   * Resolves a subquery input using retained physical or inherited CTE schemas.
+   *
+   * @param table
+   *          local table reference
+   * @return its unqualified source columns, or null when unknown
+   */
+  private Set<String> subqueryTableColumns(Table table) {
+    return subqueryTableColumns(table, cteResults, conf);
+  }
+
+  /**
+   * Resolves input columns while the owning prepared plan is being constructed.
+   *
+   * @param table
+   *          local source
+   * @param ctes
+   *          CTEs available during planning
+   * @param configuration
+   *          physical input configuration
+   * @return source column names, or null when unknown
+   */
+  private Set<String> subqueryTableColumns(Table table, Map<Identifier, CteResult> ctes, Configuration configuration) {
+    Set<String> virtual = SubqueryExecutor.virtualColumns(table);
+    if (virtual != null) {
+      return virtual;
+    }
+    try {
+      CteResult cte = resolveCteResultByName(table.getName(), ctes);
+      Schema schema;
+      if (cte != null) {
+        schema = cte.schema();
+      } else {
+        var location = stmt.getConn().resolveTable(table.getSchemaName(), table.getName());
+        schema = validatedTable(location, configuration == null ? new Configuration(false) : configuration).schema();
+      }
+      return schema.getFields().stream().map(Schema.Field::name).collect(java.util.stream.Collectors.toSet());
+    } catch (SQLException exception) {
+      if (QueryCancellation.findCancellation(exception).isPresent()) {
+        throw new IllegalStateException("Canceled while resolving subquery columns", exception);
+      }
+      return null;
+    }
+  }
+
   private Schema schemaForTableReference(SqlParser.TableReference ref) throws SQLException {
     if (ref == null) {
       return null;
@@ -2559,14 +2686,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         return cte.schema();
       }
       JParqConnection.TableLocation location = stmt.getConn().resolveTable(ref.schemaName(), ref.tableName());
-      Path path = new Path(location.file().toURI());
       Configuration tableConf = new Configuration(false);
       configureParquetFiltering(tableConf);
-      try {
-        return ParquetSchemas.readAvroSchema(path, tableConf);
-      } catch (IOException e) {
-        throw new SQLException("Failed to read schema for table '" + ref.tableName() + "'", e);
-      }
+      return validatedTable(location, tableConf).schema();
     }
     return null;
   }
@@ -2788,6 +2910,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (ctes == null || ctes.isEmpty()) {
       return;
     }
+    Set<Identifier> declared = new LinkedHashSet<>();
     for (SqlParser.CommonTableExpression cte : ctes) {
       if (cte == null) {
         continue;
@@ -2796,7 +2919,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (key == null) {
         throw new SQLException("CTE definition is missing a name");
       }
-      if (target.containsKey(key)) {
+      if (!declared.add(key)) {
         throw new SQLException("Duplicate CTE name detected: " + cte.name().text());
       }
       CteResult result = evaluateCte(cte, target);
@@ -2924,7 +3047,7 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   private CteResult executeCteQuery(String sql, Map<Identifier, CteResult> context, Identifier tableName,
       List<String> columnAliases) throws SQLException {
-    try (JParqPreparedStatement prepared = new JParqPreparedStatement(stmt, sql, context);
+    try (JParqPreparedStatement prepared = prepareSubqueryStatement(sql, context);
         ResultSet rs = prepared.executeQuery()) {
       String recordName = tableName == null ? null : tableName.text();
       return consumeResultSet(rs, recordName, columnAliases);
@@ -3037,12 +3160,15 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   private void configureProjectionPushdown(SqlParser.Select select, Schema schema,
-      AggregateFunctions.AggregatePlan aggregatePlan, Configuration configuration) throws SQLException {
+      AggregateFunctions.AggregatePlan aggregatePlan, Configuration configuration, Map<Identifier, CteResult> ctes)
+      throws SQLException {
     if (schema == null || configuration == null || select == null) {
       return;
     }
 
     ColumnRequirement columnRequirement = requiredColumns(select, aggregatePlan);
+    collectSubqueryDependencies(select, schema, columnRequirement.required(),
+        new SubqueryExecutor(stmt.getConn(), null, table -> subqueryTableColumns(table, ctes, configuration)));
     Set<String> requiredColumns = columnRequirement.required();
     validateRequiredColumns(schema, requiredColumns, select.table(), select.labels(), select.columnNames(),
         columnRequirement.referenced());
@@ -3052,7 +3178,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     List<SqlParser.TableReference> refs = select.tableReferences();
     if (refs != null) {
-      boolean hasDerivedTable = refs.stream().anyMatch(ref -> ref != null && ref.subquery() != null);
+      boolean hasDerivedTable = refs.stream().anyMatch(ref -> ref != null && ref.isDerivedTable());
       if (hasDerivedTable) {
         return;
       }
@@ -3068,6 +3194,53 @@ public class JParqPreparedStatement implements PreparedStatement {
       Schema avroProjection = AvroProjections.project(schema, requiredColumns);
       AvroReadSupport.setRequestedProjection(configuration, avroProjection);
       AvroReadSupport.setAvroReadSchema(configuration, avroProjection);
+    }
+  }
+
+  /**
+   * Retains unqualified outer dependencies before projecting the physical input.
+   *
+   * @param select
+   *          outer query plan
+   * @param schema
+   *          full outer schema
+   * @param required
+   *          required-column accumulator
+   * @param resolver
+   *          scope-aware subquery schema resolver
+   */
+  private void collectSubqueryDependencies(SqlParser.Select select, Schema schema, Set<String> required,
+      SubqueryExecutor resolver) {
+    Set<String> candidates = schema.getFields().stream().map(Schema.Field::name)
+        .collect(java.util.stream.Collectors.toSet());
+    var baseRef = select.tableReferences().isEmpty() ? null : select.tableReferences().getFirst();
+    List<String> qualifiers = qualifierList(baseRef, false);
+    final var visitor = new net.sf.jsqlparser.expression.ExpressionVisitorAdapter<Void>() {
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.expression.AnyComparisonExpression any, S context) {
+        return visit(any.getSelect(), context);
+      }
+
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.statement.select.Select nested, S context) {
+        addColumns(required, resolver.rewrite(nested, qualifiers, candidates, Map.of(), (qualifier, column) -> null)
+            .correlatedColumns());
+        return null;
+      }
+
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.statement.select.ParenthesedSelect nested, S context) {
+        return visit((net.sf.jsqlparser.statement.select.Select) nested, context);
+      }
+    };
+    List<Expression> expressions = new ArrayList<>(select.expressions());
+    expressions.add(select.where());
+    expressions.add(select.having());
+    select.orderBy().forEach(key -> expressions.add(key.expression()));
+    for (Expression expression : expressions) {
+      if (expression != null) {
+        expression.accept(visitor, null);
+      }
     }
   }
 
@@ -3319,6 +3492,8 @@ public class JParqPreparedStatement implements PreparedStatement {
       boundStatement = null;
     }
     boundStatement = new JParqPreparedStatement(stmt, boundSql, inheritedCteContext);
+    boundStatement.nested = nested;
+    boundStatement.inheritedCancellation = inheritedCancellation;
     JParqResultSet resultSet = boundStatement.executeQuery();
     boundStatementStale = false;
     return resultSet;
@@ -4474,7 +4649,11 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   @Override
-  public void cancel() {
+  public void cancel() throws SQLException {
+    if (boundStatement != null) {
+      boundStatement.cancel();
+    }
+    stmt.cancel();
   }
 
   @Override

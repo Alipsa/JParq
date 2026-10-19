@@ -28,6 +28,15 @@ public final class InformationSchemaTables {
   private InformationSchemaTables() {
   }
 
+  /**
+   * Returns the view's fixed schema without loading any catalog rows.
+   *
+   * @return information-schema view schema
+   */
+  public static Schema schema() {
+    return TABLE_SCHEMA;
+  }
+
   private static Schema buildSchema() {
     return SchemaBuilder.record("information_schema_tables").namespace("se.alipsa.jparq.meta").fields()
         .name("TABLE_CATALOG").type().unionOf().nullType().and().stringType().endUnion().nullDefault()

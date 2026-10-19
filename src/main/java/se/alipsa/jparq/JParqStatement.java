@@ -6,6 +6,7 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLWarning;
 import java.sql.Statement;
+import se.alipsa.jparq.engine.QueryCancellation;
 
 /** An implementation of the java.sql.Statement interface. */
 @SuppressWarnings({
@@ -15,8 +16,11 @@ public class JParqStatement implements Statement {
 
   private final JParqConnection conn;
   private String currentSql;
-  private JParqResultSet currentRs;
+  private volatile JParqResultSet currentRs;
   private boolean closed = false;
+  private QueryCancellation activeExecution;
+  private Thread executionOwner;
+  private int executionDepth;
 
   /**
    * Constructor for JParqStatement.
@@ -94,9 +98,82 @@ public class JParqStatement implements Statement {
     // Delegation: Create a temporary prepared statement, execute it, and close it.
     // The JParqPreparedStatement constructor will perform the expensive planning
     // phase.
-    try (JParqPreparedStatement pstmt = new JParqPreparedStatement(this, sql)) {
-      this.currentRs = pstmt.executeQuery();
-      return currentRs;
+    try (ExecutionScope execution = beginExecution()) {
+      try (JParqPreparedStatement pstmt = new JParqPreparedStatement(this, sql)) {
+        execution.cancellation().checkCanceled();
+        this.currentRs = pstmt.executeQuery();
+        return currentRs;
+      } catch (SQLException | RuntimeException exception) {
+        execution.cancellation().checkCanceled();
+        throw exception;
+      }
+    }
+  }
+
+  /**
+   * Starts execution before planning or materialization, sharing nested scopes.
+   *
+   * @return scope owning one nesting level of this statement's execution
+   * @throws SQLException
+   *           if another thread is executing this statement
+   */
+  ExecutionScope beginExecution() throws SQLException {
+    return beginExecution(null);
+  }
+
+  /**
+   * Starts nested work using the outer result's cancellation state during
+   * iteration.
+   *
+   * @param inherited
+   *          outer cancellation state, or null for a fresh execution
+   * @return execution scope
+   * @throws SQLException
+   *           if another thread is executing this statement
+   */
+  synchronized ExecutionScope beginExecution(QueryCancellation inherited) throws SQLException {
+    if (executionDepth == 0) {
+      activeExecution = inherited == null ? new QueryCancellation() : inherited;
+      executionOwner = Thread.currentThread();
+    } else if (executionOwner != Thread.currentThread()) {
+      throw new SQLException("Statement is already executing on another thread");
+    }
+    executionDepth++;
+    return new ExecutionScope(activeExecution);
+  }
+
+  /** Holds the cancellation state until an execution or nested query returns. */
+  final class ExecutionScope implements AutoCloseable {
+    private final QueryCancellation cancellation;
+
+    /**
+     * Captures the shared execution state.
+     *
+     * @param cancellation
+     *          execution cancellation token
+     */
+    private ExecutionScope(QueryCancellation cancellation) {
+      this.cancellation = cancellation;
+    }
+
+    /**
+     * Returns the cancellation state shared with nested executions.
+     *
+     * @return shared token
+     */
+    QueryCancellation cancellation() {
+      return cancellation;
+    }
+
+    @Override
+    public void close() {
+      synchronized (JParqStatement.this) {
+        executionDepth--;
+        if (executionDepth == 0) {
+          executionOwner = null;
+          activeExecution = null;
+        }
+      }
     }
   }
 
@@ -180,8 +257,26 @@ public class JParqStatement implements Statement {
   public void setQueryTimeout(int seconds) {
   }
 
+  /**
+   * Cancels execution, materialization, or the currently returned result.
+   *
+   * @throws SQLException
+   *           if closing the current result fails
+   */
   @Override
-  public void cancel() {
+  public void cancel() throws SQLException {
+    QueryCancellation execution;
+    synchronized (this) {
+      execution = executionDepth > 0 ? activeExecution : null;
+    }
+    if (execution != null) {
+      execution.cancel();
+    } else {
+      JParqResultSet result = currentRs;
+      if (result != null) {
+        result.cancel();
+      }
+    }
   }
 
   @Override

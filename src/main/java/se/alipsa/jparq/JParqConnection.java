@@ -27,6 +27,7 @@ import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import se.alipsa.jparq.engine.HfTableDiscovery;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.helper.JParqUtil;
 
@@ -38,6 +39,7 @@ public class JParqConnection implements Connection {
   private final boolean caseSensitive;
   private final boolean predicatePushdown;
   private final boolean projectionPushdown;
+  private final boolean hfLayout;
   private boolean closed = false;
   /** Default schema used when no explicit schema is provided. */
   public static final String DEFAULT_SCHEMA = "PUBLIC";
@@ -72,6 +74,12 @@ public class JParqConnection implements Connection {
     this.predicatePushdown = Boolean.parseBoolean(qprops.getProperty("predicatePushdown", "true"));
     this.projectionPushdown = Boolean.parseBoolean(qprops.getProperty("projectionPushdown", "true"));
 
+    String layout = qprops.getProperty("datasetLayout", "none");
+    if (!"none".equalsIgnoreCase(layout) && !"hf".equalsIgnoreCase(layout)) {
+      throw new SQLException("Invalid datasetLayout '" + layout + "'; allowed values: none, hf");
+    }
+    hfLayout = "hf".equalsIgnoreCase(layout);
+
     if (path.startsWith("file://")) {
       path = path.substring("file://".length());
     }
@@ -83,37 +91,8 @@ public class JParqConnection implements Connection {
   }
 
   /**
-   * Resolve the Parquet file backing the supplied table in the default
-   * {@value #DEFAULT_SCHEMA} schema.
-   *
-   * @param tableName
-   *          logical table name without schema or file extension
-   * @return the {@link File} representing the Parquet table
-   * @throws SQLException
-   *           if the table cannot be found or the directory cannot be listed
-   */
-  File tableFile(String tableName) throws SQLException {
-    return resolveTable(null, tableName).file();
-  }
-
-  /**
-   * Resolve the Parquet file backing the supplied table and schema.
-   *
-   * @param schemaName
-   *          schema containing the table; when {@code null} or blank
-   *          {@value #DEFAULT_SCHEMA} is assumed
-   * @param tableName
-   *          logical table name without file extension
-   * @return the {@link File} representing the Parquet table
-   * @throws SQLException
-   *           if the table cannot be found or the directory cannot be listed
-   */
-  File tableFile(String schemaName, String tableName) throws SQLException {
-    return resolveTable(schemaName, tableName).file();
-  }
-
-  /**
-   * Resolve a table reference to its backing file.
+   * Resolve a table reference to its ordered physical files without reading
+   * footers.
    *
    * @param schemaName
    *          schema containing the table; {@value #DEFAULT_SCHEMA} is used when
@@ -139,13 +118,18 @@ public class JParqConnection implements Connection {
 
   /**
    * Discover all Parquet tables available under the base directory, mapping the
-   * root directory and any immediate child directories to schemas.
+   * root directory and immediate children to schemas in the default layout. With
+   * datasetLayout=hf, named shards and eligible numeric directories form logical
+   * tables; discovery validates the complete catalog without footer I/O.
    *
    * @return immutable list of available table locations
    * @throws SQLException
-   *           if a directory cannot be listed
+   *           if a directory cannot be listed or HF discovery is invalid
    */
   public List<TableLocation> listTables() throws SQLException {
+    if (hfLayout) {
+      return HfTableDiscovery.discover(baseDir, caseSensitive).tables();
+    }
     Map<String, TableLocation> discovered = new LinkedHashMap<>();
     addTablesFromDirectory(baseDir, DEFAULT_SCHEMA, discovered);
     File[] children = baseDir.listFiles(File::isDirectory);
@@ -164,13 +148,18 @@ public class JParqConnection implements Connection {
   }
 
   /**
-   * Discover all schemas available under the base directory.
+   * Discover all schemas available under the base directory without footer I/O.
+   * HF mode classifies directory tables before schemas and validates the whole
+   * catalog.
    *
    * @return immutable list of available schema names
    * @throws SQLException
    *           if a directory cannot be listed
    */
   public List<String> listSchemas() throws SQLException {
+    if (hfLayout) {
+      return HfTableDiscovery.discover(baseDir, caseSensitive).schemas();
+    }
     Set<String> schemas = new LinkedHashSet<>();
     schemas.add(DEFAULT_SCHEMA);
     File[] children = baseDir.listFiles(File::isDirectory);
@@ -210,14 +199,7 @@ public class JParqConnection implements Connection {
   }
 
   private String normalize(String name) {
-    Identifier identifier = Identifier.of(name);
-    if (identifier == null) {
-      return "";
-    }
-    if (caseSensitive || identifier.quoted()) {
-      return identifier.text();
-    }
-    return identifier.normalized();
+    return Identifier.normalize(name, caseSensitive);
   }
 
   private String validateTableName(String tableName) throws SQLException {
@@ -228,31 +210,57 @@ public class JParqConnection implements Connection {
   }
 
   /**
-   * Immutable description of a discovered table on disk.
-   *
+   * Immutable logical table. Record components expose files rather than a single
+   * file.
+   * 
    * @param schemaName
-   *          schema that owns the table
+   *          owning schema
    * @param tableName
-   *          logical table name without extension
-   * @param file
-   *          Parquet file backing the table
+   *          logical name
+   * @param files
+   *          nonempty physical files in scan order
    */
-  public record TableLocation(String schemaName, String tableName, File file) {
-
+  public record TableLocation(String schemaName, String tableName, List<File> files) {
     /**
-     * Create a new immutable table location.
-     *
+     * Copies and validates the physical file list.
+     * 
      * @param schemaName
-     *          schema that owns the table
+     *          owning schema
      * @param tableName
-     *          logical table name
-     * @param file
-     *          backing Parquet file
+     *          logical name
+     * @param files
+     *          nonempty ordered files without null entries
      */
     public TableLocation {
       Objects.requireNonNull(schemaName, "schemaName");
       Objects.requireNonNull(tableName, "tableName");
-      Objects.requireNonNull(file, "file");
+      files = List.copyOf(files);
+      if (files.isEmpty()) {
+        throw new IllegalArgumentException("A table requires at least one file");
+      }
+    }
+
+    /**
+     * Creates a single-file table, preserving the original constructor signature.
+     * 
+     * @param schemaName
+     *          owning schema
+     * @param tableName
+     *          logical name
+     * @param file
+     *          physical file
+     */
+    public TableLocation(String schemaName, String tableName, File file) {
+      this(schemaName, tableName, List.of(file));
+    }
+
+    /**
+     * Returns the first file for compatibility; execution must use all files.
+     * 
+     * @return first physical file
+     */
+    public File file() {
+      return files.getFirst();
     }
   }
 

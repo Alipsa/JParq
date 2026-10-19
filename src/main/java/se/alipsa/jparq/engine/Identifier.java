@@ -42,6 +42,23 @@ public final class Identifier {
   }
 
   /**
+   * Normalizes a name for filesystem catalog comparison using connection rules.
+   * 
+   * @param raw
+   *          possibly quoted name
+   * @param caseSensitive
+   *          whether unquoted names retain their case
+   * @return normalized text, or an empty string for a missing name
+   */
+  public static String normalize(String raw, boolean caseSensitive) {
+    Identifier identifier = of(raw);
+    if (identifier == null) {
+      return "";
+    }
+    return caseSensitive || identifier.quoted() ? identifier.text() : identifier.normalized();
+  }
+
+  /**
    * Determine whether the identifier was quoted in the originating SQL statement.
    *
    * @return {@code true} when the identifier was quoted

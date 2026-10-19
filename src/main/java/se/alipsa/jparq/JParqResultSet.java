@@ -18,6 +18,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
@@ -36,6 +37,7 @@ import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.ParquetSchemas;
+import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.QueryProcessor;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
@@ -73,7 +75,11 @@ public class JParqResultSet extends ResultSetAdapter {
   private final List<Integer> aggregateSqlTypes;
   private int aggregateRowIndex = -1;
   private boolean aggregateOnRow = false;
-  private boolean closed = false;
+  private volatile boolean closed = false;
+  private volatile boolean canceled;
+  private final AtomicBoolean resourcesClosed = new AtomicBoolean();
+  private QueryCancellation cancellation;
+  private SystemFunctions.ContextScope systemContext;
   private int rowNum = 0;
   private boolean lastWasNull = false;
 
@@ -444,9 +450,7 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public boolean next() throws SQLException {
-    if (closed) {
-      throw new SQLException("ResultSet closed");
-    }
+    ensureOpen();
     if (aggregateQuery) {
       if (aggregateRows == null || aggregateRows.isEmpty()) {
         aggregateOnRow = false;
@@ -470,13 +474,94 @@ public class JParqResultSet extends ResultSetAdapter {
         return true;
       }
       current = qp.nextMatching();
+      ensureOpen();
       if (current == null) {
         return false;
       }
       rowNum++;
       return true;
     } catch (Exception e) {
+      try {
+        close();
+      } catch (SQLException closeException) {
+        e.addSuppressed(closeException);
+      }
+      var canceledFailure = QueryCancellation.findCancellation(e);
+      if (canceled || canceledFailure.isPresent()) {
+        canceled = true;
+        SQLException failure;
+        if (canceledFailure.isPresent()) {
+          failure = canceledFailure.get();
+          if (failure != e) {
+            for (Throwable suppressed : e.getSuppressed()) {
+              failure.addSuppressed(suppressed);
+            }
+          }
+        } else {
+          failure = QueryCancellation.canceledException();
+          failure.addSuppressed(e);
+        }
+        throw failure;
+      }
+      if (e instanceof SQLException sqlException) {
+        throw sqlException;
+      }
       throw new SQLException(e);
+    }
+  }
+
+  /**
+   * Rejects access after closure or statement cancellation.
+   *
+   * @throws SQLException
+   *           if the result set is closed or was canceled
+   */
+  private void ensureOpen() throws SQLException {
+    if (cancellation != null) {
+      try {
+        cancellation.checkCanceled();
+      } catch (SQLException exception) {
+        close();
+        throw exception;
+      }
+    }
+    if (canceled) {
+      throw QueryCancellation.canceledException();
+    }
+    if (closed) {
+      throw new SQLException("ResultSet closed");
+    }
+  }
+
+  /**
+   * Transfers execution context ownership to this result.
+   *
+   * @param cancellation
+   *          shared query cancellation state
+   * @param context
+   *          handle belonging to this result's function context
+   */
+  void setExecutionContext(QueryCancellation cancellation, SystemFunctions.ContextScope context) {
+    this.cancellation = cancellation;
+    this.systemContext = context;
+  }
+
+  /**
+   * Cancels this result and shared nested queries before closing its input. An
+   * in-flight next() throws when its current read returns, even if that read
+   * reports no row.
+   *
+   * @throws SQLException
+   *           if closing fails
+   */
+  public void cancel() throws SQLException {
+    canceled = true;
+    try {
+      if (cancellation != null) {
+        cancellation.cancel();
+      }
+    } finally {
+      close();
     }
   }
 
@@ -1054,14 +1139,16 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public void close() throws SQLException {
     closed = true;
-    try {
+    if (!resourcesClosed.compareAndSet(false, true)) {
+      return;
+    }
+    var context = systemContext;
+    try (context) {
       if (qp != null) {
         qp.close();
       }
     } catch (Exception ignore) {
       // intentionally ignored
-    } finally {
-      SystemFunctions.clearContext();
     }
   }
 

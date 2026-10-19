@@ -5,6 +5,8 @@ import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.BiFunction;
+import java.util.function.Function;
+import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,10 +44,36 @@ public final class SubqueryCorrelatedFiltersIsolator {
    *          function resolving correlated values by qualifier and column name
    * @return the {@link CorrelatedSubqueryRewriter.Result} describing the
    *         rewritten SQL and correlated references
+   * @deprecated Use the overload accepting local columns to preserve inner-scope
+   *             binding of unqualified names.
    */
+  @Deprecated(since = "1.4.0")
   public static CorrelatedSubqueryRewriter.Result isolate(Select subSelect, Collection<String> outerQualifiers,
       Set<String> correlatedColumns, Map<String, Map<String, String>> correlationContext,
       BiFunction<String, String, Object> valueResolver) {
+    return isolate(subSelect, outerQualifiers, correlatedColumns, correlationContext, valueResolver, plain -> Set.of());
+  }
+
+  /**
+   * Rewrites correlations with schema-aware resolution of unqualified names.
+   *
+   * @param subSelect
+   *          subquery to rewrite
+   * @param outerQualifiers
+   *          qualifiers in the outer scope
+   * @param correlatedColumns
+   *          candidate unqualified outer names
+   * @param correlationContext
+   *          outer qualifier mappings
+   * @param valueResolver
+   *          resolver for current outer values
+   * @param localColumns
+   *          columns bound in each inner scope, or null when unknown
+   * @return rewritten SQL and correlation references
+   */
+  public static CorrelatedSubqueryRewriter.Result isolate(Select subSelect, Collection<String> outerQualifiers,
+      Set<String> correlatedColumns, Map<String, Map<String, String>> correlationContext,
+      BiFunction<String, String, Object> valueResolver, Function<PlainSelect, Set<String>> localColumns) {
 
     Map<String, Map<String, String>> normalizedContext = ColumnMappingUtil
         .normaliseQualifierMapping(correlationContext);
@@ -61,7 +89,7 @@ public final class SubqueryCorrelatedFiltersIsolator {
     effectiveQualifiers.addAll(normalizedContext.keySet());
 
     CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(subSelect, effectiveQualifiers,
-        correlatedColumns, valueResolver);
+        correlatedColumns, valueResolver, localColumns);
 
     if (log.isDebugEnabled()) {
       log.debug("Correlated rewrite for {} with qualifiers {} and context {} produced SQL {} and references {}",

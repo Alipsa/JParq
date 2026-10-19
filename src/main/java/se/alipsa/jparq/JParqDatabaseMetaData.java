@@ -25,7 +25,7 @@ import org.apache.parquet.ParquetReadOptions;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.metadata.ParquetMetadata;
 import org.apache.parquet.hadoop.util.HadoopInputFile;
-import se.alipsa.jparq.engine.ParquetSchemas;
+import se.alipsa.jparq.engine.ParquetTable;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 
@@ -451,6 +451,22 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
   private static final List<String> COLUMN_REMARK_PREFIXES = List.of("parquet.column.comment.", "column.comment.",
       "parquet.column.description.", "column.description.", "parquet.column.doc.", "column.doc.");
 
+  /**
+   * Lists logical tables, reading remarks only from each table's first file. Does
+   * not validate other shard schemas; discovery errors remain catalog-wide.
+   * 
+   * @param catalog
+   *          catalog filter
+   * @param schemaPattern
+   *          JDBC schema pattern
+   * @param tableNamePattern
+   *          JDBC table pattern
+   * @param types
+   *          accepted table types
+   * @return matching logical tables and first-file remarks
+   * @throws SQLException
+   *           for discovery or first-file footer errors
+   */
   @Override
   public ResultSet getTables(String catalog, String schemaPattern, String tableNamePattern, String[] types)
       throws SQLException {
@@ -467,21 +483,11 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         typeFilter = null;
       }
     }
-    boolean caseSensitive = conn.isCaseSensitive();
-    PatternSpec tablePattern = buildPattern(tableNamePattern, caseSensitive);
-    PatternSpec schemaPatternSpec = buildPattern(schemaPattern, caseSensitive);
     Configuration conf = new Configuration(false);
     String effectiveCatalog = (catalog != null && !catalog.isBlank()) ? catalog : conn.getCatalog();
-    for (JParqConnection.TableLocation location : conn.listTables()) {
+    for (JParqConnection.TableLocation location : matchingLocations(schemaPattern, tableNamePattern)) {
       String schemaName = location.schemaName();
-      if (schemaPatternSpec.regex() != null
-          && !matchesRegex(schemaPatternSpec.regex(), schemaName, schemaPatternSpec.caseSensitive())) {
-        continue;
-      }
       String base = location.tableName();
-      if (tablePattern.regex() != null && !matchesRegex(tablePattern.regex(), base, tablePattern.caseSensitive())) {
-        continue;
-      }
       String tableType = "TABLE";
       if (typeFilter != null && !typeFilter.contains(tableType.toUpperCase(Locale.ROOT))) {
         continue;
@@ -501,6 +507,47 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     }, rows);
   }
 
+  /**
+   * Discovers the catalog once and filters logical tables using JDBC patterns.
+   *
+   * @param schemaPattern
+   *          JDBC schema pattern
+   * @param tableNamePattern
+   *          JDBC table pattern
+   * @return matching logical table locations in discovery order
+   * @throws SQLException
+   *           if catalog discovery fails
+   */
+  private List<JParqConnection.TableLocation> matchingLocations(String schemaPattern, String tableNamePattern)
+      throws SQLException {
+    boolean caseSensitive = conn.isCaseSensitive();
+    PatternSpec table = buildPattern(tableNamePattern, caseSensitive);
+    PatternSpec schema = buildPattern(schemaPattern, caseSensitive);
+    return conn.listTables().stream()
+        .filter(location -> schema.regex() == null
+            || matchesRegex(schema.regex(), location.schemaName(), schema.caseSensitive()))
+        .filter(location -> table.regex() == null
+            || matchesRegex(table.regex(), location.tableName(), table.caseSensitive()))
+        .toList();
+  }
+
+  /**
+   * Reports representative columns after validating every shard of every matching
+   * table. Broad patterns therefore validate the whole catalog before returning
+   * any rows.
+   * 
+   * @param catalog
+   *          catalog filter
+   * @param schemaPattern
+   *          JDBC schema pattern
+   * @param tableNamePattern
+   *          JDBC table pattern
+   * @param columnNamePattern
+   *          JDBC column pattern
+   * @return validated columns with first-file remarks and type hints
+   * @throws SQLException
+   *           for discovery, footer, or schema compatibility errors
+   */
   @SuppressWarnings("PMD.AvoidInstantiatingObjectsInLoops")
   @Override
   public ResultSet getColumns(String catalog, String schemaPattern, String tableNamePattern, String columnNamePattern)
@@ -511,57 +558,51 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
     boolean caseSensitive = conn.isCaseSensitive();
     PatternSpec columnPattern = buildPattern(columnNamePattern, caseSensitive);
 
-    try (ResultSet tables = getTables(catalog, schemaPattern, tableNamePattern, new String[]{
-        "TABLE"
-    })) {
+    String tableCatalog = (catalog != null && !catalog.isBlank()) ? catalog : conn.getCatalog();
+    for (JParqConnection.TableLocation location : matchingLocations(schemaPattern, tableNamePattern)) {
+      String table = location.tableName();
+      String tableType = "TABLE";
       Path hPath;
-      while (tables.next()) {
-        String tableCatalog = tables.getString("TABLE_CAT");
-        String tableSchema = tables.getString("TABLE_SCHEM");
-        String table = tables.getString("TABLE_NAME");
-        String tableType = tables.getString("TABLE_TYPE");
-        JParqConnection.TableLocation location = conn.resolveTable(tableSchema, table);
-        File file = location.file();
-        String resolvedSchemaName = formatSchemaName(location.schemaName());
-        hPath = new Path(file.toURI());
-        ColumnMetadata columnMetadata = readColumnMetadata(hPath, conf);
-        List<String> columnTypeHints = columnMetadata.columnTypeHints();
-        Map<String, String> columnRemarks = columnMetadata.columnRemarks();
-        try {
-          Schema fileSchema = ParquetSchemas.readAvroSchema(hPath, conf);
-          int pos = 1;
-          int columnIndex = 0;
-          for (Schema.Field field : fileSchema.getFields()) {
-            int fieldIndex = columnIndex++;
-            String columnName = field.name();
-            if (columnPattern.regex() != null
-                && !matchesRegex(columnPattern.regex(), columnName, columnPattern.caseSensitive())) {
-              continue;
-            }
-            Schema baseSchema = JdbcTypeMapper.nonNullSchema(field.schema());
-            int jdbcType = JdbcTypeMapper.mapSchemaToJdbcType(field.schema());
-            if (!columnTypeHints.isEmpty() && fieldIndex < columnTypeHints.size()) {
-              int hintedType = JdbcTypeMapper.mapJavaClassNameToJdbcType(columnTypeHints.get(fieldIndex));
-              if (hintedType != Types.OTHER) {
-                jdbcType = hintedType;
-              }
-            }
-            String typeName = JDBCType.valueOf(jdbcType).getName();
-            String isNullable = JdbcTypeMapper.isNullable(field.schema()) ? "YES" : "NO";
-            Integer charMaxLength = resolveCharacterMaximumLength(jdbcType, baseSchema);
-            Integer numericPrecision = resolveNumericPrecision(jdbcType, baseSchema);
-            Integer numericScale = resolveNumericScale(jdbcType, baseSchema);
-            Integer datetimePrecision = resolveDatetimePrecision(jdbcType, baseSchema);
-            String columnDefault = resolveColumnDefault(field);
-            String columnRemark = resolveColumnRemark(field, columnRemarks);
-            rows.add(new Object[]{
-                tableCatalog, resolvedSchemaName, table, tableType, columnName, pos++, isNullable, jdbcType, typeName,
-                charMaxLength, numericPrecision, numericScale, null, columnDefault, datetimePrecision, columnRemark
-            });
+      File file = location.file();
+      String resolvedSchemaName = formatSchemaName(location.schemaName());
+      hPath = new Path(file.toURI());
+      Schema fileSchema = ParquetTable.validate(location, conf).schema();
+      ColumnMetadata columnMetadata = readColumnMetadata(hPath, conf);
+      List<String> columnTypeHints = columnMetadata.columnTypeHints();
+      Map<String, String> columnRemarks = columnMetadata.columnRemarks();
+      try {
+        int pos = 1;
+        int columnIndex = 0;
+        for (Schema.Field field : fileSchema.getFields()) {
+          int fieldIndex = columnIndex++;
+          String columnName = field.name();
+          if (columnPattern.regex() != null
+              && !matchesRegex(columnPattern.regex(), columnName, columnPattern.caseSensitive())) {
+            continue;
           }
-        } catch (Exception e) {
-          throw new SQLException(e);
+          Schema baseSchema = JdbcTypeMapper.nonNullSchema(field.schema());
+          int jdbcType = JdbcTypeMapper.mapSchemaToJdbcType(field.schema());
+          if (!columnTypeHints.isEmpty() && fieldIndex < columnTypeHints.size()) {
+            int hintedType = JdbcTypeMapper.mapJavaClassNameToJdbcType(columnTypeHints.get(fieldIndex));
+            if (hintedType != Types.OTHER) {
+              jdbcType = hintedType;
+            }
+          }
+          String typeName = JDBCType.valueOf(jdbcType).getName();
+          String isNullable = JdbcTypeMapper.isNullable(field.schema()) ? "YES" : "NO";
+          Integer charMaxLength = resolveCharacterMaximumLength(jdbcType, baseSchema);
+          Integer numericPrecision = resolveNumericPrecision(jdbcType, baseSchema);
+          Integer numericScale = resolveNumericScale(jdbcType, baseSchema);
+          Integer datetimePrecision = resolveDatetimePrecision(jdbcType, baseSchema);
+          String columnDefault = resolveColumnDefault(field);
+          String columnRemark = resolveColumnRemark(field, columnRemarks);
+          rows.add(new Object[]{
+              tableCatalog, resolvedSchemaName, table, tableType, columnName, pos++, isNullable, jdbcType, typeName,
+              charMaxLength, numericPrecision, numericScale, null, columnDefault, datetimePrecision, columnRemark
+          });
         }
+      } catch (Exception e) {
+        throw new SQLException(e);
       }
     }
 

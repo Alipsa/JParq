@@ -370,6 +370,18 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
    *          tables participating in the join, in evaluation order
    */
   public JoinRecordReader(List<JoinTable> tables) {
+    this(tables, null);
+  }
+
+  /**
+   * Builds a join with subquery support for ON predicates.
+   *
+   * @param tables
+   *          ordered join inputs
+   * @param subqueryExecutor
+   *          executor for correlated and uncorrelated ON subqueries
+   */
+  public JoinRecordReader(List<JoinTable> tables, SubqueryExecutor subqueryExecutor) {
     Objects.requireNonNull(tables, "tables");
     if (tables.isEmpty()) {
       throw new IllegalArgumentException("At least one table is required for a join");
@@ -387,7 +399,15 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
     this.unqualifiedColumnMapping = context.unqualifiedMapping();
     this.joinTables = joinTables;
     this.fieldMappings = List.copyOf(mappings);
-    this.evaluator = new ExpressionEvaluator(schema, null, List.of(), qualifierColumnMapping, unqualifiedColumnMapping);
+    List<String> qualifiers = new ArrayList<>();
+    for (JoinTable table : joinTables) {
+      qualifiers.add(table.tableName());
+      if (table.alias() != null) {
+        qualifiers.add(table.alias());
+      }
+    }
+    this.evaluator = new ExpressionEvaluator(schema, subqueryExecutor, qualifiers, qualifierColumnMapping,
+        unqualifiedColumnMapping);
     this.tableCount = joinTables.size();
     this.usingMetadata = metadata;
     this.canonicalLabels = context.canonicalLabels();

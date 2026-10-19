@@ -11,6 +11,17 @@ import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 
 /** Checks query-local alias shadowing during correlated-subquery rewriting. */
 class CorrelatedScopeTest {
+  @Test
+  void rewritingRetainsNestedCteDeclarations() throws Exception {
+    var select = (Select) CCJSqlParserUtil
+        .parse("(WITH small AS (SELECT id AS q FROM big) SELECT 1 FROM small WHERE q = b.id)");
+    var rewritten = CorrelatedSubqueryRewriter.rewrite(select, List.of("b"), (qualifier, column) -> 99);
+    assertTrue(rewritten.sql().contains("WITH small AS"), rewritten.sql());
+    assertTrue(rewritten.sql().contains("q = 99"), rewritten.sql());
+    var parsed = se.alipsa.jparq.engine.SqlParser.parseSelect(rewritten.sql());
+    assertEquals(1, parsed.commonTableExpressions().size(), rewritten.sql());
+  }
+
   /**
    * Local aliases must never invoke the outer value resolver.
    *
