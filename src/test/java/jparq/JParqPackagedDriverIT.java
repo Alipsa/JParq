@@ -323,12 +323,20 @@ class JParqPackagedDriverIT {
   }
 
   /**
-   * Verifies each input license and notice survives assembly, including suffixed
-   * filenames.
+   * Verifies JParq's license survives in both artifacts and each dependency license
+   * and notice survives assembly, including suffixed filenames.
    */
   @Test
   void dependencyAttributions() throws Exception {
     String classpath = Files.readString(Path.of(required("runtimeClasspathFile"))).trim();
+    String projectLicense = Files.readString(Path.of(required("resources")).resolve("../../../LICENSE").normalize())
+        .replace("\r\n", "\n").strip();
+    for (Path packaged : List.of(artifact, Path.of(required("thinArtifact")))) {
+      try (JarFile jar = new JarFile(packaged.toFile())) {
+        assertEquals(projectLicense, archiveText(jar, jar.getJarEntry("LICENSE")),
+            "JParq's license must survive in " + packaged);
+      }
+    }
     try (JarFile bundled = new JarFile(artifact.toFile())) {
       String aggregate = archiveText(bundled, bundled.getJarEntry("META-INF/NOTICE"));
       for (String kind : List.of("LICENSE", "NOTICE")) {

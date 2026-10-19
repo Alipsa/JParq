@@ -17,6 +17,20 @@ compares every source attribution against the aggregate after normalizing line
 endings. The current graph contributes 68 license and 64 notice files from 68
 runtime dependencies. The ordinary artifact, fat classifier, and executable CLI entry point remain.
 
+The merged dependency text does not map each text to its dependency JAR: its
+header lists only entry names, and individual texts have no added separators.
+It is a text-preservation measure, not a dependency-to-license inventory. Two
+`file-aggregator` handlers were tried during review verification; Assembly 3.8.0
+reuses the handler instance by name, so the second configuration displaced the
+first and the attribution test detected missing content. The combined
+`META-INF/NOTICE` is retained deliberately; there is no `META-INF/LICENSE`.
+JParq's own unmodified `LICENSE` is included at the root of both the thin and
+fat JARs, outside the dependency aggregator, and checked against the source file.
+
+The aggregator adds a build-time timestamp, and the build does not set
+`project.build.outputTimestamp`. Checksums below identify the specific tested
+artifacts, not reproducible outputs; a rebuild is expected to differ.
+
 Java 21 remains the compiler release and supported runtime. JParq uses Java 21
 APIs, including `List.getFirst()`; lowering the minimum would require a separate
 source and dependency audit. Java 25 remains best effort because
@@ -197,8 +211,16 @@ Review verification on 2026-10-19:
   Java 17: rejection and both artifact checks passed; 11 functional/client cases
   were skipped.
 
-Reviewed fat-JAR SHA-256 checksums:
+Reviewed fat-JAR SHA-256 checksums (before adding JParq's own root `LICENSE`):
 
 - macOS: `20526aae8cbe719ca50f463ec7de2daba6739dc74c4894823745942167d24cd8`
 - Linux: `39c0fb36bcd64ab424a4846281f650a3c782e190897058fa6b2353a823dc589d`
 - Windows: `f60dee2aa23d715bb628c954ccaaef0982142e57a6a6cd0b1d4c4507b2ab4195`
+
+The subsequent root-license resource change passed full `mvn verify` on macOS
+ARM64 / Java 21 with Workbench/J enabled: 1,243 unit tests and 17 integration
+cases, with one expected skip in each group. Coverage, Checkstyle, PMD,
+Spotless, and Javadoc passed. The artifact test checks JParq's complete license
+in both JARs and all dependency license/notice text in the combined file.
+Linux, Windows, and the alternate runtimes were not rerun for this resource-only
+follow-up; their results above apply to the earlier artifacts.
