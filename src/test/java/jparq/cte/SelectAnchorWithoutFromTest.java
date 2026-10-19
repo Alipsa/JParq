@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -36,6 +37,9 @@ class SelectAnchorWithoutFromTest {
       "SELECT 1 ORDER BY x", "SELECT COUNT(x)", "SELECT COUNT(*) HAVING x > 0", "SELECT 1 GROUP BY x",
       "SELECT COUNT(*) GROUP BY GROUPING SETS ((x), ())", "SELECT CASE WHEN FALSE THEN x ELSE 1 END",
       "SELECT ROW_NUMBER() OVER (ORDER BY x)", "SELECT *", "SELECT 1, *", "SELECT t.*",
+      "SELECT ROW_NUMBER() OVER w AS rn WINDOW w AS (ORDER BY nosuch)",
+      "SELECT ROW_NUMBER() OVER w AS rn WINDOW w AS (PARTITION BY nosuch)",
+      "SELECT ROW_NUMBER() OVER w AS rn WINDOW w AS (ROWS nosuch PRECEDING)", "SELECT DISTINCT ON (nosuch) 1 AS a",
       "WITH RECURSIVE r(n) AS (SELECT x UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT n FROM r"
   })
   void invalidTableFreeQueryFailsPreparation(String sql) throws SQLException {
@@ -55,7 +59,8 @@ class SelectAnchorWithoutFromTest {
   @ParameterizedTest
   @ValueSource(strings = {
       "SELECT 1 AS n ORDER BY n", "SELECT 1 AS n ORDER BY 1", "SELECT CURRENT_DATE",
-      "SELECT (SELECT a FROM (VALUES (1)) v(a)) AS n", "SELECT COUNT(*)"
+      "SELECT (SELECT a FROM (VALUES (1)) v(a)) AS n", "SELECT COUNT(*)", "SELECT DISTINCT ON (a) 1 AS a",
+      "SELECT ROW_NUMBER() OVER w AS rn WINDOW w AS (ORDER BY 1)"
   })
   void validTableFreeQueryRetainsItsScope(String sql) throws SQLException {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
@@ -64,6 +69,63 @@ class SelectAnchorWithoutFromTest {
       assertTrue(result.next());
       assertEquals(1, result.getMetaData().getColumnCount());
       assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Keeps outer references available in table-free scalar and EXISTS subqueries.
+   *
+   * @throws SQLException
+   *           if correlation or execution fails
+   */
+  @Test
+  void tableFreeSubqueriesResolveOuterColumns() throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      try (var result = statement
+          .executeQuery("SELECT e.id, (SELECT e.id * 2) AS d " + "FROM (VALUES (1), (2), (3)) e(id) ORDER BY e.id")) {
+        for (int id : List.of(1, 2, 3)) {
+          assertTrue(result.next());
+          assertEquals(id, result.getInt(1));
+          assertEquals(id * 2, result.getInt(2));
+        }
+        assertFalse(result.next());
+      }
+      try (var result = statement
+          .executeQuery("SELECT e.id FROM (VALUES (1), (2), (3)) e(id) " + "WHERE EXISTS (SELECT 1 WHERE e.id = 2)")) {
+        assertTrue(result.next());
+        assertEquals(2, result.getInt(1));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Explains the LATERAL limitation and verifies its explicit-input workaround.
+   *
+   * @throws SQLException
+   *           if the supported query fails
+   */
+  @Test
+  void tableFreeLateralReportsItsLimitation() throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      SQLException failure = assertThrows(SQLException.class, () -> statement
+          .executeQuery("SELECT e.id, x.d FROM (VALUES (1), (2)) e(id) CROSS JOIN LATERAL (SELECT e.id * 2 AS d) x"));
+      Throwable cause = failure;
+      while (cause.getCause() != null) {
+        cause = cause.getCause();
+      }
+      assertTrue(cause.getMessage().contains("LATERAL subqueries without FROM are not supported"), cause.getMessage());
+      try (var result = statement.executeQuery("SELECT e.id, x.d FROM (VALUES (1), (2)) e(id) "
+          + "CROSS JOIN LATERAL (SELECT e.id * 2 AS d FROM (VALUES (1)) v(z)) x ORDER BY e.id")) {
+        for (int id : List.of(1, 2)) {
+          assertTrue(result.next());
+          assertEquals(id, result.getInt(1));
+          assertEquals(id * 2, new BigDecimal(result.getString(2)).intValueExact());
+        }
+        assertFalse(result.next());
+      }
     }
   }
 

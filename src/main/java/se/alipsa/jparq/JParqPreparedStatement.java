@@ -2808,7 +2808,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          Avro schema describing the non-null type
    * @return value coerced into the representation expected by Avro
    * @throws SQLException
-   *           if coercion fails
+   *           if coercion fails or a numeric conversion would lose information
    */
   private Object toAvroValue(Object value, Schema schema) throws SQLException {
     if (value == null) {
@@ -2832,8 +2832,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     return switch (schema.getType()) {
       case BOOLEAN -> asBoolean(value);
-      case INT -> asNumber(value).intValue();
-      case LONG -> asNumber(value).longValue();
+      case INT, LONG -> toExactInteger(value, schema.getType());
       case FLOAT -> asNumber(value).floatValue();
       case DOUBLE -> asNumber(value).doubleValue();
       case BYTES -> toBinary(value);
@@ -2864,6 +2863,29 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
   }
 
+  /**
+   * Converts an integral value without truncating fractions or overflowing.
+   *
+   * @param value
+   *          the numeric value to convert
+   * @param type
+   *          the target INT or LONG Avro type
+   * @return the exact integer value
+   * @throws SQLException
+   *           if the conversion would lose information
+   */
+  private Number toExactInteger(Object value, Schema.Type type) throws SQLException {
+    try {
+      BigDecimal number = new BigDecimal(asNumber(value).toString());
+      if (type == Schema.Type.INT) {
+        return number.intValueExact();
+      }
+      return number.longValueExact();
+    } catch (ArithmeticException | NumberFormatException e) {
+      throw new SQLException("Cannot convert value '" + value + "' to " + type + " without loss", "22003", e);
+    }
+  }
+
   private Boolean asBoolean(Object value) {
     if (value instanceof Boolean bool) {
       return bool;
@@ -2887,6 +2909,17 @@ public class JParqPreparedStatement implements PreparedStatement {
     return ByteBuffer.wrap(value.toString().getBytes(StandardCharsets.UTF_8));
   }
 
+  /**
+   * Encodes a decimal without rounding away significant fractional digits.
+   *
+   * @param value
+   *          the JDBC numeric value
+   * @param decimal
+   *          the target logical decimal type
+   * @return the encoded unscaled decimal bytes
+   * @throws SQLException
+   *           if the value is not numeric or requires rounding
+   */
   private Object toDecimalBytes(Object value, LogicalTypes.Decimal decimal) throws SQLException {
     BigDecimal number;
     if (value instanceof BigDecimal bigDecimal) {
@@ -2898,7 +2931,13 @@ public class JParqPreparedStatement implements PreparedStatement {
         throw new SQLException("Value '" + value + "' cannot be coerced to a decimal", e);
       }
     }
-    number = number.setScale(decimal.getScale(), java.math.RoundingMode.HALF_UP);
+    try {
+      number = number.setScale(decimal.getScale(), java.math.RoundingMode.UNNECESSARY);
+    } catch (ArithmeticException e) {
+      throw new SQLException(
+          "Cannot convert value '" + value + "' to decimal scale " + decimal.getScale() + " without rounding", "22003",
+          e);
+    }
     return ByteBuffer.wrap(number.unscaledValue().toByteArray());
   }
 

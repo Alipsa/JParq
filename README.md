@@ -101,6 +101,10 @@ cannot be determined, unqualified names remain inner; use an explicit qualifier 
 WITH declarations inside subqueries, including derived tables, keep their local scope and override physical
 tables or inherited CTEs with the same name.
 
+Recursive CTEs retain the anchor's numeric types and decimal scale. Recursive values that would require
+fractional truncation, integer overflow, or decimal rounding fail with `SQLException`; recursive schemas
+are not widened across iterations. For example, an integer anchor cannot accept a recursive step of `0.5`.
+
 ### Connection options
 
 - `caseSensitive` — defaults to `false`. Set to `true` to make table-name resolution case-sensitive.
@@ -382,6 +386,8 @@ The following SQL statements are supported:
 - `SELECT` with support for
   - Omitted `FROM` for literal and computed expressions, including recursive CTE anchors. The implicit input is one row; `WHERE` and row limits still apply.
     Missing input columns and projection wildcards (`*` and `table.*`) are rejected when `FROM` is omitted.
+    Correlated scalar and `EXISTS` subqueries can omit `FROM`. LATERAL inputs referencing outer columns still require
+    an explicit input, such as `LATERAL (SELECT e.id * 2 AS d FROM (VALUES (1)) v(z)) x`.
   - `*` to select all columns
   - Qualified wildcard projections (table.*).
   - alias support for columns and tables

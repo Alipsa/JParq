@@ -952,7 +952,7 @@ public final class SqlParser {
   private static Select parsePlainSelect(PlainSelect ps, List<CommonTableExpression> ctes,
       Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
     if (ps.getFromItem() == null) {
-      validateTableFreeSelect(ps);
+      validateTableFreeSelect(ps, false);
     }
     // A table-free SELECT evaluates its expressions once over an empty row.
     FromInfo fromInfo = ps.getFromItem() == null
@@ -1026,15 +1026,21 @@ public final class SqlParser {
    *
    * @param select
    *          the table-free SELECT to validate
+   * @param lateral
+   *          whether this SELECT is a LATERAL input awaiting outer binding
    * @throws IllegalArgumentException
    *           if a column or projection wildcard requires an input
    */
-  private static void validateTableFreeSelect(PlainSelect select) {
+  private static void validateTableFreeSelect(PlainSelect select, boolean lateral) {
     var validator = new ExpressionVisitorAdapter<Void>() {
       @Override
       public <S> Void visit(Column column, S context) {
         if (column.getTable() == null && isTimeKeyword(column.getColumnName())) {
           return null;
+        }
+        if (lateral) {
+          throw new IllegalArgumentException("Column references in LATERAL subqueries without FROM are not supported; "
+              + "add an explicit input such as FROM (VALUES (1)) v(z): " + column);
         }
         throw new IllegalArgumentException("Missing column without FROM: " + column);
       }
@@ -1063,6 +1069,21 @@ public final class SqlParser {
     }
     expressions.add(select.getWhere());
     expressions.add(select.getHaving());
+    if (select.getWindowDefinitions() != null) {
+      for (var window : select.getWindowDefinitions()) {
+        expressions.addAll(window.getAllExpressions());
+      }
+    }
+    if (select.getDistinct() != null && select.getDistinct().getOnSelectItems() != null) {
+      for (var item : select.getDistinct().getOnSelectItems()) {
+        Expression expression = item.getExpression();
+        if (expression instanceof Column column && column.getTable() == null
+            && aliases.contains(Identifier.of(column.getColumnName()))) {
+          continue;
+        }
+        expressions.add(expression);
+      }
+    }
     if (select.getGroupBy() != null && select.getGroupBy().getGroupByExpressionList() != null) {
       expressions.addAll(select.getGroupBy().getGroupByExpressionList());
     }
@@ -1419,6 +1440,9 @@ public final class SqlParser {
       Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateral) {
     if (innerPlain == null) {
       throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
+    }
+    if (lateral && innerPlain.getFromItem() == null) {
+      validateTableFreeSelect(innerPlain, true);
     }
     Select innerSelect = (Select) parseSelectStatement(innerPlain, ctes, cteLookup, allowQualifiedWildcards);
     String alias = null;
