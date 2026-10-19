@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -12,6 +13,7 @@ import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.Date;
+import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
@@ -23,6 +25,9 @@ import java.time.LocalTime;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.JParqSql;
 import se.alipsa.jparq.helper.TemporalInterval;
 
@@ -40,6 +45,104 @@ public class DateFunctionsTest {
     Path dir = mtcarsPath.getParent();
 
     jparqSql = new JParqSql("jdbc:jparq:" + dir.toAbsolutePath());
+  }
+
+  /** Exercises lenient temporal literals through JDBC projections and filters. */
+  @Test
+  void lenientTemporalLiteralsExecute() {
+    jparqSql.query("""
+        SELECT TIMESTAMP '2024-06-30' AS midnight,
+               TIMESTAMP '2024-06-30T10:00:00' AS morning,
+               TIME '10:00:00.5' AS clock
+        FROM mtcars WHERE TIMESTAMP '2024-06-30' IS NOT NULL LIMIT 1
+        """, rs -> {
+      try {
+        assertTrue(rs.next());
+        assertEquals(Timestamp.valueOf("2024-06-30 00:00:00"), rs.getTimestamp("midnight"));
+        assertEquals(Timestamp.valueOf("2024-06-30 10:00:00"), rs.getTimestamp("morning"));
+        assertEquals(Time.valueOf("10:00:00"), rs.getTime("clock"));
+        assertFalse(rs.next());
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  /**
+   * Rejects invalid temporal fields when retrieving JDBC projection values.
+   *
+   * @param expression
+   *          an invalid temporal literal or cast
+   * @throws Exception
+   *           if the test connection cannot be opened
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "DATE '2024-02-30'", "TIME '25:00:00'", "CAST('2024-02-30' AS DATE)", "CAST('25:00:00' AS TIME)",
+      "TIMESTAMP '2024-02-30 00:00:00'", "TIMESTAMP '2024-06-30 25:00:00'", "CAST('2024-02-30 00:00:00' AS TIMESTAMP)",
+      "CAST('2024-06-30 25:00:00' AS TIMESTAMP)"
+  })
+  void invalidTemporalValuesFailThroughJdbc(String expression) throws Exception {
+    Path dir = Paths.get(DateFunctionsTest.class.getResource("/mtcars.parquet").toURI()).getParent();
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + dir);
+        var statement = connection.createStatement()) {
+      var failure = assertThrows(IllegalArgumentException.class, () -> {
+        try (var result = statement.executeQuery("SELECT " + expression + " FROM mtcars LIMIT 1")) {
+          result.next();
+          result.getObject(1);
+        }
+      });
+      assertTrue(failure.getMessage().startsWith("Invalid "), failure::getMessage);
+    }
+  }
+
+  /**
+   * Preserves unpadded temporal literals and casts through JDBC.
+   *
+   * @param expression
+   *          SQL literal or cast
+   * @param expected
+   *          normalized value
+   */
+  @ParameterizedTest
+  @CsvSource(value = {
+      "DATE '2024-6-3'|2024-06-03", "CAST('2024-6-3' AS DATE)|2024-06-03", "TIME '9:05:00'|09:05:00",
+      "CAST('9:05:00' AS TIME)|09:05:00", "TIME '10:00'|10:00:00", "TIME '10:00:00.5'|10:00:00",
+      "TIME '23:59:59.123456789'|23:59:59", "TIMESTAMP '2024-6-3 9:5:0'|2024-06-03 09:05:00.0",
+      "CAST('2024-6-3 9:5:0' AS TIMESTAMP)|2024-06-03 09:05:00.0"
+  }, delimiter = '|', quoteCharacter = '"')
+  void unpaddedTemporalLiteralsExecute(String expression, String expected) {
+    jparqSql.query("SELECT " + expression + " FROM mtcars LIMIT 1", rs -> {
+      try {
+        assertTrue(rs.next());
+        assertEquals(expected, rs.getObject(1).toString());
+        assertFalse(rs.next());
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
+  /**
+   * Casts date and time strings assembled from row values during aggregation.
+   *
+   * @throws Exception
+   *           if the connection or query fails
+   */
+  @Test
+  void unpaddedTemporalRowValuesExecute() throws Exception {
+    Path dir = Paths.get(DateFunctionsTest.class.getResource("/acme").toURI());
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + dir);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("""
+            SELECT COUNT(*) FROM employees
+            WHERE CAST(CAST(id AS VARCHAR) || ':05:00' AS TIME) IS NOT NULL
+              AND CAST('2024-6-' || CAST(id AS VARCHAR) AS DATE) IS NOT NULL
+            """)) {
+      assertTrue(result.next());
+      assertEquals(5, result.getInt(1));
+      assertFalse(result.next());
+    }
   }
 
   @Test

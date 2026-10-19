@@ -47,7 +47,6 @@ import java.util.Set;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.NullValue;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.OrderByElement;
@@ -71,6 +70,7 @@ import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.InMemoryRecordReader;
+import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.JoinPredicatePlanner;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.OrderingUtil;
@@ -2255,7 +2255,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     net.sf.jsqlparser.statement.select.Select parsed;
     try {
-      parsed = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil.parse(sql);
+      parsed = (net.sf.jsqlparser.statement.select.Select) JSqlParserSupport.parseStatement(sql);
     } catch (Exception e) {
       throw new SQLException("Failed to parse LATERAL subquery", e);
     }

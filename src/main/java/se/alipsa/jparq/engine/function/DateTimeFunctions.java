@@ -6,7 +6,6 @@ import java.sql.Date;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.Duration;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -15,7 +14,10 @@ import java.time.OffsetTime;
 import java.time.Period;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
 import java.time.format.DateTimeParseException;
+import java.time.format.ResolverStyle;
+import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAccessor;
 import java.util.ArrayList;
@@ -33,6 +35,14 @@ import se.alipsa.jparq.helper.TemporalInterval;
  * Utility methods for evaluating SQL date/time functions and literal casts.
  */
 public final class DateTimeFunctions {
+
+  private static final DateTimeFormatter SQL_DATE = DateTimeFormatter.ofPattern("uuuu-M-d", Locale.ROOT)
+      .withResolverStyle(ResolverStyle.STRICT);
+  private static final DateTimeFormatter SQL_TIME = new DateTimeFormatterBuilder().appendPattern("H:m[:s]")
+      .optionalStart().appendFraction(ChronoField.NANO_OF_SECOND, 0, 9, true).optionalEnd().toFormatter(Locale.ROOT)
+      .withResolverStyle(ResolverStyle.STRICT);
+  private static final DateTimeFormatter SQL_TIMESTAMP = new DateTimeFormatterBuilder().append(SQL_DATE)
+      .appendLiteral(' ').append(SQL_TIME).toFormatter(Locale.ROOT).withResolverStyle(ResolverStyle.STRICT);
 
   private DateTimeFunctions() {
   }
@@ -770,7 +780,17 @@ public final class DateTimeFunctions {
     target.add(Integer.valueOf(trimmed));
   }
 
-  private static Timestamp toTimestamp(Object value) {
+  /**
+   * Converts a value to a timestamp, accepting unpadded SQL fields, date-only and
+   * ISO date-time strings while rejecting invalid calendar and clock fields.
+   *
+   * @param value
+   *          the temporal, numeric, or string value
+   * @return the converted SQL temporal value
+   * @throws IllegalArgumentException
+   *           if the value cannot be converted
+   */
+  public static Timestamp toTimestamp(Object value) {
     if (value instanceof Timestamp ts) {
       return ts;
     }
@@ -795,26 +815,36 @@ public final class DateTimeFunctions {
     String text = value.toString().trim();
     String normalized = text.replace('T', ' ');
     try {
-      return Timestamp.valueOf(normalized);
-    } catch (IllegalArgumentException ex) {
+      return Timestamp.valueOf(LocalDateTime.parse(normalized, SQL_TIMESTAMP));
+    } catch (DateTimeParseException ex) {
       try {
-        return Timestamp.from(Instant.parse(text));
+        return Timestamp.from(OffsetDateTime.parse(text, DateTimeFormatter.ISO_DATE_TIME).toInstant());
       } catch (DateTimeParseException ignore) {
         try {
           LocalDateTime ldt = LocalDateTime.parse(text, DateTimeFormatter.ISO_DATE_TIME);
           return Timestamp.valueOf(ldt);
         } catch (DateTimeParseException ignore2) {
           try {
-            return Timestamp.valueOf(LocalDate.parse(text).atStartOfDay());
-          } catch (DateTimeParseException ignore3) {
-            throw ex;
+            return Timestamp.valueOf(LocalDate.parse(text, SQL_DATE).atStartOfDay());
+          } catch (DateTimeParseException invalid) {
+            throw new IllegalArgumentException("Invalid TIMESTAMP value: " + text, invalid);
           }
         }
       }
     }
   }
 
-  private static Date toDate(Object value) {
+  /**
+   * Converts a value to a date, accepting unpadded SQL dates and ISO date-time
+   * strings while rejecting invalid calendar dates.
+   *
+   * @param value
+   *          the temporal, numeric, or string value
+   * @return the converted SQL temporal value
+   * @throws IllegalArgumentException
+   *           if the value cannot be converted
+   */
+  public static Date toDate(Object value) {
     if (value instanceof Date d) {
       return d;
     }
@@ -832,22 +862,28 @@ public final class DateTimeFunctions {
     }
     String text = value.toString().trim();
     try {
-      return Date.valueOf(text);
-    } catch (IllegalArgumentException ex) {
+      return Date.valueOf(LocalDate.parse(text, SQL_DATE));
+    } catch (DateTimeParseException ex) {
       try {
-        LocalDate parsed = LocalDate.parse(text, DateTimeFormatter.ISO_DATE_TIME);
+        LocalDate parsed = LocalDate.parse(text.replace(' ', 'T'), DateTimeFormatter.ISO_DATE_TIME);
         return Date.valueOf(parsed);
-      } catch (DateTimeParseException ignore) {
-        try {
-          return Date.valueOf(LocalDateTime.parse(text.replace('T', ' ')).toLocalDate());
-        } catch (Exception ignore2) {
-          throw ex;
-        }
+      } catch (DateTimeParseException invalid) {
+        throw new IllegalArgumentException("Invalid DATE value: " + text, invalid);
       }
     }
   }
 
-  private static Time toTime(Object value) {
+  /**
+   * Converts a value to a time, accepting unpadded SQL fields, fractional
+   * seconds, and ISO date-time strings while rejecting out-of-range clock fields.
+   *
+   * @param value
+   *          the temporal, numeric, or string value
+   * @return the converted SQL temporal value
+   * @throws IllegalArgumentException
+   *           if the value cannot be converted
+   */
+  public static Time toTime(Object value) {
     if (value instanceof Time t) {
       return t;
     }
@@ -862,17 +898,13 @@ public final class DateTimeFunctions {
     }
     String text = value.toString().trim();
     try {
-      return Time.valueOf(text);
-    } catch (IllegalArgumentException ex) {
+      return Time.valueOf(LocalTime.parse(text, SQL_TIME));
+    } catch (DateTimeParseException ex) {
       try {
-        LocalTime parsed = LocalTime.parse(text, DateTimeFormatter.ISO_DATE_TIME);
+        LocalTime parsed = LocalTime.parse(text.replace(' ', 'T'), DateTimeFormatter.ISO_DATE_TIME);
         return Time.valueOf(parsed);
-      } catch (DateTimeParseException ignore) {
-        try {
-          return Time.valueOf(LocalTime.parse(text));
-        } catch (DateTimeParseException ignore2) {
-          throw ex;
-        }
+      } catch (DateTimeParseException invalid) {
+        throw new IllegalArgumentException("Invalid TIME value: " + text, invalid);
       }
     }
   }

@@ -14,6 +14,9 @@ import net.sf.jsqlparser.statement.create.table.ColDataType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.helper.TemporalInterval;
 
@@ -339,6 +342,133 @@ public class DateTimeFunctionsTest {
     assertEquals(expected.toLocalTime(),
         ((Time) DateTimeFunctions.castLiteral(createCastExpression("TIME"), Timestamp.valueOf("2023-01-01 10:30:00")))
             .toLocalTime());
+  }
+
+  /**
+   * Rejects invalid calendar dates in public conversions and SQL casts.
+   *
+   * @param text
+   *          invalid date text
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "2024-02-30", "2023-02-29", "2024-04-31", "2024-13-01", "2024-01-00", "2024-02-30T10:00:00", "2024-2-30",
+      "2023-2-29"
+  })
+  void invalidDatesAreRejected(String text) {
+    assertThrows(IllegalArgumentException.class, () -> DateTimeFunctions.toDate(text));
+    assertThrows(IllegalArgumentException.class,
+        () -> DateTimeFunctions.castLiteral(createCastExpression("DATE"), text));
+  }
+
+  /**
+   * Rejects invalid time fields in public conversions and SQL casts.
+   *
+   * @param text
+   *          invalid time text
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "25:00:00", "24:00:00", "12:60:00", "12:00:60", "-1:00:00", "25:00:00.5", "2024-06-30T25:00:00", "25:0:0",
+      "10:60:0"
+  })
+  void invalidTimesAreRejected(String text) {
+    assertThrows(IllegalArgumentException.class, () -> DateTimeFunctions.toTime(text));
+    assertThrows(IllegalArgumentException.class,
+        () -> DateTimeFunctions.castLiteral(createCastExpression("TIME"), text));
+  }
+
+  /**
+   * Preserves unpadded SQL date fields without allowing calendar rollover.
+   *
+   * @param text
+   *          SQL date text
+   * @param expected
+   *          normalized date
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "2024-6-3,2024-06-03", "2024-06-3,2024-06-03", "2024-6-03,2024-06-03", "2024-02-29,2024-02-29"
+  })
+  void unpaddedDatesRemainAvailable(String text, String expected) {
+    Date date = Date.valueOf(expected);
+    assertEquals(date, DateTimeFunctions.toDate(text));
+    assertEquals(date, DateTimeFunctions.castLiteral(createCastExpression("DATE"), text));
+  }
+
+  /**
+   * Preserves flexible clock fields, optional seconds, and nanosecond input.
+   *
+   * @param text
+   *          SQL time text
+   * @param expected
+   *          normalized time at JDBC TIME precision
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "9:05:00,09:05:00", "9:5:0,09:05:00", "10:00,10:00:00", "10:00:00.5,10:00:00", "23:59:59.123456789,23:59:59"
+  })
+  void unpaddedTimesRemainAvailable(String text, String expected) {
+    Time time = Time.valueOf(expected);
+    assertEquals(time, DateTimeFunctions.toTime(text));
+    assertEquals(time, DateTimeFunctions.castLiteral(createCastExpression("TIME"), text));
+  }
+
+  /**
+   * Validates timestamps using the same strict calendar and clock rules.
+   *
+   * @param text
+   *          invalid timestamp text
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "2024-02-30 00:00:00", "2024-06-30 25:00:00", "2023-2-29 9:05:00", "2024-6-3 10:60:00", "2024-02-30",
+      "2024-06-30T25:00:00Z", "2024-02-30T10:00:00+01:00"
+  })
+  void invalidTimestampsAreRejected(String text) {
+    assertThrows(IllegalArgumentException.class, () -> DateTimeFunctions.toTimestamp(text));
+    assertThrows(IllegalArgumentException.class,
+        () -> DateTimeFunctions.castLiteral(createCastExpression("TIMESTAMP"), text));
+  }
+
+  /**
+   * Retains valid timestamp forms and nanosecond precision after validation.
+   *
+   * @param text
+   *          SQL timestamp text
+   * @param expected
+   *          normalized timestamp
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "2024-6-3 9:5:0,2024-06-03 09:05:00", "2024-6-3,2024-06-03 00:00:00", "2024-02-29 10:00,2024-02-29 10:00:00",
+      "2024-6-3T9:05:00.123456789,2024-06-03 09:05:00.123456789", "2024-06-03T09:05:00,2024-06-03 09:05:00"
+  })
+  void flexibleTimestampsRemainAvailable(String text, String expected) {
+    Timestamp timestamp = Timestamp.valueOf(expected);
+    assertEquals(timestamp, DateTimeFunctions.toTimestamp(text));
+    assertEquals(timestamp, DateTimeFunctions.castLiteral(createCastExpression("TIMESTAMP"), text));
+  }
+
+  /** Keeps offset timestamp strings tied to their instant and full precision. */
+  @Test
+  void timestampOffsetsRemainAvailable() {
+    Timestamp expected = Timestamp.from(Instant.parse("2024-06-03T08:05:00.123456789Z"));
+    assertEquals(expected, DateTimeFunctions.toTimestamp("2024-06-03T08:05:00.123456789Z"));
+    assertEquals(expected, DateTimeFunctions.toTimestamp("2024-06-03T09:05:00.123456789+01:00"));
+  }
+
+  /** Keeps leap days, fractional times, and ISO date-time inputs available. */
+  @Test
+  void validDateAndTimeFormsRemainAvailable() {
+    Date leapDay = Date.valueOf(LocalDate.of(2024, 2, 29));
+    final Time time = Time.valueOf(LocalTime.of(10, 30, 15));
+    assertEquals(leapDay, DateTimeFunctions.toDate("2024-02-29"));
+    assertEquals(leapDay, DateTimeFunctions.toDate("2024-02-29T10:30:15"));
+    assertEquals(leapDay, DateTimeFunctions.toDate("2024-02-29 10:30:15"));
+    assertEquals(time, DateTimeFunctions.toTime("10:30:15.123456789"));
+    assertEquals(time, DateTimeFunctions.toTime("2024-02-29T10:30:15.5"));
+    assertEquals(time, DateTimeFunctions.toTime("2024-02-29 10:30:15.5"));
   }
 
   // Additional tests for applyInterval

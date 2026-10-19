@@ -18,8 +18,7 @@ import net.sf.jsqlparser.expression.*;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
-import net.sf.jsqlparser.parser.SimpleNode;
+import net.sf.jsqlparser.parser.Node;
 import net.sf.jsqlparser.parser.Token;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
@@ -609,9 +608,21 @@ public final class SqlParser {
     }
   }
 
+  /**
+   * Parses and normalizes a query using JSqlParser's simple-first strategy.
+   * Complex retries use a fresh identifier-aware parser and the default nesting
+   * limit, and execution failures are propagated without retrying.
+   *
+   * @param sql
+   *          statement text
+   * @param allowQualifiedWildcards
+   *          whether qualified wildcard projections are accepted
+   * @return the normalized query
+   * @throws JSQLParserException
+   *           if parsing fails
+   */
   private static Query parseWithJsqlParser(String sql, boolean allowQualifiedWildcards) throws JSQLParserException {
-    net.sf.jsqlparser.statement.select.Select stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
-        .parse(sql);
+    var stmt = (net.sf.jsqlparser.statement.select.Select) JSqlParserSupport.parseStatement(sql);
     SqlExpressionNormalizer.normalize(stmt);
     return parseSelectStatement(stmt, List.of(), Map.of(), allowQualifiedWildcards);
   }
@@ -1916,7 +1927,7 @@ public final class SqlParser {
     if (item == null) {
       return null;
     }
-    SimpleNode node = item.getASTNode();
+    Node node = item.getASTNode();
     if (node != null) {
       Token token = node.jjtGetFirstToken();
       if (token != null) {

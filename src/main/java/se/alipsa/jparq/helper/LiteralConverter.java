@@ -3,6 +3,7 @@ package se.alipsa.jparq.helper;
 import java.math.BigDecimal;
 import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.CastExpression;
+import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
 import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.DoubleValue;
 import net.sf.jsqlparser.expression.Expression;
@@ -12,6 +13,7 @@ import net.sf.jsqlparser.expression.NullValue;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
+import net.sf.jsqlparser.expression.TimeValue;
 import net.sf.jsqlparser.expression.TimestampValue;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
@@ -64,6 +66,18 @@ public class LiteralConverter {
     }
     if (e instanceof TimeKeyExpression tk) {
       return DateTimeFunctions.evaluateTimeKey(tk);
+    }
+    if (e instanceof DateTimeLiteralExpression temporal) {
+      String value = new StringValue(temporal.getValue()).getValue();
+      return switch (temporal.getType()) {
+        case DATE -> DateTimeFunctions.toDate(value);
+        case TIME -> DateTimeFunctions.toTime(value);
+        case TIMESTAMP, DATETIME -> DateTimeFunctions.toTimestamp(value);
+        default -> throw new IllegalArgumentException("Unsupported temporal literal type: " + temporal.getType());
+      };
+    }
+    if (e instanceof TimeValue time) {
+      return time.getValue();
     }
     if (e instanceof DateValue dv) {
       return dv.getValue(); // java.sql.Date

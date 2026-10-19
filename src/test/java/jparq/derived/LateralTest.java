@@ -56,6 +56,28 @@ class LateralTest {
     }
   }
 
+  /** Exercises the lateral parser with an unqualified type-named column. */
+  @Test
+  void lateralTypeNamedColumn() {
+    String query = """
+        SELECT c.name, latest.number FROM customers c
+        JOIN LATERAL (
+          SELECT number FROM orders WHERE customer_id = c.id ORDER BY number DESC LIMIT 1
+        ) latest ON TRUE ORDER BY c.id
+        """;
+    List<String> results = new ArrayList<>();
+    jparqSql.query(query, rs -> {
+      try {
+        while (rs.next()) {
+          results.add(rs.getString("name") + ":" + rs.getDouble("number"));
+        }
+      } catch (Exception e) {
+        throw new IllegalStateException("Failed to evaluate type-named lateral column", e);
+      }
+    });
+    Assertions.assertEquals(List.of("Alice:150.0", "Bob:200.0"), results);
+  }
+
   @Test
   void lateralTopOrderPerCustomer() {
     String sql = """
@@ -158,7 +180,7 @@ class LateralTest {
 
   private static Schema buildOrderSchema() {
     return SchemaBuilder.record("order").namespace("jparq.derived").fields().requiredInt("id")
-        .requiredInt("customer_id").requiredDouble("amount").endRecord();
+        .requiredInt("customer_id").requiredDouble("amount").requiredDouble("number").endRecord();
   }
 
   private static void writeCustomers() throws IOException {
@@ -195,6 +217,7 @@ class LateralTest {
     record.put("id", id);
     record.put("customer_id", customerId);
     record.put("amount", amount);
+    record.put("number", amount);
     return record;
   }
 }

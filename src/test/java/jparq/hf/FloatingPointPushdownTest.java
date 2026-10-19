@@ -315,6 +315,7 @@ class FloatingPointPushdownTest {
           assertTrue(column.getColumnIndexReference() != null, column.getPath().toDotString());
           if ("d".equals(column.getPath().toDotString())) {
             assertTrue(reader.readOffsetIndex(column).getPageCount() >= 16);
+            assertNull(reader.readColumnIndex(column).getNanCounts());
             assertFalse(Double.isNaN((Double) column.getStatistics().genericGetMax()));
           }
         }
@@ -327,19 +328,23 @@ class FloatingPointPushdownTest {
   }
 
   /**
-   * NaN-safe operators still prune pages; the others are Java residuals.
+   * Equality still prunes pages, while ranges retain pages without NaN counts.
+   * Predicates unsafe for JParq's NaN ordering remain Java residuals.
    *
    * @throws Exception
    *           if planning fails
    */
   @Test
-  void nanSafeOperatorsSkipPagesAndTheRestAreResiduals() throws Exception {
+  void floatingPagePruningRespectsMissingNaNCounts() throws Exception {
     for (String column : List.of("d", "f")) {
-      for (String condition : List.of(column + " < 40", column + " <= 40", column + " = 1001",
-          column + " IN (1001, 1002)", column + " BETWEEN 100 AND 110", column + " < 40 AND id > 0",
-          column + " > 3 AND id < 100")) {
+      for (String condition : List.of(column + " = 1001", column + " IN (1001, 1002)", column + " > 3 AND id < 100")) {
         long filtered = filteredCount("float_pages", condition);
         assertTrue(filtered > 0 && filtered <= 128, condition + " kept " + filtered);
+      }
+      for (String condition : List.of(column + " < 40", column + " <= 40", column + " BETWEEN 100 AND 110",
+          column + " < 40 AND id > 0")) {
+        assertEquals(2048, filteredCount("float_pages", condition),
+            "Parquet must retain range-filtered pages when NaN counts are unknown: " + condition);
       }
       for (String condition : List.of(column + " > 100", column + " >= 100", column + " <> 6", column + " NOT IN (6)",
           column + " NOT BETWEEN 1 AND 5", "NOT (" + column + " < 5)", column + " = 0", column + " < 0.0",

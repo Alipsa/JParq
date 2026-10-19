@@ -3,6 +3,8 @@ package jparq.engine;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.ByteBuffer;
 import net.sf.jsqlparser.expression.Expression;
@@ -13,6 +15,8 @@ import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 
 class ValueExpressionEvaluatorTest {
@@ -35,6 +39,30 @@ class ValueExpressionEvaluatorTest {
   private Object eval(String sqlExpression, GenericRecord record) throws Exception {
     Expression expression = CCJSqlParserUtil.parseExpression(sqlExpression);
     return evaluator.eval(expression, record);
+  }
+
+  /**
+   * Rejects parsed SQL/JSON options until their behavior is implemented.
+   *
+   * @param expression
+   *          JSON function containing an unsupported clause
+   * @throws Exception
+   *           if parsing fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "JSON_VALUE('{\"a\":1}', '$.a' RETURNING INTEGER)", "JSON_VALUE('{\"a\":1}', '$.x' DEFAULT 0 ON EMPTY)",
+      "JSON_VALUE('{\"a\":1}', '$.a' NULL ON ERROR)", "JSON_VALUE('{\"a\":1}', '$.a' PASSING 1)",
+      "JSON_QUERY('{\"a\":1}', '$.a' RETURNING VARCHAR)", "JSON_QUERY('{\"a\":1}', '$.x' EMPTY ARRAY ON EMPTY)",
+      "JSON_QUERY('{\"a\":1}', '$.a' ERROR ON ERROR)", "JSON_QUERY('{\"a\":1}', '$.a' PASSING 1)",
+      "JSON_QUERY('{\"a\":1}', '$.a' WITH ARRAY WRAPPER)", "JSON_QUERY('{\"a\":1}', '$.a' WITHOUT ARRAY WRAPPER)",
+      "JSON_QUERY('{\"a\":1}', '$.a', '$.b')", "JSON_QUERY('{\"a\":1}', '$.a' KEEP QUOTES)",
+      "JSON_QUERY('{\"a\":1}', '$.a' OMIT QUOTES)"
+  })
+  void unsupportedJsonClausesFailClearly(String expression) throws Exception {
+    Expression parsed = CCJSqlParserUtil.parseExpression(expression);
+    var failure = assertThrows(IllegalArgumentException.class, () -> evaluator.eval(parsed, nullNoteRecord));
+    assertTrue(failure.getMessage().startsWith("Unsupported JSON_"), failure::getMessage);
   }
 
   @Test

@@ -15,6 +15,8 @@ import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.TemporalInterval;
@@ -24,6 +26,60 @@ import se.alipsa.jparq.helper.TemporalInterval;
  * {@link LiteralConverter#toLiteral(net.sf.jsqlparser.expression.Expression)}.
  */
 class LiteralConverterTest {
+
+  /**
+   * Converts the typed temporal nodes emitted by JSqlParser 5.4.
+   *
+   * @throws Exception
+   *           if parsing fails
+   */
+  @Test
+  void convertsTypedTemporalLiterals() throws Exception {
+    assertEquals(Date.valueOf("2024-06-30"),
+        LiteralConverter.toLiteral(CCJSqlParserUtil.parseExpression("DATE '2024-06-30'")));
+    assertEquals(java.sql.Time.valueOf("22:34:45"),
+        LiteralConverter.toLiteral(CCJSqlParserUtil.parseExpression("TIME '22:34:45'")));
+    assertEquals(java.sql.Timestamp.valueOf("2024-06-30 22:34:45.123456789"),
+        LiteralConverter.toLiteral(CCJSqlParserUtil.parseExpression("TIMESTAMP '2024-06-30 22:34:45.123456789'")));
+  }
+
+  /**
+   * Retains the lenient temporal forms accepted before the parser upgrade.
+   *
+   * @throws Exception
+   *           if parsing fails
+   */
+  @Test
+  void convertsLenientTemporalLiterals() throws Exception {
+    assertEquals(java.sql.Timestamp.valueOf("2024-06-30 00:00:00"),
+        LiteralConverter.toLiteral(CCJSqlParserUtil.parseExpression("TIMESTAMP '2024-06-30'")));
+    assertEquals(java.sql.Timestamp.valueOf("2024-06-30 10:00:00"),
+        LiteralConverter.toLiteral(CCJSqlParserUtil.parseExpression("TIMESTAMP '2024-06-30T10:00:00'")));
+    assertEquals(java.sql.Time.valueOf("10:00:00"),
+        LiteralConverter.toLiteral(CCJSqlParserUtil.parseExpression("TIME '10:00:00.5'")));
+    var zoned = CCJSqlParserUtil.parseExpression("TIMESTAMPTZ '2024-06-30 10:00:00+01'");
+    var failure = assertThrows(IllegalArgumentException.class, () -> LiteralConverter.toLiteral(zoned));
+    assertTrue(failure.getMessage().contains("Unsupported temporal literal type"));
+  }
+
+  /**
+   * Prevents invalid temporal literals from rolling into valid values.
+   *
+   * @param sql
+   *          a literal with invalid calendar or clock fields
+   * @throws Exception
+   *           if parsing fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "DATE '2024-02-30'", "TIME '25:00:00'", "CAST('2024-02-30' AS DATE)", "CAST('25:00:00' AS TIME)",
+      "TIMESTAMP '2024-02-30 00:00:00'", "TIMESTAMP '2024-06-30 25:00:00'", "CAST('2024-02-30 00:00:00' AS TIMESTAMP)",
+      "CAST('2024-06-30 25:00:00' AS TIMESTAMP)"
+  })
+  void invalidTemporalLiteralsAreRejected(String sql) throws Exception {
+    var expression = CCJSqlParserUtil.parseExpression(sql);
+    assertThrows(IllegalArgumentException.class, () -> LiteralConverter.toLiteral(expression));
+  }
 
   @Test
   void convertsBasicLiteralExpressions() {

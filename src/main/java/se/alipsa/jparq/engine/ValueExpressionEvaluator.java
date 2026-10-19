@@ -523,6 +523,19 @@ public final class ValueExpressionEvaluator {
 
   private Object evaluateJsonFunction(JsonFunction json, GenericRecord record) {
     JsonFunctionType type = json.getType();
+    if (type == JsonFunctionType.VALUE || type == JsonFunctionType.QUERY) {
+      if (json.getReturningType() != null || json.getOnEmptyBehavior() != null || json.getOnErrorBehavior() != null
+          || !json.getPassingExpressions().isEmpty() || !json.getAdditionalQueryPathArguments().isEmpty()
+          || json.getWrapperType() != null || json.getQuotesType() != null) {
+        throw new IllegalArgumentException("Unsupported JSON_" + type
+            + " clause: RETURNING, ON EMPTY, ON ERROR, PASSING, extra paths, wrappers, and quotes are not supported");
+      }
+      Object document = evalInternal(json.getInputExpression().getExpression(), record);
+      Object path = evalInternal(json.getJsonPathExpression(), record);
+      return type == JsonFunctionType.VALUE
+          ? JsonFunctions.jsonValue(document, path)
+          : JsonFunctions.jsonQuery(document, path);
+    }
     if (type == JsonFunctionType.OBJECT || type == JsonFunctionType.POSTGRES_OBJECT
         || type == JsonFunctionType.MYSQL_OBJECT) {
       List<Object> args = new ArrayList<>();

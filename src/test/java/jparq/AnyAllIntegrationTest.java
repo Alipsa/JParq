@@ -20,6 +20,8 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Integration tests verifying SQL {@code ANY}/{@code ALL} handling through the
@@ -110,15 +112,26 @@ class AnyAllIntegrationTest {
     assertEquals(List.of(1, 2, 3, 4, 5), ids);
   }
 
-  @Test
-  @DisplayName("ANY subqueries can appear on the left-hand side of a comparison")
-  void anySubqueryOnLeftHandSide() throws SQLException {
+  /**
+   * Verifies quantified subqueries parsed as functions on the left of a
+   * comparison.
+   *
+   * @param quantifier
+   *          ANY, SOME, or ALL
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "ANY", "SOME", "ALL"
+  })
+  void quantifiedSubqueryOnLeftHandSide(String quantifier) throws SQLException {
     String sql = """
         SELECT first_name
         FROM employees
-        WHERE ANY (SELECT salary FROM salary WHERE salary.employee = employees.id) > 220000
+        WHERE %s (SELECT salary FROM salary WHERE salary.employee = employees.id) > 220000
         ORDER BY first_name
-        """;
+        """.formatted(quantifier);
     List<String> names = new ArrayList<>();
     try (Statement stmt = connection.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
       while (rs.next()) {
@@ -128,6 +141,66 @@ class AnyAllIntegrationTest {
       }
     }
     assertEquals(List.of("Sixten"), names, "Only Sixten has a salary above the threshold");
+  }
+
+  /**
+   * Distinguishes universal and existential comparisons over several salaries.
+   *
+   * @param quantifier
+   *          ANY, SOME, or ALL
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "ANY", "SOME", "ALL"
+  })
+  void quantifiedLeftHandSideDistinguishesAllFromAny(String quantifier) throws SQLException {
+    String query = """
+        SELECT COUNT(*) FROM employees
+        WHERE id = 1
+          AND %s (SELECT salary FROM salary WHERE salary.employee = employees.id) > 160000
+        """.formatted(quantifier);
+    try (Statement stmt = connection.createStatement(); ResultSet rs = stmt.executeQuery(query)) {
+      assertTrue(rs.next());
+      assertEquals("ALL".equals(quantifier) ? 0 : 1, rs.getInt(1),
+          "Employee 1 has salaries both below and above 160000");
+      assertFalse(rs.next());
+    }
+  }
+
+  /**
+   * Preserves quantified operands when nested scopes are serialized and reparsed.
+   *
+   * @param quantifier
+   *          ANY, SOME, or ALL
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "ANY", "SOME", "ALL"
+  })
+  void nestedQuantifiedSubqueries(String quantifier) throws SQLException {
+    String inner = """
+        SELECT first_name FROM employees
+        WHERE id = 1 AND %s (SELECT salary FROM salary WHERE salary.employee = employees.id) > 160000
+        """.formatted(quantifier);
+    List<String> queries = List.of("SELECT first_name FROM (" + inner + ") x",
+        "WITH h AS (" + inner + ") SELECT first_name FROM h", """
+            SELECT first_name FROM employees e WHERE e.id = 1 AND EXISTS (
+              SELECT 1 FROM employees i WHERE i.id = e.id AND
+              %s (SELECT salary FROM salary WHERE salary.employee = i.id) > 160000)
+            """.formatted(quantifier));
+    for (String query : queries) {
+      List<String> names = new ArrayList<>();
+      try (Statement stmt = connection.createStatement(); ResultSet rs = stmt.executeQuery(query)) {
+        while (rs.next()) {
+          names.add(rs.getString(1));
+        }
+      }
+      assertEquals("ALL".equals(quantifier) ? List.of() : List.of("Per"), names, query);
+    }
   }
 
   @Test

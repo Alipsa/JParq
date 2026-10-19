@@ -69,12 +69,11 @@ public class ParsingTest {
   }
 
   /**
-   * This works on the main branch of jsqlparser but fails on 5.3. This test will
-   * need to be inverted when upgrading to 5.4. At that point the fallback code in
-   * JParq can be removed.
+   * Documents the consecutive blank-line parsing issue still present in 5.4.
+   * JParq retains its whitespace-compaction fallback for this input.
    */
   @Test
-  public void testParseStatementWithBlankLines() throws Exception {
+  public void testParseStatementWithBlankLines() {
     assertThrows(JSQLParserException.class, () -> CCJSqlParserUtil.parse("""
         WITH LatestSalary AS (
           SELECT
