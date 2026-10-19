@@ -1,6 +1,7 @@
 # Version history
 
 ### 1.4.0
+- Reject invalid calendar dates and out-of-range clock fields in DATE/TIME literals and casts instead of rolling them over; retain valid leap days, fractional times, and ISO date-time input.
 - Adapt to JSqlParser 5.4 AST changes for quantified subqueries, temporal literals, JSON functions, and type-named identifiers; preserve qualified-wildcard token positions, the blank-line parsing fallback, and bounded simple-to-complex parsing. Preserve nested ANY/ALL/SOME subquery parentheses and lenient timestamp/time literal conversion. Share identifier-aware parsing with LATERAL and pushdown planning. Reject unsupported JSON_VALUE/JSON_QUERY clauses and extra paths explicitly, and reject unsupported temporal literal types such as TIMESTAMPTZ.
 - Account for Parquet 1.18's conservative floating-point range pruning when page indexes lack NaN counts; equality, IN, and eligible predicates on other columns can still prune pages.
 - Upgrade dependencies: avro 1.12.1 → 1.12.2, checkstyle 13.3.0 → 14.3.0, hadoop 3.4.3 → 3.5.0, jackson 2.21.1 → 2.22.4, jsqlparser 5.3 → 5.4, junit 6.0.3 → 6.1.3, parquet 1.17.0 → 1.18.1, slf4j 2.0.17 → 2.0.20, and Mockito 5.23.0 → 5.24.0.

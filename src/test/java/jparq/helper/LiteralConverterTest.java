@@ -15,6 +15,8 @@ import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.TemporalInterval;
@@ -58,6 +60,23 @@ class LiteralConverterTest {
     var zoned = CCJSqlParserUtil.parseExpression("TIMESTAMPTZ '2024-06-30 10:00:00+01'");
     var failure = assertThrows(IllegalArgumentException.class, () -> LiteralConverter.toLiteral(zoned));
     assertTrue(failure.getMessage().contains("Unsupported temporal literal type"));
+  }
+
+  /**
+   * Prevents invalid DATE and TIME literals from rolling into valid values.
+   *
+   * @param sql
+   *          a literal with invalid calendar or clock fields
+   * @throws Exception
+   *           if parsing fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "DATE '2024-02-30'", "TIME '25:00:00'", "CAST('2024-02-30' AS DATE)", "CAST('25:00:00' AS TIME)"
+  })
+  void invalidTemporalLiteralsAreRejected(String sql) throws Exception {
+    var expression = CCJSqlParserUtil.parseExpression(sql);
+    assertThrows(IllegalArgumentException.class, () -> LiteralConverter.toLiteral(expression));
   }
 
   @Test

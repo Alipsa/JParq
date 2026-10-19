@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -12,6 +13,7 @@ import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.Date;
+import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
@@ -23,6 +25,8 @@ import java.time.LocalTime;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.JParqSql;
 import se.alipsa.jparq.helper.TemporalInterval;
 
@@ -61,6 +65,32 @@ public class DateFunctionsTest {
         fail(e);
       }
     });
+  }
+
+  /**
+   * Rejects invalid temporal fields when retrieving JDBC projection values.
+   *
+   * @param expression
+   *          an invalid temporal literal or cast
+   * @throws Exception
+   *           if the test connection cannot be opened
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "DATE '2024-02-30'", "TIME '25:00:00'", "CAST('2024-02-30' AS DATE)", "CAST('25:00:00' AS TIME)"
+  })
+  void invalidTemporalValuesFailThroughJdbc(String expression) throws Exception {
+    Path dir = Paths.get(DateFunctionsTest.class.getResource("/mtcars.parquet").toURI()).getParent();
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + dir);
+        var statement = connection.createStatement()) {
+      var failure = assertThrows(IllegalArgumentException.class, () -> {
+        try (var result = statement.executeQuery("SELECT " + expression + " FROM mtcars LIMIT 1")) {
+          result.next();
+          result.getObject(1);
+        }
+      });
+      assertTrue(failure.getMessage().startsWith("Invalid "), failure::getMessage);
+    }
   }
 
   @Test

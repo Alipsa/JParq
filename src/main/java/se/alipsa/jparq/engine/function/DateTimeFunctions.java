@@ -825,7 +825,8 @@ public final class DateTimeFunctions {
   }
 
   /**
-   * Converts a value to a date, accepting ISO date-time strings.
+   * Converts a value to a date, accepting ISO date-time strings and rejecting
+   * invalid calendar dates.
    *
    * @param value
    *          the temporal, numeric, or string value
@@ -851,23 +852,20 @@ public final class DateTimeFunctions {
     }
     String text = value.toString().trim();
     try {
-      return Date.valueOf(text);
-    } catch (IllegalArgumentException ex) {
+      return Date.valueOf(LocalDate.parse(text));
+    } catch (DateTimeParseException ex) {
       try {
-        LocalDate parsed = LocalDate.parse(text, DateTimeFormatter.ISO_DATE_TIME);
+        LocalDate parsed = LocalDate.parse(text.replace(' ', 'T'), DateTimeFormatter.ISO_DATE_TIME);
         return Date.valueOf(parsed);
-      } catch (DateTimeParseException ignore) {
-        try {
-          return Date.valueOf(LocalDateTime.parse(text.replace('T', ' ')).toLocalDate());
-        } catch (Exception ignore2) {
-          throw ex;
-        }
+      } catch (DateTimeParseException invalid) {
+        throw new IllegalArgumentException("Invalid DATE value: " + text, invalid);
       }
     }
   }
 
   /**
-   * Converts a value to a time, accepting fractional seconds in ISO strings.
+   * Converts a value to a time, accepting fractional seconds in ISO strings and
+   * rejecting out-of-range clock fields.
    *
    * @param value
    *          the temporal, numeric, or string value
@@ -890,17 +888,13 @@ public final class DateTimeFunctions {
     }
     String text = value.toString().trim();
     try {
-      return Time.valueOf(text);
-    } catch (IllegalArgumentException ex) {
+      return Time.valueOf(LocalTime.parse(text));
+    } catch (DateTimeParseException ex) {
       try {
-        LocalTime parsed = LocalTime.parse(text, DateTimeFormatter.ISO_DATE_TIME);
+        LocalTime parsed = LocalTime.parse(text.replace(' ', 'T'), DateTimeFormatter.ISO_DATE_TIME);
         return Time.valueOf(parsed);
-      } catch (DateTimeParseException ignore) {
-        try {
-          return Time.valueOf(LocalTime.parse(text));
-        } catch (DateTimeParseException ignore2) {
-          throw ex;
-        }
+      } catch (DateTimeParseException invalid) {
+        throw new IllegalArgumentException("Invalid TIME value: " + text, invalid);
       }
     }
   }
