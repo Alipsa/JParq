@@ -3067,26 +3067,59 @@ public class JParqPreparedStatement implements PreparedStatement {
     ResultSetMetaData meta = rs.getMetaData();
     List<String> fieldNames = new ArrayList<>(meta.getColumnCount());
     List<Schema> valueSchemas = new ArrayList<>(meta.getColumnCount());
-    // Computed projections can report OTHER. Retain their actual values before
-    // choosing the CTE schema so numeric anchors are not converted to strings.
+    boolean inferTypes = false;
+    for (int i = 1; i <= meta.getColumnCount(); i++) {
+      inferTypes |= meta.getColumnType(i) == Types.OTHER;
+    }
     List<List<Object>> rawRows = new ArrayList<>();
+    Schema schema = inferTypes
+        ? null
+        : buildResultSchema(meta, tableName, fieldNames, valueSchemas, columnAliases, List.of());
+    List<GenericRecord> rows = new ArrayList<>();
     while (rs.next()) {
       List<Object> values = new ArrayList<>(meta.getColumnCount());
       for (int i = 1; i <= meta.getColumnCount(); i++) {
         values.add(rs.getObject(i));
       }
-      rawRows.add(values);
-    }
-    Schema schema = buildResultSchema(meta, tableName, fieldNames, valueSchemas, columnAliases, rawRows);
-    List<GenericRecord> rows = new ArrayList<>(rawRows.size());
-    for (List<Object> values : rawRows) {
-      GenericData.Record record = new GenericData.Record(schema);
-      for (int i = 0; i < fieldNames.size(); i++) {
-        record.put(fieldNames.get(i), toAvroValue(values.get(i), valueSchemas.get(i)));
+      if (inferTypes) {
+        rawRows.add(values);
+      } else {
+        rows.add(materializeResultRow(values, schema, fieldNames, valueSchemas));
       }
-      rows.add(record);
+    }
+    if (inferTypes) {
+      // Only unknown types require buffering. Release each buffered row as it
+      // is converted so the two complete row collections are never retained.
+      schema = buildResultSchema(meta, tableName, fieldNames, valueSchemas, columnAliases, rawRows);
+      for (int i = 0; i < rawRows.size(); i++) {
+        rows.add(materializeResultRow(rawRows.set(i, null), schema, fieldNames, valueSchemas));
+      }
     }
     return new CteResult(schema, rows);
+  }
+
+  /**
+   * Converts one JDBC row to its materialized Avro representation.
+   *
+   * @param values
+   *          the JDBC column values
+   * @param schema
+   *          the result record schema
+   * @param fieldNames
+   *          the output field names in projection order
+   * @param valueSchemas
+   *          the non-null column schemas in projection order
+   * @return the converted row
+   * @throws SQLException
+   *           if a value cannot be converted to its output type
+   */
+  private GenericRecord materializeResultRow(List<Object> values, Schema schema, List<String> fieldNames,
+      List<Schema> valueSchemas) throws SQLException {
+    GenericData.Record record = new GenericData.Record(schema);
+    for (int i = 0; i < fieldNames.size(); i++) {
+      record.put(fieldNames.get(i), toAvroValue(values.get(i), valueSchemas.get(i)));
+    }
+    return record;
   }
 
   private CteResult resolveCteResult(SqlParser.CommonTableExpression cte, Map<Identifier, CteResult> available) {

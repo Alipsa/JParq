@@ -3,6 +3,7 @@ package jparq.cte;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
@@ -20,6 +21,78 @@ class SelectAnchorWithoutFromTest {
 
   @TempDir
   Path directory;
+
+  /**
+   * Rejects columns and projection wildcards against the implicit empty schema.
+   *
+   * @param sql
+   *          an invalid table-free query
+   * @throws SQLException
+   *           if the test connection cannot be opened
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT nosuch", "SELECT x + 1 AS y", "SELECT x AS x", "SELECT t.x", "SELECT 1 WHERE x = 1",
+      "SELECT 1 ORDER BY x", "SELECT COUNT(x)", "SELECT COUNT(*) HAVING x > 0", "SELECT 1 GROUP BY x",
+      "SELECT COUNT(*) GROUP BY GROUPING SETS ((x), ())", "SELECT CASE WHEN FALSE THEN x ELSE 1 END",
+      "SELECT ROW_NUMBER() OVER (ORDER BY x)", "SELECT *", "SELECT 1, *", "SELECT t.*",
+      "WITH RECURSIVE r(n) AS (SELECT x UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT n FROM r"
+  })
+  void invalidTableFreeQueryFailsPreparation(String sql) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      assertThrows(SQLException.class, () -> connection.prepareStatement(sql));
+    }
+  }
+
+  /**
+   * Keeps valid aliases, time keywords, and nested query inputs available.
+   *
+   * @param sql
+   *          a valid table-free query with one output row
+   * @throws SQLException
+   *           if preparation or execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT 1 AS n ORDER BY n", "SELECT 1 AS n ORDER BY 1", "SELECT CURRENT_DATE",
+      "SELECT (SELECT a FROM (VALUES (1)) v(a)) AS n", "SELECT COUNT(*)"
+  })
+  void validTableFreeQueryRetainsItsScope(String sql) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.prepareStatement(sql);
+        var result = statement.executeQuery()) {
+      assertTrue(result.next());
+      assertEquals(1, result.getMetaData().getColumnCount());
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Exercises both streaming and inferred-schema CTE materialization with NULLs.
+   *
+   * @param expression
+   *          a typed source column or a computed expression
+   * @throws SQLException
+   *           if materialization fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "n", "n + 0"
+  })
+  void materializationPreservesTypedAndInferredRows(String expression) throws SQLException {
+    String sql = "WITH c(v) AS (SELECT " + expression + " FROM (VALUES (1), (NULL), (3)) input(n)) SELECT v FROM c";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.prepareStatement(sql);
+        var result = statement.executeQuery()) {
+      assertTrue(result.next());
+      assertEquals(1, result.getInt(1));
+      assertTrue(result.next());
+      assertNull(result.getObject(1));
+      assertTrue(result.next());
+      assertEquals(3, result.getInt(1));
+      assertFalse(result.next());
+    }
+  }
 
   /**
    * Verifies table-free recursion through JDBC in both UNION modes.

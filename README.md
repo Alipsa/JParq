@@ -381,6 +381,7 @@ As of version 1.1.1, the support for the standard is complete (as far as I know)
 The following SQL statements are supported:
 - `SELECT` with support for
   - Omitted `FROM` for literal and computed expressions, including recursive CTE anchors. The implicit input is one row; `WHERE` and row limits still apply.
+    Missing input columns and projection wildcards (`*` and `table.*`) are rejected when `FROM` is omitted.
   - `*` to select all columns
   - Qualified wildcard projections (table.*).
   - alias support for columns and tables

@@ -4,14 +4,31 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.SqlParser;
 
 /** Tests for CTE parsing support in {@link SqlParser}. */
 class SqlParserCteTest {
+
+  /**
+   * Rejects references that require a table before building the implicit input.
+   *
+   * @param sql
+   *          an invalid table-free SELECT
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT nosuch", "SELECT x + 1 AS y", "SELECT *", "SELECT t.*"
+  })
+  void tableFreeSelectRejectsMissingInputs(String sql) {
+    assertThrows(IllegalArgumentException.class, () -> SqlParser.parseSelect(sql));
+  }
 
   /**
    * Verifies that a table-free recursive anchor retains its projection and

@@ -951,6 +951,9 @@ public final class SqlParser {
 
   private static Select parsePlainSelect(PlainSelect ps, List<CommonTableExpression> ctes,
       Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
+    if (ps.getFromItem() == null) {
+      validateTableFreeSelect(ps);
+    }
     // A table-free SELECT evaluates its expressions once over an empty row.
     FromInfo fromInfo = ps.getFromItem() == null
         ? new FromInfo(null, null, null, Map.of(), null, null, null,
@@ -1015,6 +1018,72 @@ public final class SqlParser {
         offset, orderCopy, distinct, false, List.of(), expressionCopy, expressionOrderCopy, wildcardCopy,
         groupByInfo.expressions(), groupByInfo.groupingSets(), combinedHaving, -1, 0, List.of(), tableRefs,
         List.copyOf(ctes));
+  }
+
+  /**
+   * Rejects references to an absent input while keeping nested query scopes
+   * separate.
+   *
+   * @param select
+   *          the table-free SELECT to validate
+   * @throws IllegalArgumentException
+   *           if a column or projection wildcard requires an input
+   */
+  private static void validateTableFreeSelect(PlainSelect select) {
+    var validator = new ExpressionVisitorAdapter<Void>() {
+      @Override
+      public <S> Void visit(Column column, S context) {
+        if (column.getTable() == null && isTimeKeyword(column.getColumnName())) {
+          return null;
+        }
+        throw new IllegalArgumentException("Missing column without FROM: " + column);
+      }
+
+      @Override
+      public <S> Void visit(ParenthesedSelect nested, S context) {
+        return null;
+      }
+
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.statement.select.Select nested, S context) {
+        return null;
+      }
+    };
+    Set<Identifier> aliases = new LinkedHashSet<>();
+    List<Expression> expressions = new ArrayList<>();
+    for (SelectItem<?> item : select.getSelectItems()) {
+      Expression expression = item.getExpression();
+      if (expression instanceof AllColumns || expression instanceof AllTableColumns) {
+        throw new IllegalArgumentException("SELECT * without FROM is not valid");
+      }
+      expressions.add(expression);
+      if (item.getAlias() != null) {
+        aliases.add(Identifier.of(item.getAlias().getName()));
+      }
+    }
+    expressions.add(select.getWhere());
+    expressions.add(select.getHaving());
+    if (select.getGroupBy() != null && select.getGroupBy().getGroupByExpressionList() != null) {
+      expressions.addAll(select.getGroupBy().getGroupByExpressionList());
+    }
+    if (select.getGroupBy() != null && select.getGroupBy().getGroupingSets() != null) {
+      expressions.addAll(select.getGroupBy().getGroupingSets());
+    }
+    if (select.getOrderByElements() != null) {
+      for (OrderByElement order : select.getOrderByElements()) {
+        Expression expression = order.getExpression();
+        if (expression instanceof Column column && column.getTable() == null
+            && aliases.contains(Identifier.of(column.getColumnName()))) {
+          continue;
+        }
+        expressions.add(expression);
+      }
+    }
+    for (Expression expression : expressions) {
+      if (expression != null) {
+        expression.accept(validator, null);
+      }
+    }
   }
 
   private static Select parseValuesSelect(Values values, List<CommonTableExpression> ctes,
