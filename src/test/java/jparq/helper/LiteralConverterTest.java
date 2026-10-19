@@ -63,7 +63,7 @@ class LiteralConverterTest {
   }
 
   /**
-   * Prevents invalid DATE and TIME literals from rolling into valid values.
+   * Prevents invalid temporal literals from rolling into valid values.
    *
    * @param sql
    *          a literal with invalid calendar or clock fields
@@ -72,7 +72,9 @@ class LiteralConverterTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "DATE '2024-02-30'", "TIME '25:00:00'", "CAST('2024-02-30' AS DATE)", "CAST('25:00:00' AS TIME)"
+      "DATE '2024-02-30'", "TIME '25:00:00'", "CAST('2024-02-30' AS DATE)", "CAST('25:00:00' AS TIME)",
+      "TIMESTAMP '2024-02-30 00:00:00'", "TIMESTAMP '2024-06-30 25:00:00'", "CAST('2024-02-30 00:00:00' AS TIMESTAMP)",
+      "CAST('2024-06-30 25:00:00' AS TIMESTAMP)"
   })
   void invalidTemporalLiteralsAreRejected(String sql) throws Exception {
     var expression = CCJSqlParserUtil.parseExpression(sql);
