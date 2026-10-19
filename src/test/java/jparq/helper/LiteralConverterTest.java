@@ -25,6 +25,22 @@ import se.alipsa.jparq.helper.TemporalInterval;
  */
 class LiteralConverterTest {
 
+  /**
+   * Converts the typed temporal nodes emitted by JSqlParser 5.4.
+   *
+   * @throws Exception
+   *           if parsing fails
+   */
+  @Test
+  void convertsTypedTemporalLiterals() throws Exception {
+    assertEquals(Date.valueOf("2024-06-30"),
+        LiteralConverter.toLiteral(CCJSqlParserUtil.parseExpression("DATE '2024-06-30'")));
+    assertEquals(java.sql.Time.valueOf("22:34:45"),
+        LiteralConverter.toLiteral(CCJSqlParserUtil.parseExpression("TIME '22:34:45'")));
+    assertEquals(java.sql.Timestamp.valueOf("2024-06-30 22:34:45.123456789"),
+        LiteralConverter.toLiteral(CCJSqlParserUtil.parseExpression("TIMESTAMP '2024-06-30 22:34:45.123456789'")));
+  }
+
   @Test
   void convertsBasicLiteralExpressions() {
     assertNull(LiteralConverter.toLiteral(new net.sf.jsqlparser.expression.NullValue()));

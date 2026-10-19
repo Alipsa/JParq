@@ -2,9 +2,12 @@ package se.alipsa.jparq.engine;
 
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import net.sf.jsqlparser.expression.AnalyticExpression;
+import net.sf.jsqlparser.expression.AnyComparisonExpression;
+import net.sf.jsqlparser.expression.AnyType;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
@@ -165,7 +168,7 @@ public final class SqlExpressionNormalizer {
     if (original == null) {
       return null;
     }
-    Expression result = original;
+    Expression result = normalizeQuantifier(original);
     if (original instanceof InExpression in && booleanOperator(in.getRightExpression())) {
       BinaryExpression tail = (BinaryExpression) in.getRightExpression();
       BinaryExpression leading = tail;
@@ -191,6 +194,25 @@ public final class SqlExpressionNormalizer {
       }
     }
     return result;
+  }
+
+  /**
+   * Restores quantified subqueries parsed as function calls on a comparison's
+   * left side.
+   *
+   * @param original
+   *          parsed expression
+   * @return a quantified comparison operand, or the unchanged expression
+   */
+  private static Expression normalizeQuantifier(Expression original) {
+    if (original instanceof Function function && function.getParameters() != null
+        && function.getParameters().size() == 1 && function.getParameters().getFirst() instanceof Select select) {
+      String name = function.getName().toUpperCase(Locale.ROOT);
+      if ("ANY".equals(name) || "ALL".equals(name) || "SOME".equals(name)) {
+        return new AnyComparisonExpression(AnyType.valueOf(name), select);
+      }
+    }
+    return original;
   }
 
   /**

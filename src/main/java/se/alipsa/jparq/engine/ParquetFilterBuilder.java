@@ -392,6 +392,7 @@ public final class ParquetFilterBuilder {
     return expression instanceof StringValue || expression instanceof net.sf.jsqlparser.expression.LongValue
         || expression instanceof net.sf.jsqlparser.expression.DoubleValue
         || expression instanceof net.sf.jsqlparser.expression.BooleanValue
+        || expression instanceof net.sf.jsqlparser.expression.DateTimeLiteralExpression
         || expression instanceof net.sf.jsqlparser.expression.DateValue
         || expression instanceof net.sf.jsqlparser.expression.TimestampValue
         || expression instanceof net.sf.jsqlparser.expression.NullValue;

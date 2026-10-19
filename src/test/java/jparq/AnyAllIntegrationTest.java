@@ -20,6 +20,8 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Integration tests verifying SQL {@code ANY}/{@code ALL} handling through the
@@ -110,15 +112,26 @@ class AnyAllIntegrationTest {
     assertEquals(List.of(1, 2, 3, 4, 5), ids);
   }
 
-  @Test
-  @DisplayName("ANY subqueries can appear on the left-hand side of a comparison")
-  void anySubqueryOnLeftHandSide() throws SQLException {
+  /**
+   * Verifies quantified subqueries parsed as functions on the left of a
+   * comparison.
+   *
+   * @param quantifier
+   *          ANY, SOME, or ALL
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "ANY", "SOME", "ALL"
+  })
+  void quantifiedSubqueryOnLeftHandSide(String quantifier) throws SQLException {
     String sql = """
         SELECT first_name
         FROM employees
-        WHERE ANY (SELECT salary FROM salary WHERE salary.employee = employees.id) > 220000
+        WHERE %s (SELECT salary FROM salary WHERE salary.employee = employees.id) > 220000
         ORDER BY first_name
-        """;
+        """.formatted(quantifier);
     List<String> names = new ArrayList<>();
     try (Statement stmt = connection.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
       while (rs.next()) {

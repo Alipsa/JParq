@@ -8,10 +8,20 @@ import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.engine.QualifiedWildcard;
+import se.alipsa.jparq.engine.SourcePosition;
 import se.alipsa.jparq.engine.SqlParser;
 
 /** Tests focused on the parser behaviour for qualified wildcard projections. */
 class ParseQualifiedWildcardTest {
+
+  /** Verifies token positions survive the parser AST API upgrade. */
+  @Test
+  void retainsQualifiedWildcardSourcePosition() {
+    var select = SqlParser.parseSelectAllowQualifiedWildcards("SELECT\n  t.*\nFROM input t");
+    var wildcard = select.qualifiedWildcards().getFirst();
+    assertEquals(new SourcePosition(2, 3), wildcard.sourcePosition().orElseThrow());
+    assertEquals(0, wildcard.selectListIndex());
+  }
 
   @Test
   @DisplayName("Parser retains alias-qualified wildcard projections")

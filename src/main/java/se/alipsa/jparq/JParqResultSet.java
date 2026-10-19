@@ -201,7 +201,7 @@ public class JParqResultSet extends ResultSetAdapter {
     List<String> canonicalPhysical = canonicalizeProjection(select, physicalColumnOrder, qualifierMapping,
         unqualifiedMapping);
     List<String> canonicalLookup = canonicalPhysical == null ? null : List.copyOf(canonicalPhysical);
-    List<String> requestedColumns = canonicalLookup != null ? canonicalLookup : select.columns();
+    final List<String> requestedColumns = canonicalLookup != null ? canonicalLookup : select.columns();
     List<String> physical = physicalColumnOrder == null ? null : List.copyOf(physicalColumnOrder);
 
     AggregateFunctions.AggregatePlan aggregatePlan = AggregateFunctions.plan(select);
