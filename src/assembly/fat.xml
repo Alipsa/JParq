@@ -6,11 +6,25 @@
     <format>jar</format>
   </formats>
   <includeBaseDirectory>false</includeBaseDirectory>
+  <containerDescriptorHandlers>
+    <containerDescriptorHandler>
+      <handlerName>metaInf-services</handlerName>
+    </containerDescriptorHandler>
+  </containerDescriptorHandlers>
   <dependencySets>
     <dependencySet>
       <outputDirectory>/</outputDirectory>
       <useProjectArtifact>true</useProjectArtifact>
       <unpack>true</unpack>
+      <unpackOptions>
+        <excludes>
+          <exclude>module-info.class</exclude>
+          <exclude>META-INF/versions/*/module-info.class</exclude>
+          <exclude>META-INF/*.SF</exclude>
+          <exclude>META-INF/*.RSA</exclude>
+          <exclude>META-INF/*.DSA</exclude>
+        </excludes>
+      </unpackOptions>
       <scope>runtime</scope>
       <useTransitiveDependencies>true</useTransitiveDependencies>
     </dependencySet>

@@ -16,11 +16,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.stream.Collectors;
-import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqDriver;
 import se.alipsa.jparq.JParqVersion;
+import se.alipsa.jparq.engine.HadoopConfigurations;
 import se.alipsa.jparq.engine.ParquetFileInfo;
 
 /**
@@ -288,7 +288,7 @@ public class JParqCliSession implements Closeable {
         try {
           List<ParquetFileInfo.RowGroup> groups = new ArrayList<>();
           for (var file : location.files()) {
-            groups.addAll(ParquetFileInfo.read(new Path(file.toURI()), new Configuration(false)).rowGroups());
+            groups.addAll(ParquetFileInfo.read(new Path(file.toURI()), HadoopConfigurations.create()).rowGroups());
           }
           var info = new ParquetFileInfo(groups);
           out.println(

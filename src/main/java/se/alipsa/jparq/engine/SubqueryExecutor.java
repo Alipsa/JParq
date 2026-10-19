@@ -19,7 +19,6 @@ import java.util.function.Function;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.*;
-import org.apache.hadoop.conf.Configuration;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.meta.InformationSchemaColumns;
 import se.alipsa.jparq.meta.InformationSchemaTables;
@@ -292,7 +291,7 @@ public final class SubqueryExecutor {
     }
     try {
       var location = connection.resolveTable(table.getSchemaName(), table.getName());
-      return ParquetTable.validate(location, new Configuration(false)).schema().getFields().stream()
+      return ParquetTable.validate(location, HadoopConfigurations.create()).schema().getFields().stream()
           .map(org.apache.avro.Schema.Field::name).collect(java.util.stream.Collectors.toSet());
     } catch (SQLException exception) {
       if (QueryCancellation.findCancellation(exception).isPresent()) {

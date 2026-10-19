@@ -68,6 +68,7 @@ import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
+import se.alipsa.jparq.engine.HadoopConfigurations;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.InMemoryRecordReader;
 import se.alipsa.jparq.engine.JSqlParserSupport;
@@ -282,7 +283,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           AggregateFunctions.AggregatePlan aggregatePlan = null;
 
           if (tmpJoinQuery) {
-            tmpConf = new Configuration(false);
+            tmpConf = HadoopConfigurations.create();
             configureParquetFiltering(tmpConf);
             tmpResidual = tmpSelect.where();
           } else if (baseRef != null && baseRef.valueTable() != null) {
@@ -353,7 +354,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
           } else {
-            tmpConf = new Configuration(false);
+            tmpConf = HadoopConfigurations.create();
             configureParquetFiltering(tmpConf);
 
             String targetTable = baseRef != null ? baseRef.tableName() : tmpSelect.table();
@@ -1313,7 +1314,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           && !InformationSchemaColumns.matchesTableReference(reference.tableName())
           && resolveCteResultByName(reference.tableName(), cteResults) == null) {
         var location = stmt.getConn().resolveTable(reference.schemaName(), reference.tableName());
-        schema = validatedTable(location, new Configuration(false)).schema();
+        schema = validatedTable(location, HadoopConfigurations.create()).schema();
       }
       schemas.add(schema);
     }
@@ -1413,7 +1414,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         throw new SQLException("JOIN requires explicit table names");
       }
       JParqConnection.TableLocation tableLocation = stmt.getConn().resolveTable(ref.schemaName(), tableName);
-      Configuration tableConf = new Configuration(conf);
+      Configuration tableConf = HadoopConfigurations.copy(conf);
       ParquetTable input = validatedTable(tableLocation, tableConf);
       Schema tableSchema = input.schema();
       validateJoinTableColumns(tableSchema, ref);
@@ -2655,7 +2656,8 @@ public class JParqPreparedStatement implements PreparedStatement {
         schema = cte.schema();
       } else {
         var location = stmt.getConn().resolveTable(table.getSchemaName(), table.getName());
-        schema = validatedTable(location, configuration == null ? new Configuration(false) : configuration).schema();
+        schema = validatedTable(location, configuration == null ? HadoopConfigurations.create() : configuration)
+            .schema();
       }
       return schema.getFields().stream().map(Schema.Field::name).collect(java.util.stream.Collectors.toSet());
     } catch (SQLException exception) {
@@ -2686,7 +2688,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         return cte.schema();
       }
       JParqConnection.TableLocation location = stmt.getConn().resolveTable(ref.schemaName(), ref.tableName());
-      Configuration tableConf = new Configuration(false);
+      Configuration tableConf = HadoopConfigurations.create();
       configureParquetFiltering(tableConf);
       return validatedTable(location, tableConf).schema();
     }

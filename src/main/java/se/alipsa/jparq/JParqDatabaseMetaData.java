@@ -25,6 +25,7 @@ import org.apache.parquet.ParquetReadOptions;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.metadata.ParquetMetadata;
 import org.apache.parquet.hadoop.util.HadoopInputFile;
+import se.alipsa.jparq.engine.HadoopConfigurations;
 import se.alipsa.jparq.engine.ParquetTable;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
@@ -483,7 +484,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
         typeFilter = null;
       }
     }
-    Configuration conf = new Configuration(false);
+    Configuration conf = HadoopConfigurations.create();
     String effectiveCatalog = (catalog != null && !catalog.isBlank()) ? catalog : conn.getCatalog();
     for (JParqConnection.TableLocation location : matchingLocations(schemaPattern, tableNamePattern)) {
       String schemaName = location.schemaName();
@@ -554,7 +555,7 @@ public class JParqDatabaseMetaData implements DatabaseMetaData {
       throws SQLException {
 
     List<Object[]> rows = new ArrayList<>();
-    Configuration conf = new Configuration(false);
+    Configuration conf = HadoopConfigurations.create();
     boolean caseSensitive = conn.isCaseSensitive();
     PatternSpec columnPattern = buildPattern(columnNamePattern, caseSensitive);
 

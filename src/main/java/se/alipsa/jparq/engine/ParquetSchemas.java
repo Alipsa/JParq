@@ -31,13 +31,14 @@ public final class ParquetSchemas {
    *
    * @param path
    *          the Parquet file path
-   * @param conf
+   * @param input
    *          the Hadoop configuration
    * @return the Avro schema
    * @throws IOException
    *           if an I/O error occurs
    */
-  public static Schema readAvroSchema(Path path, Configuration conf) throws IOException {
+  public static Schema readAvroSchema(Path path, Configuration input) throws IOException {
+    Configuration conf = HadoopConfigurations.copy(input);
     try (ParquetFileReader reader = ParquetFileReader.open(HadoopInputFile.fromPath(path, conf))) {
 
       var meta = reader.getFooter().getFileMetaData();
