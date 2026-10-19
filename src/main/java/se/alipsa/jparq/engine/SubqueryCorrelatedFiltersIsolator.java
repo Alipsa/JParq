@@ -47,7 +47,7 @@ public final class SubqueryCorrelatedFiltersIsolator {
    * @deprecated Use the overload accepting local columns to preserve inner-scope
    *             binding of unqualified names.
    */
-  @Deprecated(since = "1.3.0")
+  @Deprecated(since = "1.4.0")
   public static CorrelatedSubqueryRewriter.Result isolate(Select subSelect, Collection<String> outerQualifiers,
       Set<String> correlatedColumns, Map<String, Map<String, String>> correlationContext,
       BiFunction<String, String, Object> valueResolver) {

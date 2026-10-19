@@ -1,6 +1,7 @@
 # Version history
 
 ### 1.4.0
+- Deprecate the correlation rewrite and isolation overloads that ignore inner-scope columns; use the schema-aware overloads for unqualified column binding.
 - Add opt-in `datasetLayout=hf` multi-file tables for named Hugging Face shards and numeric directory layouts, with strict discovery, lazy schema validation, per-shard pushdown, and aggregated CLI diagnostics; the default `none` layout preserves single-file discovery.
 - Reuse shard validation within each prepared statement and discover the catalog once per column-metadata request; report incompatible shard schemas with the differing field path.
 - Honor `Statement.cancel()` during aggregation, sorting, join loading, and nested execution, as well as in-flight JDBC `next()` calls. Cancellation returns without waiting for an active physical read and the executing call throws `SQLException`; cleanup follows the current physical read, which with a pushed-down filter can span a shard.

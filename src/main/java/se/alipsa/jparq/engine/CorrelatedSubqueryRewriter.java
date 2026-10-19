@@ -133,7 +133,7 @@ public final class CorrelatedSubqueryRewriter {
    * @deprecated Use the overload accepting local columns to preserve inner-scope
    *             binding of unqualified names.
    */
-  @Deprecated(since = "1.3.0")
+  @Deprecated(since = "1.4.0")
   public static Result rewrite(Select select, Collection<String> outerQualifiers, Set<String> correlatedColumns,
       BiFunction<String, String, Object> valueResolver) {
     return rewrite(select, outerQualifiers, correlatedColumns, valueResolver, plain -> Set.of());
