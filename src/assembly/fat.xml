@@ -10,6 +10,13 @@
     <containerDescriptorHandler>
       <handlerName>metaInf-services</handlerName>
     </containerDescriptorHandler>
+    <containerDescriptorHandler>
+      <handlerName>file-aggregator</handlerName>
+      <configuration>
+        <filePattern>(?i)META-INF/(LICENSE|NOTICE)[^/]*</filePattern>
+        <outputPath>META-INF/NOTICE</outputPath>
+      </configuration>
+    </containerDescriptorHandler>
   </containerDescriptorHandlers>
   <dependencySets>
     <dependencySet>
@@ -23,6 +30,8 @@
           <exclude>META-INF/*.SF</exclude>
           <exclude>META-INF/*.RSA</exclude>
           <exclude>META-INF/*.DSA</exclude>
+          <exclude>META-INF/*.EC</exclude>
+          <exclude>META-INF/INDEX.LIST</exclude>
         </excludes>
       </unpackOptions>
       <scope>runtime</scope>

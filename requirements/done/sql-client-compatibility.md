@@ -9,8 +9,13 @@ without changing caller-owned instances. There is no filesystem preload, TCCL
 swap, or new driver initialization step.
 
 Assembly merges service descriptors, excludes dependency module descriptors and
-invalid dependency signatures, and enables multi-release dependency classes.
-The ordinary artifact, fat classifier, and executable CLI entry point remain.
+invalid dependency signatures (including `.EC`), removes stale JAR indexes, and
+enables multi-release dependency classes. A single file-aggregator preserves all
+root `META-INF/LICENSE*` and `META-INF/NOTICE*` dependency text together in
+`META-INF/NOTICE`; it matches filenames case-insensitively. The artifact test
+compares every source attribution against the aggregate after normalizing line
+endings. The current graph contributes 68 license and 64 notice files from 68
+runtime dependencies. The ordinary artifact, fat classifier, and executable CLI entry point remain.
 
 Java 21 remains the compiler release and supported runtime. JParq uses Java 21
 APIs, including `List.getFirst()`; lowering the minimum would require a separate
@@ -86,7 +91,8 @@ Java 11 feature version are rejected before launching the driver probe.
 
 ## Results and limits
 
-Validation date: 2026-10-19. Platform results apply only to ARM64, not x64.
+Original-delivery validation date: 2026-10-19. Platform results apply only to
+ARM64, not x64. Updated review verification is recorded below.
 The Linux container initially had 1 GiB RAM: Checkstyle exhausted its default
 heap, and a targeted test-only verification reached the coverage gate with only
 15% coverage (expected when selecting three unit tests). A subsequent full run
@@ -105,7 +111,7 @@ the existing filesystem. The final run uses all tests and unskipped checks with
 | Windows ARM64 | Java 25 | Untested: no Java 25 runtime installed |
 | macOS/Linux/Windows x64 | Any | Untested: no x64 test environment |
 
-Tested fat-JAR SHA-256 checksums (local development artifacts, not a published release):
+Initial-delivery fat-JAR SHA-256 checksums (before the review follow-up, not a published release):
 
 - macOS and Linux: `0174c6c607fc84c072791957be87cbbfc57b6d29c4ff17a1b45510dfb73e9b22`
 - Windows: `c4bbd0e17e310edf6d9da7ee2babb4cd10122473a9bcf4dbf643eb417a00b17f`
@@ -167,3 +173,32 @@ Windows testing exposed a separate build portability problem: without Git
 metadata, Spotless defaulted to native Windows endings and rejected every LF
 source file. Java files now explicitly use LF in Spotless and `.gitattributes`;
 no mass source reformatting or skipped formatting check is needed.
+
+## Review follow-up
+
+The completed [implementation plan](sql-client-compatibility-plan.md) is now in
+this directory. The artifact asserts absence of `META-INF/INDEX.LIST` and all
+`.SF`, `.RSA`, `.DSA`, and `.EC` signature files. The foreign-first subprocess now
+fails if the cold lookup unexpectedly succeeds, so the test cannot lose its
+cache-order precondition silently. The Workbench/J failure timeout waits up to
+ten seconds after forced termination before reporting the timeout, matching the
+ordinary probe cleanup path.
+
+Review verification on 2026-10-19:
+
+- macOS ARM64 / Java 21: full unskipped `mvn verify` with Workbench/J passed
+  1,243 unit tests and 17 integration cases, with one expected skip in each group.
+  Coverage, Checkstyle, PMD, Spotless, and Javadoc passed.
+- Linux ARM64 / Java 21 and Windows ARM64 / Java 21: rebuilt artifacts and all
+  14 packaged/client cases passed (the older-runtime rejection case was skipped).
+  Windows retained `HADOOP_HOME` unset and no `winutils.exe`.
+
+- macOS ARM64 / Java 25: all 14 packaged/client cases passed (rejection skipped).
+  Java 17: rejection and both artifact checks passed; 11 functional/client cases
+  were skipped.
+
+Reviewed fat-JAR SHA-256 checksums:
+
+- macOS: `20526aae8cbe719ca50f463ec7de2daba6739dc74c4894823745942167d24cd8`
+- Linux: `39c0fb36bcd64ab424a4846281f650a3c782e190897058fa6b2353a823dc589d`
+- Windows: `f60dee2aa23d715bb628c954ccaaef0982142e57a6a6cd0b1d4c4507b2ab4195`

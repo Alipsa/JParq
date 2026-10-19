@@ -260,6 +260,7 @@ class JParqPackagedDriverIT {
     boolean finished = failure.waitFor(120, TimeUnit.SECONDS);
     if (!finished) {
       failure.destroyForcibly();
+      failure.waitFor(10, TimeUnit.SECONDS);
     }
     assertTrue(finished, "SQL Workbench/J failure scenario timed out");
     String failureOutput = Files.readString(failureLog);
@@ -285,6 +286,8 @@ class JParqPackagedDriverIT {
   @Test
   void packaging() throws Exception {
     try (JarFile jar = new JarFile(artifact.toFile())) {
+      assertFalse(jar.stream().anyMatch(entry -> entry.getName().equals("META-INF/INDEX.LIST")
+          || entry.getName().matches("META-INF/[^/]+\\.(SF|RSA|DSA|EC)")));
       assertEquals("true", jar.getManifest().getMainAttributes().getValue("Multi-Release"));
       assertTrue(jar.isMultiRelease());
       assertFalse(jar.stream().anyMatch(entry -> entry.getName().equals("module-info.class")
@@ -316,6 +319,41 @@ class JParqPackagedDriverIT {
         String base = candidate.getName().substring("META-INF/versions/11/".length());
         assertTrue(runtimeJar.getJarEntry(base).getRealName().startsWith("META-INF/versions/"));
       }
+    }
+  }
+
+  /**
+   * Verifies each input license and notice survives assembly, including suffixed
+   * filenames.
+   */
+  @Test
+  void dependencyAttributions() throws Exception {
+    String classpath = Files.readString(Path.of(required("runtimeClasspathFile"))).trim();
+    try (JarFile bundled = new JarFile(artifact.toFile())) {
+      String aggregate = archiveText(bundled, bundled.getJarEntry("META-INF/NOTICE"));
+      for (String kind : List.of("LICENSE", "NOTICE")) {
+        int sources = 0;
+        for (String dependency : classpath.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
+          try (JarFile input = new JarFile(dependency)) {
+            for (JarEntry entry : input.stream().filter(candidate -> !candidate.isDirectory()).toList()) {
+              String name = entry.getName().toUpperCase(java.util.Locale.ROOT);
+              if (name.startsWith("META-INF/" + kind) && !name.substring("META-INF/".length()).contains("/")) {
+                String original = archiveText(input, entry);
+                assertTrue(aggregate.contains(original), "Lost " + dependency + "!/" + entry.getName());
+                sources++;
+              }
+            }
+          }
+        }
+        assertTrue(sources > 1, "Expected multiple dependency " + kind + " files");
+      }
+    }
+  }
+
+  private static String archiveText(JarFile jar, JarEntry entry) throws IOException {
+    assertNotNull(entry, "Missing aggregated attribution in " + jar.getName());
+    try (InputStream input = jar.getInputStream(entry)) {
+      return new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8).replace("\r\n", "\n").strip();
     }
   }
 

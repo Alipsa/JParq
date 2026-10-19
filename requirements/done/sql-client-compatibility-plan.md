@@ -1,7 +1,7 @@
 # SQL client compatibility: issue #179
 
 Status: packaging and class-loading fixes implemented. See the
-[verification record](done/sql-client-compatibility.md) for tested configurations
+[verification record](sql-client-compatibility.md) for tested configurations
 and outstanding GUI/platform checks.
 
 ## Evidence and scope

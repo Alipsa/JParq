@@ -82,6 +82,7 @@ public final class PackagedDriverProbe {
               try {
                 fs.getMethod("getFileSystemClass", String.class,
                     Class.forName("org.apache.hadoop.conf.Configuration", true, loader)).invoke(null, "file", null);
+                throw new AssertionError("Cold foreign-TCCL lookup unexpectedly succeeded; precondition lost");
               } catch (java.lang.reflect.InvocationTargetException exception) {
                 require(exception.getCause().getClass().getSimpleName().equals("UnsupportedFileSystemException"),
                     "Expected cold foreign-TCCL provider lookup failure: " + exception.getCause());
