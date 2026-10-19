@@ -1,5 +1,6 @@
 package se.alipsa.jparq;
 
+import java.math.BigDecimal;
 import java.sql.JDBCType;
 import java.sql.Types;
 import java.util.ArrayList;
@@ -18,6 +19,8 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter {
   private final String tableName;
   private final String tableSchema;
   private final String tableCatalog;
+  private final int[] precisions;
+  private final int[] scales;
 
   /**
    * Create metadata for an aggregate result set.
@@ -35,11 +38,54 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter {
    */
   public AggregateResultSetMetaData(List<String> labels, List<Integer> sqlTypes, String tableName, String tableSchema,
       String tableCatalog) {
+    this(labels, sqlTypes, tableName, tableSchema, tableCatalog, List.of());
+  }
+
+  /**
+   * Creates metadata with decimal precision and scale derived from materialized
+   * values.
+   *
+   * @param labels
+   *          the output column labels
+   * @param sqlTypes
+   *          the JDBC types in projection order
+   * @param tableName
+   *          the virtual table name
+   * @param tableSchema
+   *          the owning schema, or null
+   * @param tableCatalog
+   *          the owning catalog, or null
+   * @param rows
+   *          the materialized rows used to determine decimal bounds
+   */
+  public AggregateResultSetMetaData(List<String> labels, List<Integer> sqlTypes, String tableName, String tableSchema,
+      String tableCatalog, List<List<Object>> rows) {
     this.labels = new ArrayList<>(labels);
     this.sqlTypes = new ArrayList<>(sqlTypes);
     this.tableName = tableName;
     this.tableSchema = tableSchema;
     this.tableCatalog = tableCatalog;
+    this.precisions = new int[labels.size()];
+    this.scales = new int[labels.size()];
+    for (int i = 0; i < labels.size(); i++) {
+      if (getColumnType(i + 1) != Types.DECIMAL && getColumnType(i + 1) != Types.NUMERIC) {
+        continue;
+      }
+      int integerDigits = 0;
+      boolean hasValue = false;
+      for (List<Object> row : rows) {
+        Object value = row.get(i);
+        if (value instanceof Number number) {
+          BigDecimal decimal = number instanceof BigDecimal bd ? bd : new BigDecimal(number.toString());
+          integerDigits = Math.max(integerDigits, decimal.precision() - decimal.scale());
+          scales[i] = Math.max(scales[i], decimal.scale());
+          hasValue = true;
+        }
+      }
+      if (hasValue) {
+        precisions[i] = Math.max(1, integerDigits + scales[i]);
+      }
+    }
   }
 
   @Override
@@ -88,6 +134,18 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter {
   @Override
   public String getColumnTypeName(int column) {
     return JDBCType.valueOf(getColumnType(column)).getName();
+  }
+
+  /** {@inheritDoc} */
+  @Override
+  public int getPrecision(int column) {
+    return precisions[column - 1];
+  }
+
+  /** {@inheritDoc} */
+  @Override
+  public int getScale(int column) {
+    return scales[column - 1];
   }
 
   /**

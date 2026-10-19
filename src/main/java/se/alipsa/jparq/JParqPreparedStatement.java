@@ -2876,7 +2876,20 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private Number toExactInteger(Object value, Schema.Type type) throws SQLException {
     try {
-      BigDecimal number = new BigDecimal(asNumber(value).toString());
+      if (value instanceof Byte || value instanceof Short || value instanceof Integer) {
+        Number number = (Number) value;
+        if (type == Schema.Type.INT) {
+          return number.intValue();
+        }
+        return number.longValue();
+      }
+      if (value instanceof Long number) {
+        if (type == Schema.Type.LONG) {
+          return number;
+        }
+        return Math.toIntExact(number);
+      }
+      BigDecimal number = value instanceof BigDecimal decimal ? decimal : new BigDecimal(asNumber(value).toString());
       if (type == Schema.Type.INT) {
         return number.intValueExact();
       }

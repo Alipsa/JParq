@@ -73,6 +73,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private final boolean aggregateQuery;
   private final List<List<Object>> aggregateRows;
   private final List<Integer> aggregateSqlTypes;
+  private AggregateResultSetMetaData aggregateMetadata;
   private int aggregateRowIndex = -1;
   private boolean aggregateOnRow = false;
   private volatile boolean closed = false;
@@ -1127,8 +1128,12 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public ResultSetMetaData getMetaData() {
     if (aggregateQuery) {
-      List<Integer> types = aggregateSqlTypes == null ? List.of() : aggregateSqlTypes;
-      return new AggregateResultSetMetaData(columnOrder, types, tableName, tableSchema, tableCatalog);
+      if (aggregateMetadata == null) {
+        List<Integer> types = aggregateSqlTypes == null ? List.of() : aggregateSqlTypes;
+        aggregateMetadata = new AggregateResultSetMetaData(columnOrder, types, tableName, tableSchema, tableCatalog,
+            aggregateRows == null ? List.of() : aggregateRows);
+      }
+      return aggregateMetadata;
     }
     var normalized = ParquetSchemas.normalizeStringTypes(metadataSchema);
     return new JParqResultSetMetaData(normalized, columnOrder, physicalColumnOrder, canonicalColumnNames, tableName,

@@ -11,6 +11,7 @@ import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
+import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.BooleanExpressions;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
@@ -175,6 +176,36 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   @Override
   public String getColumnTypeName(int column) {
     return java.sql.JDBCType.valueOf(getColumnType(column)).getName();
+  }
+
+  /** {@inheritDoc} */
+  @Override
+  public int getPrecision(int column) {
+    LogicalTypes.Decimal decimal = decimalType(column);
+    return decimal == null ? 0 : decimal.getPrecision();
+  }
+
+  /** {@inheritDoc} */
+  @Override
+  public int getScale(int column) {
+    LogicalTypes.Decimal decimal = decimalType(column);
+    return decimal == null ? 0 : decimal.getScale();
+  }
+
+  /**
+   * Resolves the decimal logical type exposed by a projected source field.
+   *
+   * @param column
+   *          the one-based output column index
+   * @return the decimal type, or null for a nondecimal or computed field
+   */
+  private LogicalTypes.Decimal decimalType(int column) {
+    if (getColumnType(column) != Types.DECIMAL && getColumnType(column) != Types.NUMERIC) {
+      return null;
+    }
+    Schema.Field field = resolveField(column);
+    Schema valueSchema = field == null ? null : JdbcTypeMapper.nonNullSchema(field.schema());
+    return valueSchema != null && valueSchema.getLogicalType() instanceof LogicalTypes.Decimal decimal ? decimal : null;
   }
 
   /**

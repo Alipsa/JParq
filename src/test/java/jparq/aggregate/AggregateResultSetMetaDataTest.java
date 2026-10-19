@@ -2,6 +2,7 @@ package jparq.aggregate;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.math.BigDecimal;
 import java.sql.JDBCType;
 import java.sql.Types;
 import java.util.Arrays;
@@ -107,5 +108,19 @@ public class AggregateResultSetMetaDataTest {
   @Test
   void testIsNullable() {
     assertEquals(AggregateResultSetMetaData.columnNullableUnknown, metaData.isNullable(1));
+  }
+
+  /**
+   * Combines the largest integer part and fractional scale across decimal rows.
+   */
+  @Test
+  void decimalBoundsCoverEveryMaterializedValue() {
+    var metadata = new AggregateResultSetMetaData(List.of("amount", "id"), List.of(Types.DECIMAL, Types.INTEGER),
+        "totals", null, null,
+        List.of(List.of(new BigDecimal("1.25"), 1), List.of(new BigDecimal("10000.0"), 2), Arrays.asList(null, 3)));
+    assertEquals(7, metadata.getPrecision(1));
+    assertEquals(2, metadata.getScale(1));
+    assertEquals(0, metadata.getPrecision(2));
+    assertEquals(0, metadata.getScale(2));
   }
 }
