@@ -535,15 +535,22 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
-   * Marks this result as canceled before closing its input. An in-flight next()
-   * throws when its current read returns, even if that read reports no row.
+   * Cancels this result and shared nested queries before closing its input. An
+   * in-flight next() throws when its current read returns, even if that read
+   * reports no row.
    *
    * @throws SQLException
    *           if closing fails
    */
   public void cancel() throws SQLException {
     canceled = true;
-    close();
+    try {
+      if (cancellation != null) {
+        cancellation.cancel();
+      }
+    } finally {
+      close();
+    }
   }
 
   private Object value(int idx) throws SQLException {

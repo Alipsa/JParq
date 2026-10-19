@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine;
 
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.Map;
 import java.util.Set;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.BinaryExpression;
@@ -38,6 +39,7 @@ import net.sf.jsqlparser.statement.select.Values;
  */
 public final class SqlExpressionNormalizer {
   private final Set<Select> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+  private final Map<Expression, Expression> absorbedHeads = new IdentityHashMap<>();
   private final Children children = new Children();
 
   private SqlExpressionNormalizer() {
@@ -175,14 +177,53 @@ public final class SqlExpressionNormalizer {
         in.setRightExpression(operand);
         leading.setLeftExpression(in);
         result = tail;
+        absorbedHeads.put(tail, in);
       }
     }
     if (LegacyParenthesisSupport.isLegacyParenthesis(result)) {
       LegacyParenthesisSupport.replace(result, expression(LegacyParenthesisSupport.extract(result)));
     } else {
       result.accept(children, null);
+      if (result instanceof AndExpression and) {
+        result = liftAbsorbed(and, and.getRightExpression());
+      } else if (result instanceof NotExpression not) {
+        result = liftAbsorbed(not, not.getExpression());
+      }
     }
     return result;
+  }
+
+  /**
+   * Moves an absorbed tail above the parent that precedes its IN predicate.
+   * Explicit parentheses have their own root and therefore never appear in the
+   * map.
+   *
+   * @param parent
+   *          AND or NOT preceding the absorbed tail
+   * @param operand
+   *          normalized child that may contain an absorbed tail
+   * @return the tail with the parent applied only to its leading predicate, or
+   *         the parent
+   */
+  private Expression liftAbsorbed(Expression parent, Expression operand) {
+    Expression head = absorbedHeads.get(operand);
+    if (head == null) {
+      return parent;
+    }
+    BinaryExpression leading = (BinaryExpression) operand;
+    while (leading.getLeftExpression() != head) {
+      leading = (BinaryExpression) leading.getLeftExpression();
+    }
+    if (parent instanceof AndExpression and) {
+      and.setRightExpression(head);
+    } else if (parent instanceof NotExpression not) {
+      not.setExpression(head);
+    }
+    leading.setLeftExpression(parent);
+    // A parent originating from an earlier IN absorption retains that IN as its
+    // head.
+    absorbedHeads.put(operand, absorbedHeads.getOrDefault(parent, parent));
+    return operand;
   }
 
   /**

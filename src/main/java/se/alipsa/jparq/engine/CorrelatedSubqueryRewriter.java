@@ -130,7 +130,10 @@ public final class CorrelatedSubqueryRewriter {
    *          from the current outer row
    * @return a {@link Result} describing the rewritten SQL and correlated column
    *         usage
+   * @deprecated Use the overload accepting local columns to preserve inner-scope
+   *             binding of unqualified names.
    */
+  @Deprecated(since = "1.3.0")
   public static Result rewrite(Select select, Collection<String> outerQualifiers, Set<String> correlatedColumns,
       BiFunction<String, String, Object> valueResolver) {
     return rewrite(select, outerQualifiers, correlatedColumns, valueResolver, plain -> Set.of());

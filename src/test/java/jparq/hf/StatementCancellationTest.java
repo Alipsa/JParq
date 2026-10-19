@@ -268,15 +268,23 @@ class StatementCancellationTest {
     }
   }
 
+  /**
+   * Stops an inner scan after cancellation without waiting for another physical
+   * read.
+   *
+   * @throws Exception
+   *           if execution or synchronization fails
+   */
   @Test
   void cancellationInsideACorrelatedSubqueryRetainsItsJdbcIdentity() throws Exception {
     Files.copy(base.resolve("train.parquet"), base.resolve("small.parquet"));
     var started = new CountDownLatch(1);
     var release = new CountDownLatch(1);
-    try (var conn = DriverManager.getConnection("jdbc:jparq:" + base);
+    var reads = new AtomicInteger();
+    try (var conn = DriverManager.getConnection("jdbc:jparq:" + base + "?predicatePushdown=false");
         var statement = conn.createStatement();
         var result = statement
-            .executeQuery("SELECT b.id FROM train b WHERE EXISTS " + "(SELECT 1 FROM small s2 WHERE s2.id = b.id)")) {
+            .executeQuery("SELECT b.id FROM train b WHERE b.id IN (SELECT s2.id FROM small s2 WHERE s2.id = b.id)")) {
       assertTrue(result.next());
       assertEquals(0, result.getInt(1));
       var running = new FutureTask<Boolean>(() -> {
@@ -288,16 +296,24 @@ class StatementCancellationTest {
                 (shard, conf, predicate) -> new RecordReader() {
                   @Override
                   public GenericRecord read() throws IOException {
-                    started.countDown();
-                    try {
-                      if (!release.await(10, TimeUnit.SECONDS)) {
-                        throw new IOException("Timed out waiting for correlated cancellation");
-                      }
-                    } catch (InterruptedException exception) {
-                      Thread.currentThread().interrupt();
-                      throw new IOException(exception);
+                    if (reads.incrementAndGet() > 2) {
+                      return null;
                     }
-                    return null;
+                    // The first row lets executeQuery finish. Block during lazy iteration.
+                    if (reads.get() == 2) {
+                      started.countDown();
+                      try {
+                        if (!release.await(10, TimeUnit.SECONDS)) {
+                          throw new IOException("Timed out waiting for correlated cancellation");
+                        }
+                      } catch (InterruptedException exception) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException(exception);
+                      }
+                    }
+                    var row = new GenericData.Record(shard.schema());
+                    row.put("id", 1);
+                    return row;
                   }
 
                   @Override
@@ -320,6 +336,7 @@ class StatementCancellationTest {
       SQLException cancellation = assertInstanceOf(SQLException.class, failure.getCause());
       assertEquals("Statement was canceled", cancellation.getMessage());
       assertEquals(QueryCancellation.SQL_STATE, cancellation.getSQLState());
+      assertEquals(2, reads.get(), "Cancellation must stop the inner scan after its active read");
       assertTrue(result.isClosed());
       assertEquals(QueryCancellation.SQL_STATE, assertThrows(SQLException.class, result::next).getSQLState());
     }

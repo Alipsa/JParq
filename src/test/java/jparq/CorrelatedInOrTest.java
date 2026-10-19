@@ -125,6 +125,72 @@ class CorrelatedInOrTest {
     }
   }
 
+  /**
+   * Verifies absorbed IN tails escape AND and NOT while explicit grouping stays
+   * intact.
+   *
+   * @param predicate
+   *          whether predicate pushdown is enabled
+   * @param projection
+   *          whether projection pushdown is enabled
+   * @throws Exception
+   *           if fixture creation or execution fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void absorbedTailsRespectParentPrecedence(boolean predicate, boolean projection) throws Exception {
+    write("compact", 20, 0);
+    try (var conn = DriverManager.getConnection(
+        "jdbc:jparq:" + base + "?predicatePushdown=" + predicate + "&projectionPushdown=" + projection)) {
+      for (String in : List.of("b.id IN (0,1,2,3,4)", "b.id IN (SELECT s.id FROM small s WHERE s.g = b.g)")) {
+        assertEquals(Set.of(0, 19), ids(conn, "compact", "b.g = 0 AND " + in + " OR b.id = 19"));
+        assertEquals(Set.of(0, 19), ids(conn, "compact", "b.id < 2 AND b.g = 0 AND " + in + " OR b.id = 19"));
+        assertEquals(Set.of(0), ids(conn, "compact", "b.g = 0 AND (" + in + " OR b.id = 19)"));
+        assertEquals(16, ids(conn, "compact", "NOT " + in + " OR b.id = 0").size());
+        assertEquals(14, ids(conn, "compact", "NOT (" + in + " OR b.id = 19)").size());
+        assertEquals(14, ids(conn, "compact", "NOT " + in + " AND b.id < 19").size());
+        assertEquals(Set.of(5, 10, 15, 19), ids(conn, "compact", "NOT " + in + " AND b.g IN (0) OR b.id = 19"));
+        assertEquals(Set.of(0, 19), ids(conn, "compact", "NOT (NOT " + in + ") AND b.g = 0 OR b.id = 19"));
+      }
+    }
+  }
+
+  /**
+   * Verifies ARRAY subqueries bind shared column names in their inner scope.
+   *
+   * @param predicate
+   *          whether predicate pushdown is enabled
+   * @param projection
+   *          whether projection pushdown is enabled
+   * @throws Exception
+   *           if execution fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void arraySubqueriesPreferInnerColumns(boolean predicate, boolean projection) throws Exception {
+    try (
+        var conn = DriverManager.getConnection(
+            "jdbc:jparq:" + base + "?predicatePushdown=" + predicate + "&projectionPushdown=" + projection);
+        var statement = conn.createStatement();
+        var result = statement.executeQuery("SELECT b.id, ARRAY(SELECT id FROM small s WHERE id = 4) AS arr, "
+            + "ARRAY(SELECT id FROM small s WHERE id = 4 AND s.g = b.g) AS correlated "
+            + "FROM big b WHERE b.id IN (0,4) ORDER BY b.id")) {
+      assertTrue(result.next());
+      assertEquals(0, result.getInt(1));
+      assertEquals(List.of(4), result.getObject(2));
+      assertEquals(List.of(), result.getObject(3));
+      assertTrue(result.next());
+      assertEquals(4, result.getInt(1));
+      assertEquals(List.of(4), result.getObject(2));
+      assertEquals(List.of(4), result.getObject(3));
+      assertFalse(result.next());
+    }
+  }
+
   @ParameterizedTest
   @CsvSource({
       "true,true", "true,false", "false,true", "false,false"
