@@ -42,6 +42,27 @@ public class DateFunctionsTest {
     jparqSql = new JParqSql("jdbc:jparq:" + dir.toAbsolutePath());
   }
 
+  /** Exercises lenient temporal literals through JDBC projections and filters. */
+  @Test
+  void lenientTemporalLiteralsExecute() {
+    jparqSql.query("""
+        SELECT TIMESTAMP '2024-06-30' AS midnight,
+               TIMESTAMP '2024-06-30T10:00:00' AS morning,
+               TIME '10:00:00.5' AS clock
+        FROM mtcars WHERE TIMESTAMP '2024-06-30' IS NOT NULL LIMIT 1
+        """, rs -> {
+      try {
+        assertTrue(rs.next());
+        assertEquals(Timestamp.valueOf("2024-06-30 00:00:00"), rs.getTimestamp("midnight"));
+        assertEquals(Timestamp.valueOf("2024-06-30 10:00:00"), rs.getTimestamp("morning"));
+        assertEquals(Time.valueOf("10:00:00"), rs.getTime("clock"));
+        assertFalse(rs.next());
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
+  }
+
   @Test
   void testYear() {
     executeSingleInt("SELECT EXTRACT(YEAR FROM timestamp '2024-06-30 12:34:56') AS year_val FROM mtcars LIMIT 1",

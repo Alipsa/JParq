@@ -70,10 +70,10 @@ public class LiteralConverter {
     if (e instanceof DateTimeLiteralExpression temporal) {
       String value = new StringValue(temporal.getValue()).getValue();
       return switch (temporal.getType()) {
-        case DATE -> java.sql.Date.valueOf(value);
-        case TIME -> java.sql.Time.valueOf(value);
-        case TIMESTAMP, DATETIME -> java.sql.Timestamp.valueOf(value);
-        default -> temporal.toString();
+        case DATE -> DateTimeFunctions.toDate(value);
+        case TIME -> DateTimeFunctions.toTime(value);
+        case TIMESTAMP, DATETIME -> DateTimeFunctions.toTimestamp(value);
+        default -> throw new IllegalArgumentException("Unsupported temporal literal type: " + temporal.getType());
       };
     }
     if (e instanceof TimeValue time) {

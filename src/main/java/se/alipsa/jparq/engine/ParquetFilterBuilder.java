@@ -32,7 +32,6 @@ import net.sf.jsqlparser.expression.operators.relational.MinorThan;
 import net.sf.jsqlparser.expression.operators.relational.MinorThanEquals;
 import net.sf.jsqlparser.expression.operators.relational.NotEqualsTo;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
@@ -745,7 +744,7 @@ public final class ParquetFilterBuilder {
     }
     if (exp instanceof IsNullExpression || exp instanceof LikeExpression) {
       try {
-        Expression copy = CCJSqlParserUtil.parseCondExpression(exp.toString());
+        Expression copy = JSqlParserSupport.parseCondition(exp.toString());
         if (copy instanceof IsNullExpression isNull) {
           isNull.setNot(!isNull.isNot());
         }

@@ -4,13 +4,19 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
+import java.util.List;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.schema.Column;
+import org.apache.avro.SchemaBuilder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.JSqlParserSupport;
+import se.alipsa.jparq.engine.JoinPredicatePlanner;
+import se.alipsa.jparq.engine.ParquetFilterBuilder;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.helper.LiteralConverter;
 
@@ -57,6 +63,26 @@ class SqlParserCompatibilityTest {
   void malformedImplicitCastFailsClearly() {
     assertThrows(IllegalArgumentException.class,
         () -> SqlParser.parseSelect("SELECT INTEGER 'unterminated FROM input"));
+  }
+
+  /**
+   * Keeps type-named columns eligible for join and negated-NULL pushdown.
+   *
+   * @throws Exception
+   *           if condition parsing fails
+   */
+  @Test
+  void typeNamedColumnsKeepPushdown() throws Exception {
+    var schema = SchemaBuilder.record("input").fields().optionalInt("number").endRecord();
+    var other = SchemaBuilder.record("other").fields().requiredInt("id").endRecord();
+    var query = SqlParser.parseSelect("SELECT number FROM input i JOIN other o ON i.number = o.id WHERE number > 3");
+    assertTrue(
+        JoinPredicatePlanner.plan(query.where(), query.tableReferences(), List.of(schema, other), 0).isPresent());
+    var condition = JSqlParserSupport.parseCondition("NOT (number IS NULL)");
+    assertTrue(ParquetFilterBuilder.build(schema, condition).isPresent());
+    assertEquals("number IS NULL", JSqlParserSupport.parseCondition("number IS NULL").toString());
+    assertThrows(net.sf.jsqlparser.JSQLParserException.class,
+        () -> JSqlParserSupport.parseCondition("number > 3 trailing"));
   }
 
   /** Preserves literal casts with and without precision parameters. */

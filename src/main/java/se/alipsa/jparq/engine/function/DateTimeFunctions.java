@@ -770,7 +770,17 @@ public final class DateTimeFunctions {
     target.add(Integer.valueOf(trimmed));
   }
 
-  private static Timestamp toTimestamp(Object value) {
+  /**
+   * Converts a value to a timestamp, accepting date-only and ISO date-time
+   * strings.
+   *
+   * @param value
+   *          the temporal, numeric, or string value
+   * @return the converted SQL temporal value
+   * @throws IllegalArgumentException
+   *           if the value cannot be converted
+   */
+  public static Timestamp toTimestamp(Object value) {
     if (value instanceof Timestamp ts) {
       return ts;
     }
@@ -814,7 +824,16 @@ public final class DateTimeFunctions {
     }
   }
 
-  private static Date toDate(Object value) {
+  /**
+   * Converts a value to a date, accepting ISO date-time strings.
+   *
+   * @param value
+   *          the temporal, numeric, or string value
+   * @return the converted SQL temporal value
+   * @throws IllegalArgumentException
+   *           if the value cannot be converted
+   */
+  public static Date toDate(Object value) {
     if (value instanceof Date d) {
       return d;
     }
@@ -847,7 +866,16 @@ public final class DateTimeFunctions {
     }
   }
 
-  private static Time toTime(Object value) {
+  /**
+   * Converts a value to a time, accepting fractional seconds in ISO strings.
+   *
+   * @param value
+   *          the temporal, numeric, or string value
+   * @return the converted SQL temporal value
+   * @throws IllegalArgumentException
+   *           if the value cannot be converted
+   */
+  public static Time toTime(Object value) {
     if (value instanceof Time t) {
       return t;
     }

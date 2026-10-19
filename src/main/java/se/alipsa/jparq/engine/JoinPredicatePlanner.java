@@ -7,7 +7,6 @@ import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
@@ -51,7 +50,7 @@ public final class JoinPredicatePlanner {
     }
     Expression copy;
     try {
-      copy = CCJSqlParserUtil.parseCondExpression(expression.toString());
+      copy = JSqlParserSupport.parseCondition(expression.toString());
     } catch (JSQLParserException exception) {
       return Optional.empty();
     }

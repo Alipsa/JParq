@@ -525,9 +525,10 @@ public final class ValueExpressionEvaluator {
     JsonFunctionType type = json.getType();
     if (type == JsonFunctionType.VALUE || type == JsonFunctionType.QUERY) {
       if (json.getReturningType() != null || json.getOnEmptyBehavior() != null || json.getOnErrorBehavior() != null
-          || !json.getPassingExpressions().isEmpty() || json.getWrapperType() != null || json.getQuotesType() != null) {
+          || !json.getPassingExpressions().isEmpty() || !json.getAdditionalQueryPathArguments().isEmpty()
+          || json.getWrapperType() != null || json.getQuotesType() != null) {
         throw new IllegalArgumentException("Unsupported JSON_" + type
-            + " clause: RETURNING, ON EMPTY, ON ERROR, PASSING, wrappers, and quotes are not supported");
+            + " clause: RETURNING, ON EMPTY, ON ERROR, PASSING, extra paths, wrappers, and quotes are not supported");
       }
       Object document = evalInternal(json.getInputExpression().getExpression(), record);
       Object path = evalInternal(json.getJsonPathExpression(), record);

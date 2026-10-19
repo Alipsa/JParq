@@ -209,7 +209,8 @@ public final class SqlExpressionNormalizer {
         && function.getParameters().size() == 1 && function.getParameters().getFirst() instanceof Select select) {
       String name = function.getName().toUpperCase(Locale.ROOT);
       if ("ANY".equals(name) || "ALL".equals(name) || "SOME".equals(name)) {
-        return new AnyComparisonExpression(AnyType.valueOf(name), select);
+        Select operand = select instanceof ParenthesedSelect ? select : new ParenthesedSelect().withSelect(select);
+        return new AnyComparisonExpression(AnyType.valueOf(name), operand);
       }
     }
     return original;

@@ -169,6 +169,40 @@ class AnyAllIntegrationTest {
     }
   }
 
+  /**
+   * Preserves quantified operands when nested scopes are serialized and reparsed.
+   *
+   * @param quantifier
+   *          ANY, SOME, or ALL
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "ANY", "SOME", "ALL"
+  })
+  void nestedQuantifiedSubqueries(String quantifier) throws SQLException {
+    String inner = """
+        SELECT first_name FROM employees
+        WHERE id = 1 AND %s (SELECT salary FROM salary WHERE salary.employee = employees.id) > 160000
+        """.formatted(quantifier);
+    List<String> queries = List.of("SELECT first_name FROM (" + inner + ") x",
+        "WITH h AS (" + inner + ") SELECT first_name FROM h", """
+            SELECT first_name FROM employees e WHERE e.id = 1 AND EXISTS (
+              SELECT 1 FROM employees i WHERE i.id = e.id AND
+              %s (SELECT salary FROM salary WHERE salary.employee = i.id) > 160000)
+            """.formatted(quantifier));
+    for (String query : queries) {
+      List<String> names = new ArrayList<>();
+      try (Statement stmt = connection.createStatement(); ResultSet rs = stmt.executeQuery(query)) {
+        while (rs.next()) {
+          names.add(rs.getString(1));
+        }
+      }
+      assertEquals("ALL".equals(quantifier) ? List.of() : List.of("Per"), names, query);
+    }
+  }
+
   @Test
   @DisplayName("SOME acts as a synonym for ANY in comparisons")
   void someKeywordBehavesLikeAny() throws SQLException {

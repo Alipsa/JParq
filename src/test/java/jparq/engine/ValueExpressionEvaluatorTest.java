@@ -56,7 +56,8 @@ class ValueExpressionEvaluatorTest {
       "JSON_QUERY('{\"a\":1}', '$.a' RETURNING VARCHAR)", "JSON_QUERY('{\"a\":1}', '$.x' EMPTY ARRAY ON EMPTY)",
       "JSON_QUERY('{\"a\":1}', '$.a' ERROR ON ERROR)", "JSON_QUERY('{\"a\":1}', '$.a' PASSING 1)",
       "JSON_QUERY('{\"a\":1}', '$.a' WITH ARRAY WRAPPER)", "JSON_QUERY('{\"a\":1}', '$.a' WITHOUT ARRAY WRAPPER)",
-      "JSON_QUERY('{\"a\":1}', '$.a' KEEP QUOTES)", "JSON_QUERY('{\"a\":1}', '$.a' OMIT QUOTES)"
+      "JSON_QUERY('{\"a\":1}', '$.a', '$.b')", "JSON_QUERY('{\"a\":1}', '$.a' KEEP QUOTES)",
+      "JSON_QUERY('{\"a\":1}', '$.a' OMIT QUOTES)"
   })
   void unsupportedJsonClausesFailClearly(String expression) throws Exception {
     Expression parsed = CCJSqlParserUtil.parseExpression(expression);

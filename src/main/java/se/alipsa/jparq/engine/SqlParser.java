@@ -10,9 +10,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CancellationException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -21,13 +18,8 @@ import net.sf.jsqlparser.expression.*;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
-import net.sf.jsqlparser.parser.CCJSqlParser;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.parser.Node;
-import net.sf.jsqlparser.parser.StringProvider;
 import net.sf.jsqlparser.parser.Token;
-import net.sf.jsqlparser.parser.TokenMgrException;
-import net.sf.jsqlparser.parser.feature.Feature;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.*;
@@ -630,24 +622,7 @@ public final class SqlParser {
    *           if parsing fails
    */
   private static Query parseWithJsqlParser(String sql, boolean allowQualifiedWildcards) throws JSQLParserException {
-    net.sf.jsqlparser.statement.select.Select stmt;
-    try (var executor = Executors.newSingleThreadExecutor()) {
-      var parser = new IdentifierAwareParser(sql);
-      int allowedDepth = parser.getAsInt(Feature.allowedNestingDepth);
-      try {
-        stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
-            .parseStatement(parser.withAllowComplexParsing(false), executor);
-      } catch (JSQLParserException e) {
-        Throwable cause = e.getCause();
-        if (cause instanceof InterruptedException || cause instanceof TimeoutException
-            || cause instanceof CancellationException
-            || (allowedDepth >= 0 && CCJSqlParserUtil.getNestingDepth(sql) > allowedDepth)) {
-          throw e;
-        }
-        stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
-            .parseStatement(new IdentifierAwareParser(sql).withAllowComplexParsing(true), executor);
-      }
-    }
+    var stmt = (net.sf.jsqlparser.statement.select.Select) JSqlParserSupport.parseStatement(sql);
     SqlExpressionNormalizer.normalize(stmt);
     return parseSelectStatement(stmt, List.of(), Map.of(), allowQualifiedWildcards);
   }
@@ -2721,41 +2696,6 @@ public final class SqlParser {
       }
     }
     return combined;
-  }
-
-  /**
-   * Preserves type-named identifiers when no literal follows an implicit cast
-   * prefix.
-   */
-  private static final class IdentifierAwareParser extends CCJSqlParser {
-    /**
-     * Creates a parser for one SQL statement.
-     *
-     * @param sql
-     *          statement text
-     */
-    private IdentifierAwareParser(String sql) {
-      super(new StringProvider(sql));
-    }
-
-    /**
-     * Distinguishes an implicit literal cast from an identifier followed by an
-     * operator.
-     *
-     * @return whether a supported literal or precision clause follows the type name
-     */
-    @Override
-    protected boolean isImplicitCastAhead() {
-      try {
-        if (!super.isImplicitCastAhead()) {
-          return false;
-        }
-        int next = getToken(2).kind;
-        return next == S_CHAR_LITERAL || next == S_LONG || next == S_DOUBLE || next == OPENING_BRACKET;
-      } catch (TokenMgrException e) {
-        return false;
-      }
-    }
   }
 
 }
