@@ -10,7 +10,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -24,6 +26,8 @@ import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.parser.Node;
 import net.sf.jsqlparser.parser.StringProvider;
 import net.sf.jsqlparser.parser.Token;
+import net.sf.jsqlparser.parser.TokenMgrException;
+import net.sf.jsqlparser.parser.feature.Feature;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.*;
@@ -612,11 +616,37 @@ public final class SqlParser {
     }
   }
 
+  /**
+   * Parses and normalizes a query using JSqlParser's simple-first strategy.
+   * Complex retries use a fresh identifier-aware parser and the default nesting
+   * limit, and execution failures are propagated without retrying.
+   *
+   * @param sql
+   *          statement text
+   * @param allowQualifiedWildcards
+   *          whether qualified wildcard projections are accepted
+   * @return the normalized query
+   * @throws JSQLParserException
+   *           if parsing fails
+   */
   private static Query parseWithJsqlParser(String sql, boolean allowQualifiedWildcards) throws JSQLParserException {
     net.sf.jsqlparser.statement.select.Select stmt;
     try (var executor = Executors.newSingleThreadExecutor()) {
-      stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil.parseStatement(new IdentifierAwareParser(sql),
-          executor);
+      var parser = new IdentifierAwareParser(sql);
+      int allowedDepth = parser.getAsInt(Feature.allowedNestingDepth);
+      try {
+        stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
+            .parseStatement(parser.withAllowComplexParsing(false), executor);
+      } catch (JSQLParserException e) {
+        Throwable cause = e.getCause();
+        if (cause instanceof InterruptedException || cause instanceof TimeoutException
+            || cause instanceof CancellationException
+            || (allowedDepth >= 0 && CCJSqlParserUtil.getNestingDepth(sql) > allowedDepth)) {
+          throw e;
+        }
+        stmt = (net.sf.jsqlparser.statement.select.Select) CCJSqlParserUtil
+            .parseStatement(new IdentifierAwareParser(sql).withAllowComplexParsing(true), executor);
+      }
     }
     SqlExpressionNormalizer.normalize(stmt);
     return parseSelectStatement(stmt, List.of(), Map.of(), allowQualifiedWildcards);
@@ -2716,11 +2746,15 @@ public final class SqlParser {
      */
     @Override
     protected boolean isImplicitCastAhead() {
-      if (!super.isImplicitCastAhead()) {
+      try {
+        if (!super.isImplicitCastAhead()) {
+          return false;
+        }
+        int next = getToken(2).kind;
+        return next == S_CHAR_LITERAL || next == S_LONG || next == S_DOUBLE || next == OPENING_BRACKET;
+      } catch (TokenMgrException e) {
         return false;
       }
-      int next = getToken(2).kind;
-      return next == S_CHAR_LITERAL || next == S_LONG || next == S_DOUBLE || next == OPENING_BRACKET;
     }
   }
 

@@ -143,6 +143,32 @@ class AnyAllIntegrationTest {
     assertEquals(List.of("Sixten"), names, "Only Sixten has a salary above the threshold");
   }
 
+  /**
+   * Distinguishes universal and existential comparisons over several salaries.
+   *
+   * @param quantifier
+   *          ANY, SOME, or ALL
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "ANY", "SOME", "ALL"
+  })
+  void quantifiedLeftHandSideDistinguishesAllFromAny(String quantifier) throws SQLException {
+    String query = """
+        SELECT COUNT(*) FROM employees
+        WHERE id = 1
+          AND %s (SELECT salary FROM salary WHERE salary.employee = employees.id) > 160000
+        """.formatted(quantifier);
+    try (Statement stmt = connection.createStatement(); ResultSet rs = stmt.executeQuery(query)) {
+      assertTrue(rs.next());
+      assertEquals("ALL".equals(quantifier) ? 0 : 1, rs.getInt(1),
+          "Employee 1 has salaries both below and above 160000");
+      assertFalse(rs.next());
+    }
+  }
+
   @Test
   @DisplayName("SOME acts as a synonym for ANY in comparisons")
   void someKeywordBehavesLikeAny() throws SQLException {

@@ -2,6 +2,8 @@ package jparq.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.math.BigDecimal;
 import net.sf.jsqlparser.expression.CastExpression;
@@ -12,7 +14,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.helper.LiteralConverter;
 
-/** Checks compatibility with JSqlParser's implicit cast lookahead. */
+/**
+ * Checks identifier lookahead and the bounded simple-to-complex parser
+ * fallback.
+ */
 class SqlParserCompatibilityTest {
   /**
    * Keeps type-named columns available as identifiers.
@@ -29,6 +34,29 @@ class SqlParserCompatibilityTest {
     var column = assertInstanceOf(Column.class, select.expressions().getFirst());
     assertEquals(name, column.getColumnName());
     assertEquals(name, select.orderBy().getFirst().column());
+  }
+
+  /** Retries Boolean CASE branches with a fresh parser in complex mode. */
+  @Test
+  void complexCaseBranchesRemainAvailable() {
+    assertNotNull(SqlParser.parseSelect("SELECT CASE WHEN id=1 THEN id=2 ELSE id=3 END FROM input"));
+  }
+
+  /** Limits complex retries without restricting successful simple parses. */
+  @Test
+  void complexRetryHonorsNestingLimit() {
+    String opening = "(".repeat(11);
+    String closing = ")".repeat(11);
+    assertNotNull(SqlParser.parseSelect("SELECT " + opening + "id + 1" + closing + " FROM input"));
+    String complex = "SELECT " + opening + "CASE WHEN id=1 THEN id=2 ELSE id=3 END" + closing + " FROM input";
+    assertThrows(IllegalArgumentException.class, () -> SqlParser.parseSelect(complex));
+  }
+
+  /** Reports malformed tokens as parse failures. */
+  @Test
+  void malformedImplicitCastFailsClearly() {
+    assertThrows(IllegalArgumentException.class,
+        () -> SqlParser.parseSelect("SELECT INTEGER 'unterminated FROM input"));
   }
 
   /** Preserves literal casts with and without precision parameters. */
