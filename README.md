@@ -380,6 +380,7 @@ As of version 1.1.1, the support for the standard is complete (as far as I know)
 
 The following SQL statements are supported:
 - `SELECT` with support for
+  - Omitted `FROM` for literal and computed expressions, including recursive CTE anchors. The implicit input is one row; `WHERE` and row limits still apply.
   - `*` to select all columns
   - Qualified wildcard projections (table.*).
   - alias support for columns and tables
@@ -535,8 +536,6 @@ See [release.md](release.md) for the full version history and work in progress.
 ## Roadmap: _Might_ be implemented in the future
 
 ### Non standard extensions
-- Allow omission of from clause in some cases
-  - Several popular databases allow you to omit the FROM clause when you are only selecting literal values, performing arithmetic, or evaluating scalar functions (functions that return a single value). In these cases, the query returns a single row e.g: `SELECT CURRENT_DATE as cur_date`.
 - Support for variable assignment and use within SQL scripts.
   - @variable_name syntax to define a variable that exists for the duration of the connection
     - Example (direct assignment, connection scope):

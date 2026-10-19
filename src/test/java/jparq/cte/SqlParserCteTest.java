@@ -13,6 +13,34 @@ import se.alipsa.jparq.engine.SqlParser;
 /** Tests for CTE parsing support in {@link SqlParser}. */
 class SqlParserCteTest {
 
+  /**
+   * Verifies that a table-free recursive anchor retains its projection and
+   * filter.
+   */
+  @Test
+  void recursiveCteAcceptsSelectAnchorWithoutFrom() {
+    var query = SqlParser.parseSelect("""
+        WITH RECURSIVE r(n) AS (
+          SELECT 1 + 0 WHERE TRUE
+          UNION ALL
+          SELECT n + 1 FROM r WHERE n < 3
+        )
+        SELECT n FROM r ORDER BY n
+        """);
+    var cte = query.commonTableExpressions().getFirst();
+    assertEquals(List.of("n"), cte.columnAliases());
+    var body = assertInstanceOf(SqlParser.SetQuery.class, cte.query());
+    var anchor = assertInstanceOf(SqlParser.Select.class, body.components().getFirst().query());
+    assertEquals("1 + 0", anchor.expressions().getFirst().toString());
+    assertNotNull(anchor.where());
+    var input = anchor.tableReferences().getFirst().valueTable();
+    assertNotNull(input);
+    assertEquals(List.of(List.of()), input.rows());
+    assertTrue(input.columnNames().isEmpty());
+    var recursive = assertInstanceOf(SqlParser.Select.class, body.components().get(1).query());
+    assertEquals("r", recursive.table());
+  }
+
   @Test
   void derivedPlanUsesItsOwnCteDeclaration() {
     var query = SqlParser.parseSelect("WITH a AS (SELECT id FROM small) "

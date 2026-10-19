@@ -1,6 +1,7 @@
 # Version history
 
 ### 1.4.0
+- Support `SELECT` without `FROM`, including recursive CTE anchors such as `SELECT 1`; preserve numeric computed values when materializing CTEs (#190).
 - Include JParq's own LICENSE at the root of both the thin and fat JARs.
 - Fix fat-JAR service descriptor merging, preserve dependency license/notice text, remove dependency module descriptors and stale JAR indexes, and preserve multi-release dependency classes. Centralize driver-aware Hadoop configuration so local Parquet reads work in isolated driver loaders with a foreign context class loader. Add packaged-artifact regression probes for discovery, metadata, all fixture values, GZIP/Snappy/ZSTD, and replacement loaders. Java 21 remains the minimum; Java 25 is best effort. Add optional SQL Workbench/J batch integration coverage. Specific SQL-client GUI workflows remain unverified; see the compatibility record.
 - Reject invalid calendar dates and out-of-range clock fields in DATE, TIME, and TIMESTAMP literals and casts instead of rolling them over; retain unpadded SQL fields, valid leap days, fractional times, and ISO date-time input. This includes rejecting end-of-day `24:00:00`: `TIME '24:00:00'` and `TIMESTAMP '2024-06-30 24:00:00'` now fail instead of rolling over to midnight or the next day.

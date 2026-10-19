@@ -63,6 +63,7 @@ import org.apache.parquet.filter2.predicate.FilterPredicate;
 import org.apache.parquet.hadoop.ParquetInputFormat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
@@ -1896,9 +1897,8 @@ public class JParqPreparedStatement implements PreparedStatement {
       throw new SQLException("Value table definition cannot be null");
     }
     List<String> columnNames = valueTable.columnNames();
-    if (columnNames == null || columnNames.isEmpty()) {
-      throw new SQLException("Value table must expose at least one column");
-    }
+    // Zero columns and one empty row supply the implicit input for SELECT
+    // without FROM; explicit VALUES constructors are validated by the parser.
     Schema literalSchema = Schema.createRecord("values_literal", null, null, false);
     literalSchema.setFields(List.of());
     GenericData.Record emptyRecord = new GenericData.Record(literalSchema);
@@ -2711,7 +2711,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   private Schema buildResultSchema(ResultSetMetaData meta, String recordName, List<String> fieldNames,
-      List<Schema> valueSchemas, List<String> columnAliases) throws SQLException {
+      List<Schema> valueSchemas, List<String> columnAliases, List<List<Object>> rawRows) throws SQLException {
     int columnCount = meta.getColumnCount();
     if (columnAliases != null && !columnAliases.isEmpty() && columnAliases.size() != columnCount) {
       List<String> metaLabels = new ArrayList<>(columnCount);
@@ -2741,6 +2741,13 @@ public class JParqPreparedStatement implements PreparedStatement {
         lookupKey = Identifier.lookupKey(columnName);
       }
       Schema valueSchema = columnSchema(meta, i);
+      if (meta.getColumnType(i) == Types.OTHER && !rawRows.isEmpty()) {
+        List<Object> values = new ArrayList<>(rawRows.size());
+        for (List<Object> row : rawRows) {
+          values.add(row.get(i - 1));
+        }
+        valueSchema = schemaForColumnType(determineColumnType(values), values);
+      }
       Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
       Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
       if (lookupKey != null) {
@@ -3060,13 +3067,22 @@ public class JParqPreparedStatement implements PreparedStatement {
     ResultSetMetaData meta = rs.getMetaData();
     List<String> fieldNames = new ArrayList<>(meta.getColumnCount());
     List<Schema> valueSchemas = new ArrayList<>(meta.getColumnCount());
-    Schema schema = buildResultSchema(meta, tableName, fieldNames, valueSchemas, columnAliases);
-    List<GenericRecord> rows = new ArrayList<>();
+    // Computed projections can report OTHER. Retain their actual values before
+    // choosing the CTE schema so numeric anchors are not converted to strings.
+    List<List<Object>> rawRows = new ArrayList<>();
     while (rs.next()) {
+      List<Object> values = new ArrayList<>(meta.getColumnCount());
+      for (int i = 1; i <= meta.getColumnCount(); i++) {
+        values.add(rs.getObject(i));
+      }
+      rawRows.add(values);
+    }
+    Schema schema = buildResultSchema(meta, tableName, fieldNames, valueSchemas, columnAliases, rawRows);
+    List<GenericRecord> rows = new ArrayList<>(rawRows.size());
+    for (List<Object> values : rawRows) {
       GenericData.Record record = new GenericData.Record(schema);
-      for (int i = 1; i <= fieldNames.size(); i++) {
-        Object raw = rs.getObject(i);
-        record.put(fieldNames.get(i - 1), toAvroValue(raw, valueSchemas.get(i - 1)));
+      for (int i = 0; i < fieldNames.size(); i++) {
+        record.put(fieldNames.get(i), toAvroValue(values.get(i), valueSchemas.get(i)));
       }
       rows.add(record);
     }
@@ -3135,7 +3151,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       } else {
         nonNullSchema = fieldSchema;
       }
-      Object raw = record.get(field.name());
+      Object raw = AvroCoercions.unwrap(record.get(field.name()), record.getSchema().getField(field.name()).schema());
       converted.put(field.name(), toAvroValue(raw, nonNullSchema));
     }
     return converted;

@@ -495,7 +495,9 @@ public final class SqlParser {
 
   /**
    * Representation of a {@code VALUES} table constructor discovered in the
-   * {@code FROM} clause or as a stand-alone query.
+   * {@code FROM} clause or as a stand-alone query. A single empty row with no
+   * columns represents the implicit input of a {@code SELECT} without
+   * {@code FROM}.
    *
    * @param rows
    *          ordered collection of row expressions supplied to the constructor;
@@ -949,7 +951,11 @@ public final class SqlParser {
 
   private static Select parsePlainSelect(PlainSelect ps, List<CommonTableExpression> ctes,
       Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
-    FromInfo fromInfo = parseFromItem(ps.getFromItem(), ctes, cteLookup, allowQualifiedWildcards);
+    // A table-free SELECT evaluates its expressions once over an empty row.
+    FromInfo fromInfo = ps.getFromItem() == null
+        ? new FromInfo(null, null, null, Map.of(), null, null, null,
+            new ValueTableDefinition(List.of(List.of()), List.of()), null, false, null)
+        : parseFromItem(ps.getFromItem(), ctes, cteLookup, allowQualifiedWildcards);
     List<JoinInfo> joinInfos = parseJoins(ps.getJoins(), ctes, cteLookup, allowQualifiedWildcards);
     List<TableReference> tableRefs = buildTableReferences(fromInfo, joinInfos);
     final Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo, tableRefs,
@@ -2202,6 +2208,9 @@ public final class SqlParser {
       result.append(c);
     }
 
+    if (inSingleQuote || inDoubleQuote) {
+      throw new IllegalArgumentException("Unterminated quoted literal or identifier in SQL");
+    }
     return result.toString();
   }
 
