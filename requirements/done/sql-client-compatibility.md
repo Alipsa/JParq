@@ -229,3 +229,8 @@ The artifact test checks JParq's complete license
 in both JARs and all dependency license/notice text in the combined file.
 Linux, Windows, and the alternate runtimes were not rerun for this resource-only
 follow-up; their results above apply to the earlier artifacts.
+
+After aligning the Maven version and README CLI example with release 1.4.0,
+full `mvn verify` with Workbench/J enabled passed again on macOS ARM64 / Java 21
+with the same test counts and all quality checks. The packaged tests used the
+new `jparq-1.4.0.jar` and `jparq-1.4.0-fat.jar` artifacts.
