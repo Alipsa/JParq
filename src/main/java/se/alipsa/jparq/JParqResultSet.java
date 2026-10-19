@@ -489,7 +489,11 @@ public class JParqResultSet extends ResultSetAdapter {
       var canceledFailure = QueryCancellation.findCancellation(e);
       if (canceled || canceledFailure.isPresent()) {
         canceled = true;
-        throw canceledFailure.orElseGet(QueryCancellation::canceledException);
+        SQLException failure = canceledFailure.orElseGet(QueryCancellation::canceledException);
+        if (failure != e) {
+          failure.addSuppressed(e);
+        }
+        throw failure;
       }
       if (e instanceof SQLException sqlException) {
         throw sqlException;
