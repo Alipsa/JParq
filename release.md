@@ -1,6 +1,8 @@
 # Version history
 
 ### 1.4.0
+- Reuse parsed query shapes, validated source schemas, and eligible prepared plans for correlated EXISTS, IN, scalar, quantified, and ARRAY subqueries within one owning execution (#192). Bind current outer values directly, refresh row-dependent derived/CTE/join materializations, and preserve cancellation and uncorrelated-result caching.
+- **Behavior change:** correlated outer references retain their original Java types instead of being converted through SQL literals (#192). Scalar projections of an outer INTEGER can therefore return `Integer` rather than the literal-derived `Long`; NULLs and exact decimal and temporal values are preserved.
 - **Behavior change:** non-LATERAL derived tables, including joined inputs, infer unknown computed column types from returned values (#191). `getObject()` returns inferred Java values such as `java.sql.Date`, `Long`, and `BigDecimal` instead of strings, preserving exact numeric aggregate behavior. Empty or all-NULL unknown-type columns fall back to VARCHAR; mixed types, such as numbers and strings in a CASE expression, may also resolve to VARCHAR with String values. Known column types remain available for empty results.
 - Support `SELECT` without `FROM`, including recursive CTE anchors such as `SELECT 1`; preserve numeric computed values when materializing CTEs (#190).
 - Reject missing columns and projection wildcards in SELECTs without FROM. Stream CTE materialization when types are known and release buffered rows during conversion when type inference is needed.

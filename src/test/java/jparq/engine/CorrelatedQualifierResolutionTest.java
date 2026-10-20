@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.apache.avro.Schema;
@@ -23,9 +24,11 @@ import se.alipsa.jparq.JParqDriver;
 import se.alipsa.jparq.engine.CorrelationContextBuilder;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
+import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.window.WindowState;
+import se.alipsa.jparq.helper.LiteralConverter;
 
 /**
  * Tests that correlated subquery rewriting resolves qualified outer references
@@ -52,7 +55,7 @@ class CorrelatedQualifierResolutionTest {
 
       assertTrue(evaluator.eval(existsExpression, record));
       assertNotNull(executor.lastSql());
-      assertTrue(executor.lastSql().contains("= 7"), "Correlated rewrite should embed the outer alias value");
+      assertEquals(7, executor.lastValue(), "Correlation should bind the outer alias value");
     }
   }
 
@@ -76,7 +79,7 @@ class CorrelatedQualifierResolutionTest {
       Object value = evaluator.eval(arrayExpression, record);
       assertEquals(List.of(10, 11), value);
       assertNotNull(executor.lastSql());
-      assertTrue(executor.lastSql().contains("= 3"), "Correlated rewrite should embed the outer alias value");
+      assertEquals(3, executor.lastValue(), "Correlation should bind the outer alias value");
     }
   }
 
@@ -101,7 +104,7 @@ class CorrelatedQualifierResolutionTest {
       Object value = evaluator.eval(expression, record);
       assertEquals("ok", value);
       assertNotNull(executor.lastSql());
-      assertTrue(executor.lastSql().contains("= 9"), "Correlation context should supply aliased columns to subqueries");
+      assertEquals(9, executor.lastValue(), "Correlation context should supply aliased columns to subqueries");
     }
   }
 
@@ -109,11 +112,14 @@ class CorrelatedQualifierResolutionTest {
 
     private final SubqueryExecutor executor;
     private final AtomicReference<String> lastSql = new AtomicReference<>();
+    private final AtomicReference<Object> lastValue = new AtomicReference<>();
     private final JParqConnection connection;
 
     StubbedExecutor(SubqueryExecutor.SubqueryResult result) throws Exception {
       SubqueryExecutor.StatementFactory factory = sql -> {
         lastSql.set(sql);
+        var comparison = (BinaryExpression) SqlParser.parseSelect(sql).where();
+        lastValue.set(LiteralConverter.toLiteral(comparison.getRightExpression()));
         return createPreparedStatement(() -> result);
       };
       var tempDir = Files.createTempDirectory("jparq-test");
@@ -130,8 +136,18 @@ class CorrelatedQualifierResolutionTest {
       return lastSql.get();
     }
 
+    /**
+     * Returns the typed outer value captured while its binding frame is active.
+     *
+     * @return last correlated value
+     */
+    Object lastValue() {
+      return lastValue.get();
+    }
+
     @Override
     public void close() throws Exception {
+      executor.close();
       connection.close();
     }
   }

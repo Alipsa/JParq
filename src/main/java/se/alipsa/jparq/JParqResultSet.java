@@ -1172,7 +1172,7 @@ public class JParqResultSet extends ResultSetAdapter {
       return;
     }
     var context = systemContext;
-    try (context) {
+    try (context; subqueryExecutor) {
       if (qp != null) {
         qp.close();
       }

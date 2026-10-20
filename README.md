@@ -101,6 +101,13 @@ cannot be determined, unqualified names remain inner; use an explicit qualifier 
 WITH declarations inside subqueries, including derived tables, keep their local scope and override physical
 tables or inherited CTEs with the same name.
 
+Correlated subqueries reuse parsed query shapes and validated source schemas within one outer execution.
+Outer values are bound with their Java types and NULL values intact, and each evaluation reads fresh results.
+Simple physical-table subqueries also reuse their prepared plans; derived tables, joins, and CTEs rebuild
+row-dependent materializations. Eligible correlated predicates are rebuilt from the current bindings for
+predicate pushdown on every evaluation; the Java residual filter still checks current outer values.
+Caches are local to the owning execution, and uncorrelated subqueries continue to reuse their results.
+
 Recursive CTEs retain the anchor's numeric types and decimal precision and scale. Recursive values that require
 fractional truncation or decimal rounding, or exceed integer ranges or decimal precision, fail with `SQLException`
 (SQLState `22003`); recursive schemas are not widened across iterations. For example, an integer anchor cannot

@@ -191,6 +191,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   private boolean closed = false;
   private boolean nested;
   private QueryCancellation inheritedCancellation;
+  private final SubqueryExecutor.ExecutionPlans reusablePlan;
+  private SubqueryExecutor.ExecutionPlans executionPlans;
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
     this(stmt, sql, Map.of(), false);
@@ -207,7 +209,30 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   JParqPreparedStatement(JParqStatement stmt, String sql, Map<Identifier, CteResult> inheritedCtes,
       boolean ownsStatement) throws SQLException {
+    this(stmt, sql, inheritedCtes, ownsStatement, null);
+  }
+
+  /**
+   * Instantiates a parsed nested shape with fresh row-dependent materializations.
+   *
+   * @param stmt
+   *          owning statement
+   * @param sql
+   *          stable SQL for this shape
+   * @param inheritedCtes
+   *          current inherited CTE values
+   * @param ownsStatement
+   *          whether closing this wrapper closes the statement
+   * @param reusablePlan
+   *          execution-local parsed and validated shape, or null
+   * @throws SQLException
+   *           if planning or materialization fails
+   */
+  private JParqPreparedStatement(JParqStatement stmt, String sql, Map<Identifier, CteResult> inheritedCtes,
+      boolean ownsStatement, SubqueryExecutor.ExecutionPlans reusablePlan) throws SQLException {
     this.stmt = stmt;
+    this.reusablePlan = reusablePlan;
+    this.executionPlans = reusablePlan;
     this.ownsStatement = ownsStatement;
     ParameterParseResult parseResult = parseParameters(sql);
     this.originalSql = parseResult.sql();
@@ -248,7 +273,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         tmpJoinQuery = false;
         tmpCteResults = this.inheritedCteContext;
       } else {
-        SqlParser.Query query = SqlParser.parseQuery(originalSql);
+        SqlParser.Query query = reusablePlan == null
+            ? SqlParser.parseQuery(originalSql)
+            : reusablePlan.query(originalSql);
 
         Map<Identifier, CteResult> mutableCtes = new LinkedHashMap<>();
         if (inheritedCtes != null && !inheritedCtes.isEmpty()) {
@@ -459,6 +486,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (hasParameters) {
       return executeWithBoundParameters();
     }
+    if (reusablePlan == null) {
+      executionPlans = new SubqueryExecutor.ExecutionPlans();
+    }
     Connection conn = getConnection();
     JParqDatabaseMetaData metaData = (JParqDatabaseMetaData) conn.getMetaData();
     var context = SystemFunctions.openContext(conn.getCatalog(), metaData.getUserName());
@@ -490,7 +520,13 @@ public class JParqPreparedStatement implements PreparedStatement {
           }
           reader = new InMemoryRecordReader(baseCteResult.rows(), baseCteResult.schema(), resultTableName);
         } else {
-          reader = validatedTable(baseTableLocation, conf).open(conf, parquetPredicate.orElse(null));
+          FilterPredicate predicate = parquetPredicate.orElse(null);
+          if (reusablePlan != null && stmt.getConn().isPredicatePushdown()
+              && (baseRef == null || baseRef.tableSample() == null)) {
+            predicate = ParquetFilterBuilder.withCorrelatedBindings(
+                () -> ParquetFilterBuilder.split(fileAvroSchema, parsedSelect.where()).predicate().orElse(null));
+          }
+          reader = validatedTable(baseTableLocation, conf).open(conf, predicate);
           resultTableName = baseTableLocation.tableName();
         }
         resultMetadata = reader instanceof JoinRecordReader joinReader ? joinReader.schema() : fileAvroSchema;
@@ -513,14 +549,18 @@ public class JParqPreparedStatement implements PreparedStatement {
       final List<String> physical = parsedSelect.labels().isEmpty() ? null : parsedSelect.columnNames();
       // Create the result set, passing reader, select plan, residual filter,
       // plus projection labels and physical names (for metadata & value lookups)
-      SubqueryExecutor subqueryExecutor = new SubqueryExecutor(stmt.getConn(),
-          sql -> prepareSubqueryStatement(sql, cteResults, cancellation), this::subqueryTableColumns);
+      SubqueryExecutor subqueryExecutor = createSubqueryExecutor(cancellation);
       JParqResultSet rs;
       try {
         rs = new JParqResultSet(reader, parsedSelect, resultTableName, resultSchema, tableCatalog, residualExpression,
             labels, physical, subqueryExecutor);
         rs.setMetadataSchema(resultMetadata);
       } catch (SQLException | RuntimeException exception) {
+        try {
+          subqueryExecutor.close();
+        } catch (SQLException closeException) {
+          exception.addSuppressed(closeException);
+        }
         try {
           reader.close();
         } catch (IOException closeException) {
@@ -571,6 +611,18 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
   }
 
+  /**
+   * Identifies nested physical-table plans without binding-dependent input data.
+   * Derived inputs, joins, CTEs, and set operations must rebuild their current
+   * materializations while reusing their parsed and validated shapes.
+   *
+   * @return whether this statement can execute again with new outer bindings
+   */
+  public boolean isReusableSubqueryShape() {
+    return nested && !hasParameters && !setOperationQuery && !joinQuery && baseCteResult == null && cteResults.isEmpty()
+        && inheritedCteContext.isEmpty();
+  }
+
   @Override
   public void close() {
     // Close the bound statement if it exists
@@ -581,7 +633,22 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (ownsStatement) {
       stmt.close();
     }
+    executionPlans = null;
     closed = true;
+  }
+
+  /**
+   * Creates an executor that keeps its plan cache after a temporary statement
+   * wrapper is closed by Statement.executeQuery.
+   *
+   * @param cancellation
+   *          owning execution's cancellation state
+   * @return executor owned by the result or join materialization
+   */
+  private SubqueryExecutor createSubqueryExecutor(QueryCancellation cancellation) {
+    var plans = executionPlans;
+    return new SubqueryExecutor(stmt.getConn(), sql -> prepareSubqueryStatement(sql, cteResults, cancellation, plans),
+        this::subqueryTableColumns, plans);
   }
 
   private JParqPreparedStatement prepareSubqueryStatement(String sql, Map<Identifier, CteResult> cteContext)
@@ -605,10 +672,31 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private JParqPreparedStatement prepareSubqueryStatement(String sql, Map<Identifier, CteResult> cteContext,
       QueryCancellation cancellation) throws SQLException {
+    return prepareSubqueryStatement(sql, cteContext, cancellation, executionPlans);
+  }
+
+  /**
+   * Prepares nested work using an explicitly retained execution-local cache.
+   *
+   * @param sql
+   *          nested SQL
+   * @param cteContext
+   *          current inherited CTE values
+   * @param cancellation
+   *          owning cancellation state
+   * @param plans
+   *          retained parent shapes, or null during ordinary preparation
+   * @return nested statement
+   * @throws SQLException
+   *           if preparation fails or execution is canceled
+   */
+  private JParqPreparedStatement prepareSubqueryStatement(String sql, Map<Identifier, CteResult> cteContext,
+      QueryCancellation cancellation, SubqueryExecutor.ExecutionPlans plans) throws SQLException {
     Map<Identifier, CteResult> inherited = cteContext == null ? Map.of() : cteContext;
     try (var execution = stmt.beginExecution(cancellation)) {
       execution.cancellation().checkCanceled();
-      var prepared = new JParqPreparedStatement(stmt, sql, inherited);
+      var shape = plans == null ? null : plans.child(sql);
+      var prepared = new JParqPreparedStatement(stmt, sql, inherited, false, shape);
       prepared.nested = true;
       prepared.inheritedCancellation = execution.cancellation();
       return prepared;
@@ -1298,6 +1386,9 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private ParquetTable validatedTable(JParqConnection.TableLocation location, Configuration configuration)
       throws SQLException {
+    if (reusablePlan != null) {
+      return reusablePlan.table(location, configuration);
+    }
     ParquetTable table = validatedTables.get(location);
     if (table == null) {
       table = ParquetTable.validate(location, configuration);
@@ -1325,7 +1416,11 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     Map<Integer, FilterPredicate> predicates = new LinkedHashMap<>();
     for (int index = 0; index < tableReferences.size(); index++) {
-      var predicate = JoinPredicatePlanner.plan(parsedSelect.where(), tableReferences, schemas, index);
+      int participant = index;
+      var predicate = reusablePlan == null
+          ? JoinPredicatePlanner.plan(parsedSelect.where(), tableReferences, schemas, participant)
+          : ParquetFilterBuilder.withCorrelatedBindings(
+              () -> JoinPredicatePlanner.plan(parsedSelect.where(), tableReferences, schemas, participant));
       if (predicate.isPresent()) {
         predicates.put(index, predicate.get());
       }
@@ -1440,9 +1535,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       tables.add(table);
       registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
     }
-    try {
-      var executor = new SubqueryExecutor(stmt.getConn(),
-          sql -> prepareSubqueryStatement(sql, cteResults, cancellation), this::subqueryTableColumns);
+    try (var executor = createSubqueryExecutor(cancellation)) {
       JoinRecordReader joinReader = new JoinRecordReader(tables, executor);
       expandJoinQualifiedWildcards(joinReader);
       return joinReader;
@@ -2313,7 +2406,11 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (sql == null || sql.isBlank()) {
       throw new SQLException("Missing subquery SQL for derived table");
     }
-    try (PreparedStatement subStmt = prepareSubqueryStatement(sql, cteContext); ResultSet rs = subStmt.executeQuery()) {
+    // LATERAL suppliers still generate literal SQL per row. Do not retain a
+    // separate parsed shape for every distinct outer value in that path.
+    try (PreparedStatement subStmt = ref != null && ref.lateral()
+        ? prepareSubqueryStatement(sql, cteContext, inheritedCancellation, null)
+        : prepareSubqueryStatement(sql, cteContext); ResultSet rs = subStmt.executeQuery()) {
       ResultSetMetaData meta = rs.getMetaData();
       int columnCount = meta.getColumnCount();
       Schema schemaToUse = schema;

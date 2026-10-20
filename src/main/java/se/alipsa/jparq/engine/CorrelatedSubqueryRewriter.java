@@ -34,8 +34,8 @@ import net.sf.jsqlparser.util.deparser.SelectDeParser;
 
 /**
  * Utility that rewrites sub queries containing correlated column references by
- * substituting the column with the literal value sourced from the outer query
- * context.
+ * substituting a literal value or stable typed binding reference supplied by
+ * the outer query context.
  */
 public final class CorrelatedSubqueryRewriter {
 
@@ -417,6 +417,9 @@ public final class CorrelatedSubqueryRewriter {
   }
 
   private static Expression toLiteralExpression(Object value) {
+    if (value instanceof CorrelatedBindings.Reference reference) {
+      return reference.expression();
+    }
     if (value == null) {
       return new NullValue();
     }

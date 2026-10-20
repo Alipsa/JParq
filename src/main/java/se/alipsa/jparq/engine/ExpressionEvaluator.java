@@ -4,7 +4,6 @@ import static se.alipsa.jparq.engine.AvroCoercions.coerceLiteral;
 
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -51,7 +50,6 @@ public final class ExpressionEvaluator {
   private final ValueExpressionEvaluator literalEvaluator;
   private final SubqueryExecutor subqueryExecutor;
   private final List<String> outerQualifiers;
-  private final Map<net.sf.jsqlparser.statement.select.Select, Boolean> subqueryCorrelations = new IdentityHashMap<>();
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
 
@@ -413,14 +411,8 @@ public final class ExpressionEvaluator {
    */
   private SubqueryExecutor.SubqueryResult executeCorrelatedSubquery(net.sf.jsqlparser.statement.select.Select subSelect,
       GenericRecord rec) {
-    if (Boolean.FALSE.equals(subqueryCorrelations.get(subSelect))) {
-      return subqueryExecutor.execute(subSelect);
-    }
-    CorrelatedSubqueryRewriter.Result rewritten = subqueryExecutor.rewrite(subSelect, outerQualifiers,
-        correlationColumns(), qualifierColumnMapping,
+    return subqueryExecutor.executeCorrelated(subSelect, outerQualifiers, correlationColumns(), qualifierColumnMapping,
         (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
-    subqueryCorrelations.put(subSelect, rewritten.correlated());
-    return rewritten.correlated() ? subqueryExecutor.executeRaw(rewritten.sql()) : subqueryExecutor.execute(subSelect);
   }
 
   private Boolean evalBinary(BinaryExpression be, GenericRecord rec) {
@@ -526,13 +518,9 @@ public final class ExpressionEvaluator {
    */
   private List<Object> fetchAnyAllValues(AnyComparisonExpression anyExpr, GenericRecord rec) {
     net.sf.jsqlparser.statement.select.Select subSelect = anyExpr.getSelect();
-    CorrelatedSubqueryRewriter.Result rewritten = subqueryExecutor.rewrite(subSelect, outerQualifiers,
+    SubqueryExecutor.SubqueryResult result = subqueryExecutor.executeCorrelated(subSelect, outerQualifiers,
         correlationColumns(), qualifierColumnMapping,
         (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
-
-    SubqueryExecutor.SubqueryResult result = rewritten.correlated()
-        ? subqueryExecutor.executeRaw(rewritten.sql())
-        : subqueryExecutor.execute(subSelect);
     return result.firstColumnValues();
   }
 
