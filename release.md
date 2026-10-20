@@ -1,7 +1,7 @@
 # Version history
 
 ### 1.4.0
-- **Behavior change:** non-LATERAL derived tables, including joined inputs, infer unknown computed column types from returned values (#191). `getObject()` returns inferred Java values such as `java.sql.Date`, `Long`, and `BigDecimal` instead of strings, preserving exact numeric aggregate behavior. Empty or all-NULL unknown-type columns fall back to VARCHAR; known column types remain available for empty results.
+- **Behavior change:** non-LATERAL derived tables, including joined inputs, infer unknown computed column types from returned values (#191). `getObject()` returns inferred Java values such as `java.sql.Date`, `Long`, and `BigDecimal` instead of strings, preserving exact numeric aggregate behavior. Empty or all-NULL unknown-type columns fall back to VARCHAR; mixed types, such as numbers and strings in a CASE expression, may also resolve to VARCHAR with String values. Known column types remain available for empty results.
 - Support `SELECT` without `FROM`, including recursive CTE anchors such as `SELECT 1`; preserve numeric computed values when materializing CTEs (#190).
 - Reject missing columns and projection wildcards in SELECTs without FROM. Stream CTE materialization when types are known and release buffered rows during conversion when type inference is needed.
 - Reject lossy numeric conversions during CTE materialization and recursive alignment with `SQLException` instead of truncating fractions, overflowing integers, or rounding decimal scale. Validate table-free named WINDOW and DISTINCT ON expressions; document the explicit-FROM requirement for correlated LATERAL inputs and preserve scalar/EXISTS correlations.
