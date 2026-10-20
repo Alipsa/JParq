@@ -2545,7 +2545,8 @@ public class JParqPreparedStatement implements PreparedStatement {
       Schema valueSchema = ref != null && ref.lateral() && requiresValueInference(meta, i)
           ? Schema.create(Schema.Type.STRING)
           : columnSchema(meta, i);
-      if (ref != null && meta.getColumnType(i) == Types.OTHER) {
+      // Non-LATERAL unknown columns are inferred by consumeResultSet instead.
+      if (ref != null && ref.lateral() && meta.getColumnType(i) == Types.OTHER) {
         Schema inferred = inferSubqueryColumnSchema(ref, i);
         if (inferred != null) {
           valueSchema = inferred;
