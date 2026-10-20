@@ -2425,6 +2425,14 @@ public class JParqPreparedStatement implements PreparedStatement {
         throw new SQLException("Derived table alias declares " + columnAliases.size()
             + " columns but subquery produces " + columnCount + " columns", "42000");
       }
+      Set<String> aliasNames = new LinkedHashSet<>();
+      Set<String> fieldAliases = new LinkedHashSet<>();
+      for (String alias : columnAliases) {
+        Identifier identifier = Identifier.of(alias);
+        if (!aliasNames.add(identifier.normalized()) || !fieldAliases.add(identifier.text())) {
+          throw new SQLException("Duplicate derived table column alias: " + alias, "42000");
+        }
+      }
       Schema schemaToUse = schema;
       if (schemaToUse == null) {
         fieldNames.clear();
@@ -2456,7 +2464,11 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       return new SubqueryTableData(schemaToUse, List.copyOf(rows));
     } catch (SQLException e) {
-      throw new SQLException("Failed to execute subquery for join: " + sql + ": " + e.getMessage(), e.getSQLState(), e);
+      String context = "Failed to execute derived table: ";
+      if (e.getMessage() != null && e.getMessage().contains(context)) {
+        throw e;
+      }
+      throw new SQLException(context + e.getMessage(), e.getSQLState(), e);
     }
   }
 

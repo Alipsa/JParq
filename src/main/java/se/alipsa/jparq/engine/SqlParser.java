@@ -1621,6 +1621,22 @@ public final class SqlParser {
       } else if (info.subquerySql() != null) {
         // Bind output names after wildcard expansion, against JDBC ordinals.
         mapping = Map.of();
+      } else if (info.innerSelect() != null && info.innerSelect().columnNames() != null
+          && !info.innerSelect().columnNames().isEmpty()) {
+        List<String> physical = info.innerSelect().columnNames();
+        if (physical.size() != aliasColumns.size()) {
+          throw new IllegalArgumentException("Alias column count does not match derived table projection");
+        }
+        Map<String, String> aliasMapping = new LinkedHashMap<>();
+        for (int i = 0; i < aliasColumns.size(); i++) {
+          String aliasColumn = aliasColumns.get(i);
+          String physicalColumn = physical.get(i);
+          if (physicalColumn == null || physicalColumn.isBlank()) {
+            physicalColumn = aliasColumn;
+          }
+          aliasMapping.put(aliasColumn, physicalColumn);
+        }
+        mapping = Map.copyOf(aliasMapping);
       } else {
         Map<String, String> aliasMapping = new LinkedHashMap<>();
         for (String columnName : aliasColumns) {

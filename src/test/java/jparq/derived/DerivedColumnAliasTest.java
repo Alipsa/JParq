@@ -162,10 +162,78 @@ class DerivedColumnAliasTest {
           try (var statement = connection.createStatement()) {
             SQLException error = assertThrows(SQLException.class,
                 () -> statement.executeQuery("SELECT * FROM " + source));
-            assertTrue(error.getMessage().contains("alias"), error.getMessage());
+            assertEquals("42000", error.getSQLState(), error.getMessage());
+            assertTrue(error.getMessage().contains("Derived table alias declares"), error.getMessage());
           }
         }
       }
     }
   }
+
+  /**
+   * Checks positional alias mapping for parenthesized CTE references.
+   *
+   * @param pushdown
+   *          whether predicate and projection pushdown are enabled
+   * @throws Exception
+   *           if JDBC execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void parenthesizedCteAliasesBindByPosition(boolean pushdown) throws Exception {
+    String url = "jdbc:jparq:" + Path.of("src/test/resources/hf").toAbsolutePath() + "?predicatePushdown=" + pushdown
+        + "&projectionPushdown=" + pushdown;
+    try (var connection = DriverManager.getConnection(url)) {
+      for (String source : List.of("(c) x(a, b)", "((c)) x(a, b)")) {
+        String sql = "WITH c AS (SELECT id, id + 1 AS n FROM optimized WHERE id <= 2) " + "SELECT x.a, x.b FROM "
+            + source + " ORDER BY x.a";
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+          for (int id = 1; id <= 2; id++) {
+            assertTrue(result.next(), sql);
+            assertEquals(Integer.toString(id), result.getString(1), sql);
+            assertEquals(Integer.toString(id + 1), result.getString(2), sql);
+          }
+          assertFalse(result.next(), sql);
+        }
+      }
+    }
+  }
+
+  /**
+   * Rejects duplicate output aliases before constructing an Avro schema.
+   *
+   * @param aliases
+   *          duplicate column alias names
+   * @throws Exception
+   *           if the connection cannot be opened
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "a, a", "a, A", "\"Same\", \"Same\""
+  })
+  void duplicateAliasesHaveSqlDiagnostics(String aliases) throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + Path.of("src/test/resources/hf"))) {
+      for (String body : List.of("SELECT id, id + 1 FROM optimized WHERE id <= 2",
+          "SELECT id, id FROM optimized WHERE id < 0")) {
+        String derived = "(" + body + ") x(" + aliases + ")";
+        for (String source : List.of(derived, "(VALUES (1)) s(z) JOIN " + derived + " ON TRUE",
+            "(VALUES (1)) s(z) JOIN LATERAL " + derived + " ON TRUE", "(SELECT * FROM " + derived + ") nested")) {
+          try (var statement = connection.createStatement()) {
+            SQLException error = assertThrows(SQLException.class,
+                () -> statement.executeQuery("SELECT * FROM " + source));
+            assertEquals("42000", error.getSQLState(), error.getMessage());
+            assertTrue(error.getMessage().contains("Duplicate derived table column alias:"), error.getMessage());
+            String context = "Failed to execute derived table:";
+            assertTrue(error.getMessage().contains(context), error.getMessage());
+            assertEquals(error.getMessage().indexOf(context), error.getMessage().lastIndexOf(context),
+                error.getMessage());
+            assertFalse(error.getMessage().contains("subquery for join"), error.getMessage());
+          }
+        }
+      }
+    }
+  }
+
 }
