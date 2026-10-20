@@ -1448,6 +1448,8 @@ public final class SqlParser {
     if (innerPlain == null) {
       throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
     }
+    List<String> columnAliases = extractAliasColumns(aliasNode);
+    validateDerivedColumnAliases(columnAliases);
     if (lateral && innerPlain.getFromItem() == null) {
       validateTableFreeSelect(innerPlain, true);
     }
@@ -1461,7 +1463,6 @@ public final class SqlParser {
       alias = innerSelect.table();
     }
     Map<String, String> mapping = buildColumnMapping(innerSelect);
-    List<String> columnAliases = extractAliasColumns(aliasNode);
     if (!columnAliases.isEmpty()) {
       mapping = Map.of();
     }
@@ -1606,6 +1607,7 @@ public final class SqlParser {
     Map<String, String> mapping = info.columnMapping() == null ? Map.of() : info.columnMapping();
     ValueTableDefinition valueTable = info.valueTable();
     List<String> aliasColumns = extractAliasColumns(aliasNode);
+    validateDerivedColumnAliases(aliasColumns);
     if (!aliasColumns.isEmpty()) {
       if (valueTable != null) {
         if (valueTable.columnNames().size() != aliasColumns.size()) {
@@ -1651,6 +1653,27 @@ public final class SqlParser {
     return new FromInfo(info.schemaName(), tableName, tableAlias, mapping, info.innerSelect(), info.subquerySql(),
         info.commonTableExpression(), valueTable, info.unnest(), info.lateral(), info.tableSample(),
         info.subquerySql() != null && !aliasColumns.isEmpty() ? aliasColumns : info.columnAliases());
+  }
+
+  /**
+   * Rejects duplicate derived column aliases before executing their inputs.
+   *
+   * @param aliases
+   *          column aliases in output order
+   * @throws IllegalArgumentException
+   *           with a syntax error cause if names collide during lookup or Avro
+   *           field creation
+   */
+  private static void validateDerivedColumnAliases(List<String> aliases) {
+    Set<String> aliasNames = new LinkedHashSet<>();
+    Set<String> fieldAliases = new LinkedHashSet<>();
+    for (String alias : aliases) {
+      Identifier identifier = Identifier.of(alias);
+      if (!aliasNames.add(identifier.normalized()) || !fieldAliases.add(identifier.text())) {
+        String message = "Duplicate derived table column alias: " + alias;
+        throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000"));
+      }
+    }
   }
 
   private static List<String> extractAliasColumns(Alias alias) {

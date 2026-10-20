@@ -10,8 +10,11 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.List;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.SqlExceptions;
+import se.alipsa.jparq.engine.SqlParser;
 
 /** Verifies ordinal column alias binding at derived-table boundaries. */
 class DerivedColumnAliasTest {
@@ -164,6 +167,7 @@ class DerivedColumnAliasTest {
                 () -> statement.executeQuery("SELECT * FROM " + source));
             assertEquals("42000", error.getSQLState(), error.getMessage());
             assertTrue(error.getMessage().contains("Derived table alias declares"), error.getMessage());
+            assertTrue(error.getMessage().contains("Failed to execute derived table 'x':"), error.getMessage());
           }
         }
       }
@@ -202,7 +206,7 @@ class DerivedColumnAliasTest {
   }
 
   /**
-   * Rejects duplicate output aliases before constructing an Avro schema.
+   * Rejects duplicate output aliases during parsing, before input execution.
    *
    * @param aliases
    *          duplicate column alias names
@@ -219,18 +223,41 @@ class DerivedColumnAliasTest {
           "SELECT id, id FROM optimized WHERE id < 0")) {
         String derived = "(" + body + ") x(" + aliases + ")";
         for (String source : List.of(derived, "(VALUES (1)) s(z) JOIN " + derived + " ON TRUE",
-            "(VALUES (1)) s(z) JOIN LATERAL " + derived + " ON TRUE", "(SELECT * FROM " + derived + ") nested")) {
+            "(VALUES (1)) s(z) JOIN LATERAL " + derived + " ON TRUE", "(SELECT * FROM " + derived + ") nested",
+            "((" + body + ") inner_alias) x(" + aliases + ")")) {
           try (var statement = connection.createStatement()) {
-            SQLException error = assertThrows(SQLException.class,
-                () -> statement.executeQuery("SELECT * FROM " + source));
+            String sql = "SELECT * FROM " + source;
+            IllegalArgumentException parseError = assertThrows(IllegalArgumentException.class,
+                () -> SqlParser.parseSelect(sql));
+            assertEquals("42000", SqlExceptions.findSqlStateFailure(parseError).getSQLState());
+            SQLException error = assertThrows(SQLException.class, () -> statement.executeQuery(sql));
             assertEquals("42000", error.getSQLState(), error.getMessage());
             assertTrue(error.getMessage().contains("Duplicate derived table column alias:"), error.getMessage());
-            String context = "Failed to execute derived table:";
-            assertTrue(error.getMessage().contains(context), error.getMessage());
-            assertEquals(error.getMessage().indexOf(context), error.getMessage().lastIndexOf(context),
-                error.getMessage());
-            assertFalse(error.getMessage().contains("subquery for join"), error.getMessage());
           }
+        }
+      }
+    }
+  }
+
+  /**
+   * Identifies the failing join input and preserves its context through nesting.
+   *
+   * @throws Exception
+   *           if the connection cannot be opened
+   */
+  @Test
+  void countErrorsIdentifyDerivedTable() throws Exception {
+    String joined = "SELECT * FROM (SELECT id FROM optimized WHERE id <= 2) x(a) "
+        + "JOIN (SELECT id, id FROM optimized WHERE id <= 2) y(b) ON TRUE";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + Path.of("src/test/resources/hf"))) {
+      for (String sql : List.of(joined, "SELECT * FROM (" + joined + ") outer_input")) {
+        try (var statement = connection.createStatement()) {
+          SQLException error = assertThrows(SQLException.class, () -> statement.executeQuery(sql));
+          assertEquals("42000", error.getSQLState(), error.getMessage());
+          String context = "Failed to execute derived table '";
+          assertTrue(error.getMessage().contains(context + "y': Derived table alias declares"), error.getMessage());
+          assertEquals(error.getMessage().indexOf(context), error.getMessage().lastIndexOf(context),
+              error.getMessage());
         }
       }
     }
