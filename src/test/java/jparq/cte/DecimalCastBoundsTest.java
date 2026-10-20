@@ -142,6 +142,47 @@ class DecimalCastBoundsTest {
   }
 
   /**
+   * Rejects invalid bounds in set ordering and quantified subqueries before any
+   * rows are needed.
+   *
+   * @param sql
+   *          the statement with invalid bounds, including empty-result variants
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT 1 AS a UNION ALL SELECT 2 ORDER BY CAST(1 AS DECIMAL(1,2))",
+      "SELECT 1 AS a WHERE 1 = 0 UNION ALL SELECT 2 WHERE 1 = 0 ORDER BY CAST(1 AS DECIMAL(1,2))",
+      "SELECT model FROM mtcars WHERE mpg > ALL (SELECT CAST(1 AS DECIMAL(1,2)))",
+      "SELECT model FROM mtcars WHERE mpg > ANY (SELECT CAST(1 AS DECIMAL(1,2)))",
+      "SELECT model FROM mtcars WHERE mpg > SOME (SELECT CAST(1 AS DECIMAL(1,2)))",
+      "SELECT model FROM mtcars WHERE cyl = 99 AND mpg > ALL (SELECT CAST(1 AS DECIMAL(1,2)))",
+      "SELECT model FROM mtcars WHERE cyl = 99 AND mpg > ANY (SELECT CAST(1 AS DECIMAL(1,2)))",
+      "SELECT model FROM mtcars WHERE cyl = 99 AND mpg > SOME (SELECT CAST(1 AS DECIMAL(1,2)))"
+  })
+  void quantifiedAndSetOrderDeclarationsFailBeforeRows(String sql) throws Exception {
+    var parsed = (Select) JSqlParserSupport.parseStatement(sql);
+    assertThrows(IllegalArgumentException.class, () -> DecimalCasts.validateStatement(parsed), sql);
+    String url = "jdbc:jparq:"
+        + Path.of(DecimalCastBoundsTest.class.getResource("/mtcars.parquet").toURI()).getParent();
+    try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+      SQLException preparation = assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql);
+      assertEquals("42000", preparation.getSQLState(), sql);
+      assertTrue(preparation.getMessage().contains("Invalid decimal bounds"), preparation.getMessage());
+      SQLException execution = assertThrows(SQLException.class, () -> {
+        try (var result = statement.executeQuery(sql)) {
+          while (result.next()) {
+            result.getObject(1);
+          }
+        }
+      }, sql);
+      assertEquals("42000", execution.getSQLState(), sql);
+      assertTrue(execution.getMessage().contains("Invalid decimal bounds"), execution.getMessage());
+    }
+  }
+
+  /**
    * Preserves a syntax SQLState when the SQL parser itself rejects decimal
    * bounds.
    *
