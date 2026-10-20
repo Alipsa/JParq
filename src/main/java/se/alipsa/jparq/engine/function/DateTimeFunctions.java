@@ -601,8 +601,8 @@ public final class DateTimeFunctions {
    *          the evaluated inner value
    * @return the cast result converted to the requested type when possible
    * @throws IllegalArgumentException
-   *           if decimal bounds are invalid or the rounded value exceeds
-   *           precision; the cause carries SQLState 22003
+   *           if decimal bounds are invalid (SQLState 42000) or the rounded value
+   *           exceeds precision (SQLState 22003), carried by the cause
    */
   public static Object castLiteral(CastExpression cast, Object value) {
     if (cast != null && cast.getColDataType() != null

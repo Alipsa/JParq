@@ -4,10 +4,15 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.sql.SQLDataException;
 import java.sql.SQLException;
+import java.sql.SQLSyntaxErrorException;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import net.sf.jsqlparser.expression.CastExpression;
+import net.sf.jsqlparser.statement.select.Select;
+import net.sf.jsqlparser.statement.select.SelectVisitor;
+import net.sf.jsqlparser.util.deparser.ExpressionDeParser;
+import net.sf.jsqlparser.util.deparser.SelectDeParser;
 import org.apache.avro.LogicalTypes;
 
 /**
@@ -64,6 +69,48 @@ public final class DecimalCasts {
   }
 
   /**
+   * Validates decimal declarations throughout a statement before query planning.
+   *
+   * @param statement
+   *          the parsed SELECT, including nested queries and CTEs
+   * @throws IllegalArgumentException
+   *           if bounds are invalid; the cause carries SQLState 42000
+   */
+  public static void validateStatement(Select statement) {
+    StringBuilder buffer = new StringBuilder();
+    ExpressionDeParser expressions = new ExpressionDeParser() {
+      /** {@inheritDoc} */
+      @Override
+      public <S> StringBuilder visit(CastExpression cast, S context) {
+        validateBounds(cast);
+        return super.visit(cast, context);
+      }
+    };
+    SelectDeParser selects = new SelectDeParser(expressions, buffer);
+    expressions.setSelectVisitor(selects);
+    expressions.setBuilder(buffer);
+    statement.accept((SelectVisitor<StringBuilder>) selects, null);
+  }
+
+  /**
+   * Rejects invalid decimal type declarations independently of input values.
+   *
+   * @param cast
+   *          the CAST expression to check
+   * @throws IllegalArgumentException
+   *           if bounds are invalid; the cause carries SQLState 42000
+   */
+  public static void validateBounds(CastExpression cast) {
+    if (cast == null || cast.getColDataType() == null || !isDecimalType(cast.getColDataType().getDataType())) {
+      return;
+    }
+    if (decimalBounds(cast) != null && declaredType(cast) == null) {
+      String message = "Invalid decimal bounds: " + cast.getColDataType();
+      throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000"));
+    }
+  }
+
+  /**
    * Applies declared scale before checking precision, preserving unbounded casts.
    *
    * @param cast
@@ -72,18 +119,15 @@ public final class DecimalCasts {
    *          the decimal value to convert, possibly null
    * @return the value rounded to the declared scale, or unchanged without bounds
    * @throws IllegalArgumentException
-   *           if bounds are invalid or the rounded value overflows; the cause is
-   *           a SQLException with SQLState 22003
+   *           if bounds are invalid (SQLState 42000) or the rounded value
+   *           overflows (SQLState 22003), carried by a SQLException cause
    */
   public static BigDecimal convert(CastExpression cast, BigDecimal value) {
-    var declaration = cast.getColDataType();
+    validateBounds(cast);
     if (decimalBounds(cast) == null) {
       return value;
     }
     LogicalTypes.Decimal type = declaredType(cast);
-    if (type == null) {
-      throw numericFailure("Invalid decimal bounds: " + declaration);
-    }
     if (value == null) {
       return null;
     }
@@ -95,17 +139,17 @@ public final class DecimalCasts {
   }
 
   /**
-   * Finds a numeric range error across unchecked expression-evaluation
-   * boundaries.
+   * Finds a CAST declaration or numeric range error across unchecked boundaries.
    *
    * @param failure
    *          the exception or wrapper to inspect
-   * @return the SQLState 22003 exception, or null when none is present
+   * @return the SQLState 42000 or 22003 exception, or null when none is present
    */
-  public static SQLException findNumericFailure(Throwable failure) {
+  public static SQLException findCastFailure(Throwable failure) {
     Throwable current = failure;
     while (current != null) {
-      if (current instanceof SQLException sql && "22003".equals(sql.getSQLState())) {
+      if (current instanceof SQLException sql
+          && ("22003".equals(sql.getSQLState()) || "42000".equals(sql.getSQLState()))) {
         return sql;
       }
       current = current.getCause();

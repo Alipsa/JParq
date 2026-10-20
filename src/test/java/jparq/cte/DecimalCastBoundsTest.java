@@ -73,19 +73,18 @@ class DecimalCastBoundsTest {
   }
 
   /**
-   * Rejects overflow after rounding and invalid bounds at the JDBC boundary.
+   * Rejects value overflow after rounding at the JDBC boundary.
    * 
    * @param expression
-   *          the invalid or overflowing CAST projection
+   *          the overflowing CAST projection
    * @throws Exception
    *           if opening a connection fails
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "CAST(123 AS DECIMAL(2,0))", "CAST(99.5 AS NUMERIC(2))", "CAST(9.95 AS NUMBER(2,1))", "CAST(1 AS DECIMAL(2,5))",
-      "CAST(1 AS NUMERIC(0,0))", "CAST(NULL AS NUMBER(2,5))"
+      "CAST(123 AS DECIMAL(2,0))", "CAST(99.5 AS NUMERIC(2))", "CAST(9.95 AS NUMBER(2,1))"
   })
-  void invalidCastsReportNumericSqlState(String expression) throws Exception {
+  void overflowingCastsReportNumericSqlState(String expression) throws Exception {
     String body = "SELECT " + expression + " AS n";
     for (String sql : List.of(body, "WITH c AS (" + body + ") SELECT n FROM c", "SELECT d.n FROM (" + body + ") d")) {
       try (var connection = DriverManager.getConnection(jdbcUrl); var statement = connection.createStatement()) {
@@ -100,4 +99,52 @@ class DecimalCastBoundsTest {
       }
     }
   }
+  /**
+   * Rejects invalid declarations before data access or parameter binding.
+   *
+   * @param sql
+   *          the statement containing invalid decimal bounds
+   * @throws Exception
+   *           if opening a connection fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT CAST(1 AS DECIMAL(2,5))", "SELECT CAST(NULL AS NUMBER(2,5))", "SELECT CAST(? AS NUMERIC(0,0))",
+      "SELECT CAST(amount AS DECIMAL(2,5)) FROM optimized WHERE id < 0",
+      "SELECT 1 FROM optimized WHERE id < 0 AND CAST(amount AS NUMBER(0)) = 0",
+      "WITH c AS (SELECT CAST(NULL AS NUMERIC(2,5)) AS n) SELECT n FROM c",
+      "WITH c AS (SELECT CAST(NULL AS NUMERIC(2,5)) AS n) SELECT 1",
+      "SELECT d.n FROM (SELECT CAST(1 AS DECIMAL(0)) AS n) d",
+      "SELECT CASE WHEN FALSE THEN CAST(1 AS DECIMAL(2,5)) ELSE 1 END",
+      "SELECT 1 UNION ALL SELECT CAST(NULL AS NUMBER(2,5))",
+      "SELECT m.id FROM optimized m, LATERAL " + "(SELECT CAST(m.amount AS DECIMAL(2,5)) AS n FROM (VALUES (1)) v(z)) x"
+  })
+  void invalidDeclarationsFailDuringPreparation(String sql) throws Exception {
+    try (var connection = DriverManager.getConnection(jdbcUrl)) {
+      SQLException failure = assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql);
+      assertEquals("42000", failure.getSQLState(), sql);
+      assertTrue(failure.getMessage().contains("Invalid decimal bounds"), failure.getMessage());
+    }
+  }
+
+  /**
+   * Preserves a syntax SQLState when the SQL parser itself rejects decimal
+   * bounds.
+   *
+   * @param sql
+   *          the statement with unsupported negative type parameters
+   * @throws Exception
+   *           if opening a connection fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT CAST(1 AS NUMERIC(2,-1))", "SELECT CAST(1 AS DECIMAL(-1,0))"
+  })
+  void invalidDecimalSyntaxFailsDuringPreparation(String sql) throws Exception {
+    try (var connection = DriverManager.getConnection(jdbcUrl)) {
+      SQLException failure = assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql);
+      assertEquals("42000", failure.getSQLState(), sql);
+    }
+  }
+
 }

@@ -121,7 +121,8 @@ expressions with unknown precision use VARCHAR to keep one stable schema across 
 
 `DECIMAL(p,s)`, `NUMERIC(p,s)`, and `NUMBER(p,s)` casts round to the declared scale with HALF_UP and then
 reject precision overflow with SQLState `22003`. Omitting scale while specifying precision defaults to scale
-zero. Bounds must satisfy `1 <= p` and `0 <= s <= p`. Casts without precision preserve the decimal value.
+zero. Bounds must satisfy `1 <= p` and `0 <= s <= p`; invalid declarations fail during statement preparation
+with SQLState `42000`, including for NULL inputs and empty results. Casts without precision preserve the decimal value.
 
 ### Connection options
 

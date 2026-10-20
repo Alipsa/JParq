@@ -1,5 +1,6 @@
 package se.alipsa.jparq.engine;
 
+import java.sql.SQLSyntaxErrorException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -603,7 +604,8 @@ public final class SqlParser {
       if (fallback != null) {
         return fallback;
       }
-      throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
+      String message = "Failed to parse SQL: " + sql;
+      throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000", e));
     } catch (Exception e) {
       throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
     }
@@ -624,6 +626,7 @@ public final class SqlParser {
    */
   private static Query parseWithJsqlParser(String sql, boolean allowQualifiedWildcards) throws JSQLParserException {
     var stmt = (net.sf.jsqlparser.statement.select.Select) JSqlParserSupport.parseStatement(sql);
+    DecimalCasts.validateStatement(stmt);
     SqlExpressionNormalizer.normalize(stmt);
     return parseSelectStatement(stmt, List.of(), Map.of(), allowQualifiedWildcards);
   }

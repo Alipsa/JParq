@@ -508,9 +508,9 @@ public class JParqResultSet extends ResultSetAdapter {
       if (e instanceof SQLException sqlException) {
         throw sqlException;
       }
-      SQLException numericFailure = DecimalCasts.findNumericFailure(e);
-      if (numericFailure != null) {
-        throw numericFailure;
+      SQLException castFailure = DecimalCasts.findCastFailure(e);
+      if (castFailure != null) {
+        throw castFailure;
       }
       throw new SQLException(e);
     }
@@ -572,21 +572,21 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
-   * Evaluates a projection while preserving numeric range SQLStates.
+   * Evaluates a projection while preserving CAST error SQLStates.
    *
    * @param expression
    *          the projection to evaluate
    * @return the computed value, or null without an evaluator
    * @throws SQLException
-   *           if a numeric cast exceeds its bounds
+   *           if a decimal declaration or value is invalid
    */
   private Object evaluateProjection(Expression expression) throws SQLException {
     try {
       return projectionEvaluator == null ? null : projectionEvaluator.eval(expression, current);
     } catch (IllegalArgumentException exception) {
-      SQLException numericFailure = DecimalCasts.findNumericFailure(exception);
-      if (numericFailure != null) {
-        throw numericFailure;
+      SQLException castFailure = DecimalCasts.findCastFailure(exception);
+      if (castFailure != null) {
+        throw castFailure;
       }
       throw exception;
     }

@@ -390,9 +390,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
       }
     } catch (Exception e) {
-      SQLException numericFailure = DecimalCasts.findNumericFailure(e);
-      if (numericFailure != null) {
-        throw numericFailure;
+      SQLException castFailure = DecimalCasts.findCastFailure(e);
+      if (castFailure != null) {
+        throw castFailure;
       }
       throw new SQLException("Failed to prepare query: " + sql, e);
     }
@@ -439,9 +439,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         return executeQuery(cancellation);
       } catch (SQLException | RuntimeException exception) {
         cancellation.checkCanceled();
-        SQLException numericFailure = DecimalCasts.findNumericFailure(exception);
-        if (numericFailure != null) {
-          throw numericFailure;
+        SQLException castFailure = DecimalCasts.findCastFailure(exception);
+        if (castFailure != null) {
+          throw castFailure;
         }
         throw exception;
       }
