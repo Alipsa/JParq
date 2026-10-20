@@ -101,6 +101,32 @@ cannot be determined, unqualified names remain inner; use an explicit qualifier 
 WITH declarations inside subqueries, including derived tables, keep their local scope and override physical
 tables or inherited CTEs with the same name.
 
+Recursive CTEs retain the anchor's numeric types and decimal precision and scale. Recursive values that require
+fractional truncation or decimal rounding, or exceed integer ranges or decimal precision, fail with `SQLException`
+(SQLState `22003`); recursive schemas are not widened across iterations. For example, an integer anchor cannot
+accept a recursive step of `0.5`. A decimal literal also infers precision from its value: an anchor of `0.5`
+becomes `DECIMAL(1,1)` and cannot grow to `1.5`. Use an explicit cast to reserve both precision and scale:
+
+```sql
+WITH RECURSIVE r(n) AS (
+  SELECT CAST(0.5 AS DECIMAL(10,1))
+  UNION ALL SELECT n + 1 FROM r WHERE n < 29.5
+)
+SELECT n FROM r ORDER BY n
+```
+
+Computed numeric values retain their types through CTEs and single derived tables. Derived tables used in
+joins, including LATERAL, may still expose numeric values as VARCHAR. In particular, LATERAL decimal
+expressions with unknown precision use VARCHAR to keep one stable schema across correlated executions.
+
+`DECIMAL(p,s)`, `NUMERIC(p,s)`, and `NUMBER(p,s)` casts round to the declared scale with HALF_UP and then
+reject precision overflow with SQLState `22003`. Omitting scale while specifying precision defaults to scale
+zero. Bounds must satisfy `1 <= p` and `0 <= s <= p`; invalid declarations fail during statement preparation
+with SQLState `42000`, including for NULL inputs and empty results. Casts without precision preserve the decimal value.
+
+SQL syntax rejected by JSqlParser raises `SQLSyntaxErrorException` with SQLState `42000`. Syntax and numeric
+errors retain preparation and nested-query context in their messages and cause chains.
+
 ### Connection options
 
 - `caseSensitive` — defaults to `false`. Set to `true` to make table-name resolution case-sensitive.
@@ -380,6 +406,10 @@ As of version 1.1.1, the support for the standard is complete (as far as I know)
 
 The following SQL statements are supported:
 - `SELECT` with support for
+  - Omitted `FROM` for literal and computed expressions, including recursive CTE anchors. The implicit input is one row; `WHERE` and row limits still apply.
+    Missing input columns and projection wildcards (`*` and `table.*`) are rejected when `FROM` is omitted.
+    Correlated scalar and `EXISTS` subqueries can omit `FROM`. LATERAL inputs referencing outer columns still require
+    an explicit input, such as `LATERAL (SELECT e.id * 2 AS d FROM (VALUES (1)) v(z)) x`.
   - `*` to select all columns
   - Qualified wildcard projections (table.*).
   - alias support for columns and tables
@@ -535,8 +565,6 @@ See [release.md](release.md) for the full version history and work in progress.
 ## Roadmap: _Might_ be implemented in the future
 
 ### Non standard extensions
-- Allow omission of from clause in some cases
-  - Several popular databases allow you to omit the FROM clause when you are only selecting literal values, performing arithmetic, or evaluating scalar functions (functions that return a single value). In these cases, the query returns a single row e.g: `SELECT CURRENT_DATE as cur_date`.
 - Support for variable assignment and use within SQL scripts.
   - @variable_name syntax to define a variable that exists for the duration of the connection
     - Example (direct assignment, connection scope):

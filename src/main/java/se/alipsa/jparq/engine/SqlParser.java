@@ -1,5 +1,6 @@
 package se.alipsa.jparq.engine;
 
+import java.sql.SQLSyntaxErrorException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -38,8 +39,7 @@ public final class SqlParser {
       "LOCALTIME", "LOCALTIMESTAMP");
   private static final Set<String> CONVERT_TYPE_NAMES = Set.of("boolean", "bool", "char", "character", "nchar",
       "varchar", "charactervarying", "nvarchar", "string", "text", "clob", "tinyint", "smallint", "int", "integer",
-      "signed", "int2", "int4", "bigint", "int8", "float", "real", "float4", "double", "doubleprecision", "float8",
-      "numeric", "decimal", "number");
+      "signed", "int2", "int4", "bigint", "int8", "float", "real", "float4", "double", "doubleprecision", "float8");
   private static final Pattern SINGLE_CTE_PATTERN = Pattern.compile(
       "^\\s*with\\s+(?:\"([A-Za-z_][\\w]*)\"|([A-Za-z_][\\w]*))\\s+as\\s*\\(",
       Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
@@ -56,7 +56,7 @@ public final class SqlParser {
     if (paren > 0) {
       normalized = normalized.substring(0, paren).trim();
     }
-    return CONVERT_TYPE_NAMES.contains(normalized);
+    return CONVERT_TYPE_NAMES.contains(normalized) || DecimalCasts.isDecimalType(normalized);
   }
 
   /**
@@ -495,7 +495,9 @@ public final class SqlParser {
 
   /**
    * Representation of a {@code VALUES} table constructor discovered in the
-   * {@code FROM} clause or as a stand-alone query.
+   * {@code FROM} clause or as a stand-alone query. A single empty row with no
+   * columns represents the implicit input of a {@code SELECT} without
+   * {@code FROM}.
    *
    * @param rows
    *          ordered collection of row expressions supplied to the constructor;
@@ -602,7 +604,8 @@ public final class SqlParser {
       if (fallback != null) {
         return fallback;
       }
-      throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
+      String message = "Failed to parse SQL: " + sql;
+      throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000", e));
     } catch (Exception e) {
       throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
     }
@@ -623,6 +626,7 @@ public final class SqlParser {
    */
   private static Query parseWithJsqlParser(String sql, boolean allowQualifiedWildcards) throws JSQLParserException {
     var stmt = (net.sf.jsqlparser.statement.select.Select) JSqlParserSupport.parseStatement(sql);
+    DecimalCasts.validateStatement(stmt);
     SqlExpressionNormalizer.normalize(stmt);
     return parseSelectStatement(stmt, List.of(), Map.of(), allowQualifiedWildcards);
   }
@@ -949,7 +953,14 @@ public final class SqlParser {
 
   private static Select parsePlainSelect(PlainSelect ps, List<CommonTableExpression> ctes,
       Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
-    FromInfo fromInfo = parseFromItem(ps.getFromItem(), ctes, cteLookup, allowQualifiedWildcards);
+    if (ps.getFromItem() == null) {
+      validateTableFreeSelect(ps, false);
+    }
+    // A table-free SELECT evaluates its expressions once over an empty row.
+    FromInfo fromInfo = ps.getFromItem() == null
+        ? new FromInfo(null, null, null, Map.of(), null, null, null,
+            new ValueTableDefinition(List.of(List.of()), List.of()), null, false, null)
+        : parseFromItem(ps.getFromItem(), ctes, cteLookup, allowQualifiedWildcards);
     List<JoinInfo> joinInfos = parseJoins(ps.getJoins(), ctes, cteLookup, allowQualifiedWildcards);
     List<TableReference> tableRefs = buildTableReferences(fromInfo, joinInfos);
     final Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo, tableRefs,
@@ -1009,6 +1020,93 @@ public final class SqlParser {
         offset, orderCopy, distinct, false, List.of(), expressionCopy, expressionOrderCopy, wildcardCopy,
         groupByInfo.expressions(), groupByInfo.groupingSets(), combinedHaving, -1, 0, List.of(), tableRefs,
         List.copyOf(ctes));
+  }
+
+  /**
+   * Rejects references to an absent input while keeping nested query scopes
+   * separate.
+   *
+   * @param select
+   *          the table-free SELECT to validate
+   * @param lateral
+   *          whether this SELECT is a LATERAL input awaiting outer binding
+   * @throws IllegalArgumentException
+   *           if a column or projection wildcard requires an input
+   */
+  private static void validateTableFreeSelect(PlainSelect select, boolean lateral) {
+    final var validator = new ExpressionVisitorAdapter<Void>() {
+      @Override
+      public <S> Void visit(Column column, S context) {
+        if (column.getTable() == null && isTimeKeyword(column.getColumnName())) {
+          return null;
+        }
+        if (lateral) {
+          throw new IllegalArgumentException("Column references in LATERAL subqueries without FROM are not supported; "
+              + "add an explicit input such as FROM (VALUES (1)) v(z): " + column);
+        }
+        throw new IllegalArgumentException("Missing column without FROM: " + column);
+      }
+
+      @Override
+      public <S> Void visit(ParenthesedSelect nested, S context) {
+        return null;
+      }
+
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.statement.select.Select nested, S context) {
+        return null;
+      }
+    };
+    Set<Identifier> aliases = new LinkedHashSet<>();
+    List<Expression> expressions = new ArrayList<>();
+    for (SelectItem<?> item : select.getSelectItems()) {
+      Expression expression = item.getExpression();
+      if (expression instanceof AllColumns || expression instanceof AllTableColumns) {
+        throw new IllegalArgumentException("SELECT * without FROM is not valid");
+      }
+      expressions.add(expression);
+      if (item.getAlias() != null) {
+        aliases.add(Identifier.of(item.getAlias().getName()));
+      }
+    }
+    expressions.add(select.getWhere());
+    expressions.add(select.getHaving());
+    if (select.getWindowDefinitions() != null) {
+      for (var window : select.getWindowDefinitions()) {
+        expressions.addAll(window.getAllExpressions());
+      }
+    }
+    if (select.getDistinct() != null && select.getDistinct().getOnSelectItems() != null) {
+      for (var item : select.getDistinct().getOnSelectItems()) {
+        Expression expression = item.getExpression();
+        if (expression instanceof Column column && column.getTable() == null
+            && aliases.contains(Identifier.of(column.getColumnName()))) {
+          continue;
+        }
+        expressions.add(expression);
+      }
+    }
+    if (select.getGroupBy() != null && select.getGroupBy().getGroupByExpressionList() != null) {
+      expressions.addAll(select.getGroupBy().getGroupByExpressionList());
+    }
+    if (select.getGroupBy() != null && select.getGroupBy().getGroupingSets() != null) {
+      expressions.addAll(select.getGroupBy().getGroupingSets());
+    }
+    if (select.getOrderByElements() != null) {
+      for (OrderByElement order : select.getOrderByElements()) {
+        Expression expression = order.getExpression();
+        if (expression instanceof Column column && column.getTable() == null
+            && aliases.contains(Identifier.of(column.getColumnName()))) {
+          continue;
+        }
+        expressions.add(expression);
+      }
+    }
+    for (Expression expression : expressions) {
+      if (expression != null) {
+        expression.accept(validator, null);
+      }
+    }
   }
 
   private static Select parseValuesSelect(Values values, List<CommonTableExpression> ctes,
@@ -1344,6 +1442,9 @@ public final class SqlParser {
       Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateral) {
     if (innerPlain == null) {
       throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
+    }
+    if (lateral && innerPlain.getFromItem() == null) {
+      validateTableFreeSelect(innerPlain, true);
     }
     Select innerSelect = (Select) parseSelectStatement(innerPlain, ctes, cteLookup, allowQualifiedWildcards);
     String alias = null;
@@ -2104,16 +2205,19 @@ public final class SqlParser {
    * comments can still interfere with parsing when they appear in leading or
    * inline positions. This helper processes the SQL text and strips both
    * {@code --} line comments and {@code /* ... *&#47;} block comments so that
-   * {@link CCJSqlParserUtil} receives a clean statement. Content that appears
-   * inside single-quoted or double-quoted literals is preserved verbatim.
+   * {@link JSqlParserSupport} receives a clean statement. Content that appears
+   * inside single-quoted literals or double-quoted and backtick identifiers is
+   * preserved verbatim.
    * </p>
    *
    * @param sql
    *          the raw SQL text that may contain comments
    * @return the SQL text with comments removed
+   * @throws IllegalArgumentException
+   *           if a quoted literal or identifier is unterminated
    */
   @SuppressWarnings("PMD.CyclomaticComplexity")
-  private static String stripSqlComments(String sql) {
+  public static String stripSqlComments(String sql) {
     if (sql == null || sql.isEmpty()) {
       return sql;
     }
@@ -2121,6 +2225,7 @@ public final class SqlParser {
     StringBuilder result = new StringBuilder(sql.length());
     boolean inSingleQuote = false;
     boolean inDoubleQuote = false;
+    char identifierEnd = '\0';
     boolean inLineComment = false;
     boolean inBlockComment = false;
     boolean addSpaceAfterBlock = false;
@@ -2176,6 +2281,22 @@ public final class SqlParser {
         continue;
       }
 
+      if (identifierEnd != '\0') {
+        result.append(c);
+        if (c == identifierEnd && next == identifierEnd) {
+          result.append(next);
+          i++;
+        } else if (c == identifierEnd) {
+          identifierEnd = '\0';
+        }
+        continue;
+      }
+      if (c == '`') {
+        identifierEnd = '`';
+        result.append(c);
+        continue;
+      }
+
       if (c == '-' && next == '-') {
         inLineComment = true;
         i++;
@@ -2202,6 +2323,9 @@ public final class SqlParser {
       result.append(c);
     }
 
+    if (inSingleQuote || inDoubleQuote || identifierEnd != '\0') {
+      throw new IllegalArgumentException("Unterminated quoted literal or identifier in SQL");
+    }
     return result.toString();
   }
 

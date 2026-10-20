@@ -63,6 +63,7 @@ import org.apache.parquet.filter2.predicate.FilterPredicate;
 import org.apache.parquet.hadoop.ParquetInputFormat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
@@ -82,6 +83,7 @@ import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SamplingRecordReader;
 import se.alipsa.jparq.engine.SqlComparisons;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.QualifiedExpansionColumn;
 import se.alipsa.jparq.engine.SqlParser.ValueTableDefinition;
@@ -388,7 +390,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
       }
     } catch (Exception e) {
-      throw new SQLException("Failed to prepare query: " + sql, e);
+      throw SqlExceptions.wrap("Failed to prepare query: " + sql, e);
     }
 
     this.parsedSelect = tmpSelect;
@@ -433,6 +435,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         return executeQuery(cancellation);
       } catch (SQLException | RuntimeException exception) {
         cancellation.checkCanceled();
+        if (SqlExceptions.findSqlStateFailure(exception) != null) {
+          throw SqlExceptions.wrap(exception.getMessage(), exception);
+        }
         throw exception;
       }
     }
@@ -1896,9 +1901,8 @@ public class JParqPreparedStatement implements PreparedStatement {
       throw new SQLException("Value table definition cannot be null");
     }
     List<String> columnNames = valueTable.columnNames();
-    if (columnNames == null || columnNames.isEmpty()) {
-      throw new SQLException("Value table must expose at least one column");
-    }
+    // Zero columns and one empty row supply the implicit input for SELECT
+    // without FROM; explicit VALUES constructors are validated by the parser.
     Schema literalSchema = Schema.createRecord("values_literal", null, null, false);
     literalSchema.setFields(List.of());
     GenericData.Record emptyRecord = new GenericData.Record(literalSchema);
@@ -2138,21 +2142,17 @@ public class JParqPreparedStatement implements PreparedStatement {
     };
   }
 
+  /**
+   * Builds a decimal schema covering all integer and fractional digits.
+   *
+   * @param values
+   *          materialized numeric values, allowing nulls
+   * @return the inferred decimal bytes schema
+   * @throws NumberFormatException
+   *           if a nonnull value is not numeric
+   */
   private Schema decimalSchemaForValues(List<Object> values) {
-    int precision = 1;
-    int scale = 0;
-    if (values != null) {
-      for (Object value : values) {
-        if (value == null) {
-          continue;
-        }
-        BigDecimal decimal = value instanceof BigDecimal bd ? bd : new BigDecimal(value.toString());
-        precision = Math.max(precision, decimal.precision());
-        scale = Math.max(scale, Math.max(decimal.scale(), 0));
-      }
-    }
-    LogicalType logicalType = LogicalTypes.decimal(Math.max(precision, 1), Math.max(scale, 0));
-    return logicalType.addToSchema(Schema.create(Schema.Type.BYTES));
+    return DecimalTypeInference.infer(values).addToSchema(Schema.create(Schema.Type.BYTES));
   }
 
   private Object normalizeValueForType(Object value, ValueColumnType type) throws SQLException {
@@ -2320,6 +2320,17 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (schemaToUse == null) {
         fieldNames.clear();
         valueSchemas.clear();
+        for (int i = 1; i <= columnCount; i++) {
+          if ((ref == null || !ref.lateral()) && meta.getColumnType(i) != Types.OTHER
+              && requiresValueInference(meta, i)) {
+            CteResult data = consumeResultSet(rs, derivedRecordName(ref), List.of());
+            for (Field field : data.schema().getFields()) {
+              fieldNames.add(field.name());
+              valueSchemas.add(JdbcTypeMapper.nonNullSchema(field.schema()));
+            }
+            return new SubqueryTableData(data.schema(), List.copyOf(data.rows()));
+          }
+        }
         schemaToUse = buildSubquerySchema(meta, ref, fieldNames, valueSchemas);
       } else if (fieldNames.size() != columnCount || valueSchemas.size() != columnCount) {
         throw new SQLException("LATERAL subquery column count mismatch");
@@ -2459,7 +2470,8 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (fieldName == null) {
       fieldName = findFieldName(record.getSchema(), normalizedColumn);
     }
-    return fieldName == null ? null : record.get(fieldName);
+    Schema.Field field = fieldName == null ? null : record.getSchema().getField(fieldName);
+    return field == null ? null : AvroCoercions.unwrap(record.get(fieldName), field.schema());
   }
 
   /**
@@ -2528,7 +2540,10 @@ public class JParqPreparedStatement implements PreparedStatement {
     List<Field> fields = new ArrayList<>(columnCount);
     for (int i = 1; i <= columnCount; i++) {
       String columnName = columnLabel(meta, i);
-      Schema valueSchema = columnSchema(meta, i);
+      // Correlated runs must not inherit decimal bounds from the NULL probe.
+      Schema valueSchema = ref != null && ref.lateral() && requiresValueInference(meta, i)
+          ? Schema.create(Schema.Type.STRING)
+          : columnSchema(meta, i);
       if (ref != null && meta.getColumnType(i) == Types.OTHER) {
         Schema inferred = inferSubqueryColumnSchema(ref, i);
         if (inferred != null) {
@@ -2711,7 +2726,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   private Schema buildResultSchema(ResultSetMetaData meta, String recordName, List<String> fieldNames,
-      List<Schema> valueSchemas, List<String> columnAliases) throws SQLException {
+      List<Schema> valueSchemas, List<String> columnAliases, List<List<Object>> rawRows) throws SQLException {
     int columnCount = meta.getColumnCount();
     if (columnAliases != null && !columnAliases.isEmpty() && columnAliases.size() != columnCount) {
       List<String> metaLabels = new ArrayList<>(columnCount);
@@ -2740,7 +2755,19 @@ public class JParqPreparedStatement implements PreparedStatement {
         columnName = columnLabel(meta, i);
         lookupKey = Identifier.lookupKey(columnName);
       }
-      Schema valueSchema = columnSchema(meta, i);
+      Schema valueSchema;
+      if (requiresValueInference(meta, i) && !rawRows.isEmpty()) {
+        List<Object> values = new ArrayList<>(rawRows.size());
+        for (List<Object> row : rawRows) {
+          values.add(row.get(i - 1));
+        }
+        ValueColumnType type = meta.getColumnType(i) == Types.OTHER
+            ? determineColumnType(values)
+            : ValueColumnType.DECIMAL;
+        valueSchema = schemaForColumnType(type, values);
+      } else {
+        valueSchema = columnSchema(meta, i);
+      }
       Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
       Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
       if (lookupKey != null) {
@@ -2754,6 +2781,22 @@ public class JParqPreparedStatement implements PreparedStatement {
     Schema schema = Schema.createRecord(schemaName, null, null, false);
     schema.setFields(fields);
     return schema;
+  }
+
+  /**
+   * Determines whether materialized values are needed to infer a column schema.
+   *
+   * @param meta
+   *          metadata describing the column
+   * @param column
+   *          one-based column index
+   * @return whether the JDBC type or decimal precision is unknown
+   * @throws SQLException
+   *           if column metadata cannot be accessed
+   */
+  private boolean requiresValueInference(ResultSetMetaData meta, int column) throws SQLException {
+    int type = meta.getColumnType(column);
+    return type == Types.OTHER || ((type == Types.DECIMAL || type == Types.NUMERIC) && meta.getPrecision(column) == 0);
   }
 
   /**
@@ -2801,7 +2844,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          Avro schema describing the non-null type
    * @return value coerced into the representation expected by Avro
    * @throws SQLException
-   *           if coercion fails
+   *           if coercion fails or a numeric conversion would lose information
    */
   private Object toAvroValue(Object value, Schema schema) throws SQLException {
     if (value == null) {
@@ -2825,8 +2868,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     return switch (schema.getType()) {
       case BOOLEAN -> asBoolean(value);
-      case INT -> asNumber(value).intValue();
-      case LONG -> asNumber(value).longValue();
+      case INT, LONG -> toExactInteger(value, schema.getType());
       case FLOAT -> asNumber(value).floatValue();
       case DOUBLE -> asNumber(value).doubleValue();
       case BYTES -> toBinary(value);
@@ -2857,6 +2899,42 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
   }
 
+  /**
+   * Converts an integral value without truncating fractions or overflowing.
+   *
+   * @param value
+   *          the numeric value to convert
+   * @param type
+   *          the target INT or LONG Avro type
+   * @return the exact integer value
+   * @throws SQLException
+   *           if the conversion would lose information
+   */
+  private Number toExactInteger(Object value, Schema.Type type) throws SQLException {
+    try {
+      if (value instanceof Byte || value instanceof Short || value instanceof Integer) {
+        Number number = (Number) value;
+        if (type == Schema.Type.INT) {
+          return number.intValue();
+        }
+        return number.longValue();
+      }
+      if (value instanceof Long number) {
+        if (type == Schema.Type.LONG) {
+          return number;
+        }
+        return Math.toIntExact(number);
+      }
+      BigDecimal number = value instanceof BigDecimal decimal ? decimal : new BigDecimal(asNumber(value).toString());
+      if (type == Schema.Type.INT) {
+        return number.intValueExact();
+      }
+      return number.longValueExact();
+    } catch (ArithmeticException | NumberFormatException e) {
+      throw new SQLException("Cannot convert value '" + value + "' to " + type + " without loss", "22003", e);
+    }
+  }
+
   private Boolean asBoolean(Object value) {
     if (value instanceof Boolean bool) {
       return bool;
@@ -2880,6 +2958,18 @@ public class JParqPreparedStatement implements PreparedStatement {
     return ByteBuffer.wrap(value.toString().getBytes(StandardCharsets.UTF_8));
   }
 
+  /**
+   * Encodes a decimal without rounding or exceeding the target precision.
+   *
+   * @param value
+   *          the JDBC numeric value
+   * @param decimal
+   *          the target logical decimal type
+   * @return the encoded unscaled decimal bytes
+   * @throws SQLException
+   *           if the value is not numeric, requires rounding, or exceeds the
+   *           target precision
+   */
   private Object toDecimalBytes(Object value, LogicalTypes.Decimal decimal) throws SQLException {
     BigDecimal number;
     if (value instanceof BigDecimal bigDecimal) {
@@ -2891,7 +2981,16 @@ public class JParqPreparedStatement implements PreparedStatement {
         throw new SQLException("Value '" + value + "' cannot be coerced to a decimal", e);
       }
     }
-    number = number.setScale(decimal.getScale(), java.math.RoundingMode.HALF_UP);
+    try {
+      number = number.setScale(decimal.getScale(), java.math.RoundingMode.UNNECESSARY);
+    } catch (ArithmeticException e) {
+      throw new SQLException(
+          "Cannot convert value '" + value + "' to decimal scale " + decimal.getScale() + " without rounding", "22003",
+          e);
+    }
+    if (number.precision() > decimal.getPrecision()) {
+      throw new SQLException("Value '" + value + "' exceeds decimal precision " + decimal.getPrecision(), "22003");
+    }
     return ByteBuffer.wrap(number.unscaledValue().toByteArray());
   }
 
@@ -3060,17 +3159,59 @@ public class JParqPreparedStatement implements PreparedStatement {
     ResultSetMetaData meta = rs.getMetaData();
     List<String> fieldNames = new ArrayList<>(meta.getColumnCount());
     List<Schema> valueSchemas = new ArrayList<>(meta.getColumnCount());
-    Schema schema = buildResultSchema(meta, tableName, fieldNames, valueSchemas, columnAliases);
+    boolean inferTypes = false;
+    for (int i = 1; i <= meta.getColumnCount(); i++) {
+      inferTypes |= requiresValueInference(meta, i);
+    }
+    List<List<Object>> rawRows = new ArrayList<>();
+    Schema schema = inferTypes
+        ? null
+        : buildResultSchema(meta, tableName, fieldNames, valueSchemas, columnAliases, List.of());
     List<GenericRecord> rows = new ArrayList<>();
     while (rs.next()) {
-      GenericData.Record record = new GenericData.Record(schema);
-      for (int i = 1; i <= fieldNames.size(); i++) {
-        Object raw = rs.getObject(i);
-        record.put(fieldNames.get(i - 1), toAvroValue(raw, valueSchemas.get(i - 1)));
+      List<Object> values = new ArrayList<>(meta.getColumnCount());
+      for (int i = 1; i <= meta.getColumnCount(); i++) {
+        values.add(rs.getObject(i));
       }
-      rows.add(record);
+      if (inferTypes) {
+        rawRows.add(values);
+      } else {
+        rows.add(materializeResultRow(values, schema, fieldNames, valueSchemas));
+      }
+    }
+    if (inferTypes) {
+      // Unknown types or decimal bounds require buffering. Release each row as it
+      // is converted so the two complete row collections are never retained.
+      schema = buildResultSchema(meta, tableName, fieldNames, valueSchemas, columnAliases, rawRows);
+      for (int i = 0; i < rawRows.size(); i++) {
+        rows.add(materializeResultRow(rawRows.set(i, null), schema, fieldNames, valueSchemas));
+      }
     }
     return new CteResult(schema, rows);
+  }
+
+  /**
+   * Converts one JDBC row to its materialized Avro representation.
+   *
+   * @param values
+   *          the JDBC column values
+   * @param schema
+   *          the result record schema
+   * @param fieldNames
+   *          the output field names in projection order
+   * @param valueSchemas
+   *          the non-null column schemas in projection order
+   * @return the converted row
+   * @throws SQLException
+   *           if a value cannot be converted to its output type
+   */
+  private GenericRecord materializeResultRow(List<Object> values, Schema schema, List<String> fieldNames,
+      List<Schema> valueSchemas) throws SQLException {
+    GenericData.Record record = new GenericData.Record(schema);
+    for (int i = 0; i < fieldNames.size(); i++) {
+      record.put(fieldNames.get(i), toAvroValue(values.get(i), valueSchemas.get(i)));
+    }
+    return record;
   }
 
   private CteResult resolveCteResult(SqlParser.CommonTableExpression cte, Map<Identifier, CteResult> available) {
@@ -3135,7 +3276,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       } else {
         nonNullSchema = fieldSchema;
       }
-      Object raw = record.get(field.name());
+      Object raw = AvroCoercions.unwrap(record.get(field.name()), record.getSchema().getField(field.name()).schema());
       converted.put(field.name(), toAvroValue(raw, nonNullSchema));
     }
     return converted;

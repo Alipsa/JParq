@@ -66,6 +66,20 @@ class SqlParserCompatibilityTest {
   }
 
   /**
+   * Rejects unterminated quotes even when a valid table-free prefix was parsed.
+   *
+   * @param sql
+   *          malformed SQL containing an unclosed literal or identifier
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT 1, 'unterminated", "SELECT \"unterminated", "SELECT 'escaped''quote"
+  })
+  void tableFreeSelectRejectsUnterminatedQuotes(String sql) {
+    assertThrows(IllegalArgumentException.class, () -> SqlParser.parseSelect(sql));
+  }
+
+  /**
    * Keeps type-named columns eligible for join and negated-NULL pushdown.
    *
    * @throws Exception

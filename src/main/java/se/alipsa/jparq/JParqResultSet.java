@@ -40,6 +40,7 @@ import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.QueryProcessor;
 import se.alipsa.jparq.engine.RecordReader;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
@@ -73,6 +74,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private final boolean aggregateQuery;
   private final List<List<Object>> aggregateRows;
   private final List<Integer> aggregateSqlTypes;
+  private AggregateResultSetMetaData aggregateMetadata;
   private int aggregateRowIndex = -1;
   private boolean aggregateOnRow = false;
   private volatile boolean closed = false;
@@ -503,6 +505,9 @@ public class JParqResultSet extends ResultSetAdapter {
         }
         throw failure;
       }
+      if (SqlExceptions.findSqlStateFailure(e) != null) {
+        throw SqlExceptions.wrap(e.getMessage(), e);
+      }
       if (e instanceof SQLException sqlException) {
         throw sqlException;
       }
@@ -565,6 +570,26 @@ public class JParqResultSet extends ResultSetAdapter {
     }
   }
 
+  /**
+   * Evaluates a projection while preserving SQLStates and diagnostic context.
+   *
+   * @param expression
+   *          the projection to evaluate
+   * @return the computed value, or null without an evaluator
+   * @throws SQLException
+   *           if a decimal declaration or value is invalid
+   */
+  private Object evaluateProjection(Expression expression) throws SQLException {
+    try {
+      return projectionEvaluator == null ? null : projectionEvaluator.eval(expression, current);
+    } catch (IllegalArgumentException exception) {
+      if (SqlExceptions.findSqlStateFailure(exception) != null) {
+        throw SqlExceptions.wrap(exception.getMessage(), exception);
+      }
+      throw exception;
+    }
+  }
+
   private Object value(int idx) throws SQLException {
     if (aggregateQuery) {
       if (!aggregateOnRow || aggregateRowIndex < 0) {
@@ -589,7 +614,7 @@ public class JParqResultSet extends ResultSetAdapter {
     Expression projectionExpr = projectionExpression(idx);
     if (projectionExpr != null && !(projectionExpr instanceof Column)) {
       ensureProjectionEvaluator(current);
-      Object computed = projectionEvaluator == null ? null : projectionEvaluator.eval(projectionExpr, current);
+      Object computed = evaluateProjection(projectionExpr);
       lastWasNull = (computed == null);
       return computed;
     }
@@ -609,7 +634,7 @@ public class JParqResultSet extends ResultSetAdapter {
     if (field == null) {
       if (projectionExpr instanceof Column columnExpr) {
         ensureProjectionEvaluator(current);
-        Object computed = projectionEvaluator == null ? null : projectionEvaluator.eval(columnExpr, current);
+        Object computed = evaluateProjection(columnExpr);
         lastWasNull = (computed == null);
         return computed;
       }
@@ -1127,8 +1152,12 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public ResultSetMetaData getMetaData() {
     if (aggregateQuery) {
-      List<Integer> types = aggregateSqlTypes == null ? List.of() : aggregateSqlTypes;
-      return new AggregateResultSetMetaData(columnOrder, types, tableName, tableSchema, tableCatalog);
+      if (aggregateMetadata == null) {
+        List<Integer> types = aggregateSqlTypes == null ? List.of() : aggregateSqlTypes;
+        aggregateMetadata = new AggregateResultSetMetaData(columnOrder, types, tableName, tableSchema, tableCatalog,
+            aggregateRows == null ? List.of() : aggregateRows);
+      }
+      return aggregateMetadata;
     }
     var normalized = ParquetSchemas.normalizeStringTypes(metadataSchema);
     return new JParqResultSetMetaData(normalized, columnOrder, physicalColumnOrder, canonicalColumnNames, tableName,

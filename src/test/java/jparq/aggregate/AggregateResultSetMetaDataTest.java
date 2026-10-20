@@ -2,6 +2,7 @@ package jparq.aggregate;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.math.BigDecimal;
 import java.sql.JDBCType;
 import java.sql.Types;
 import java.util.Arrays;
@@ -108,4 +109,35 @@ public class AggregateResultSetMetaDataTest {
   void testIsNullable() {
     assertEquals(AggregateResultSetMetaData.columnNullableUnknown, metaData.isNullable(1));
   }
+
+  /**
+   * Combines the largest integer part and fractional scale across decimal rows.
+   */
+  @Test
+  void decimalBoundsCoverEveryMaterializedValue() {
+    var metadata = new AggregateResultSetMetaData(List.of("amount", "id"), List.of(Types.DECIMAL, Types.INTEGER),
+        "totals", null, null,
+        List.of(List.of(new BigDecimal("1.25"), 1), List.of(new BigDecimal("10000.0"), 2), Arrays.asList(null, 3)));
+    assertEquals(7, metadata.getPrecision(1));
+    assertEquals(2, metadata.getScale(1));
+    assertEquals(0, metadata.getPrecision(2));
+    assertEquals(0, metadata.getScale(2));
+  }
+  /**
+   * Covers small fractions, negative scales, zero, and columns without values.
+   */
+  @Test
+  void decimalBoundsHandleFractionalAndScientificValues() {
+    var metadata = new AggregateResultSetMetaData(List.of("mixed", "zero", "empty"),
+        List.of(Types.DECIMAL, Types.NUMERIC, Types.DECIMAL), "totals", null, null,
+        List.of(Arrays.asList(new BigDecimal("0.05"), new BigDecimal("0.0000"), null),
+            Arrays.asList(new BigDecimal("1E+3"), null, null)));
+    assertEquals(6, metadata.getPrecision(1));
+    assertEquals(2, metadata.getScale(1));
+    assertEquals(4, metadata.getPrecision(2));
+    assertEquals(4, metadata.getScale(2));
+    assertEquals(0, metadata.getPrecision(3));
+    assertEquals(0, metadata.getScale(3));
+  }
+
 }
