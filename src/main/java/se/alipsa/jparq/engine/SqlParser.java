@@ -360,10 +360,13 @@ public final class SqlParser {
    * @param tableSample
    *          sampling metadata associated with the table reference (may be
    *          {@code null})
+   * @param columnAliases
+   *          derived-table output names in ordinal order, empty when absent
    */
   private record FromInfo(String schemaName, String tableName, String tableAlias, Map<String, String> columnMapping,
       Select innerSelect, String subquerySql, CommonTableExpression commonTableExpression,
-      ValueTableDefinition valueTable, UnnestDefinition unnest, boolean lateral, TableSampleDefinition tableSample) {
+      ValueTableDefinition valueTable, UnnestDefinition unnest, boolean lateral, TableSampleDefinition tableSample,
+      List<String> columnAliases) {
   }
 
   /**
@@ -426,11 +429,13 @@ public final class SqlParser {
    * @param tableSample
    *          sampling metadata associated with the table reference (may be
    *          {@code null})
+   * @param columnAliases
+   *          derived-table output names in ordinal order, empty when absent
    */
   public record TableReference(String schemaName, String tableName, String tableAlias, JoinType joinType,
       Expression joinCondition, Select subquery, String subquerySql, CommonTableExpression commonTableExpression,
       List<String> usingColumns, ValueTableDefinition valueTable, UnnestDefinition unnest, boolean lateral,
-      TableSampleDefinition tableSample) {
+      TableSampleDefinition tableSample, List<String> columnAliases) {
     /**
      * Identifies a FROM subquery by its own SQL, rather than a CTE's stored plan.
      *
@@ -959,7 +964,7 @@ public final class SqlParser {
     // A table-free SELECT evaluates its expressions once over an empty row.
     FromInfo fromInfo = ps.getFromItem() == null
         ? new FromInfo(null, null, null, Map.of(), null, null, null,
-            new ValueTableDefinition(List.of(List.of()), List.of()), null, false, null)
+            new ValueTableDefinition(List.of(List.of()), List.of()), null, false, null, List.of())
         : parseFromItem(ps.getFromItem(), ctes, cteLookup, allowQualifiedWildcards);
     List<JoinInfo> joinInfos = parseJoins(ps.getJoins(), ctes, cteLookup, allowQualifiedWildcards);
     List<TableReference> tableRefs = buildTableReferences(fromInfo, joinInfos);
@@ -1359,7 +1364,7 @@ public final class SqlParser {
         }
       }
       return new FromInfo(schemaName, tableName, tableAlias, mapping, innerSelect, null, cte, null, null, lateral,
-          tableSample);
+          tableSample, List.of());
     }
     if (fromItem instanceof ParenthesedFromItem parenthesed) {
       FromItem inner = parenthesed.getFromItem();
@@ -1435,7 +1440,7 @@ public final class SqlParser {
     }
     return new FromInfo(info.schemaName(), info.tableName(), info.tableAlias(), info.columnMapping(),
         info.innerSelect(), info.subquerySql(), info.commonTableExpression(), info.valueTable(), info.unnest(),
-        info.lateral(), tableSample);
+        info.lateral(), tableSample, info.columnAliases());
   }
 
   private static FromInfo parseSubSelect(PlainSelect innerPlain, Alias aliasNode, List<CommonTableExpression> ctes,
@@ -1443,6 +1448,8 @@ public final class SqlParser {
     if (innerPlain == null) {
       throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
     }
+    List<String> columnAliases = extractAliasColumns(aliasNode);
+    validateDerivedColumnAliases(columnAliases);
     if (lateral && innerPlain.getFromItem() == null) {
       validateTableFreeSelect(innerPlain, true);
     }
@@ -1456,9 +1463,12 @@ public final class SqlParser {
       alias = innerSelect.table();
     }
     Map<String, String> mapping = buildColumnMapping(innerSelect);
+    if (!columnAliases.isEmpty()) {
+      mapping = Map.of();
+    }
     String subquerySql = innerPlain.toString();
     return new FromInfo(null, innerSelect.table(), alias, mapping, innerSelect, subquerySql, null, null, null, lateral,
-        null);
+        null, columnAliases);
   }
 
   private static FromInfo parseTableFunction(TableFunction tableFunction, boolean lateral) {
@@ -1492,7 +1502,7 @@ public final class SqlParser {
     boolean withOrdinality = tableFunction.getWithClause() != null
         && "ORDINALITY".equalsIgnoreCase(tableFunction.getWithClause().trim());
     UnnestDefinition unnest = new UnnestDefinition(expression, withOrdinality, columnAliases);
-    return new FromInfo(null, null, aliasName, Map.of(), null, null, null, null, unnest, lateral, null);
+    return new FromInfo(null, null, aliasName, Map.of(), null, null, null, null, unnest, lateral, null, List.of());
   }
 
   private static Function unwrapTableWrapper(Function function, TableFunction tableFunction) {
@@ -1580,7 +1590,7 @@ public final class SqlParser {
     String tableName = (aliasName != null && !aliasName.isBlank()) ? aliasName : "values";
     ValueTableDefinition valueTable = new ValueTableDefinition(rows, columnNames);
     return new FromInfo(null, tableName, aliasName, Map.copyOf(mapping), null, null, null, valueTable, null, lateral,
-        null);
+        null, List.of());
   }
 
   private static FromInfo applyAlias(FromInfo info, Alias aliasNode) {
@@ -1597,6 +1607,7 @@ public final class SqlParser {
     Map<String, String> mapping = info.columnMapping() == null ? Map.of() : info.columnMapping();
     ValueTableDefinition valueTable = info.valueTable();
     List<String> aliasColumns = extractAliasColumns(aliasNode);
+    validateDerivedColumnAliases(aliasColumns);
     if (!aliasColumns.isEmpty()) {
       if (valueTable != null) {
         if (valueTable.columnNames().size() != aliasColumns.size()) {
@@ -1609,6 +1620,9 @@ public final class SqlParser {
           aliasMapping.put(columnName, columnName);
         }
         mapping = Map.copyOf(aliasMapping);
+      } else if (info.subquerySql() != null) {
+        // Bind output names after wildcard expansion, against JDBC ordinals.
+        mapping = Map.of();
       } else if (info.innerSelect() != null && info.innerSelect().columnNames() != null
           && !info.innerSelect().columnNames().isEmpty()) {
         List<String> physical = info.innerSelect().columnNames();
@@ -1637,7 +1651,29 @@ public final class SqlParser {
     String tableName = aliasName != null ? aliasName : info.tableName();
     String tableAlias = aliasName != null ? aliasName : info.tableAlias();
     return new FromInfo(info.schemaName(), tableName, tableAlias, mapping, info.innerSelect(), info.subquerySql(),
-        info.commonTableExpression(), valueTable, info.unnest(), info.lateral(), info.tableSample());
+        info.commonTableExpression(), valueTable, info.unnest(), info.lateral(), info.tableSample(),
+        info.subquerySql() != null && !aliasColumns.isEmpty() ? aliasColumns : info.columnAliases());
+  }
+
+  /**
+   * Rejects duplicate derived column aliases before executing their inputs.
+   *
+   * @param aliases
+   *          column aliases in output order
+   * @throws IllegalArgumentException
+   *           with a syntax error cause if names collide during lookup or Avro
+   *           field creation
+   */
+  private static void validateDerivedColumnAliases(List<String> aliases) {
+    Set<String> aliasNames = new LinkedHashSet<>();
+    Set<String> fieldAliases = new LinkedHashSet<>();
+    for (String alias : aliases) {
+      Identifier identifier = Identifier.of(alias);
+      if (!aliasNames.add(identifier.normalized()) || !fieldAliases.add(identifier.text())) {
+        String message = "Duplicate derived table column alias: " + alias;
+        throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000"));
+      }
+    }
   }
 
   private static List<String> extractAliasColumns(Alias alias) {
@@ -2692,7 +2728,7 @@ public final class SqlParser {
     List<TableReference> refs = new ArrayList<>();
     refs.add(new TableReference(base.schemaName(), base.tableName(), base.tableAlias(), JoinType.BASE, null,
         base.innerSelect(), base.subquerySql(), base.commonTableExpression(), List.of(), base.valueTable(),
-        base.unnest(), base.lateral(), base.tableSample()));
+        base.unnest(), base.lateral(), base.tableSample(), base.columnAliases()));
     if (joins != null) {
       for (JoinInfo join : joins) {
         FromInfo info = join.table();
@@ -2700,7 +2736,8 @@ public final class SqlParser {
         Expression combinedCondition = combineExpressions(join.condition(), usingCondition);
         refs.add(new TableReference(info.schemaName(), info.tableName(), info.tableAlias(), join.joinType(),
             combinedCondition, info.innerSelect(), info.subquerySql(), info.commonTableExpression(),
-            join.usingColumns(), info.valueTable(), info.unnest(), info.lateral(), info.tableSample()));
+            join.usingColumns(), info.valueTable(), info.unnest(), info.lateral(), info.tableSample(),
+            info.columnAliases()));
       }
     }
     return List.copyOf(refs);

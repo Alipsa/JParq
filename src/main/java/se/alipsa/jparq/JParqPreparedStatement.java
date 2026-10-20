@@ -352,6 +352,10 @@ public class JParqPreparedStatement implements PreparedStatement {
                 tmpCteResults);
             tmpBaseCteResult = new CteResult(data.schema(), data.rows());
             tmpFileAvro = data.schema();
+            if (!tmpSelect.qualifiedWildcards().isEmpty()) {
+              tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect,
+                  buildQualifierColumnsForSchema(tmpSelect, baseRef, tmpFileAvro));
+            }
             aggregatePlan = AggregateFunctions.plan(tmpSelect);
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
@@ -2416,6 +2420,11 @@ public class JParqPreparedStatement implements PreparedStatement {
         : prepareSubqueryStatement(sql, cteContext); ResultSet rs = subStmt.executeQuery()) {
       ResultSetMetaData meta = rs.getMetaData();
       int columnCount = meta.getColumnCount();
+      List<String> columnAliases = ref == null ? List.of() : ref.columnAliases();
+      if (!columnAliases.isEmpty() && columnAliases.size() != columnCount) {
+        throw new SQLException("Derived table alias declares " + columnAliases.size()
+            + " columns but subquery produces " + columnCount + " columns", "42000");
+      }
       Schema schemaToUse = schema;
       if (schemaToUse == null) {
         fieldNames.clear();
@@ -2424,7 +2433,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           // Infer computed values before converting them to Avro; a string
           // fallback would lose their numeric type and aggregate promotion.
           if ((ref == null || !ref.lateral()) && requiresValueInference(meta, i)) {
-            CteResult data = consumeResultSet(rs, derivedRecordName(ref), List.of());
+            CteResult data = consumeResultSet(rs, derivedRecordName(ref), columnAliases);
             for (Field field : data.schema().getFields()) {
               fieldNames.add(field.name());
               valueSchemas.add(JdbcTypeMapper.nonNullSchema(field.schema()));
@@ -2447,7 +2456,11 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       return new SubqueryTableData(schemaToUse, List.copyOf(rows));
     } catch (SQLException e) {
-      throw new SQLException("Failed to execute subquery for join: " + sql, e);
+      String context = "Failed to execute derived table '";
+      if (e.getMessage() != null && e.getMessage().contains(context)) {
+        throw e;
+      }
+      throw new SQLException(context + derivedRecordName(ref) + "': " + e.getMessage(), e.getSQLState(), e);
     }
   }
 
@@ -2640,7 +2653,8 @@ public class JParqPreparedStatement implements PreparedStatement {
     int columnCount = meta.getColumnCount();
     List<Field> fields = new ArrayList<>(columnCount);
     for (int i = 1; i <= columnCount; i++) {
-      String columnName = columnLabel(meta, i);
+      String alias = ref == null || ref.columnAliases().isEmpty() ? null : ref.columnAliases().get(i - 1);
+      String columnName = alias == null ? columnLabel(meta, i) : Identifier.of(alias).text();
       // Correlated runs must not inherit decimal bounds from the NULL probe.
       Schema valueSchema = ref != null && ref.lateral() && requiresValueInference(meta, i)
           ? Schema.create(Schema.Type.STRING)
@@ -2654,6 +2668,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
       Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
+      field.addProp("jparq.lookupKey", Identifier.lookupKey(alias == null ? columnName : alias));
       fields.add(field);
       fieldNames.add(columnName);
       valueSchemas.add(valueSchema);

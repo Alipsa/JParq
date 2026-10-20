@@ -460,6 +460,9 @@ The following SQL statements are supported:
   - In the FROM Clause : Treated as a derived table or inline view. E.g:
     SELECT *
     FROM (SELECT first_name, salary FROM employees WHERE salary > 5000) AS "high_salaried"
+  - Derived-table column alias lists rename every output by position, including computed columns and expanded
+    wildcards: `SELECT x.a, x.b FROM (SELECT id, id + 1 FROM optimized) x(a, b)`. This also applies to joins and
+    LATERAL inputs. The alias count must equal the expanded output column count, including for empty results.
   - In the WHERE Clause : Used to filter the results. e.g
     SELECT first_name
     FROM employees
