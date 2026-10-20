@@ -1,7 +1,6 @@
 package se.alipsa.jparq.engine.function;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.sql.Date;
 import java.sql.Time;
 import java.sql.Timestamp;
@@ -29,6 +28,7 @@ import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.statement.create.table.ColDataType;
+import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
@@ -600,8 +600,15 @@ public final class DateTimeFunctions {
    * @param value
    *          the evaluated inner value
    * @return the cast result converted to the requested type when possible
+   * @throws IllegalArgumentException
+   *           if decimal bounds are invalid or the rounded value exceeds
+   *           precision; the cause carries SQLState 22003
    */
   public static Object castLiteral(CastExpression cast, Object value) {
+    if (cast != null && cast.getColDataType() != null
+        && DecimalCasts.isDecimalType(cast.getColDataType().getDataType())) {
+      return castToBigDecimal(cast, value);
+    }
     if (cast == null || value == null) {
       return value;
     }
@@ -631,7 +638,6 @@ public final class DateTimeFunctions {
       case "bigint", "int8" -> toBigDecimalValue(value).longValue();
       case "float", "real", "float4" -> toBigDecimalValue(value).floatValue();
       case "double", "doubleprecision", "float8" -> toBigDecimalValue(value).doubleValue();
-      case "numeric", "decimal", "number" -> castToBigDecimal(cast, value);
       default -> value;
     };
   }
@@ -661,21 +667,24 @@ public final class DateTimeFunctions {
     return text;
   }
 
+  /**
+   * Rounds a decimal to declared scale and rejects invalid bounds or precision
+   * overflow.
+   *
+   * @param cast
+   *          the decimal CAST expression
+   * @param value
+   *          the numeric input, possibly null
+   * @return the converted decimal, or null for a null input
+   * @throws IllegalArgumentException
+   *           if the declared bounds cannot represent the result
+   */
   private static BigDecimal castToBigDecimal(CastExpression cast, Object value) {
-    BigDecimal decimal = toBigDecimalValue(value);
-    Integer scale = secondIntegerArgument(cast);
-    if (scale != null) {
-      decimal = decimal.setScale(scale, RoundingMode.HALF_UP);
-    }
-    return decimal;
+    return DecimalCasts.convert(cast, value == null ? null : toBigDecimalValue(value));
   }
 
   private static Integer firstIntegerArgument(CastExpression cast) {
     return integerArgument(cast, 0);
-  }
-
-  private static Integer secondIntegerArgument(CastExpression cast) {
-    return integerArgument(cast, 1);
   }
 
   private static Integer integerArgument(CastExpression cast, int index) {

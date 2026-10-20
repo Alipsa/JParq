@@ -33,6 +33,7 @@ import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelationContextBuilder;
 import se.alipsa.jparq.engine.CorrelationMappings;
+import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.LegacyParenthesisSupport;
@@ -507,6 +508,10 @@ public class JParqResultSet extends ResultSetAdapter {
       if (e instanceof SQLException sqlException) {
         throw sqlException;
       }
+      SQLException numericFailure = DecimalCasts.findNumericFailure(e);
+      if (numericFailure != null) {
+        throw numericFailure;
+      }
       throw new SQLException(e);
     }
   }
@@ -566,6 +571,27 @@ public class JParqResultSet extends ResultSetAdapter {
     }
   }
 
+  /**
+   * Evaluates a projection while preserving numeric range SQLStates.
+   *
+   * @param expression
+   *          the projection to evaluate
+   * @return the computed value, or null without an evaluator
+   * @throws SQLException
+   *           if a numeric cast exceeds its bounds
+   */
+  private Object evaluateProjection(Expression expression) throws SQLException {
+    try {
+      return projectionEvaluator == null ? null : projectionEvaluator.eval(expression, current);
+    } catch (IllegalArgumentException exception) {
+      SQLException numericFailure = DecimalCasts.findNumericFailure(exception);
+      if (numericFailure != null) {
+        throw numericFailure;
+      }
+      throw exception;
+    }
+  }
+
   private Object value(int idx) throws SQLException {
     if (aggregateQuery) {
       if (!aggregateOnRow || aggregateRowIndex < 0) {
@@ -590,7 +616,7 @@ public class JParqResultSet extends ResultSetAdapter {
     Expression projectionExpr = projectionExpression(idx);
     if (projectionExpr != null && !(projectionExpr instanceof Column)) {
       ensureProjectionEvaluator(current);
-      Object computed = projectionEvaluator == null ? null : projectionEvaluator.eval(projectionExpr, current);
+      Object computed = evaluateProjection(projectionExpr);
       lastWasNull = (computed == null);
       return computed;
     }
@@ -610,7 +636,7 @@ public class JParqResultSet extends ResultSetAdapter {
     if (field == null) {
       if (projectionExpr instanceof Column columnExpr) {
         ensureProjectionEvaluator(current);
-        Object computed = projectionEvaluator == null ? null : projectionEvaluator.eval(columnExpr, current);
+        Object computed = evaluateProjection(columnExpr);
         lastWasNull = (computed == null);
         return computed;
       }

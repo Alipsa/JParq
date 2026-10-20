@@ -38,8 +38,7 @@ public final class SqlParser {
       "LOCALTIME", "LOCALTIMESTAMP");
   private static final Set<String> CONVERT_TYPE_NAMES = Set.of("boolean", "bool", "char", "character", "nchar",
       "varchar", "charactervarying", "nvarchar", "string", "text", "clob", "tinyint", "smallint", "int", "integer",
-      "signed", "int2", "int4", "bigint", "int8", "float", "real", "float4", "double", "doubleprecision", "float8",
-      "numeric", "decimal", "number");
+      "signed", "int2", "int4", "bigint", "int8", "float", "real", "float4", "double", "doubleprecision", "float8");
   private static final Pattern SINGLE_CTE_PATTERN = Pattern.compile(
       "^\\s*with\\s+(?:\"([A-Za-z_][\\w]*)\"|([A-Za-z_][\\w]*))\\s+as\\s*\\(",
       Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
@@ -56,7 +55,7 @@ public final class SqlParser {
     if (paren > 0) {
       normalized = normalized.substring(0, paren).trim();
     }
-    return CONVERT_TYPE_NAMES.contains(normalized);
+    return CONVERT_TYPE_NAMES.contains(normalized) || DecimalCasts.isDecimalType(normalized);
   }
 
   /**
@@ -2204,8 +2203,8 @@ public final class SqlParser {
    * inline positions. This helper processes the SQL text and strips both
    * {@code --} line comments and {@code /* ... *&#47;} block comments so that
    * {@link JSqlParserSupport} receives a clean statement. Content that appears
-   * inside single-quoted literals or double-quoted, backtick, and bracket
-   * identifiers is preserved verbatim.
+   * inside single-quoted literals or double-quoted and backtick identifiers is
+   * preserved verbatim.
    * </p>
    *
    * @param sql
@@ -2289,8 +2288,8 @@ public final class SqlParser {
         }
         continue;
       }
-      if (c == '`' || c == '[') {
-        identifierEnd = c == '[' ? ']' : '`';
+      if (c == '`') {
+        identifierEnd = '`';
         result.append(c);
         continue;
       }

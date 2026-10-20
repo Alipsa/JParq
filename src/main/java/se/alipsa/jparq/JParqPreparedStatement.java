@@ -68,6 +68,7 @@ import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.CorrelationMappings;
+import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.HadoopConfigurations;
 import se.alipsa.jparq.engine.Identifier;
@@ -389,6 +390,10 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
       }
     } catch (Exception e) {
+      SQLException numericFailure = DecimalCasts.findNumericFailure(e);
+      if (numericFailure != null) {
+        throw numericFailure;
+      }
       throw new SQLException("Failed to prepare query: " + sql, e);
     }
 
@@ -434,6 +439,10 @@ public class JParqPreparedStatement implements PreparedStatement {
         return executeQuery(cancellation);
       } catch (SQLException | RuntimeException exception) {
         cancellation.checkCanceled();
+        SQLException numericFailure = DecimalCasts.findNumericFailure(exception);
+        if (numericFailure != null) {
+          throw numericFailure;
+        }
         throw exception;
       }
     }
@@ -2316,6 +2325,17 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (schemaToUse == null) {
         fieldNames.clear();
         valueSchemas.clear();
+        for (int i = 1; i <= columnCount; i++) {
+          if ((ref == null || !ref.lateral()) && meta.getColumnType(i) != Types.OTHER
+              && requiresValueInference(meta, i)) {
+            CteResult data = consumeResultSet(rs, derivedRecordName(ref), List.of());
+            for (Field field : data.schema().getFields()) {
+              fieldNames.add(field.name());
+              valueSchemas.add(JdbcTypeMapper.nonNullSchema(field.schema()));
+            }
+            return new SubqueryTableData(data.schema(), List.copyOf(data.rows()));
+          }
+        }
         schemaToUse = buildSubquerySchema(meta, ref, fieldNames, valueSchemas);
       } else if (fieldNames.size() != columnCount || valueSchemas.size() != columnCount) {
         throw new SQLException("LATERAL subquery column count mismatch");
@@ -2455,7 +2475,8 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (fieldName == null) {
       fieldName = findFieldName(record.getSchema(), normalizedColumn);
     }
-    return fieldName == null ? null : record.get(fieldName);
+    Schema.Field field = fieldName == null ? null : record.getSchema().getField(fieldName);
+    return field == null ? null : AvroCoercions.unwrap(record.get(fieldName), field.schema());
   }
 
   /**
@@ -2524,7 +2545,10 @@ public class JParqPreparedStatement implements PreparedStatement {
     List<Field> fields = new ArrayList<>(columnCount);
     for (int i = 1; i <= columnCount; i++) {
       String columnName = columnLabel(meta, i);
-      Schema valueSchema = columnSchema(meta, i);
+      // Correlated runs must not inherit decimal bounds from the NULL probe.
+      Schema valueSchema = ref != null && ref.lateral() && requiresValueInference(meta, i)
+          ? Schema.create(Schema.Type.STRING)
+          : columnSchema(meta, i);
       if (ref != null && meta.getColumnType(i) == Types.OTHER) {
         Schema inferred = inferSubqueryColumnSchema(ref, i);
         if (inferred != null) {
@@ -2736,13 +2760,18 @@ public class JParqPreparedStatement implements PreparedStatement {
         columnName = columnLabel(meta, i);
         lookupKey = Identifier.lookupKey(columnName);
       }
-      Schema valueSchema = columnSchema(meta, i);
-      if (meta.getColumnType(i) == Types.OTHER && !rawRows.isEmpty()) {
+      Schema valueSchema;
+      if (requiresValueInference(meta, i) && !rawRows.isEmpty()) {
         List<Object> values = new ArrayList<>(rawRows.size());
         for (List<Object> row : rawRows) {
           values.add(row.get(i - 1));
         }
-        valueSchema = schemaForColumnType(determineColumnType(values), values);
+        ValueColumnType type = meta.getColumnType(i) == Types.OTHER
+            ? determineColumnType(values)
+            : ValueColumnType.DECIMAL;
+        valueSchema = schemaForColumnType(type, values);
+      } else {
+        valueSchema = columnSchema(meta, i);
       }
       Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
       Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
@@ -2757,6 +2786,22 @@ public class JParqPreparedStatement implements PreparedStatement {
     Schema schema = Schema.createRecord(schemaName, null, null, false);
     schema.setFields(fields);
     return schema;
+  }
+
+  /**
+   * Determines whether materialized values are needed to infer a column schema.
+   *
+   * @param meta
+   *          metadata describing the column
+   * @param column
+   *          one-based column index
+   * @return whether the JDBC type or decimal precision is unknown
+   * @throws SQLException
+   *           if column metadata cannot be accessed
+   */
+  private boolean requiresValueInference(ResultSetMetaData meta, int column) throws SQLException {
+    int type = meta.getColumnType(column);
+    return type == Types.OTHER || ((type == Types.DECIMAL || type == Types.NUMERIC) && meta.getPrecision(column) == 0);
   }
 
   /**
@@ -3121,7 +3166,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     List<Schema> valueSchemas = new ArrayList<>(meta.getColumnCount());
     boolean inferTypes = false;
     for (int i = 1; i <= meta.getColumnCount(); i++) {
-      inferTypes |= meta.getColumnType(i) == Types.OTHER;
+      inferTypes |= requiresValueInference(meta, i);
     }
     List<List<Object>> rawRows = new ArrayList<>();
     Schema schema = inferTypes
@@ -3140,7 +3185,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
     }
     if (inferTypes) {
-      // Only unknown types require buffering. Release each buffered row as it
+      // Unknown types or decimal bounds require buffering. Release each row as it
       // is converted so the two complete row collections are never retained.
       schema = buildResultSchema(meta, tableName, fieldNames, valueSchemas, columnAliases, rawRows);
       for (int i = 0; i < rawRows.size(); i++) {

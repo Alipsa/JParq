@@ -241,9 +241,6 @@ public final class ValueExpressionEvaluator {
     }
     if (expression instanceof CastExpression cast) {
       Object inner = evalInternal(cast.getLeftExpression(), record);
-      if (inner == null) {
-        return null;
-      }
       return DateTimeFunctions.castLiteral(cast, inner);
     }
     if (expression instanceof SignedExpression se) {

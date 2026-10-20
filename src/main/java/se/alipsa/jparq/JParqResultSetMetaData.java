@@ -9,6 +9,7 @@ import java.util.Locale;
 import java.util.Map;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
+import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.LogicalTypes;
@@ -16,6 +17,7 @@ import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.BooleanExpressions;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.CorrelationMappings;
+import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
@@ -161,6 +163,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
 
   @Override
   public int getColumnType(int column) {
+    if (declaredDecimalType(column) != null) {
+      return Types.DECIMAL;
+    }
     int computedType = resolveComputedColumnType(column);
     // A computed Boolean alias may have the same name as a source field.
     if (computedType == Types.BOOLEAN) {
@@ -193,19 +198,35 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   }
 
   /**
-   * Resolves the decimal logical type exposed by a projected source field.
+   * Resolves the decimal logical type of an explicit cast or projected source
+   * field.
    *
    * @param column
    *          the one-based output column index
-   * @return the decimal type, or null for a nondecimal or computed field
+   * @return the decimal type, or null when no decimal bounds are available
    */
   private LogicalTypes.Decimal decimalType(int column) {
+    LogicalTypes.Decimal declared = declaredDecimalType(column);
+    if (declared != null) {
+      return declared;
+    }
     if (getColumnType(column) != Types.DECIMAL && getColumnType(column) != Types.NUMERIC) {
       return null;
     }
     Schema.Field field = resolveField(column);
     Schema valueSchema = field == null ? null : JdbcTypeMapper.nonNullSchema(field.schema());
     return valueSchema != null && valueSchema.getLogicalType() instanceof LogicalTypes.Decimal decimal ? decimal : null;
+  }
+
+  /**
+   * Resolves explicitly declared precision and scale for a decimal cast.
+   *
+   * @param column
+   *          the one-based output column index
+   * @return the declared decimal type, or null without an explicit precision
+   */
+  private LogicalTypes.Decimal declaredDecimalType(int column) {
+    return expressionAtColumn(column) instanceof CastExpression cast ? DecimalCasts.declaredType(cast) : null;
   }
 
   /**

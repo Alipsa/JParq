@@ -2,6 +2,7 @@ package jparq.cte;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
@@ -179,6 +180,116 @@ class DecimalMaterializationTest {
       assertEquals(2, result.getMetaData().getScale(1));
       assertTrue(result.next());
       assertEquals(new BigDecimal("0.05"), result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Infers missing window decimal bounds through CTE and derived-table schemas.
+   *
+   * @param function
+   *          the window function and optional offset
+   * @param derived
+   *          whether to materialize through a derived table instead of a CTE
+   * @param expectedValues
+   *          expected decimal values or NULL in row order
+   * @param precision
+   *          the inferred precision
+   * @param scale
+   *          the inferred scale
+   * @throws Exception
+   *           if preparation or execution fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "LAG(amount) | false | NULL 0.01 0.02 | 2 | 2", "LAG(amount) | true | NULL 0.01 0.02 | 2 | 2",
+      "LEAD(amount) | false | 0.02 0.03 NULL | 2 | 2", "LEAD(amount) | true | 0.02 0.03 NULL | 2 | 2",
+      "LAG(amount, 5) | false | NULL NULL NULL | 1 | 0", "LAG(amount, 5) | true | NULL NULL NULL | 1 | 0"
+  })
+  void windowDecimalsRetainExactValues(String function, boolean derived, String expectedValues, int precision,
+      int scale) throws Exception {
+    String body = "SELECT id, " + function + " OVER (ORDER BY id) AS x FROM optimized WHERE id <= 3";
+    String sql = derived
+        ? "SELECT d.x FROM (" + body + ") d ORDER BY d.id"
+        : "WITH c AS (" + body + ") SELECT x FROM c ORDER BY id";
+    try (var connection = DriverManager.getConnection(jdbcUrl);
+        var statement = connection.prepareStatement(sql);
+        var result = statement.executeQuery()) {
+      assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1));
+      assertEquals(precision, result.getMetaData().getPrecision(1));
+      assertEquals(scale, result.getMetaData().getScale(1));
+      for (String expected : expectedValues.split(" ")) {
+        assertTrue(result.next());
+        if ("NULL".equals(expected)) {
+          assertNull(result.getObject(1));
+        } else {
+          assertEquals(new BigDecimal(expected), result.getObject(1));
+        }
+      }
+      assertFalse(result.next());
+      assertEquals(precision, result.getMetaData().getPrecision(1));
+      assertEquals(scale, result.getMetaData().getScale(1));
+    }
+  }
+
+  /**
+   * Exposes explicit decimal cast bounds even when the current value is smaller.
+   *
+   * @param expression
+   *          the decimal cast
+   * @param expected
+   *          the expected decimal value
+   * @param scale
+   *          the declared fractional scale
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "CAST(0.5 AS DECIMAL(10,1)) | 0.5 | 1", "CAST(0.5 AS NUMERIC(10,1)) | 0.5 | 1", "CAST(1 AS DECIMAL(10)) | 1 | 0"
+  })
+  void decimalCastsExposeDeclaredBounds(String expression, String expected, int scale) throws Exception {
+    try (var connection = DriverManager.getConnection(jdbcUrl)) {
+      for (String source : List.of("", " FROM optimized WHERE id = 1")) {
+        try (var statement = connection.createStatement();
+            var result = statement.executeQuery("SELECT " + expression + " AS x" + source)) {
+          assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1));
+          assertEquals(10, result.getMetaData().getPrecision(1));
+          assertEquals(scale, result.getMetaData().getScale(1));
+          assertTrue(result.next());
+          assertEquals(new BigDecimal(expected), result.getObject(1));
+          assertFalse(result.next());
+        }
+      }
+    }
+  }
+
+  /**
+   * Verifies that a declared decimal precision permits recursive integer growth.
+   *
+   * @param source
+   *          the optional physical input for the anchor
+   * @throws Exception
+   *           if preparation or execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "", " FROM optimized WHERE id = 1"
+  })
+  void typedDecimalAnchorAllowsPrecisionGrowth(String source) throws Exception {
+    try (var connection = DriverManager.getConnection(jdbcUrl); var statement = connection.prepareStatement("""
+        WITH RECURSIVE r(n) AS (
+          SELECT CAST(0.5 AS DECIMAL(10,1))%s
+          UNION ALL SELECT n + 1 FROM r WHERE n < 29.5
+        )
+        SELECT n FROM r ORDER BY n
+        """.formatted(source)); var result = statement.executeQuery()) {
+      assertEquals(10, result.getMetaData().getPrecision(1));
+      assertEquals(1, result.getMetaData().getScale(1));
+      for (int row = 0; row < 30; row++) {
+        assertTrue(result.next());
+        assertEquals(new BigDecimal("0.5").add(BigDecimal.valueOf(row)), result.getObject(1));
+      }
       assertFalse(result.next());
     }
   }

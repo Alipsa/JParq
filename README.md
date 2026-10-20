@@ -103,10 +103,25 @@ tables or inherited CTEs with the same name.
 
 Recursive CTEs retain the anchor's numeric types and decimal precision and scale. Recursive values that require
 fractional truncation or decimal rounding, or exceed integer ranges or decimal precision, fail with `SQLException`
-(SQLState `22003`); recursive schemas are not widened across iterations. For example, an integer anchor cannot accept a recursive step of `0.5`.
+(SQLState `22003`); recursive schemas are not widened across iterations. For example, an integer anchor cannot
+accept a recursive step of `0.5`. A decimal literal also infers precision from its value: an anchor of `0.5`
+becomes `DECIMAL(1,1)` and cannot grow to `1.5`. Use an explicit cast to reserve both precision and scale:
+
+```sql
+WITH RECURSIVE r(n) AS (
+  SELECT CAST(0.5 AS DECIMAL(10,1))
+  UNION ALL SELECT n + 1 FROM r WHERE n < 29.5
+)
+SELECT n FROM r ORDER BY n
+```
 
 Computed numeric values retain their types through CTEs and single derived tables. Derived tables used in
-joins, including LATERAL, may still expose numeric values as VARCHAR.
+joins, including LATERAL, may still expose numeric values as VARCHAR. In particular, LATERAL decimal
+expressions with unknown precision use VARCHAR to keep one stable schema across correlated executions.
+
+`DECIMAL(p,s)`, `NUMERIC(p,s)`, and `NUMBER(p,s)` casts round to the declared scale with HALF_UP and then
+reject precision overflow with SQLState `22003`. Omitting scale while specifying precision defaults to scale
+zero. Bounds must satisfy `1 <= p` and `0 <= s <= p`. Casts without precision preserve the decimal value.
 
 ### Connection options
 

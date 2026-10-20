@@ -59,11 +59,29 @@ class SqlParserCommentTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "`it's`", "[it's]", "`a``'--/*b`", "[a]]'--/*b]", "`a\"b`", "[a\"b]"
+      "`it's`", "`a``'--/*b`", "`a\"b`"
   })
   void stripCommentsPreservesDelimitedIdentifiers(String identifier) {
     String sql = "SELECT model AS " + identifier + " FROM mtcars";
     assertEquals(sql + " ", SqlParser.stripSqlComments(sql + " -- trailing comment"));
+  }
+
+  /**
+   * Preserves closing brackets and comment markers inside array string elements.
+   *
+   * @param expression
+   *          an array constructor or subscript expression
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "ARRAY['a]']", "ARRAY['a]', 'b']", "ARRAY['a]--/*', 'b']", "arr['k]']", "arr['k]--/*']"
+  })
+  void parseSelectPreservesArrayStrings(String expression) {
+    String sql = "SELECT " + expression + " AS x FROM mtcars LIMIT 1";
+    assertEquals(sql + " ", SqlParser.stripSqlComments(sql + " -- trailing comment"));
+    var select = assertDoesNotThrow(() -> SqlParser.parseSelect(sql));
+    assertEquals("x", select.labels().getFirst());
+    assertEquals(1, select.expressions().size());
   }
 
   /**
@@ -74,7 +92,7 @@ class SqlParserCommentTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "`", "[", "'", "\""
+      "`", "'", "\""
   })
   void stripCommentsRejectsUnterminatedQuotes(String quote) {
     assertThrows(IllegalArgumentException.class, () -> SqlParser.stripSqlComments("SELECT " + quote + "unfinished"));
