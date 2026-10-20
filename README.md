@@ -115,8 +115,8 @@ WITH RECURSIVE r(n) AS (
 SELECT n FROM r ORDER BY n
 ```
 
-Computed numeric values retain their types through CTEs and single derived tables. Derived tables used in
-joins, including LATERAL, may still expose numeric values as VARCHAR. In particular, LATERAL decimal
+Computed numeric values retain their types through CTEs and non-LATERAL derived tables, including when
+used in joins. LATERAL derived tables may still expose numeric values as VARCHAR. In particular, LATERAL decimal
 expressions with unknown precision use VARCHAR to keep one stable schema across correlated executions.
 
 `DECIMAL(p,s)`, `NUMERIC(p,s)`, and `NUMBER(p,s)` casts round to the declared scale with HALF_UP and then
