@@ -115,8 +115,13 @@ WITH RECURSIVE r(n) AS (
 SELECT n FROM r ORDER BY n
 ```
 
-Computed numeric values retain their types through CTEs and single derived tables. Derived tables used in
-joins, including LATERAL, may still expose numeric values as VARCHAR. In particular, LATERAL decimal
+Computed values with unknown types, including dates and window results, are typed from the returned values
+through CTEs and non-LATERAL derived tables, including when used in joins. Inferred metadata depends on
+which rows survive filtering: empty or all-NULL unknown-type columns use VARCHAR, and mixed types may
+also resolve to VARCHAR. Known column types remain available for empty results.
+For inferred columns, `getObject()` returns the corresponding Java type, such as `java.sql.Date`, `Long`,
+or `BigDecimal`.
+LATERAL derived tables may still expose numeric values as VARCHAR. In particular, LATERAL decimal
 expressions with unknown precision use VARCHAR to keep one stable schema across correlated executions.
 
 `DECIMAL(p,s)`, `NUMERIC(p,s)`, and `NUMBER(p,s)` casts round to the declared scale with HALF_UP and then

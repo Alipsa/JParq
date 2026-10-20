@@ -2321,8 +2321,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         fieldNames.clear();
         valueSchemas.clear();
         for (int i = 1; i <= columnCount; i++) {
-          if ((ref == null || !ref.lateral()) && meta.getColumnType(i) != Types.OTHER
-              && requiresValueInference(meta, i)) {
+          // Infer computed values before converting them to Avro; a string
+          // fallback would lose their numeric type and aggregate promotion.
+          if ((ref == null || !ref.lateral()) && requiresValueInference(meta, i)) {
             CteResult data = consumeResultSet(rs, derivedRecordName(ref), List.of());
             for (Field field : data.schema().getFields()) {
               fieldNames.add(field.name());
@@ -2544,7 +2545,8 @@ public class JParqPreparedStatement implements PreparedStatement {
       Schema valueSchema = ref != null && ref.lateral() && requiresValueInference(meta, i)
           ? Schema.create(Schema.Type.STRING)
           : columnSchema(meta, i);
-      if (ref != null && meta.getColumnType(i) == Types.OTHER) {
+      // Non-LATERAL unknown columns are inferred by consumeResultSet instead.
+      if (ref != null && ref.lateral() && meta.getColumnType(i) == Types.OTHER) {
         Schema inferred = inferSubqueryColumnSchema(ref, i);
         if (inferred != null) {
           valueSchema = inferred;
