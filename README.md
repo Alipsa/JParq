@@ -120,7 +120,7 @@ through CTEs and non-LATERAL derived tables, including when used in joins. Infer
 which rows survive filtering: empty or all-NULL unknown-type columns use VARCHAR, and mixed types may
 also resolve to VARCHAR. Known column types remain available for empty results.
 For inferred columns, `getObject()` returns the corresponding Java type, such as `java.sql.Date`, `Long`,
-or `BigDecimal`, instead of the strings previously returned by derived tables.
+or `BigDecimal`.
 LATERAL derived tables may still expose numeric values as VARCHAR. In particular, LATERAL decimal
 expressions with unknown precision use VARCHAR to keep one stable schema across correlated executions.
 

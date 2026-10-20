@@ -165,7 +165,8 @@ class DerivedNumericTypeTest {
   }
 
   /**
-   * Pins the VARCHAR fallback when unknown expressions have no non-null values.
+   * Pins the VARCHAR fallback for unknown expressions without non-null values
+   * while preserving known source column types.
    *
    * @param body
    *          the empty or all-null projection
@@ -176,20 +177,24 @@ class DerivedNumericTypeTest {
    */
   @ParameterizedTest
   @CsvSource(delimiter = '|', value = {
-      "SELECT id * 1 AS x FROM small WHERE id > 100 | 0",
-      "SELECT CASE WHEN id > 100 THEN id * 1 END AS x FROM small | 5"
+      "SELECT id, id * 1 AS x FROM small WHERE id > 100 | 0",
+      "SELECT id, CASE WHEN id > 100 THEN id * 1 END AS x FROM small | 5"
   })
   void unknownTypesWithoutValuesFallBackToVarchar(String body, int expectedRows) throws Exception {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
-      for (String sql : List.of("SELECT t.x FROM (" + body + ") t",
-          "SELECT t.x FROM (" + body + ") t JOIN small s ON s.id = 0",
-          "SELECT t.x FROM small s JOIN (" + body + ") t ON s.id = 0", "WITH t AS (" + body + ") SELECT x FROM t")) {
+      for (String sql : List.of("SELECT t.x, t.id FROM (" + body + ") t",
+          "SELECT t.x, t.id FROM (" + body + ") t JOIN small s ON s.id = 0",
+          "SELECT t.x, t.id FROM small s JOIN (" + body + ") t ON s.id = 0",
+          "WITH t AS (" + body + ") SELECT x, id FROM t")) {
         try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
           assertEquals(Types.VARCHAR, result.getMetaData().getColumnType(1), sql);
           assertEquals(String.class.getName(), result.getMetaData().getColumnClassName(1), sql);
+          assertEquals(Types.INTEGER, result.getMetaData().getColumnType(2), sql);
+          assertEquals(Integer.class.getName(), result.getMetaData().getColumnClassName(2), sql);
           int count = 0;
           while (result.next()) {
             assertNull(result.getObject(1), sql);
+            assertInstanceOf(Integer.class, result.getObject(2), sql);
             count++;
           }
           assertEquals(expectedRows, count, sql);
