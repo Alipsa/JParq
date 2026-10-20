@@ -2233,7 +2233,7 @@ public final class AggregateFunctions {
         return arithmetic(mod.getLeftExpression(), mod.getRightExpression(), Operation.MOD);
       }
       if (expr instanceof Function func) {
-        if (CorrelatedBindings.matches(func)) {
+        if (CorrelatedBindings.isReserved(func)) {
           return CorrelatedBindings.value(func);
         }
         if (isGroupingFunction(func)) {

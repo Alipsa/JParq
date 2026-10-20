@@ -619,6 +619,9 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @return whether this statement can execute again with new outer bindings
    */
   public boolean isReusableSubqueryShape() {
+    // joinPredicates captures current bindings; join statements must never be
+    // cached.
+    // See planJoinPredicates, which runs during construction for each outer row.
     return nested && !hasParameters && !setOperationQuery && !joinQuery && baseCteResult == null && cteResults.isEmpty()
         && inheritedCteContext.isEmpty();
   }

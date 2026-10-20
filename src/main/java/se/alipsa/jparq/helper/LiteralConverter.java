@@ -40,7 +40,7 @@ public class LiteralConverter {
       "PMD.AvoidDecimalLiteralsInBigDecimalConstructor", "PMD.EmptyCatchBlock", "checkstyle:NeedBraces"
   })
   public static Object toLiteral(Expression e) {
-    if (e instanceof Function function && CorrelatedBindings.matches(function)) {
+    if (e instanceof Function function && CorrelatedBindings.isReserved(function)) {
       return CorrelatedBindings.value(function);
     }
     if (e instanceof NullValue) {

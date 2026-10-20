@@ -73,6 +73,30 @@ class SubqueryExecutorLifecycleTest {
   }
 
   /**
+   * Reports the original query and fresh outer values when a stable shape fails.
+   */
+  @Test
+  void correlatedFailuresDescribeOuterBindings() throws Exception {
+    var nested = mock(JParqPreparedStatement.class);
+    when(nested.isReusableSubqueryShape()).thenReturn(true);
+    var cause = new SQLException("nested failure", "42000");
+    when(nested.executeQuery()).thenThrow(cause);
+    var query = (net.sf.jsqlparser.statement.select.Select) net.sf.jsqlparser.parser.CCJSqlParserUtil
+        .parse("SELECT 1 WHERE o.id = 1");
+    try (var executor = new SubqueryExecutor(mock(JParqConnection.class), sql -> nested)) {
+      for (int value : java.util.List.of(7, 9)) {
+        var failure = assertThrows(IllegalStateException.class, () -> executor.executeCorrelated(query,
+            java.util.List.of("o"), java.util.Set.of("id"), java.util.Map.of(), (qualifier, column) -> value));
+        assertTrue(failure.getMessage().contains("SELECT 1 WHERE o.id = 1"));
+        assertTrue(failure.getMessage().contains("qualifier=U:o, column=id]=" + value), failure.getMessage());
+        assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"));
+        assertSame(cause, failure.getCause());
+        assertEquals("42000", ((SQLException) failure.getCause()).getSQLState());
+      }
+    }
+  }
+
+  /**
    * Creates a one-row result with deterministic metadata and value.
    *
    * @param value

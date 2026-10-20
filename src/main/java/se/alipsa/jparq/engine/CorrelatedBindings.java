@@ -41,6 +41,19 @@ public final class CorrelatedBindings implements AutoCloseable {
    * @return whether this expression reads a correlated binding
    */
   public static boolean matches(Function function) {
+    var arguments = function.getParameters();
+    return isReserved(function) && arguments != null && arguments.size() == 2 && arguments.get(0) instanceof StringValue
+        && arguments.get(1) instanceof LongValue;
+  }
+
+  /**
+   * Identifies the reserved internal function, including malformed calls.
+   *
+   * @param function
+   *          function expression
+   * @return whether the function uses the reserved binding name
+   */
+  public static boolean isReserved(Function function) {
     return FUNCTION_NAME.equalsIgnoreCase(function.getName());
   }
 
@@ -50,18 +63,23 @@ public final class CorrelatedBindings implements AutoCloseable {
    * @param function
    *          private placeholder expression
    * @return current outer value, possibly null
-   * @throws IllegalStateException
-   *           if the placeholder is evaluated outside its binding frame
+   * @throws IllegalArgumentException
+   *           if the call is malformed, inactive, or has an invalid slot
    */
   public static Object value(Function function) {
+    String message = "Invalid correlated binding: reserved for internal query execution";
+    if (!matches(function)) {
+      throw new IllegalArgumentException(message);
+    }
     var arguments = function.getParameters();
     String key = ((StringValue) arguments.get(0)).getValue();
-    int index = Math.toIntExact(((LongValue) arguments.get(1)).getValue());
+    var index = ((LongValue) arguments.get(1)).getBigIntegerValue();
     var active = ACTIVE.get();
-    if (active == null || !active.containsKey(key)) {
-      throw new IllegalStateException("Correlated binding is not active");
+    List<Object> values = active == null ? null : active.get(key);
+    if (values == null || index.signum() < 0 || index.compareTo(java.math.BigInteger.valueOf(values.size())) >= 0) {
+      throw new IllegalArgumentException(message);
     }
-    return active.get(key).get(index);
+    return values.get(index.intValue());
   }
 
   /** Restores ancestor bindings and removes thread state after the last frame. */

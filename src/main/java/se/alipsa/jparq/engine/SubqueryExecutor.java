@@ -130,7 +130,10 @@ public final class SubqueryExecutor implements AutoCloseable {
 
   /**
    * Executes a subquery using one analyzed shape and the current typed bindings.
-   * Uncorrelated results retain their separate result cache.
+   * Uncorrelated results retain their separate result cache. Each Select node
+   * belongs to one lexical outer scope within this execution: qualifiers,
+   * columns, and context must remain unchanged across calls; only resolved values
+   * vary.
    *
    * @param select
    *          subquery node
@@ -167,7 +170,14 @@ public final class SubqueryExecutor implements AutoCloseable {
     }
     var frame = new CorrelatedBindings(query.key(), bindings);
     try (frame) {
-      return executeRaw(query.sql());
+      var references = query.references();
+      return runQuery(normalize(query.sql()), () -> {
+        var namedBindings = new LinkedHashMap<CorrelatedSubqueryRewriter.QualifiedColumn, Object>();
+        for (int index = 0; index < bindings.size(); index++) {
+          namedBindings.put(references.get(index), bindings.get(index));
+        }
+        return select + " [outer bindings: " + namedBindings + "]";
+      });
     }
   }
 
@@ -382,6 +392,19 @@ public final class SubqueryExecutor implements AutoCloseable {
   }
 
   private SubqueryResult runQuery(String sql) {
+    return runQuery(sql, () -> sql);
+  }
+
+  /**
+   * Executes a stable shape with a separate user-facing diagnostic description.
+   *
+   * @param sql
+   *          executable SQL shape
+   * @param description
+   *          diagnostic text computed only on failure
+   * @return materialized subquery result
+   */
+  private SubqueryResult runQuery(String sql, java.util.function.Supplier<String> description) {
     try {
       PreparedStatement prepared = preparedStatements.get(sql);
       if (prepared == null) {
@@ -395,8 +418,8 @@ public final class SubqueryExecutor implements AutoCloseable {
       try (perCall; ResultSet rs = prepared.executeQuery()) {
         return consume(rs);
       }
-    } catch (SQLException e) {
-      throw new IllegalStateException("Failed to execute sub query: " + sql, e);
+    } catch (SQLException | RuntimeException e) {
+      throw new IllegalStateException("Failed to execute sub query: " + description.get(), e);
     }
   }
 

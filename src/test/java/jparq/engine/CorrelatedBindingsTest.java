@@ -31,8 +31,28 @@ class CorrelatedBindingsTest {
         assertSame(values.get(index), LiteralConverter.toLiteral(expression));
       }
     }
-    assertThrows(IllegalStateException.class,
+    assertThrows(IllegalArgumentException.class,
         () -> LiteralConverter.toLiteral(new CorrelatedBindings.Reference("shape", 0).expression()));
+  }
+
+  /** Rejects malformed, inactive, and out-of-range private calls consistently. */
+  @Test
+  void invalidPlaceholderCallsHaveOneClearError() throws Exception {
+    for (String sql : List.of("__JPARQ_CORRELATED_VALUE()", "__JPARQ_CORRELATED_VALUE(1, 2)",
+        "__JPARQ_CORRELATED_VALUE('shape')", "__JPARQ_CORRELATED_VALUE('shape', 'slot')",
+        "__JPARQ_CORRELATED_VALUE('shape', 0, 1)", "__JPARQ_CORRELATED_VALUE('missing', 0)")) {
+      var expression = net.sf.jsqlparser.parser.CCJSqlParserUtil.parseExpression(sql);
+      var failure = assertThrows(IllegalArgumentException.class, () -> LiteralConverter.toLiteral(expression));
+      assertEquals("Invalid correlated binding: reserved for internal query execution", failure.getMessage());
+    }
+    try (var bindings = new CorrelatedBindings("shape", List.of(1))) {
+      for (String index : List.of("-1", "1", "2147483648", "9223372036854775808")) {
+        var expression = net.sf.jsqlparser.parser.CCJSqlParserUtil
+            .parseExpression("__JPARQ_CORRELATED_VALUE('shape', " + index + ")");
+        var failure = assertThrows(IllegalArgumentException.class, () -> LiteralConverter.toLiteral(expression));
+        assertEquals("Invalid correlated binding: reserved for internal query execution", failure.getMessage());
+      }
+    }
   }
 
   /** Restores ancestors after deeper work fails and releases the last frame. */
@@ -50,9 +70,9 @@ class CorrelatedBindingsTest {
         }
       });
       assertEquals(1, LiteralConverter.toLiteral(outer));
-      assertThrows(IllegalStateException.class, () -> LiteralConverter.toLiteral(inner));
+      assertThrows(IllegalArgumentException.class, () -> LiteralConverter.toLiteral(inner));
     }
-    assertThrows(IllegalStateException.class, () -> LiteralConverter.toLiteral(outer));
+    assertThrows(IllegalArgumentException.class, () -> LiteralConverter.toLiteral(outer));
   }
   /** Limits bound predicate translation to the current execution scope. */
   @Test

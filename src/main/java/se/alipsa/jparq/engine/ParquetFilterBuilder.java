@@ -52,8 +52,9 @@ public final class ParquetFilterBuilder {
 
   /**
    * Translates predicates using the current correlated binding frame. This scope
-   * is used only at execution time, so cached plans never retain one outer row's
-   * predicate values.
+   * is used at execution time for reusable plans and during construction of
+   * per-row join statements. Predicates built here capture current values and
+   * must not be retained across binding frames.
    *
    * @param translation
    *          predicate translation to perform

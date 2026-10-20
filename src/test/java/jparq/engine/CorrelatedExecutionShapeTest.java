@@ -66,6 +66,29 @@ class CorrelatedExecutionShapeTest {
   }
 
   /**
+   * Rejects user-written private binding calls through the JDBC error contract.
+   */
+  @Test
+  void reservedBindingCallsRaiseSqlExceptions() throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String call : List.of("__JPARQ_CORRELATED_VALUE(1, 2)", "__JPARQ_CORRELATED_VALUE('x', 0)")) {
+        var failure = assertThrows(java.sql.SQLException.class, () -> {
+          try (var result = statement.executeQuery("SELECT o.id FROM big o WHERE " + call + " = 1")) {
+            result.next();
+          }
+        });
+        Throwable root = failure;
+        while (root.getCause() != null) {
+          root = root.getCause();
+        }
+        assertInstanceOf(IllegalArgumentException.class, root);
+        assertEquals("Invalid correlated binding: reserved for internal query execution", root.getMessage());
+      }
+    }
+  }
+
+  /**
    * Checks every evaluator path with changing keys in all pushdown modes.
    *
    * @param predicate
