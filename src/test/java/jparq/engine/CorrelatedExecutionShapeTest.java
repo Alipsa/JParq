@@ -66,10 +66,10 @@ class CorrelatedExecutionShapeTest {
   }
 
   /**
-   * Rejects user-written private binding calls through the JDBC error contract.
+   * Rejects user-written private binding calls in WHERE with SQLException.
    */
   @Test
-  void reservedBindingCallsRaiseSqlExceptions() throws Exception {
+  void reservedBindingCallsInWhereRaiseSqlExceptions() throws Exception {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement()) {
       for (String call : List.of("__JPARQ_CORRELATED_VALUE(1, 2)", "__JPARQ_CORRELATED_VALUE('x', 0)")) {

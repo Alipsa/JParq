@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.StringJoiner;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
@@ -172,9 +173,13 @@ public final class SubqueryExecutor implements AutoCloseable {
     try (frame) {
       var references = query.references();
       return runQuery(normalize(query.sql()), () -> {
-        var namedBindings = new LinkedHashMap<CorrelatedSubqueryRewriter.QualifiedColumn, Object>();
+        var namedBindings = new StringJoiner(", ");
         for (int index = 0; index < bindings.size(); index++) {
-          namedBindings.put(references.get(index), bindings.get(index));
+          var reference = references.get(index);
+          String qualifier = reference.qualifier() == null
+              ? ""
+              : reference.qualifier().replaceFirst("^[UQ]:", "") + ".";
+          namedBindings.add(qualifier + reference.column() + "=" + bindings.get(index));
         }
         return select + " [outer bindings: " + namedBindings + "]";
       });
