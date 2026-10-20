@@ -11,10 +11,13 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.List;
+import net.sf.jsqlparser.statement.select.Select;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.DecimalCasts;
+import se.alipsa.jparq.engine.JSqlParserSupport;
 
 /**
  * Keeps decimal CAST evaluation consistent with declared materialization
@@ -115,11 +118,22 @@ class DecimalCastBoundsTest {
       "WITH c AS (SELECT CAST(NULL AS NUMERIC(2,5)) AS n) SELECT n FROM c",
       "WITH c AS (SELECT CAST(NULL AS NUMERIC(2,5)) AS n) SELECT 1",
       "SELECT d.n FROM (SELECT CAST(1 AS DECIMAL(0)) AS n) d",
+      "SELECT d.n FROM (SELECT CAST(amount AS DECIMAL(2,5)) AS n FROM missing_table) d",
+      "SELECT * FROM (VALUES (CAST(1 AS NUMBER(2,5)))) v(n)",
       "SELECT CASE WHEN FALSE THEN CAST(1 AS DECIMAL(2,5)) ELSE 1 END",
-      "SELECT 1 UNION ALL SELECT CAST(NULL AS NUMBER(2,5))",
+      "SELECT 1 UNION ALL SELECT CAST(NULL AS NUMBER(2,5))", "SELECT (SELECT CAST(NULL AS DECIMAL(2,5)))",
+      "SELECT id FROM optimized WHERE EXISTS (SELECT CAST(NULL AS NUMBER(2,5)))",
+      "SELECT id FROM optimized ORDER BY CAST(id AS DECIMAL(2,5))",
+      "SELECT COUNT(*) FROM optimized GROUP BY CAST(id AS NUMERIC(2,5))",
+      "SELECT COUNT(*) FROM optimized HAVING COUNT(*) > CAST(0 AS DECIMAL(2,5))",
+      "SELECT SUM(amount) OVER (ORDER BY CAST(id AS DECIMAL(2,5))) FROM optimized",
+      "SELECT SUM(amount) OVER w FROM optimized WINDOW w AS (ORDER BY CAST(id AS NUMBER(2,5)))",
+      "SELECT a.id FROM optimized a JOIN optimized b ON a.id = CAST(b.id AS DECIMAL(2,5))",
       "SELECT m.id FROM optimized m, LATERAL " + "(SELECT CAST(m.amount AS DECIMAL(2,5)) AS n FROM (VALUES (1)) v(z)) x"
   })
   void invalidDeclarationsFailDuringPreparation(String sql) throws Exception {
+    var parsed = (Select) JSqlParserSupport.parseStatement(sql);
+    assertThrows(IllegalArgumentException.class, () -> DecimalCasts.validateStatement(parsed), sql);
     try (var connection = DriverManager.getConnection(jdbcUrl)) {
       SQLException failure = assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql);
       assertEquals("42000", failure.getSQLState(), sql);

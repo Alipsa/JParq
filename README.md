@@ -124,6 +124,9 @@ reject precision overflow with SQLState `22003`. Omitting scale while specifying
 zero. Bounds must satisfy `1 <= p` and `0 <= s <= p`; invalid declarations fail during statement preparation
 with SQLState `42000`, including for NULL inputs and empty results. Casts without precision preserve the decimal value.
 
+SQL syntax rejected by JSqlParser raises `SQLSyntaxErrorException` with SQLState `42000`. Syntax and numeric
+errors retain preparation and nested-query context in their messages and cause chains.
+
 ### Connection options
 
 - `caseSensitive` — defaults to `false`. Set to `true` to make table-name resolution case-sensitive.

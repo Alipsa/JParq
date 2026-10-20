@@ -33,7 +33,6 @@ import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelationContextBuilder;
 import se.alipsa.jparq.engine.CorrelationMappings;
-import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.LegacyParenthesisSupport;
@@ -41,6 +40,7 @@ import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.QueryProcessor;
 import se.alipsa.jparq.engine.RecordReader;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
@@ -505,12 +505,11 @@ public class JParqResultSet extends ResultSetAdapter {
         }
         throw failure;
       }
+      if (SqlExceptions.findSqlStateFailure(e) != null) {
+        throw SqlExceptions.wrap(e.getMessage(), e);
+      }
       if (e instanceof SQLException sqlException) {
         throw sqlException;
-      }
-      SQLException castFailure = DecimalCasts.findCastFailure(e);
-      if (castFailure != null) {
-        throw castFailure;
       }
       throw new SQLException(e);
     }
@@ -572,7 +571,7 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
-   * Evaluates a projection while preserving CAST error SQLStates.
+   * Evaluates a projection while preserving SQLStates and diagnostic context.
    *
    * @param expression
    *          the projection to evaluate
@@ -584,9 +583,8 @@ public class JParqResultSet extends ResultSetAdapter {
     try {
       return projectionEvaluator == null ? null : projectionEvaluator.eval(expression, current);
     } catch (IllegalArgumentException exception) {
-      SQLException castFailure = DecimalCasts.findCastFailure(exception);
-      if (castFailure != null) {
-        throw castFailure;
+      if (SqlExceptions.findSqlStateFailure(exception) != null) {
+        throw SqlExceptions.wrap(exception.getMessage(), exception);
       }
       throw exception;
     }

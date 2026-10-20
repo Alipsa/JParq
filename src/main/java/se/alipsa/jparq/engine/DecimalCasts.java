@@ -3,16 +3,18 @@ package se.alipsa.jparq.engine;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.sql.SQLDataException;
-import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import net.sf.jsqlparser.expression.CastExpression;
+import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
+import net.sf.jsqlparser.statement.select.FromItemVisitorAdapter;
+import net.sf.jsqlparser.statement.select.PivotVisitorAdapter;
 import net.sf.jsqlparser.statement.select.Select;
+import net.sf.jsqlparser.statement.select.SelectItemVisitorAdapter;
 import net.sf.jsqlparser.statement.select.SelectVisitor;
-import net.sf.jsqlparser.util.deparser.ExpressionDeParser;
-import net.sf.jsqlparser.util.deparser.SelectDeParser;
+import net.sf.jsqlparser.statement.select.SelectVisitorAdapter;
 import org.apache.avro.LogicalTypes;
 
 /**
@@ -77,19 +79,21 @@ public final class DecimalCasts {
    *           if bounds are invalid; the cause carries SQLState 42000
    */
   public static void validateStatement(Select statement) {
-    StringBuilder buffer = new StringBuilder();
-    ExpressionDeParser expressions = new ExpressionDeParser() {
+    ExpressionVisitorAdapter<Void> expressions = new ExpressionVisitorAdapter<>() {
       /** {@inheritDoc} */
       @Override
-      public <S> StringBuilder visit(CastExpression cast, S context) {
+      public <S> Void visit(CastExpression cast, S context) {
         validateBounds(cast);
         return super.visit(cast, context);
       }
     };
-    SelectDeParser selects = new SelectDeParser(expressions, buffer);
+    FromItemVisitorAdapter<Void> sources = new FromItemVisitorAdapter<>();
+    SelectVisitorAdapter<Void> selects = new SelectVisitorAdapter<>(expressions, new PivotVisitorAdapter<>(expressions),
+        new SelectItemVisitorAdapter<>(expressions), sources);
+    sources.setSelectVisitor(selects);
+    sources.setExpressionVisitor(expressions);
     expressions.setSelectVisitor(selects);
-    expressions.setBuilder(buffer);
-    statement.accept((SelectVisitor<StringBuilder>) selects, null);
+    statement.accept((SelectVisitor<Void>) selects, null);
   }
 
   /**
@@ -136,25 +140,6 @@ public final class DecimalCasts {
       throw numericFailure("Value '" + value + "' exceeds decimal precision " + type.getPrecision());
     }
     return result;
-  }
-
-  /**
-   * Finds a CAST declaration or numeric range error across unchecked boundaries.
-   *
-   * @param failure
-   *          the exception or wrapper to inspect
-   * @return the SQLState 42000 or 22003 exception, or null when none is present
-   */
-  public static SQLException findCastFailure(Throwable failure) {
-    Throwable current = failure;
-    while (current != null) {
-      if (current instanceof SQLException sql
-          && ("22003".equals(sql.getSQLState()) || "42000".equals(sql.getSQLState()))) {
-        return sql;
-      }
-      current = current.getCause();
-    }
-    return null;
   }
 
   /**
