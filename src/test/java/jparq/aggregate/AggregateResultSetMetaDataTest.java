@@ -123,4 +123,21 @@ public class AggregateResultSetMetaDataTest {
     assertEquals(0, metadata.getPrecision(2));
     assertEquals(0, metadata.getScale(2));
   }
+  /**
+   * Covers small fractions, negative scales, zero, and columns without values.
+   */
+  @Test
+  void decimalBoundsHandleFractionalAndScientificValues() {
+    var metadata = new AggregateResultSetMetaData(List.of("mixed", "zero", "empty"),
+        List.of(Types.DECIMAL, Types.NUMERIC, Types.DECIMAL), "totals", null, null,
+        List.of(Arrays.asList(new BigDecimal("0.05"), new BigDecimal("0.0000"), null),
+            Arrays.asList(new BigDecimal("1E+3"), null, null)));
+    assertEquals(6, metadata.getPrecision(1));
+    assertEquals(2, metadata.getScale(1));
+    assertEquals(4, metadata.getPrecision(2));
+    assertEquals(4, metadata.getScale(2));
+    assertEquals(0, metadata.getPrecision(3));
+    assertEquals(0, metadata.getScale(3));
+  }
+
 }

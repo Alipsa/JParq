@@ -36,6 +36,7 @@ class RecursiveCteConversionTest {
         for (String anchor : List.of("1", "CAST(1 AS INTEGER)")) {
           cases.add(Arguments.of(anchor + source, union, "0.5", "3", "without loss"));
         }
+        cases.add(Arguments.of("0.5" + source, union, "1", "30", "exceeds decimal precision"));
         cases.add(Arguments.of("1.5" + source, union, "0.25", "2.5", "without rounding"));
         cases.add(Arguments.of("CAST(2147483647 AS INTEGER)" + source, union, "1", "2147483648", "without loss"));
         cases.add(Arguments.of("9223372036854775807" + source, union, "1", "9223372036854775808", "without loss"));
@@ -72,7 +73,7 @@ class RecursiveCteConversionTest {
         SQLException failure = assertTimeoutPreemptively(Duration.ofSeconds(5),
             () -> assertThrows(SQLException.class, () -> statement.executeQuery(sql)));
         Throwable cause = failure;
-        while (cause.getCause() != null) {
+        while (cause != null) {
           if (cause instanceof SQLException sqlException && "22003".equals(sqlException.getSQLState())) {
             assertTrue(cause.getMessage().contains(message), cause.getMessage());
             return;

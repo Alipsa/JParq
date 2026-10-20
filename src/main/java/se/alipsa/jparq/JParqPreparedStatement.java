@@ -2138,21 +2138,17 @@ public class JParqPreparedStatement implements PreparedStatement {
     };
   }
 
+  /**
+   * Builds a decimal schema covering all integer and fractional digits.
+   *
+   * @param values
+   *          materialized numeric values, allowing nulls
+   * @return the inferred decimal bytes schema
+   * @throws NumberFormatException
+   *           if a nonnull value is not numeric
+   */
   private Schema decimalSchemaForValues(List<Object> values) {
-    int precision = 1;
-    int scale = 0;
-    if (values != null) {
-      for (Object value : values) {
-        if (value == null) {
-          continue;
-        }
-        BigDecimal decimal = value instanceof BigDecimal bd ? bd : new BigDecimal(value.toString());
-        precision = Math.max(precision, decimal.precision());
-        scale = Math.max(scale, Math.max(decimal.scale(), 0));
-      }
-    }
-    LogicalType logicalType = LogicalTypes.decimal(Math.max(precision, 1), Math.max(scale, 0));
-    return logicalType.addToSchema(Schema.create(Schema.Type.BYTES));
+    return DecimalTypeInference.infer(values).addToSchema(Schema.create(Schema.Type.BYTES));
   }
 
   private Object normalizeValueForType(Object value, ValueColumnType type) throws SQLException {
@@ -2923,7 +2919,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Encodes a decimal without rounding away significant fractional digits.
+   * Encodes a decimal without rounding or exceeding the target precision.
    *
    * @param value
    *          the JDBC numeric value
@@ -2931,7 +2927,8 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          the target logical decimal type
    * @return the encoded unscaled decimal bytes
    * @throws SQLException
-   *           if the value is not numeric or requires rounding
+   *           if the value is not numeric, requires rounding, or exceeds the
+   *           target precision
    */
   private Object toDecimalBytes(Object value, LogicalTypes.Decimal decimal) throws SQLException {
     BigDecimal number;
@@ -2950,6 +2947,9 @@ public class JParqPreparedStatement implements PreparedStatement {
       throw new SQLException(
           "Cannot convert value '" + value + "' to decimal scale " + decimal.getScale() + " without rounding", "22003",
           e);
+    }
+    if (number.precision() > decimal.getPrecision()) {
+      throw new SQLException("Value '" + value + "' exceeds decimal precision " + decimal.getPrecision(), "22003");
     }
     return ByteBuffer.wrap(number.unscaledValue().toByteArray());
   }

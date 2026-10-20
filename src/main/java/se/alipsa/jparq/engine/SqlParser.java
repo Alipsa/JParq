@@ -1032,7 +1032,7 @@ public final class SqlParser {
    *           if a column or projection wildcard requires an input
    */
   private static void validateTableFreeSelect(PlainSelect select, boolean lateral) {
-    var validator = new ExpressionVisitorAdapter<Void>() {
+    final var validator = new ExpressionVisitorAdapter<Void>() {
       @Override
       public <S> Void visit(Column column, S context) {
         if (column.getTable() == null && isTimeKeyword(column.getColumnName())) {
@@ -2203,16 +2203,19 @@ public final class SqlParser {
    * comments can still interfere with parsing when they appear in leading or
    * inline positions. This helper processes the SQL text and strips both
    * {@code --} line comments and {@code /* ... *&#47;} block comments so that
-   * {@link CCJSqlParserUtil} receives a clean statement. Content that appears
-   * inside single-quoted or double-quoted literals is preserved verbatim.
+   * {@link JSqlParserSupport} receives a clean statement. Content that appears
+   * inside single-quoted literals or double-quoted, backtick, and bracket
+   * identifiers is preserved verbatim.
    * </p>
    *
    * @param sql
    *          the raw SQL text that may contain comments
    * @return the SQL text with comments removed
+   * @throws IllegalArgumentException
+   *           if a quoted literal or identifier is unterminated
    */
   @SuppressWarnings("PMD.CyclomaticComplexity")
-  private static String stripSqlComments(String sql) {
+  public static String stripSqlComments(String sql) {
     if (sql == null || sql.isEmpty()) {
       return sql;
     }
@@ -2220,6 +2223,7 @@ public final class SqlParser {
     StringBuilder result = new StringBuilder(sql.length());
     boolean inSingleQuote = false;
     boolean inDoubleQuote = false;
+    char identifierEnd = '\0';
     boolean inLineComment = false;
     boolean inBlockComment = false;
     boolean addSpaceAfterBlock = false;
@@ -2275,6 +2279,22 @@ public final class SqlParser {
         continue;
       }
 
+      if (identifierEnd != '\0') {
+        result.append(c);
+        if (c == identifierEnd && next == identifierEnd) {
+          result.append(next);
+          i++;
+        } else if (c == identifierEnd) {
+          identifierEnd = '\0';
+        }
+        continue;
+      }
+      if (c == '`' || c == '[') {
+        identifierEnd = c == '[' ? ']' : '`';
+        result.append(c);
+        continue;
+      }
+
       if (c == '-' && next == '-') {
         inLineComment = true;
         i++;
@@ -2301,7 +2321,7 @@ public final class SqlParser {
       result.append(c);
     }
 
-    if (inSingleQuote || inDoubleQuote) {
+    if (inSingleQuote || inDoubleQuote || identifierEnd != '\0') {
       throw new IllegalArgumentException("Unterminated quoted literal or identifier in SQL");
     }
     return result.toString();

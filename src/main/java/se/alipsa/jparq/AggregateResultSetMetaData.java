@@ -1,6 +1,5 @@
 package se.alipsa.jparq;
 
-import java.math.BigDecimal;
 import java.sql.JDBCType;
 import java.sql.Types;
 import java.util.ArrayList;
@@ -71,19 +70,12 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter {
       if (getColumnType(i + 1) != Types.DECIMAL && getColumnType(i + 1) != Types.NUMERIC) {
         continue;
       }
-      int integerDigits = 0;
-      boolean hasValue = false;
-      for (List<Object> row : rows) {
-        Object value = row.get(i);
-        if (value instanceof Number number) {
-          BigDecimal decimal = number instanceof BigDecimal bd ? bd : new BigDecimal(number.toString());
-          integerDigits = Math.max(integerDigits, decimal.precision() - decimal.scale());
-          scales[i] = Math.max(scales[i], decimal.scale());
-          hasValue = true;
-        }
-      }
-      if (hasValue) {
-        precisions[i] = Math.max(1, integerDigits + scales[i]);
+      int column = i;
+      List<Object> values = rows.stream().map(row -> row.get(column)).filter(Number.class::isInstance).toList();
+      if (!values.isEmpty()) {
+        var decimal = DecimalTypeInference.infer(values);
+        precisions[i] = decimal.getPrecision();
+        scales[i] = decimal.getScale();
       }
     }
   }

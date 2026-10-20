@@ -101,9 +101,12 @@ cannot be determined, unqualified names remain inner; use an explicit qualifier 
 WITH declarations inside subqueries, including derived tables, keep their local scope and override physical
 tables or inherited CTEs with the same name.
 
-Recursive CTEs retain the anchor's numeric types and decimal scale. Recursive values that would require
-fractional truncation, integer overflow, or decimal rounding fail with `SQLException`; recursive schemas
-are not widened across iterations. For example, an integer anchor cannot accept a recursive step of `0.5`.
+Recursive CTEs retain the anchor's numeric types and decimal precision and scale. Recursive values that require
+fractional truncation or decimal rounding, or exceed integer ranges or decimal precision, fail with `SQLException`
+(SQLState `22003`); recursive schemas are not widened across iterations. For example, an integer anchor cannot accept a recursive step of `0.5`.
+
+Computed numeric values retain their types through CTEs and single derived tables. Derived tables used in
+joins, including LATERAL, may still expose numeric values as VARCHAR.
 
 ### Connection options
 

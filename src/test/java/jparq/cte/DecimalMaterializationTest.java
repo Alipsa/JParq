@@ -13,6 +13,7 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /** Preserves decimal values and metadata across materialization boundaries. */
@@ -119,6 +120,65 @@ class DecimalMaterializationTest {
         assertTrue(result.next());
         assertEquals(new BigDecimal("1.25"), result.getBigDecimal(1));
       }
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Preserves small computed decimal values while preparing a CTE schema.
+   *
+   * @param expression
+   *          the decimal expression to materialize
+   * @param expectedValues
+   *          the expected values in row order, separated by spaces
+   * @param precision
+   *          the precision needed by all rows
+   * @param scale
+   *          the largest fractional scale
+   * @throws Exception
+   *           if preparation or execution fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "0.05 | 0.05 0.05 0.05 | 2 | 2", "amount * 3 | 0.03 0.06 0.09 | 2 | 2",
+      "amount / 3 | 0.003333333333333333 0.006666666666666667 0.01 | 18 | 18",
+      "CASE WHEN id > 1 THEN id * 10 ELSE 0.5 END | 0.5 20.0 30.0 | 3 | 1"
+  })
+  void computedCteDecimalsHaveSufficientBounds(String expression, String expectedValues, int precision, int scale)
+      throws Exception {
+    String sql = "WITH c AS (SELECT id, " + expression
+        + " AS x FROM optimized WHERE id <= 3) SELECT x FROM c ORDER BY id";
+    try (var connection = DriverManager.getConnection(jdbcUrl); var statement = connection.prepareStatement(sql)) {
+      try (var result = statement.executeQuery()) {
+        assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1));
+        assertEquals(precision, result.getMetaData().getPrecision(1));
+        assertEquals(scale, result.getMetaData().getScale(1));
+        for (String expected : expectedValues.split(" ")) {
+          assertTrue(result.next());
+          assertEquals(new BigDecimal(expected).setScale(scale), result.getObject(1));
+        }
+        assertFalse(result.next());
+        assertEquals(precision, result.getMetaData().getPrecision(1));
+        assertEquals(scale, result.getMetaData().getScale(1));
+      }
+    }
+  }
+
+  /**
+   * Infers sufficient precision for a table-free fractional CTE anchor.
+   *
+   * @throws Exception
+   *           if preparation or execution fails
+   */
+  @Test
+  void smallTableFreeDecimalCtePrepares() throws Exception {
+    try (var connection = DriverManager.getConnection(jdbcUrl);
+        var statement = connection.prepareStatement("WITH c AS (SELECT 0.05 AS x) SELECT x FROM c");
+        var result = statement.executeQuery()) {
+      assertEquals(2, result.getMetaData().getPrecision(1));
+      assertEquals(2, result.getMetaData().getScale(1));
+      assertTrue(result.next());
+      assertEquals(new BigDecimal("0.05"), result.getObject(1));
       assertFalse(result.next());
     }
   }
