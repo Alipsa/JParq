@@ -1,7 +1,7 @@
 # Version history
 
 ### 1.4.0
-- Apply derived-table column alias lists by output position across standalone inputs, joins, and LATERAL, including computed and wildcard projections; reject alias-count mismatches even for empty results (#196).
+- Apply derived-table column alias lists by output position across standalone inputs, joins, and LATERAL, including computed and wildcard projections; reject alias-count mismatches even for empty results, and reject duplicate column aliases at parse time with SQLState `42000` (#196).
 - Reuse parsed query shapes, validated source schemas, and eligible prepared plans for correlated EXISTS, IN, scalar, quantified, and ARRAY subqueries within one owning execution (#192). Bind current outer values directly, refresh row-dependent derived/CTE/join materializations, and preserve cancellation and uncorrelated-result caching.
 - **Behavior change:** correlated outer references retain their original Java types instead of being converted through SQL literals (#192). Scalar projections of an outer INTEGER can therefore return `Integer` rather than the literal-derived `Long`; NULLs and exact decimal and temporal values are preserved.
 - **Behavior change:** non-LATERAL derived tables, including joined inputs, infer unknown computed column types from returned values (#191). `getObject()` returns inferred Java values such as `java.sql.Date`, `Long`, and `BigDecimal` instead of strings, preserving exact numeric aggregate behavior. Empty or all-NULL unknown-type columns fall back to VARCHAR; mixed types, such as numbers and strings in a CASE expression, may also resolve to VARCHAR with String values. Known column types remain available for empty results.
