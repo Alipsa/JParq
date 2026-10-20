@@ -12,10 +12,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 import net.sf.jsqlparser.JSQLParserException;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.NotExpression;
 import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
@@ -43,8 +45,35 @@ import se.alipsa.jparq.helper.LiteralConverter;
  * Best-effort translator from JSQLParser Expression -> Parquet FilterPredicate.
  */
 public final class ParquetFilterBuilder {
+  private static final ThreadLocal<Boolean> BOUND_VALUES = new ThreadLocal<>();
 
   private ParquetFilterBuilder() {
+  }
+
+  /**
+   * Translates predicates using the current correlated binding frame. This scope
+   * is used at execution time for reusable plans and during construction of
+   * per-row join statements. Predicates built here capture current values and
+   * must not be retained across binding frames.
+   *
+   * @param translation
+   *          predicate translation to perform
+   * @param <T>
+   *          translation result type
+   * @return translation result
+   */
+  public static <T> T withCorrelatedBindings(Supplier<T> translation) {
+    Boolean previous = BOUND_VALUES.get();
+    BOUND_VALUES.set(true);
+    try {
+      return translation.get();
+    } finally {
+      if (previous == null) {
+        BOUND_VALUES.remove();
+      } else {
+        BOUND_VALUES.set(previous);
+      }
+    }
   }
 
   /**
@@ -378,10 +407,14 @@ public final class ParquetFilterBuilder {
   }
 
   /**
-   * Restricts translation to literal values rather than SQL functions or computed
-   * operands.
+   * Restricts translation to literals and execution-scoped binding slots;
+   * ordinary SQL functions and computed operands remain in Java.
    */
   private static boolean isLiteral(Expression expression) {
+    if (Boolean.TRUE.equals(BOUND_VALUES.get()) && expression instanceof Function function
+        && CorrelatedBindings.matches(function)) {
+      return true;
+    }
     if (expression instanceof net.sf.jsqlparser.expression.CastExpression cast) {
       return isLiteral(cast.getLeftExpression());
     }

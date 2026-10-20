@@ -63,7 +63,7 @@ import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
-import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
+import se.alipsa.jparq.engine.CorrelatedBindings;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.Identifier;
@@ -2141,11 +2141,8 @@ public final class AggregateFunctions {
         if (subqueryExecutor == null) {
           throw new IllegalStateException("IN subqueries require a subquery executor");
         }
-        CorrelatedSubqueryRewriter.Result rewritten = subqueryExecutor.rewrite(subSelect, correlationQualifiers(),
+        SubqueryExecutor.SubqueryResult result = subqueryExecutor.executeCorrelated(subSelect, correlationQualifiers(),
             correlationColumns(), correlationContext, (qualifier, column) -> correlatedValue(qualifier, column));
-        SubqueryExecutor.SubqueryResult result = rewritten.correlated()
-            ? subqueryExecutor.executeRaw(rewritten.sql())
-            : subqueryExecutor.execute(subSelect);
         return SqlTruth.in(leftVal, result.firstColumnValues(), in.isNot());
       }
       throw new IllegalArgumentException("Unsupported IN expression in HAVING clause: " + in);
@@ -2158,11 +2155,8 @@ public final class AggregateFunctions {
       if (!(exists.getRightExpression() instanceof Select subSelect)) {
         throw new IllegalArgumentException("EXISTS requires a subquery");
       }
-      CorrelatedSubqueryRewriter.Result rewritten = subqueryExecutor.rewrite(subSelect, correlationQualifiers(),
+      SubqueryExecutor.SubqueryResult result = subqueryExecutor.executeCorrelated(subSelect, correlationQualifiers(),
           correlationColumns(), correlationContext, (qualifier, column) -> correlatedValue(qualifier, column));
-      SubqueryExecutor.SubqueryResult result = rewritten.correlated()
-          ? subqueryExecutor.executeRaw(rewritten.sql())
-          : subqueryExecutor.execute(subSelect);
       boolean hasRows = !result.rows().isEmpty();
       return exists.isNot() != hasRows;
     }
@@ -2239,6 +2233,9 @@ public final class AggregateFunctions {
         return arithmetic(mod.getLeftExpression(), mod.getRightExpression(), Operation.MOD);
       }
       if (expr instanceof Function func) {
+        if (CorrelatedBindings.isReserved(func)) {
+          return CorrelatedBindings.value(func);
+        }
         if (isGroupingFunction(func)) {
           return grouping(func);
         }
@@ -2263,11 +2260,8 @@ public final class AggregateFunctions {
       if (subqueryExecutor == null) {
         throw new IllegalStateException("Scalar subqueries require a subquery executor");
       }
-      CorrelatedSubqueryRewriter.Result rewritten = subqueryExecutor.rewrite(subSelect, correlationQualifiers(),
+      SubqueryExecutor.SubqueryResult result = subqueryExecutor.executeCorrelated(subSelect, correlationQualifiers(),
           correlationColumns(), correlationContext, (qualifier, column) -> correlatedValue(qualifier, column));
-      SubqueryExecutor.SubqueryResult result = rewritten.correlated()
-          ? subqueryExecutor.executeRaw(rewritten.sql())
-          : subqueryExecutor.execute(subSelect);
       if (result.rows().isEmpty()) {
         return null;
       }

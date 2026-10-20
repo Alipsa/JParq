@@ -427,12 +427,9 @@ public final class ValueExpressionEvaluator {
     if (subqueryExecutor == null) {
       throw new IllegalStateException("Scalar subqueries require a subquery executor");
     }
-    CorrelatedSubqueryRewriter.Result rewritten = subqueryExecutor.rewrite(subSelect, correlationQualifiers(),
+    SubqueryExecutor.SubqueryResult result = subqueryExecutor.executeCorrelated(subSelect, correlationQualifiers(),
         correlationColumns(), correlationContext,
         (qualifier, column) -> resolveCorrelatedValue(qualifier, column, record));
-    SubqueryExecutor.SubqueryResult result = rewritten.correlated()
-        ? subqueryExecutor.executeRaw(rewritten.sql())
-        : subqueryExecutor.execute(subSelect);
     if (result.rows().isEmpty()) {
       return null;
     }

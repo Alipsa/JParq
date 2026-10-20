@@ -281,64 +281,71 @@ class StatementCancellationTest {
     var started = new CountDownLatch(1);
     var release = new CountDownLatch(1);
     var reads = new AtomicInteger();
-    try (var conn = DriverManager.getConnection("jdbc:jparq:" + base + "?predicatePushdown=false");
-        var statement = conn.createStatement();
-        var result = statement
-            .executeQuery("SELECT b.id FROM train b WHERE b.id IN (SELECT s2.id FROM small s2 WHERE s2.id = b.id)")) {
-      assertTrue(result.next());
-      assertEquals(0, result.getInt(1));
-      var running = new FutureTask<Boolean>(() -> {
-        try (var tables = mockStatic(ParquetTable.class, CALLS_REAL_METHODS)) {
-          tables.when(() -> ParquetTable.validate(any(), any())).thenAnswer(invocation -> {
-            ParquetTable table = (ParquetTable) invocation.callRealMethod();
-            ParquetTable observed = spy(table);
-            doAnswer(open -> table.open(open.getArgument(0), open.getArgument(1),
-                (shard, conf, predicate) -> new RecordReader() {
-                  @Override
-                  public GenericRecord read() throws IOException {
-                    if (reads.incrementAndGet() > 2) {
-                      return null;
-                    }
-                    // The first row lets executeQuery finish. Block during lazy iteration.
-                    if (reads.get() == 2) {
-                      started.countDown();
-                      try {
-                        if (!release.await(10, TimeUnit.SECONDS)) {
-                          throw new IOException("Timed out waiting for correlated cancellation");
-                        }
-                      } catch (InterruptedException exception) {
-                        Thread.currentThread().interrupt();
-                        throw new IOException(exception);
-                      }
-                    }
-                    var row = new GenericData.Record(shard.schema());
-                    row.put("id", 1);
-                    return row;
-                  }
-
-                  @Override
-                  public void close() {
-                  }
-                })).when(observed).open(any(Configuration.class), nullable(FilterPredicate.class));
-            return observed;
-          });
-          return result.next();
+    var opens = new AtomicInteger();
+    try (var tables = mockStatic(ParquetTable.class, CALLS_REAL_METHODS)) {
+      tables.when(() -> ParquetTable.validate(any(), any())).thenAnswer(invocation -> {
+        ParquetTable table = (ParquetTable) invocation.callRealMethod();
+        se.alipsa.jparq.JParqConnection.TableLocation location = invocation.getArgument(0);
+        if (!"small".equals(location.tableName())) {
+          return table;
         }
+        ParquetTable observed = spy(table);
+        doAnswer(open -> {
+          if (opens.incrementAndGet() == 1) {
+            return table.open(open.getArgument(0), open.getArgument(1));
+          }
+          return table.open(open.getArgument(0), open.getArgument(1), (shard, conf, predicate) -> new RecordReader() {
+            @Override
+            public GenericRecord read() throws IOException {
+              if (reads.incrementAndGet() > 2) {
+                return null;
+              }
+              // Validation is cached; block a fresh reader on a later binding.
+              if (reads.get() == 2) {
+                started.countDown();
+                try {
+                  if (!release.await(10, TimeUnit.SECONDS)) {
+                    throw new IOException("Timed out waiting for correlated cancellation");
+                  }
+                } catch (InterruptedException exception) {
+                  Thread.currentThread().interrupt();
+                  throw new IOException(exception);
+                }
+              }
+              var row = new GenericData.Record(shard.schema());
+              row.put("id", 1);
+              return row;
+            }
+
+            @Override
+            public void close() {
+            }
+          });
+        }).when(observed).open(any(Configuration.class), nullable(FilterPredicate.class));
+        return observed;
       });
-      Thread.ofPlatform().start(running);
-      try {
-        assertTrue(started.await(10, TimeUnit.SECONDS));
-        statement.cancel();
-      } finally {
-        release.countDown();
+      try (var conn = DriverManager.getConnection("jdbc:jparq:" + base + "?predicatePushdown=false");
+          var statement = conn.createStatement();
+          var result = statement
+              .executeQuery("SELECT b.id FROM train b WHERE b.id IN (SELECT s2.id FROM small s2 WHERE s2.id = b.id)")) {
+        assertTrue(result.next());
+        assertEquals(0, result.getInt(1));
+        var running = new FutureTask<Boolean>(result::next);
+        Thread.ofPlatform().start(running);
+        try {
+          assertTrue(started.await(10, TimeUnit.SECONDS));
+          statement.cancel();
+        } finally {
+          release.countDown();
+        }
+        ExecutionException failure = assertThrows(ExecutionException.class, () -> running.get(10, TimeUnit.SECONDS));
+        SQLException cancellation = assertInstanceOf(SQLException.class, failure.getCause());
+        assertEquals("Statement was canceled", cancellation.getMessage());
+        assertEquals(QueryCancellation.SQL_STATE, cancellation.getSQLState());
+        assertEquals(2, reads.get(), "Cancellation must stop the inner scan after its active read");
+        assertTrue(result.isClosed());
+        assertEquals(QueryCancellation.SQL_STATE, assertThrows(SQLException.class, result::next).getSQLState());
       }
-      ExecutionException failure = assertThrows(ExecutionException.class, () -> running.get(10, TimeUnit.SECONDS));
-      SQLException cancellation = assertInstanceOf(SQLException.class, failure.getCause());
-      assertEquals("Statement was canceled", cancellation.getMessage());
-      assertEquals(QueryCancellation.SQL_STATE, cancellation.getSQLState());
-      assertEquals(2, reads.get(), "Cancellation must stop the inner scan after its active read");
-      assertTrue(result.isClosed());
-      assertEquals(QueryCancellation.SQL_STATE, assertThrows(SQLException.class, result::next).getSQLState());
     }
   }
 

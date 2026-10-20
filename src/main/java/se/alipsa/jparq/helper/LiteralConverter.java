@@ -7,6 +7,7 @@ import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
 import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.DoubleValue;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.LongValue;
 import net.sf.jsqlparser.expression.NullValue;
@@ -15,6 +16,7 @@ import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TimeValue;
 import net.sf.jsqlparser.expression.TimestampValue;
+import se.alipsa.jparq.engine.CorrelatedBindings;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
 /** Converts JSqlParser Expression literals to Java Objects. */
@@ -38,6 +40,9 @@ public class LiteralConverter {
       "PMD.AvoidDecimalLiteralsInBigDecimalConstructor", "PMD.EmptyCatchBlock", "checkstyle:NeedBraces"
   })
   public static Object toLiteral(Expression e) {
+    if (e instanceof Function function && CorrelatedBindings.isReserved(function)) {
+      return CorrelatedBindings.value(function);
+    }
     if (e instanceof NullValue) {
       return null;
     }

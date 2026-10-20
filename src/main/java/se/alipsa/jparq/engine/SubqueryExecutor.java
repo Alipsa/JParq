@@ -7,12 +7,15 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.StringJoiner;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -20,6 +23,7 @@ import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.*;
 import se.alipsa.jparq.JParqConnection;
+import se.alipsa.jparq.JParqPreparedStatement;
 import se.alipsa.jparq.meta.InformationSchemaColumns;
 import se.alipsa.jparq.meta.InformationSchemaTables;
 
@@ -27,8 +31,11 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
  * Utility for evaluating sub queries using the same {@link JParqConnection} as
  * the parent query.
  */
-public final class SubqueryExecutor {
+public final class SubqueryExecutor implements AutoCloseable {
 
+  private final Map<String, PreparedStatement> preparedStatements = new LinkedHashMap<>();
+
+  private final ExecutionPlans executionPlans;
   private final JParqConnection connection;
   private final Map<String, SubqueryResult> cache = new ConcurrentHashMap<>();
   private final StatementFactory statementFactory;
@@ -73,6 +80,24 @@ public final class SubqueryExecutor {
    */
   public SubqueryExecutor(JParqConnection connection, StatementFactory statementFactory,
       Function<Table, Set<String>> tableColumns) {
+    this(connection, statementFactory, tableColumns, new ExecutionPlans());
+  }
+
+  /**
+   * Creates an executor sharing parsed shapes within one owning execution.
+   *
+   * @param connection
+   *          active connection
+   * @param statementFactory
+   *          factory using the same execution plans, or null
+   * @param tableColumns
+   *          source column resolver, or null
+   * @param executionPlans
+   *          shape cache belonging only to this execution
+   */
+  public SubqueryExecutor(JParqConnection connection, StatementFactory statementFactory,
+      Function<Table, Set<String>> tableColumns, ExecutionPlans executionPlans) {
+    this.executionPlans = Objects.requireNonNull(executionPlans, "executionPlans");
     this.connection = Objects.requireNonNull(connection, "connection");
     this.statementFactory = statementFactory;
     this.tableColumns = tableColumns == null ? this::physicalColumns : tableColumns;
@@ -93,7 +118,7 @@ public final class SubqueryExecutor {
 
   /**
    * Execute the provided SQL text without caching the result. This is used for
-   * correlated sub queries where the SQL string changes for each outer row.
+   * correlated subqueries with stable placeholders and per-row binding frames.
    *
    * @param sql
    *          the SQL text to execute
@@ -102,6 +127,76 @@ public final class SubqueryExecutor {
   public SubqueryResult executeRaw(String sql) {
     Objects.requireNonNull(sql, "sql");
     return runQuery(normalize(sql));
+  }
+
+  /**
+   * Executes a subquery using one analyzed shape and the current typed bindings.
+   * Uncorrelated results retain their separate result cache. Each Select node
+   * belongs to one lexical outer scope within this execution: qualifiers,
+   * columns, and context must remain unchanged across calls; only resolved values
+   * vary.
+   *
+   * @param select
+   *          subquery node
+   * @param qualifiers
+   *          outer qualifiers
+   * @param columns
+   *          candidate unqualified outer columns
+   * @param context
+   *          outer qualifier mappings
+   * @param values
+   *          current outer value resolver
+   * @return a fresh correlated result or cached uncorrelated result
+   */
+  public SubqueryResult executeCorrelated(Select select, Collection<String> qualifiers, Set<String> columns,
+      Map<String, Map<String, String>> context, BiFunction<String, String, Object> values) {
+    BoundQuery query = executionPlans.correlations.get(select);
+    if (query == null) {
+      String key = UUID.randomUUID().toString();
+      var references = new LinkedHashMap<CorrelatedSubqueryRewriter.QualifiedColumn, Integer>();
+      var rewritten = rewrite(select, qualifiers, columns, context, (qualifier, column) -> {
+        var reference = new CorrelatedSubqueryRewriter.QualifiedColumn(qualifier, column);
+        int index = references.computeIfAbsent(reference, ignored -> references.size());
+        return new CorrelatedBindings.Reference(key, index);
+      });
+      query = new BoundQuery(rewritten.sql(), key, List.copyOf(references.keySet()));
+      executionPlans.correlations.put(select, query);
+    }
+    if (query.references().isEmpty()) {
+      return execute(select);
+    }
+    List<Object> bindings = new ArrayList<>(query.references().size());
+    for (var reference : query.references()) {
+      bindings.add(values.apply(reference.qualifier(), reference.column()));
+    }
+    var frame = new CorrelatedBindings(query.key(), bindings);
+    try (frame) {
+      var references = query.references();
+      return runQuery(normalize(query.sql()), () -> {
+        var namedBindings = new StringJoiner(", ");
+        for (int index = 0; index < bindings.size(); index++) {
+          var reference = references.get(index);
+          String qualifier = reference.qualifier() == null
+              ? ""
+              : reference.qualifier().replaceFirst("^[UQ]:", "") + ".";
+          namedBindings.add(qualifier + reference.column() + "=" + bindings.get(index));
+        }
+        return select + " [outer bindings: " + namedBindings + "]";
+      });
+    }
+  }
+
+  /**
+   * An analyzed query whose outer references occupy stable typed slots.
+   *
+   * @param sql
+   *          stable SQL containing binding placeholders
+   * @param key
+   *          binding-frame identity
+   * @param references
+   *          outer references in slot order
+   */
+  private record BoundQuery(String sql, String key, List<CorrelatedSubqueryRewriter.QualifiedColumn> references) {
   }
 
   /**
@@ -302,29 +397,93 @@ public final class SubqueryExecutor {
   }
 
   private SubqueryResult runQuery(String sql) {
-    try (PreparedStatement stmt = prepareStatement(sql); ResultSet rs = stmt.executeQuery()) {
-      ResultSetMetaData meta = rs.getMetaData();
-      int columnCount = meta.getColumnCount();
-      List<String> columnLabels = new ArrayList<>(columnCount);
-      for (int i = 1; i <= columnCount; i++) {
-        String label = meta.getColumnLabel(i);
-        if (label == null || label.isBlank()) {
-          label = meta.getColumnName(i);
-        }
-        columnLabels.add(label);
-      }
+    return runQuery(sql, () -> sql);
+  }
 
-      List<List<Object>> rows = new ArrayList<>();
-      while (rs.next()) {
-        List<Object> row = new ArrayList<>(columnCount);
-        for (int i = 1; i <= columnCount; i++) {
-          row.add(rs.getObject(i));
+  /**
+   * Executes a stable shape with a separate user-facing diagnostic description.
+   *
+   * @param sql
+   *          executable SQL shape
+   * @param description
+   *          diagnostic text computed only on failure
+   * @return materialized subquery result
+   */
+  private SubqueryResult runQuery(String sql, java.util.function.Supplier<String> description) {
+    try {
+      PreparedStatement prepared = preparedStatements.get(sql);
+      if (prepared == null) {
+        prepared = prepareStatement(sql);
+        if (prepared instanceof JParqPreparedStatement nested && nested.isReusableSubqueryShape()) {
+          preparedStatements.put(sql, prepared);
         }
-        rows.add(row);
       }
-      return new SubqueryResult(List.copyOf(columnLabels), List.copyOf(rows));
-    } catch (SQLException e) {
-      throw new IllegalStateException("Failed to execute sub query: " + sql, e);
+      // Cached statements are closed by this executor; all results are per-call.
+      PreparedStatement perCall = preparedStatements.containsKey(sql) ? null : prepared;
+      try (perCall; ResultSet rs = prepared.executeQuery()) {
+        return consume(rs);
+      }
+    } catch (SQLException | RuntimeException e) {
+      throw new IllegalStateException("Failed to execute sub query: " + description.get(), e);
+    }
+  }
+
+  /**
+   * Captures a per-call result without retaining a live reader.
+   *
+   * @param rs
+   *          nested result owned by the caller
+   * @return materialized rows and labels
+   * @throws SQLException
+   *           if metadata or iteration fails
+   */
+  private SubqueryResult consume(ResultSet rs) throws SQLException {
+    ResultSetMetaData meta = rs.getMetaData();
+    int columnCount = meta.getColumnCount();
+    List<String> columnLabels = new ArrayList<>(columnCount);
+    for (int i = 1; i <= columnCount; i++) {
+      String label = meta.getColumnLabel(i);
+      if (label == null || label.isBlank()) {
+        label = meta.getColumnName(i);
+      }
+      columnLabels.add(label);
+    }
+
+    List<List<Object>> rows = new ArrayList<>();
+    while (rs.next()) {
+      List<Object> row = new ArrayList<>(columnCount);
+      for (int i = 1; i <= columnCount; i++) {
+        row.add(rs.getObject(i));
+      }
+      rows.add(row);
+    }
+    return new SubqueryResult(List.copyOf(columnLabels), List.copyOf(rows));
+  }
+
+  /**
+   * Closes cached statements after their owning result or join is closed.
+   *
+   * @throws SQLException
+   *           if a cached statement cannot be closed
+   */
+  @Override
+  public void close() throws SQLException {
+    SQLException failure = null;
+    for (PreparedStatement prepared : preparedStatements.values()) {
+      try {
+        prepared.close();
+      } catch (SQLException exception) {
+        if (failure == null) {
+          failure = exception;
+        } else {
+          failure.addSuppressed(exception);
+        }
+      }
+    }
+    preparedStatements.clear();
+    cache.clear();
+    if (failure != null) {
+      throw failure;
     }
   }
 
@@ -341,6 +500,67 @@ public final class SubqueryExecutor {
       return trimmed.substring(1, trimmed.length() - 1);
     }
     return trimmed;
+  }
+
+  /**
+   * Parsed and schema-validated shapes owned by one nested execution tree. No
+   * rows, readers, statements, cancellation state, or CTE results are cached.
+   */
+  public static final class ExecutionPlans {
+    private final Map<String, ExecutionPlans> children = new LinkedHashMap<>();
+    private final Map<JParqConnection.TableLocation, ParquetTable> tables = new LinkedHashMap<>();
+    private final Map<Select, BoundQuery> correlations = new IdentityHashMap<>();
+    private SqlParser.Query query;
+
+    /** Creates an empty execution-local shape cache. */
+    public ExecutionPlans() {
+    }
+
+    /**
+     * Obtains a child shape scoped to its declaring query and SQL text.
+     *
+     * @param sql
+     *          stable nested SQL
+     * @return the child cache
+     */
+    public ExecutionPlans child(String sql) {
+      return children.computeIfAbsent(sql, ignored -> new ExecutionPlans());
+    }
+
+    /**
+     * Parses this shape once; callers supply the same SQL throughout its life.
+     *
+     * @param sql
+     *          stable SQL identifying this shape
+     * @return parsed query
+     */
+    public SqlParser.Query query(String sql) {
+      if (query == null) {
+        query = SqlParser.parseQuery(sql);
+      }
+      return query;
+    }
+
+    /**
+     * Validates a physical input once within this query shape.
+     *
+     * @param location
+     *          physical or logical input
+     * @param configuration
+     *          footer reader configuration
+     * @return validated table
+     * @throws SQLException
+     *           if a footer cannot be read or schemas disagree
+     */
+    public ParquetTable table(JParqConnection.TableLocation location,
+        org.apache.hadoop.conf.Configuration configuration) throws SQLException {
+      ParquetTable table = tables.get(location);
+      if (table == null) {
+        table = ParquetTable.validate(location, configuration);
+        tables.put(location, table);
+      }
+      return table;
+    }
   }
 
   /**

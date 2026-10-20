@@ -16,7 +16,6 @@ import net.sf.jsqlparser.expression.TrimFunction;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.generic.GenericRecord;
-import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.helper.LiteralConverter;
 
@@ -208,12 +207,9 @@ public final class FunctionSupport {
     if (subqueryExecutor == null) {
       throw new IllegalStateException("ARRAY subqueries require a subquery executor");
     }
-    CorrelatedSubqueryRewriter.Result rewritten = subqueryExecutor.rewrite(subSelect, correlationQualifiers,
+    SubqueryExecutor.SubqueryResult result = subqueryExecutor.executeCorrelated(subSelect, correlationQualifiers,
         correlationColumns, correlationContext,
         (qualifier, column) -> correlatedValueResolver.resolve(qualifier, column, record));
-    SubqueryExecutor.SubqueryResult result = rewritten.correlated()
-        ? subqueryExecutor.executeRaw(rewritten.sql())
-        : subqueryExecutor.execute(subSelect);
     if (result.columnLabels().isEmpty()) {
       return List.of();
     }

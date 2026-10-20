@@ -1,5 +1,6 @@
 package jparq.engine;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -14,6 +15,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.apache.avro.Schema;
@@ -25,7 +27,9 @@ import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqDriver;
 import se.alipsa.jparq.engine.CorrelationContextBuilder;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
+import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
+import se.alipsa.jparq.helper.LiteralConverter;
 
 /**
  * Verifies that correlated subqueries retain derived qualifier mappings
@@ -47,9 +51,12 @@ class SubqueryCorrelatedFiltersIsolatorUnitTest {
     SubqueryExecutor.SubqueryResult subqueryResult = new SubqueryExecutor.SubqueryResult(List.of("c"),
         List.of(List.of(1)));
     AtomicReference<String> lastSql = new AtomicReference<>();
+    AtomicReference<Object> lastValue = new AtomicReference<>();
     try (JParqConnection connection = new JParqConnection(jdbcUrl(), new Properties())) {
       SubqueryExecutor executor = new SubqueryExecutor(connection, sql -> {
         lastSql.set(sql);
+        var comparison = (BinaryExpression) SqlParser.parseSelect(sql).where();
+        lastValue.set(LiteralConverter.toLiteral(comparison.getRightExpression()));
         return createPreparedStatement(() -> subqueryResult);
       });
 
@@ -61,7 +68,7 @@ class SubqueryCorrelatedFiltersIsolatorUnitTest {
       assertTrue(evaluator.eval(exists, record));
       String sql = lastSql.get();
       assertNotNull(sql, "Subquery SQL should be captured");
-      assertTrue(sql.contains("= 5"), "Correlated rewrite should embed derived alias value but was " + sql);
+      assertEquals(5, lastValue.get(), "Correlation should bind the derived alias value");
       assertFalse(sql.contains("derived.alias_id"),
           "Correlation context should prevent unresolved qualifier in " + sql);
     }
