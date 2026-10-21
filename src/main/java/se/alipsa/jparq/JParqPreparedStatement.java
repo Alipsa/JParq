@@ -77,6 +77,7 @@ import se.alipsa.jparq.engine.InMemoryRecordReader;
 import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.JoinPredicatePlanner;
 import se.alipsa.jparq.engine.JoinRecordReader;
+import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
 import se.alipsa.jparq.engine.ParquetTable;
@@ -770,7 +771,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           labels = new ArrayList<>(columnCount);
           sqlTypes = new ArrayList<>(columnCount);
           for (int col = 1; col <= columnCount; col++) {
-            labels.add(meta.getColumnLabel(col));
+            labels.add(columnLabel(meta, col));
             sqlTypes.add(meta.getColumnType(col));
             sourceSchemas.add(sourceColumnSchema(meta, col));
           }
@@ -1257,13 +1258,19 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (labels == null || labels.isEmpty()) {
       return SchemaBuilder.record("set_order").fields().endRecord();
     }
-    SchemaBuilder.FieldAssembler<Schema> fields = SchemaBuilder.record("set_order").fields();
+    Schema schema = Schema.createRecord("set_order", null, null, false);
+    List<Field> fields = new ArrayList<>(labels.size());
+    Set<String> used = new LinkedHashSet<>();
     for (int i = 0; i < labels.size(); i++) {
       String label = labels.get(i);
       Schema baseType = mapSqlTypeToAvroType(sqlTypes, i);
-      fields = fields.name(label).type(SchemaBuilder.unionOf().nullType().and().type(baseType).endUnion()).noDefault();
+      Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), baseType));
+      Field field = new Field(MaterializedNames.allocate(label, used), union, null, Field.NULL_DEFAULT_VALUE);
+      field.addProp(MaterializedNames.LOOKUP_KEY, Identifier.lookupKey(label));
+      fields.add(field);
     }
-    return fields.endRecord();
+    schema.setFields(fields);
+    return schema;
   }
 
   private Schema mapSqlTypeToAvroType(List<Integer> sqlTypes, int index) {
@@ -1293,7 +1300,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     GenericData.Record record = new GenericData.Record(schema);
     for (int i = 0; i < labels.size() && i < row.size(); i++) {
-      Schema.Field field = schema.getField(labels.get(i));
+      Schema.Field field = schema.getFields().get(i);
       if (field == null) {
         continue;
       }
@@ -1889,7 +1896,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     List<String> columns = schemaColumnNames(schema);
     List<QualifiedExpansionColumn> projections = new ArrayList<>(columns.size());
     for (String column : columns) {
-      projections.add(new QualifiedExpansionColumn(column, column));
+      projections.add(new QualifiedExpansionColumn(MaterializedNames.sqlLabel(schema.getField(column)), column));
     }
     List<QualifiedExpansionColumn> immutable = List.copyOf(projections);
     Map<String, List<QualifiedExpansionColumn>> mapping = new LinkedHashMap<>();
@@ -2057,14 +2064,19 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
 
     List<Field> fields = new ArrayList<>(columnNames.size());
+    Set<String> usedNames = new LinkedHashSet<>();
     for (int i = 0; i < columnNames.size(); i++) {
       Schema valueSchema = valueSchemas.get(i);
       Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
-      fields.add(new Field(columnNames.get(i), union, null, Field.NULL_DEFAULT_VALUE));
+      String label = columnNames.get(i);
+      Field field = new Field(MaterializedNames.allocate(label, usedNames), union, null, Field.NULL_DEFAULT_VALUE);
+      field.addProp(MaterializedNames.SQL_LABEL, label);
+      field.addProp(MaterializedNames.LOOKUP_KEY, Identifier.lookupKey(label));
+      fields.add(field);
     }
 
     String recordName = (tableName == null || tableName.isBlank()) ? "values" : tableName;
-    Schema schema = Schema.createRecord(recordName, null, null, false);
+    Schema schema = Schema.createRecord(MaterializedNames.recordName(recordName), null, null, false);
     schema.setFields(fields);
 
     List<GenericRecord> records = new ArrayList<>(evaluatedRows.size());
@@ -2072,7 +2084,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       GenericData.Record record = new GenericData.Record(schema);
       for (int i = 0; i < columnNames.size(); i++) {
         Object normalized = normalizeValueForType(row.get(i), columnTypes.get(i));
-        record.put(columnNames.get(i), toAvroValue(normalized, valueSchemas.get(i)));
+        record.put(i, toAvroValue(normalized, valueSchemas.get(i)));
       }
       records.add(record);
     }
@@ -2553,7 +2565,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     for (JoinRecordReader.JoinTable table : tables) {
       Map<String, String> columns = new LinkedHashMap<>();
       for (Schema.Field field : table.schema().getFields()) {
-        String normalized = normalizeColumnKey(field.name());
+        String normalized = normalizeColumnKey(MaterializedNames.sqlLabel(field));
         columns.putIfAbsent(normalized, field.name());
       }
       registerCorrelatedColumns(lookup, table.tableName(), columns);
@@ -2701,9 +2713,11 @@ public class JParqPreparedStatement implements PreparedStatement {
     String recordName = derivedRecordName(ref);
     int columnCount = meta.getColumnCount();
     List<Field> fields = new ArrayList<>(columnCount);
+    Set<String> usedNames = new LinkedHashSet<>();
     for (int i = 1; i <= columnCount; i++) {
       String alias = ref == null || ref.columnAliases().isEmpty() ? null : ref.columnAliases().get(i - 1);
-      String columnName = alias == null ? columnLabel(meta, i) : Identifier.of(alias).text();
+      String sqlLabel = alias == null ? columnLabel(meta, i) : alias;
+      String columnName = MaterializedNames.allocate(sqlLabel, usedNames);
       // Correlated runs must not inherit decimal bounds from the NULL probe.
       Schema valueSchema = ref != null && ref.lateral() && requiresValueInference(meta, i)
           ? Schema.create(Schema.Type.STRING)
@@ -2717,12 +2731,13 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
       Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
-      field.addProp("jparq.lookupKey", Identifier.lookupKey(alias == null ? columnName : alias));
+      field.addProp(MaterializedNames.LOOKUP_KEY, Identifier.lookupKey(sqlLabel));
+      field.addProp(MaterializedNames.SQL_LABEL, sqlLabel);
       fields.add(field);
       fieldNames.add(columnName);
       valueSchemas.add(valueSchema);
     }
-    Schema schema = Schema.createRecord(recordName, null, null, false);
+    Schema schema = Schema.createRecord(MaterializedNames.recordName(recordName), null, null, false);
     schema.setFields(fields);
     return schema;
   }
@@ -2903,6 +2918,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           + ") does not match projected column count " + columnCount + " (metadata labels: " + metaLabels + ")");
     }
     List<Field> fields = new ArrayList<>(columnCount);
+    Set<String> usedNames = new LinkedHashSet<>();
     for (int i = 1; i <= columnCount; i++) {
       String columnName;
       String lookupKey = null;
@@ -2915,7 +2931,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         if (aliasId == null) {
           throw new SQLException("Invalid CTE column alias: '" + alias + "'");
         }
-        columnName = aliasId.text();
+        columnName = alias;
         lookupKey = aliasId.lookupKey();
       } else {
         columnName = columnLabel(meta, i);
@@ -2938,16 +2954,19 @@ public class JParqPreparedStatement implements PreparedStatement {
         valueSchema = columnSchema(meta, i);
       }
       Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
+      String sqlLabel = columnName;
+      columnName = MaterializedNames.allocate(sqlLabel, usedNames);
       Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
+      field.addProp(MaterializedNames.SQL_LABEL, sqlLabel);
       if (lookupKey != null) {
-        field.addProp("jparq.lookupKey", lookupKey);
+        field.addProp(MaterializedNames.LOOKUP_KEY, lookupKey);
       }
       fields.add(field);
       fieldNames.add(columnName);
       valueSchemas.add(valueSchema);
     }
     String schemaName = recordName == null || recordName.isBlank() ? "derived" : recordName;
-    Schema schema = Schema.createRecord(schemaName, null, null, false);
+    Schema schema = Schema.createRecord(MaterializedNames.recordName(schemaName), null, null, false);
     schema.setFields(fields);
     return schema;
   }
@@ -3077,7 +3096,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   private String columnLabel(ResultSetMetaData meta, int column) throws SQLException {
-    String label = meta.getColumnLabel(column);
+    String label = meta instanceof AvroColumnMetadata avro ? avro.columnSqlLabel(column) : meta.getColumnLabel(column);
     if (label == null || label.isBlank()) {
       label = meta.getColumnName(column);
     }

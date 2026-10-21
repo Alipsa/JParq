@@ -1,7 +1,6 @@
 package se.alipsa.jparq.engine;
 
 import java.io.IOException;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -88,22 +87,6 @@ public final class InMemoryRecordReader implements RecordReader, ColumnMappingPr
   }
 
   private static Map<String, String> buildColumnMapping(Schema schema) {
-    if (schema == null || schema.getFields() == null) {
-      return Map.of();
-    }
-    Map<String, String> mapping = new LinkedHashMap<>();
-    for (Schema.Field field : schema.getFields()) {
-      if (field == null || field.name() == null) {
-        continue;
-      }
-      String normalized = field.getProp("jparq.lookupKey");
-      if (normalized == null || normalized.isBlank()) {
-        normalized = Identifier.lookupKey(field.name());
-      }
-      if (normalized != null) {
-        mapping.putIfAbsent(normalized, field.name());
-      }
-    }
-    return mapping;
+    return MaterializedNames.lookupIndex(schema);
   }
 }

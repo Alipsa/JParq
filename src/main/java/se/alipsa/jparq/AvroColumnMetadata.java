@@ -13,4 +13,13 @@ interface AvroColumnMetadata {
    * @return source schema, or null when the column is computed or unknown
    */
   Schema columnValueSchema(int column);
+
+  /**
+   * Retains quoting information needed when materializing a SQL output column.
+   *
+   * @param column
+   *          one-based output column index
+   * @return the original SQL label, including identifier delimiters
+   */
+  String columnSqlLabel(int column);
 }

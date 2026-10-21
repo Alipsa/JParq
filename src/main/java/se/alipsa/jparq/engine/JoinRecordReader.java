@@ -351,7 +351,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
         return direct.name();
       }
       for (Schema.Field field : schema.getFields()) {
-        if (field.name().equalsIgnoreCase(column)) {
+        if (Identifier.lookupKey(column).equals(Identifier.lookupKey(MaterializedNames.sqlLabel(field)))) {
           return field.name();
         }
       }
@@ -420,20 +420,27 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
     Map<String, UsingFieldState> usingFieldStates = new LinkedHashMap<>();
     List<Schema.Field> otherFields = new ArrayList<>();
     Set<String> usedNames = new HashSet<>();
+    Set<String> usedPrefixes = new HashSet<>();
     Map<String, Integer> columnCounts = computeColumnCounts(tables, usingMetadata);
     Map<String, Map<String, String>> qualifierMap = new LinkedHashMap<>();
     Map<String, String> unqualifiedMap = new LinkedHashMap<>();
     Map<String, String> canonicalLabels = new LinkedHashMap<>();
     Set<String> reservedTableQualifiers = new HashSet<>();
+    Set<String> unaliasedTableNames = new HashSet<>();
+    for (JoinTable table : tables) {
+      if (table.alias() == null || table.alias().isBlank()) {
+        unaliasedTableNames.add(normalize(table.tableName()));
+      }
+    }
     Map<String, Integer> aliaslessTableCounts = new HashMap<>();
     for (int tableIndex = 0; tableIndex < tables.size(); tableIndex++) {
       JoinTable joinTable = tables.get(tableIndex);
       Schema tableSchema = joinTable.schema();
-      String qualifierPrefix = qualifierPrefix(joinTable, tableIndex);
+      String qualifierPrefix = MaterializedNames.allocate(qualifierPrefix(joinTable, tableIndex), usedPrefixes);
       Set<String> qualifiers = qualifierSet(joinTable, tableIndex);
       boolean aliasPresent = joinTable.alias() != null && !joinTable.alias().isBlank();
       String normalizedTableName = normalize(joinTable.tableName());
-      boolean includeTableQualifier = true;
+      boolean includeTableQualifier = !aliasPresent || !unaliasedTableNames.contains(normalizedTableName);
       if (normalizedTableName != null) {
         int aliaslessCount = aliaslessTableCounts.getOrDefault(normalizedTableName, 0);
         boolean duplicateTable = !reservedTableQualifiers.add(normalizedTableName);
@@ -452,30 +459,27 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
       }
       for (Schema.Field field : tableSchema.getFields()) {
         String name = field.name();
-        String lookupKey = Identifier.lookupKey(name);
+        String lookupKey = MaterializedNames.lookupKey(field);
         UsingColumnInfo usingInfo = usingMetadata.lookup(tableIndex, name);
         boolean usingColumn = usingInfo != null;
-        boolean duplicate = columnCounts.getOrDefault(name, 0) > 1;
+        boolean duplicate = columnCounts.getOrDefault(lookupKey, 0) > 1;
         String canonical;
         if (usingColumn) {
           canonical = usingInfo.canonicalName();
         } else {
-          canonical = duplicate ? qualifierPrefix + "__" + name : name;
+          canonical = MaterializedNames.allocate(duplicate ? qualifierPrefix + "__" + name : name, usedNames);
         }
-        String label = (!usingColumn && duplicate) ? name : canonical;
+        String label = MaterializedNames.sqlLabel(field);
         canonicalLabels.putIfAbsent(canonical, label);
-        String originalKey = Identifier.lookupKey(label);
-        String canonicalKey = Identifier.lookupKey(canonical);
+        String originalKey = lookupKey;
         registerQualifierMappings(qualifierMap, qualifiers, includeTableQualifier, normalizedTableName, originalKey,
             canonical);
-        if (canonicalKey != null && !canonicalKey.equals(originalKey)) {
-          registerQualifierMappings(qualifierMap, qualifiers, includeTableQualifier, normalizedTableName, canonicalKey,
-              canonical);
-        }
         if (usingColumn) {
           final boolean owner = usingInfo.isOwner(tableIndex);
           UsingFieldState state = usingFieldStates.computeIfAbsent(canonical, key -> new UsingFieldState());
           Schema.Field newField = new Schema.Field(canonical, field.schema(), field.doc(), field.defaultVal());
+          newField.addProp(MaterializedNames.SQL_LABEL, label);
+          newField.addProp(MaterializedNames.LOOKUP_KEY, lookupKey);
           state.registerField(newField, owner);
           if (owner) {
             if (!usedNames.add(canonical)) {
@@ -488,15 +492,14 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
           unqualifiedMap.putIfAbsent(lookupKey, canonical);
           continue;
         } else {
-          if (!usedNames.add(canonical)) {
-            throw new IllegalArgumentException("Duplicate column name '" + canonical + "' in join schema");
-          }
           Schema.Field newField = new Schema.Field(canonical, field.schema(), field.doc(), field.defaultVal());
+          newField.addProp(MaterializedNames.SQL_LABEL, label);
+          newField.addProp(MaterializedNames.LOOKUP_KEY, lookupKey);
           FieldMapping mapping = new FieldMapping(tableIndex, name, canonical, List.of());
           otherFields.add(newField);
           mappings.add(mapping);
           if (!duplicate) {
-            unqualifiedMap.put(lookupKey, canonical);
+            unqualifiedMap.merge(lookupKey, canonical, (left, right) -> left.equals(right) ? left : "");
           }
         }
       }
@@ -521,14 +524,14 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
   }
 
   /**
-   * Count how many times each column name appears across join participants while
-   * respecting {@code USING} semantics (suppressed columns are ignored).
+   * Count how many times each SQL lookup key appears across join participants
+   * while respecting {@code USING} semantics (suppressed columns are ignored).
    *
    * @param tables
    *          ordered join tables
    * @param metadata
    *          precomputed {@code USING} column metadata
-   * @return mapping of column name to occurrence count
+   * @return mapping of SQL lookup key to occurrence count
    */
   private static Map<String, Integer> computeColumnCounts(List<JoinTable> tables, UsingMetadata metadata) {
     Map<String, Integer> columnCounts = new HashMap<>();
@@ -539,7 +542,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
         if (usingInfo != null && !usingInfo.isOwner(tableIndex)) {
           continue;
         }
-        columnCounts.merge(field.name(), 1, Integer::sum);
+        columnCounts.merge(MaterializedNames.lookupKey(field), 1, Integer::sum);
       }
     }
     return columnCounts;
@@ -576,7 +579,8 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
       if (!includeTableQualifier && normalizedQualifier.equals(normalizedTableName)) {
         continue;
       }
-      qualifierMap.computeIfAbsent(normalizedQualifier, k -> new LinkedHashMap<>()).put(lookupKey, canonical);
+      qualifierMap.computeIfAbsent(normalizedQualifier, k -> new LinkedHashMap<>()).merge(lookupKey, canonical,
+          (left, right) -> left.equals(right) ? left : "");
     }
   }
 

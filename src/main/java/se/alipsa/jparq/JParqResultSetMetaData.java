@@ -19,6 +19,7 @@ import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.Identifier;
+import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 
@@ -107,26 +108,35 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     return labels.size();
   }
 
+  /** {@inheritDoc} */
+  @Override
+  public String columnSqlLabel(int column) {
+    String label = labels.get(column - 1);
+    Schema.Field field = schema == null || !expressions.isEmpty() ? null : schema.getField(label);
+    return field == null ? label : MaterializedNames.sqlLabel(field);
+  }
+
   @Override
   public String getColumnLabel(int column) {
-    return labels.get(column - 1);
+    return MaterializedNames.displayLabel(columnSqlLabel(column));
   }
 
   @Override
   public String getColumnName(int column) {
     String expressionName = resolveExpressionColumnName(column);
     if (expressionName != null && !expressionName.isBlank()) {
-      return expressionName;
+      return MaterializedNames.displayLabel(expressionName);
     }
     int index = column - 1;
     if (physicalNames != null && index >= 0 && index < physicalNames.size()) {
       String phys = physicalNames.get(index);
       if (phys != null && !phys.isBlank()) {
-        return phys;
+        Schema.Field field = schema == null ? null : schema.getField(phys);
+        return MaterializedNames.displayLabel(field == null ? phys : MaterializedNames.sqlLabel(field));
       }
     }
     if (index >= 0 && index < labels.size()) {
-      return labels.get(index);
+      return getColumnLabel(column);
     }
     return "column_" + column;
   }

@@ -108,6 +108,15 @@ row-dependent materializations. Eligible correlated predicates are rebuilt from 
 predicate pushdown on every evaluation; the Java residual filter still checks current outer values.
 Caches are local to the owning execution, and uncorrelated subqueries continue to reuse their results.
 
+Delimited column aliases retain their case and appear in JDBC column labels without the surrounding
+identifier quotes. Derived tables and CTEs preserve these labels, including spaces and unnamed computed
+expressions such as `id + 1`; internal Avro names do not restrict SQL output labels. Quoted table aliases
+such as `"My T"` are supported at these materialization boundaries. Doubled quotes in delimited identifiers
+are decoded (`"a""b"` has label `a"b`). Unaliased expression labels keep their SQL text, including
+quoted operands such as `"id" + 1`. Generated internal names are not SQL column aliases, and ambiguous
+projection and predicate references to duplicate output names raise an SQL exception; duplicate outputs remain available by position
+through `SELECT *`.
+
 Recursive CTEs retain the anchor's numeric types and decimal precision and scale. Recursive values that require
 fractional truncation or decimal rounding, or exceed integer ranges or decimal precision, fail with `SQLException`
 (SQLState `22003`); recursive schemas are not widened across iterations. For example, an integer anchor cannot

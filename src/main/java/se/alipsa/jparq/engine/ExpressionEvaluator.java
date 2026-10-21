@@ -47,6 +47,7 @@ import se.alipsa.jparq.engine.window.WindowState;
 public final class ExpressionEvaluator {
 
   /** exact field name -> schema */
+  private final Schema schema;
   private final Map<String, Schema> fieldSchemas;
   /** lower(field name) -> canonical field name */
   private final Map<String, String> caseInsensitiveIndex;
@@ -131,16 +132,12 @@ public final class ExpressionEvaluator {
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping,
       WindowState windowState) {
     Map<String, Schema> fs = new HashMap<>();
-    Map<String, String> ci = new HashMap<>();
     for (Schema.Field f : schema.getFields()) {
       fs.put(f.name(), f.schema());
-      String key = Identifier.lookupKey(f.name());
-      if (key != null) {
-        ci.put(key, f.name());
-      }
     }
+    this.schema = schema;
     this.fieldSchemas = Collections.unmodifiableMap(fs);
-    this.caseInsensitiveIndex = Collections.unmodifiableMap(ci);
+    this.caseInsensitiveIndex = MaterializedNames.lookupIndex(schema);
     List<String> qualifiers = outerQualifiers == null ? List.of() : List.copyOf(outerQualifiers);
     this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(qualifierColumnMapping);
     this.unqualifiedColumnMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(unqualifiedColumnMapping);
@@ -583,8 +580,9 @@ public final class ExpressionEvaluator {
   }
 
   private String canonicalFieldName(String qualifier, String columnName) {
-    return ColumnMappingUtil.canonicalFieldName(qualifier, columnName, qualifierColumnMapping, unqualifiedColumnMapping,
-        caseInsensitiveIndex);
+    String canonical = ColumnMappingUtil.canonicalFieldName(qualifier, columnName, qualifierColumnMapping,
+        unqualifiedColumnMapping, caseInsensitiveIndex);
+    return MaterializedNames.sqlReference(schema, columnName, canonical);
   }
 
   private Set<String> correlationColumns() {
