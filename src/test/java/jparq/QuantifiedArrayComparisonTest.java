@@ -2,6 +2,7 @@ package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -181,26 +182,62 @@ class QuantifiedArrayComparisonTest {
    *
    * @param predicate
    *          invalid comparison
+   * @param expectedMessage
+   *          expected root-cause message
    * @throws Exception
    *           if connection setup fails
    */
   @ParameterizedTest
-  @ValueSource(strings = {
-      "ANY(ARRAY[4,6]) = ANY(ARRAY[6])", "cyl = ANY(ARRAY[[4],[6]])", "cyl = SOME(ARRAY[[4],[6]])",
-      "cyl = ALL(ARRAY[[4],[6]])", "4 = ANY(ARRAY[4,[6]])", "cyl = ANY()", "cyl = ANY(ARRAY[4],ARRAY[6])"
+  @CsvSource(delimiter = '|', value = {
+      "ANY(ARRAY[4,6]) = ANY(ARRAY[6]) | requires a scalar operand",
+      "cyl = ANY(ARRAY[[4],[6]]) | requires scalar array elements",
+      "cyl = SOME(ARRAY[[4],[6]]) | requires scalar array elements",
+      "cyl = ALL(ARRAY[[4],[6]]) | requires scalar array elements", "cyl = ANY() | requires exactly one array operand",
+      "cyl = ANY(ARRAY[4],ARRAY[6]) | requires exactly one array operand"
   })
-  void rejectsInvalidComparisons(String predicate) throws Exception {
+  void rejectsInvalidComparisons(String predicate, String expectedMessage) throws Exception {
     Path root = Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
     for (boolean pushdown : List.of(true, false)) {
       try (var connection = DriverManager.getConnection("jdbc:jparq:" + root + "?predicatePushdown=" + pushdown);
           var statement = connection.createStatement()) {
-        assertThrows(SQLException.class, () -> {
+        SQLException exception = assertThrows(SQLException.class, () -> {
           try (var result = statement.executeQuery("SELECT model FROM mtcars WHERE " + predicate)) {
             result.next();
           }
         }, predicate);
+        Throwable cause = rootCause(exception);
+        assertInstanceOf(IllegalArgumentException.class, cause, predicate);
+        assertTrue(cause.getMessage().contains(expectedMessage), predicate + ": " + cause.getMessage());
       }
     }
+  }
+
+  /**
+   * Rejects Avro records inside array columns before attempting scalar
+   * comparison.
+   *
+   * @param quantifier
+   *          quantified comparison keyword
+   * @throws Exception
+   *           if expression parsing fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "ANY", "SOME", "ALL"
+  })
+  void rejectsStructArrayElements(String quantifier) throws Exception {
+    var elementSchema = SchemaBuilder.record("element").fields().requiredInt("value").endRecord();
+    var schema = SchemaBuilder.record("struct_arrays").fields().name("items").type().array().items(elementSchema)
+        .noDefault().endRecord();
+    var element = new GenericData.Record(elementSchema);
+    element.put("value", 4);
+    var record = new GenericData.Record(schema);
+    record.put("items", List.of(element));
+    var evaluator = new ExpressionEvaluator(schema);
+    var predicate = CCJSqlParserUtil.parseCondExpression("4 = " + quantifier + "(items)");
+    IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+        () -> evaluator.evalTruth(predicate, record));
+    assertEquals("ANY/SOME/ALL requires scalar array elements", exception.getMessage());
   }
 
   /**
@@ -224,12 +261,24 @@ class QuantifiedArrayComparisonTest {
           result.next();
         }
       });
-      Throwable cause = exception;
-      while (cause.getCause() != null) {
-        cause = cause.getCause();
-      }
+      Throwable cause = rootCause(exception);
       assertTrue(cause.getMessage().contains("array operand"), cause.getMessage());
     }
+  }
+
+  /**
+   * Unwraps JDBC execution errors to their original cause.
+   *
+   * @param exception
+   *          exception to unwrap
+   * @return deepest cause
+   */
+  private static Throwable rootCause(Throwable exception) {
+    Throwable cause = exception;
+    while (cause.getCause() != null) {
+      cause = cause.getCause();
+    }
+    return cause;
   }
 
   /**

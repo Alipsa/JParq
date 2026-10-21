@@ -30,6 +30,7 @@ import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import org.apache.avro.generic.IndexedRecord;
 import se.alipsa.jparq.engine.function.StringFunctions;
 import se.alipsa.jparq.engine.window.WindowState;
 
@@ -463,7 +464,7 @@ public final class ExpressionEvaluator {
     if (JSqlParserSupport.isQuantifiedOperand(right)) {
       return evalAnyComparison(right, left, be.getStringExpression(), rec, false);
     }
-    throw new IllegalArgumentException("ANY/ALL evaluation requested without AnyComparisonExpression");
+    throw new IllegalArgumentException("ANY/SOME/ALL evaluation requested without a quantified operand");
   }
 
   /**
@@ -506,8 +507,8 @@ public final class ExpressionEvaluator {
       if (!(array instanceof List<?> list)) {
         throw new IllegalArgumentException("ANY/SOME/ALL requires an array operand");
       }
-      if (list.stream()
-          .anyMatch(value -> value instanceof List<?> || value instanceof Map<?, ?> || value instanceof Object[])) {
+      if (list.stream().anyMatch(value -> value instanceof List<?> || value instanceof Map<?, ?>
+          || value instanceof Object[] || value instanceof IndexedRecord)) {
         throw new IllegalArgumentException("ANY/SOME/ALL requires scalar array elements");
       }
       values = list;
