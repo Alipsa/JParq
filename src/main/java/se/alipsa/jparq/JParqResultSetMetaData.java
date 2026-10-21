@@ -24,7 +24,7 @@ import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 
 /** An implementation of the java.sql.ResultSetMetaData interface. */
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
-public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
+public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements AvroColumnMetadata {
 
   private final Schema schema; // may be null if empty file
   private final List<String> labels; // projection labels (aliases if present)
@@ -179,16 +179,17 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
   }
 
   /**
-   * Retains the element schema of a physical array column during materialization.
+   * Retains the source schema of a physical column during materialization.
    *
    * @param column
    *          one-based output column index
-   * @return non-null array schema, or null when no physical array field is known
+   * @return non-null source schema, or null when no physical field is known
    */
-  Schema arrayColumnSchema(int column) {
+  @Override
+  public Schema columnValueSchema(int column) {
     Schema.Field field = resolveField(column);
     Schema valueSchema = field == null ? null : JdbcTypeMapper.nonNullSchema(field.schema());
-    return valueSchema != null && valueSchema.getType() == Schema.Type.ARRAY ? valueSchema : null;
+    return valueSchema;
   }
 
   @Override

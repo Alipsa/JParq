@@ -4,6 +4,7 @@ import java.sql.JDBCType;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
+import org.apache.avro.Schema;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 
@@ -11,7 +12,7 @@ import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
  * Simple metadata for aggregate result sets where the values do not originate
  * from the underlying Avro schema.
  */
-public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter {
+public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter implements AvroColumnMetadata {
 
   private final List<String> labels;
   private final List<Integer> sqlTypes;
@@ -20,6 +21,7 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter {
   private final String tableCatalog;
   private final int[] precisions;
   private final int[] scales;
+  private List<Schema> valueSchemas = List.of();
 
   /**
    * Create metadata for an aggregate result set.
@@ -78,6 +80,22 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter {
         scales[i] = decimal.getScale();
       }
     }
+  }
+
+  /**
+   * Retains source schemas for structured materialized columns.
+   *
+   * @param schemas
+   *          schemas in output order, allowing null for unknown schemas
+   */
+  void retainValueSchemas(List<Schema> schemas) {
+    valueSchemas = new ArrayList<>(schemas);
+  }
+
+  /** {@inheritDoc} */
+  @Override
+  public Schema columnValueSchema(int column) {
+    return valueSchemas.isEmpty() ? null : valueSchemas.get(column - 1);
   }
 
   @Override

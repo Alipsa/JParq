@@ -18,7 +18,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import jparq.usage.AcmeTest;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
@@ -140,13 +139,13 @@ class JParqResultSetMetaDataTest {
   }
 
   @Test
-  void recordSchemaFieldsReportMapClass() {
+  void recordSchemaFieldsReportGenericRecordClass() {
     Schema schema = schemaWithRecordField();
     JParqResultSetMetaData metaData = createMetadataWithExpression(schema, List.of("child"),
         Collections.singletonList("child"), Collections.emptyList());
 
-    assertEquals(Map.class.getName(), metaData.getColumnClassName(1),
-        "Nested record schema fields should report java.util.Map");
+    assertEquals(org.apache.avro.generic.GenericRecord.class.getName(), metaData.getColumnClassName(1),
+        "Nested record schema fields should report their Avro record representation");
   }
 
   @Test

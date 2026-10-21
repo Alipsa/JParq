@@ -105,6 +105,29 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
+   * Creates a set-operation result retaining structured source schemas.
+   *
+   * @param tableName
+   *          virtual table name
+   * @param columnLabels
+   *          output labels
+   * @param sqlTypes
+   *          JDBC output types
+   * @param rows
+   *          materialized rows
+   * @param valueSchemas
+   *          source schemas in output order, allowing null entries
+   * @return materialized result with source metadata
+   */
+  static JParqResultSet materializedResult(String tableName, List<String> columnLabels, List<Integer> sqlTypes,
+      List<List<Object>> rows, List<Schema> valueSchemas) {
+    JParqResultSet result = materializedResult(tableName, columnLabels, sqlTypes, rows);
+    result.aggregateMetadata = new AggregateResultSetMetaData(columnLabels, sqlTypes, tableName, null, null, rows);
+    result.aggregateMetadata.retainValueSchemas(valueSchemas);
+    return result;
+  }
+
+  /**
    * Create a {@link JParqResultSet} from precomputed rows with optional schema
    * context.
    *

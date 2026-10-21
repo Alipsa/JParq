@@ -88,7 +88,9 @@ class HfDatasetLayoutTest {
       while (rs.next()) {
         List<Object> row = new ArrayList<>();
         for (int index = 1; index <= count; index++) {
-          row.add(rs.getObject(index));
+          Object value = rs.getObject(index);
+          // Compare field contents across shards whose Avro record names differ.
+          row.add(value instanceof GenericRecord record ? record.toString() : value);
         }
         rows.add(row);
       }
