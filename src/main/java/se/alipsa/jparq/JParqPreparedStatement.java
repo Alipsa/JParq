@@ -437,7 +437,11 @@ public class JParqPreparedStatement implements PreparedStatement {
     this.residualExpression = tmpResidual;
     this.fileAvroSchema = tmpFileAvro;
     this.cteResults = tmpCteResults;
-    this.joinPredicates = tmpJoinQuery ? planJoinPredicates() : Map.of();
+    try {
+      this.joinPredicates = tmpJoinQuery ? planJoinPredicates() : Map.of();
+    } catch (RuntimeException exception) {
+      throw SqlExceptions.wrap("Failed to prepare query: " + sql, exception);
+    }
     PushdownInfo plannedPushdown = determinePushdownInfo(hasParameters, tmpSetOperation, tmpJoinQuery, tmpBaseCteResult,
         tmpConf, tmpSelect, tmpPredicate, tmpResidual);
     this.pushdownInfo = stmt.getConn().isProjectionPushdown()

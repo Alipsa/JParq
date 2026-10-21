@@ -86,13 +86,14 @@ public class DateFunctionsTest {
     Path dir = Paths.get(DateFunctionsTest.class.getResource("/mtcars.parquet").toURI()).getParent();
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + dir);
         var statement = connection.createStatement()) {
-      var failure = assertThrows(IllegalArgumentException.class, () -> {
+      var failure = assertThrows(SQLException.class, () -> {
         try (var result = statement.executeQuery("SELECT " + expression + " FROM mtcars LIMIT 1")) {
           result.next();
           result.getObject(1);
         }
       });
-      assertTrue(failure.getMessage().startsWith("Invalid "), failure::getMessage);
+      assertTrue(failure.getMessage().contains("Invalid "), failure::getMessage);
+      assertInstanceOf(IllegalArgumentException.class, failure.getCause());
     }
   }
 

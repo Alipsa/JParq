@@ -2,6 +2,7 @@ package jparq.engine;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -210,12 +211,17 @@ class SqlTruthTest {
     for (String input : List.of("(VALUES (1, 1, 'a'), (2, 2, 'b')) AS t(id, n, s)",
         "(VALUES (1, CAST(NULL AS INTEGER), CAST(NULL AS VARCHAR))) AS t(id, n, s)")) {
       for (String expression : List.of("n", "t.n", "s", "1", "n + 1", "s || 'x'")) {
-        assertThrows(java.sql.SQLException.class, () -> query("SELECT id FROM " + input + " WHERE " + expression));
-        assertThrows(java.sql.SQLException.class,
+        assertThrows(SQLException.class, () -> query("SELECT id FROM " + input + " WHERE " + expression));
+        assertThrows(SQLException.class,
             () -> query("SELECT id FROM " + input + " GROUP BY id, n, s HAVING " + expression));
       }
-      assertThrows(IllegalArgumentException.class, () -> query("SELECT CASE WHEN n THEN 1 ELSE 0 END FROM " + input));
-      assertThrows(IllegalArgumentException.class, () -> queryObjects("SELECT NOT s FROM " + input));
+      var caseFailure = assertThrows(SQLException.class,
+          () -> query("SELECT CASE WHEN n THEN 1 ELSE 0 END FROM " + input));
+      assertInstanceOf(IllegalArgumentException.class, caseFailure.getCause());
+      assertTrue(caseFailure.getMessage().contains("Unsupported predicate"), caseFailure::getMessage);
+      var notFailure = assertThrows(SQLException.class, () -> queryObjects("SELECT NOT s FROM " + input));
+      assertInstanceOf(IllegalArgumentException.class, notFailure.getCause());
+      assertTrue(notFailure.getMessage().contains("Unsupported predicate"), notFailure::getMessage);
     }
   }
 

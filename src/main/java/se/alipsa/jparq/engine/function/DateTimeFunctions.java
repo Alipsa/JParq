@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine.function;
 
 import java.math.BigDecimal;
 import java.sql.Date;
+import java.sql.SQLDataException;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.Duration;
@@ -602,7 +603,8 @@ public final class DateTimeFunctions {
    * @return the cast result converted to the requested type when possible
    * @throws IllegalArgumentException
    *           if decimal bounds are invalid (SQLState 42000) or the rounded value
-   *           exceeds precision (SQLState 22003), carried by the cause
+   *           exceeds precision (SQLState 22003), or numeric input is invalid or
+   *           non-finite (SQLState 22018), carried by the cause
    */
   public static Object castLiteral(CastExpression cast, Object value) {
     if (cast != null && cast.getColDataType() != null
@@ -642,17 +644,28 @@ public final class DateTimeFunctions {
     };
   }
 
+  /**
+   * Converts a finite numeric input without leaking unclassified parse errors.
+   *
+   * @param value
+   *          the numeric input or its textual representation
+   * @return the decimal value, with booleans represented as zero or one
+   * @throws IllegalArgumentException
+   *           if conversion fails, carrying SQLState 22018
+   */
   private static BigDecimal toBigDecimalValue(Object value) {
     if (value instanceof BigDecimal bd) {
       return bd;
     }
-    if (value instanceof Number num) {
-      return new BigDecimal(num.toString());
-    }
     if (value instanceof Boolean bool) {
       return bool ? BigDecimal.ONE : BigDecimal.ZERO;
     }
-    return new BigDecimal(value.toString().trim());
+    try {
+      return new BigDecimal(value.toString().trim());
+    } catch (NumberFormatException exception) {
+      String message = "Cannot cast value '" + value + "' to a numeric value";
+      throw new IllegalArgumentException(message, new SQLDataException(message, "22018", exception));
+    }
   }
 
   private static String castToString(CastExpression cast, Object value) {
