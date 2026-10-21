@@ -48,7 +48,8 @@ class MaterializedIdentifierLookupTest {
         }
       }
       for (String sql : List.of("SELECT x FROM (SELECT 1 AS x) a JOIN (SELECT 2 AS x) b ON TRUE",
-          "SELECT id FROM (SELECT id FROM optimized WHERE id = 1) a JOIN (SELECT id FROM optimized WHERE id = 1) b ON a.id = b.id",
+          "SELECT id FROM (SELECT id FROM optimized WHERE id = 1) a "
+              + "JOIN (SELECT id FROM optimized WHERE id = 1) b ON a.id = b.id",
           "SELECT x FROM (SELECT 1 AS x, 2 AS x) t", "SELECT * FROM (SELECT 1 AS x, 2 AS x) t WHERE x = 2",
           "SELECT t.x FROM (SELECT 1 AS x, 2 AS x) t")) {
         SQLException exception = assertThrows(SQLException.class, () -> {

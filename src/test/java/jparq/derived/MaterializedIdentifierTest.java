@@ -146,4 +146,57 @@ class MaterializedIdentifierTest {
     }
   }
 
+  /**
+   * Keeps expression labels intact while decoding only complete identifiers.
+   *
+   * @throws Exception
+   *           if JDBC execution fails
+   */
+  @Test
+  void preservesQuotedIdentifiersInsideComputedLabels() throws Exception {
+    String url = "jdbc:jparq:" + Path.of("src/test/resources/hf").toAbsolutePath();
+    try (var connection = DriverManager.getConnection(url)) {
+      for (String expression : List.of("\"id\" + 1", "1 + \"id\"", "\"text\" || \"text\"")) {
+        String body = "SELECT " + expression + " FROM optimized WHERE id = 1";
+        for (String sql : List.of(body, "SELECT * FROM (" + body + ") t", "WITH t AS (" + body + ") SELECT * FROM t")) {
+          try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+            assertEquals(expression, result.getMetaData().getColumnLabel(1), sql);
+            assertTrue(result.next(), sql);
+            assertFalse(result.next(), sql);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Reuses bindings while reading fresh values from each row and repeated
+   * getters.
+   *
+   * @throws Exception
+   *           if JDBC execution fails
+   */
+  @Test
+  void cachedBindingsReadCurrentRowValues() throws Exception {
+    String url = "jdbc:jparq:" + Path.of("src/test/resources/hf").toAbsolutePath();
+    try (var connection = DriverManager.getConnection(url)) {
+      String body = "SELECT id, CASE WHEN id = 2 THEN NULL ELSE id END AS nullable_id "
+          + "FROM optimized WHERE id BETWEEN 1 AND 3";
+      for (String sql : List.of("SELECT id, nullable_id FROM (" + body + ") t ORDER BY id",
+          "WITH t AS (" + body + ") SELECT id, nullable_id FROM t ORDER BY id")) {
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+          for (int id = 1; id <= 3; id++) {
+            assertTrue(result.next(), sql);
+            for (int repeat = 0; repeat < 3; repeat++) {
+              assertEquals(id, result.getInt(1), sql);
+              assertEquals(id == 2 ? null : Integer.toString(id), result.getString(2), sql);
+              assertEquals(id == 2, result.wasNull(), sql);
+            }
+          }
+          assertFalse(result.next(), sql);
+        }
+      }
+    }
+  }
+
 }

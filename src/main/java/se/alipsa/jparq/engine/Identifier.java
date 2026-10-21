@@ -2,7 +2,6 @@ package se.alipsa.jparq.engine;
 
 import java.util.Locale;
 import java.util.Objects;
-import net.sf.jsqlparser.schema.MultiPartName;
 
 /**
  * Represents a SQL identifier while preserving whether it was quoted in the
@@ -36,14 +35,42 @@ public final class Identifier {
     if (trimmed.isEmpty()) {
       return null;
     }
-    boolean quoted = MultiPartName.isQuoted(trimmed);
-    String unquoted = MultiPartName.unquote(trimmed);
+    boolean quoted = isDelimitedIdentifier(trimmed);
+    String unquoted = quoted ? trimmed.substring(1, trimmed.length() - 1) : trimmed;
     if (quoted) {
       char delimiter = trimmed.charAt(trimmed.length() - 1);
       String escaped = Character.toString(delimiter).repeat(2);
       unquoted = unquoted.replace(escaped, Character.toString(delimiter));
     }
     return new Identifier(unquoted, quoted);
+  }
+
+  /**
+   * Checks whether the entire text is one delimited identifier.
+   *
+   * @param text
+   *          trimmed identifier or expression text
+   * @return true when matching delimiters surround only escaped interior
+   *         delimiters
+   */
+  private static boolean isDelimitedIdentifier(String text) {
+    if (text.length() < 2) {
+      return false;
+    }
+    char first = text.charAt(0);
+    char closing = first == '[' ? ']' : first;
+    if ((first != '"' && first != '`' && first != '[') || text.charAt(text.length() - 1) != closing) {
+      return false;
+    }
+    for (int i = 1; i < text.length() - 1; i++) {
+      if (text.charAt(i) == closing) {
+        if (i + 1 >= text.length() - 1 || text.charAt(i + 1) != closing) {
+          return false;
+        }
+        i++;
+      }
+    }
+    return true;
   }
 
   /**

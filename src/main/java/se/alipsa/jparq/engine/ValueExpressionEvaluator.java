@@ -722,6 +722,20 @@ public final class ValueExpressionEvaluator {
         effectiveQualifierMapping);
   }
 
+  /**
+   * Resolves a column once for callers that can read a stable schema directly.
+   *
+   * @param column
+   *          SQL column reference
+   * @return internal field name, or null when the reference is hidden or unknown
+   * @throws IllegalArgumentException
+   *           if the reference is ambiguous
+   */
+  public String resolveColumnName(Column column) {
+    String qualifier = column.getTable() == null ? null : column.getTable().getName();
+    return canonicalFieldName(qualifier, column.getColumnName());
+  }
+
   private String canonicalFieldName(String qualifier, String columnName) {
     String canonical = ColumnMappingUtil.canonicalFieldName(qualifier, columnName, effectiveQualifierMapping,
         unqualifiedColumnMapping, caseInsensitiveIndex);

@@ -132,13 +132,12 @@ public final class ExpressionEvaluator {
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping,
       WindowState windowState) {
     Map<String, Schema> fs = new HashMap<>();
-    Map<String, String> ci = MaterializedNames.lookupIndex(schema);
     for (Schema.Field f : schema.getFields()) {
       fs.put(f.name(), f.schema());
     }
     this.schema = schema;
     this.fieldSchemas = Collections.unmodifiableMap(fs);
-    this.caseInsensitiveIndex = Collections.unmodifiableMap(ci);
+    this.caseInsensitiveIndex = MaterializedNames.lookupIndex(schema);
     List<String> qualifiers = outerQualifiers == null ? List.of() : List.copyOf(outerQualifiers);
     this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(qualifierColumnMapping);
     this.unqualifiedColumnMapping = ColumnMappingUtil.normaliseUnqualifiedMapping(unqualifiedColumnMapping);

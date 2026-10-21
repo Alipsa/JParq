@@ -17,6 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.sf.jsqlparser.expression.Expression;
@@ -68,6 +69,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private final List<String> queryQualifiers;
   private ValueExpressionEvaluator projectionEvaluator;
   private Schema metadataSchema;
+  private final Map<Integer, Optional<Schema.Field>> materializedColumnBindings = new HashMap<>();
   private final CorrelationMappings metadataSourceMappings;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
@@ -641,6 +643,11 @@ public class JParqResultSet extends ResultSetAdapter {
       return computed;
     }
 
+    Optional<Schema.Field> binding = materializedColumnBindings.get(idx);
+    if (binding != null) {
+      return readMaterializedColumn(binding.orElse(null));
+    }
+
     // projection name (may be an alias/label)
     String projectedName = columnOrder.get(idx - 1);
     String canonical = canonicalColumnName(idx);
@@ -665,14 +672,33 @@ public class JParqResultSet extends ResultSetAdapter {
 
     if (projectionExpr instanceof Column && field.getProp(MaterializedNames.SQL_LABEL) != null) {
       ensureProjectionEvaluator(current);
-      Object computed = evaluateProjection(projectionExpr);
-      lastWasNull = computed == null;
-      return computed;
+      try {
+        String resolved = projectionEvaluator.resolveColumnName((Column) projectionExpr);
+        Schema.Field bound = resolved == null ? null : current.getSchema().getField(resolved);
+        materializedColumnBindings.put(idx, Optional.ofNullable(bound));
+        return readMaterializedColumn(bound);
+      } catch (RuntimeException exception) {
+        throw SqlExceptions.wrap("Failed to bind projection " + projectionExpr + ": " + exception.getMessage(),
+            exception);
+      }
     }
     Object rawValue = current.get(lookupName);
     Object raw = AvroCoercions.unwrap(rawValue, field.schema());
     lastWasNull = (raw == null);
     return raw;
+  }
+
+  /**
+   * Reads a previously validated column from the current materialized row.
+   *
+   * @param field
+   *          bound field, or null for a hidden or unknown reference
+   * @return decoded current-row value, or null
+   */
+  private Object readMaterializedColumn(Schema.Field field) {
+    Object decoded = field == null ? null : AvroCoercions.unwrap(current.get(field.pos()), field.schema());
+    lastWasNull = decoded == null;
+    return decoded;
   }
 
   private Expression projectionExpression(int idx) {
