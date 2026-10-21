@@ -105,6 +105,66 @@ class EscapedStringLiteralTest {
   }
 
   /**
+   * Decodes parser-stored JSON key tokens and retains apostrophes in decoded
+   * keys.
+   *
+   * @param pushdown
+   *          whether predicate and projection pushdown are enabled
+   * @throws Exception
+   *           if querying fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void decodesJsonObjectKeys(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("""
+            SELECT JSON_OBJECT('it''s' VALUE 1), JSON_OBJECT(KEY 'a''b' VALUE 'c''d'),
+                   JSON_OBJECT('a''''b' VALUE 2), JSON_OBJECT('''quoted''' VALUE 3),
+                   JSON_OBJECT('''' VALUE 4), JSON_OBJECT('' VALUE 5),
+                   JSON_OBJECT(' spaced ' VALUE 6), JSON_OBJECT(KEY N'a''b' VALUE 7)
+            """)) {
+      assertTrue(result.next());
+      assertEquals("{\"it's\":1}", result.getString(1));
+      assertEquals("{\"a'b\":\"c'd\"}", result.getString(2));
+      assertEquals("{\"a''b\":2}", result.getString(3));
+      assertEquals("{\"'quoted'\":3}", result.getString(4));
+      assertEquals("{\"'\":4}", result.getString(5));
+      assertEquals("{\"\":5}", result.getString(6));
+      assertEquals("{\" spaced \":6}", result.getString(7));
+      assertEquals("{\"a'b\":7}", result.getString(8));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Preserves physical column values used as keys without SQL unescaping them.
+   *
+   * @param pushdown
+   *          whether predicate and projection pushdown are enabled
+   * @throws Exception
+   *           if querying fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void preservesEvaluatedJsonObjectKeys(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT JSON_OBJECT(KEY name VALUE id) FROM names ORDER BY id")) {
+      for (String expected : List.of("{\"O'Brien\":1}", "{\"O''Brien\":2}", "{\"Other\":3}", "{\"'\":4}",
+          "{\"''\":5}")) {
+        assertTrue(result.next());
+        assertEquals(expected, result.getString(1));
+      }
+      assertFalse(result.next());
+    }
+  }
+
+  /**
    * Verifies every literal filter path against physical strings with pushdown on
    * and off.
    *

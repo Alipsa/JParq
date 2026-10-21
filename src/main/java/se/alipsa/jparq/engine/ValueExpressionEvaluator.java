@@ -27,6 +27,7 @@ import net.sf.jsqlparser.expression.JsonFunctionExpression;
 import net.sf.jsqlparser.expression.JsonFunctionType;
 import net.sf.jsqlparser.expression.JsonKeyValuePair;
 import net.sf.jsqlparser.expression.SignedExpression;
+import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TranscodingFunction;
 import net.sf.jsqlparser.expression.TrimFunction;
@@ -538,6 +539,8 @@ public final class ValueExpressionEvaluator {
         String key = null;
         if (keyObj instanceof Expression keyExpr) {
           key = toStringValue(evalInternal(keyExpr, record));
+        } else if (keyObj instanceof String keyText) {
+          key = LiteralConverter.decodeStringLiteral(new StringValue(keyText));
         } else if (keyObj != null) {
           key = keyObj.toString();
         }

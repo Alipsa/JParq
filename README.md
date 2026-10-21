@@ -140,7 +140,9 @@ SQL syntax rejected by JSqlParser raises `SQLSyntaxErrorException` with SQLState
 errors retain preparation and nested-query context in their messages and cause chains.
 
 Escape an apostrophe in a SQL string literal by doubling it: `'O''Brien'` evaluates to `O'Brien`.
-JDBC `setString` values are escaped automatically. Dollar-quoted strings preserve their contents literally.
+JDBC `setString` values are escaped automatically. Literal decoding leaves dollar-quoted contents unchanged,
+but the SQL pre-pass does not fully recognize dollar quotes: unmatched apostrophes and comment markers inside
+them can still cause parsing failures (tracked in [#226](https://github.com/Alipsa/JParq/issues/226)).
 
 ### Connection options
 

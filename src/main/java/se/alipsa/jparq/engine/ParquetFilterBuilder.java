@@ -675,7 +675,7 @@ public final class ParquetFilterBuilder {
     if (field == null || AvroCoercions.effectiveSchema(field.schema()).getType() != Schema.Type.STRING) {
       return Optional.empty();
     }
-    String decodedPattern = pattern.getNotExcapedValue();
+    String decodedPattern = LiteralConverter.decodeStringLiteral(pattern);
     int wildcard = decodedPattern.indexOf('%');
     if (wildcard <= 0) {
       return Optional.empty();

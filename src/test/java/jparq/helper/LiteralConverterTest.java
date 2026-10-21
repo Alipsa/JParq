@@ -43,6 +43,10 @@ class LiteralConverterTest {
     assertEquals("a''''b", LiteralConverter.toLiteral(new StringValue("$tag$a''''b$tag$")));
     assertTrue(AggregateFunctions.expressionsEquivalent(literal, new StringValue("$$a''b$$")));
     assertFalse(AggregateFunctions.expressionsEquivalent(literal, new StringValue("$$a''''b$$")));
+    var unescaped = new StringValue("plain text");
+    assertSame(unescaped.getValue(), LiteralConverter.toLiteral(unescaped));
+    var dollarQuoted = new StringValue("$$a''b$$");
+    assertSame(dollarQuoted.getValue(), LiteralConverter.toLiteral(dollarQuoted));
   }
 
   /**
