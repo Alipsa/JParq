@@ -351,7 +351,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
         return direct.name();
       }
       for (Schema.Field field : schema.getFields()) {
-        if (field.name().equalsIgnoreCase(column)) {
+        if (Identifier.lookupKey(column).equals(Identifier.lookupKey(MaterializedNames.sqlLabel(field)))) {
           return field.name();
         }
       }
@@ -452,7 +452,10 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
       }
       for (Schema.Field field : tableSchema.getFields()) {
         String name = field.name();
-        String lookupKey = Identifier.lookupKey(name);
+        String lookupKey = field.getProp("jparq.lookupKey");
+        if (lookupKey == null) {
+          lookupKey = Identifier.lookupKey(name);
+        }
         UsingColumnInfo usingInfo = usingMetadata.lookup(tableIndex, name);
         boolean usingColumn = usingInfo != null;
         boolean duplicate = columnCounts.getOrDefault(name, 0) > 1;
@@ -462,9 +465,9 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
         } else {
           canonical = duplicate ? qualifierPrefix + "__" + name : name;
         }
-        String label = (!usingColumn && duplicate) ? name : canonical;
+        String label = MaterializedNames.sqlLabel(field);
         canonicalLabels.putIfAbsent(canonical, label);
-        String originalKey = Identifier.lookupKey(label);
+        String originalKey = lookupKey;
         String canonicalKey = Identifier.lookupKey(canonical);
         registerQualifierMappings(qualifierMap, qualifiers, includeTableQualifier, normalizedTableName, originalKey,
             canonical);
@@ -476,6 +479,8 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
           final boolean owner = usingInfo.isOwner(tableIndex);
           UsingFieldState state = usingFieldStates.computeIfAbsent(canonical, key -> new UsingFieldState());
           Schema.Field newField = new Schema.Field(canonical, field.schema(), field.doc(), field.defaultVal());
+          newField.addProp(MaterializedNames.SQL_LABEL, label);
+          newField.addProp("jparq.lookupKey", lookupKey);
           state.registerField(newField, owner);
           if (owner) {
             if (!usedNames.add(canonical)) {
@@ -492,6 +497,8 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
             throw new IllegalArgumentException("Duplicate column name '" + canonical + "' in join schema");
           }
           Schema.Field newField = new Schema.Field(canonical, field.schema(), field.doc(), field.defaultVal());
+          newField.addProp(MaterializedNames.SQL_LABEL, label);
+          newField.addProp("jparq.lookupKey", lookupKey);
           FieldMapping mapping = new FieldMapping(tableIndex, name, canonical, List.of());
           otherFields.add(newField);
           mappings.add(mapping);
@@ -583,7 +590,8 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
   private static String qualifierPrefix(JoinTable table, int index) {
     String alias = IdentifierUtil.sanitizeIdentifier(table.alias());
     if (alias != null && !alias.isBlank()) {
-      return alias;
+      String name = MaterializedNames.allocate(alias, new HashSet<>());
+      return name.equals(alias) ? name : name + "_" + index;
     }
     String tableName = IdentifierUtil.sanitizeIdentifier(table.tableName());
     if (tableName != null && !tableName.isBlank()) {

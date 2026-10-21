@@ -5,6 +5,7 @@ import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.avro.Schema;
+import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 
@@ -103,9 +104,15 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
     return labels.size();
   }
 
+  /** {@inheritDoc} */
+  @Override
+  public String columnSqlLabel(int column) {
+    return labels.get(column - 1);
+  }
+
   @Override
   public String getColumnLabel(int column) {
-    return labels.get(column - 1);
+    return MaterializedNames.displayLabel(columnSqlLabel(column));
   }
 
   @Override

@@ -141,7 +141,10 @@ public final class ValueExpressionEvaluator {
     Map<String, String> ci = new HashMap<>();
     for (Schema.Field f : schema.getFields()) {
       fs.put(f.name(), f.schema());
-      String key = Identifier.lookupKey(f.name());
+      String key = f.getProp("jparq.lookupKey");
+      if (key == null) {
+        key = Identifier.lookupKey(f.name());
+      }
       if (key != null) {
         ci.put(key, f.name());
       }

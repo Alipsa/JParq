@@ -36,6 +36,7 @@ import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.LegacyParenthesisSupport;
+import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.QueryProcessor;
@@ -1100,6 +1101,12 @@ public class JParqResultSet extends ResultSetAdapter {
     String labelText = labelId == null ? label : labelId.text();
     for (int i = 0; i < columnOrder.size(); i++) {
       String candidate = columnOrder.get(i);
+      Schema.Field field = metadataSchema == null || !selectExpressions.isEmpty()
+          ? null
+          : metadataSchema.getField(candidate);
+      if (field != null) {
+        candidate = MaterializedNames.sqlLabel(field);
+      }
       Identifier candidateId = Identifier.of(candidate);
       String candidateText = candidateId == null ? candidate : candidateId.text();
       if (candidate.equals(label) || candidateText.equals(labelText)) {
