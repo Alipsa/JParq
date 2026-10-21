@@ -212,6 +212,9 @@ public final class JsonFunctions {
     if (value instanceof JsonNode node) {
       return node;
     }
+    if (value instanceof org.apache.avro.generic.GenericRecord record) {
+      return toNode(record.toString());
+    }
     if (value instanceof String str) {
       String trimmed = str.trim();
       if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {

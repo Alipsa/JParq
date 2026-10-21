@@ -820,7 +820,7 @@ public final class QueryProcessor implements AutoCloseable {
     for (Expression expression : distinctExpressions) {
       key.add(valueEvaluator.eval(expression, rec));
     }
-    return key;
+    return RelationalKeys.row(key);
   }
 
   /**
@@ -845,7 +845,7 @@ public final class QueryProcessor implements AutoCloseable {
       Object value = AvroCoercions.unwrap(rec.get(col), field.schema());
       key.add(value);
     }
-    return key;
+    return RelationalKeys.row(key);
   }
 
   private static List<String> augmentProjectionWithOrderColumns(List<String> projection, List<SqlParser.OrderKey> order,

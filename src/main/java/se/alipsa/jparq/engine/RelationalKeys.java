@@ -1,0 +1,106 @@
+package se.alipsa.jparq.engine;
+
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericData.EnumSymbol;
+import org.apache.avro.generic.GenericData.Fixed;
+import org.apache.avro.generic.GenericRecord;
+
+/** Builds content keys without changing projected JDBC values. */
+public final class RelationalKeys {
+
+  private RelationalKeys() {
+  }
+
+  /**
+   * Normalizes a row for DISTINCT, grouping, set operations, or window
+   * partitions. Rows whose values need no conversion reuse the supplied list;
+   * callers must not modify that list while its key is in use. A converted value
+   * triggers a copy of the row.
+   *
+   * @param values
+   *          row values, including SQL NULLs
+   * @return the supplied list if unchanged, otherwise an unmodifiable key list
+   */
+  public static List<Object> row(List<Object> values) {
+    List<Object> keys = null;
+    int index = 0;
+    for (Object original : values) {
+      Object key = value(original);
+      if (keys == null && key != original) {
+        keys = new ArrayList<>(values);
+      }
+      if (keys != null) {
+        keys.set(index, key);
+      }
+      index++;
+    }
+    return keys == null ? values : Collections.unmodifiableList(keys);
+  }
+
+  /**
+   * Copies nested containers even when every element is already scalar.
+   *
+   * @param values
+   *          nested values to snapshot
+   * @return an unmodifiable list of content keys
+   */
+  private static List<Object> snapshot(Collection<?> values) {
+    List<Object> keys = new ArrayList<>(values.size());
+    for (Object value : values) {
+      keys.add(value(value));
+    }
+    return Collections.unmodifiableList(keys);
+  }
+
+  /**
+   * Snapshots structured values by content, ignoring Avro record names.
+   *
+   * @param value
+   *          a scalar, record, array, collection, or map
+   * @return content key, or the original scalar
+   */
+  public static Object value(Object value) {
+    if (value instanceof GenericRecord record) {
+      Map<String, Object> fields = new LinkedHashMap<>();
+      for (Schema.Field field : record.getSchema().getFields()) {
+        fields.put(field.name(), value(record.get(field.pos())));
+      }
+      return Collections.unmodifiableMap(fields);
+    }
+    if (value instanceof Object[] array) {
+      return snapshot(Arrays.asList(array));
+    }
+    if (value instanceof Collection<?> collection) {
+      return snapshot(collection);
+    }
+    if (value instanceof Map<?, ?> map) {
+      Map<Object, Object> fields = new LinkedHashMap<>();
+      map.forEach((key, item) -> fields.put(value(key), value(item)));
+      return Collections.unmodifiableMap(fields);
+    }
+    if (value instanceof EnumSymbol symbol) {
+      return symbol.toString();
+    }
+    if (value instanceof Fixed fixed) {
+      return value(fixed.bytes());
+    }
+    if (value instanceof byte[] bytes) {
+      return ByteBuffer.wrap(bytes.clone()).asReadOnlyBuffer();
+    }
+    if (value instanceof ByteBuffer buffer) {
+      ByteBuffer copy = buffer.duplicate();
+      byte[] bytes = new byte[copy.remaining()];
+      copy.get(bytes);
+      return ByteBuffer.wrap(bytes).asReadOnlyBuffer();
+    }
+    return value instanceof CharSequence text ? text.toString() : value;
+  }
+}

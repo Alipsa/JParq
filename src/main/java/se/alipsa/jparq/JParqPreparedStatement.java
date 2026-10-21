@@ -33,7 +33,9 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Calendar;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -81,6 +83,7 @@ import se.alipsa.jparq.engine.ParquetTable;
 import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.RecordReader;
+import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SamplingRecordReader;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlExceptions;
@@ -751,6 +754,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     List<List<List<Object>>> componentRows = new ArrayList<>(components.size());
     List<String> labels = null;
     List<Integer> sqlTypes = null;
+    List<Schema> sourceSchemas = new ArrayList<>();
     int columnCount = -1;
     for (SqlParser.SetComponent component : components) {
       List<List<Object>> componentData = new ArrayList<>();
@@ -764,11 +768,15 @@ public class JParqPreparedStatement implements PreparedStatement {
           for (int col = 1; col <= columnCount; col++) {
             labels.add(meta.getColumnLabel(col));
             sqlTypes.add(meta.getColumnType(col));
+            sourceSchemas.add(sourceColumnSchema(meta, col));
           }
         } else if (meta.getColumnCount() != columnCount) {
           throw new SQLException("Set operation components must project the same number of columns");
         } else {
           for (int col = 1; col <= columnCount; col++) {
+            if (!Objects.equals(sourceSchemas.get(col - 1), sourceColumnSchema(meta, col))) {
+              sourceSchemas.set(col - 1, null);
+            }
             Integer expectedType = sqlTypes.get(col - 1);
             if (expectedType != null && expectedType != meta.getColumnType(col)) {
               throw new SQLException("Set operation components must use compatible column types");
@@ -788,7 +796,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     List<List<Object>> combined = evaluateSetOperation(components, componentRows);
     List<List<Object>> ordered = applySetOrdering(combined, labels, sqlTypes, parsedSetQuery.orderBy());
     List<List<Object>> sliced = applySetLimitOffset(ordered, parsedSetQuery.limit(), parsedSetQuery.offset());
-    return JParqResultSet.materializedResult("set_operation_result", labels, sqlTypes, sliced);
+    return JParqResultSet.materializedResult("set_operation_result", labels, sqlTypes, sliced, sourceSchemas);
   }
 
   /**
@@ -1024,12 +1032,14 @@ public class JParqPreparedStatement implements PreparedStatement {
     LinkedHashSet<List<Object>> unique = new LinkedHashSet<>(accumulated.size() + incoming.size());
     List<List<Object>> result = new ArrayList<>(accumulated.size() + incoming.size());
     for (List<Object> row : accumulated) {
-      if (unique.add(row)) {
+      List<Object> key = RelationalKeys.row(row);
+      if (unique.add(key)) {
         result.add(row);
       }
     }
     for (List<Object> row : incoming) {
-      if (unique.add(row)) {
+      List<Object> key = RelationalKeys.row(row);
+      if (unique.add(key)) {
         result.add(row);
       }
     }
@@ -1051,11 +1061,12 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (accumulated.isEmpty() || incoming.isEmpty()) {
       return new ArrayList<>();
     }
-    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(incoming);
+    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(incoming.stream().map(RelationalKeys::row).toList());
     LinkedHashSet<List<Object>> result = new LinkedHashSet<>();
     List<List<Object>> ordered = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      if (incomingSet.contains(row) && result.add(row)) {
+      List<Object> key = RelationalKeys.row(row);
+      if (incomingSet.contains(key) && result.add(key)) {
         ordered.add(row);
       }
     }
@@ -1080,17 +1091,19 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     Map<List<Object>, Integer> remaining = new HashMap<>();
     for (List<Object> row : incoming) {
-      remaining.merge(row, 1, Integer::sum);
+      List<Object> key = RelationalKeys.row(row);
+      remaining.merge(key, 1, Integer::sum);
     }
     List<List<Object>> result = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      Integer count = remaining.get(row);
+      List<Object> key = RelationalKeys.row(row);
+      Integer count = remaining.get(key);
       if (count != null && count > 0) {
         result.add(row);
         if (count == 1) {
-          remaining.remove(row);
+          remaining.remove(key);
         } else {
-          remaining.put(row, count - 1);
+          remaining.put(key, count - 1);
         }
       }
     }
@@ -1113,14 +1126,14 @@ public class JParqPreparedStatement implements PreparedStatement {
       return new ArrayList<>();
     }
     if (incoming.isEmpty()) {
-      LinkedHashSet<List<Object>> unique = new LinkedHashSet<>(accumulated);
-      return new ArrayList<>(unique);
+      return mergeDistinct(accumulated, List.of());
     }
-    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(incoming);
+    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(incoming.stream().map(RelationalKeys::row).toList());
     LinkedHashSet<List<Object>> emitted = new LinkedHashSet<>();
     List<List<Object>> ordered = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      if (!incomingSet.contains(row) && emitted.add(row)) {
+      List<Object> key = RelationalKeys.row(row);
+      if (!incomingSet.contains(key) && emitted.add(key)) {
         ordered.add(row);
       }
     }
@@ -1148,17 +1161,19 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     Map<List<Object>, Integer> remaining = new HashMap<>();
     for (List<Object> row : incoming) {
-      remaining.merge(row, 1, Integer::sum);
+      List<Object> key = RelationalKeys.row(row);
+      remaining.merge(key, 1, Integer::sum);
     }
     List<List<Object>> result = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      Integer count = remaining.get(row);
+      List<Object> key = RelationalKeys.row(row);
+      Integer count = remaining.get(key);
       if (count == null) {
         result.add(row);
       } else if (count == 1) {
-        remaining.remove(row);
+        remaining.remove(key);
       } else {
-        remaining.put(row, count - 1);
+        remaining.put(key, count - 1);
       }
     }
     return result;
@@ -2173,6 +2188,12 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (value instanceof byte[] || value instanceof ByteBuffer) {
       return ValueColumnType.BINARY;
     }
+    if (value instanceof Object[] || value instanceof Collection<?>) {
+      return ValueColumnType.ARRAY;
+    }
+    if (value instanceof GenericRecord) {
+      return ValueColumnType.STRUCT;
+    }
     return ValueColumnType.STRING;
   }
 
@@ -2240,7 +2261,30 @@ public class JParqPreparedStatement implements PreparedStatement {
       case TIMESTAMP -> LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
       case BINARY -> Schema.create(Schema.Type.BYTES);
       case STRING -> Schema.create(Schema.Type.STRING);
+      case ARRAY -> inferredArraySchema(values);
+      case STRUCT -> values.stream().filter(GenericRecord.class::isInstance).map(GenericRecord.class::cast).findFirst()
+          .map(GenericRecord::getSchema).orElse(Schema.create(Schema.Type.STRING));
     };
+  }
+
+  /**
+   * Infers one element schema across all materialized arrays, recursively.
+   *
+   * @param values
+   *          arrays whose non-null elements determine the element type
+   * @return array schema with nullable elements; unknown elements use STRING
+   */
+  private Schema inferredArraySchema(List<Object> values) {
+    List<Object> elements = new ArrayList<>();
+    for (Object value : values) {
+      if (value instanceof Object[] array) {
+        elements.addAll(Arrays.asList(array));
+      } else if (value instanceof Collection<?> collection) {
+        elements.addAll(collection);
+      }
+    }
+    Schema element = schemaForColumnType(determineColumnType(elements), elements);
+    return Schema.createArray(Schema.createUnion(Schema.create(Schema.Type.NULL), element));
   }
 
   /**
@@ -2269,7 +2313,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         case DOUBLE ->
           value instanceof Number num ? Double.valueOf(num.doubleValue()) : Double.valueOf(value.toString());
         case DECIMAL -> value instanceof BigDecimal bd ? bd : new BigDecimal(value.toString());
-        case DATE, TIME, TIMESTAMP, BINARY -> value;
+        case DATE, TIME, TIMESTAMP, BINARY, ARRAY, STRUCT -> value;
         case STRING -> value instanceof CharSequence ? value : value.toString();
       };
     } catch (NumberFormatException | NullPointerException e) {
@@ -2326,7 +2370,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   private enum ValueColumnType {
-    BOOLEAN, INT, LONG, FLOAT, DOUBLE, DECIMAL, DATE, TIME, TIMESTAMP, STRING, BINARY
+    ARRAY, STRUCT, BOOLEAN, INT, LONG, FLOAT, DOUBLE, DECIMAL, DATE, TIME, TIMESTAMP, STRING, BINARY
   }
 
   /**
@@ -2874,14 +2918,17 @@ public class JParqPreparedStatement implements PreparedStatement {
         lookupKey = Identifier.lookupKey(columnName);
       }
       Schema valueSchema;
-      if (requiresValueInference(meta, i) && !rawRows.isEmpty()) {
+      if (requiresValueInference(meta, i) && (!rawRows.isEmpty() || meta.getColumnType(i) == Types.ARRAY)) {
         List<Object> values = new ArrayList<>(rawRows.size());
         for (List<Object> row : rawRows) {
           values.add(row.get(i - 1));
         }
-        ValueColumnType type = meta.getColumnType(i) == Types.OTHER
-            ? determineColumnType(values)
-            : ValueColumnType.DECIMAL;
+        ValueColumnType type = switch (meta.getColumnType(i)) {
+          case Types.ARRAY -> ValueColumnType.ARRAY;
+          case Types.STRUCT -> ValueColumnType.STRUCT;
+          case Types.OTHER -> determineColumnType(values);
+          default -> ValueColumnType.DECIMAL;
+        };
         valueSchema = schemaForColumnType(type, values);
       } else {
         valueSchema = columnSchema(meta, i);
@@ -2908,13 +2955,16 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          metadata describing the column
    * @param column
    *          one-based column index
-   * @return whether the JDBC type or decimal precision is unknown
+   * @return whether the JDBC type, structured schema, or decimal precision is
+   *         unknown
    * @throws SQLException
    *           if column metadata cannot be accessed
    */
   private boolean requiresValueInference(ResultSetMetaData meta, int column) throws SQLException {
     int type = meta.getColumnType(column);
-    return type == Types.OTHER || ((type == Types.DECIMAL || type == Types.NUMERIC) && meta.getPrecision(column) == 0);
+    return type == Types.OTHER
+        || ((type == Types.ARRAY || type == Types.STRUCT) && sourceColumnSchema(meta, column) == null)
+        || ((type == Types.DECIMAL || type == Types.NUMERIC) && meta.getPrecision(column) == 0);
   }
 
   /**
@@ -2930,11 +2980,9 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private Schema columnSchema(ResultSetMetaData meta, int column) throws SQLException {
     int type = meta.getColumnType(column);
-    if (type == Types.ARRAY && meta instanceof JParqResultSetMetaData jparqMeta) {
-      Schema arraySchema = jparqMeta.arrayColumnSchema(column);
-      if (arraySchema != null) {
-        return arraySchema;
-      }
+    Schema source = sourceColumnSchema(meta, column);
+    if (source != null && (type == Types.ARRAY || type == Types.STRUCT)) {
+      return source;
     }
     return switch (type) {
       case Types.BOOLEAN, Types.BIT -> Schema.create(Schema.Type.BOOLEAN);
@@ -2947,8 +2995,22 @@ public class JParqPreparedStatement implements PreparedStatement {
       case Types.TIME -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
       case Types.TIMESTAMP -> LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
       case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY -> Schema.create(Schema.Type.BYTES);
+      case Types.ARRAY -> inferredArraySchema(List.of());
       default -> Schema.create(Schema.Type.STRING);
     };
+  }
+
+  /**
+   * Reads source schema information retained by driver metadata.
+   *
+   * @param meta
+   *          output metadata
+   * @param column
+   *          one-based output index
+   * @return source schema, or null for computed columns
+   */
+  private Schema sourceColumnSchema(ResultSetMetaData meta, int column) {
+    return meta instanceof AvroColumnMetadata avro ? avro.columnValueSchema(column) : null;
   }
 
   private Schema decimalSchema(ResultSetMetaData meta, int column) throws SQLException {
@@ -2974,7 +3036,8 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (value == null) {
       return null;
     }
-    LogicalType logical = schema.getLogicalType();
+    Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    LogicalType logical = effective.getLogicalType();
     if (logical instanceof LogicalTypes.Date) {
       Date date = value instanceof Date d ? d : Date.valueOf(value.toString());
       return toEpochDays(date);
@@ -2990,13 +3053,21 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (logical instanceof LogicalTypes.Decimal decimal) {
       return toDecimalBytes(value, decimal);
     }
-    return switch (schema.getType()) {
+    return switch (effective.getType()) {
       case BOOLEAN -> asBoolean(value);
-      case INT, LONG -> toExactInteger(value, schema.getType());
+      case INT, LONG -> toExactInteger(value, effective.getType());
       case FLOAT -> asNumber(value).floatValue();
       case DOUBLE -> asNumber(value).doubleValue();
       case BYTES -> toBinary(value);
       case STRING -> value.toString();
+      case ARRAY -> {
+        List<?> elements = value instanceof Object[] array ? Arrays.asList(array) : (List<?>) value;
+        List<Object> converted = new ArrayList<>(elements.size());
+        for (Object element : elements) {
+          converted.add(toAvroValue(element, effective.getElementType()));
+        }
+        yield converted;
+      }
       default -> value;
     };
   }

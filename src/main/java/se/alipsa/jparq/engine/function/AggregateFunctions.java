@@ -71,6 +71,7 @@ import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.Operation;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.RecordReader;
+import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.OrderKey;
@@ -1667,14 +1668,31 @@ public final class AggregateFunctions {
     }
   }
 
+  /**
+   * Identifies a group within a grouping set using a cached content hash.
+   *
+   * <p>
+   * The caller must not modify the supplied values list after construction:
+   * scalar-only lists are retained directly, and mutation would invalidate the
+   * cached hash and map membership.
+   */
   private static final class GroupKey {
     private final int groupingSetIndex;
     private final List<Object> values;
     private final int hash;
 
+    /**
+     * Creates a key whose values remain stable for its lifetime.
+     *
+     * @param groupingSetIndex
+     *          index of the grouping set
+     * @param values
+     *          grouping values; the caller must not modify this list after
+     *          construction
+     */
     GroupKey(int groupingSetIndex, List<Object> values) {
       this.groupingSetIndex = groupingSetIndex;
-      this.values = immutableListAllowingNulls(values);
+      this.values = RelationalKeys.row(values);
       this.hash = 31 * groupingSetIndex + this.values.hashCode();
     }
 
@@ -1987,7 +2005,10 @@ public final class AggregateFunctions {
     if (cls == Boolean.class) {
       return Types.BOOLEAN;
     }
-    if (List.class.isAssignableFrom(cls)) {
+    if (GenericRecord.class.isAssignableFrom(cls)) {
+      return Types.STRUCT;
+    }
+    if (List.class.isAssignableFrom(cls) || Object[].class.isAssignableFrom(cls)) {
       return Types.ARRAY;
     }
     if (cls == String.class || CharSequence.class.isAssignableFrom(cls)) {

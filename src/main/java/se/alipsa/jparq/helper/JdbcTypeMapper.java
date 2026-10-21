@@ -135,7 +135,7 @@ public final class JdbcTypeMapper {
             : (base.getLogicalType() instanceof LogicalTypes.Decimal)
                 ? BigDecimal.class.getName()
                 : byte[].class.getName();
-      case RECORD -> Map.class.getName();
+      case RECORD -> org.apache.avro.generic.GenericRecord.class.getName();
       case ARRAY -> List.class.getName();
       case MAP -> Map.class.getName();
       default -> Object.class.getName();
@@ -169,7 +169,7 @@ public final class JdbcTypeMapper {
       case Types.ARRAY -> List.class.getName();
       case Types.CLOB, Types.NCLOB -> java.sql.Clob.class.getName();
       case Types.BLOB -> java.sql.Blob.class.getName();
-      case Types.STRUCT -> Map.class.getName();
+      case Types.STRUCT -> org.apache.avro.generic.GenericRecord.class.getName();
       default -> Object.class.getName();
     };
   }

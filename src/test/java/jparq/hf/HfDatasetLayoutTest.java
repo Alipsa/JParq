@@ -49,6 +49,24 @@ class HfDatasetLayoutTest {
   }
 
   private static void write(Path path, Schema schema, int... ids) throws Exception {
+    write(path, schema, null, ids);
+  }
+
+  /**
+   * Writes shard rows with an optional shared nested label.
+   *
+   * @param path
+   *          output file
+   * @param schema
+   *          shard schema
+   * @param label
+   *          shared label, or null to derive labels from row IDs
+   * @param ids
+   *          row IDs to write in encounter order
+   * @throws Exception
+   *           if the fixture cannot be written
+   */
+  private static void write(Path path, Schema schema, String label, int... ids) throws Exception {
     Files.createDirectories(path.getParent());
     Configuration conf = new Configuration(false);
     var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(path.toUri()), conf);
@@ -60,7 +78,7 @@ class HfDatasetLayoutTest {
         row.put("id", id);
         row.put("n", id == 2 ? null : id);
         var nested = new GenericData.Record(schema.getField("nested").schema());
-        nested.put("label", "row-" + id);
+        nested.put("label", label == null ? "row-" + id : label);
         row.put("nested", nested);
         row.put("unused", "ignored");
         writer.write(row);
@@ -88,7 +106,9 @@ class HfDatasetLayoutTest {
       while (rs.next()) {
         List<Object> row = new ArrayList<>();
         for (int index = 1; index <= count; index++) {
-          row.add(rs.getObject(index));
+          Object value = rs.getObject(index);
+          // Compare field contents across shards whose Avro record names differ.
+          row.add(value instanceof GenericRecord record ? record.toString() : value);
         }
         rows.add(row);
       }
@@ -169,6 +189,92 @@ class HfDatasetLayoutTest {
         assertEquals(rows(conn, "SELECT id, nested FROM single ORDER BY id"),
             rows(conn, "SELECT id, nested FROM data.train ORDER BY id"));
         assertEquals(4, rows(conn, "SELECT a.nested FROM data.train a JOIN single b ON a.id = b.id").size());
+      }
+    }
+  }
+
+  /**
+   * Uses field contents for relational keys across differently named records.
+   *
+   * @throws Exception
+   *           if fixture creation or execution fails
+   */
+  @Test
+  void nestedRelationalKeysIgnoreRecordNames() throws Exception {
+    write(base.resolve("equal/train-0-of-2.parquet"), schema("EqualFirst"), 1);
+    write(base.resolve("equal/train-1-of-2.parquet"), schema("EqualLast"), 1);
+    for (boolean predicate : List.of(true, false)) {
+      for (boolean projection : List.of(true, false)) {
+        try (var connection = connect(predicate, projection)) {
+          for (String sql : List.of("SELECT DISTINCT nested FROM equal.train",
+              "SELECT nested FROM equal.train GROUP BY nested",
+              "SELECT nested FROM data.train WHERE id = 1 UNION SELECT nested FROM single WHERE id = 1",
+              "WITH t AS (SELECT nested FROM data.train WHERE id = 1 UNION "
+                  + "SELECT nested FROM single WHERE id = 1) SELECT * FROM t",
+              "SELECT * FROM (SELECT nested FROM data.train WHERE id = 1 UNION "
+                  + "SELECT nested FROM single WHERE id = 1) t")) {
+            try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+              assertEquals(java.sql.Types.STRUCT, result.getMetaData().getColumnType(1), sql);
+              assertTrue(result.next(), sql);
+              GenericRecord record = assertInstanceOf(GenericRecord.class, result.getObject(1), sql);
+              assertEquals("row-1", record.get("label").toString(), sql);
+              assertFalse(result.next(), sql);
+            }
+          }
+          for (String sql : List.of("SELECT nested, COUNT(*) FROM equal.train GROUP BY nested",
+              "SELECT MIN(nested), MAX(nested) FROM equal.train")) {
+            try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+              assertEquals(java.sql.Types.STRUCT, result.getMetaData().getColumnType(1), sql);
+              assertTrue(result.next(), sql);
+              assertInstanceOf(GenericRecord.class, result.getObject(1), sql);
+              if (sql.contains("COUNT")) {
+                assertEquals(2, result.getInt(2), sql);
+              } else {
+                assertEquals(java.sql.Types.STRUCT, result.getMetaData().getColumnType(2), sql);
+                assertInstanceOf(GenericRecord.class, result.getObject(2), sql);
+              }
+              assertFalse(result.next(), sql);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Partitions equal struct contents together across named schemas and shards.
+   *
+   * @throws Exception
+   *           if fixture creation or execution fails
+   */
+  @Test
+  void nestedWindowPartitionsIgnoreRecordNames() throws Exception {
+    write(base.resolve("windows/train-0-of-2.parquet"), schema("WindowFirst"), "same", 3, 1);
+    write(base.resolve("windows/train-1-of-2.parquet"), schema("WindowLast"), "same", 2);
+    write(base.resolve("window_single.parquet"), schema("WindowSingle"), "same", 3, 1, 2);
+    for (boolean predicate : List.of(true, false)) {
+      for (boolean projection : List.of(true, false)) {
+        try (var connection = connect(predicate, projection)) {
+          for (String input : List.of("windows.train", "window_single",
+              "(SELECT id, nested FROM window_single WHERE id < 3 UNION ALL "
+                  + "SELECT id, nested FROM windows.train WHERE id = 3) t")) {
+            String sql = "SELECT id, nested, COUNT(*) OVER (PARTITION BY nested) AS n, "
+                + "ROW_NUMBER() OVER (PARTITION BY nested ORDER BY id) AS rn, "
+                + "RANK() OVER (PARTITION BY nested ORDER BY id) AS rk FROM " + input + " ORDER BY id";
+            try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+              for (int id = 1; id <= 3; id++) {
+                assertTrue(result.next(), sql);
+                assertEquals(id, result.getInt(1), sql);
+                var record = assertInstanceOf(GenericRecord.class, result.getObject(2), sql);
+                assertEquals("same", record.get("label").toString(), sql);
+                assertEquals(3, result.getInt(3), sql);
+                assertEquals(id, result.getInt(4), sql);
+                assertEquals(id, result.getInt(5), sql);
+              }
+              assertFalse(result.next(), sql);
+            }
+          }
+        }
       }
     }
   }
