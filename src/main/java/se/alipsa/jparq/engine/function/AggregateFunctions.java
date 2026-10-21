@@ -1668,11 +1668,28 @@ public final class AggregateFunctions {
     }
   }
 
+  /**
+   * Identifies a group within a grouping set using a cached content hash.
+   *
+   * <p>
+   * The caller must not modify the supplied values list after construction:
+   * scalar-only lists are retained directly, and mutation would invalidate the
+   * cached hash and map membership.
+   */
   private static final class GroupKey {
     private final int groupingSetIndex;
     private final List<Object> values;
     private final int hash;
 
+    /**
+     * Creates a key whose values remain stable for its lifetime.
+     *
+     * @param groupingSetIndex
+     *          index of the grouping set
+     * @param values
+     *          grouping values; the caller must not modify this list after
+     *          construction
+     */
     GroupKey(int groupingSetIndex, List<Object> values) {
       this.groupingSetIndex = groupingSetIndex;
       this.values = RelationalKeys.row(values);
