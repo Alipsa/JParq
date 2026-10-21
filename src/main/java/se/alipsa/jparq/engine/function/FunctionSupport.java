@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine.function;
 
 import static se.alipsa.jparq.engine.function.NumericFunctions.toInteger;
 
+import java.sql.SQLSyntaxErrorException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -16,8 +17,9 @@ import net.sf.jsqlparser.expression.TrimFunction;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.engine.CorrelatedBindings;
+import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SubqueryExecutor;
-import se.alipsa.jparq.helper.LiteralConverter;
 
 /**
  * Central dispatch for evaluating SQL {@link Function} expressions.
@@ -66,16 +68,23 @@ public final class FunctionSupport {
    * @param record
    *          the current record
    * @return the computed value or {@code null}
+   * @throws IllegalArgumentException
+   *           if the function is unsupported or NULLIF has an invalid argument
+   *           count; the cause carries SQLState 42000
    */
   public Object evaluate(Function func, GenericRecord record) {
+    if (CorrelatedBindings.isReserved(func)) {
+      return CorrelatedBindings.value(func);
+    }
     String name = func.getName();
     if (name == null) {
-      return null;
+      throw syntaxFailure("Unsupported function: " + func);
     }
     String upper = name.toUpperCase(Locale.ROOT);
     FunctionArguments args = new FunctionArguments(func, record, evaluator);
     return switch (upper) {
       case "COALESCE" -> StringFunctions.coalesce(args);
+      case "NULLIF" -> evaluateNullIf(args);
       case "IFNULL" -> SystemFunctions.ifNull(args.firstValue(),
           args.positionalValues().size() > 1 ? args.positionalValues().get(1) : null);
       case "DATABASE" -> SystemFunctions.database();
@@ -130,7 +139,7 @@ public final class FunctionSupport {
           "LOG", "LOG10", "PI", "RAND", "RANDOM", "SIGN", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN", "ATAN2",
           "DEGREES", "RADIANS" ->
         NumericFunctions.evaluate(upper, args.positionalValues());
-      default -> LiteralConverter.toLiteral(func);
+      default -> throw syntaxFailure("Unsupported function: " + name);
     };
   }
 
@@ -184,6 +193,37 @@ public final class FunctionSupport {
       values.add(evaluator.apply(element, record));
     }
     return ArrayFunctions.homogenizeArrayValues(values);
+  }
+
+  /**
+   * Returns NULL for equal arguments, or the first value for unequal or UNKNOWN
+   * comparisons, using the same equality rules as SQL predicates.
+   *
+   * @param args
+   *          arguments to evaluate
+   * @return the first argument or NULL
+   * @throws IllegalArgumentException
+   *           if there are not exactly two arguments, with SQLState 42000
+   */
+  private Object evaluateNullIf(FunctionArguments args) {
+    if (args.positionalExpressions().size() != 2) {
+      throw syntaxFailure("NULLIF requires exactly two arguments");
+    }
+    List<Object> values = args.positionalValues();
+    Object first = values.getFirst();
+    Integer comparison = SqlComparisons.compareOrUnknown(first, values.get(1));
+    return comparison != null && comparison == 0 ? null : first;
+  }
+
+  /**
+   * Creates a scalar function failure with its JDBC syntax classification.
+   *
+   * @param message
+   *          the diagnostic message
+   * @return an engine exception carrying SQLState 42000
+   */
+  private static IllegalArgumentException syntaxFailure(String message) {
+    return new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000"));
   }
 
   private Object evaluateArrayFunction(Function func, GenericRecord record, FunctionArguments args) {
