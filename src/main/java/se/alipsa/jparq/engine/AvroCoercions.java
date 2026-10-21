@@ -223,7 +223,8 @@ public final class AvroCoercions {
 
   /**
    * Unwraps an Avro value to a corresponding Java type. Record values retain
-   * their Avro schema and fields as GenericRecord objects rather than JSON text.
+   * their Avro schema and raw field values as GenericRecord objects rather than
+   * JSON text; record fields are not recursively unwrapped.
    *
    * @param v
    *          The Avro value to unwrap.

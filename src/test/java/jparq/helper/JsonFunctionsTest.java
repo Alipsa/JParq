@@ -39,6 +39,23 @@ class JsonFunctionsTest {
     assertEquals("{}", JsonFunctions.jsonObject(List.of()));
   }
 
+  /** Embeds Avro records as objects, including nested records and SQL NULLs. */
+  @Test
+  void embedsStructValuesAsObjects() {
+    var childSchema = org.apache.avro.SchemaBuilder.record("child").fields().requiredInt("n").endRecord();
+    var schema = org.apache.avro.SchemaBuilder.record("parent").fields().requiredString("s").name("child")
+        .type(childSchema).noDefault().optionalString("missing").endRecord();
+    var child = new org.apache.avro.generic.GenericData.Record(childSchema);
+    child.put("n", 7);
+    var record = new org.apache.avro.generic.GenericData.Record(schema);
+    record.put("s", "it's");
+    record.put("child", child);
+    record.put("missing", null);
+    String json = "{\"s\":\"it's\",\"child\":{\"n\":7},\"missing\":null}";
+    assertEquals("{\"k\":" + json + "}", JsonFunctions.jsonObject(List.of("k", record)));
+    assertEquals("[" + json + "]", JsonFunctions.jsonArray(List.of(record)));
+  }
+
   @Test
   void validatesInput() {
     assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonObject(List.of("onlyKey")));

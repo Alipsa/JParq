@@ -83,6 +83,7 @@ import se.alipsa.jparq.engine.ParquetTable;
 import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.RecordReader;
+import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SamplingRecordReader;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlExceptions;
@@ -773,6 +774,9 @@ public class JParqPreparedStatement implements PreparedStatement {
           throw new SQLException("Set operation components must project the same number of columns");
         } else {
           for (int col = 1; col <= columnCount; col++) {
+            if (!Objects.equals(sourceSchemas.get(col - 1), sourceColumnSchema(meta, col))) {
+              sourceSchemas.set(col - 1, null);
+            }
             Integer expectedType = sqlTypes.get(col - 1);
             if (expectedType != null && expectedType != meta.getColumnType(col)) {
               throw new SQLException("Set operation components must use compatible column types");
@@ -1028,12 +1032,14 @@ public class JParqPreparedStatement implements PreparedStatement {
     LinkedHashSet<List<Object>> unique = new LinkedHashSet<>(accumulated.size() + incoming.size());
     List<List<Object>> result = new ArrayList<>(accumulated.size() + incoming.size());
     for (List<Object> row : accumulated) {
-      if (unique.add(row)) {
+      List<Object> key = RelationalKeys.row(row);
+      if (unique.add(key)) {
         result.add(row);
       }
     }
     for (List<Object> row : incoming) {
-      if (unique.add(row)) {
+      List<Object> key = RelationalKeys.row(row);
+      if (unique.add(key)) {
         result.add(row);
       }
     }
@@ -1055,11 +1061,12 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (accumulated.isEmpty() || incoming.isEmpty()) {
       return new ArrayList<>();
     }
-    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(incoming);
+    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(incoming.stream().map(RelationalKeys::row).toList());
     LinkedHashSet<List<Object>> result = new LinkedHashSet<>();
     List<List<Object>> ordered = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      if (incomingSet.contains(row) && result.add(row)) {
+      List<Object> key = RelationalKeys.row(row);
+      if (incomingSet.contains(key) && result.add(key)) {
         ordered.add(row);
       }
     }
@@ -1084,17 +1091,19 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     Map<List<Object>, Integer> remaining = new HashMap<>();
     for (List<Object> row : incoming) {
-      remaining.merge(row, 1, Integer::sum);
+      List<Object> key = RelationalKeys.row(row);
+      remaining.merge(key, 1, Integer::sum);
     }
     List<List<Object>> result = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      Integer count = remaining.get(row);
+      List<Object> key = RelationalKeys.row(row);
+      Integer count = remaining.get(key);
       if (count != null && count > 0) {
         result.add(row);
         if (count == 1) {
-          remaining.remove(row);
+          remaining.remove(key);
         } else {
-          remaining.put(row, count - 1);
+          remaining.put(key, count - 1);
         }
       }
     }
@@ -1117,14 +1126,14 @@ public class JParqPreparedStatement implements PreparedStatement {
       return new ArrayList<>();
     }
     if (incoming.isEmpty()) {
-      LinkedHashSet<List<Object>> unique = new LinkedHashSet<>(accumulated);
-      return new ArrayList<>(unique);
+      return mergeDistinct(accumulated, List.of());
     }
-    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(incoming);
+    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(incoming.stream().map(RelationalKeys::row).toList());
     LinkedHashSet<List<Object>> emitted = new LinkedHashSet<>();
     List<List<Object>> ordered = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      if (!incomingSet.contains(row) && emitted.add(row)) {
+      List<Object> key = RelationalKeys.row(row);
+      if (!incomingSet.contains(key) && emitted.add(key)) {
         ordered.add(row);
       }
     }
@@ -1152,17 +1161,19 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     Map<List<Object>, Integer> remaining = new HashMap<>();
     for (List<Object> row : incoming) {
-      remaining.merge(row, 1, Integer::sum);
+      List<Object> key = RelationalKeys.row(row);
+      remaining.merge(key, 1, Integer::sum);
     }
     List<List<Object>> result = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      Integer count = remaining.get(row);
+      List<Object> key = RelationalKeys.row(row);
+      Integer count = remaining.get(key);
       if (count == null) {
         result.add(row);
       } else if (count == 1) {
-        remaining.remove(row);
+        remaining.remove(key);
       } else {
-        remaining.put(row, count - 1);
+        remaining.put(key, count - 1);
       }
     }
     return result;
@@ -2252,7 +2263,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       case STRING -> Schema.create(Schema.Type.STRING);
       case ARRAY -> inferredArraySchema(values);
       case STRUCT -> values.stream().filter(GenericRecord.class::isInstance).map(GenericRecord.class::cast).findFirst()
-          .orElseThrow().getSchema();
+          .map(GenericRecord::getSchema).orElse(Schema.create(Schema.Type.STRING));
     };
   }
 

@@ -175,6 +175,54 @@ class HfDatasetLayoutTest {
     }
   }
 
+  /**
+   * Uses field contents for relational keys across differently named records.
+   *
+   * @throws Exception
+   *           if fixture creation or execution fails
+   */
+  @Test
+  void nestedRelationalKeysIgnoreRecordNames() throws Exception {
+    write(base.resolve("equal/train-0-of-2.parquet"), schema("EqualFirst"), 1);
+    write(base.resolve("equal/train-1-of-2.parquet"), schema("EqualLast"), 1);
+    for (boolean predicate : List.of(true, false)) {
+      for (boolean projection : List.of(true, false)) {
+        try (var connection = connect(predicate, projection)) {
+          for (String sql : List.of("SELECT DISTINCT nested FROM equal.train",
+              "SELECT nested FROM equal.train GROUP BY nested",
+              "SELECT nested FROM data.train WHERE id = 1 UNION SELECT nested FROM single WHERE id = 1",
+              "WITH t AS (SELECT nested FROM data.train WHERE id = 1 UNION "
+                  + "SELECT nested FROM single WHERE id = 1) SELECT * FROM t",
+              "SELECT * FROM (SELECT nested FROM data.train WHERE id = 1 UNION "
+                  + "SELECT nested FROM single WHERE id = 1) t")) {
+            try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+              assertEquals(java.sql.Types.STRUCT, result.getMetaData().getColumnType(1), sql);
+              assertTrue(result.next(), sql);
+              GenericRecord record = assertInstanceOf(GenericRecord.class, result.getObject(1), sql);
+              assertEquals("row-1", record.get("label").toString(), sql);
+              assertFalse(result.next(), sql);
+            }
+          }
+          for (String sql : List.of("SELECT nested, COUNT(*) FROM equal.train GROUP BY nested",
+              "SELECT MIN(nested), MAX(nested) FROM equal.train")) {
+            try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+              assertEquals(java.sql.Types.STRUCT, result.getMetaData().getColumnType(1), sql);
+              assertTrue(result.next(), sql);
+              assertInstanceOf(GenericRecord.class, result.getObject(1), sql);
+              if (sql.contains("COUNT")) {
+                assertEquals(2, result.getInt(2), sql);
+              } else {
+                assertEquals(java.sql.Types.STRUCT, result.getMetaData().getColumnType(2), sql);
+                assertInstanceOf(GenericRecord.class, result.getObject(2), sql);
+              }
+              assertFalse(result.next(), sql);
+            }
+          }
+        }
+      }
+    }
+  }
+
   private void incompatibleGroup() throws Exception {
     Files.createDirectories(base.resolve("other"));
     Files.copy(base.resolve("single.parquet"), base.resolve("other/bad-0-of-2.parquet"));

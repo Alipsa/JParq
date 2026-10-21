@@ -489,10 +489,15 @@ The following SQL statements are supported:
   `ANY`/`SOME` and TRUE for `ALL`; NULL arrays or undecided comparisons with NULL elements yield UNKNOWN.
   Array-column values decode scalar element logical types, including dates, decimals, and timestamps,
   before comparison or correlation binding. Physical array and struct columns retain their types through derived tables, CTEs, and set operations,
-  including empty results. Computed arrays in non-LATERAL derived tables and CTEs infer element types
+  with matching source schemas available even for empty results. Computed arrays and arrays with differing
+  set-branch schemas in non-LATERAL derived tables and CTEs infer element types
   from returned values, recursively; empty or all-NULL elements use a nullable VARCHAR element schema.
   JDBC `getObject()` returns array columns read through derived tables and CTEs as `Object[]`,
-  and struct columns as Avro `GenericRecord` values.
+  and struct columns as Avro `GenericRecord` values. Struct fields retain their raw Avro representations:
+  strings can be `Utf8`, dates epoch-day integers, decimals `ByteBuffer`, and timestamps stored longs.
+  The record's schema describes those field types; nested struct fields are not recursively decoded.
+  DISTINCT, GROUP BY, and set-operation keys compare struct fields and array elements by content,
+  independently of Avro record names. JSON_OBJECT and JSON_ARRAY embed struct values as JSON objects.
   Modern three-level Parquet lists have a separate projection
   limitation tracked in [#217](https://github.com/Alipsa/JParq/issues/217).
   Quantified comparisons in `HAVING` are not currently supported; see [#214](https://github.com/Alipsa/JParq/issues/214).

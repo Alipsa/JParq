@@ -219,6 +219,151 @@ class DerivedComplexTypeTest {
   }
 
   /**
+   * Infers array element types across all set branches independently of order.
+   *
+   * @param predicate
+   *          predicate pushdown setting
+   * @param projection
+   *          projection pushdown setting
+   * @param directory
+   *          temporary dataset directory
+   * @throws Exception
+   *           if fixture creation or execution fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void promotesSetArrayElements(boolean predicate, boolean projection, @TempDir Path directory) throws Exception {
+    writeFixture(directory);
+    try (var connection = DriverManager.getConnection(url(directory, predicate, projection))) {
+      String physical = "SELECT ints AS a FROM small WHERE id = 1";
+      for (String computed : List.of("SELECT ARRAY[1.5] AS a", "SELECT ARRAY['x'] AS a",
+          "SELECT decs AS a FROM small WHERE id = 1")) {
+        for (String branches : List.of(physical + " UNION ALL " + computed, computed + " UNION ALL " + physical,
+            physical + " UNION ALL " + computed + " UNION ALL " + physical)) {
+          for (String sql : List.of("WITH t AS (" + branches + ") SELECT a FROM t",
+              "SELECT a FROM (" + branches + ") t")) {
+            try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+              assertEquals(Types.ARRAY, result.getMetaData().getColumnType(1), sql);
+              java.util.Set<List<Object>> actual = new java.util.HashSet<>();
+              while (result.next()) {
+                actual.add(java.util.Arrays.asList(assertInstanceOf(Object[].class, result.getObject(1), sql)));
+              }
+              java.util.Set<List<Object>> expected = computed.contains("decs")
+                  ? java.util.Set.of(List.of(new BigDecimal("1.00"), new BigDecimal("2.00")),
+                      List.of(new BigDecimal("1.50")))
+                  : computed.contains("1.5")
+                      ? java.util.Set.of(List.of(new BigDecimal("1.0"), new BigDecimal("2.0")),
+                          List.of(new BigDecimal("1.5")))
+                      : java.util.Set.of(List.of("1", "2"), List.of("x"));
+              assertEquals(expected, actual, sql);
+            }
+          }
+        }
+      }
+      for (String sql : List.of("SELECT JSON_OBJECT(KEY 'k' VALUE details) FROM small WHERE id = 1",
+          "SELECT JSON_ARRAY(details) FROM small WHERE id = 1")) {
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+          assertTrue(result.next());
+          assertEquals(sql.contains("JSON_OBJECT") ? "{\"k\":{\"m\":\"m1\",\"w\":7}}" : "[{\"m\":\"m1\",\"w\":7}]",
+              result.getString(1), sql);
+        }
+      }
+    }
+  }
+
+  /**
+   * Compares physical arrays by content across grouping and all set operators.
+   *
+   * @param predicate
+   *          predicate pushdown setting
+   * @param projection
+   *          projection pushdown setting
+   * @param directory
+   *          temporary dataset directory
+   * @throws Exception
+   *           if fixture creation or execution fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void arrayRelationalKeys(boolean predicate, boolean projection, @TempDir Path directory) throws Exception {
+    writeFixture(directory);
+    try (var connection = DriverManager.getConnection(url(directory, predicate, projection))) {
+      for (String operator : List.of("UNION", "UNION ALL", "INTERSECT", "INTERSECT ALL", "EXCEPT", "EXCEPT ALL")) {
+        String sql = "SELECT tags FROM small " + operator + " SELECT tags FROM small";
+        int expected = operator.startsWith("EXCEPT") ? 0 : operator.equals("UNION ALL") ? 6 : 3;
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+          int count = 0;
+          while (result.next()) {
+            Object value = result.getObject(1);
+            if (value != null) {
+              assertInstanceOf(Object[].class, value, sql);
+            }
+            count++;
+          }
+          assertEquals(expected, count, sql);
+        }
+      }
+      String cte = "WITH t AS (SELECT tags FROM small UNION ALL SELECT tags FROM small) ";
+      for (String sql : List.of(cte + "SELECT DISTINCT tags FROM t",
+          cte + "SELECT tags, COUNT(*) FROM t GROUP BY tags")) {
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+          assertEquals(Types.ARRAY, result.getMetaData().getColumnType(1), sql);
+          int count = 0;
+          while (result.next()) {
+            if (sql.contains("COUNT")) {
+              assertEquals(2, result.getInt(2), sql);
+            }
+            count++;
+          }
+          assertEquals(3, count, sql);
+        }
+      }
+    }
+  }
+
+  /**
+   * Falls back safely when differing struct schemas contribute only NULLs.
+   *
+   * @param directory
+   *          temporary dataset directory
+   * @throws Exception
+   *           if fixture creation or execution fails
+   */
+  @org.junit.jupiter.api.Test
+  void allNullStructSetFallsBackSafely(@TempDir Path directory) throws Exception {
+    writeFixture(directory);
+    Schema details = SchemaBuilder.record("other_details").fields().requiredString("m").requiredInt("w").endRecord();
+    Schema schema = SchemaBuilder.record("other").fields().name("details").type(optional(details)).noDefault()
+        .endRecord();
+    var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve("other.parquet").toUri()),
+        new Configuration(false));
+    try (var writer = AvroParquetWriter.<GenericRecord>builder(output).withSchema(schema).build()) {
+      GenericRecord record = new GenericData.Record(schema);
+      record.put("details", null);
+      writer.write(record);
+    }
+    try (var connection = DriverManager.getConnection(url(directory, true, true))) {
+      String first = "SELECT details FROM small WHERE id > 1";
+      String second = "SELECT details FROM other";
+      for (String branches : List.of(first + " UNION ALL " + second, second + " UNION ALL " + first)) {
+        String sql = "WITH t AS (" + branches + ") SELECT * FROM t";
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+          assertEquals(Types.VARCHAR, result.getMetaData().getColumnType(1), sql);
+          for (int row = 0; row < 3; row++) {
+            assertTrue(result.next(), sql);
+            assertNull(result.getObject(1), sql);
+          }
+          assertFalse(result.next(), sql);
+        }
+      }
+    }
+  }
+
+  /**
    * Builds a JDBC URL with independent pushdown settings.
    *
    * @param directory
@@ -249,7 +394,8 @@ class DerivedComplexTypeTest {
     Schema schema = SchemaBuilder.record("small").fields().requiredInt("id").name("tags")
         .type(optional(Schema.createArray(Schema.create(Schema.Type.STRING)))).noDefault().name("details")
         .type(optional(details)).noDefault().name("dates").type(optional(Schema.createArray(date))).noDefault()
-        .name("decs").type(optional(Schema.createArray(decimal))).noDefault().endRecord();
+        .name("decs").type(optional(Schema.createArray(decimal))).noDefault().name("ints")
+        .type(optional(Schema.createArray(Schema.create(Schema.Type.INT)))).noDefault().endRecord();
     Configuration configuration = new Configuration(false);
     configuration.setBoolean("parquet.avro.write-old-list-structure", true);
     var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve("small.parquet").toUri()),
@@ -259,6 +405,7 @@ class DerivedComplexTypeTest {
       for (int id = 1; id <= 3; id++) {
         GenericRecord record = new GenericData.Record(schema);
         record.put("id", id);
+        record.put("ints", id == 1 ? List.of(1, 2) : null);
         GenericRecord struct = new GenericData.Record(details);
         struct.put("m", "m1");
         struct.put("w", 7);

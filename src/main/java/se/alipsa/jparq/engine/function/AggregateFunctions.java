@@ -71,6 +71,7 @@ import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.Operation;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.RecordReader;
+import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.OrderKey;
@@ -1674,7 +1675,7 @@ public final class AggregateFunctions {
 
     GroupKey(int groupingSetIndex, List<Object> values) {
       this.groupingSetIndex = groupingSetIndex;
-      this.values = immutableListAllowingNulls(values);
+      this.values = RelationalKeys.row(values);
       this.hash = 31 * groupingSetIndex + this.values.hashCode();
     }
 
@@ -1987,7 +1988,10 @@ public final class AggregateFunctions {
     if (cls == Boolean.class) {
       return Types.BOOLEAN;
     }
-    if (List.class.isAssignableFrom(cls)) {
+    if (GenericRecord.class.isAssignableFrom(cls)) {
+      return Types.STRUCT;
+    }
+    if (List.class.isAssignableFrom(cls) || Object[].class.isAssignableFrom(cls)) {
       return Types.ARRAY;
     }
     if (cls == String.class || CharSequence.class.isAssignableFrom(cls)) {
