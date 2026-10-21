@@ -1412,8 +1412,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     List<Schema> schemas = new ArrayList<>();
     for (var reference : tableReferences) {
       Schema schema = null;
-      if (reference.subquery() == null && reference.commonTableExpression() == null && reference.valueTable() == null
-          && reference.unnest() == null && !InformationSchemaTables.matchesTableReference(reference.tableName())
+      if (!reference.isDerivedTable() && reference.subquery() == null && reference.commonTableExpression() == null
+          && reference.valueTable() == null && reference.unnest() == null
+          && !InformationSchemaTables.matchesTableReference(reference.tableName())
           && !InformationSchemaColumns.matchesTableReference(reference.tableName())
           && resolveCteResultByName(reference.tableName(), cteResults) == null) {
         var location = stmt.getConn().resolveTable(reference.schemaName(), reference.tableName());
