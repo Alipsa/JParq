@@ -96,7 +96,8 @@ public final class JsonFunctions {
   }
 
   /**
-   * Construct a JSON object from an alternating sequence of keys and values.
+   * Construct a JSON object from an alternating sequence of evaluated keys and
+   * values. Key text is preserved, including whitespace and literal quotes.
    *
    * @param args
    *          alternating key/value arguments
@@ -117,11 +118,7 @@ public final class JsonFunctions {
       if (key == null) {
         continue;
       }
-      String field = normalizeKey(key);
-      if (field == null) {
-        continue;
-      }
-      obj.set(field, toNode(value));
+      obj.set(key.toString(), toNode(value));
     }
     return obj.toString();
   }
@@ -233,20 +230,6 @@ public final class JsonFunctions {
       return MAPPER.getNodeFactory().booleanNode(bool);
     }
     return MAPPER.getNodeFactory().textNode(value.toString());
-  }
-
-  private static String normalizeKey(Object key) {
-    if (key == null) {
-      return null;
-    }
-    String field = key.toString().trim();
-    if (field.isEmpty()) {
-      return null;
-    }
-    if ((field.startsWith("\"") && field.endsWith("\"")) || (field.startsWith("'") && field.endsWith("'"))) {
-      field = field.substring(1, field.length() - 1);
-    }
-    return field;
   }
 
   private static JsonNode numberNode(Number number) {

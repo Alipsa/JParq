@@ -26,6 +26,7 @@ import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.*;
 import se.alipsa.jparq.helper.FunctionEscapeResolver;
 import se.alipsa.jparq.helper.JParqUtil;
+import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.meta.InformationSchemaColumns;
 import se.alipsa.jparq.meta.InformationSchemaTables;
 
@@ -2209,7 +2210,7 @@ public final class SqlParser {
             qualifier = extractQualifier(c);
           }
         } else if (ex instanceof StringValue sv) {
-          keyText = sv.getValue();
+          keyText = LiteralConverter.decodeStringLiteral(sv);
         } else {
           keyText = ex.toString();
         }

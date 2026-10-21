@@ -139,6 +139,11 @@ with SQLState `42000`, including for NULL inputs and empty results. Casts withou
 SQL syntax rejected by JSqlParser raises `SQLSyntaxErrorException` with SQLState `42000`. Syntax and numeric
 errors retain preparation and nested-query context in their messages and cause chains.
 
+Escape an apostrophe in a SQL string literal by doubling it: `'O''Brien'` evaluates to `O'Brien`.
+JDBC `setString` values are escaped automatically. Literal decoding leaves dollar-quoted contents unchanged,
+but the SQL pre-pass does not fully recognize dollar quotes: unmatched apostrophes and comment markers inside
+them can still cause parsing failures (tracked in [#226](https://github.com/Alipsa/JParq/issues/226)).
+
 ### Connection options
 
 - `caseSensitive` — defaults to `false`. Set to `true` to make table-name resolution case-sensitive.

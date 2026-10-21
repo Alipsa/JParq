@@ -31,8 +31,8 @@ class JsonFunctionsTest {
     List<Object> objectArgs = Arrays.asList("name", "Alice", "\"age\"", 30, null, "ignored", " active ", true);
     String objectJson = JsonFunctions.jsonObject(objectArgs);
     assertTrue(objectJson.contains("\"name\":\"Alice\""));
-    assertTrue(objectJson.contains("\"age\":30"));
-    assertTrue(objectJson.contains("\"active\":true"));
+    assertTrue(objectJson.contains("\"\\\"age\\\"\":30"));
+    assertTrue(objectJson.contains("\" active \":true"));
 
     List<Object> arrayArgs = List.of("x", 2, "{\"k\": \"v\"}", JsonNodeFactory.instance.booleanNode(false));
     assertEquals("[\"x\",2,{\"k\":\"v\"},false]", JsonFunctions.jsonArray(arrayArgs));

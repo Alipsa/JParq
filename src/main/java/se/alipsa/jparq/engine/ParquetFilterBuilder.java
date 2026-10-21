@@ -675,11 +675,12 @@ public final class ParquetFilterBuilder {
     if (field == null || AvroCoercions.effectiveSchema(field.schema()).getType() != Schema.Type.STRING) {
       return Optional.empty();
     }
-    int wildcard = pattern.getValue().indexOf('%');
+    String decodedPattern = LiteralConverter.decodeStringLiteral(pattern);
+    int wildcard = decodedPattern.indexOf('%');
     if (wildcard <= 0) {
       return Optional.empty();
     }
-    String prefix = pattern.getValue().substring(0, wildcard);
+    String prefix = decodedPattern.substring(0, wildcard);
     if (prefix.indexOf('_') >= 0) {
       return Optional.empty();
     }
