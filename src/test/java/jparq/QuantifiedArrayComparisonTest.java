@@ -11,16 +11,30 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
+import se.alipsa.jparq.engine.JSqlParserSupport;
 
 /** Regression coverage for quantified comparisons over SQL arrays. */
 class QuantifiedArrayComparisonTest {
+
+  /** Verifies null-safe recognition of parser-created function operands. */
+  @Test
+  void recognizesQuantifierNamesSafely() {
+    assertFalse(JSqlParserSupport.isQuantifiedOperand(null));
+    assertFalse(JSqlParserSupport.isQuantifiedOperand(new Function()));
+    assertFalse(JSqlParserSupport.isQuantifiedOperand(new Function().withName("ABS")));
+    for (String name : List.of("any", "SoMe", "ALL")) {
+      assertTrue(JSqlParserSupport.isQuantifiedOperand(new Function().withName(name)));
+    }
+  }
 
   /**
    * Checks every comparison operator, empty arrays, and SQL UNKNOWN without a
@@ -116,6 +130,75 @@ class QuantifiedArrayComparisonTest {
           }
           assertEquals(14, count);
         }
+      }
+    }
+  }
+
+  /**
+   * Keeps NOT outside quantified comparisons during predicate normalization.
+   *
+   * @param pushdown
+   *          predicate and projection pushdown setting
+   * @throws Exception
+   *           if connection setup or querying fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void negatedQuantifiersMatchScalarPredicates(boolean pushdown) throws Exception {
+    Path root = Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    try (var connection = DriverManager
+        .getConnection("jdbc:jparq:" + root + "?predicatePushdown=" + pushdown + "&projectionPushdown=" + pushdown)) {
+      for (String quantifier : List.of("ANY", "SOME", "ALL")) {
+        boolean all = "ALL".equals(quantifier);
+        for (String[] conditions : List.of(new String[]{
+            "NOT (cyl = " + quantifier + "(ARRAY[4,6]))", all ? "1=1" : "cyl NOT IN (4,6)"
+        }, new String[]{
+            "NOT (cyl < " + quantifier + "(ARRAY[6,8]))", all ? "cyl >= 6" : "cyl >= 8"
+        }, new String[]{
+            "NOT (cyl > " + quantifier + "(ARRAY[4,6]))", all ? "cyl <= 6" : "cyl <= 4"
+        }, new String[]{
+            "NOT (" + quantifier + "(ARRAY[4,6]) = cyl)", all ? "1=1" : "cyl NOT IN (4,6)"
+        }, new String[]{
+            "NOT (cyl = " + quantifier + "(ARRAY[]))", all ? "1=0" : "1=1"
+        }, new String[]{
+            "NOT (cyl = " + quantifier + "(ARRAY[NULL,4]))", all ? "cyl <> 4" : "1=0"
+        })) {
+          for (String suffix : List.of("", " AND mpg > 0")) {
+            String query = "SELECT model FROM mtcars WHERE " + conditions[0] + suffix + " ORDER BY model";
+            assertEquals(
+                models(connection, "SELECT model FROM mtcars WHERE " + conditions[1] + suffix + " ORDER BY model"),
+                models(connection, query), query);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Invalid quantified operands must raise a JDBC error instead of losing rows.
+   *
+   * @param predicate
+   *          invalid comparison
+   * @throws Exception
+   *           if connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "ANY(ARRAY[4,6]) = ANY(ARRAY[6])", "cyl = ANY(ARRAY[[4],[6]])", "cyl = SOME(ARRAY[[4],[6]])",
+      "cyl = ALL(ARRAY[[4],[6]])", "4 = ANY(ARRAY[4,[6]])", "cyl = ANY()", "cyl = ANY(ARRAY[4],ARRAY[6])"
+  })
+  void rejectsInvalidComparisons(String predicate) throws Exception {
+    Path root = Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    for (boolean pushdown : List.of(true, false)) {
+      try (var connection = DriverManager.getConnection("jdbc:jparq:" + root + "?predicatePushdown=" + pushdown);
+          var statement = connection.createStatement()) {
+        assertThrows(SQLException.class, () -> {
+          try (var result = statement.executeQuery("SELECT model FROM mtcars WHERE " + predicate)) {
+            result.next();
+          }
+        }, predicate);
       }
     }
   }

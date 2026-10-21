@@ -480,6 +480,7 @@ The following SQL statements are supported:
 - `ANY`, `SOME`, and `ALL` comparisons over subqueries and arrays, such as
   `cyl = ANY(ARRAY[4, 6])`. `SOME` is a synonym for `ANY`. Empty arrays yield FALSE for
   `ANY`/`SOME` and TRUE for `ALL`; NULL arrays or undecided comparisons with NULL elements yield UNKNOWN.
+  Quantified comparisons in `HAVING` are not currently supported; see [#214](https://github.com/Alipsa/JParq/issues/214).
 - Join support: INNER, LEFT, RIGHT, FULL, CROSS, and Self Join, join ... using syntax
 - `UNION` and `UNION ALL` support
 - Complete set-operation coverage.

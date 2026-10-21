@@ -14,7 +14,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.Supplier;
 import net.sf.jsqlparser.JSQLParserException;
-import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.Function;
@@ -756,8 +755,8 @@ public final class ParquetFilterBuilder {
       return exp;
     }
     if (exp instanceof BinaryExpression binary) {
-      if (binary.getLeftExpression() instanceof AnyComparisonExpression
-          || binary.getRightExpression() instanceof AnyComparisonExpression) {
+      if (JSqlParserSupport.isQuantifiedOperand(binary.getLeftExpression())
+          || JSqlParserSupport.isQuantifiedOperand(binary.getRightExpression())) {
         return new NotExpression(exp);
       }
       BinaryExpression inverse = switch (binary.getStringExpression()) {

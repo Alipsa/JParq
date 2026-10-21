@@ -5,7 +5,6 @@ import static se.alipsa.jparq.engine.AvroCoercions.coerceLiteral;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
@@ -437,25 +436,7 @@ public final class ExpressionEvaluator {
    * @return {@code true} if either side is a quantified subquery or array
    */
   private static boolean involvesAnyComparison(Expression left, Expression right) {
-    return isQuantifiedOperand(left) || isQuantifiedOperand(right);
-  }
-
-  /**
-   * Identifies quantified subqueries and function-shaped array quantifiers.
-   *
-   * @param expression
-   *          comparison operand
-   * @return whether the operand uses ANY, SOME, or ALL
-   */
-  private static boolean isQuantifiedOperand(Expression expression) {
-    if (expression instanceof AnyComparisonExpression) {
-      return true;
-    }
-    if (expression instanceof Function function) {
-      String name = function.getName().toUpperCase(Locale.ROOT);
-      return "ANY".equals(name) || "SOME".equals(name) || "ALL".equals(name);
-    }
-    return false;
+    return JSqlParserSupport.isQuantifiedOperand(left) || JSqlParserSupport.isQuantifiedOperand(right);
   }
 
   /**
@@ -473,10 +454,13 @@ public final class ExpressionEvaluator {
     Expression left = be.getLeftExpression();
     Expression right = be.getRightExpression();
 
-    if (isQuantifiedOperand(left)) {
+    if (JSqlParserSupport.isQuantifiedOperand(left) && JSqlParserSupport.isQuantifiedOperand(right)) {
+      throw new IllegalArgumentException("Quantified comparison requires a scalar operand on one side");
+    }
+    if (JSqlParserSupport.isQuantifiedOperand(left)) {
       return evalAnyComparison(left, right, be.getStringExpression(), rec, true);
     }
-    if (isQuantifiedOperand(right)) {
+    if (JSqlParserSupport.isQuantifiedOperand(right)) {
       return evalAnyComparison(right, left, be.getStringExpression(), rec, false);
     }
     throw new IllegalArgumentException("ANY/ALL evaluation requested without AnyComparisonExpression");
@@ -521,6 +505,10 @@ public final class ExpressionEvaluator {
       }
       if (!(array instanceof List<?> list)) {
         throw new IllegalArgumentException("ANY/SOME/ALL requires an array operand");
+      }
+      if (list.stream()
+          .anyMatch(value -> value instanceof List<?> || value instanceof Map<?, ?> || value instanceof Object[])) {
+        throw new IllegalArgumentException("ANY/SOME/ALL requires scalar array elements");
       }
       values = list;
       isAll = "ALL".equalsIgnoreCase(function.getName());
