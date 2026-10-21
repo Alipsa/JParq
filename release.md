@@ -1,6 +1,7 @@
 # Version history
 
 ### 1.4.0
+- Support quantified comparisons over Parquet array columns, including date and decimal element decoding, and preserve array schemas through derived tables and CTEs (#197).
 - Evaluate `ANY`, `SOME`, and `ALL` comparisons over arrays instead of silently filtering out matching rows; preserve SQL NULL and empty-array semantics and negated predicates with pushdown enabled, and reject comparisons with two quantified operands or non-scalar array elements (#197).
 - Apply derived-table column alias lists by output position across standalone inputs, joins, and LATERAL, including computed and wildcard projections; reject alias-count mismatches even for empty results, and reject duplicate column aliases at parse time with SQLState `42000` (#196).
 - Reuse parsed query shapes, validated source schemas, and eligible prepared plans for correlated EXISTS, IN, scalar, quantified, and ARRAY subqueries within one owning execution (#192). Bind current outer values directly, refresh row-dependent derived/CTE/join materializations, and preserve cancellation and uncorrelated-result caching.

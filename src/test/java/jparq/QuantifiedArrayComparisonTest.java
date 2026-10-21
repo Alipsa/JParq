@@ -232,7 +232,7 @@ class QuantifiedArrayComparisonTest {
     var element = new GenericData.Record(elementSchema);
     element.put("value", 4);
     var record = new GenericData.Record(schema);
-    record.put("items", List.of(element));
+    record.put("items", new GenericData.Array<>(schema.getField("items").schema(), List.of(element)));
     var evaluator = new ExpressionEvaluator(schema);
     var predicate = CCJSqlParserUtil.parseCondExpression("4 = " + quantifier + "(items)");
     IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,

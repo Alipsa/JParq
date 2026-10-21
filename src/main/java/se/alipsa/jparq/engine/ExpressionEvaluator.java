@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine;
 
 import static se.alipsa.jparq.engine.AvroCoercions.coerceLiteral;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -500,9 +501,13 @@ public final class ExpressionEvaluator {
       if (function.getParameters() == null || function.getParameters().size() != 1) {
         throw new IllegalArgumentException("ANY/SOME/ALL requires exactly one array operand");
       }
-      Object array = literalEvaluator.eval(function.getParameters().getFirst(), rec);
+      Operand arrayOperand = operand(function.getParameters().getFirst(), rec);
+      Object array = arrayOperand.value;
       if (array == null) {
         return null;
+      }
+      if (array instanceof Object[] objects) {
+        array = Arrays.asList(objects);
       }
       if (!(array instanceof List<?> list)) {
         throw new IllegalArgumentException("ANY/SOME/ALL requires an array operand");
@@ -511,7 +516,12 @@ public final class ExpressionEvaluator {
           || value instanceof Object[] || value instanceof IndexedRecord)) {
         throw new IllegalArgumentException("ANY/SOME/ALL requires scalar array elements");
       }
-      values = list;
+      Schema arraySchema = arrayOperand.schemaOrNull == null
+          ? null
+          : AvroCoercions.effectiveSchema(arrayOperand.schemaOrNull);
+      values = arraySchema != null && arraySchema.getType() == Schema.Type.ARRAY
+          ? list.stream().map(value -> AvroCoercions.unwrap(value, arraySchema.getElementType())).toList()
+          : list;
       isAll = "ALL".equalsIgnoreCase(function.getName());
     }
     Boolean result = isAll;

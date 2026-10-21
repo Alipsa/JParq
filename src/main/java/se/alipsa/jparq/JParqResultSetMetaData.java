@@ -178,6 +178,19 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter {
     return JdbcTypeMapper.mapSchemaToJdbcType(field.schema());
   }
 
+  /**
+   * Retains the element schema of a physical array column during materialization.
+   *
+   * @param column
+   *          one-based output column index
+   * @return non-null array schema, or null when no physical array field is known
+   */
+  Schema arrayColumnSchema(int column) {
+    Schema.Field field = resolveField(column);
+    Schema valueSchema = field == null ? null : JdbcTypeMapper.nonNullSchema(field.schema());
+    return valueSchema != null && valueSchema.getType() == Schema.Type.ARRAY ? valueSchema : null;
+  }
+
   @Override
   public String getColumnTypeName(int column) {
     return java.sql.JDBCType.valueOf(getColumnType(column)).getName();
