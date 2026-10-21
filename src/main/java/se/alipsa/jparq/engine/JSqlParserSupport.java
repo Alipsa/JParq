@@ -4,7 +4,9 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeoutException;
 import net.sf.jsqlparser.JSQLParserException;
+import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.parser.CCJSqlParser;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.parser.ParseException;
@@ -16,6 +18,25 @@ import net.sf.jsqlparser.statement.Statement;
 /** Shares identifier-aware JSqlParser entry points across query planning. */
 public final class JSqlParserSupport {
   private JSqlParserSupport() {
+  }
+
+  /**
+   * Identifies quantified subqueries and array operands, including function calls
+   * produced by JSqlParser for ANY, SOME, and ALL.
+   *
+   * @param expression
+   *          comparison operand, or null
+   * @return whether the expression is a quantified operand
+   */
+  public static boolean isQuantifiedOperand(Expression expression) {
+    if (expression instanceof AnyComparisonExpression) {
+      return true;
+    }
+    if (expression instanceof Function function) {
+      String name = function.getName();
+      return "ANY".equalsIgnoreCase(name) || "SOME".equalsIgnoreCase(name) || "ALL".equalsIgnoreCase(name);
+    }
+    return false;
   }
 
   /**

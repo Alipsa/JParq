@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.LocalDate;
@@ -43,6 +44,14 @@ class AvroCoercionsTest {
               ? Timestamp.valueOf(java.time.LocalDateTime.ofInstant(instant, java.time.ZoneOffset.UTC))
               : Timestamp.from(instant);
           assertEquals(expected, AvroCoercions.unwrap(-1L, timestamp));
+          Schema arraySchema = Schema.createArray(timestamp);
+          Object[] decoded = assertInstanceOf(Object[].class, AvroCoercions.unwrap(new Object[]{
+              -1L, null
+          }, arraySchema));
+          assertArrayEquals(new Object[]{
+              expected, null
+          }, decoded);
+          assertArrayEquals(decoded, assertInstanceOf(Object[].class, AvroCoercions.unwrap(decoded, arraySchema)));
           assertEquals(expected, AvroCoercions.coerceLiteral(expected.toString(), timestamp));
         }
       }
@@ -93,6 +102,19 @@ class AvroCoercionsTest {
     assertEquals("hi", new String((byte[]) binary));
   }
 
+  /** Keeps UTF-8 array elements binary when the element schema requests it. */
+  @Test
+  void unwrapsBinaryArrayElementsRespectingPreferences() {
+    Schema element = Schema.create(Schema.Type.BYTES);
+    element.addProp("jparq.binary", true);
+    byte[] expected = "abc".getBytes(StandardCharsets.UTF_8);
+    Object[] decoded = assertInstanceOf(Object[].class, AvroCoercions.unwrap(new Object[]{
+        ByteBuffer.wrap(expected)
+    }, Schema.createArray(element)));
+    assertEquals(1, decoded.length);
+    assertArrayEquals(expected, assertInstanceOf(byte[].class, decoded[0]));
+  }
+
   @Test
   void unwrapsDecimalsFromBytesAndFixed() {
     Schema decimalBytes = LogicalTypes.decimal(4, 2).addToSchema(Schema.create(Schema.Type.BYTES));
@@ -103,6 +125,55 @@ class AvroCoercionsTest {
     LogicalTypes.decimal(4, 2).addToSchema(fixedSchema);
     GenericData.Fixed fixed = new GenericData.Fixed(fixedSchema, value);
     assertEquals(new BigDecimal("12.34"), AvroCoercions.unwrap(fixed, fixedSchema));
+  }
+
+  /**
+   * Decodes logical array elements across containers without changing storage
+   * values.
+   */
+  @Test
+  void unwrapsLogicalArrayContainersWithoutMutatingStorage() {
+    Schema date = LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
+    Schema decimal = LogicalTypes.decimal(4, 2).addToSchema(Schema.create(Schema.Type.BYTES));
+    Schema fixed = LogicalTypes.decimal(4, 2).addToSchema(SchemaBuilder.fixed("array_decimal").size(4));
+    ByteBuffer bytes = ByteBuffer.wrap(new BigDecimal("12.34").unscaledValue().toByteArray());
+    Object[] stored = {
+        1, bytes, new GenericData.Fixed(fixed, new byte[]{
+            0, 0, 4, (byte) 210
+        })
+    };
+    Object[] expected = {
+        Date.valueOf("1970-01-02"), new BigDecimal("12.34"), new BigDecimal("12.34")
+    };
+    var schemas = java.util.List.of(date, decimal, fixed);
+    for (int index = 0; index < schemas.size(); index++) {
+      Schema array = Schema.createArray(Schema.createUnion(Schema.create(Schema.Type.NULL), schemas.get(index)));
+      Object[] raw = {
+          stored[index], null
+      };
+      var values = java.util.Arrays.asList(raw);
+      Object[] typed = switch (index) {
+        case 0 -> new Integer[]{
+            1, null
+          };
+        case 1 -> new ByteBuffer[]{
+            bytes, null
+          };
+        case 2 -> new GenericData.Fixed[]{
+            (GenericData.Fixed) stored[index], null
+          };
+        default -> throw new IllegalArgumentException("Unexpected logical type index " + index);
+      };
+      for (Object container : java.util.List.of(raw, typed, values, new GenericData.Array<>(array, values))) {
+        Object[] decoded = assertInstanceOf(Object[].class, AvroCoercions.unwrap(container, array));
+        assertArrayEquals(new Object[]{
+            expected[index], null
+        }, decoded);
+        assertArrayEquals(decoded, assertInstanceOf(Object[].class, AvroCoercions.unwrap(decoded, array)));
+      }
+      assertSame(stored[index], raw[0]);
+    }
+    assertEquals(0, bytes.position());
   }
 
   @Test

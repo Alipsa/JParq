@@ -2929,6 +2929,12 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private Schema columnSchema(ResultSetMetaData meta, int column) throws SQLException {
     int type = meta.getColumnType(column);
+    if (type == Types.ARRAY && meta instanceof JParqResultSetMetaData jparqMeta) {
+      Schema arraySchema = jparqMeta.arrayColumnSchema(column);
+      if (arraySchema != null) {
+        return arraySchema;
+      }
+    }
     return switch (type) {
       case Types.BOOLEAN, Types.BIT -> Schema.create(Schema.Type.BOOLEAN);
       case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> Schema.create(Schema.Type.INT);

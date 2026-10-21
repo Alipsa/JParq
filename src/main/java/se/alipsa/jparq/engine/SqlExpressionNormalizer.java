@@ -207,8 +207,8 @@ public final class SqlExpressionNormalizer {
   private static Expression normalizeQuantifier(Expression original) {
     if (original instanceof Function function && function.getParameters() != null
         && function.getParameters().size() == 1 && function.getParameters().getFirst() instanceof Select select) {
-      String name = function.getName().toUpperCase(Locale.ROOT);
-      if ("ANY".equals(name) || "ALL".equals(name) || "SOME".equals(name)) {
+      if (JSqlParserSupport.isQuantifiedOperand(function)) {
+        String name = function.getName().toUpperCase(Locale.ROOT);
         Select operand = select instanceof ParenthesedSelect ? select : new ParenthesedSelect().withSelect(select);
         return new AnyComparisonExpression(AnyType.valueOf(name), operand);
       }
