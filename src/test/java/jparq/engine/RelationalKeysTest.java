@@ -2,7 +2,9 @@ package jparq.engine;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import org.apache.avro.SchemaBuilder;
@@ -12,9 +14,35 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.engine.RelationalKeys;
 
 /**
- * Checks immutable keys for nested structured values independently of schemas.
+ * Checks scalar-row reuse and snapshots for nested structured values.
  */
 class RelationalKeysTest {
+
+  /** Scalar rows reuse their input list, including NULL and decimal values. */
+  @Test
+  void reusesScalarRows() {
+    List<Object> values = Arrays.asList("text", 1, 2L, new BigDecimal("1.50"), true, null);
+    assertSame(values, RelationalKeys.row(values));
+    List<Object> empty = List.of();
+    assertSame(empty, RelationalKeys.row(empty));
+    List<Object> immutable = List.of("text", 1);
+    assertSame(immutable, RelationalKeys.row(immutable));
+  }
+
+  /** Converted text and nested scalar lists remain independent of mutations. */
+  @Test
+  void snapshotsRowsRequiringNormalization() {
+    Utf8 text = new Utf8("same");
+    List<Object> nested = new ArrayList<>(Arrays.asList(1, "two", null));
+    List<Object> values = new ArrayList<>(Arrays.asList(7, "prefix", text, nested));
+    List<Object> key = RelationalKeys.row(values);
+    assertNotSame(values, key);
+    values.set(1, "changed");
+    text.set("changed");
+    nested.set(0, 9);
+    assertEquals(Arrays.asList(7, "prefix", "same", Arrays.asList(1, "two", null)), key);
+    assertThrows(UnsupportedOperationException.class, () -> key.add("extra"));
+  }
 
   /** Record names and array containers do not affect equal field contents. */
   @Test

@@ -12,7 +12,6 @@ import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
@@ -435,11 +434,11 @@ public final class WindowFunctions {
         evaluator);
 
     IdentityHashMap<GenericRecord, Long> values = new IdentityHashMap<>();
-    List<Object> previousPartition = null;
+    int previousPartition = -1;
     long rowNumber = 0L;
     for (RowContext context : contexts) {
-      if (!Objects.equals(previousPartition, context.partitionValues())) {
-        previousPartition = context.partitionValues();
+      if (previousPartition != context.partitionIndex()) {
+        previousPartition = context.partitionIndex();
         rowNumber = 1L;
       } else {
         rowNumber++;
@@ -455,13 +454,13 @@ public final class WindowFunctions {
         evaluator);
 
     IdentityHashMap<GenericRecord, Long> values = new IdentityHashMap<>();
-    List<Object> previousPartition = null;
+    int previousPartition = -1;
     List<OrderComponent> previousOrder = null;
     long processedInPartition = 0L;
     long currentRank = 0L;
     for (RowContext context : contexts) {
-      if (!Objects.equals(previousPartition, context.partitionValues())) {
-        previousPartition = context.partitionValues();
+      if (previousPartition != context.partitionIndex()) {
+        previousPartition = context.partitionIndex();
         previousOrder = null;
         processedInPartition = 0L;
         currentRank = 0L;
@@ -484,12 +483,12 @@ public final class WindowFunctions {
         evaluator);
 
     IdentityHashMap<GenericRecord, Long> values = new IdentityHashMap<>();
-    List<Object> previousPartition = null;
+    int previousPartition = -1;
     List<OrderComponent> previousOrder = null;
     long currentRank = 0L;
     for (RowContext context : contexts) {
-      if (!Objects.equals(previousPartition, context.partitionValues())) {
-        previousPartition = context.partitionValues();
+      if (previousPartition != context.partitionIndex()) {
+        previousPartition = context.partitionIndex();
         previousOrder = null;
         currentRank = 0L;
       }
@@ -527,10 +526,10 @@ public final class WindowFunctions {
     final int n = contexts.size();
     while (i < n) {
       // Identify the partition starting at i
-      List<Object> partitionValues = contexts.get(i).partitionValues();
+      int partitionIndex = contexts.get(i).partitionIndex();
       int partitionStart = i;
       int partitionEnd = i;
-      while (partitionEnd < n && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+      while (partitionEnd < n && contexts.get(partitionEnd).partitionIndex() == partitionIndex) {
         partitionEnd++;
       }
       long totalRows = partitionEnd - partitionStart;
@@ -585,11 +584,10 @@ public final class WindowFunctions {
     int index = 0;
     final int totalContexts = contexts.size();
     while (index < totalContexts) {
-      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionIndex = contexts.get(index).partitionIndex();
       int partitionStart = index;
       int partitionEnd = index;
-      while (partitionEnd < totalContexts
-          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+      while (partitionEnd < totalContexts && contexts.get(partitionEnd).partitionIndex() == partitionIndex) {
         partitionEnd++;
       }
 
@@ -644,11 +642,10 @@ public final class WindowFunctions {
     int index = 0;
     final int totalContexts = contexts.size();
     while (index < totalContexts) {
-      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionIndex = contexts.get(index).partitionIndex();
       int partitionStart = index;
       int partitionEnd = index;
-      while (partitionEnd < totalContexts
-          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+      while (partitionEnd < totalContexts && contexts.get(partitionEnd).partitionIndex() == partitionIndex) {
         partitionEnd++;
       }
 
@@ -719,11 +716,10 @@ public final class WindowFunctions {
     int index = 0;
     final int totalContexts = contexts.size();
     while (index < totalContexts) {
-      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionIndex = contexts.get(index).partitionIndex();
       int partitionStart = index;
       int partitionEnd = index;
-      while (partitionEnd < totalContexts
-          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+      while (partitionEnd < totalContexts && contexts.get(partitionEnd).partitionIndex() == partitionIndex) {
         partitionEnd++;
       }
       applyCountForPartition(window, contexts, argumentValues, partitionStart, partitionEnd, values);
@@ -903,11 +899,10 @@ public final class WindowFunctions {
     int index = 0;
     final int totalContexts = contexts.size();
     while (index < totalContexts) {
-      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionIndex = contexts.get(index).partitionIndex();
       int partitionStart = index;
       int partitionEnd = index;
-      while (partitionEnd < totalContexts
-          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+      while (partitionEnd < totalContexts && contexts.get(partitionEnd).partitionIndex() == partitionIndex) {
         partitionEnd++;
       }
       applySumForPartition(window, contexts, argumentValues, partitionStart, partitionEnd, values);
@@ -936,11 +931,10 @@ public final class WindowFunctions {
     int index = 0;
     final int totalContexts = contexts.size();
     while (index < totalContexts) {
-      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionIndex = contexts.get(index).partitionIndex();
       int partitionStart = index;
       int partitionEnd = index;
-      while (partitionEnd < totalContexts
-          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+      while (partitionEnd < totalContexts && contexts.get(partitionEnd).partitionIndex() == partitionIndex) {
         partitionEnd++;
       }
       applyAvgForPartition(window, contexts, argumentValues, partitionStart, partitionEnd, values);
@@ -1172,11 +1166,10 @@ public final class WindowFunctions {
     int index = 0;
     final int totalContexts = contexts.size();
     while (index < totalContexts) {
-      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionIndex = contexts.get(index).partitionIndex();
       int partitionStart = index;
       int partitionEnd = index;
-      while (partitionEnd < totalContexts
-          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+      while (partitionEnd < totalContexts && contexts.get(partitionEnd).partitionIndex() == partitionIndex) {
         partitionEnd++;
       }
       applyMinForPartition(window, contexts, argumentValues, partitionStart, partitionEnd, values);
@@ -1350,11 +1343,10 @@ public final class WindowFunctions {
     int index = 0;
     final int totalContexts = contexts.size();
     while (index < totalContexts) {
-      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionIndex = contexts.get(index).partitionIndex();
       int partitionStart = index;
       int partitionEnd = index;
-      while (partitionEnd < totalContexts
-          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+      while (partitionEnd < totalContexts && contexts.get(partitionEnd).partitionIndex() == partitionIndex) {
         partitionEnd++;
       }
       applyMaxForPartition(window, contexts, argumentValues, partitionStart, partitionEnd, values);
@@ -1536,11 +1528,10 @@ public final class WindowFunctions {
     int index = 0;
     final int totalContexts = contexts.size();
     while (index < totalContexts) {
-      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionIndex = contexts.get(index).partitionIndex();
       int partitionStart = index;
       int partitionEnd = index;
-      while (partitionEnd < totalContexts
-          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+      while (partitionEnd < totalContexts && contexts.get(partitionEnd).partitionIndex() == partitionIndex) {
         partitionEnd++;
       }
 
@@ -1593,11 +1584,10 @@ public final class WindowFunctions {
     int index = 0;
     final int totalContexts = contexts.size();
     while (index < totalContexts) {
-      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionIndex = contexts.get(index).partitionIndex();
       int partitionStart = index;
       int partitionEnd = index;
-      while (partitionEnd < totalContexts
-          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+      while (partitionEnd < totalContexts && contexts.get(partitionEnd).partitionIndex() == partitionIndex) {
         partitionEnd++;
       }
 
@@ -1645,11 +1635,10 @@ public final class WindowFunctions {
     int index = 0;
     final int totalContexts = contexts.size();
     while (index < totalContexts) {
-      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionIndex = contexts.get(index).partitionIndex();
       int partitionStart = index;
       int partitionEnd = index;
-      while (partitionEnd < totalContexts
-          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+      while (partitionEnd < totalContexts && contexts.get(partitionEnd).partitionIndex() == partitionIndex) {
         partitionEnd++;
       }
 
@@ -1898,11 +1887,10 @@ public final class WindowFunctions {
     int index = 0;
     final int totalContexts = contexts.size();
     while (index < totalContexts) {
-      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionIndex = contexts.get(index).partitionIndex();
       int partitionStart = index;
       int partitionEnd = index;
-      while (partitionEnd < totalContexts
-          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+      while (partitionEnd < totalContexts && contexts.get(partitionEnd).partitionIndex() == partitionIndex) {
         partitionEnd++;
       }
 
@@ -2045,11 +2033,10 @@ public final class WindowFunctions {
     int index = 0;
     final int totalContexts = contexts.size();
     while (index < totalContexts) {
-      List<Object> partitionValues = contexts.get(index).partitionValues();
+      int partitionIndex = contexts.get(index).partitionIndex();
       int partitionStart = index;
       int partitionEnd = index;
-      while (partitionEnd < totalContexts
-          && Objects.equals(contexts.get(partitionEnd).partitionValues(), partitionValues)) {
+      while (partitionEnd < totalContexts && contexts.get(partitionEnd).partitionIndex() == partitionIndex) {
         partitionEnd++;
       }
 
@@ -2434,7 +2421,7 @@ public final class WindowFunctions {
       List<Object> partitionValues = RelationalKeys.row(evaluateAll(partitionExpressions, evaluator, record));
       List<OrderComponent> orderValues = buildOrderComponents(orderByElements, evaluator, record);
       int partitionIndex = partitionIndexes.computeIfAbsent(partitionValues, key -> partitionIndexes.size());
-      contexts.add(new RowContext(record, partitionValues, orderValues, index++, partitionIndex));
+      contexts.add(new RowContext(record, orderValues, index++, partitionIndex));
     }
     contexts.sort((left, right) -> compareContexts(left, right, orderByElements));
     return contexts;
@@ -2713,12 +2700,10 @@ public final class WindowFunctions {
   }
 
   /**
-   * Retains input values separately from content-based partition keys.
+   * Retains input values and the assigned window partition index.
    *
    * @param record
    *          original input row
-   * @param partitionValues
-   *          content keys used for partition boundaries
    * @param orderComponents
    *          values used for window ordering
    * @param originalIndex
@@ -2726,8 +2711,8 @@ public final class WindowFunctions {
    * @param partitionIndex
    *          encounter-order index of the partition key
    */
-  private record RowContext(GenericRecord record, List<Object> partitionValues, List<OrderComponent> orderComponents,
-      int originalIndex, int partitionIndex) {
+  private record RowContext(GenericRecord record, List<OrderComponent> orderComponents, int originalIndex,
+      int partitionIndex) {
   }
 
   private record OrderComponent(Object value, boolean ascending, OrderByElement.NullOrdering nullOrdering) {
