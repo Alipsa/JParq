@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.LocalDate;
@@ -99,6 +100,19 @@ class AvroCoercionsTest {
     Object binary = AvroCoercions.unwrap(ByteBuffer.wrap("hi".getBytes()), binaryPreferred);
     assertTrue(binary instanceof byte[]);
     assertEquals("hi", new String((byte[]) binary));
+  }
+
+  /** Keeps UTF-8 array elements binary when the element schema requests it. */
+  @Test
+  void unwrapsBinaryArrayElementsRespectingPreferences() {
+    Schema element = Schema.create(Schema.Type.BYTES);
+    element.addProp("jparq.binary", true);
+    byte[] expected = "abc".getBytes(StandardCharsets.UTF_8);
+    Object[] decoded = assertInstanceOf(Object[].class, AvroCoercions.unwrap(new Object[]{
+        ByteBuffer.wrap(expected)
+    }, Schema.createArray(element)));
+    assertEquals(1, decoded.length);
+    assertArrayEquals(expected, assertInstanceOf(byte[].class, decoded[0]));
   }
 
   @Test

@@ -4,7 +4,7 @@
 - Support quantified comparisons over Parquet array columns, including correlated logical arrays (#197).
 - **Behavior change:** JDBC array elements now decode dates, decimals, and timestamps to their Java logical types before correlation binding or projection (#219).
   Plain binary elements also follow the scalar UTF-8 text heuristic per element: text can become `String` and other
-  values `byte[]`, so a single array can contain both; explicit binary schema preferences are honored.
+  values `byte[]`, so a single array can contain both; element schemas marked `jparq.binary=true` stay `byte[]`.
   Nested array elements are recursively returned as `Object[]` instead of `GenericData.Array`.
 - **Behavior change:** physical array columns projected directly through derived tables and CTEs retain JDBC ARRAY metadata and Object[] values instead of VARCHAR identity strings (partial fix for #201). Structs, computed arrays, and set-operation arrays remain affected.
 - Evaluate `ANY`, `SOME`, and `ALL` comparisons over arrays instead of silently filtering out matching rows; preserve SQL NULL and empty-array semantics and negated predicates with pushdown enabled, and reject comparisons with two quantified operands or non-scalar array elements (#197).
