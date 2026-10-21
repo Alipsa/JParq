@@ -415,6 +415,18 @@ public final class AggregateFunctions {
   }
 
   /**
+   * Identifies supported aggregate names, including aliases, without planning an
+   * aggregate expression.
+   *
+   * @param name
+   *          function name, possibly null
+   * @return whether the name identifies a supported aggregate
+   */
+  public static boolean isAggregateName(String name) {
+    return AggregateType.from(name) != null;
+  }
+
+  /**
    * Attempt to build an {@link AggregatePlan} for the provided SELECT. Returns
    * {@code null} if the statement contains no aggregates and no GROUP BY clause.
    *

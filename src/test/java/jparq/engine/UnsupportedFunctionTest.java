@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLSyntaxErrorException;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -59,6 +60,47 @@ class UnsupportedFunctionTest {
       }
     }
   }
+
+  /**
+   * Distinguishes supported aggregates in scalar contexts from unknown functions.
+   *
+   * @param predicatePushdown
+   *          whether predicate pushdown is enabled
+   * @param projectionPushdown
+   *          whether projection pushdown is enabled
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void explainsAggregatesInScalarExpressions(boolean predicatePushdown, boolean projectionPushdown) throws Exception {
+    Path directory = Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    String url = "jdbc:jparq:" + directory + "?predicatePushdown=" + predicatePushdown + "&projectionPushdown="
+        + projectionPushdown;
+    Map<String, String> queries = Map.of("SELECT COALESCE(MAX(cyl), 0) FROM mtcars", "MAX",
+        "SELECT UPPER(MAX(model)) FROM mtcars", "MAX", "SELECT ROUND(AVG(mpg), 1) FROM mtcars", "AVG",
+        "SELECT SUM(cyl) + 1 FROM mtcars", "SUM", "SELECT cyl FROM mtcars WHERE COUNT(*) > 1", "COUNT",
+        "SELECT NULLIF(MIN(cyl), 0) FROM mtcars", "MIN", "SELECT UPPER(STRING_AGG(model, ',')) FROM mtcars",
+        "STRING_AGG", "SELECT ROUND(average(mpg), 1) FROM mtcars", "average");
+    try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+      for (var query : queries.entrySet()) {
+        var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
+          try (var result = statement.executeQuery(query.getKey())) {
+            while (result.next()) {
+              result.getObject(1);
+            }
+          }
+        }, query.getKey());
+        assertEquals("42000", failure.getSQLState(), query.getKey());
+        String message = "Aggregate function " + query.getValue()
+            + " is not supported inside this scalar expression (see #231)";
+        assertTrue(failure.getMessage().contains(message), failure::getMessage);
+      }
+    }
+  }
+
   /**
    * Rejects table-free calls while preserving selective expression evaluation.
    *
@@ -91,5 +133,4 @@ class UnsupportedFunctionTest {
       }
     }
   }
-
 }

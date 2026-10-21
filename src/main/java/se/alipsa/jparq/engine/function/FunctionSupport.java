@@ -69,8 +69,8 @@ public final class FunctionSupport {
    *          the current record
    * @return the computed value or {@code null}
    * @throws IllegalArgumentException
-   *           if the function is unsupported or NULLIF has an invalid argument
-   *           count; the cause carries SQLState 42000
+   *           if the function cannot be evaluated here or NULLIF has an invalid
+   *           argument count; the cause carries SQLState 42000
    */
   public Object evaluate(Function func, GenericRecord record) {
     if (CorrelatedBindings.isReserved(func)) {
@@ -139,7 +139,13 @@ public final class FunctionSupport {
           "LOG", "LOG10", "PI", "RAND", "RANDOM", "SIGN", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN", "ATAN2",
           "DEGREES", "RADIANS" ->
         NumericFunctions.evaluate(upper, args.positionalValues());
-      default -> throw syntaxFailure("Unsupported function: " + name);
+      default -> {
+        if (AggregateFunctions.isAggregateName(name)) {
+          throw syntaxFailure(
+              "Aggregate function " + name + " is not supported inside this scalar expression (see #231)");
+        }
+        throw syntaxFailure("Unsupported function: " + name);
+      }
     };
   }
 
