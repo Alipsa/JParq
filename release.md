@@ -1,6 +1,7 @@
 # Version history
 
 ### 1.4.0
+- Support set operations in derived tables, including joins and LATERAL inputs, instead of failing with an internal ClassCastException; preserve local CTE scope, aliases, ordering, row bounds, and decimal declaration validation (#198).
 - Support quantified comparisons over Parquet array columns, including correlated logical arrays (#197).
 - **Behavior change:** JDBC array elements now decode dates, decimals, and timestamps to their Java logical types before correlation binding or projection (#219).
   Plain binary elements also follow the scalar UTF-8 text heuristic per element: text can become `String` and other

@@ -11,6 +11,8 @@ import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.statement.select.FromItemVisitorAdapter;
+import net.sf.jsqlparser.statement.select.LateralSubSelect;
+import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.PivotVisitorAdapter;
 import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.select.SelectItemVisitorAdapter;
@@ -95,7 +97,19 @@ public final class DecimalCasts {
         return comparison.getSelect().accept(getSelectVisitor(), context);
       }
     };
-    FromItemVisitorAdapter<Void> sources = new FromItemVisitorAdapter<>();
+    FromItemVisitorAdapter<Void> sources = new FromItemVisitorAdapter<>() {
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(ParenthesedSelect select, S context) {
+        return select.accept(getSelectVisitor(), context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(LateralSubSelect select, S context) {
+        return select.accept(getSelectVisitor(), context);
+      }
+    };
     SelectVisitorAdapter<Void> selects = new SelectVisitorAdapter<>(expressions, new PivotVisitorAdapter<>(expressions),
         new SelectItemVisitorAdapter<>(expressions), sources) {
       /** {@inheritDoc} */

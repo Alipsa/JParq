@@ -351,8 +351,8 @@ public final class SqlParser {
    * @param columnMapping
    *          mapping between projection labels and physical column names
    * @param innerSelect
-   *          parsed representation of the subquery when {@code fromItem} is a
-   *          derived table
+   *          optional plain SELECT plan for source-column schema inference; null
+   *          for set-operation derived tables
    * @param subquerySql
    *          textual SQL used to materialize the derived table
    * @param lateral
@@ -406,8 +406,9 @@ public final class SqlParser {
    *          expression defining the join condition (may be {@code null})
    * @param subquery
    *          parsed representation backing a derived table or a CTE reference
-   *          (may be {@code null}); use {@link TableReference#isDerivedTable()}
-   *          to distinguish an independently materialized FROM subquery
+   *          (may be {@code null}, including for a set-operation derived table);
+   *          use {@link TableReference#isDerivedTable()} to distinguish an
+   *          independently materialized FROM subquery
    * @param subquerySql
    *          textual SQL used to materialize the derived table (may be
    *          {@code null})
@@ -1374,15 +1375,14 @@ public final class SqlParser {
     }
     if (fromItem instanceof LateralSubSelect lateralSub) {
       lateral = true;
-      PlainSelect innerPlain = lateralSub.getPlainSelect();
       Alias aliasNode = lateralSub.getAlias();
-      FromInfo info = parseSubSelect(innerPlain, aliasNode, ctes, cteLookup, allowQualifiedWildcards, lateral);
+      FromInfo info = parseSubSelect(lateralSub.getSelect(), aliasNode, ctes, cteLookup, allowQualifiedWildcards,
+          lateral);
       return applySample(info, tableSample);
     }
     if (fromItem instanceof ParenthesedSelect sub) {
-      PlainSelect innerPlain = sub.getPlainSelect();
       Alias aliasNode = sub.getAlias();
-      FromInfo info = parseSubSelect(innerPlain, aliasNode, ctes, cteLookup, allowQualifiedWildcards, lateral);
+      FromInfo info = parseSubSelect(sub.getSelect(), aliasNode, ctes, cteLookup, allowQualifiedWildcards, lateral);
       return applySample(info, tableSample);
     }
     if (fromItem instanceof TableFunction tableFunction) {
@@ -1443,32 +1443,54 @@ public final class SqlParser {
         info.lateral(), tableSample, info.columnAliases());
   }
 
-  private static FromInfo parseSubSelect(PlainSelect innerPlain, Alias aliasNode, List<CommonTableExpression> ctes,
-      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateral) {
-    if (innerPlain == null) {
-      throw new IllegalArgumentException("Only plain SELECT subqueries are supported");
+  /**
+   * Parses a derived query without restricting its body to a plain SELECT.
+   *
+   * @param body
+   *          the complete derived query, including local WITH declarations
+   * @param aliasNode
+   *          the optional table and column aliases
+   * @param ctes
+   *          visible inherited CTE declarations
+   * @param cteLookup
+   *          inherited declarations indexed by identifier
+   * @param allowQualifiedWildcards
+   *          whether qualified wildcards may remain unresolved
+   * @param lateral
+   *          whether the query requires per-row outer binding
+   * @return the reference used to materialize the query independently
+   */
+  private static FromInfo parseSubSelect(net.sf.jsqlparser.statement.select.Select body, Alias aliasNode,
+      List<CommonTableExpression> ctes, Map<Identifier, CommonTableExpression> cteLookup,
+      boolean allowQualifiedWildcards, boolean lateral) {
+    if (body == null) {
+      throw new IllegalArgumentException("Derived table requires a query");
     }
     List<String> columnAliases = extractAliasColumns(aliasNode);
     validateDerivedColumnAliases(columnAliases);
-    if (lateral && innerPlain.getFromItem() == null) {
-      validateTableFreeSelect(innerPlain, true);
+    if (lateral && body instanceof PlainSelect plain && plain.getFromItem() == null) {
+      validateTableFreeSelect(plain, true);
     }
-    Select innerSelect = (Select) parseSelectStatement(innerPlain, ctes, cteLookup, allowQualifiedWildcards);
+    Query query = parseSelectStatement(body, ctes, cteLookup, allowQualifiedWildcards);
+    // Set queries execute through their SQL just like plain derived queries.
+    // Keep the optional plain plan only for source-column schema inference.
+    Select innerSelect = query instanceof Select select ? select : null;
+    String tableName = innerSelect == null ? null : innerSelect.table();
     String alias = null;
     if (aliasNode != null && aliasNode.getName() != null && !aliasNode.getName().isBlank()) {
       alias = aliasNode.getName();
-    } else if (innerSelect.tableAlias() != null && !innerSelect.tableAlias().isBlank()) {
+    } else if (innerSelect != null && innerSelect.tableAlias() != null && !innerSelect.tableAlias().isBlank()) {
       alias = innerSelect.tableAlias();
     } else {
-      alias = innerSelect.table();
+      alias = tableName;
     }
     Map<String, String> mapping = buildColumnMapping(innerSelect);
     if (!columnAliases.isEmpty()) {
       mapping = Map.of();
     }
-    String subquerySql = innerPlain.toString();
-    return new FromInfo(null, innerSelect.table(), alias, mapping, innerSelect, subquerySql, null, null, null, lateral,
-        null, columnAliases);
+    String subquerySql = body.toString();
+    return new FromInfo(null, tableName, alias, mapping, innerSelect, subquerySql, null, null, null, lateral, null,
+        columnAliases);
   }
 
   private static FromInfo parseTableFunction(TableFunction tableFunction, boolean lateral) {
