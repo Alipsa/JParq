@@ -5,6 +5,7 @@ import static se.alipsa.jparq.engine.AvroCoercions.coerceLiteral;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
@@ -12,6 +13,7 @@ import net.sf.jsqlparser.expression.AnyType;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.NotExpression;
 import net.sf.jsqlparser.expression.Parenthesis;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
@@ -432,10 +434,28 @@ public final class ExpressionEvaluator {
    *          the left-hand expression
    * @param right
    *          the right-hand expression
-   * @return {@code true} if either side is an {@link AnyComparisonExpression}
+   * @return {@code true} if either side is a quantified subquery or array
    */
   private static boolean involvesAnyComparison(Expression left, Expression right) {
-    return left instanceof AnyComparisonExpression || right instanceof AnyComparisonExpression;
+    return isQuantifiedOperand(left) || isQuantifiedOperand(right);
+  }
+
+  /**
+   * Identifies quantified subqueries and function-shaped array quantifiers.
+   *
+   * @param expression
+   *          comparison operand
+   * @return whether the operand uses ANY, SOME, or ALL
+   */
+  private static boolean isQuantifiedOperand(Expression expression) {
+    if (expression instanceof AnyComparisonExpression) {
+      return true;
+    }
+    if (expression instanceof Function function) {
+      String name = function.getName().toUpperCase(Locale.ROOT);
+      return "ANY".equals(name) || "SOME".equals(name) || "ALL".equals(name);
+    }
+    return false;
   }
 
   /**
@@ -453,18 +473,17 @@ public final class ExpressionEvaluator {
     Expression left = be.getLeftExpression();
     Expression right = be.getRightExpression();
 
-    if (left instanceof AnyComparisonExpression any) {
-      return evalAnyComparison(any, right, be.getStringExpression(), rec, true);
+    if (isQuantifiedOperand(left)) {
+      return evalAnyComparison(left, right, be.getStringExpression(), rec, true);
     }
-    if (right instanceof AnyComparisonExpression any) {
-      return evalAnyComparison(any, left, be.getStringExpression(), rec, false);
+    if (isQuantifiedOperand(right)) {
+      return evalAnyComparison(right, left, be.getStringExpression(), rec, false);
     }
     throw new IllegalArgumentException("ANY/ALL evaluation requested without AnyComparisonExpression");
   }
 
   /**
-   * Evaluate a single {@link AnyComparisonExpression} against the provided
-   * expression.
+   * Evaluate a quantified subquery or array against the provided expression.
    *
    * @param anyExpr
    *          the ANY/SOME/ALL expression
@@ -481,17 +500,31 @@ public final class ExpressionEvaluator {
    * @return {@code true} or {@code false} when the quantified comparison is
    *         decisive, {@code null} for UNKNOWN
    */
-  private Boolean evalAnyComparison(AnyComparisonExpression anyExpr, Expression otherExpr, String operator,
-      GenericRecord rec, boolean anyOnLeft) {
-    if (subqueryExecutor == null) {
-      throw new IllegalStateException("ANY/ALL subqueries require a subquery executor");
-    }
-
+  private Boolean evalAnyComparison(Expression anyExpr, Expression otherExpr, String operator, GenericRecord rec,
+      boolean anyOnLeft) {
     Operand otherOperand = operand(otherExpr, rec);
     Object otherValue = otherOperand.value;
 
-    List<Object> values = fetchAnyAllValues(anyExpr, rec);
-    boolean isAll = anyExpr.getAnyType() == AnyType.ALL;
+    List<?> values;
+    boolean isAll;
+    if (anyExpr instanceof AnyComparisonExpression subquery) {
+      values = fetchAnyAllValues(subquery, rec);
+      isAll = subquery.getAnyType() == AnyType.ALL;
+    } else {
+      Function function = (Function) anyExpr;
+      if (function.getParameters() == null || function.getParameters().size() != 1) {
+        throw new IllegalArgumentException("ANY/SOME/ALL requires exactly one array operand");
+      }
+      Object array = literalEvaluator.eval(function.getParameters().getFirst(), rec);
+      if (array == null) {
+        return null;
+      }
+      if (!(array instanceof List<?> list)) {
+        throw new IllegalArgumentException("ANY/SOME/ALL requires an array operand");
+      }
+      values = list;
+      isAll = "ALL".equalsIgnoreCase(function.getName());
+    }
     Boolean result = isAll;
     for (Object rawValue : values) {
       Object candidate = coerceLiteralToColumnType(rawValue, otherOperand.schemaOrNull);
@@ -517,6 +550,9 @@ public final class ExpressionEvaluator {
    * @return the list of values from the first column of the subquery result
    */
   private List<Object> fetchAnyAllValues(AnyComparisonExpression anyExpr, GenericRecord rec) {
+    if (subqueryExecutor == null) {
+      throw new IllegalStateException("ANY/ALL subqueries require a subquery executor");
+    }
     net.sf.jsqlparser.statement.select.Select subSelect = anyExpr.getSelect();
     SubqueryExecutor.SubqueryResult result = subqueryExecutor.executeCorrelated(subSelect, outerQualifiers,
         correlationColumns(), qualifierColumnMapping,

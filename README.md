@@ -477,7 +477,9 @@ The following SQL statements are supported:
   - `HAVING` clause with conditions
   - support aggregation functions and case statements in the `GROUP BY` and `SELECT` clause
 - `EXISTS` support
-- `ANY` and `ALL` support
+- `ANY`, `SOME`, and `ALL` comparisons over subqueries and arrays, such as
+  `cyl = ANY(ARRAY[4, 6])`. `SOME` is a synonym for `ANY`. Empty arrays yield FALSE for
+  `ANY`/`SOME` and TRUE for `ALL`; NULL arrays or undecided comparisons with NULL elements yield UNKNOWN.
 - Join support: INNER, LEFT, RIGHT, FULL, CROSS, and Self Join, join ... using syntax
 - `UNION` and `UNION ALL` support
 - Complete set-operation coverage.
