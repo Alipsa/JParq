@@ -1,7 +1,8 @@
 # Version history
 
 ### 1.4.0
-- Decode doubled apostrophes in SQL string literals, including JDBC string parameters, JSON_OBJECT keys, and pushed comparison, IN, BETWEEN, and LIKE filters (#199). JSON object construction preserves evaluated key text, including literal quotes and whitespace. Literal decoding leaves dollar-quoted contents unchanged; pre-pass failures for dollar-quoted apostrophes and comment markers remain tracked in #226.
+- Decode doubled apostrophes in SQL string literals, including JDBC string parameters, JSON_OBJECT keys, and pushed comparison, IN, BETWEEN, and LIKE filters (#199). Literal decoding leaves dollar-quoted contents unchanged; pre-pass failures for dollar-quoted apostrophes and comment markers remain tracked in #226.
+- **Behavior change:** JSON_OBJECT preserves evaluated key text, including keys from columns and comma-form arguments. Leading and trailing whitespace and literal quotes are retained; empty and blank keys are included instead of dropping their pairs. A key containing a single apostrophe now works instead of throwing StringIndexOutOfBoundsException (#199).
 - Support set operations in derived tables, including joins and LATERAL inputs, instead of failing with an internal ClassCastException; preserve local CTE scope, aliases, ordering, row bounds, and decimal declaration validation (#198).
 - Support quantified comparisons over Parquet array columns, including correlated logical arrays (#197).
 - **Behavior change:** JDBC array elements now decode dates, decimals, and timestamps to their Java logical types before correlation binding or projection (#219).
