@@ -480,8 +480,10 @@ The following SQL statements are supported:
 - `ANY`, `SOME`, and `ALL` comparisons over subqueries and arrays, such as
   `cyl = ANY(ARRAY[4, 6])`. `SOME` is a synonym for `ANY`. Empty arrays yield FALSE for
   `ANY`/`SOME` and TRUE for `ALL`; NULL arrays or undecided comparisons with NULL elements yield UNKNOWN.
-  Array-column comparisons decode element logical types, including dates and decimals, and retain those
-  types through derived tables and CTEs. Modern three-level Parquet lists have a separate projection
+  Array-column values decode scalar element logical types, including dates, decimals, and timestamps,
+  before comparison or correlation binding. Physical array columns projected directly by derived tables
+  and CTEs retain their array types. Computed arrays, arrays passing through set operations, and structs
+  have remaining materialization limitations tracked in [#201](https://github.com/Alipsa/JParq/issues/201). Modern three-level Parquet lists have a separate projection
   limitation tracked in [#217](https://github.com/Alipsa/JParq/issues/217).
   Quantified comparisons in `HAVING` are not currently supported; see [#214](https://github.com/Alipsa/JParq/issues/214).
 - Join support: INNER, LEFT, RIGHT, FULL, CROSS, and Self Join, join ... using syntax

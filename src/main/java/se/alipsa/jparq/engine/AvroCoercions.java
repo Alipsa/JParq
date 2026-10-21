@@ -12,6 +12,8 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Map;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
@@ -250,12 +252,18 @@ public final class AvroCoercions {
         return v.toString();
       case INT:
         if (LogicalTypes.date().equals(effective.getLogicalType())) {
+          if (v instanceof Date) {
+            return v;
+          }
           int days = (Integer) v;
           return Date.valueOf(LocalDate.ofEpochDay(days));
         }
         return ((Number) v).intValue();
       case LONG:
         if (isTimestamp(effective)) {
+          if (v instanceof Timestamp) {
+            return v;
+          }
           long epoch = ((Number) v).longValue();
           long units = timestampUnits(effective);
           Instant instant = Instant.ofEpochSecond(Math.floorDiv(epoch, units),
@@ -274,6 +282,9 @@ public final class AvroCoercions {
       case BYTES:
         boolean preferBinary = isBinaryPreferred(effective);
         if (effective.getLogicalType() instanceof LogicalTypes.Decimal dec) {
+          if (v instanceof BigDecimal) {
+            return v;
+          }
           ByteBuffer bb = ((ByteBuffer) v).duplicate();
           byte[] bytes = new byte[bb.remaining()];
           bb.get(bytes);
@@ -299,16 +310,16 @@ public final class AvroCoercions {
       case ENUM:
         return v.toString();
       case ARRAY:
-        if (v instanceof GenericData.Array) {
-          return ((GenericData.Array<?>) v).toArray();
-        }
-        return v;
+        return unwrapArray(v, effective.getElementType());
       case FIXED:
         if (isFloat16(effective) && v instanceof GenericData.Fixed fixed) {
           byte[] bytes = fixed.bytes();
           return Float.float16ToFloat((short) ((bytes[0] & 255) | (bytes[1] & 255) << 8));
         }
         if (effective.getLogicalType() instanceof LogicalTypes.Decimal) {
+          if (v instanceof BigDecimal) {
+            return v;
+          }
           LogicalTypes.Decimal dec = (LogicalTypes.Decimal) effective.getLogicalType();
           byte[] bytes = ((GenericData.Fixed) v).bytes();
           java.math.BigInteger bi = new java.math.BigInteger(bytes);
@@ -321,6 +332,37 @@ public final class AvroCoercions {
       default:
         return v;
     }
+  }
+
+  /**
+   * Decodes scalar array elements before JDBC projection or correlation binding.
+   * Records remain available to structured consumers such as UNNEST. Previously
+   * decoded logical values are retained when materialized arrays are read again.
+   *
+   * @param value
+   *          Avro array, collection, or object array
+   * @param elementSchema
+   *          schema shared by the array elements
+   * @return a decoded object array, or the original unsupported container
+   */
+  private static Object unwrapArray(Object value, Schema elementSchema) {
+    Object[] elements;
+    if (value instanceof Collection<?> collection) {
+      elements = collection.toArray();
+    } else if (value instanceof Object[] objects) {
+      elements = Arrays.copyOf(objects, objects.length, Object[].class);
+    } else {
+      return value;
+    }
+    Schema element = effectiveSchema(elementSchema);
+    for (int index = 0; index < elements.length; index++) {
+      Object item = elements[index];
+      if (item == null || element.getType() == Schema.Type.RECORD) {
+        continue;
+      }
+      elements[index] = unwrap(item, elementSchema);
+    }
+    return elements;
   }
 
   /**

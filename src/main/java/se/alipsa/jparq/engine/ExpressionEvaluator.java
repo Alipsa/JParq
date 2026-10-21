@@ -516,12 +516,7 @@ public final class ExpressionEvaluator {
           || value instanceof Object[] || value instanceof IndexedRecord)) {
         throw new IllegalArgumentException("ANY/SOME/ALL requires scalar array elements");
       }
-      Schema arraySchema = arrayOperand.schemaOrNull == null
-          ? null
-          : AvroCoercions.effectiveSchema(arrayOperand.schemaOrNull);
-      values = arraySchema != null && arraySchema.getType() == Schema.Type.ARRAY
-          ? list.stream().map(value -> AvroCoercions.unwrap(value, arraySchema.getElementType())).toList()
-          : list;
+      values = list;
       isAll = "ALL".equalsIgnoreCase(function.getName());
     }
     Boolean result = isAll;
