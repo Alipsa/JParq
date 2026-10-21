@@ -2209,7 +2209,7 @@ public final class SqlParser {
             qualifier = extractQualifier(c);
           }
         } else if (ex instanceof StringValue sv) {
-          keyText = sv.getValue();
+          keyText = sv.getNotExcapedValue();
         } else {
           keyText = ex.toString();
         }

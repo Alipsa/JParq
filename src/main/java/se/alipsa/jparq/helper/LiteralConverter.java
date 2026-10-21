@@ -30,7 +30,9 @@ public class LiteralConverter {
   }
 
   /**
-   * Converts a JSqlParser Expression literal to a Java Object.
+   * Converts a JSqlParser Expression literal to a Java Object. String literals
+   * decode SQL doubled apostrophes once, while dollar-quoted strings stay
+   * literal.
    *
    * @param e
    *          the expression
@@ -47,7 +49,7 @@ public class LiteralConverter {
       return null;
     }
     if (e instanceof StringValue sv) {
-      return sv.getValue();
+      return sv.getNotExcapedValue();
     }
     if (e instanceof LongValue lv) {
       var value = lv.getBigIntegerValue();

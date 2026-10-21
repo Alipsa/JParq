@@ -890,7 +890,7 @@ public final class AggregateFunctions {
       return true;
     }
     if (first instanceof StringValue leftString) {
-      return Objects.equals(leftString.getValue(), ((StringValue) second).getValue());
+      return Objects.equals(leftString.getNotExcapedValue(), ((StringValue) second).getNotExcapedValue());
     }
     if (first instanceof DateValue leftDate) {
       return Objects.equals(leftDate.getValue(), ((DateValue) second).getValue());

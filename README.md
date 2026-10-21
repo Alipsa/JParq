@@ -139,6 +139,9 @@ with SQLState `42000`, including for NULL inputs and empty results. Casts withou
 SQL syntax rejected by JSqlParser raises `SQLSyntaxErrorException` with SQLState `42000`. Syntax and numeric
 errors retain preparation and nested-query context in their messages and cause chains.
 
+Escape an apostrophe in a SQL string literal by doubling it: `'O''Brien'` evaluates to `O'Brien`.
+JDBC `setString` values are escaped automatically. Dollar-quoted strings preserve their contents literally.
+
 ### Connection options
 
 - `caseSensitive` — defaults to `false`. Set to `true` to make table-name resolution case-sensitive.

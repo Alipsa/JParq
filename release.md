@@ -1,6 +1,7 @@
 # Version history
 
 ### 1.4.0
+- Decode doubled apostrophes in SQL string literals, including JDBC string parameters and pushed comparison, IN, BETWEEN, and LIKE filters; preserve dollar-quoted text (#199).
 - Support set operations in derived tables, including joins and LATERAL inputs, instead of failing with an internal ClassCastException; preserve local CTE scope, aliases, ordering, row bounds, and decimal declaration validation (#198).
 - Support quantified comparisons over Parquet array columns, including correlated logical arrays (#197).
 - **Behavior change:** JDBC array elements now decode dates, decimals, and timestamps to their Java logical types before correlation binding or projection (#219).

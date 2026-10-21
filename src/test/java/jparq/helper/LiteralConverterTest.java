@@ -17,6 +17,7 @@ import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.function.AggregateFunctions;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.TemporalInterval;
@@ -26,6 +27,23 @@ import se.alipsa.jparq.helper.TemporalInterval;
  * {@link LiteralConverter#toLiteral(net.sf.jsqlparser.expression.Expression)}.
  */
 class LiteralConverterTest {
+
+  /**
+   * Decodes escaped apostrophes without changing the AST or dollar-quoted text.
+   *
+   * @throws Exception
+   *           if parsing fails
+   */
+  @Test
+  void decodesStringEscapesWithoutMutatingLiteral() throws Exception {
+    var literal = CCJSqlParserUtil.parseExpression("'a''''b'");
+    assertEquals("a''b", LiteralConverter.toLiteral(literal));
+    assertEquals("a''b", LiteralConverter.toLiteral(literal));
+    assertEquals("'a''''b'", literal.toString());
+    assertEquals("a''''b", LiteralConverter.toLiteral(new StringValue("$tag$a''''b$tag$")));
+    assertTrue(AggregateFunctions.expressionsEquivalent(literal, new StringValue("$$a''b$$")));
+    assertFalse(AggregateFunctions.expressionsEquivalent(literal, new StringValue("$$a''''b$$")));
+  }
 
   /**
    * Converts the typed temporal nodes emitted by JSqlParser 5.4.
