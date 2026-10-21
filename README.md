@@ -139,6 +139,8 @@ with SQLState `42000`, including for NULL inputs and empty results. Casts withou
 Numeric casts reject non-finite inputs such as `'Infinity'`, `'-Infinity'`, and `'NaN'`, as well as invalid numeric
 text, with `SQLDataException` and SQLState `22018`. Projection evaluation failures are reported as
 `SQLException` with their original causes, including when retrieving values through result-set getters.
+Range checks for finite inputs narrowed to integer or floating-point targets remain incomplete; those casts
+can still wrap or overflow to infinity (tracked in [#238](https://github.com/Alipsa/JParq/issues/238)).
 
 SQL syntax rejected by JSqlParser raises `SQLSyntaxErrorException` with SQLState `42000`. Syntax and numeric
 errors retain preparation and nested-query context in their messages and cause chains.

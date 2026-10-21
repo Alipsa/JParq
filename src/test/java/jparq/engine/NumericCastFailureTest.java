@@ -41,7 +41,9 @@ class NumericCastFailureTest {
         String body = "SELECT " + expression + " AS x FROM mtcars WHERE cyl = 6 LIMIT 1";
         for (String sql : List.of(body, "SELECT x FROM (" + body + ") d", "WITH c AS (" + body + ") SELECT x FROM c",
             "SELECT (" + body + ") AS x", "SELECT " + expression + " AS x",
-            "SELECT cyl FROM mtcars WHERE " + expression + " > 0 LIMIT 1")) {
+            "SELECT cyl FROM mtcars WHERE " + expression + " > 0 LIMIT 1",
+            "SELECT cyl FROM mtcars WHERE mpg > " + expression + " LIMIT 1",
+            "SELECT a.cyl FROM mtcars a JOIN mtcars b ON a.cyl = b.cyl WHERE b.mpg > " + expression + " LIMIT 1")) {
           SQLDataException failure = assertThrows(SQLDataException.class, () -> {
             try (var result = statement.executeQuery(sql)) {
               assertTrue(result.next(), sql);
@@ -55,6 +57,42 @@ class NumericCastFailureTest {
             root = root.getCause();
           }
           assertInstanceOf(NumberFormatException.class, root, sql);
+        }
+      }
+    }
+  }
+
+  /**
+   * Preserves range errors while planning either participant's pushed join
+   * predicate.
+   *
+   * @param predicatePushdown
+   *          whether predicate pushdown is enabled
+   * @param projectionPushdown
+   *          whether projection pushdown is enabled
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void joinPlanningRetainsNumericRangeState(boolean predicatePushdown, boolean projectionPushdown) throws Exception {
+    String url = jdbcUrl() + "?predicatePushdown=" + predicatePushdown + "&projectionPushdown=" + projectionPushdown;
+    try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+      for (String qualifier : List.of("a", "b")) {
+        String sql = "SELECT a.cyl FROM mtcars a JOIN mtcars b ON a.cyl = b.cyl WHERE " + qualifier
+            + ".mpg > CAST(123.45 AS DECIMAL(2,1))";
+        var failure = assertThrows(SQLDataException.class, () -> {
+          try (var result = statement.executeQuery(sql)) {
+            while (result.next()) {
+              result.getObject(1);
+            }
+          }
+        }, sql);
+        assertEquals("22003", failure.getSQLState(), sql);
+        if (predicatePushdown) {
+          assertTrue(failure.getMessage().contains("Failed to prepare query: " + sql), failure::getMessage);
         }
       }
     }

@@ -553,19 +553,18 @@ public class DateTimeFunctionsTest {
   // Additional tests for castLiteral
 
   /**
-   * Rejects non-finite numeric objects and text with a classified conversion
-   * failure.
+   * Rejects non-finite inputs and invalid numeric text with neutral diagnostics.
    */
   @Test
-  void nonFiniteNumericCastsCarrySqlState() {
+  void invalidNumericCastsCarrySqlState() {
     for (Object value : List.of("Infinity", "-Infinity", "NaN", Double.POSITIVE_INFINITY, Double.NaN,
-        Float.NEGATIVE_INFINITY, Float.NaN)) {
+        Float.NEGATIVE_INFINITY, Float.NaN, "not a number", Date.valueOf("2020-01-01"))) {
       for (String type : List.of("DOUBLE", "REAL", "INTEGER", "DECIMAL")) {
         var failure = assertThrows(IllegalArgumentException.class,
             () -> DateTimeFunctions.castLiteral(createCastExpression(type), value), value + " AS " + type);
         var classified = assertInstanceOf(SQLDataException.class, SqlExceptions.findSqlStateFailure(failure));
         assertEquals("22018", classified.getSQLState());
-        assertTrue(classified.getMessage().contains("numeric"), classified::getMessage);
+        assertEquals("Cannot cast value '" + value + "' to a numeric value", classified.getMessage());
         assertInstanceOf(NumberFormatException.class, classified.getCause());
       }
     }

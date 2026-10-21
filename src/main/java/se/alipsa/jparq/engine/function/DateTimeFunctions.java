@@ -663,7 +663,7 @@ public final class DateTimeFunctions {
     try {
       return new BigDecimal(value.toString().trim());
     } catch (NumberFormatException exception) {
-      String message = "Cannot cast value '" + value + "' to a finite numeric value";
+      String message = "Cannot cast value '" + value + "' to a numeric value";
       throw new IllegalArgumentException(message, new SQLDataException(message, "22018", exception));
     }
   }
