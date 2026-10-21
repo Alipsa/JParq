@@ -4,9 +4,11 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.math.BigDecimal;
 import java.sql.Date;
+import java.sql.SQLDataException;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.*;
+import java.util.List;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
@@ -17,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.helper.TemporalInterval;
 
@@ -548,6 +551,25 @@ public class DateTimeFunctionsTest {
   }
 
   // Additional tests for castLiteral
+
+  /**
+   * Rejects non-finite numeric objects and text with a classified conversion
+   * failure.
+   */
+  @Test
+  void nonFiniteNumericCastsCarrySqlState() {
+    for (Object value : List.of("Infinity", "-Infinity", "NaN", Double.POSITIVE_INFINITY, Double.NaN,
+        Float.NEGATIVE_INFINITY, Float.NaN)) {
+      for (String type : List.of("DOUBLE", "REAL", "INTEGER", "DECIMAL")) {
+        var failure = assertThrows(IllegalArgumentException.class,
+            () -> DateTimeFunctions.castLiteral(createCastExpression(type), value), value + " AS " + type);
+        var classified = assertInstanceOf(SQLDataException.class, SqlExceptions.findSqlStateFailure(failure));
+        assertEquals("22018", classified.getSQLState());
+        assertTrue(classified.getMessage().contains("numeric"), classified::getMessage);
+        assertInstanceOf(NumberFormatException.class, classified.getCause());
+      }
+    }
+  }
   @Test
   void testCastToNumericTypes() {
     assertEquals((byte) 123, DateTimeFunctions.castLiteral(createCastExpression("TINYINT"), "123"));

@@ -600,16 +600,14 @@ public class JParqResultSet extends ResultSetAdapter {
    *          the projection to evaluate
    * @return the computed value, or null without an evaluator
    * @throws SQLException
-   *           if a decimal declaration or value is invalid
+   *           if projection evaluation fails
    */
   private Object evaluateProjection(Expression expression) throws SQLException {
     try {
       return projectionEvaluator == null ? null : projectionEvaluator.eval(expression, current);
-    } catch (IllegalArgumentException exception) {
-      if (SqlExceptions.findSqlStateFailure(exception) != null) {
-        throw SqlExceptions.wrap(exception.getMessage(), exception);
-      }
-      throw exception;
+    } catch (RuntimeException exception) {
+      throw SqlExceptions.wrap("Failed to evaluate projection " + expression + ": " + exception.getMessage(),
+          exception);
     }
   }
 
