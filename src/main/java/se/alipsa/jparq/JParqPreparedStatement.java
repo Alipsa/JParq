@@ -1266,7 +1266,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       Schema baseType = mapSqlTypeToAvroType(sqlTypes, i);
       Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), baseType));
       Field field = new Field(MaterializedNames.allocate(label, used), union, null, Field.NULL_DEFAULT_VALUE);
-      field.addProp("jparq.lookupKey", Identifier.lookupKey(label));
+      field.addProp(MaterializedNames.LOOKUP_KEY, Identifier.lookupKey(label));
       fields.add(field);
     }
     schema.setFields(fields);
@@ -2071,13 +2071,12 @@ public class JParqPreparedStatement implements PreparedStatement {
       String label = columnNames.get(i);
       Field field = new Field(MaterializedNames.allocate(label, usedNames), union, null, Field.NULL_DEFAULT_VALUE);
       field.addProp(MaterializedNames.SQL_LABEL, label);
-      field.addProp("jparq.lookupKey", Identifier.lookupKey(label));
+      field.addProp(MaterializedNames.LOOKUP_KEY, Identifier.lookupKey(label));
       fields.add(field);
     }
 
     String recordName = (tableName == null || tableName.isBlank()) ? "values" : tableName;
-    Schema schema = Schema.createRecord(MaterializedNames.allocate(recordName, new LinkedHashSet<>()), null, null,
-        false);
+    Schema schema = Schema.createRecord(MaterializedNames.recordName(recordName), null, null, false);
     schema.setFields(fields);
 
     List<GenericRecord> records = new ArrayList<>(evaluatedRows.size());
@@ -2732,14 +2731,13 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
       Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
-      field.addProp("jparq.lookupKey", Identifier.lookupKey(sqlLabel));
+      field.addProp(MaterializedNames.LOOKUP_KEY, Identifier.lookupKey(sqlLabel));
       field.addProp(MaterializedNames.SQL_LABEL, sqlLabel);
       fields.add(field);
       fieldNames.add(columnName);
       valueSchemas.add(valueSchema);
     }
-    Schema schema = Schema.createRecord(MaterializedNames.allocate(recordName, new LinkedHashSet<>()), null, null,
-        false);
+    Schema schema = Schema.createRecord(MaterializedNames.recordName(recordName), null, null, false);
     schema.setFields(fields);
     return schema;
   }
@@ -2961,15 +2959,14 @@ public class JParqPreparedStatement implements PreparedStatement {
       Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
       field.addProp(MaterializedNames.SQL_LABEL, sqlLabel);
       if (lookupKey != null) {
-        field.addProp("jparq.lookupKey", lookupKey);
+        field.addProp(MaterializedNames.LOOKUP_KEY, lookupKey);
       }
       fields.add(field);
       fieldNames.add(columnName);
       valueSchemas.add(valueSchema);
     }
     String schemaName = recordName == null || recordName.isBlank() ? "derived" : recordName;
-    Schema schema = Schema.createRecord(MaterializedNames.allocate(schemaName, new LinkedHashSet<>()), null, null,
-        false);
+    Schema schema = Schema.createRecord(MaterializedNames.recordName(schemaName), null, null, false);
     schema.setFields(fields);
     return schema;
   }

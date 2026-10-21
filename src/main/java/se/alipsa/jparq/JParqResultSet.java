@@ -663,6 +663,12 @@ public class JParqResultSet extends ResultSetAdapter {
       throw new SQLException("Unknown column in current schema: " + projectedName);
     }
 
+    if (projectionExpr instanceof Column && field.getProp(MaterializedNames.SQL_LABEL) != null) {
+      ensureProjectionEvaluator(current);
+      Object computed = evaluateProjection(projectionExpr);
+      lastWasNull = computed == null;
+      return computed;
+    }
     Object rawValue = current.get(lookupName);
     Object raw = AvroCoercions.unwrap(rawValue, field.schema());
     lastWasNull = (raw == null);
@@ -1141,7 +1147,7 @@ public class JParqResultSet extends ResultSetAdapter {
     if (field == null) {
       return null;
     }
-    String key = field.getProp("jparq.lookupKey");
+    String key = field.getProp(MaterializedNames.LOOKUP_KEY);
     if (key == null || key.isBlank()) {
       return null;
     }

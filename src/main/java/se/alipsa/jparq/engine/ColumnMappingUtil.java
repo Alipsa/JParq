@@ -50,11 +50,45 @@ public final class ColumnMappingUtil {
    * @param caseInsensitiveIndex
    *          a fallback case-insensitive index for single-table queries
    * @return the canonical field name to use when reading the record
+   * @throws IllegalArgumentException
+   *           if the SQL name is ambiguous
    */
   public static String canonicalFieldName(String qualifier, String columnName,
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping,
       Map<String, String> caseInsensitiveIndex) {
 
+    Objects.requireNonNull(columnName, "columnName");
+    Objects.requireNonNull(caseInsensitiveIndex, "caseInsensitiveIndex");
+    String key = normalizeLookupKey(columnName);
+    if (key != null && !hasQualifier(qualifier) && "".equals(caseInsensitiveIndex.get(key))) {
+      throw new IllegalArgumentException("Ambiguous column reference: " + columnName);
+    }
+    String canonical = resolveCanonicalFieldName(qualifier, columnName, qualifierColumnMapping,
+        unqualifiedColumnMapping, caseInsensitiveIndex);
+    if ("".equals(canonical)) {
+      throw new IllegalArgumentException("Ambiguous column reference: " + columnName);
+    }
+    return canonical;
+  }
+
+  /**
+   * Resolves qualified, unqualified, and fallback lookup paths.
+   *
+   * @param qualifier
+   *          optional SQL qualifier
+   * @param columnName
+   *          SQL column identifier
+   * @param qualifierColumnMapping
+   *          mappings for qualified SQL names
+   * @param unqualifiedColumnMapping
+   *          mappings for unqualified SQL names
+   * @param caseInsensitiveIndex
+   *          fallback SQL name index
+   * @return the resolved field or the original unresolved identifier
+   */
+  private static String resolveCanonicalFieldName(String qualifier, String columnName,
+      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping,
+      Map<String, String> caseInsensitiveIndex) {
     Objects.requireNonNull(columnName, "columnName");
     Objects.requireNonNull(caseInsensitiveIndex, "caseInsensitiveIndex");
 

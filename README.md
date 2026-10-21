@@ -111,7 +111,10 @@ Caches are local to the owning execution, and uncorrelated subqueries continue t
 Delimited column aliases retain their case and appear in JDBC column labels without the surrounding
 identifier quotes. Derived tables and CTEs preserve these labels, including spaces and unnamed computed
 expressions such as `id + 1`; internal Avro names do not restrict SQL output labels. Quoted table aliases
-such as `"My T"` are supported at these materialization boundaries.
+such as `"My T"` are supported at these materialization boundaries. Doubled quotes in delimited identifiers
+are decoded (`"a""b"` has label `a"b`). Generated internal names are not SQL column aliases, and ambiguous
+projection and predicate references to duplicate output names raise an SQL exception; duplicate outputs remain available by position
+through `SELECT *`.
 
 Recursive CTEs retain the anchor's numeric types and decimal precision and scale. Recursive values that require
 fractional truncation or decimal rounding, or exceed integer ranges or decimal precision, fail with `SQLException`

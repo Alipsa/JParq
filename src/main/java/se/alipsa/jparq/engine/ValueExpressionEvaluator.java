@@ -138,16 +138,9 @@ public final class ValueExpressionEvaluator {
   public ValueExpressionEvaluator(Schema schema, SubqueryExecutor subqueryExecutor, CorrelationMappings mappings,
       WindowState windowState) {
     Map<String, Schema> fs = new HashMap<>();
-    Map<String, String> ci = new HashMap<>();
+    Map<String, String> ci = MaterializedNames.lookupIndex(schema);
     for (Schema.Field f : schema.getFields()) {
       fs.put(f.name(), f.schema());
-      String key = f.getProp("jparq.lookupKey");
-      if (key == null) {
-        key = Identifier.lookupKey(f.name());
-      }
-      if (key != null) {
-        ci.put(key, f.name());
-      }
     }
     this.fieldSchemas = Map.copyOf(fs);
     this.caseInsensitiveIndex = Map.copyOf(ci);
@@ -655,7 +648,7 @@ public final class ValueExpressionEvaluator {
   private boolean hasSchemaField(Column column) {
     String qualifier = column.getTable() == null ? null : column.getTable().getName();
     String canonical = canonicalFieldName(qualifier, column.getColumnName());
-    return fieldSchemas.containsKey(canonical);
+    return canonical != null && fieldSchemas.containsKey(canonical);
   }
 
   private Object resolveColumnValue(String qualifier, String columnName, GenericRecord record) {
@@ -730,8 +723,9 @@ public final class ValueExpressionEvaluator {
   }
 
   private String canonicalFieldName(String qualifier, String columnName) {
-    return ColumnMappingUtil.canonicalFieldName(qualifier, columnName, effectiveQualifierMapping,
+    String canonical = ColumnMappingUtil.canonicalFieldName(qualifier, columnName, effectiveQualifierMapping,
         unqualifiedColumnMapping, caseInsensitiveIndex);
+    return MaterializedNames.sqlReference(schema, columnName, canonical);
   }
 
   private static Map<String, Map<String, String>> mergeQualifierMappings(Map<String, Map<String, String>> primary,

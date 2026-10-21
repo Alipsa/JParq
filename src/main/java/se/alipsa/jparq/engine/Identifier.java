@@ -38,6 +38,11 @@ public final class Identifier {
     }
     boolean quoted = MultiPartName.isQuoted(trimmed);
     String unquoted = MultiPartName.unquote(trimmed);
+    if (quoted) {
+      char delimiter = trimmed.charAt(trimmed.length() - 1);
+      String escaped = Character.toString(delimiter).repeat(2);
+      unquoted = unquoted.replace(escaped, Character.toString(delimiter));
+    }
     return new Identifier(unquoted, quoted);
   }
 
