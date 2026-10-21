@@ -8,6 +8,7 @@ import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +27,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.OrderingUtil;
+import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
@@ -2408,14 +2410,31 @@ public final class WindowFunctions {
     return (int) value;
   }
 
+  /**
+   * Groups content-equal partition keys before applying window ordering.
+   * Partition indexes keep distinct structured keys separate even when their text
+   * representations compare equally.
+   *
+   * @param partitionExpressions
+   *          partition key expressions
+   * @param orderByElements
+   *          ordering within each partition
+   * @param records
+   *          input rows in encounter order
+   * @param evaluator
+   *          expression evaluator for the input schema
+   * @return contexts grouped by partition and sorted within each partition
+   */
   private static List<RowContext> buildSortedContexts(List<Expression> partitionExpressions,
       List<OrderByElement> orderByElements, List<GenericRecord> records, ValueExpressionEvaluator evaluator) {
     List<RowContext> contexts = new ArrayList<>(records.size());
+    Map<List<Object>, Integer> partitionIndexes = new HashMap<>();
     int index = 0;
     for (GenericRecord record : records) {
-      List<Object> partitionValues = evaluateAll(partitionExpressions, evaluator, record);
+      List<Object> partitionValues = RelationalKeys.row(evaluateAll(partitionExpressions, evaluator, record));
       List<OrderComponent> orderValues = buildOrderComponents(orderByElements, evaluator, record);
-      contexts.add(new RowContext(record, partitionValues, orderValues, index++));
+      int partitionIndex = partitionIndexes.computeIfAbsent(partitionValues, key -> partitionIndexes.size());
+      contexts.add(new RowContext(record, partitionValues, orderValues, index++, partitionIndex));
     }
     contexts.sort((left, right) -> compareContexts(left, right, orderByElements));
     return contexts;
@@ -2476,8 +2495,19 @@ public final class WindowFunctions {
     return true;
   }
 
+  /**
+   * Orders partition groups by their assigned indexes and rows by window order.
+   *
+   * @param left
+   *          first row context
+   * @param right
+   *          second row context
+   * @param orderElements
+   *          window ORDER BY elements
+   * @return partition order, then window order, with input position breaking ties
+   */
   private static int compareContexts(RowContext left, RowContext right, List<OrderByElement> orderElements) {
-    int partitionCompare = comparePartitions(left.partitionValues(), right.partitionValues());
+    int partitionCompare = Integer.compare(left.partitionIndex(), right.partitionIndex());
     if (partitionCompare != 0) {
       return partitionCompare;
     }
@@ -2493,31 +2523,6 @@ public final class WindowFunctions {
       }
     }
     return Integer.compare(left.originalIndex(), right.originalIndex());
-  }
-
-  private static int comparePartitions(List<Object> left, List<Object> right) {
-    int size = Math.min(left.size(), right.size());
-    for (int i = 0; i < size; i++) {
-      Object lv = left.get(i);
-      Object rv = right.get(i);
-      if (lv == rv) {
-        continue;
-      }
-      if (lv == null && rv == null) {
-        continue;
-      }
-      if (lv == null) {
-        return -1;
-      }
-      if (rv == null) {
-        return 1;
-      }
-      int cmp = compareValues(lv, rv);
-      if (cmp != 0) {
-        return cmp;
-      }
-    }
-    return Integer.compare(left.size(), right.size());
   }
 
   private static int compareOrderValues(OrderComponent left, OrderComponent right) {
@@ -2707,8 +2712,22 @@ public final class WindowFunctions {
   private record FrameSpecification(FrameBoundary start, FrameBoundary end) {
   }
 
+  /**
+   * Retains input values separately from content-based partition keys.
+   *
+   * @param record
+   *          original input row
+   * @param partitionValues
+   *          content keys used for partition boundaries
+   * @param orderComponents
+   *          values used for window ordering
+   * @param originalIndex
+   *          position in the input rows
+   * @param partitionIndex
+   *          encounter-order index of the partition key
+   */
   private record RowContext(GenericRecord record, List<Object> partitionValues, List<OrderComponent> orderComponents,
-      int originalIndex) {
+      int originalIndex, int partitionIndex) {
   }
 
   private record OrderComponent(Object value, boolean ascending, OrderByElement.NullOrdering nullOrdering) {

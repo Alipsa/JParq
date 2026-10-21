@@ -49,6 +49,24 @@ class HfDatasetLayoutTest {
   }
 
   private static void write(Path path, Schema schema, int... ids) throws Exception {
+    write(path, schema, null, ids);
+  }
+
+  /**
+   * Writes shard rows with an optional shared nested label.
+   *
+   * @param path
+   *          output file
+   * @param schema
+   *          shard schema
+   * @param label
+   *          shared label, or null to derive labels from row IDs
+   * @param ids
+   *          row IDs to write in encounter order
+   * @throws Exception
+   *           if the fixture cannot be written
+   */
+  private static void write(Path path, Schema schema, String label, int... ids) throws Exception {
     Files.createDirectories(path.getParent());
     Configuration conf = new Configuration(false);
     var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(path.toUri()), conf);
@@ -60,7 +78,7 @@ class HfDatasetLayoutTest {
         row.put("id", id);
         row.put("n", id == 2 ? null : id);
         var nested = new GenericData.Record(schema.getField("nested").schema());
-        nested.put("label", "row-" + id);
+        nested.put("label", label == null ? "row-" + id : label);
         row.put("nested", nested);
         row.put("unused", "ignored");
         writer.write(row);
@@ -214,6 +232,44 @@ class HfDatasetLayoutTest {
               } else {
                 assertEquals(java.sql.Types.STRUCT, result.getMetaData().getColumnType(2), sql);
                 assertInstanceOf(GenericRecord.class, result.getObject(2), sql);
+              }
+              assertFalse(result.next(), sql);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Partitions equal struct contents together across named schemas and shards.
+   *
+   * @throws Exception
+   *           if fixture creation or execution fails
+   */
+  @Test
+  void nestedWindowPartitionsIgnoreRecordNames() throws Exception {
+    write(base.resolve("windows/train-0-of-2.parquet"), schema("WindowFirst"), "same", 3, 1);
+    write(base.resolve("windows/train-1-of-2.parquet"), schema("WindowLast"), "same", 2);
+    write(base.resolve("window_single.parquet"), schema("WindowSingle"), "same", 3, 1, 2);
+    for (boolean predicate : List.of(true, false)) {
+      for (boolean projection : List.of(true, false)) {
+        try (var connection = connect(predicate, projection)) {
+          for (String input : List.of("windows.train", "window_single",
+              "(SELECT id, nested FROM window_single WHERE id < 3 UNION ALL "
+                  + "SELECT id, nested FROM windows.train WHERE id = 3) t")) {
+            String sql = "SELECT id, nested, COUNT(*) OVER (PARTITION BY nested) AS n, "
+                + "ROW_NUMBER() OVER (PARTITION BY nested ORDER BY id) AS rn, "
+                + "RANK() OVER (PARTITION BY nested ORDER BY id) AS rk FROM " + input + " ORDER BY id";
+            try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+              for (int id = 1; id <= 3; id++) {
+                assertTrue(result.next(), sql);
+                assertEquals(id, result.getInt(1), sql);
+                var record = assertInstanceOf(GenericRecord.class, result.getObject(2), sql);
+                assertEquals("same", record.get("label").toString(), sql);
+                assertEquals(3, result.getInt(3), sql);
+                assertEquals(id, result.getInt(4), sql);
+                assertEquals(id, result.getInt(5), sql);
               }
               assertFalse(result.next(), sql);
             }
