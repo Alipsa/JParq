@@ -228,7 +228,7 @@ class UnarySignTest {
         assertTrue(failure.getMessage().contains(expectedMessage), failure::getMessage);
         assertTrue(failure.getMessage().contains("<outer value>"), failure::getMessage);
         for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
-          assertFalse(cause.getMessage().contains("__JPARQ_CORRELATED_VALUE"), cause::getMessage);
+          assertFalse(String.valueOf(cause.getMessage()).contains("__JPARQ_CORRELATED_VALUE"), cause::getMessage);
         }
       }
     }
