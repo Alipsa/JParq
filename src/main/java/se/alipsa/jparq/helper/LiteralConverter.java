@@ -1,6 +1,11 @@
 package se.alipsa.jparq.helper;
 
+import static se.alipsa.jparq.engine.SqlExceptions.describe;
+import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
+import static se.alipsa.jparq.engine.function.NumericFunctions.toBigDecimal;
+
 import java.math.BigDecimal;
+import java.sql.SQLDataException;
 import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
@@ -8,6 +13,7 @@ import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.DoubleValue;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.Function;
+import net.sf.jsqlparser.expression.HexValue;
 import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.LongValue;
 import net.sf.jsqlparser.expression.NullValue;
@@ -30,6 +36,53 @@ public class LiteralConverter {
   }
 
   /**
+   * Identifies literal nodes shared by scalar evaluation and predicate pushdown.
+   * Casts and unary signs require separate operand validation.
+   *
+   * @param expression
+   *          the parsed expression
+   * @return whether the node represents a literal, including legacy hex literals
+   */
+  public static boolean isLiteral(Expression expression) {
+    return expression instanceof StringValue || expression instanceof LongValue || expression instanceof DoubleValue
+        || expression instanceof NullValue || expression instanceof BooleanValue || expression instanceof HexValue
+        || expression instanceof DateTimeLiteralExpression || expression instanceof DateValue
+        || expression instanceof TimeValue || expression instanceof TimestampValue;
+  }
+
+  /**
+   * Applies a unary sign using the numeric conversion rules of arithmetic.
+   *
+   * @param value
+   *          evaluated operand, including numeric text, an interval, or NULL
+   * @param expression
+   *          the signed expression; diagnostics omit internal correlated bindings
+   * @return the signed value or NULL
+   * @throws IllegalArgumentException
+   *           if conversion fails (SQLState 22018) or the operand type is invalid
+   *           (SQLState 42000)
+   */
+  public static Object applySign(Object value, SignedExpression expression) {
+    char sign = expression.getSign();
+    if (value == null) {
+      return null;
+    }
+    if (value instanceof TemporalInterval interval) {
+      return sign == '-' ? interval.negate() : interval;
+    }
+    if (value instanceof Number || value instanceof String) {
+      try {
+        BigDecimal number = toBigDecimal(value);
+        return sign == '-' ? number.negate() : number;
+      } catch (NumberFormatException failure) {
+        String message = "Cannot convert unary sign operand to a numeric value: " + describe(expression);
+        throw new IllegalArgumentException(message, new SQLDataException(message, "22018", failure));
+      }
+    }
+    throw syntaxFailure("Unary sign requires a numeric or interval operand: " + describe(expression));
+  }
+
+  /**
    * Converts a JSqlParser Expression literal to a Java Object. String literals
    * decode SQL doubled apostrophes once, while dollar-quoted strings stay
    * literal.
@@ -37,6 +90,9 @@ public class LiteralConverter {
    * @param e
    *          the expression
    * @return the corresponding Java Object
+   * @throws IllegalArgumentException
+   *           if a signed literal has an invalid operand, with SQLState 22018 for
+   *           numeric conversion failures or 42000 for invalid types
    */
   @SuppressWarnings({
       "PMD.AvoidDecimalLiteralsInBigDecimalConstructor", "PMD.EmptyCatchBlock", "checkstyle:NeedBraces"
@@ -115,23 +171,14 @@ public class LiteralConverter {
     return raw.indexOf("''") < 0 ? raw : literal.getNotExcapedValue();
   }
 
-  @SuppressWarnings("PMD.EmptyCatchBlock")
-  private static Object toSignedLiteral(SignedExpression se) {
-    Object inner = toLiteral(se.getExpression());
-    if (inner instanceof Number n) {
-      var bd = new BigDecimal(n.toString());
-      return se.getSign() == '-' ? bd.negate() : bd;
-    }
-    if (inner instanceof String s) {
-      try {
-        var bd = new BigDecimal(s);
-        return se.getSign() == '-' ? bd.negate() : bd;
-      } catch (Exception ignore) {
-      }
-    }
-    if (inner instanceof TemporalInterval interval) {
-      return se.getSign() == '-' ? interval.negate() : interval;
-    }
-    return (se.getSign() == '-') ? ("-" + inner) : inner;
+  /**
+   * Converts and signs a literal operand.
+   *
+   * @param expression
+   *          the signed expression
+   * @return the signed value
+   */
+  private static Object toSignedLiteral(SignedExpression expression) {
+    return applySign(toLiteral(expression.getExpression()), expression);
   }
 }

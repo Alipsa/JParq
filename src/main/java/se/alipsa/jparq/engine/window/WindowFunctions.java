@@ -11,7 +11,9 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
@@ -19,6 +21,7 @@ import net.sf.jsqlparser.expression.WindowElement;
 import net.sf.jsqlparser.expression.WindowOffset;
 import net.sf.jsqlparser.expression.WindowRange;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
+import net.sf.jsqlparser.statement.select.AllColumns;
 import net.sf.jsqlparser.statement.select.OrderByElement;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
@@ -38,6 +41,10 @@ import se.alipsa.jparq.helper.TemporalInterval;
  * in SELECT lists.
  */
 public final class WindowFunctions {
+
+  /** Names that require OVER and cannot be used as scalar functions. */
+  public static final Set<String> WINDOW_ONLY_FUNCTION_NAMES = Set.of("ROW_NUMBER", "RANK", "DENSE_RANK",
+      "PERCENT_RANK", "CUME_DIST", "NTILE", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE");
 
   private static final Logger log = LoggerFactory.getLogger(WindowFunctions.class);
 
@@ -93,12 +100,8 @@ public final class WindowFunctions {
     if (name == null) {
       return;
     }
-    if (!"ROW_NUMBER".equalsIgnoreCase(name) && !"RANK".equalsIgnoreCase(name) && !"DENSE_RANK".equalsIgnoreCase(name)
-        && !"PERCENT_RANK".equalsIgnoreCase(name) && !"CUME_DIST".equalsIgnoreCase(name)
-        && !"NTILE".equalsIgnoreCase(name) && !"COUNT".equalsIgnoreCase(name) && !"SUM".equalsIgnoreCase(name)
-        && !"AVG".equalsIgnoreCase(name) && !"MIN".equalsIgnoreCase(name) && !"MAX".equalsIgnoreCase(name)
-        && !"LAG".equalsIgnoreCase(name) && !"LEAD".equalsIgnoreCase(name) && !"NTH_VALUE".equalsIgnoreCase(name)
-        && !"FIRST_VALUE".equalsIgnoreCase(name) && !"LAST_VALUE".equalsIgnoreCase(name)) {
+    if (!WINDOW_ONLY_FUNCTION_NAMES.contains(name.toUpperCase(Locale.ROOT))
+        && !Set.of("COUNT", "SUM", "AVG", "MIN", "MAX").contains(name.toUpperCase(Locale.ROOT))) {
       return;
     }
     if ((analytic.isDistinct() || analytic.isUnique()) && !"COUNT".equalsIgnoreCase(name)) {
@@ -172,7 +175,7 @@ public final class WindowFunctions {
       return;
     }
     if ("COUNT".equalsIgnoreCase(name)) {
-      boolean countStar = analytic.isAllColumns();
+      boolean countStar = analytic.isAllColumns() || analytic.getExpression() instanceof AllColumns;
       Expression argument = analytic.getExpression();
       if (!countStar && argument == null) {
         throw new IllegalArgumentException(

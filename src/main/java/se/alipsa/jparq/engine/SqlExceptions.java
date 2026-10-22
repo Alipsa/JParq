@@ -4,14 +4,44 @@ import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.Objects;
+import java.util.regex.Pattern;
+import net.sf.jsqlparser.expression.Expression;
 
 /**
  * Preserves SQLState classifications and diagnostic context across engine
  * boundaries.
  */
 public final class SqlExceptions {
+  private static final Pattern CORRELATED_BINDING = Pattern
+      .compile("__JPARQ_CORRELATED_VALUE\\s*\\(\\s*'[^']*'\\s*,\\s*\\d+\\s*\\)", Pattern.CASE_INSENSITIVE);
+
+  /**
+   * Renders an expression for diagnostics without exposing private correlated
+   * bindings. Rendered-text replacement also covers bindings inside nested
+   * subqueries.
+   *
+   * @param expression
+   *          the expression to describe
+   * @return SQL text with each private binding replaced by a neutral outer-value
+   *         token
+   */
+  public static String describe(Expression expression) {
+    return CORRELATED_BINDING.matcher(expression.toString()).replaceAll("<outer value>");
+  }
+
   /** Prevents utility class instantiation. */
   private SqlExceptions() {
+  }
+
+  /**
+   * Creates an engine failure carrying the JDBC syntax classification.
+   *
+   * @param message
+   *          the diagnostic message
+   * @return an engine exception carrying SQLState 42000
+   */
+  public static IllegalArgumentException syntaxFailure(String message) {
+    return new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000"));
   }
 
   /**

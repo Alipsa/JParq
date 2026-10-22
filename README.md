@@ -151,6 +151,19 @@ text, with `SQLDataException` and SQLState `22018`. Projection evaluation failur
 Range checks for finite inputs narrowed to integer or floating-point targets remain incomplete; those casts
 can still wrap or overflow to infinity (tracked in [#238](https://github.com/Alipsa/JParq/issues/238)).
 
+Unknown or unsupported scalar functions and unsupported expression types raise `SQLSyntaxErrorException`
+with SQLState `42000`
+when evaluated, instead of returning their SQL text as a value. Evaluation can occur during query
+execution, materialization, or a result-set getter; function names are not checked by a preparation-time
+allowlist. Scalar functions in HAVING and grouped select lists remain limited;
+NULLIF support and SQLState classification there remain tracked in [#247](https://github.com/Alipsa/JParq/issues/247).
+Unary signs convert numeric text and report invalid numeric text as `SQLDataException` with SQLState `22018`;
+unsupported operand types raise SQLState `42000`. Expression diagnostics preserve the SQL structure while replacing internal correlated bindings with
+`<outer value>`, including bindings inside nested subqueries.
+Hex literals (`X'41'`, `0x41`), including JDBC byte parameters, still return their SQL text rather than
+binary values; this legacy behavior is tracked in [#250](https://github.com/Alipsa/JParq/issues/250).
+Expressions skipped by filtering or CASE branch selection are not evaluated.
+
 SQL syntax rejected by JSqlParser raises `SQLSyntaxErrorException` with SQLState `42000`. Syntax and numeric
 errors retain preparation and nested-query context in their messages and cause chains.
 
@@ -465,6 +478,8 @@ The following SQL statements are supported:
   - CAST support
   - CONVERT support (for both character set conversion with USING and data type conversion without USING, as per SQL standard and common extensions)
   - coalesce (The COALESCE() function returns the first non-null value in a list.)
+  - NULLIF(a, b) returns NULL when its arguments compare equal, otherwise the first argument, including
+    when the comparison is UNKNOWN because an argument is NULL.
   - String functions (all SQL standard string function supported)
     - also support || operator for string concatenations
   - Numeric functions (abs, ceil/ceiling, floor, round, sqrt, truncate/trunc, mod, power/pow, exp, log, log10,
