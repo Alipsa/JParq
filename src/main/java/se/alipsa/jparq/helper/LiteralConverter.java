@@ -1,18 +1,17 @@
 package se.alipsa.jparq.helper;
 
+import static se.alipsa.jparq.engine.SqlExceptions.describe;
 import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 import static se.alipsa.jparq.engine.function.NumericFunctions.toBigDecimal;
 
 import java.math.BigDecimal;
 import java.sql.SQLDataException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
 import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.DoubleValue;
 import net.sf.jsqlparser.expression.Expression;
-import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.HexValue;
 import net.sf.jsqlparser.expression.IntervalExpression;
@@ -76,32 +75,11 @@ public class LiteralConverter {
         BigDecimal number = toBigDecimal(value);
         return sign == '-' ? number.negate() : number;
       } catch (NumberFormatException failure) {
-        String message = "Cannot convert unary sign operand to a numeric value" + diagnosticSuffix(expression);
+        String message = "Cannot convert unary sign operand to a numeric value: " + describe(expression);
         throw new IllegalArgumentException(message, new SQLDataException(message, "22018", failure));
       }
     }
-    throw syntaxFailure("Unary sign requires a numeric or interval operand" + diagnosticSuffix(expression));
-  }
-
-  /**
-   * Formats a signed expression without exposing private correlated placeholders.
-   *
-   * @param expression
-   *          the signed expression, possibly containing nested binding functions
-   * @return the expression suffix, or an empty string for correlated bindings
-   */
-  private static String diagnosticSuffix(SignedExpression expression) {
-    AtomicBoolean correlated = new AtomicBoolean();
-    expression.accept(new ExpressionVisitorAdapter<Void>() {
-      @Override
-      public <S> Void visit(Function function, S context) {
-        if (CorrelatedBindings.isReserved(function)) {
-          correlated.set(true);
-        }
-        return super.visit(function, context);
-      }
-    });
-    return correlated.get() ? "" : ": " + expression;
+    throw syntaxFailure("Unary sign requires a numeric or interval operand: " + describe(expression));
   }
 
   /**

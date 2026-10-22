@@ -39,7 +39,7 @@ class LiteralConverterTest {
     expression.setSign('-');
     expression.setExpression(new CorrelatedBindings.Reference("private-binding-key", 0).expression());
     var failure = assertThrows(IllegalArgumentException.class, () -> LiteralConverter.applySign(true, expression));
-    assertEquals("Unary sign requires a numeric or interval operand", failure.getMessage());
+    assertEquals("Unary sign requires a numeric or interval operand: -<outer value>", failure.getMessage());
     assertInstanceOf(SQLSyntaxErrorException.class, failure.getCause());
     assertEquals("42000", ((SQLSyntaxErrorException) failure.getCause()).getSQLState());
   }

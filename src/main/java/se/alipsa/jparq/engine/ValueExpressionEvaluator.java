@@ -309,7 +309,7 @@ public final class ValueExpressionEvaluator {
     if (LiteralConverter.isLiteral(expression)) {
       return LiteralConverter.toLiteral(expression);
     }
-    throw syntaxFailure("Unsupported expression: " + expression);
+    throw syntaxFailure("Unsupported expression: " + SqlExceptions.describe(expression));
   }
 
   private Object evaluateConvert(TranscodingFunction convert, GenericRecord record) {
@@ -560,7 +560,7 @@ public final class ValueExpressionEvaluator {
       }
       return JsonFunctions.jsonArray(values);
     }
-    throw syntaxFailure("Unsupported JSON function: " + json);
+    throw syntaxFailure("Unsupported JSON function: " + SqlExceptions.describe(json));
   }
 
   private String toStringValue(Object value) {

@@ -16,6 +16,7 @@ import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.List;
+import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
 import org.junit.jupiter.api.Test;
@@ -33,6 +34,24 @@ import se.alipsa.jparq.engine.SqlParser;
 class SqlExceptionsTest {
   @TempDir
   Path directory;
+
+  /**
+   * Redacts every binding inside nested SQL while retaining ordinary expression
+   * text.
+   *
+   * @throws Exception
+   *           if parsing fails
+   */
+  @Test
+  void describesExpressionsWithoutPrivateBindings() throws Exception {
+    String sql = "-(SELECT __JPARQ_CORRELATED_VALUE('private-key', 0) "
+        + "+ __JPARQ_CORRELATED_VALUE('another-key', 12))";
+    var expression = CCJSqlParserUtil.parseExpression(sql);
+    assertEquals("-(SELECT <outer value> + <outer value>)", SqlExceptions.describe(expression));
+    assertTrue(expression.toString().contains("private-key"));
+    var ordinary = CCJSqlParserUtil.parseExpression("cyl & 2");
+    assertEquals(ordinary.toString(), SqlExceptions.describe(ordinary));
+  }
 
   /**
    * Documents the JDBC syntax error contract, including preparation context.

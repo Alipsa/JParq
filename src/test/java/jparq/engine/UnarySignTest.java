@@ -2,6 +2,7 @@ package jparq.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -9,6 +10,7 @@ import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLDataException;
+import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.ArrayList;
 import java.util.List;
@@ -185,7 +187,8 @@ class UnarySignTest {
   }
 
   /**
-   * Omits internal binding functions from correlated conversion diagnostics.
+   * Redacts correlated bindings in conversion and unsupported-expression
+   * diagnostics.
    *
    * @param pushdown
    *          whether predicate pushdown is enabled
@@ -200,8 +203,9 @@ class UnarySignTest {
     Path directory = Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory + "?predicatePushdown=" + pushdown);
         var statement = connection.createStatement()) {
-      for (String operand : List.of("-a.model", "-COALESCE(a.model, 'x')", "-(a.model)")) {
-        var failure = assertThrows(SQLDataException.class, () -> {
+      for (String operand : List.of("-a.model", "-COALESCE(a.model, 'x')", "-(a.model)", "-(SELECT a.model)",
+          "(a.cyl & 2)", "a.cyl DIV 2", "JSON_ARRAYAGG(a.model)", "JSON_EXISTS(a.model, '$.a')")) {
+        var failure = assertThrows(SQLException.class, () -> {
           try (var result = statement.executeQuery(
               "SELECT cyl FROM mtcars a WHERE EXISTS " + "(SELECT 1 FROM mtcars b WHERE b.cyl = " + operand + ")")) {
             while (result.next()) {
@@ -209,10 +213,23 @@ class UnarySignTest {
             }
           }
         }, operand);
-        assertEquals("22018", failure.getSQLState());
-        assertTrue(failure.getMessage().contains("Cannot convert unary sign operand to a numeric value"),
-            failure::getMessage);
-        assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure::getMessage);
+        String expectedMessage;
+        if (operand.startsWith("-")) {
+          assertInstanceOf(SQLDataException.class, failure);
+          assertEquals("22018", failure.getSQLState());
+          expectedMessage = "Cannot convert unary sign operand to a numeric value";
+        } else {
+          assertInstanceOf(SQLSyntaxErrorException.class, failure);
+          assertEquals("42000", failure.getSQLState());
+          expectedMessage = operand.startsWith("JSON_EXISTS")
+              ? "Unsupported JSON function:"
+              : "Unsupported expression:";
+        }
+        assertTrue(failure.getMessage().contains(expectedMessage), failure::getMessage);
+        assertTrue(failure.getMessage().contains("<outer value>"), failure::getMessage);
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+          assertFalse(cause.getMessage().contains("__JPARQ_CORRELATED_VALUE"), cause::getMessage);
+        }
       }
     }
   }
