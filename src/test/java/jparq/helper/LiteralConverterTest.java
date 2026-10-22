@@ -154,7 +154,7 @@ class LiteralConverterTest {
     SignedExpression stringLiteral = new SignedExpression();
     stringLiteral.setSign('-');
     stringLiteral.setExpression(new StringValue("abc"));
-    assertEquals("-abc", LiteralConverter.toLiteral(stringLiteral));
+    assertThrows(IllegalArgumentException.class, () -> LiteralConverter.toLiteral(stringLiteral));
 
     SignedExpression numericFromString = new SignedExpression();
     numericFromString.setSign('+');
@@ -164,7 +164,7 @@ class LiteralConverterTest {
     SignedExpression fallback = new SignedExpression();
     fallback.setSign('+');
     fallback.setExpression(new StringValue("not-a-number"));
-    assertEquals("not-a-number", LiteralConverter.toLiteral(fallback));
+    assertThrows(IllegalArgumentException.class, () -> LiteralConverter.toLiteral(fallback));
 
     AnalyticExpression unknownExpression = new AnalyticExpression();
     assertEquals(unknownExpression.toString(), LiteralConverter.toLiteral(unknownExpression));

@@ -35,6 +35,22 @@ import se.alipsa.jparq.engine.function.AggregateFunctions;
  */
 class AggregateFunctionsHelperTest {
 
+  /**
+   * Recognizes parser star arguments even when isAllColumns is false.
+   *
+   * @throws Exception
+   *           if parsing fails
+   */
+  @Test
+  void recognizesParsedCountStar() throws Exception {
+    Function function = (Function) CCJSqlParserUtil.parseExpression("COUNT(*)");
+    assertFalse(function.isAllColumns());
+    assertTrue(function.getParameters().getFirst() instanceof AllColumns);
+    var spec = aggregateSpec(function, "count");
+    assertTrue(spec.countStar());
+    assertTrue(spec.arguments().isEmpty());
+  }
+
   @Test
   void expressionsEquivalentCoversStructuralBranches() throws Exception {
     Expression between = CCJSqlParserUtil.parseExpression("hp BETWEEN 100 AND 200");

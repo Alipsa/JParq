@@ -10,9 +10,11 @@ import java.sql.DriverManager;
 import java.sql.SQLSyntaxErrorException;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Verifies unknown scalar functions fail instead of returning their SQL text.
@@ -45,6 +47,9 @@ class UnsupportedFunctionTest {
             "SELECT (" + body + ") AS x", "SELECT cyl FROM mtcars WHERE " + function + " > 0",
             "SELECT cyl FROM mtcars WHERE mpg > " + function,
             "SELECT a.cyl FROM mtcars a JOIN mtcars b ON a.cyl = b.cyl WHERE b.mpg > " + function,
+            "SELECT a.cyl FROM mtcars a JOIN mtcars b ON " + function + " > b.mpg",
+            "SELECT DISTINCT " + function + " FROM mtcars",
+            "SELECT " + function + " FROM mtcars UNION SELECT cyl FROM mtcars",
             "SELECT COUNT(" + function + ") FROM mtcars", "SELECT cyl FROM mtcars ORDER BY " + function + " LIMIT 1",
             "SELECT ABS(" + function + ") FROM mtcars LIMIT 1")) {
           SQLSyntaxErrorException failure = assertThrows(SQLSyntaxErrorException.class, () -> {
@@ -98,6 +103,123 @@ class UnsupportedFunctionTest {
             + " is not supported inside this scalar expression (see #231)";
         assertTrue(failure.getMessage().contains(message), failure::getMessage);
       }
+    }
+  }
+
+  /**
+   * Rejects unsupported parser nodes and invalid unary signs at JDBC boundaries.
+   *
+   * @param sql
+   *          the query containing an unsupported expression
+   * @param diagnostic
+   *          expected error detail
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "SELECT JSON_ARRAYAGG(model) FROM mtcars LIMIT 1|Unsupported expression:",
+      "SELECT TIMESTAMP '2024-01-01 00:00:00' AT TIME ZONE 'UTC'|Unsupported expression:",
+      "SELECT -'abc'|Unary sign requires", "SELECT +'abc'|Unary sign requires",
+      "SELECT 7 DIV 2|Unsupported expression:", "SELECT 6 & 3|Unsupported expression:",
+      "SELECT (ARRAY[1,2])[1]|Unsupported expression:", "SELECT JSON_EXISTS('{}', '$.a')|Unsupported JSON function:"
+  })
+  void rejectsUnsupportedExpressions(String sql, String diagnostic) throws Exception {
+    Path directory = Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
+        try (var result = statement.executeQuery(sql)) {
+          while (result.next()) {
+            result.getObject(1);
+          }
+        }
+      }, sql);
+      assertEquals("42000", failure.getSQLState());
+      assertTrue(failure.getMessage().contains(diagnostic), failure::getMessage);
+    }
+  }
+
+  /**
+   * Explains why window-only function names cannot be evaluated without OVER.
+   *
+   * @param expression
+   *          a window-only function without its window specification
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "ROW_NUMBER()", "RANK()", "DENSE_RANK()", "PERCENT_RANK()", "CUME_DIST()", "NTILE(2)", "LAG(cyl)", "LEAD(cyl)",
+      "FIRST_VALUE(cyl)", "LAST_VALUE(cyl)", "NTH_VALUE(cyl, 2)"
+  })
+  void explainsMissingOverClause(String expression) throws Exception {
+    Path directory = Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
+        try (var result = statement.executeQuery("SELECT " + expression + " FROM mtcars LIMIT 1")) {
+          assertTrue(result.next());
+          result.getObject(1);
+        }
+      });
+      assertEquals("42000", failure.getSQLState());
+      assertTrue(failure.getMessage().contains("requires an OVER clause"), failure::getMessage);
+    }
+  }
+
+  /**
+   * Specifies the desired grouped scalar behavior tracked in issue 247.
+   *
+   * @param sql
+   *          grouped query with a supported scalar function
+   * @param expectedRows
+   *          expected number of groups
+   * @throws Exception
+   *           if fixture lookup or query execution fails
+   */
+  @Disabled("#247: scalar functions in HAVING and grouped select lists")
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "SELECT cyl, COUNT(*) FROM mtcars GROUP BY cyl HAVING NULLIF(cyl, 4) IS NOT NULL|2",
+      "SELECT cyl FROM mtcars GROUP BY cyl HAVING COALESCE(MAX(mpg), 0) > 1|3",
+      "SELECT NULLIF(cyl, 4) FROM mtcars GROUP BY cyl|3"
+  })
+  void evaluatesGroupedScalarFunctions(String sql, int expectedRows) throws Exception {
+    Path directory = Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      int rows = 0;
+      while (result.next()) {
+        result.getObject(1);
+        rows++;
+      }
+      assertEquals(expectedRows, rows);
+    }
+  }
+
+  /**
+   * Specifies the desired syntax classification for unknown functions in HAVING.
+   *
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @Disabled("#247: syntax classification in HAVING")
+  @Test
+  void rejectsUnknownHavingFunction() throws Exception {
+    Path directory = Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
+        try (var result = statement.executeQuery("SELECT cyl FROM mtcars GROUP BY cyl HAVING NO_SUCH(MAX(mpg)) > 1")) {
+          while (result.next()) {
+            result.getObject(1);
+          }
+        }
+      });
+      assertEquals("42000", failure.getSQLState());
+      assertTrue(failure.getMessage().contains("Unsupported function: NO_SUCH"), failure::getMessage);
     }
   }
 

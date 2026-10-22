@@ -15,6 +15,17 @@ public final class SqlExceptions {
   }
 
   /**
+   * Creates an engine failure carrying the JDBC syntax classification.
+   *
+   * @param message
+   *          the diagnostic message
+   * @return an engine exception carrying SQLState 42000
+   */
+  public static IllegalArgumentException syntaxFailure(String message) {
+    return new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000"));
+  }
+
+  /**
    * Finds classified syntax, numeric range, or numeric conversion errors inside
    * engine wrappers.
    *

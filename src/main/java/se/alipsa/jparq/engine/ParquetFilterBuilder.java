@@ -418,15 +418,17 @@ public final class ParquetFilterBuilder {
       return isLiteral(cast.getLeftExpression());
     }
     if (expression instanceof net.sf.jsqlparser.expression.SignedExpression signed) {
-      return isLiteral(signed.getExpression());
+      if (!isLiteral(signed.getExpression())) {
+        return false;
+      }
+      try {
+        LiteralConverter.toLiteral(signed);
+        return true;
+      } catch (IllegalArgumentException failure) {
+        return false;
+      }
     }
-    return expression instanceof StringValue || expression instanceof net.sf.jsqlparser.expression.LongValue
-        || expression instanceof net.sf.jsqlparser.expression.DoubleValue
-        || expression instanceof net.sf.jsqlparser.expression.BooleanValue
-        || expression instanceof net.sf.jsqlparser.expression.DateTimeLiteralExpression
-        || expression instanceof net.sf.jsqlparser.expression.DateValue
-        || expression instanceof net.sf.jsqlparser.expression.TimestampValue
-        || expression instanceof net.sf.jsqlparser.expression.NullValue;
+    return LiteralConverter.isLiteral(expression);
   }
 
   /** Converts exact decimal values to their Parquet physical representation. */

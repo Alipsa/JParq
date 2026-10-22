@@ -1,8 +1,8 @@
 package se.alipsa.jparq.engine.function;
 
+import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 import static se.alipsa.jparq.engine.function.NumericFunctions.toInteger;
 
-import java.sql.SQLSyntaxErrorException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -15,11 +15,13 @@ import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TrimFunction;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
+import net.sf.jsqlparser.statement.select.AllColumns;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.CorrelatedBindings;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SubqueryExecutor;
+import se.alipsa.jparq.engine.window.WindowFunctions;
 
 /**
  * Central dispatch for evaluating SQL {@link Function} expressions.
@@ -69,8 +71,8 @@ public final class FunctionSupport {
    *          the current record
    * @return the computed value or {@code null}
    * @throws IllegalArgumentException
-   *           if the function cannot be evaluated here or NULLIF has an invalid
-   *           argument count; the cause carries SQLState 42000
+   *           if the function cannot be evaluated here or NULLIF has invalid
+   *           arguments or modifiers; the cause carries SQLState 42000
    */
   public Object evaluate(Function func, GenericRecord record) {
     if (CorrelatedBindings.isReserved(func)) {
@@ -84,7 +86,7 @@ public final class FunctionSupport {
     FunctionArguments args = new FunctionArguments(func, record, evaluator);
     return switch (upper) {
       case "COALESCE" -> StringFunctions.coalesce(args);
-      case "NULLIF" -> evaluateNullIf(args);
+      case "NULLIF" -> evaluateNullIf(func, args);
       case "IFNULL" -> SystemFunctions.ifNull(args.firstValue(),
           args.positionalValues().size() > 1 ? args.positionalValues().get(1) : null);
       case "DATABASE" -> SystemFunctions.database();
@@ -140,6 +142,9 @@ public final class FunctionSupport {
           "DEGREES", "RADIANS" ->
         NumericFunctions.evaluate(upper, args.positionalValues());
       default -> {
+        if (WindowFunctions.WINDOW_ONLY_FUNCTION_NAMES.contains(upper)) {
+          throw syntaxFailure("Window function " + name + " requires an OVER clause");
+        }
         if (AggregateFunctions.isAggregateName(name)) {
           throw syntaxFailure(
               "Aggregate function " + name + " is not supported inside this scalar expression (see #231)");
@@ -205,13 +210,19 @@ public final class FunctionSupport {
    * Returns NULL for equal arguments, or the first value for unequal or UNKNOWN
    * comparisons, using the same equality rules as SQL predicates.
    *
+   * @param func
+   *          the function call and its modifiers
    * @param args
    *          arguments to evaluate
    * @return the first argument or NULL
    * @throws IllegalArgumentException
-   *           if there are not exactly two arguments, with SQLState 42000
+   *           if arguments or modifiers are invalid, with SQLState 42000
    */
-  private Object evaluateNullIf(FunctionArguments args) {
+  private Object evaluateNullIf(Function func, FunctionArguments args) {
+    if (func.isDistinct() || func.isUnique() || func.isAllColumns()
+        || args.positionalExpressions().stream().anyMatch(AllColumns.class::isInstance)) {
+      throw syntaxFailure("NULLIF does not support DISTINCT, UNIQUE, or * modifiers");
+    }
     if (args.positionalExpressions().size() != 2) {
       throw syntaxFailure("NULLIF requires exactly two arguments");
     }
@@ -219,17 +230,6 @@ public final class FunctionSupport {
     Object first = values.getFirst();
     Integer comparison = SqlComparisons.compareOrUnknown(first, values.get(1));
     return comparison != null && comparison == 0 ? null : first;
-  }
-
-  /**
-   * Creates a scalar function failure with its JDBC syntax classification.
-   *
-   * @param message
-   *          the diagnostic message
-   * @return an engine exception carrying SQLState 42000
-   */
-  private static IllegalArgumentException syntaxFailure(String message) {
-    return new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000"));
   }
 
   private Object evaluateArrayFunction(Function func, GenericRecord record, FunctionArguments args) {

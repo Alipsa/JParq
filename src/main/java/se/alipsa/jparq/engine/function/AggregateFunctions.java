@@ -58,6 +58,7 @@ import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionLi
 import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
+import net.sf.jsqlparser.statement.select.AllColumns;
 import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
@@ -542,6 +543,18 @@ public final class AggregateFunctions {
   }
 
   /**
+   * Recognizes both parser representations of COUNT(*).
+   *
+   * @param function
+   *          aggregate function to inspect
+   * @return whether the call uses a star argument
+   */
+  private static boolean isCountStar(Function function) {
+    List<Expression> args = parameters(function);
+    return function.isAllColumns() || args.size() == 1 && args.getFirst() instanceof AllColumns;
+  }
+
+  /**
    * Build an aggregate specification from a function expression.
    *
    * @param func
@@ -563,7 +576,7 @@ public final class AggregateFunctions {
     boolean countStar = false;
     List<Expression> args = List.of();
 
-    if (type == AggregateType.COUNT && func.isAllColumns()) {
+    if (type == AggregateType.COUNT && isCountStar(func)) {
       countStar = true;
     } else {
       args = parameters(func);
@@ -2322,7 +2335,7 @@ public final class AggregateFunctions {
         if (spec.type() != type) {
           continue;
         }
-        if (spec.countStar() != (type == AggregateType.COUNT && func.isAllColumns())) {
+        if (spec.countStar() != (type == AggregateType.COUNT && isCountStar(func))) {
           continue;
         }
         if (!spec.countStar()) {

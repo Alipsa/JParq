@@ -1,8 +1,7 @@
 package se.alipsa.jparq.engine;
 
-import static se.alipsa.jparq.engine.function.NumericFunctions.*;
+import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 
-import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -208,6 +207,9 @@ public final class ValueExpressionEvaluator {
    * @param record
    *          the current {@link GenericRecord}
    * @return the computed value (may be {@code null})
+   * @throws IllegalArgumentException
+   *           if an expression is unsupported or a unary sign has an invalid
+   *           operand; the cause carries SQLState 42000
    */
   public Object eval(Expression expression, GenericRecord record) {
     return evalInternal(ExpressionEvaluator.unwrapParenthesis(expression), record);
@@ -241,15 +243,7 @@ public final class ValueExpressionEvaluator {
       return DateTimeFunctions.castLiteral(cast, inner);
     }
     if (expression instanceof SignedExpression se) {
-      Object inner = evalInternal(se.getExpression(), record);
-      if (inner == null) {
-        return null;
-      }
-      if (!(inner instanceof Number)) {
-        return LiteralConverter.toLiteral(se);
-      }
-      BigDecimal value = toBigDecimal(inner);
-      return se.getSign() == '-' ? value.negate() : value;
+      return LiteralConverter.applySign(evalInternal(se.getExpression(), record), se.getSign());
     }
     if (expression instanceof Concat concat) {
       return concatenate(concat.getLeftExpression(), concat.getRightExpression(), record);
@@ -311,7 +305,10 @@ public final class ValueExpressionEvaluator {
     if (expression instanceof net.sf.jsqlparser.statement.select.Select subSelect) {
       return evaluateScalarSubquery(subSelect, record);
     }
-    return LiteralConverter.toLiteral(expression);
+    if (LiteralConverter.isLiteral(expression)) {
+      return LiteralConverter.toLiteral(expression);
+    }
+    throw syntaxFailure("Unsupported expression: " + expression);
   }
 
   private Object evaluateConvert(TranscodingFunction convert, GenericRecord record) {
@@ -562,7 +559,7 @@ public final class ValueExpressionEvaluator {
       }
       return JsonFunctions.jsonArray(values);
     }
-    return LiteralConverter.toLiteral(json);
+    throw syntaxFailure("Unsupported JSON function: " + json);
   }
 
   private String toStringValue(Object value) {

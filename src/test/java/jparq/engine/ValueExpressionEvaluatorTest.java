@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
+import se.alipsa.jparq.helper.TemporalInterval;
 
 class ValueExpressionEvaluatorTest {
 
@@ -63,6 +65,21 @@ class ValueExpressionEvaluatorTest {
     Expression parsed = CCJSqlParserUtil.parseExpression(expression);
     var failure = assertThrows(IllegalArgumentException.class, () -> evaluator.eval(parsed, nullNoteRecord));
     assertTrue(failure.getMessage().startsWith("Unsupported JSON_"), failure::getMessage);
+  }
+
+  /**
+   * Preserves numeric, NULL, and interval values under unary signs.
+   *
+   * @throws Exception
+   *           if expression parsing fails
+   */
+  @Test
+  void evaluatesSignedOperands() throws Exception {
+    assertEquals(new BigDecimal("-2"), eval("-2", nullNoteRecord));
+    assertEquals(new BigDecimal("2"), eval("+2", nullNoteRecord));
+    assertNull(eval("-NULL", nullNoteRecord));
+    assertEquals(TemporalInterval.parse("-2", "DAY"), eval("-INTERVAL '2 days'", nullNoteRecord));
+    assertEquals(TemporalInterval.parse("2", "DAY"), eval("+INTERVAL '2 days'", nullNoteRecord));
   }
 
   @Test

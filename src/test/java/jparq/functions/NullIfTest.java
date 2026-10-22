@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.sql.Date;
 import java.sql.DriverManager;
 import java.sql.SQLSyntaxErrorException;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -99,6 +100,25 @@ class NullIfTest {
   }
 
   /**
+   * Groups rows by evaluated NULLIF values, including one NULL group.
+   *
+   * @throws Exception
+   *           if fixture lookup or query execution fails
+   */
+  @Test
+  void groupsByNullIf() throws Exception {
+    try (var connection = DriverManager.getConnection(jdbcUrl());
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT COUNT(*) FROM mtcars GROUP BY NULLIF(cyl, 4)")) {
+      List<Integer> counts = new ArrayList<>();
+      while (result.next()) {
+        counts.add(result.getInt(1));
+      }
+      assertEquals(List.of(7, 11, 14), counts.stream().sorted().toList());
+    }
+  }
+
+  /**
    * Rejects an invalid argument count with a classified, descriptive SQL error.
    *
    * @throws Exception
@@ -116,6 +136,28 @@ class NullIfTest {
         }, expression);
         assertEquals("42000", failure.getSQLState());
         assertTrue(failure.getMessage().contains("NULLIF requires exactly two arguments"), failure::getMessage);
+      }
+    }
+  }
+
+  /**
+   * Rejects aggregate modifiers on the scalar NULLIF function.
+   *
+   * @throws Exception
+   *           if connection setup fails
+   */
+  @Test
+  void rejectsInvalidModifiers() throws Exception {
+    try (var connection = DriverManager.getConnection(jdbcUrl()); var statement = connection.createStatement()) {
+      for (String expression : List.of("NULLIF(DISTINCT cyl, 4)", "NULLIF(UNIQUE cyl, 4)", "NULLIF(*)")) {
+        var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
+          try (var result = statement.executeQuery("SELECT " + expression + " FROM mtcars LIMIT 1")) {
+            assertTrue(result.next());
+            result.getObject(1);
+          }
+        }, expression);
+        assertEquals("42000", failure.getSQLState());
+        assertTrue(failure.getMessage().contains("NULLIF does not support"), failure::getMessage);
       }
     }
   }
