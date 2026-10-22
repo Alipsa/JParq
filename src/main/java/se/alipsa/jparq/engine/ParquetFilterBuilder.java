@@ -741,7 +741,7 @@ public final class ParquetFilterBuilder {
     if (exp instanceof InExpression in && (negative || in.isNot())
         && in.getRightExpression() instanceof ExpressionList<?> list && !list.isEmpty() && list.size() <= 20) {
       // A NULL list member must keep the entire IN in Java.
-      if (list.stream().anyMatch(value -> LiteralConverter.toLiteral(value) == null)) {
+      if (list.stream().anyMatch(value -> isLiteral(value) && LiteralConverter.toLiteral(value) == null)) {
         return negative ? new NotExpression(exp) : exp;
       }
       boolean inverse = negative != in.isNot();

@@ -4,6 +4,7 @@ import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 import static se.alipsa.jparq.engine.function.NumericFunctions.toBigDecimal;
 
 import java.math.BigDecimal;
+import java.sql.SQLDataException;
 import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
@@ -53,13 +54,15 @@ public class LiteralConverter {
    *
    * @param value
    *          evaluated operand, including numeric text, an interval, or NULL
-   * @param sign
-   *          the unary sign
+   * @param expression
+   *          the signed expression, used for diagnostics
    * @return the signed value or NULL
    * @throws IllegalArgumentException
-   *           if the operand cannot be converted, with SQLState 42000
+   *           if conversion fails (SQLState 22018) or the operand type is invalid
+   *           (SQLState 42000)
    */
-  public static Object applySign(Object value, char sign) {
+  public static Object applySign(Object value, SignedExpression expression) {
+    char sign = expression.getSign();
     if (value == null) {
       return null;
     }
@@ -71,10 +74,11 @@ public class LiteralConverter {
         BigDecimal number = toBigDecimal(value);
         return sign == '-' ? number.negate() : number;
       } catch (NumberFormatException failure) {
-        throw syntaxFailure("Unary sign requires a numeric or interval operand: " + value);
+        String message = "Cannot convert unary sign operand to a numeric value: " + expression;
+        throw new IllegalArgumentException(message, new SQLDataException(message, "22018", failure));
       }
     }
-    throw syntaxFailure("Unary sign requires a numeric or interval operand: " + value);
+    throw syntaxFailure("Unary sign requires a numeric or interval operand: " + expression);
   }
 
   /**
@@ -86,7 +90,8 @@ public class LiteralConverter {
    *          the expression
    * @return the corresponding Java Object
    * @throws IllegalArgumentException
-   *           if a signed literal has an invalid operand, with SQLState 42000
+   *           if a signed literal has an invalid operand, with SQLState 22018 for
+   *           numeric conversion failures or 42000 for invalid types
    */
   @SuppressWarnings({
       "PMD.AvoidDecimalLiteralsInBigDecimalConstructor", "PMD.EmptyCatchBlock", "checkstyle:NeedBraces"
@@ -173,6 +178,6 @@ public class LiteralConverter {
    * @return the signed value
    */
   private static Object toSignedLiteral(SignedExpression expression) {
-    return applySign(toLiteral(expression.getExpression()), expression.getSign());
+    return applySign(toLiteral(expression.getExpression()), expression);
   }
 }

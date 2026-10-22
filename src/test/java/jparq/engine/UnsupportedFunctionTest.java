@@ -120,9 +120,9 @@ class UnsupportedFunctionTest {
   @CsvSource(delimiter = '|', value = {
       "SELECT JSON_ARRAYAGG(model) FROM mtcars LIMIT 1|Unsupported expression:",
       "SELECT TIMESTAMP '2024-01-01 00:00:00' AT TIME ZONE 'UTC'|Unsupported expression:",
-      "SELECT -'abc'|Unary sign requires", "SELECT +'abc'|Unary sign requires",
-      "SELECT 7 DIV 2|Unsupported expression:", "SELECT 6 & 3|Unsupported expression:",
-      "SELECT (ARRAY[1,2])[1]|Unsupported expression:", "SELECT JSON_EXISTS('{}', '$.a')|Unsupported JSON function:"
+      "SELECT -TRUE|Unary sign requires", "SELECT +TRUE|Unary sign requires", "SELECT 7 DIV 2|Unsupported expression:",
+      "SELECT 6 & 3|Unsupported expression:", "SELECT (ARRAY[1,2])[1]|Unsupported expression:",
+      "SELECT JSON_EXISTS('{}', '$.a')|Unsupported JSON function:"
   })
   void rejectsUnsupportedExpressions(String sql, String diagnostic) throws Exception {
     Path directory = Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();

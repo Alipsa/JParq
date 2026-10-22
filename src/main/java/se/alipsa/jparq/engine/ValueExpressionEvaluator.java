@@ -209,7 +209,8 @@ public final class ValueExpressionEvaluator {
    * @return the computed value (may be {@code null})
    * @throws IllegalArgumentException
    *           if an expression is unsupported or a unary sign has an invalid
-   *           operand; the cause carries SQLState 42000
+   *           operand; the cause carries SQLState 42000 for unsupported types or
+   *           expressions, or 22018 for numeric conversion failures
    */
   public Object eval(Expression expression, GenericRecord record) {
     return evalInternal(ExpressionEvaluator.unwrapParenthesis(expression), record);
@@ -243,7 +244,7 @@ public final class ValueExpressionEvaluator {
       return DateTimeFunctions.castLiteral(cast, inner);
     }
     if (expression instanceof SignedExpression se) {
-      return LiteralConverter.applySign(evalInternal(se.getExpression(), record), se.getSign());
+      return LiteralConverter.applySign(evalInternal(se.getExpression(), record), se);
     }
     if (expression instanceof Concat concat) {
       return concatenate(concat.getLeftExpression(), concat.getRightExpression(), record);
