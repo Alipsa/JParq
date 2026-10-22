@@ -184,4 +184,37 @@ class UnarySignTest {
     }
   }
 
+  /**
+   * Omits internal binding functions from correlated conversion diagnostics.
+   *
+   * @param pushdown
+   *          whether predicate pushdown is enabled
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void hidesCorrelatedBindingsInDiagnostics(boolean pushdown) throws Exception {
+    Path directory = Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory + "?predicatePushdown=" + pushdown);
+        var statement = connection.createStatement()) {
+      for (String operand : List.of("-a.model", "-COALESCE(a.model, 'x')", "-(a.model)")) {
+        var failure = assertThrows(SQLDataException.class, () -> {
+          try (var result = statement.executeQuery(
+              "SELECT cyl FROM mtcars a WHERE EXISTS " + "(SELECT 1 FROM mtcars b WHERE b.cyl = " + operand + ")")) {
+            while (result.next()) {
+              result.getObject(1);
+            }
+          }
+        }, operand);
+        assertEquals("22018", failure.getSQLState());
+        assertTrue(failure.getMessage().contains("Cannot convert unary sign operand to a numeric value"),
+            failure::getMessage);
+        assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure::getMessage);
+      }
+    }
+  }
+
 }

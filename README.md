@@ -158,7 +158,8 @@ execution, materialization, or a result-set getter; function names are not check
 allowlist. Scalar functions in HAVING and grouped select lists remain limited;
 NULLIF support and SQLState classification there remain tracked in [#247](https://github.com/Alipsa/JParq/issues/247).
 Unary signs convert numeric text and report invalid numeric text as `SQLDataException` with SQLState `22018`;
-unsupported operand types raise SQLState `42000`. Diagnostics identify the signed SQL expression.
+unsupported operand types raise SQLState `42000`. Diagnostics identify the signed SQL expression, or use a generic
+unary-sign message when the expression contains internal correlated bindings.
 Hex literals (`X'41'`, `0x41`), including JDBC byte parameters, still return their SQL text rather than
 binary values; this legacy behavior is tracked in [#250](https://github.com/Alipsa/JParq/issues/250).
 Expressions skipped by filtering or CASE branch selection are not evaluated.

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.math.BigDecimal;
 import java.sql.Date;
+import java.sql.SQLSyntaxErrorException;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.CastExpression;
@@ -17,6 +18,7 @@ import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.CorrelatedBindings;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.helper.LiteralConverter;
@@ -27,6 +29,20 @@ import se.alipsa.jparq.helper.TemporalInterval;
  * {@link LiteralConverter#toLiteral(net.sf.jsqlparser.expression.Expression)}.
  */
 class LiteralConverterTest {
+
+  /**
+   * Redacts internal binding identity for unsupported unary operand types.
+   */
+  @Test
+  void hidesCorrelatedBindingInTypeFailure() {
+    var expression = new SignedExpression();
+    expression.setSign('-');
+    expression.setExpression(new CorrelatedBindings.Reference("private-binding-key", 0).expression());
+    var failure = assertThrows(IllegalArgumentException.class, () -> LiteralConverter.applySign(true, expression));
+    assertEquals("Unary sign requires a numeric or interval operand", failure.getMessage());
+    assertInstanceOf(SQLSyntaxErrorException.class, failure.getCause());
+    assertEquals("42000", ((SQLSyntaxErrorException) failure.getCause()).getSQLState());
+  }
 
   /**
    * Decodes escaped apostrophes without changing the AST or dollar-quoted text.
