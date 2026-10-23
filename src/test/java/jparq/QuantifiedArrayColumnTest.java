@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -14,6 +15,7 @@ import java.sql.Connection;
 import java.sql.Date;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.sql.SQLSyntaxErrorException;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.LocalDate;
@@ -180,6 +182,68 @@ class QuantifiedArrayColumnTest {
       })) {
         assertEquals(List.of(1), ids(connection, "SELECT a.id FROM (SELECT * FROM arrays) a, UNNEST(a." + pair[0]
             + ") d(v) " + "WHERE d.v = " + pair[1] + " ORDER BY a.id"));
+      }
+    }
+  }
+
+  /**
+   * Validates stored arrays alongside constructors and preserves logical elements
+   * in ARRAY subqueries.
+   *
+   * @param pushdown
+   *          predicate and projection pushdown setting
+   * @param directory
+   *          temporary dataset directory
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void constructsNestedStoredArrays(boolean pushdown, @TempDir Path directory) throws Exception {
+    writeArrays(directory);
+    try (var connection = DriverManager.getConnection(
+        "jdbc:jparq:" + directory + "?predicatePushdown=" + pushdown + "&projectionPushdown=" + pushdown)) {
+      for (String expression : List.of("ARRAY[nums,tags]", "ARRAY[tags,nums]", "ARRAY[dates,times]",
+          "ARRAY[nums,ARRAY[ARRAY[1]]]")) {
+        try (var statement = connection.createStatement()) {
+          var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
+            try (var result = statement.executeQuery("SELECT " + expression + " FROM arrays WHERE id = 1")) {
+              while (result.next()) {
+                result.getObject(1);
+              }
+            }
+          }, expression);
+          assertEquals("42000", failure.getSQLState());
+        }
+      }
+      for (String input : List.of("arrays", "(SELECT * FROM arrays) a")) {
+        try (var statement = connection.createStatement();
+            var result = statement.executeQuery("SELECT ARRAY[nums,decs], ARRAY[nums,ARRAY[1.5]], "
+                + "ARRAY[tags,ARRAY['x']] FROM " + input + " WHERE id = 1")) {
+          assertTrue(result.next());
+          assertEquals(List.of(List.of(new BigDecimal("2"), new BigDecimal("4")),
+              List.of(new BigDecimal("1.50"), new BigDecimal("2.50"))), result.getObject(1));
+          assertEquals(List.of(List.of(new BigDecimal("2"), new BigDecimal("4")), List.of(new BigDecimal("1.5"))),
+              result.getObject(2));
+          assertEquals(List.of(List.of("Sport", "Comfort"), List.of("x")), result.getObject(3));
+          assertFalse(result.next());
+        }
+      }
+      var dates = List.of(Date.valueOf("2024-01-01"), Date.valueOf("2024-01-02"));
+      try (var statement = connection.createStatement();
+          var result = statement.executeQuery("SELECT ARRAY(SELECT dates FROM arrays WHERE id = 1)")) {
+        assertTrue(result.next());
+        assertEquals(List.of(dates), result.getObject(1));
+        assertFalse(result.next());
+      }
+      try (var statement = connection.createStatement();
+          var result = statement.executeQuery(
+              "SELECT d FROM (SELECT ARRAY(SELECT dates FROM arrays WHERE id = 1) AS a) s, UNNEST(s.a) t(d)")) {
+        assertTrue(result.next());
+        assertArrayEquals(dates.toArray(), assertInstanceOf(Object[].class, result.getObject(1)));
+        assertFalse(result.next());
       }
     }
   }
