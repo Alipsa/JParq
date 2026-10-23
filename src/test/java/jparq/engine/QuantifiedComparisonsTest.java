@@ -60,7 +60,7 @@ class QuantifiedComparisonsTest {
           expression -> new QuantifiedComparisons.ScalarOperand(32, UnaryOperator.identity()), expression -> {
             throw new AssertionError("Unexpected array evaluation");
           }, select -> List.of(decisive, structured)));
-      assertEquals("ANY/SOME/ALL requires scalar array elements", exception.getMessage());
+      assertEquals("ANY/SOME/ALL requires scalar candidate values", exception.getMessage());
     }
   }
 

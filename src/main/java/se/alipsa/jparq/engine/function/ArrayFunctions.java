@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import net.sf.jsqlparser.statement.select.Select;
 import se.alipsa.jparq.engine.SubqueryExecutor.SubqueryResult;
 
 /**
@@ -20,16 +21,18 @@ public final class ArrayFunctions {
    *
    * @param result
    *          the executed subquery
+   * @param subSelect
+   *          the subquery used in error diagnostics
    * @return homogenized first-column values, or an empty array for no columns
    * @throws IllegalArgumentException
    *           if the result has multiple columns
    */
-  public static List<Object> fromSubquery(SubqueryResult result) {
+  public static List<Object> fromSubquery(SubqueryResult result, Select subSelect) {
     if (result.columnLabels().isEmpty()) {
       return List.of();
     }
     if (result.columnLabels().size() > 1) {
-      throw new IllegalArgumentException("ARRAY subquery must return exactly one column");
+      throw new IllegalArgumentException("ARRAY subquery must return exactly one column: " + subSelect);
     }
     return homogenizeArrayValues(result.firstColumnValues());
   }

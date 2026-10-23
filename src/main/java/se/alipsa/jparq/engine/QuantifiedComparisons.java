@@ -115,7 +115,7 @@ public final class QuantifiedComparisons {
       isAll = "ALL".equalsIgnoreCase(function.getName());
     }
     if (values.stream().anyMatch(QuantifiedComparisons::isNonScalar)) {
-      throw new IllegalArgumentException("ANY/SOME/ALL requires scalar array elements");
+      throw new IllegalArgumentException("ANY/SOME/ALL requires scalar candidate values");
     }
     Boolean result = isAll;
     for (Object rawValue : values) {

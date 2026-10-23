@@ -23,6 +23,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.BinaryExpression;
@@ -2392,8 +2393,7 @@ public final class AggregateFunctions {
       Expression rightExpr = be.getRightExpression();
       if (JSqlParserSupport.isQuantifiedOperand(leftExpr) || JSqlParserSupport.isQuantifiedOperand(rightExpr)) {
         return QuantifiedComparisons.evaluate(be,
-            expression -> new QuantifiedComparisons.ScalarOperand(value(expression),
-                java.util.function.UnaryOperator.identity()),
+            expression -> new QuantifiedComparisons.ScalarOperand(value(expression), UnaryOperator.identity()),
             this::value, subSelect -> evaluateSubquery(subSelect).firstColumnValues());
       }
       String op = be.getStringExpression();
@@ -2440,7 +2440,7 @@ public final class AggregateFunctions {
         if ("ARRAY".equalsIgnoreCase(func.getName())) {
           ExpressionList<?> parameters = func.getParameters();
           if (parameters != null && !parameters.isEmpty() && parameters.getFirst() instanceof Select subSelect) {
-            return ArrayFunctions.fromSubquery(evaluateSubquery(subSelect));
+            return ArrayFunctions.fromSubquery(evaluateSubquery(subSelect), subSelect);
           }
           return arrayValues(parameters);
         }

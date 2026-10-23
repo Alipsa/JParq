@@ -255,7 +255,7 @@ public final class FunctionSupport {
     SubqueryExecutor.SubqueryResult result = subqueryExecutor.executeCorrelated(subSelect, correlationQualifiers,
         correlationColumns, correlationContext,
         (qualifier, column) -> correlatedValueResolver.resolve(qualifier, column, record));
-    return ArrayFunctions.fromSubquery(result);
+    return ArrayFunctions.fromSubquery(result, subSelect);
   }
 
   private Object evaluatePosition(FunctionArguments args) {

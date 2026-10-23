@@ -163,7 +163,7 @@ class HavingQuantifiedComparisonTest {
       }, new String[]{
           "COUNT(*) = ALL(1)", "requires an array operand"
       }, new String[]{
-          "COUNT(*) = ANY(ARRAY[[32]])", "requires scalar array elements"
+          "COUNT(*) = ANY(ARRAY[[32]])", "requires scalar candidate values"
       }, new String[]{
           "COUNT(*) = ANY(ARRAY(SELECT 1, 2))", "ARRAY subquery must return exactly one column"
       })) {
@@ -199,7 +199,36 @@ class HavingQuantifiedComparisonTest {
           while (cause.getCause() != null) {
             cause = cause.getCause();
           }
-          assertEquals("ANY/SOME/ALL requires scalar array elements", cause.getMessage(), sql);
+          assertEquals("ANY/SOME/ALL requires scalar candidate values", cause.getMessage(), sql);
+        }
+      }
+    }
+  }
+
+  /**
+   * ARRAY column-count errors retain the failing query through JDBC wrappers.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if querying fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void arraySubqueryErrorsIdentifyQuery(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown)) {
+      for (String subquery : List.of("SELECT cyl, gear FROM mtcars", "SELECT cyl, gear FROM mtcars WHERE cyl = 0")) {
+        for (String sql : List.of("SELECT cyl FROM mtcars WHERE cyl = ANY(ARRAY(" + subquery + "))",
+            "SELECT COUNT(*) FROM mtcars HAVING COUNT(*) = ANY(ARRAY(" + subquery + "))")) {
+          SQLException exception = assertThrows(SQLException.class, () -> integers(connection, sql), sql);
+          Throwable cause = exception;
+          while (cause.getCause() != null) {
+            cause = cause.getCause();
+          }
+          assertTrue(cause.getMessage().startsWith("ARRAY subquery must return exactly one column: "), sql);
+          assertTrue(cause.getMessage().contains(subquery), cause.getMessage());
         }
       }
     }
