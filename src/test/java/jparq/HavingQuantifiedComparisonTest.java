@@ -1,6 +1,7 @@
 package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -32,18 +33,26 @@ class HavingQuantifiedComparisonTest {
     try (var connection = connect(pushdown)) {
       assertEquals(List.of(4), groups(connection, "COUNT(*) = ANY(SELECT 11)"));
       assertEquals(List.of(4, 6), groups(connection, "COUNT(*) = ANY(ARRAY[11,7])"));
+      assertEquals(List.of(6), groups(connection, "COUNT(*) < ALL(ARRAY[8,14])"));
+      assertEquals(List.of(8), groups(connection, "COUNT(*) > ALL(SELECT 7 UNION ALL SELECT 11)"));
+      assertEquals(List.of(4, 6), groups(connection, "COUNT(*) <= ALL(ARRAY[11,14])"));
+      assertEquals(List.of(4, 8), groups(connection, "COUNT(*) >= ALL(ARRAY[7,11])"));
+      assertEquals(List.of(4, 8), groups(connection, "COUNT(*) <> ALL(ARRAY[7,32])"));
+      assertEquals(List.of(4, 8), groups(connection, "COUNT(*) != ALL(ARRAY[7,32])"));
       for (String quantifier : List.of("ANY", "SOME", "ALL")) {
-        for (String operator : List.of("=", "<>", "!=", "<", "<=", ">", ">=")) {
+        for (String operator : List.of("=", "<", ">")) {
           for (String values : List.of("ARRAY[7,11]", "SELECT 7 UNION ALL SELECT 11",
               "ARRAY(SELECT 7 UNION ALL SELECT 11)")) {
             String quantified = quantifier + "(" + values + ")";
             String connective = "ALL".equals(quantifier) ? " AND " : " OR ";
+            String rightPredicate = "COUNT(*) " + operator + " " + quantified;
+            String leftPredicate = quantified + " " + operator + " COUNT(*)";
             assertEquals(
                 groups(connection, "COUNT(*) " + operator + " 7" + connective + "COUNT(*) " + operator + " 11"),
-                groups(connection, "COUNT(*) " + operator + " " + quantified));
+                groups(connection, rightPredicate), rightPredicate);
             assertEquals(
                 groups(connection, "7 " + operator + " COUNT(*)" + connective + "11 " + operator + " COUNT(*)"),
-                groups(connection, quantified + " " + operator + " COUNT(*)"));
+                groups(connection, leftPredicate), leftPredicate);
           }
         }
         assertEquals(List.of(4, 6, 8), groups(connection, "COUNT(*) = " + quantifier + "(ARRAY[COUNT(*), COUNT(*)])"));
@@ -66,7 +75,7 @@ class HavingQuantifiedComparisonTest {
             assertTrue(result.next());
             assertEquals(count == 11 ? 4 : count == 7 ? 6 : 8, result.getInt(1));
             assertEquals(count, result.getInt(2));
-            assertEquals(false, result.next());
+            assertFalse(result.next());
           }
         }
       }
@@ -164,6 +173,34 @@ class HavingQuantifiedComparisonTest {
           cause = cause.getCause();
         }
         assertTrue(cause.getMessage().contains(test[1]), cause.getMessage());
+      }
+    }
+  }
+
+  /**
+   * Structured subquery values must fail in WHERE and HAVING before filtering.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if querying fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void rejectsStructuredSubqueryValues(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown)) {
+      for (String quantifier : List.of("ANY", "SOME", "ALL")) {
+        for (String sql : List.of("SELECT cyl FROM mtcars WHERE cyl = " + quantifier + "(SELECT ARRAY[11])",
+            "SELECT COUNT(*) FROM mtcars HAVING COUNT(*) = " + quantifier + "(SELECT ARRAY[11])")) {
+          SQLException exception = assertThrows(SQLException.class, () -> integers(connection, sql), sql);
+          Throwable cause = exception;
+          while (cause.getCause() != null) {
+            cause = cause.getCause();
+          }
+          assertEquals("ANY/SOME/ALL requires scalar array elements", cause.getMessage(), sql);
+        }
       }
     }
   }

@@ -10,12 +10,24 @@ import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.engine.SubqueryExecutor.SubqueryResult;
 import se.alipsa.jparq.engine.function.ArrayFunctions;
 
 /**
  * Unit tests for {@link ArrayFunctions}.
  */
 class ArrayFunctionsTest {
+
+  /** Verifies shared ARRAY subquery shape checks and numeric normalization. */
+  @Test
+  void normalizesSubqueryResults() {
+    assertEquals(List.of(), ArrayFunctions.fromSubquery(new SubqueryResult(List.of(), List.of(List.of(1)))));
+    assertEquals(List.of(), ArrayFunctions.fromSubquery(new SubqueryResult(List.of("n"), List.of())));
+    assertEquals(List.of(1L, 2L),
+        ArrayFunctions.fromSubquery(new SubqueryResult(List.of("n"), List.of(List.of(1), List.of(2L)))));
+    assertThrows(IllegalArgumentException.class,
+        () -> ArrayFunctions.fromSubquery(new SubqueryResult(List.of("n", "m"), List.of())));
+  }
 
   /**
    * Verify null or empty inputs return an empty, unmodifiable list.

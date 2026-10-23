@@ -447,46 +447,12 @@ public final class ExpressionEvaluator {
    *         {@code null} for UNKNOWN
    */
   private Boolean evalAnyComparison(BinaryExpression be, GenericRecord rec) {
-    Expression left = be.getLeftExpression();
-    Expression right = be.getRightExpression();
-
-    if (JSqlParserSupport.isQuantifiedOperand(left) && JSqlParserSupport.isQuantifiedOperand(right)) {
-      throw new IllegalArgumentException("Quantified comparison requires a scalar operand on one side");
-    }
-    if (JSqlParserSupport.isQuantifiedOperand(left)) {
-      return evalAnyComparison(left, right, be.getStringExpression(), rec, true);
-    }
-    if (JSqlParserSupport.isQuantifiedOperand(right)) {
-      return evalAnyComparison(right, left, be.getStringExpression(), rec, false);
-    }
-    throw new IllegalArgumentException("ANY/SOME/ALL evaluation requested without a quantified operand");
-  }
-
-  /**
-   * Evaluate a quantified subquery or array against the provided expression.
-   *
-   * @param anyExpr
-   *          the ANY/SOME/ALL expression
-   * @param otherExpr
-   *          the expression to compare with the results of {@code anyExpr}
-   * @param operator
-   *          the comparison operator ({@code =}, {@code <>}, {@code >},
-   *          {@code >=}, {@code <}, or {@code <=})
-   * @param rec
-   *          the record currently under evaluation
-   * @param anyOnLeft
-   *          {@code true} if {@code anyExpr} appeared on the left-hand side of
-   *          the operator
-   * @return {@code true} or {@code false} when the quantified comparison is
-   *         decisive, {@code null} for UNKNOWN
-   */
-  private Boolean evalAnyComparison(Expression anyExpr, Expression otherExpr, String operator, GenericRecord rec,
-      boolean anyOnLeft) {
-    Operand otherOperand = operand(otherExpr, rec);
-    return QuantifiedComparisons.evaluate(anyExpr, otherOperand.value, operator, anyOnLeft,
-        expression -> operand(expression, rec).value,
-        subSelect -> executeCorrelatedSubquery(subSelect, rec).firstColumnValues(),
-        candidate -> coerceLiteralToColumnType(candidate, otherOperand.schemaOrNull));
+    return QuantifiedComparisons.evaluate(be, expression -> {
+      Operand scalar = operand(expression, rec);
+      return new QuantifiedComparisons.ScalarOperand(scalar.value,
+          candidate -> coerceLiteralToColumnType(candidate, scalar.schemaOrNull));
+    }, expression -> operand(expression, rec).value,
+        subSelect -> executeCorrelatedSubquery(subSelect, rec).firstColumnValues());
   }
 
   // -------------------------

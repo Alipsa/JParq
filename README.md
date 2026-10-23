@@ -112,6 +112,8 @@ continue to depend on returned values.
 HAVING supports quantified comparisons with `ANY`, `SOME`, and `ALL` over subqueries and arrays,
 including aggregate values and correlated grouping columns. These comparisons use SQL three-valued logic for
 NULLs; empty inputs yield FALSE for ANY/SOME and TRUE for ALL.
+Quantified comparisons in WHERE and HAVING require scalar candidates; array, map, and struct candidates
+from either arrays or subqueries raise an error.
 HAVING evaluates AND/OR operands from left to right: AND stops after FALSE, and OR stops after TRUE.
 Skipped operands are not evaluated, so their errors are suppressed; reordering conditions can expose an error.
 Scalar subqueries must return exactly one column and at most one row. Violations raise SQLSyntaxErrorException

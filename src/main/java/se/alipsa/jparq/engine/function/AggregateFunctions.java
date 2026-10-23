@@ -2390,15 +2390,11 @@ public final class AggregateFunctions {
     private Boolean evalBinary(BinaryExpression be) {
       Expression leftExpr = be.getLeftExpression();
       Expression rightExpr = be.getRightExpression();
-      boolean leftQuantified = JSqlParserSupport.isQuantifiedOperand(leftExpr);
-      boolean rightQuantified = JSqlParserSupport.isQuantifiedOperand(rightExpr);
-      if (leftQuantified && rightQuantified) {
-        throw new IllegalArgumentException("Quantified comparison requires a scalar operand on one side");
-      }
-      if (leftQuantified || rightQuantified) {
-        return QuantifiedComparisons.evaluate(leftQuantified ? leftExpr : rightExpr,
-            value(leftQuantified ? rightExpr : leftExpr), be.getStringExpression(), leftQuantified, this::value,
-            subSelect -> evaluateSubquery(subSelect).firstColumnValues(), candidate -> candidate);
+      if (JSqlParserSupport.isQuantifiedOperand(leftExpr) || JSqlParserSupport.isQuantifiedOperand(rightExpr)) {
+        return QuantifiedComparisons.evaluate(be,
+            expression -> new QuantifiedComparisons.ScalarOperand(value(expression),
+                java.util.function.UnaryOperator.identity()),
+            this::value, subSelect -> evaluateSubquery(subSelect).firstColumnValues());
       }
       String op = be.getStringExpression();
       Object left = value(be.getLeftExpression());
@@ -2444,11 +2440,7 @@ public final class AggregateFunctions {
         if ("ARRAY".equalsIgnoreCase(func.getName())) {
           ExpressionList<?> parameters = func.getParameters();
           if (parameters != null && !parameters.isEmpty() && parameters.getFirst() instanceof Select subSelect) {
-            SubqueryExecutor.SubqueryResult result = evaluateSubquery(subSelect);
-            if (result.columnLabels().size() > 1) {
-              throw new IllegalArgumentException("ARRAY subquery must return exactly one column: " + subSelect);
-            }
-            return ArrayFunctions.homogenizeArrayValues(result.firstColumnValues());
+            return ArrayFunctions.fromSubquery(evaluateSubquery(subSelect));
           }
           return arrayValues(parameters);
         }
