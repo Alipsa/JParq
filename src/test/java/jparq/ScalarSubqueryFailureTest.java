@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -23,10 +24,10 @@ import org.junit.jupiter.params.provider.MethodSource;
  * exceptions.
  */
 class ScalarSubqueryFailureTest {
-  private static final Map<String, String> SUBQUERY_FAILURES = Map.of("SELECT COUNT(*) FROM optimized WHERE zz = 1",
-      "Missing columns for table 'optimized': zz",
-      "SELECT COUNT(*) FROM (SELECT id FROM optimized WHERE id <= 2) x(a, a)",
-      "Duplicate derived table column alias: a");
+  private static final List<Map.Entry<String, String>> SUBQUERY_FAILURES = List.of(
+      Map.entry("SELECT COUNT(*) FROM optimized WHERE zz = 1", "Missing columns for table 'optimized': zz"),
+      Map.entry("SELECT COUNT(*) FROM (SELECT id FROM optimized WHERE id <= 2) x(a, a)",
+          "Duplicate derived table column alias: a"));
 
   /**
    * Checks the streaming iteration boundary independently of projection getters.
@@ -38,7 +39,7 @@ class ScalarSubqueryFailureTest {
    * @throws Exception
    *           if connecting or reading the first row fails
    */
-  @ParameterizedTest
+  @ParameterizedTest(name = "{0}")
   @MethodSource("subqueryFailures")
   void nextRetainsSubqueryFailure(String inner, String diagnostic) throws Exception {
     String url = "jdbc:jparq:" + fixtureDirectory();
@@ -76,7 +77,7 @@ class ScalarSubqueryFailureTest {
     String url = "jdbc:jparq:" + fixtureDirectory() + "?predicatePushdown=" + predicate + "&projectionPushdown="
         + projection;
     try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
-      for (var entry : SUBQUERY_FAILURES.entrySet()) {
+      for (var entry : SUBQUERY_FAILURES) {
         for (String outer : new String[]{
             "", " FROM optimized", " FROM optimized ORDER BY id"
         }) {
@@ -99,7 +100,7 @@ class ScalarSubqueryFailureTest {
    * @return subqueries paired with their expected diagnostics
    */
   private static Stream<Arguments> subqueryFailures() {
-    return SUBQUERY_FAILURES.entrySet().stream().map(entry -> Arguments.of(entry.getKey(), entry.getValue()));
+    return SUBQUERY_FAILURES.stream().map(entry -> Arguments.of(entry.getKey(), entry.getValue()));
   }
 
   /**
