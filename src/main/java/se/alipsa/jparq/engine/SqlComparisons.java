@@ -71,8 +71,7 @@ public final class SqlComparisons {
       return li.compareTo(ri);
     }
     if (l instanceof Number && r instanceof TemporalInterval || l instanceof TemporalInterval && r instanceof Number) {
-      throw syntaxFailure(
-          "Cannot compare a numeric day count with INTERVAL; compare DATE differences with numeric days");
+      throw syntaxFailure("Cannot compare a numeric value with INTERVAL; DATE differences are numeric day counts");
     }
     return l.toString().compareTo(r.toString());
   }

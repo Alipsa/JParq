@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.sql.Date;
 import java.sql.DriverManager;
@@ -42,8 +44,9 @@ class DateArithmeticTest {
   @BeforeEach
   void writeDates() throws Exception {
     Schema date = LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
+    Schema decimal = LogicalTypes.decimal(10, 2).addToSchema(Schema.create(Schema.Type.BYTES));
     Schema schema = SchemaBuilder.record("dates").fields().requiredInt("id").name("d").type().unionOf().nullType().and()
-        .type(date).endUnion().nullDefault().endRecord();
+        .type(date).endUnion().nullDefault().name("amt").type(decimal).noDefault().endRecord();
     Configuration configuration = new Configuration(false);
     var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve("small.parquet").toUri()),
         configuration);
@@ -52,6 +55,7 @@ class DateArithmeticTest {
       for (int id = 0; id < 2; id++) {
         var record = new GenericData.Record(schema);
         record.put("id", id);
+        record.put("amt", ByteBuffer.wrap(new BigDecimal("123.45").unscaledValue().toByteArray()));
         record.put("d", id == 0 ? (int) LocalDate.of(2024, 3, 1).toEpochDay() : null);
         writer.write(record);
       }
@@ -165,7 +169,11 @@ class DateArithmeticTest {
       for (String comparison : List.of("d - DATE '2024-02-01' " + operator + " INTERVAL '7 days'",
           "INTERVAL '7 days' " + operator + " (d - DATE '2024-02-01')")) {
         for (String sql : List.of("SELECT id FROM small WHERE id = 0 AND " + comparison,
-            "SELECT " + comparison + " FROM small WHERE id = 0")) {
+            "SELECT " + comparison + " FROM small WHERE id = 0",
+            "SELECT CASE d - DATE '2024-02-01' WHEN INTERVAL '29 days' THEN 'y' ELSE 'n' END "
+                + "FROM small WHERE id = 0",
+            "SELECT CASE INTERVAL '29 days' WHEN d - DATE '2024-02-01' THEN 'y' ELSE 'n' END "
+                + "FROM small WHERE id = 0")) {
           var failure = assertThrows(SQLException.class, () -> {
             try (var result = statement.executeQuery(sql)) {
               result.next();
@@ -196,9 +204,6 @@ class DateArithmeticTest {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
       for (String expression : List.of("(d - DATE '2024-02-28')", "((d - DATE '2024-02-28'))", "CURRENT_DATE - d",
           "CURRENT_DATE() - d", "? - d")) {
-        long expected = expression.contains("CURRENT_DATE")
-            ? java.time.temporal.ChronoUnit.DAYS.between(LocalDate.of(2024, 3, 1), LocalDate.now())
-            : 2L;
         for (String filter : List.of("id = 0", "id = 99")) {
           String inner = "SELECT " + expression + " AS d FROM small WHERE " + filter;
           for (String sql : List.of(inner, "SELECT * FROM (" + inner + ") t",
@@ -207,18 +212,102 @@ class DateArithmeticTest {
               if (expression.contains("?")) {
                 statement.setDate(1, Date.valueOf("2024-03-03"));
               }
+              LocalDate before = LocalDate.now();
               try (var result = statement.executeQuery()) {
                 assertEquals(Types.BIGINT, result.getMetaData().getColumnType(1), sql);
                 assertEquals(Long.class.getName(), result.getMetaData().getColumnClassName(1), sql);
                 if (filter.equals("id = 0")) {
                   assertTrue(result.next(), sql);
-                  assertEquals(expected, result.getObject(1), sql);
+                  Object actual = result.getObject(1);
+                  if (expression.contains("CURRENT_DATE")) {
+                    LocalDate after = LocalDate.now();
+                    long beforeDays = java.time.temporal.ChronoUnit.DAYS.between(LocalDate.of(2024, 3, 1), before);
+                    long afterDays = java.time.temporal.ChronoUnit.DAYS.between(LocalDate.of(2024, 3, 1), after);
+                    assertTrue(Long.valueOf(beforeDays).equals(actual) || Long.valueOf(afterDays).equals(actual), sql);
+                  } else {
+                    assertEquals(2L, actual, sql);
+                  }
                 }
                 assertFalse(result.next(), sql);
               }
             }
           }
         }
+      }
+    }
+  }
+
+  /**
+   * Retains numeric source types for subtraction aliases, even with empty inputs.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void numericSubtractionPreservesSourceMetadata() throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String field : List.of("amt", "id")) {
+        for (String expression : List.of(field + " - 1", "(" + field + " - 1)")) {
+          for (String filter : List.of("id = 0", "id = 99")) {
+            String inner = "SELECT " + expression + " AS " + field + " FROM small WHERE " + filter;
+            for (String sql : List.of(inner, "SELECT * FROM (" + inner + ") t",
+                "WITH t AS (" + inner + ") SELECT * FROM t")) {
+              try (var result = statement.executeQuery(sql)) {
+                var metadata = result.getMetaData();
+                assertEquals(field.equals("amt") ? Types.DECIMAL : Types.INTEGER, metadata.getColumnType(1), sql);
+                if (field.equals("amt")) {
+                  assertEquals(10, metadata.getPrecision(1), sql);
+                  assertEquals(2, metadata.getScale(1), sql);
+                }
+                if (sql.equals(inner)) {
+                  assertEquals(java.sql.ResultSetMetaData.columnNoNulls, metadata.isNullable(1), sql);
+                }
+                if (filter.equals("id = 0")) {
+                  assertTrue(result.next(), sql);
+                  if (field.equals("amt")) {
+                    assertEquals(new BigDecimal("122.45"), result.getBigDecimal(1), sql);
+                  } else {
+                    assertEquals(-1, result.getInt(1), sql);
+                  }
+                }
+                assertFalse(result.next(), sql);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Preserves the documented DATE behavior of both JDBC date binding APIs.
+   *
+   * @param localDate
+   *          whether to bind LocalDate using setObject
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void dateParametersRetainDateValues(boolean localDate) throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.prepareStatement("SELECT ?, ? + INTERVAL '1 day', EXTRACT(YEAR FROM ?)")) {
+      for (int parameter = 1; parameter <= 3; parameter++) {
+        if (localDate) {
+          statement.setObject(parameter, LocalDate.of(2024, 3, 1));
+        } else {
+          statement.setDate(parameter, Date.valueOf("2024-03-01"));
+        }
+      }
+      try (var result = statement.executeQuery()) {
+        assertTrue(result.next());
+        assertEquals(Date.valueOf("2024-03-01"), result.getObject(1));
+        assertEquals(Date.valueOf("2024-03-02"), result.getObject(2));
+        assertEquals(2024, result.getInt(3));
+        assertFalse(result.next());
       }
     }
   }

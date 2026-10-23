@@ -320,7 +320,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    *         computed
    */
   private Schema.Field resolveField(int column) {
-    if (unwrap(expressionAtColumn(column)) instanceof Subtraction) {
+    Expression expression = unwrap(expressionAtColumn(column));
+    if (expression instanceof Subtraction && resolveComputedColumnType(column) == Types.BIGINT) {
       return null;
     }
     if (schema == null) {

@@ -507,7 +507,10 @@ public final class ValueExpressionEvaluator {
     }
     try {
       return ExpressionEvaluator.typedCompare(left, right) == 0;
-    } catch (Exception e) {
+    } catch (RuntimeException e) {
+      if (SqlExceptions.findSqlStateFailure(e) != null) {
+        throw e;
+      }
       return left.equals(right);
     }
   }
