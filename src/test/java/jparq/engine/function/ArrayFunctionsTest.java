@@ -3,6 +3,7 @@ package jparq.engine.function;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertIterableEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -273,7 +274,7 @@ class ArrayFunctionsTest {
   }
 
   /**
-   * Distinguishes unsupported Java representations that have the same SQL label.
+   * Distinguishes mixed Java representations of the same SQL type.
    *
    * @param first
    *          first representation
@@ -302,11 +303,30 @@ class ArrayFunctionsTest {
    * @return incompatible representations and their shared label
    */
   private static Stream<Arguments> sameSqlTypeRepresentations() {
-    return Stream.of(
-        Arguments.of(java.time.LocalDateTime.of(2026, 1, 1, 12, 0), java.sql.Timestamp.valueOf("2026-01-01 12:00:00"),
-            "TIMESTAMP"),
-        Arguments.of(java.time.LocalTime.NOON, java.sql.Time.valueOf("12:00:00"), "TIME"),
-        Arguments.of(new java.util.HashMap<>(), new java.util.LinkedHashMap<>(), "STRUCT"));
+    return Stream.of(Arguments.of(java.time.LocalDateTime.of(2026, 1, 1, 12, 0),
+        java.sql.Timestamp.valueOf("2026-01-01 12:00:00"), "TIMESTAMP"),
+        Arguments.of(java.time.LocalTime.NOON, java.sql.Time.valueOf("12:00:00"), "TIME"));
+  }
+
+  /**
+   * Accepts different Map implementations as STRUCT elements, including inside
+   * nested arrays.
+   */
+  @Test
+  void acceptsMixedMapImplementations() {
+    var first = new java.util.HashMap<>(java.util.Map.of("value", 1));
+    var second = new java.util.LinkedHashMap<>(java.util.Map.of("value", 2));
+    var values = new ArrayList<Object>(Arrays.asList(null, first, second, null));
+    for (int order = 0; order < 2; order++) {
+      var normalized = ArrayFunctions.homogenizeArrayValues(values);
+      assertEquals(values, normalized);
+      assertSame(values.get(1), normalized.get(1));
+      assertSame(values.get(2), normalized.get(2));
+      assertThrows(UnsupportedOperationException.class, () -> normalized.add(first));
+      assertEquals(List.of(List.of(first), List.of(second)),
+          ArrayFunctions.homogenizeArrayValues(List.of(List.of(first), List.of(second))));
+      Collections.reverse(values);
+    }
   }
 
   /**

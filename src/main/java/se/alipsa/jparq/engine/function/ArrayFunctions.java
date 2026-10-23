@@ -47,7 +47,8 @@ public final class ArrayFunctions {
    * element type and nesting depth. Numeric leaves are promoted across sibling
    * arrays; NULLs and empty arrays do not constrain the inferred leaf type.
    * Nested reference arrays, including stored Parquet array columns, are
-   * normalized to unmodifiable lists. Primitive arrays remain scalar values.
+   * normalized to unmodifiable lists. Primitive arrays remain scalar values. Map
+   * implementations share the STRUCT family and retain their original values.
    *
    * @param values
    *          raw values
@@ -90,6 +91,8 @@ public final class ArrayFunctions {
         candidate = String.class;
       } else if (value instanceof List<?> || value instanceof Object[]) {
         candidate = List.class;
+      } else if (value instanceof Map<?, ?>) {
+        candidate = Map.class;
       } else {
         candidate = value.getClass();
       }
