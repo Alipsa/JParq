@@ -23,7 +23,9 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
+import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
@@ -69,9 +71,11 @@ import se.alipsa.jparq.engine.CorrelatedBindings;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.Identifier;
+import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.Operation;
 import se.alipsa.jparq.engine.OrderingUtil;
+import se.alipsa.jparq.engine.QuantifiedComparisons;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlComparisons;
@@ -2385,6 +2389,13 @@ public final class AggregateFunctions {
     }
 
     private Boolean evalBinary(BinaryExpression be) {
+      Expression leftExpr = be.getLeftExpression();
+      Expression rightExpr = be.getRightExpression();
+      if (JSqlParserSupport.isQuantifiedOperand(leftExpr) || JSqlParserSupport.isQuantifiedOperand(rightExpr)) {
+        return QuantifiedComparisons.evaluate(be,
+            expression -> new QuantifiedComparisons.ScalarOperand(value(expression), UnaryOperator.identity()),
+            this::value, subSelect -> evaluateSubquery(subSelect).firstColumnValues());
+      }
       String op = be.getStringExpression();
       Object left = value(be.getLeftExpression());
       Object right = value(be.getRightExpression());
@@ -2398,6 +2409,9 @@ public final class AggregateFunctions {
       Expression expr = ExpressionEvaluator.unwrapParenthesis(expression);
       if (expr instanceof Select subSelect) {
         return evaluateScalarSubquery(subSelect);
+      }
+      if (expr instanceof ArrayConstructor array) {
+        return arrayValues(array.getExpressions());
       }
       if (expr instanceof SignedExpression signed) {
         Object inner = value(signed.getExpression());
@@ -2423,6 +2437,13 @@ public final class AggregateFunctions {
         return arithmetic(mod.getLeftExpression(), mod.getRightExpression(), Operation.MOD);
       }
       if (expr instanceof Function func) {
+        if ("ARRAY".equalsIgnoreCase(func.getName())) {
+          ExpressionList<?> parameters = func.getParameters();
+          if (parameters != null && !parameters.isEmpty() && parameters.getFirst() instanceof Select subSelect) {
+            return ArrayFunctions.fromSubquery(evaluateSubquery(subSelect), subSelect);
+          }
+          return arrayValues(parameters);
+        }
         if (CorrelatedBindings.isReserved(func)) {
           return CorrelatedBindings.value(func);
         }
@@ -2437,6 +2458,23 @@ public final class AggregateFunctions {
       return LiteralConverter.toLiteral(expr);
     }
 
+    /**
+     * Evaluates an array constructor using the current group's values.
+     *
+     * @param expressions
+     *          the array elements, or null for an empty constructor
+     * @return homogenized array values
+     */
+    private List<Object> arrayValues(ExpressionList<?> expressions) {
+      List<Object> elements = new ArrayList<>();
+      if (expressions != null) {
+        for (Expression element : expressions) {
+          elements.add(value(element));
+        }
+      }
+      return ArrayFunctions.homogenizeArrayValues(elements);
+    }
+
     private Object arithmetic(Expression left, Expression right, Operation op) {
       Object leftVal = value(left);
       Object rightVal = value(right);
@@ -2447,12 +2485,24 @@ public final class AggregateFunctions {
     }
 
     private Object evaluateScalarSubquery(Select subSelect) {
+      return evaluateSubquery(subSelect).scalarValue();
+    }
+
+    /**
+     * Executes a subquery with the current group's correlation bindings.
+     *
+     * @param subSelect
+     *          the nested query
+     * @return the subquery result
+     * @throws IllegalStateException
+     *           if no subquery executor is available
+     */
+    private SubqueryExecutor.SubqueryResult evaluateSubquery(Select subSelect) {
       if (subqueryExecutor == null) {
-        throw new IllegalStateException("Scalar subqueries require a subquery executor");
+        throw new IllegalStateException("HAVING subqueries require a subquery executor");
       }
-      SubqueryExecutor.SubqueryResult result = subqueryExecutor.executeCorrelated(subSelect, correlationQualifiers(),
-          correlationColumns(), correlationContext, (qualifier, column) -> correlatedValue(qualifier, column));
-      return result.scalarValue();
+      return subqueryExecutor.executeCorrelated(subSelect, correlationQualifiers(), correlationColumns(),
+          correlationContext, (qualifier, column) -> correlatedValue(qualifier, column));
     }
 
     private Object aggregateValue(Function func) {

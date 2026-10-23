@@ -190,9 +190,10 @@ class QuantifiedArrayComparisonTest {
   @ParameterizedTest
   @CsvSource(delimiter = '|', value = {
       "ANY(ARRAY[4,6]) = ANY(ARRAY[6]) | requires a scalar operand",
-      "cyl = ANY(ARRAY[[4],[6]]) | requires scalar array elements",
-      "cyl = SOME(ARRAY[[4],[6]]) | requires scalar array elements",
-      "cyl = ALL(ARRAY[[4],[6]]) | requires scalar array elements", "cyl = ANY() | requires exactly one array operand",
+      "cyl = ANY(ARRAY[[4],[6]]) | requires scalar candidate values",
+      "cyl = SOME(ARRAY[[4],[6]]) | requires scalar candidate values",
+      "cyl = ALL(ARRAY[[4],[6]]) | requires scalar candidate values",
+      "cyl = ANY() | requires exactly one array operand",
       "cyl = ANY(ARRAY[4],ARRAY[6]) | requires exactly one array operand"
   })
   void rejectsInvalidComparisons(String predicate, String expectedMessage) throws Exception {
@@ -237,7 +238,7 @@ class QuantifiedArrayComparisonTest {
     var predicate = CCJSqlParserUtil.parseCondExpression("4 = " + quantifier + "(items)");
     IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
         () -> evaluator.evalTruth(predicate, record));
-    assertEquals("ANY/SOME/ALL requires scalar array elements", exception.getMessage());
+    assertEquals("ANY/SOME/ALL requires scalar candidate values", exception.getMessage());
   }
 
   /**

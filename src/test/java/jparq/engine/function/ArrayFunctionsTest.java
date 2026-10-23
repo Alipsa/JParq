@@ -9,13 +9,34 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.List;
+import net.sf.jsqlparser.statement.select.Select;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.engine.JSqlParserSupport;
+import se.alipsa.jparq.engine.SubqueryExecutor.SubqueryResult;
 import se.alipsa.jparq.engine.function.ArrayFunctions;
 
 /**
  * Unit tests for {@link ArrayFunctions}.
  */
 class ArrayFunctionsTest {
+
+  /**
+   * Verifies shared ARRAY subquery shape checks, normalization, and diagnostics.
+   *
+   * @throws Exception
+   *           if parsing fails
+   */
+  @Test
+  void normalizesSubqueryResults() throws Exception {
+    Select subSelect = (Select) JSqlParserSupport.parseStatement("SELECT 1, 2");
+    assertEquals(List.of(), ArrayFunctions.fromSubquery(new SubqueryResult(List.of(), List.of(List.of(1))), subSelect));
+    assertEquals(List.of(), ArrayFunctions.fromSubquery(new SubqueryResult(List.of("n"), List.of()), subSelect));
+    assertEquals(List.of(1L, 2L),
+        ArrayFunctions.fromSubquery(new SubqueryResult(List.of("n"), List.of(List.of(1), List.of(2L))), subSelect));
+    var exception = assertThrows(IllegalArgumentException.class,
+        () -> ArrayFunctions.fromSubquery(new SubqueryResult(List.of("n", "m"), List.of()), subSelect));
+    assertEquals("ARRAY subquery must return exactly one column: " + subSelect, exception.getMessage());
+  }
 
   /**
    * Verify null or empty inputs return an empty, unmodifiable list.

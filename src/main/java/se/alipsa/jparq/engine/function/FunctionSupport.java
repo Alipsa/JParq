@@ -239,8 +239,7 @@ public final class FunctionSupport {
     }
     Expression first = parameterExpressions.getFirst();
     if (first instanceof Select select) {
-      List<Object> values = executeArraySubquery(select, record);
-      return ArrayFunctions.homogenizeArrayValues(values);
+      return executeArraySubquery(select, record);
     }
     List<Object> values = new ArrayList<>(parameterExpressions.size());
     for (Expression element : parameterExpressions) {
@@ -256,13 +255,7 @@ public final class FunctionSupport {
     SubqueryExecutor.SubqueryResult result = subqueryExecutor.executeCorrelated(subSelect, correlationQualifiers,
         correlationColumns, correlationContext,
         (qualifier, column) -> correlatedValueResolver.resolve(qualifier, column, record));
-    if (result.columnLabels().isEmpty()) {
-      return List.of();
-    }
-    if (result.columnLabels().size() > 1) {
-      throw new IllegalArgumentException("ARRAY subquery must return exactly one column: " + subSelect);
-    }
-    return result.firstColumnValues();
+    return ArrayFunctions.fromSubquery(result, subSelect);
   }
 
   private Object evaluatePosition(FunctionArguments args) {
