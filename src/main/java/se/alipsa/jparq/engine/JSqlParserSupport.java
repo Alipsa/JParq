@@ -97,6 +97,9 @@ public final class JSqlParserSupport {
         visitWithItems(set.getWithItemsList(), context);
         super.visit(set, context);
         expressions.visitOrderBy(set.getOrderByElements(), context);
+        if (set.getOffset() != null) {
+          expressions.visitExpression(set.getOffset().getOffset(), context);
+        }
         if (set.getFetch() != null) {
           expressions.visitExpression(set.getFetch().getExpression(), context);
         }
