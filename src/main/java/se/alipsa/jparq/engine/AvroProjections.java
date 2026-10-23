@@ -1,5 +1,6 @@
 package se.alipsa.jparq.engine;
 
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -12,6 +13,17 @@ import org.apache.avro.Schema;
 public final class AvroProjections {
 
   private AvroProjections() {
+  }
+
+  /**
+   * Extracts the top-level field names of a projected record schema.
+   *
+   * @param projection
+   *          projected record schema
+   * @return field names in declaration order
+   */
+  public static Set<String> fieldNames(Schema projection) {
+    return projection.getFields().stream().map(Schema.Field::name).collect(Collectors.toCollection(LinkedHashSet::new));
   }
 
   /**

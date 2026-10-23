@@ -5,9 +5,7 @@ import java.io.IOException;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.stream.Collectors;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
@@ -139,11 +137,10 @@ public final class ParquetTable {
     String requested = input.get(AvroReadSupport.AVRO_REQUESTED_PROJECTION);
     result.unset(AvroReadSupport.AVRO_REQUESTED_PROJECTION);
     // parquet-avro keeps this configuration key private.
-    result.unset("parquet.avro.read.schema");
+    result.unset(PrunedAvroReadSupport.AVRO_READ_SCHEMA_CONFIG);
     if (requested != null) {
       Schema projection = new Schema.Parser().parse(requested);
-      Set<String> fields = projection.getFields().stream().map(Schema.Field::name).collect(Collectors.toSet());
-      Schema ownProjection = AvroProjections.project(shard.schema(), fields);
+      Schema ownProjection = AvroProjections.project(shard.schema(), AvroProjections.fieldNames(projection));
       AvroReadSupport.setRequestedProjection(result, ownProjection);
       AvroReadSupport.setAvroReadSchema(result, ownProjection);
     }
@@ -194,7 +191,7 @@ public final class ParquetTable {
    */
   private static RecordReader openShard(Shard shard, Configuration configuration, FilterPredicate predicate)
       throws IOException {
-    var builder = ParquetReader.<GenericRecord>builder(new AvroReadSupport<>(), new Path(shard.file().toURI()))
+    var builder = ParquetReader.<GenericRecord>builder(new PrunedAvroReadSupport<>(), new Path(shard.file().toURI()))
         .withConf(configurationFor(shard, configuration));
     if (predicate != null) {
       builder.withFilter(FilterCompat.get(predicate));
