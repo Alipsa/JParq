@@ -40,11 +40,45 @@ public final class ColumnsUsed {
    * @return set of column names referenced by the expression (empty if none)
    */
   public static Set<String> inWhere(Expression where) {
+    return collect(where, true);
+  }
+
+  /**
+   * Collects column names in an expression without entering nested query scopes.
+   *
+   * @param expression
+   *          expression to inspect, or null
+   * @return column names belonging to the current query scope
+   */
+  public static Set<String> inScope(Expression expression) {
+    return collect(expression, false);
+  }
+
+  /**
+   * Walks an expression with the requested query-scope boundary.
+   *
+   * @param where
+   *          expression to inspect
+   * @param includeSubqueries
+   *          whether nested query expressions should be visited
+   * @return referenced column names
+   */
+  private static Set<String> collect(Expression where, boolean includeSubqueries) {
     if (where == null) {
       return Set.of();
     }
     LinkedHashSet<String> cols = new LinkedHashSet<>();
     ExpressionVisitorAdapter<Void> walker = new ExpressionVisitorAdapter<Void>() {
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.statement.select.Select select, S context) {
+        return includeSubqueries ? super.visit(select, context) : null;
+      }
+
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.statement.select.ParenthesedSelect select, S context) {
+        return includeSubqueries ? super.visit(select, context) : null;
+      }
+
       @Override
       public <S> Void visit(Column column, S context) {
         if (!SqlParser.isTimeKeyword(column.getColumnName())) {

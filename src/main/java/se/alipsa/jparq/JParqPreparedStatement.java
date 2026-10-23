@@ -339,6 +339,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             if (resolved == null) {
               throw new SQLException("CTE result not available for table '" + baseRef.tableName() + "'");
             }
+            resolved = applyColumnAliases(resolved, baseRef);
             tmpBaseCteResult = resolved;
             tmpFileAvro = resolved.schema();
             if (!tmpSelect.qualifiedWildcards().isEmpty()) {
@@ -421,6 +422,9 @@ public class JParqPreparedStatement implements PreparedStatement {
               tmpResidual = tmpSelect.where();
             }
 
+          }
+          if (tmpBaseCteResult != null) {
+            validateSelectColumns(tmpSelect, tmpFileAvro, aggregatePlan, tmpCteResults, tmpConf);
           }
         }
       }
@@ -1527,6 +1531,8 @@ public class JParqPreparedStatement implements PreparedStatement {
         cteResult = resolveCteResultByName(ref.tableName(), cteResults);
       }
       if (cteResult != null) {
+        cteResult = applyColumnAliases(cteResult, ref);
+        validateJoinTableColumns(cteResult.schema(), ref);
         String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
         List<GenericRecord> rows = applySampleToRows(ref.tableSample(), cteResult.rows());
         JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(tableName, ref.tableAlias(),
@@ -1539,6 +1545,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         JoinRecordReader.JoinTable table = ref.lateral()
             ? materializeLateralSubqueryTable(ref, tables, qualifierIndex)
             : materializeSubqueryTable(ref);
+        validateJoinTableColumns(table.schema(), ref);
         tables.add(table);
         registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
         continue;
@@ -1572,10 +1579,41 @@ public class JParqPreparedStatement implements PreparedStatement {
     try (var executor = createSubqueryExecutor(cancellation)) {
       JoinRecordReader joinReader = new JoinRecordReader(tables, executor);
       expandJoinQualifiedWildcards(joinReader);
+      validateJoinOutputColumns(joinReader.schema());
       return joinReader;
     } catch (IllegalArgumentException e) {
       throw new SQLException("Failed to build join reader", e);
     }
+  }
+
+  /**
+   * Validates unqualified references against the combined visible join schema.
+   * Qualified references are also checked against their individual inputs.
+   *
+   * @param schema
+   *          combined join schema
+   * @throws SQLException
+   *           if a column is missing
+   */
+  private void validateJoinOutputColumns(Schema schema) throws SQLException {
+    Set<String> required = new LinkedHashSet<>();
+    List<Expression> expressions = new ArrayList<>(parsedSelect.expressions());
+    expressions.add(parsedSelect.where());
+    expressions.addAll(parsedSelect.groupByExpressions());
+    for (SqlParser.OrderKey key : parsedSelect.orderBy()) {
+      expressions.add(key.expression());
+    }
+    for (Expression expression : expressions) {
+      addColumns(required, ColumnsUsed.inScope(expression));
+    }
+    Set<String> referenced = new LinkedHashSet<>(required);
+    for (SqlParser.OrderKey key : parsedSelect.orderBy()) {
+      if (key.expression() == null && !isOrdinalReference(key.column()) && !isGroupingFunctionReference(key.column())) {
+        addColumn(required, key.column());
+      }
+    }
+    addColumns(required, ColumnsUsed.inScope(parsedSelect.having()));
+    validateRequiredColumns(schema, required, null, parsedSelect.labels(), parsedSelect.columnNames(), referenced);
   }
 
   /**
@@ -1623,7 +1661,6 @@ public class JParqPreparedStatement implements PreparedStatement {
     Set<String> required = new LinkedHashSet<>();
     collectColumnReferencesFromList(parsedSelect.expressions(), qualifiers, primaryQualifier, required);
     collectColumnReferencesFromExpression(parsedSelect.where(), qualifiers, primaryQualifier, required);
-    collectColumnReferencesFromExpression(parsedSelect.having(), qualifiers, primaryQualifier, required);
     for (Expression group : parsedSelect.groupByExpressions()) {
       collectColumnReferencesFromExpression(group, qualifiers, primaryQualifier, required);
     }
@@ -1692,7 +1729,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (expression == null || target == null) {
       return;
     }
-    Set<String> collected = SqlParser.collectQualifiedColumns(expression, qualifiers);
+    Set<String> collected = SqlParser.collectQualifiedColumns(expression, qualifiers, false);
     addColumns(target, collected);
     addColumns(referenced, collected);
     if (primaryQualifier != null && !primaryQualifier.isEmpty()) {
@@ -3500,6 +3537,56 @@ public class JParqPreparedStatement implements PreparedStatement {
     return converted;
   }
 
+  /**
+   * Applies a table-reference column alias list to a materialized CTE by
+   * position.
+   *
+   * @param result
+   *          original CTE data
+   * @param reference
+   *          consuming table reference
+   * @return data exposing only the renamed SQL columns
+   * @throws SQLException
+   *           if the alias count differs from the output column count
+   */
+  private CteResult applyColumnAliases(CteResult result, SqlParser.TableReference reference) throws SQLException {
+    List<String> aliases = reference.columnAliases();
+    if (aliases.isEmpty()) {
+      return result;
+    }
+    List<Field> originalFields = result.schema().getFields();
+    if (aliases.size() != originalFields.size()) {
+      throw SqlExceptions.syntaxFailure("Table alias column count does not match CTE output column count");
+    }
+    Set<String> used = new LinkedHashSet<>();
+    List<Field> fields = new ArrayList<>();
+    for (int i = 0; i < aliases.size(); i++) {
+      Field original = originalFields.get(i);
+      String alias = aliases.get(i);
+      Field field = new Field(MaterializedNames.allocate(alias, used), original.schema(), original.doc(),
+          original.defaultVal());
+      original.getObjectProps().forEach((key, value) -> {
+        if (!MaterializedNames.SQL_LABEL.equals(key) && !MaterializedNames.LOOKUP_KEY.equals(key)) {
+          field.addProp(key, value);
+        }
+      });
+      field.addProp(MaterializedNames.SQL_LABEL, alias);
+      field.addProp(MaterializedNames.LOOKUP_KEY, Identifier.lookupKey(alias));
+      fields.add(field);
+    }
+    Schema schema = Schema.createRecord(result.schema().getName(), null, null, false);
+    schema.setFields(fields);
+    List<GenericRecord> rows = new ArrayList<>();
+    for (GenericRecord original : result.rows()) {
+      GenericRecord row = new GenericData.Record(schema);
+      for (int i = 0; i < fields.size(); i++) {
+        row.put(i, original.get(i));
+      }
+      rows.add(row);
+    }
+    return new CteResult(schema, List.copyOf(rows));
+  }
+
   private String buildJoinTableName() {
     if (tableReferences == null || tableReferences.isEmpty()) {
       return "join";
@@ -3527,12 +3614,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return;
     }
 
-    ColumnRequirement columnRequirement = requiredColumns(select, aggregatePlan);
-    collectSubqueryDependencies(select, schema, columnRequirement.required(),
-        new SubqueryExecutor(stmt.getConn(), null, table -> subqueryTableColumns(table, ctes, configuration)));
-    Set<String> requiredColumns = columnRequirement.required();
-    validateRequiredColumns(schema, requiredColumns, select.table(), select.labels(), select.columnNames(),
-        columnRequirement.referenced());
+    Set<String> requiredColumns = validateSelectColumns(select, schema, aggregatePlan, ctes, configuration);
 
     if (select.hasMultipleTables()) {
       return;
@@ -3556,6 +3638,35 @@ public class JParqPreparedStatement implements PreparedStatement {
       AvroReadSupport.setRequestedProjection(configuration, avroProjection);
       AvroReadSupport.setAvroReadSchema(configuration, avroProjection);
     }
+  }
+
+  /**
+   * Validates references against the visible input schema independently of
+   * pushdown.
+   *
+   * @param select
+   *          query being planned
+   * @param schema
+   *          input schema
+   * @param aggregatePlan
+   *          aggregate expressions, or null
+   * @param ctes
+   *          available common table expressions
+   * @param configuration
+   *          physical schema resolution configuration, or null
+   * @return required input columns
+   * @throws SQLException
+   *           if a referenced column is missing
+   */
+  private Set<String> validateSelectColumns(SqlParser.Select select, Schema schema,
+      AggregateFunctions.AggregatePlan aggregatePlan, Map<Identifier, CteResult> ctes, Configuration configuration)
+      throws SQLException {
+    ColumnRequirement requirement = requiredColumns(select, aggregatePlan);
+    collectSubqueryDependencies(select, schema, requirement.required(),
+        new SubqueryExecutor(stmt.getConn(), null, table -> subqueryTableColumns(table, ctes, configuration)));
+    validateRequiredColumns(schema, requirement.required(), select.table(), select.labels(), select.columnNames(),
+        requirement.referenced());
+    return requirement.required();
   }
 
   /**
@@ -3632,6 +3743,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     List<String> primaryQualifier = qualifierList(baseRef, true);
     collectColumnReferencesFromList(select.expressions(), qualifiers, primaryQualifier, needed, referenced);
     collectColumnReferencesFromExpression(select.where(), qualifiers, primaryQualifier, needed, referenced);
+    collectColumnReferencesFromExpression(select.having(), qualifiers, primaryQualifier, needed);
     for (SqlParser.OrderKey key : select.orderBy()) {
       if (key.expression() != null) {
         addColumns(needed, ColumnsUsed.inWhere(key.expression()));
@@ -3683,6 +3795,12 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          columns referenced by the query
    * @param tableName
    *          logical table name used for error context
+   * @param labels
+   *          select-list labels available to alias references
+   * @param columnNames
+   *          input names corresponding to select-list labels
+   * @param referencedColumns
+   *          columns requiring input binding rather than alias-only binding
    * @throws SQLException
    *           if any referenced column is missing from the schema
    */
@@ -3693,7 +3811,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     Set<String> available = new LinkedHashSet<>();
     for (Schema.Field field : schema.getFields()) {
-      available.add(normalizeColumnKey(field.name()));
+      available.add(MaterializedNames.lookupKey(field));
     }
     Set<String> normalizedLabels = new LinkedHashSet<>();
     Set<String> mappedAliases = new LinkedHashSet<>();
@@ -3746,7 +3864,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     if (!missing.isEmpty()) {
       String qualifier = tableName == null ? "" : " for table '" + tableName + "'";
-      throw new SQLException("Missing columns" + qualifier + ": " + String.join(", ", missing));
+      throw SqlExceptions.syntaxFailure("Missing columns" + qualifier + ": " + String.join(", ", missing));
     }
   }
 

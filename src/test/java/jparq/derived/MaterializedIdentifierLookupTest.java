@@ -2,7 +2,6 @@ package jparq.derived;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -69,12 +68,8 @@ class MaterializedIdentifierLookupTest {
           "SELECT \"_column\" FROM (SELECT 1 AS \"a b\") t",
           "SELECT _column_1 FROM (SELECT 1 AS \"a b\", 2 AS \"c d\") t", "SELECT x_1 FROM (SELECT 1 AS x, 2 AS x) t",
           "SELECT Mixed FROM (SELECT 1 AS \"Mixed\") t", "SELECT t._column FROM (SELECT 1 AS \"a b\") t")) {
-        try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
-          assertTrue(result.next(), sql);
-          // Unknown-column rejection is tracked separately in #209.
-          assertNull(result.getObject(1), sql);
-          assertFalse(result.next(), sql);
-        }
+        SQLException exception = assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql);
+        assertTrue(exception.getMessage().contains("Missing columns"), sql + ": " + exception);
       }
       for (String sql : List.of("SELECT 1 AS \"a\"\"b\"",
           "SELECT \"a\"\"b\" FROM (SELECT 1 AS \"a\"\"b\") t WHERE \"a\"\"b\" = 1",

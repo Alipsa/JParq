@@ -131,6 +131,10 @@ quoted operands such as `"id" + 1`. Generated internal names are not SQL column 
 projection and predicate references to duplicate output names raise an SQL exception; duplicate outputs remain available by position
 through `SELECT *`.
 
+Derived tables and CTEs validate column references against their visible output names, including for empty
+inputs. Unknown names and columns replaced by a column alias list raise `SQLSyntaxErrorException` with
+SQLState `42000`, naming the missing column; generated internal Avro names are not visible SQL columns.
+
 Recursive CTEs retain the anchor's numeric types and decimal precision and scale. Recursive values that require
 fractional truncation or decimal rounding, or exceed integer ranges or decimal precision, fail with `SQLException`
 (SQLState `22003`); recursive schemas are not widened across iterations. For example, an integer anchor cannot
