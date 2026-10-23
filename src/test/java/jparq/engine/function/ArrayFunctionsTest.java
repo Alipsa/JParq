@@ -264,13 +264,34 @@ class ArrayFunctionsTest {
    * @return independently reported SQL type mappings
    */
   private static Stream<Arguments> modernTypeMappings() {
-    return Stream.of(Arguments.of(java.util.Map.of("x", 1), "STRUCT"),
+    return Stream.of(Arguments.of(java.util.Map.of("x", 1), "MAP"), Arguments.of(structValue(), "STRUCT"),
         Arguments.of(java.time.LocalDate.of(2026, 1, 1), "DATE"), Arguments.of(java.time.LocalTime.NOON, "TIME"),
         Arguments.of(java.time.LocalDateTime.of(2026, 1, 1, 12, 0), "TIMESTAMP"),
         Arguments.of(java.time.OffsetTime.parse("12:00:00Z"), "TIME_WITH_TIMEZONE"),
         Arguments.of(java.time.OffsetDateTime.parse("2026-01-01T12:00:00Z"), "TIMESTAMP_WITH_TIMEZONE"),
         Arguments.of(java.time.ZonedDateTime.parse("2026-01-01T12:00:00Z"), "TIMESTAMP_WITH_TIMEZONE"),
         Arguments.of(java.time.Instant.EPOCH, "TIMESTAMP_WITH_TIMEZONE"));
+  }
+
+  /**
+   * Creates an Avro struct value for SQL type diagnostics.
+   *
+   * @return record with an integer field
+   */
+  private static org.apache.avro.generic.GenericData.Record structValue() {
+    var schema = org.apache.avro.SchemaBuilder.record("array_struct").fields().requiredInt("value").endRecord();
+    var record = new org.apache.avro.generic.GenericData.Record(schema);
+    record.put("value", 1);
+    return record;
+  }
+
+  /** Distinguishes MAP values from Avro STRUCT values in ARRAY diagnostics. */
+  @Test
+  void distinguishesMapsFromStructs() {
+    var failure = assertThrows(IllegalArgumentException.class,
+        () -> ArrayFunctions.homogenizeArrayValues(List.of(java.util.Map.of("value", 1), structValue())));
+    assertEquals("ARRAY elements must share a common type; found MAP and STRUCT", failure.getMessage());
+    assertEquals("42000", assertInstanceOf(SQLSyntaxErrorException.class, failure.getCause()).getSQLState());
   }
 
   /**
@@ -309,7 +330,7 @@ class ArrayFunctionsTest {
   }
 
   /**
-   * Accepts different Map implementations as STRUCT elements, including inside
+   * Accepts different Map implementations as MAP elements, including inside
    * nested arrays.
    */
   @Test

@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import net.sf.jsqlparser.statement.select.Select;
+import org.apache.avro.generic.IndexedRecord;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SubqueryExecutor.SubqueryResult;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
@@ -48,7 +49,8 @@ public final class ArrayFunctions {
    * arrays; NULLs and empty arrays do not constrain the inferred leaf type.
    * Nested reference arrays, including stored Parquet array columns, are
    * normalized to unmodifiable lists. Primitive arrays remain scalar values. Map
-   * implementations share the STRUCT family and retain their original values.
+   * implementations share the MAP family and retain their original values. MAP
+   * key/value types and STRUCT field schemas are not inspected.
    *
    * @param values
    *          raw values
@@ -183,6 +185,9 @@ public final class ArrayFunctions {
       return "NUMERIC";
     }
     if (Map.class.isAssignableFrom(family)) {
+      return "MAP";
+    }
+    if (IndexedRecord.class.isAssignableFrom(family)) {
       return "STRUCT";
     }
     JDBCType jdbcType = JDBCType.valueOf(JdbcTypeMapper.mapJavaClassNameToJdbcType(family.getName()));
