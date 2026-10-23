@@ -55,7 +55,7 @@ public final class JSqlParserSupport {
 
   /**
    * Visits SELECT expressions, including nested sources, CTEs, table-function
-   * arguments, and LIMIT operands.
+   * arguments, and LIMIT, OFFSET, and FETCH operands.
    *
    * @param statement
    *          parsed SELECT to traverse
@@ -97,6 +97,9 @@ public final class JSqlParserSupport {
         visitWithItems(set.getWithItemsList(), context);
         super.visit(set, context);
         expressions.visitOrderBy(set.getOrderByElements(), context);
+        if (set.getFetch() != null) {
+          expressions.visitExpression(set.getFetch().getExpression(), context);
+        }
         return expressions.visitLimit(set.getLimit(), context);
       }
 

@@ -11,13 +11,10 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.List;
-import net.sf.jsqlparser.statement.select.Select;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
-import se.alipsa.jparq.engine.DecimalCasts;
-import se.alipsa.jparq.engine.JSqlParserSupport;
 
 /**
  * Keeps decimal CAST evaluation consistent with declared materialization
@@ -135,11 +132,13 @@ class DecimalCastBoundsTest {
       "SELECT 1 FROM (mtcars m JOIN mtcars n ON m.cyl = CAST(n.cyl AS DECIMAL(2,5)))",
       "SELECT mpg FROM mtcars LIMIT (SELECT CAST(1 AS DECIMAL(2,5)))",
       "SELECT 1 UNION ALL SELECT 2 LIMIT (SELECT CAST(1 AS DECIMAL(2,5)))",
-      "SELECT * FROM UNNEST(ARRAY[(SELECT CAST(1 AS DECIMAL(2,5)))]) AS t(x)"
+      "SELECT * FROM UNNEST(ARRAY[(SELECT CAST(1 AS DECIMAL(2,5)))]) AS t(x)",
+      "SELECT 1 OFFSET (SELECT CAST(1 AS DECIMAL(2,5))) ROWS",
+      "SELECT 1 FETCH FIRST (SELECT CAST(1 AS DECIMAL(2,5))) ROWS ONLY",
+      "SELECT 1 UNION ALL SELECT 2 OFFSET (SELECT CAST(1 AS DECIMAL(2,5))) ROWS",
+      "SELECT 1 UNION ALL SELECT 2 FETCH FIRST (SELECT CAST(1 AS DECIMAL(2,5))) ROWS ONLY"
   })
   void invalidDeclarationsFailDuringPreparation(String sql) throws Exception {
-    var parsed = (Select) JSqlParserSupport.parseStatement(sql);
-    assertThrows(IllegalArgumentException.class, () -> DecimalCasts.validateStatement(parsed), sql);
     try (var connection = DriverManager.getConnection(jdbcUrl)) {
       SQLException failure = assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql);
       assertEquals("42000", failure.getSQLState(), sql);
@@ -168,8 +167,6 @@ class DecimalCastBoundsTest {
       "SELECT model FROM mtcars WHERE cyl = 99 AND mpg > SOME (SELECT CAST(1 AS DECIMAL(1,2)))"
   })
   void quantifiedAndSetOrderDeclarationsFailBeforeRows(String sql) throws Exception {
-    var parsed = (Select) JSqlParserSupport.parseStatement(sql);
-    assertThrows(IllegalArgumentException.class, () -> DecimalCasts.validateStatement(parsed), sql);
     String url = "jdbc:jparq:"
         + Path.of(DecimalCastBoundsTest.class.getResource("/mtcars.parquet").toURI()).getParent();
     try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {

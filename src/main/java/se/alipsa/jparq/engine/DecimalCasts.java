@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import net.sf.jsqlparser.expression.CastExpression;
-import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.LogicalTypes;
 
 /**
@@ -62,26 +61,6 @@ public final class DecimalCasts {
       return null;
     }
     return LogicalTypes.decimal(precision, scale);
-  }
-
-  /**
-   * Validates decimal declarations throughout a statement before query planning.
-   *
-   * @param statement
-   *          the parsed SELECT, including nested queries and CTEs
-   * @throws IllegalArgumentException
-   *           if bounds are invalid; the cause carries SQLState 42000
-   */
-  public static void validateStatement(Select statement) {
-    var expressions = new JSqlParserSupport.StatementExpressionVisitor() {
-      /** {@inheritDoc} */
-      @Override
-      public <S> Void visit(CastExpression cast, S context) {
-        validateBounds(cast);
-        return super.visit(cast, context);
-      }
-    };
-    JSqlParserSupport.visitExpressions(statement, expressions);
   }
 
   /**
