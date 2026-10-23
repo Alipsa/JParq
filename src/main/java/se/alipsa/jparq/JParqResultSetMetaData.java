@@ -10,7 +10,12 @@ import java.util.Map;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.CastExpression;
+import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
+import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.TimeKeyExpression;
+import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
+import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
@@ -315,6 +320,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    *         computed
    */
   private Schema.Field resolveField(int column) {
+    Expression expression = unwrap(expressionAtColumn(column));
+    if (expression instanceof Subtraction && resolveComputedColumnType(column) == Types.BIGINT) {
+      return null;
+    }
     if (schema == null) {
       return null;
     }
@@ -339,7 +348,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * @return the resolved {@link java.sql.Types JDBC type}
    */
   private int resolveComputedColumnType(int column) {
-    Expression expression = expressionAtColumn(column);
+    Expression expression = unwrap(expressionAtColumn(column));
     if (BooleanExpressions.isBoolean(expression, reference -> {
       Schema.Field field = resolveSourceField(reference);
       return field != null && JdbcTypeMapper.mapSchemaToJdbcType(field.schema()) == Types.BOOLEAN;
@@ -347,6 +356,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
       return Types.BOOLEAN;
     }
     return switch (expression) {
+      case Subtraction subtraction when isDateExpression(subtraction.getLeftExpression())
+          && isDateExpression(subtraction.getRightExpression()) ->
+        Types.BIGINT;
       case AnalyticExpression analytic -> resolveAnalyticFunctionType(analytic);
       case ArrayConstructor arrayConstructor -> Types.ARRAY;
       case net.sf.jsqlparser.expression.Function func when func.getName() != null
@@ -356,8 +368,42 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     };
   }
 
+  /**
+   * Recognizes DATE operands without evaluating row values.
+   *
+   * @param expression
+   *          operand expression
+   * @return whether its declared type is DATE
+   */
+  private boolean isDateExpression(Expression expression) {
+    if (expression instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
+      return isDateExpression(list.getFirst());
+    }
+    if (expression instanceof TimeKeyExpression key) {
+      return "CURRENT_DATE".equalsIgnoreCase(key.getStringValue())
+          || "CURRENT_DATE()".equalsIgnoreCase(key.getStringValue());
+    }
+    if (expression instanceof net.sf.jsqlparser.expression.Function function) {
+      return "CURRENT_DATE".equalsIgnoreCase(function.getName());
+    }
+    if (expression instanceof DateValue) {
+      return true;
+    }
+    if (expression instanceof DateTimeLiteralExpression literal) {
+      return literal.getType() == DateTimeLiteralExpression.DateTime.DATE;
+    }
+    if (expression instanceof CastExpression cast) {
+      return cast.getColDataType() != null && "DATE".equalsIgnoreCase(cast.getColDataType().getDataType());
+    }
+    if (expression instanceof Column column) {
+      Schema.Field field = resolveSourceField(column);
+      return field != null && JdbcTypeMapper.mapSchemaToJdbcType(field.schema()) == Types.DATE;
+    }
+    return false;
+  }
+
   private String resolveComputedColumnClassName(int column) {
-    Expression expression = expressionAtColumn(column);
+    Expression expression = unwrap(expressionAtColumn(column));
     return switch (expression) {
       case AnalyticExpression analytic -> resolveAnalyticFunctionClassName(analytic);
       case ArrayConstructor arrayConstructor -> List.class.getName();
@@ -366,6 +412,21 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
         List.class.getName();
       case null, default -> null;
     };
+  }
+
+  /**
+   * Removes single-expression parentheses for type recognition.
+   *
+   * @param expression
+   *          expression to inspect
+   * @return the enclosed expression, or the original expression
+   */
+  private static Expression unwrap(Expression expression) {
+    Expression result = expression;
+    while (result instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
+      result = list.getFirst();
+    }
+    return result;
   }
 
   private Expression expressionAtColumn(int column) {

@@ -145,6 +145,14 @@ reject precision overflow with SQLState `22003`. Omitting scale while specifying
 zero. Bounds must satisfy `1 <= p` and `0 <= s <= p`; invalid declarations fail during statement preparation
 with SQLState `42000`, including for NULL inputs and empty results. Casts without precision preserve the decimal value.
 
+`DATE - DATE` returns the signed calendar-day difference as a Java `Long` (JDBC `BIGINT`),
+including through derived tables and CTEs. For example, `DATE '2024-03-01' - DATE '2024-02-28'`
+returns `2`. NULL operands produce NULL. Day counts cannot be compared with or added to
+`INTERVAL` values; these operations raise SQLState `42000`. Compare against numeric days instead,
+for example `d - DATE '2024-02-01' > 7`. Date/time offsets require an explicit `INTERVAL`:
+`DATE '2024-01-01' + INTERVAL '1 day'` is supported; `DATE '2024-01-01' + 1` and other
+unsupported temporal arithmetic raise `SQLException` with SQLState `42000` when evaluated.
+
 Numeric casts reject non-finite inputs such as `'Infinity'`, `'-Infinity'`, and `'NaN'`, as well as invalid numeric
 text, with `SQLDataException` and SQLState `22018`. Projection evaluation failures are reported as
 `SQLException` with their original causes, including when retrieving values through result-set getters.

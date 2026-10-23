@@ -344,9 +344,7 @@ public class DateFunctionsTest {
             assertEquals(Duration.ofDays(31), tsInterval.toDuration(), "Expected 31 day interval");
 
             Object dateObj = rs.getObject("date_diff");
-            assertInstanceOf(TemporalInterval.class, dateObj, "Date subtraction should yield an interval");
-            TemporalInterval dateInterval = (TemporalInterval) dateObj;
-            assertEquals(Duration.ofDays(9), dateInterval.toDuration(), "Expected 9 day interval");
+            assertEquals(9L, dateObj, "Date subtraction should yield a signed day count");
           } catch (SQLException e) {
             fail(e);
           }

@@ -66,7 +66,7 @@ public final class DateTimeFunctions {
     }
     ZoneId zone = defaultZone();
     return switch (key.toUpperCase(Locale.ROOT)) {
-      case "CURRENT_DATE" -> Date.valueOf(LocalDate.now(zone));
+      case "CURRENT_DATE", "CURRENT_DATE()" -> Date.valueOf(LocalDate.now(zone));
       case "CURRENT_TIME" -> OffsetTime.now(zone);
       case "LOCALTIME" -> LocalTime.now(zone);
       case "CURRENT_TIMESTAMP" -> OffsetDateTime.now(zone);
@@ -401,7 +401,9 @@ public final class DateTimeFunctions {
    *          the left operand
    * @param right
    *          the right operand
-   * @return the resulting value or {@code null} if not a temporal subtraction
+   * @return the signed day count as a {@link Long} for two DATE values, an
+   *         interval for other temporal differences, or {@code null} if not a
+   *         temporal subtraction
    */
   public static Object minus(Object left, Object right) {
     if (left instanceof TemporalInterval li && right instanceof TemporalInterval ri) {
@@ -413,6 +415,9 @@ public final class DateTimeFunctions {
     if (isTemporal(left) && isTemporal(right)) {
       TemporalAccessor start = toTemporalAccessor(right);
       TemporalAccessor end = toTemporalAccessor(left);
+      if (start instanceof LocalDate startDate && end instanceof LocalDate endDate) {
+        return ChronoUnit.DAYS.between(startDate, endDate);
+      }
       if (start != null && end != null) {
         return TemporalInterval.between(start, end);
       }
@@ -420,7 +425,14 @@ public final class DateTimeFunctions {
     return null;
   }
 
-  private static boolean isTemporal(Object value) {
+  /**
+   * Determines whether a value is a supported date or time operand.
+   *
+   * @param value
+   *          the operand to inspect
+   * @return whether the value is a supported temporal type
+   */
+  public static boolean isTemporal(Object value) {
     return value instanceof Date || value instanceof Time || value instanceof Timestamp || value instanceof LocalDate
         || value instanceof LocalDateTime || value instanceof LocalTime || value instanceof OffsetDateTime
         || value instanceof OffsetTime;
