@@ -1348,7 +1348,10 @@ public final class SqlParser {
       CommonTableExpression cte = resolveCommonTableExpression(t, cteLookup);
       Map<String, String> mapping = Map.of();
       Select innerSelect = null;
+      List<String> columnAliases = List.of();
       if (cte != null) {
+        columnAliases = extractAliasColumns(t.getAlias());
+        validateDerivedColumnAliases(columnAliases);
         if (cte.query() instanceof Select selectQuery) {
           innerSelect = selectQuery;
           mapping = buildColumnMapping(selectQuery);
@@ -1366,7 +1369,7 @@ public final class SqlParser {
         }
       }
       return new FromInfo(schemaName, tableName, tableAlias, mapping, innerSelect, null, cte, null, null, lateral,
-          tableSample, List.of());
+          tableSample, columnAliases);
     }
     if (fromItem instanceof ParenthesedFromItem parenthesed) {
       FromItem inner = parenthesed.getFromItem();

@@ -65,6 +65,10 @@ class UnknownMaterializedColumnTest {
             "SELECT x.zzz FROM (SELECT id FROM optimized WHERE " + filter + ") x JOIN (SELECT 1 AS a) y ON TRUE",
             "WITH c AS (SELECT id FROM optimized WHERE " + filter
                 + ") SELECT c.zzz FROM c JOIN (SELECT 1 AS a) y ON TRUE",
+            "SELECT x.id FROM (SELECT id FROM optimized WHERE " + filter
+                + ") x JOIN (VALUES (1)) y(a) ON x.id = y.a AND zzz = 1",
+            "SELECT x.id FROM (SELECT id FROM optimized WHERE " + filter
+                + ") x JOIN (VALUES (1)) y(a) ON zzz = 1 JOIN (VALUES (1)) z(zzz) ON TRUE",
             "SELECT x.id FROM (SELECT id FROM optimized WHERE " + filter + ") x(a) JOIN (SELECT 1 AS b) y ON TRUE")) {
           SQLException exception = assertThrows(SQLException.class, () -> {
             try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
@@ -75,6 +79,9 @@ class UnknownMaterializedColumnTest {
           }, sql);
           assertTrue(exception.getMessage().contains("Missing columns"), sql + ": " + exception);
           assertEquals("42000", exception.getSQLState(), sql);
+          if (sql.startsWith("SELECT x.id FROM") && sql.contains("x(a)")) {
+            assertTrue(exception.getMessage().contains("Missing columns for table 'x': id"), sql + ": " + exception);
+          }
         }
       }
       for (String sql : List.of("SELECT a AS result FROM (SELECT id FROM optimized WHERE id = 1) x(a) ORDER BY result",

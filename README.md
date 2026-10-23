@@ -134,6 +134,11 @@ through `SELECT *`.
 Derived tables and CTEs validate column references against their visible output names, including for empty
 inputs. Unknown names and columns replaced by a column alias list raise `SQLSyntaxErrorException` with
 SQLState `42000`, naming the missing column; generated internal Avro names are not visible SQL columns.
+CTE reference alias lists bind by output position in both `FROM c AS x(a, b)` and `FROM (c) x(a, b)`,
+including wildcard output, grouping, recursive CTEs, and joins. Renamed CTE rows are cached within their
+own materialization and are not reused across fresh correlated or recursive results.
+Nonparameterized single-input queries validate during preparation; joins validate when their inputs are
+built during execution. ON conditions can reference only columns from inputs joined so far.
 
 Recursive CTEs retain the anchor's numeric types and decimal precision and scale. Recursive values that require
 fractional truncation or decimal rounding, or exceed integer ranges or decimal precision, fail with `SQLException`

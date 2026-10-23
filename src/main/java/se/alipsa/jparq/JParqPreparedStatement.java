@@ -556,7 +556,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       } catch (SQLException e) {
         throw e;
       } catch (Exception e) {
-        throw new SQLException("Failed to open parquet data source", e);
+        throw new SQLException("Failed to open query data source", e);
       }
 
       // Derive label/physical lists from the parsed SELECT
@@ -1397,16 +1397,43 @@ public class JParqPreparedStatement implements PreparedStatement {
   /**
    * Materialised result of a common table expression.
    *
-   * @param schema
-   *          Avro schema describing the CTE rows
-   * @param rows
-   *          immutable list of rows produced by the CTE
    */
-  private record CteResult(Schema schema, List<GenericRecord> rows) {
+  private static final class CteResult {
+    private final Schema schema;
+    private final List<GenericRecord> rows;
+    // Owned by this immutable materialization; fresh correlated/recursive results
+    // receive a new cache, while inherited CTE references reuse renamed records.
+    private final Map<List<String>, CteResult> aliasedResults = new LinkedHashMap<>();
 
-    private CteResult {
-      schema = Objects.requireNonNull(schema, "schema");
-      rows = List.copyOf(Objects.requireNonNull(rows, "rows"));
+    /**
+     * Creates one materialized CTE with its own alias cache.
+     *
+     * @param schema
+     *          Avro schema describing the rows
+     * @param rows
+     *          rows produced by this materialization
+     */
+    private CteResult(Schema schema, List<GenericRecord> rows) {
+      this.schema = Objects.requireNonNull(schema, "schema");
+      this.rows = List.copyOf(Objects.requireNonNull(rows, "rows"));
+    }
+
+    /**
+     * Returns the materialized schema.
+     *
+     * @return the materialized Avro schema
+     */
+    private Schema schema() {
+      return schema;
+    }
+
+    /**
+     * Returns the rows owned by this materialization.
+     *
+     * @return the immutable materialized row list
+     */
+    private List<GenericRecord> rows() {
+      return rows;
     }
   }
 
@@ -1577,6 +1604,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
     }
     try (var executor = createSubqueryExecutor(cancellation)) {
+      validateJoinConditions(tables);
       JoinRecordReader joinReader = new JoinRecordReader(tables, executor);
       expandJoinQualifiedWildcards(joinReader);
       validateJoinOutputColumns(joinReader.schema());
@@ -1584,6 +1612,49 @@ public class JParqPreparedStatement implements PreparedStatement {
     } catch (IllegalArgumentException e) {
       throw new SQLException("Failed to build join reader", e);
     }
+  }
+
+  /**
+   * Validates ON references against only the inputs visible at that join step.
+   *
+   * @param tables
+   *          ordered join participants
+   * @throws SQLException
+   *           if an ON expression references a missing column
+   */
+  private void validateJoinConditions(List<JoinRecordReader.JoinTable> tables) throws SQLException {
+    Set<String> available = new LinkedHashSet<>();
+    for (JoinRecordReader.JoinTable table : tables) {
+      for (Field field : table.schema().getFields()) {
+        available.add(MaterializedNames.lookupKey(field));
+      }
+      Set<String> missing = new LinkedHashSet<>();
+      for (String column : ColumnsUsed.inScope(table.joinCondition())) {
+        if (!containsColumn(available, normalizeColumnKey(column))) {
+          missing.add(column);
+        }
+      }
+      if (!missing.isEmpty()) {
+        throw SqlExceptions.syntaxFailure("Missing columns in JOIN condition: " + String.join(", ", missing));
+      }
+    }
+  }
+
+  /**
+   * Chooses the visible relation name for column diagnostics.
+   *
+   * @param reference
+   *          input reference, or null
+   * @return alias or table name, without exposing a derived input's physical
+   *         table
+   */
+  private static String referenceName(SqlParser.TableReference reference) {
+    if (reference == null) {
+      return null;
+    }
+    return reference.tableAlias() != null || reference.isDerivedTable()
+        ? reference.tableAlias()
+        : reference.tableName();
   }
 
   /**
@@ -1637,7 +1708,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     List<String> labels = parsedSelect == null ? List.of() : parsedSelect.labels();
     List<String> columnNames = parsedSelect == null ? List.of() : parsedSelect.columnNames();
-    validateRequiredColumns(schema, required, ref.tableName(), labels, columnNames, required);
+    validateRequiredColumns(schema, required, referenceName(ref), labels, columnNames, required);
   }
 
   /**
@@ -3554,6 +3625,10 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (aliases.isEmpty()) {
       return result;
     }
+    CteResult cached = result.aliasedResults.get(aliases);
+    if (cached != null) {
+      return cached;
+    }
     List<Field> originalFields = result.schema().getFields();
     if (aliases.size() != originalFields.size()) {
       throw SqlExceptions.syntaxFailure("Table alias column count does not match CTE output column count");
@@ -3584,7 +3659,9 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       rows.add(row);
     }
-    return new CteResult(schema, List.copyOf(rows));
+    CteResult renamed = new CteResult(schema, rows);
+    result.aliasedResults.put(List.copyOf(aliases), renamed);
+    return renamed;
   }
 
   private String buildJoinTableName() {
@@ -3664,8 +3741,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     ColumnRequirement requirement = requiredColumns(select, aggregatePlan);
     collectSubqueryDependencies(select, schema, requirement.required(),
         new SubqueryExecutor(stmt.getConn(), null, table -> subqueryTableColumns(table, ctes, configuration)));
-    validateRequiredColumns(schema, requirement.required(), select.table(), select.labels(), select.columnNames(),
-        requirement.referenced());
+    SqlParser.TableReference baseRef = select.tableReferences().isEmpty() ? null : select.tableReferences().getFirst();
+    validateRequiredColumns(schema, requirement.required(), referenceName(baseRef), select.labels(),
+        select.columnNames(), requirement.referenced());
     return requirement.required();
   }
 
@@ -3847,14 +3925,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (normalized == null) {
         continue;
       }
-      boolean present = available.contains(normalized);
-      if (!present && normalized.startsWith("Q:")) {
-        String body = normalized.substring(2);
-        String lowerCase = body.toLowerCase(Locale.ROOT);
-        if (body.equals(lowerCase)) {
-          present = available.contains("U:" + lowerCase);
-        }
-      }
+      boolean present = containsColumn(available, normalized);
       boolean labelMatch = normalizedLabels.contains(normalized);
       boolean missingReference = !normalizedReferences.contains(normalized);
       boolean aliasOnly = labelMatch && (missingReference || mappedAliases.contains(normalized));
@@ -3866,6 +3937,27 @@ public class JParqPreparedStatement implements PreparedStatement {
       String qualifier = tableName == null ? "" : " for table '" + tableName + "'";
       throw SqlExceptions.syntaxFailure("Missing columns" + qualifier + ": " + String.join(", ", missing));
     }
+  }
+
+  /**
+   * Matches a normalized reference using the existing quoted lowercase fallback.
+   *
+   * @param available
+   *          visible SQL lookup keys
+   * @param normalized
+   *          normalized reference key
+   * @return whether the name exists in the visible input
+   */
+  private static boolean containsColumn(Set<String> available, String normalized) {
+    if (normalized == null || available.contains(normalized)) {
+      return true;
+    }
+    if (normalized.startsWith("Q:")) {
+      String body = normalized.substring(2);
+      String lowerCase = body.toLowerCase(Locale.ROOT);
+      return body.equals(lowerCase) && available.contains("U:" + lowerCase);
+    }
+    return false;
   }
 
   private static void addColumns(Set<String> target, Set<String> source) {
