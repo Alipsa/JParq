@@ -1,11 +1,15 @@
 package se.alipsa.jparq.engine.function;
 
+import java.sql.Types;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.statement.select.ParenthesedSelect;
+import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.select.SelectVisitor;
 import net.sf.jsqlparser.util.deparser.ExpressionDeParser;
@@ -101,6 +105,26 @@ final class GroupedScalarSubquery {
       throw SqlExceptions.syntaxFailure("Scalar subquery returned more than one row");
     }
     return result.rows().isEmpty() ? null : result.rows().getFirst().getFirst();
+  }
+
+  /**
+   * Infers the fixed COUNT type without executing or materializing skipped
+   * queries. Prepared-statement result metadata is unavailable before execution,
+   * so other scalar types continue to depend on values from surviving groups.
+   *
+   * @return BIGINT for a COUNT projection, otherwise OTHER
+   */
+  int declaredSqlType() {
+    Select query = select;
+    while (query instanceof ParenthesedSelect parenthesed) {
+      query = parenthesed.getSelect();
+    }
+    if (query instanceof PlainSelect plain && plain.getSelectItems().size() == 1
+        && AggregateFunctions.unwrap(plain.getSelectItems().getFirst().getExpression()) instanceof Function function
+        && "COUNT".equalsIgnoreCase(function.getName())) {
+      return Types.BIGINT;
+    }
+    return Types.OTHER;
   }
 
   /**

@@ -126,6 +126,61 @@ class GroupedScalarSubqueryTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void havingSkipsRejectedGroupsAndEvaluatesAliasesOnDemand(boolean predicate, boolean projection) throws Exception {
+    try (var connection = connect(predicate, projection)) {
+      String select = "SELECT n, (SELECT v FROM t WHERE v = o.n) c FROM o GROUP BY n HAVING ";
+      assertEquals(List.of(List.of(2, 2)), rows(connection, select + "n = 2"));
+      assertEquals(List.of(), rows(connection, select + "COUNT(*) = 5"));
+      assertEquals(List.of(List.of(2, 2)), rows(connection, select + "n = 2 AND c = 2"));
+      assertEquals(List.of(List.of(2, 2)), rows(connection, select + "n = 2 AND " + "(SELECT c) = 2"));
+      assertEquals(List.of(List.of(2, 2)), rows(connection, select + "NOT (n <> 2 OR c <> 2)"));
+      assertEquals(List.of(List.of(1, 2L), List.of(2, 1L)), rows(connection,
+          "SELECT n, (SELECT COUNT(*) FROM t WHERE v = o.n) c FROM o GROUP BY n HAVING c > 0 ORDER BY n"));
+      String nullable = "SELECT n, (SELECT v FROM t WHERE v = o.n AND v = 2) c FROM o GROUP BY n HAVING ";
+      assertEquals(Arrays.asList(Arrays.asList(1, null), Arrays.asList(3, null), Arrays.asList(null, null)),
+          rows(connection, nullable + "c IS NULL ORDER BY n NULLS LAST"));
+      assertEquals(List.of(List.of(2, 2)), rows(connection, nullable + "c = 2 AND n >= 2"));
+      assertEquals(Arrays.asList(List.of(2, 2), Arrays.asList(3, null)),
+          rows(connection, nullable + "c = 2 OR n = 3 ORDER BY n"));
+      assertThrows(SQLException.class, () -> rows(connection, select + "c = 2"));
+      String typed = "SELECT (SELECT CASE WHEN o.n = 1 THEN 1 WHEN o.n = 2 THEN CAST(2 AS INTEGER) ELSE NULL END) c "
+          + "FROM o GROUP BY n HAVING c = 2";
+      try (var statement = connection.prepareStatement(typed); var result = statement.executeQuery()) {
+        assertEquals(Types.INTEGER, result.getMetaData().getColumnType(1));
+        assertTrue(result.next());
+        assertEquals(2, result.getObject(1));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void scalarExpressionSortsAndEmptyCountKeepsItsType(boolean predicate, boolean projection) throws Exception {
+    try (var connection = connect(predicate, projection)) {
+      String scalar = "(SELECT COUNT(*) FROM t WHERE v = o.n)";
+      String select = "SELECT n, " + scalar + " c FROM o GROUP BY n";
+      List<List<Object>> expected = Arrays.asList(List.of(1, 2L), List.of(2, 1L), List.of(3, 0L),
+          Arrays.asList(null, 0L));
+      for (String order : List.of("c", "2", scalar, "(" + scalar + ")")) {
+        assertEquals(expected, rows(connection, select + " ORDER BY " + order + " DESC, n NULLS LAST"));
+      }
+      for (String sql : List.of("SELECT " + scalar + " c FROM o WHERE n > 10 GROUP BY n",
+          "SELECT " + scalar + " c FROM o GROUP BY n HAVING COUNT(*) = 5")) {
+        try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
+          assertEquals(Types.BIGINT, result.getMetaData().getColumnType(1), sql);
+          assertFalse(result.next(), sql);
+        }
+      }
+    }
+  }
+
   /**
    * Writes a nullable integer fixture column.
    *

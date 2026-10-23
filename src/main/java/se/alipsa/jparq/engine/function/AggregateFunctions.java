@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.CaseExpression;
@@ -1367,9 +1368,6 @@ public final class AggregateFunctions {
     for (GroupState state : states.values()) {
       List<Object> aggregateValues = state.results();
       List<Object> row = buildRow(plan, state, aggregateValues, scalarSubqueries);
-      for (var entry : scalarTypes.entrySet()) {
-        entry.getValue().track(row.get(entry.getKey()));
-      }
       Map<String, Object> labelLookup = buildLabelLookup(plan, row, state.groupValues());
       boolean include = true;
       if (normalizedHaving != null) {
@@ -1378,6 +1376,12 @@ public final class AggregateFunctions {
         include = evaluator.eval(normalizedHaving);
       }
       if (include) {
+        for (var entry : scalarTypes.entrySet()) {
+          int index = entry.getKey();
+          Object value = resolveScalarValue(row.get(index));
+          row.set(index, value);
+          entry.getValue().track(value);
+        }
         rows.add(new AggregatedRow(row, state.groupValues(), aggregateValues, state.groupingSetIndex()));
       }
     }
@@ -1394,7 +1398,8 @@ public final class AggregateFunctions {
       } else if (column.isGrouping()) {
         columnSqlTypes.add(Types.INTEGER);
       } else if (column.subquery() != null) {
-        columnSqlTypes.add(scalarTypes.get(index).sqlType());
+        int observed = scalarTypes.get(index).sqlType();
+        columnSqlTypes.add(observed == Types.OTHER ? scalarSubqueries.get(index).declaredSqlType() : observed);
       } else {
         columnSqlTypes.add(groupSqlTypes.isEmpty() ? Types.OTHER : groupSqlTypes.get(column.groupIndex()));
       }
@@ -1448,6 +1453,9 @@ public final class AggregateFunctions {
         registerOrderAccessor(mapping, aggregateExpressionText(spec), aggregateAccessor);
       } else if (column.isGrouping()) {
         registerOrderAccessor(mapping, column.expressionText(), OrderValueAccessor.projection(i));
+      } else if (column.subquery() != null) {
+        registerOrderAccessor(mapping, column.subquery().toString(), OrderValueAccessor.projection(i));
+        registerOrderAccessor(mapping, "(" + column.subquery() + ")", OrderValueAccessor.projection(i));
       } else if (column.isGroup()) {
         GroupExpression group = plan.groupExpressions().get(column.groupIndex());
         OrderValueAccessor groupAccessor = OrderValueAccessor.groupValue(column.groupIndex());
@@ -1660,21 +1668,79 @@ public final class AggregateFunctions {
     return value;
   }
 
+  /**
+   * Builds a row with scalar projections deferred until HAVING or output needs
+   * them.
+   *
+   * @param plan
+   *          aggregate projection plan
+   * @param state
+   *          current group's values and grouping set
+   * @param aggregateValues
+   *          computed aggregate values
+   * @param scalarSubqueries
+   *          scalar evaluators indexed by projection position
+   * @return mutable row whose scalar placeholders share one cached value per
+   *         group
+   */
   private static List<Object> buildRow(AggregatePlan plan, GroupState state, List<Object> aggregateValues,
       Map<Integer, GroupedScalarSubquery> scalarSubqueries) {
     List<Object> row = new ArrayList<>(plan.resultColumns().size());
-    for (ResultColumn column : plan.resultColumns()) {
+    for (int index = 0; index < plan.resultColumns().size(); index++) {
+      ResultColumn column = plan.resultColumns().get(index);
       if (column.isAggregate()) {
         row.add(aggregateValues.get(column.aggregateIndex()));
       } else if (column.isGrouping()) {
         row.add(groupingValue(plan, state.groupingSetIndex(), column.groupingIndexes()));
       } else if (column.subquery() != null) {
-        row.add(scalarSubqueries.get(row.size()).evaluate(state.groupValues()));
+        GroupedScalarSubquery subquery = scalarSubqueries.get(index);
+        row.add(new LazyScalarValue(() -> subquery.evaluate(state.groupValues())));
       } else {
         row.add(state.groupValues().get(column.groupIndex()));
       }
     }
-    return Collections.unmodifiableList(row);
+    return row;
+  }
+
+  /**
+   * Resolves a deferred scalar projection when its value is needed.
+   *
+   * @param value
+   *          ordinary value or deferred scalar
+   * @return resolved value, including null
+   */
+  private static Object resolveScalarValue(Object value) {
+    return value instanceof LazyScalarValue scalar ? scalar.get() : value;
+  }
+
+  /** Caches a scalar projection once per group, including a NULL result. */
+  private static final class LazyScalarValue {
+    private final Supplier<Object> evaluation;
+    private boolean resolved;
+    private Object value;
+
+    /**
+     * Creates a deferred scalar for one group's current bindings.
+     *
+     * @param evaluation
+     *          scalar computation
+     */
+    private LazyScalarValue(Supplier<Object> evaluation) {
+      this.evaluation = evaluation;
+    }
+
+    /**
+     * Returns the scalar, evaluating it only on the first access.
+     *
+     * @return scalar value, including null
+     */
+    private Object get() {
+      if (!resolved) {
+        value = evaluation.get();
+        resolved = true;
+      }
+      return value;
+    }
   }
 
   private static Map<String, Object> buildLabelLookup(AggregatePlan plan, List<Object> rowValues,
@@ -2197,10 +2263,12 @@ public final class AggregateFunctions {
         return bool.getValue();
       }
       if (expr instanceof AndExpression and) {
-        return SqlTruth.and(evalTruth(and.getLeftExpression()), evalTruth(and.getRightExpression()));
+        Boolean left = evalTruth(and.getLeftExpression());
+        return Boolean.FALSE.equals(left) ? Boolean.FALSE : SqlTruth.and(left, evalTruth(and.getRightExpression()));
       }
       if (expr instanceof OrExpression or) {
-        return SqlTruth.or(evalTruth(or.getLeftExpression()), evalTruth(or.getRightExpression()));
+        Boolean left = evalTruth(or.getLeftExpression());
+        return Boolean.TRUE.equals(left) ? Boolean.TRUE : SqlTruth.or(left, evalTruth(or.getRightExpression()));
       }
       if (expr instanceof NotExpression not) {
         return SqlTruth.not(evalTruth(not.getExpression()));
@@ -2449,7 +2517,7 @@ public final class AggregateFunctions {
           if (canonical != null) {
             String lookupKey = Identifier.lookupKey(canonical);
             if (labelLookup.containsKey(lookupKey)) {
-              return labelLookup.get(lookupKey);
+              return resolveScalarValue(labelLookup.get(lookupKey));
             }
           }
         }
@@ -2497,7 +2565,7 @@ public final class AggregateFunctions {
         return null;
       }
       String key = Identifier.lookupKey(name);
-      return key == null ? null : labelLookup.get(key);
+      return key == null ? null : resolveScalarValue(labelLookup.get(key));
     }
   }
 

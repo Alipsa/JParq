@@ -105,6 +105,10 @@ Scalar subqueries in grouped SELECT lists can reference outer grouping columns, 
 omitted from the output. Each subquery uses the current group's values; NULL grouping keys and keys suppressed
 by grouping sets bind as NULL. Inner names take precedence over outer names. References to ungrouped outer
 columns are rejected, including when the outer input is empty.
+HAVING filters groups before select-list scalar subqueries run; a subquery alias referenced by HAVING is
+evaluated on demand and reused for that group's output. Only surviving groups contribute to inferred scalar
+result types. COUNT subqueries retain BIGINT metadata when no groups survive; other unknown scalar types
+continue to depend on returned values.
 
 Correlated subqueries reuse parsed query shapes and validated source schemas within one outer execution.
 Outer values are bound with their Java types and NULL values intact, and each evaluation reads fresh results.
