@@ -243,21 +243,70 @@ class ArrayFunctionsTest {
   /**
    * Names modern temporal types and custom values without ambiguous OTHER
    * diagnostics.
+   *
+   * @param value
+   *          value with a known SQL type label
+   * @param type
+   *          expected SQL type label
    */
-  @Test
-  void namesModernTemporalTypes() {
-    for (var pair : List.of(Arguments.of(java.util.Map.of("x", 1), "STRUCT"),
+  @ParameterizedTest
+  @MethodSource("modernTypeMappings")
+  void namesModernTemporalTypes(Object value, String type) {
+    var failure = assertThrows(IllegalArgumentException.class,
+        () -> ArrayFunctions.homogenizeArrayValues(List.of("x", value)));
+    assertEquals("ARRAY elements must share a common type; found VARCHAR and " + type, failure.getMessage());
+  }
+
+  /**
+   * Supplies temporal and structured values with their SQL type labels.
+   *
+   * @return independently reported SQL type mappings
+   */
+  private static Stream<Arguments> modernTypeMappings() {
+    return Stream.of(Arguments.of(java.util.Map.of("x", 1), "STRUCT"),
         Arguments.of(java.time.LocalDate.of(2026, 1, 1), "DATE"), Arguments.of(java.time.LocalTime.NOON, "TIME"),
         Arguments.of(java.time.LocalDateTime.of(2026, 1, 1, 12, 0), "TIMESTAMP"),
         Arguments.of(java.time.OffsetTime.parse("12:00:00Z"), "TIME_WITH_TIMEZONE"),
         Arguments.of(java.time.OffsetDateTime.parse("2026-01-01T12:00:00Z"), "TIMESTAMP_WITH_TIMEZONE"),
         Arguments.of(java.time.ZonedDateTime.parse("2026-01-01T12:00:00Z"), "TIMESTAMP_WITH_TIMEZONE"),
-        Arguments.of(java.time.Instant.EPOCH, "TIMESTAMP_WITH_TIMEZONE"))) {
-      var args = pair.get();
-      var failure = assertThrows(IllegalArgumentException.class,
-          () -> ArrayFunctions.homogenizeArrayValues(List.of("x", args[0])));
-      assertEquals("ARRAY elements must share a common type; found VARCHAR and " + args[1], failure.getMessage());
+        Arguments.of(java.time.Instant.EPOCH, "TIMESTAMP_WITH_TIMEZONE"));
+  }
+
+  /**
+   * Distinguishes unsupported Java representations that have the same SQL label.
+   *
+   * @param first
+   *          first representation
+   * @param second
+   *          second representation
+   * @param type
+   *          shared SQL label
+   */
+  @ParameterizedTest
+  @MethodSource("sameSqlTypeRepresentations")
+  void distinguishesSameSqlTypeRepresentations(Object first, Object second, String type) {
+    var values = new ArrayList<Object>(Arrays.asList(null, first, second, null));
+    for (int order = 0; order < 2; order++) {
+      var failure = assertThrows(IllegalArgumentException.class, () -> ArrayFunctions.homogenizeArrayValues(values));
+      assertEquals("ARRAY elements must share a common type; found " + type + " (" + values.get(1).getClass().getName()
+          + ") and " + type + " (" + values.get(2).getClass().getName() + ")", failure.getMessage());
+      assertEquals("42000", assertInstanceOf(SQLSyntaxErrorException.class, failure.getCause()).getSQLState());
+      Collections.reverse(values);
     }
+  }
+
+  /**
+   * Supplies class pairs whose SQL diagnostic labels would otherwise be
+   * identical.
+   *
+   * @return incompatible representations and their shared label
+   */
+  private static Stream<Arguments> sameSqlTypeRepresentations() {
+    return Stream.of(
+        Arguments.of(java.time.LocalDateTime.of(2026, 1, 1, 12, 0), java.sql.Timestamp.valueOf("2026-01-01 12:00:00"),
+            "TIMESTAMP"),
+        Arguments.of(java.time.LocalTime.NOON, java.sql.Time.valueOf("12:00:00"), "TIME"),
+        Arguments.of(new java.util.HashMap<>(), new java.util.LinkedHashMap<>(), "STRUCT"));
   }
 
   /**

@@ -144,6 +144,7 @@ public final class ArrayFunctions {
 
   /**
    * Resolves a common element family, treating all numeric values as compatible.
+   * Diagnostics distinguish Java representations when SQL type labels coincide.
    *
    * @param current
    *          previously established family, or null for the first non-NULL value
@@ -157,8 +158,14 @@ public final class ArrayFunctions {
     if (current == null || current == candidate) {
       return candidate;
     }
-    throw SqlExceptions.syntaxFailure(
-        "ARRAY elements must share a common type; found " + sqlTypeName(current) + " and " + sqlTypeName(candidate));
+    String currentName = sqlTypeName(current);
+    String candidateName = sqlTypeName(candidate);
+    if (currentName.equals(candidateName)) {
+      currentName += " (" + current.getName() + ")";
+      candidateName += " (" + candidate.getName() + ")";
+    }
+    throw SqlExceptions
+        .syntaxFailure("ARRAY elements must share a common type; found " + currentName + " and " + candidateName);
   }
 
   /**
