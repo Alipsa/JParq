@@ -139,7 +139,7 @@ public final class ParquetTable {
     String requested = input.get(AvroReadSupport.AVRO_REQUESTED_PROJECTION);
     result.unset(AvroReadSupport.AVRO_REQUESTED_PROJECTION);
     // parquet-avro keeps this configuration key private.
-    result.unset("parquet.avro.read.schema");
+    result.unset(PrunedAvroReadSupport.AVRO_READ_SCHEMA_CONFIG);
     if (requested != null) {
       Schema projection = new Schema.Parser().parse(requested);
       Set<String> fields = projection.getFields().stream().map(Schema.Field::name).collect(Collectors.toSet());

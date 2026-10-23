@@ -31,9 +31,14 @@ import org.apache.parquet.schema.Type;
  */
 public class PrunedAvroReadSupport<T> extends AvroReadSupport<T> {
 
-  // AvroReadSupport keeps both keys private; they must stay in sync with
+  /**
+   * Configuration key of the Avro read schema. {@code AvroReadSupport} keeps this
+   * key private; the value must stay in sync with parquet-avro.
+   */
+  static final String AVRO_READ_SCHEMA_CONFIG = "parquet.avro.read.schema";
+
+  // AvroReadSupport keeps this metadata key private; it must stay in sync with
   // parquet-avro
-  private static final String AVRO_READ_SCHEMA_CONFIG = "parquet.avro.read.schema";
   private static final String AVRO_READ_SCHEMA_METADATA = "avro.read.schema";
 
   /**
@@ -84,6 +89,10 @@ public class PrunedAvroReadSupport<T> extends AvroReadSupport<T> {
   private static MessageType prune(MessageType fileSchema, Set<String> names) {
     List<Type> kept = fileSchema.getFields().stream().filter(field -> names.contains(field.getName()))
         .collect(Collectors.toList());
+    // An empty match cannot occur under the current caller: the projection is
+    // derived from the shard's own Avro schema and AvroProjections.project
+    // already falls back to the full schema. The fallback mirrors that behavior,
+    // reading all columns instead of none.
     if (kept.isEmpty() || kept.size() == fileSchema.getFieldCount()) {
       return fileSchema;
     }
