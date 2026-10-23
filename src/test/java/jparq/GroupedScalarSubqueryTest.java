@@ -131,12 +131,12 @@ class GroupedScalarSubqueryTest {
   @CsvSource({
       "true,true", "true,false", "false,true", "false,false"
   })
-  void scalarCardinalityErrorsMatchAcrossSelectAndHaving(boolean predicate, boolean projection) throws Exception {
+  void scalarCardinalityErrorsMatchAcrossSelectWhereAndHaving(boolean predicate, boolean projection) throws Exception {
     try (var connection = connect(predicate, projection)) {
       for (String scalar : List.of("SELECT v FROM t", "SELECT v, v FROM t WHERE v = 2",
           "SELECT v, v FROM t WHERE v > 10")) {
         for (String sql : List.of("SELECT (" + scalar + ") FROM o", "SELECT n, (" + scalar + ") FROM o GROUP BY n",
-            "SELECT n FROM o GROUP BY n HAVING (" + scalar + ") = 2")) {
+            "SELECT n FROM o WHERE n = (" + scalar + ")", "SELECT n FROM o GROUP BY n HAVING (" + scalar + ") = 2")) {
           SQLSyntaxErrorException error = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, sql), sql);
           assertEquals("42000", error.getSQLState(), sql);
           assertTrue(error.getMessage().contains(scalar.contains("v, v") ? "one column" : "one row"),
