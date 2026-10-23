@@ -587,6 +587,25 @@ public final class SubqueryExecutor implements AutoCloseable {
     }
 
     /**
+     * Validates scalar cardinality and extracts the value consistently for all
+     * expression evaluators, including empty results.
+     *
+     * @return the scalar value, or null for no rows or a SQL NULL value
+     * @throws IllegalArgumentException
+     *           carrying SQLState 42000 if the result does not have exactly one
+     *           column and at most one row
+     */
+    public Object scalarValue() {
+      if (columnLabels.size() != 1 || !rows.isEmpty() && rows.getFirst().size() != 1) {
+        throw SqlExceptions.syntaxFailure("Scalar subquery must return exactly one column");
+      }
+      if (rows.size() > 1) {
+        throw SqlExceptions.syntaxFailure("Scalar subquery returned more than one row");
+      }
+      return rows.isEmpty() ? null : rows.getFirst().getFirst();
+    }
+
+    /**
      * Convenience accessor returning the first column of each row.
      *
      * @return list of values from the first column

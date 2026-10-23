@@ -427,20 +427,7 @@ public final class ValueExpressionEvaluator {
     SubqueryExecutor.SubqueryResult result = subqueryExecutor.executeCorrelated(subSelect, correlationQualifiers(),
         correlationColumns(), correlationContext,
         (qualifier, column) -> resolveCorrelatedValue(qualifier, column, record));
-    if (result.rows().isEmpty()) {
-      return null;
-    }
-    if (result.rows().size() > 1) {
-      throw new IllegalArgumentException("Scalar subquery returned more than one row");
-    }
-    List<Object> row = result.rows().getFirst();
-    if (row.isEmpty()) {
-      return null;
-    }
-    if (row.size() > 1) {
-      throw new IllegalArgumentException("Scalar subquery returned more than one column");
-    }
-    return row.getFirst();
+    return result.scalarValue();
   }
 
   private Object evaluateCase(CaseExpression caseExpr, GenericRecord record) {

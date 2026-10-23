@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.CaseExpression;
@@ -174,11 +175,11 @@ public final class AggregateFunctions {
    *          column label exposed to JDBC clients
    * @param aggregateIndex
    *          index of the aggregate specification backing the column, or
-   *          {@code -1} when the column originates from the GROUP BY clause
+   *          {@code -1} for other column kinds
    * @param groupIndex
    *          index into the {@link GroupExpression} list describing the grouping
-   *          value used for this column, or {@code -1} when the column is an
-   *          aggregate
+   *          value used for this column, or {@code -1} when the column is not a
+   *          grouping expression
    * @param kind
    *          origin of the column within the aggregate plan
    * @param groupingIndexes
@@ -186,9 +187,11 @@ public final class AggregateFunctions {
    * @param expressionText
    *          textual representation of the GROUPING() expression for error
    *          reporting
+   * @param subquery
+   *          scalar subquery evaluated after grouping, or null
    */
   public record ResultColumn(String label, ColumnKind kind, int aggregateIndex, int groupIndex,
-      List<Integer> groupingIndexes, String expressionText) {
+      List<Integer> groupingIndexes, String expressionText, Select subquery) {
     /**
      * Canonical constructor normalising the provided column metadata.
      *
@@ -196,11 +199,11 @@ public final class AggregateFunctions {
      *          column label exposed to JDBC clients
      * @param aggregateIndex
      *          index of the aggregate specification backing the column, or
-     *          {@code -1} when the column originates from the GROUP BY clause
+     *          {@code -1} for other column kinds
      * @param groupIndex
      *          index into the {@link GroupExpression} list describing the grouping
-     *          value used for this column, or {@code -1} when the column is an
-     *          aggregate
+     *          value used for this column, or {@code -1} when the column is not a
+     *          grouping expression
      * @param kind
      *          origin of the column within the aggregate plan
      * @param groupingIndexes
@@ -208,6 +211,8 @@ public final class AggregateFunctions {
      * @param expressionText
      *          textual representation of the GROUPING() expression for error
      *          reporting
+     * @param subquery
+     *          scalar subquery evaluated after grouping, or null
      */
     public ResultColumn {
       Objects.requireNonNull(label, "label");
@@ -230,8 +235,30 @@ public final class AggregateFunctions {
             throw new IllegalArgumentException("GROUPING function requires at least one argument");
           }
         }
+        case SCALAR_SUBQUERY -> Objects.requireNonNull(subquery, "subquery");
         default -> throw new IllegalArgumentException("Unsupported result column kind: " + kind);
       }
+    }
+
+    /**
+     * Creates a result column without a scalar subquery.
+     *
+     * @param label
+     *          JDBC column label
+     * @param kind
+     *          origin of the column
+     * @param aggregateIndex
+     *          aggregate specification index, or -1
+     * @param groupIndex
+     *          grouping expression index, or -1
+     * @param groupingIndexes
+     *          indexes used by GROUPING()
+     * @param expressionText
+     *          GROUPING() expression text
+     */
+    public ResultColumn(String label, ColumnKind kind, int aggregateIndex, int groupIndex,
+        List<Integer> groupingIndexes, String expressionText) {
+      this(label, kind, aggregateIndex, groupIndex, groupingIndexes, expressionText, null);
     }
 
     /**
@@ -271,7 +298,9 @@ public final class AggregateFunctions {
     /** Column represents a grouping expression value. */
     GROUP,
     /** Column returns the output of a GROUPING() function. */
-    GROUPING
+    GROUPING,
+    /** Column returns a scalar subquery evaluated against the current group. */
+    SCALAR_SUBQUERY
   }
 
   /**
@@ -438,7 +467,9 @@ public final class AggregateFunctions {
    *         validates SELECT expressions against the GROUP BY clause using
    *         structural expression comparison so that functionally equivalent
    *         constructs (for example {@code COALESCE} invocations) are accepted
-   *         even when they are formatted differently.
+   *         even when they are formatted differently. Scalar subqueries are
+   *         evaluated after grouping; their outer references are validated
+   *         against grouping columns before reading the aggregate input.
    */
   public static AggregatePlan plan(SqlParser.Select select) {
     List<Expression> expressions = select.expressions();
@@ -471,14 +502,20 @@ public final class AggregateFunctions {
         if (spec != null) {
           int aggIndex = specs.size();
           specs.add(spec);
-          resultColumns.add(new ResultColumn(label, ColumnKind.AGGREGATE, aggIndex, -1, List.of(), null));
+          resultColumns.add(new ResultColumn(label, ColumnKind.AGGREGATE, aggIndex, -1, List.of(), null, null));
           continue;
         }
         if (isGroupingFunction(func)) {
           List<Integer> groupingIndexes = groupingArgumentIndexes(func, groupIndexByText, groupExpressions);
-          resultColumns.add(new ResultColumn(label, ColumnKind.GROUPING, -1, -1, groupingIndexes, func.toString()));
+          resultColumns
+              .add(new ResultColumn(label, ColumnKind.GROUPING, -1, -1, groupingIndexes, func.toString(), null));
           continue;
         }
+      }
+
+      if (unwrap(expr) instanceof Select subquery) {
+        resultColumns.add(new ResultColumn(label, ColumnKind.SCALAR_SUBQUERY, -1, -1, List.of(), null, subquery));
+        continue;
       }
 
       if (!hasGroupBy && specs.isEmpty()) {
@@ -490,7 +527,7 @@ public final class AggregateFunctions {
         throw new IllegalArgumentException(
             "SELECT expression '" + expr + "' must appear in the GROUP BY clause when aggregates are present");
       }
-      resultColumns.add(new ResultColumn(label, ColumnKind.GROUP, -1, groupIndex, List.of(), null));
+      resultColumns.add(new ResultColumn(label, ColumnKind.GROUP, -1, groupIndex, List.of(), null, null));
     }
 
     Expression having = select.having();
@@ -504,6 +541,22 @@ public final class AggregateFunctions {
     }
 
     return new AggregatePlan(specs, resultColumns, groupExpressions, groupingSets);
+  }
+
+  /**
+   * Removes surrounding single-expression parentheses without crossing query
+   * scopes.
+   *
+   * @param expression
+   *          expression to inspect
+   * @return expression inside the parentheses
+   */
+  static Expression unwrap(Expression expression) {
+    Expression result = ExpressionEvaluator.unwrapParenthesis(expression);
+    while (result instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
+      result = ExpressionEvaluator.unwrapParenthesis(list.getFirst());
+    }
+    return result;
   }
 
   /**
@@ -1224,6 +1277,18 @@ public final class AggregateFunctions {
     Map<String, Map<String, String>> normalizedCorrelationContext = ColumnMappingUtil
         .normaliseQualifierMapping(correlationContext);
 
+    Map<Integer, GroupedScalarSubquery> scalarSubqueries = new HashMap<>();
+    Map<Integer, GroupTypeTracker> scalarTypes = new HashMap<>();
+    for (int index = 0; index < plan.resultColumns().size(); index++) {
+      Select subquery = plan.resultColumns().get(index).subquery();
+      if (subquery != null) {
+        Objects.requireNonNull(subqueryExecutor, "Scalar subqueries require a subquery executor");
+        scalarSubqueries.put(index, new GroupedScalarSubquery(subquery, groupExpressions, subqueryExecutor,
+            CorrelationMappings.of(outerQualifiers, qualifierColumnMapping, unqualifiedColumnMapping)));
+        scalarTypes.put(index, new GroupTypeTracker());
+      }
+    }
+
     int aggregateCount = plan.specs().size();
     int[] aggregateSqlTypes = new int[aggregateCount];
     for (int i = 0; i < aggregateCount; i++) {
@@ -1302,7 +1367,7 @@ public final class AggregateFunctions {
 
     for (GroupState state : states.values()) {
       List<Object> aggregateValues = state.results();
-      List<Object> row = buildRow(plan, state, aggregateValues);
+      List<Object> row = buildRow(plan, state, aggregateValues, scalarSubqueries);
       Map<String, Object> labelLookup = buildLabelLookup(plan, row, state.groupValues());
       boolean include = true;
       if (normalizedHaving != null) {
@@ -1311,6 +1376,12 @@ public final class AggregateFunctions {
         include = evaluator.eval(normalizedHaving);
       }
       if (include) {
+        for (var entry : scalarTypes.entrySet()) {
+          int index = entry.getKey();
+          Object value = resolveScalarValue(row.get(index));
+          row.set(index, value);
+          entry.getValue().track(value);
+        }
         rows.add(new AggregatedRow(row, state.groupValues(), aggregateValues, state.groupingSetIndex()));
       }
     }
@@ -1320,11 +1391,15 @@ public final class AggregateFunctions {
     }
 
     List<Integer> columnSqlTypes = new ArrayList<>(plan.resultColumns().size());
-    for (ResultColumn column : plan.resultColumns()) {
+    for (int index = 0; index < plan.resultColumns().size(); index++) {
+      ResultColumn column = plan.resultColumns().get(index);
       if (column.isAggregate()) {
         columnSqlTypes.add(aggregateSqlTypes[column.aggregateIndex()]);
       } else if (column.isGrouping()) {
         columnSqlTypes.add(Types.INTEGER);
+      } else if (column.subquery() != null) {
+        int observed = scalarTypes.get(index).sqlType();
+        columnSqlTypes.add(observed == Types.OTHER ? scalarSubqueries.get(index).declaredSqlType() : observed);
       } else {
         columnSqlTypes.add(groupSqlTypes.isEmpty() ? Types.OTHER : groupSqlTypes.get(column.groupIndex()));
       }
@@ -1378,7 +1453,10 @@ public final class AggregateFunctions {
         registerOrderAccessor(mapping, aggregateExpressionText(spec), aggregateAccessor);
       } else if (column.isGrouping()) {
         registerOrderAccessor(mapping, column.expressionText(), OrderValueAccessor.projection(i));
-      } else {
+      } else if (column.subquery() != null) {
+        registerOrderAccessor(mapping, column.subquery().toString(), OrderValueAccessor.projection(i));
+        registerOrderAccessor(mapping, "(" + column.subquery() + ")", OrderValueAccessor.projection(i));
+      } else if (column.isGroup()) {
         GroupExpression group = plan.groupExpressions().get(column.groupIndex());
         OrderValueAccessor groupAccessor = OrderValueAccessor.groupValue(column.groupIndex());
         registerOrderAccessor(mapping, group.label(), groupAccessor);
@@ -1590,18 +1668,79 @@ public final class AggregateFunctions {
     return value;
   }
 
-  private static List<Object> buildRow(AggregatePlan plan, GroupState state, List<Object> aggregateValues) {
+  /**
+   * Builds a row with scalar projections deferred until HAVING or output needs
+   * them.
+   *
+   * @param plan
+   *          aggregate projection plan
+   * @param state
+   *          current group's values and grouping set
+   * @param aggregateValues
+   *          computed aggregate values
+   * @param scalarSubqueries
+   *          scalar evaluators indexed by projection position
+   * @return mutable row whose scalar placeholders share one cached value per
+   *         group
+   */
+  private static List<Object> buildRow(AggregatePlan plan, GroupState state, List<Object> aggregateValues,
+      Map<Integer, GroupedScalarSubquery> scalarSubqueries) {
     List<Object> row = new ArrayList<>(plan.resultColumns().size());
-    for (ResultColumn column : plan.resultColumns()) {
+    for (int index = 0; index < plan.resultColumns().size(); index++) {
+      ResultColumn column = plan.resultColumns().get(index);
       if (column.isAggregate()) {
         row.add(aggregateValues.get(column.aggregateIndex()));
       } else if (column.isGrouping()) {
         row.add(groupingValue(plan, state.groupingSetIndex(), column.groupingIndexes()));
+      } else if (column.subquery() != null) {
+        GroupedScalarSubquery subquery = scalarSubqueries.get(index);
+        row.add(new LazyScalarValue(() -> subquery.evaluate(state.groupValues())));
       } else {
         row.add(state.groupValues().get(column.groupIndex()));
       }
     }
-    return Collections.unmodifiableList(row);
+    return row;
+  }
+
+  /**
+   * Resolves a deferred scalar projection when its value is needed.
+   *
+   * @param value
+   *          ordinary value or deferred scalar
+   * @return resolved value, including null
+   */
+  private static Object resolveScalarValue(Object value) {
+    return value instanceof LazyScalarValue scalar ? scalar.get() : value;
+  }
+
+  /** Caches a scalar projection once per group, including a NULL result. */
+  private static final class LazyScalarValue {
+    private final Supplier<Object> evaluation;
+    private boolean resolved;
+    private Object value;
+
+    /**
+     * Creates a deferred scalar for one group's current bindings.
+     *
+     * @param evaluation
+     *          scalar computation
+     */
+    private LazyScalarValue(Supplier<Object> evaluation) {
+      this.evaluation = evaluation;
+    }
+
+    /**
+     * Returns the scalar, evaluating it only on the first access.
+     *
+     * @return scalar value, including null
+     */
+    private Object get() {
+      if (!resolved) {
+        value = evaluation.get();
+        resolved = true;
+      }
+      return value;
+    }
   }
 
   private static Map<String, Object> buildLabelLookup(AggregatePlan plan, List<Object> rowValues,
@@ -2083,6 +2222,8 @@ public final class AggregateFunctions {
     private final AggregatePlan plan;
     private final List<Object> aggregateValues;
     private final SubqueryExecutor subqueryExecutor;
+    // Values can be LazyScalarValue placeholders; every value read must use
+    // resolveScalarValue.
     private final Map<String, Object> labelLookup;
     private final List<String> correlatedQualifiers;
     private final Map<String, Map<String, String>> correlationContext;
@@ -2124,10 +2265,12 @@ public final class AggregateFunctions {
         return bool.getValue();
       }
       if (expr instanceof AndExpression and) {
-        return SqlTruth.and(evalTruth(and.getLeftExpression()), evalTruth(and.getRightExpression()));
+        Boolean left = evalTruth(and.getLeftExpression());
+        return Boolean.FALSE.equals(left) ? Boolean.FALSE : SqlTruth.and(left, evalTruth(and.getRightExpression()));
       }
       if (expr instanceof OrExpression or) {
-        return SqlTruth.or(evalTruth(or.getLeftExpression()), evalTruth(or.getRightExpression()));
+        Boolean left = evalTruth(or.getLeftExpression());
+        return Boolean.TRUE.equals(left) ? Boolean.TRUE : SqlTruth.or(left, evalTruth(or.getRightExpression()));
       }
       if (expr instanceof NotExpression not) {
         return SqlTruth.not(evalTruth(not.getExpression()));
@@ -2309,20 +2452,7 @@ public final class AggregateFunctions {
       }
       SubqueryExecutor.SubqueryResult result = subqueryExecutor.executeCorrelated(subSelect, correlationQualifiers(),
           correlationColumns(), correlationContext, (qualifier, column) -> correlatedValue(qualifier, column));
-      if (result.rows().isEmpty()) {
-        return null;
-      }
-      if (result.rows().size() > 1) {
-        throw new IllegalArgumentException("Scalar subquery returned more than one row");
-      }
-      List<Object> row = result.rows().getFirst();
-      if (row.isEmpty()) {
-        return null;
-      }
-      if (row.size() > 1) {
-        throw new IllegalArgumentException("Scalar subquery returned more than one column");
-      }
-      return row.getFirst();
+      return result.scalarValue();
     }
 
     private Object aggregateValue(Function func) {
@@ -2376,7 +2506,7 @@ public final class AggregateFunctions {
           if (canonical != null) {
             String lookupKey = Identifier.lookupKey(canonical);
             if (labelLookup.containsKey(lookupKey)) {
-              return labelLookup.get(lookupKey);
+              return resolveScalarValue(labelLookup.get(lookupKey));
             }
           }
         }
@@ -2424,7 +2554,7 @@ public final class AggregateFunctions {
         return null;
       }
       String key = Identifier.lookupKey(name);
-      return key == null ? null : labelLookup.get(key);
+      return key == null ? null : resolveScalarValue(labelLookup.get(key));
     }
   }
 

@@ -101,6 +101,20 @@ cannot be determined, unqualified names remain inner; use an explicit qualifier 
 WITH declarations inside subqueries, including derived tables, keep their local scope and override physical
 tables or inherited CTEs with the same name.
 
+Scalar subqueries in grouped SELECT lists can reference outer grouping columns, including grouping columns
+omitted from the output. Each subquery uses the current group's values; NULL grouping keys and keys suppressed
+by grouping sets bind as NULL. Inner names take precedence over outer names. References to ungrouped outer
+columns are rejected, including when the outer input is empty.
+HAVING filters groups before select-list scalar subqueries run; a subquery alias referenced by HAVING is
+evaluated on demand and reused for that group's output. Only surviving groups contribute to inferred scalar
+result types. COUNT subqueries retain BIGINT metadata when no groups survive; other unknown scalar types
+continue to depend on returned values.
+HAVING evaluates AND/OR operands from left to right: AND stops after FALSE, and OR stops after TRUE.
+Skipped operands are not evaluated, so their errors are suppressed; reordering conditions can expose an error.
+Scalar subqueries must return exactly one column and at most one row. Violations raise SQLSyntaxErrorException
+with SQLState `42000` consistently in scalar expressions and HAVING, including empty results with multiple
+columns. An empty one-column result evaluates to NULL.
+
 Correlated subqueries reuse parsed query shapes and validated source schemas within one outer execution.
 Outer values are bound with their Java types and NULL values intact, and each evaluation reads fresh results.
 Simple physical-table subqueries also reuse their prepared plans; derived tables, joins, and CTEs rebuild
