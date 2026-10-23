@@ -3,9 +3,11 @@ package se.alipsa.jparq.engine.function;
 import java.math.BigDecimal;
 import java.sql.JDBCType;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import net.sf.jsqlparser.statement.select.Select;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SubqueryExecutor.SubqueryResult;
@@ -44,6 +46,8 @@ public final class ArrayFunctions {
    * Normalize ARRAY element types so that a single SQL ARRAY has a consistent
    * element type and nesting depth. Numeric leaves are promoted across sibling
    * arrays; NULLs and empty arrays do not constrain the inferred leaf type.
+   * Nested reference arrays, including stored Parquet array columns, are
+   * normalized to unmodifiable lists. Primitive arrays remain scalar values.
    *
    * @param values
    *          raw values
@@ -84,17 +88,17 @@ public final class ArrayFunctions {
         type.numeric = NumericType.promote(type.numeric, NumericType.of(number));
       } else if (value instanceof CharSequence) {
         candidate = String.class;
-      } else if (value instanceof List<?>) {
+      } else if (value instanceof List<?> || value instanceof Object[]) {
         candidate = List.class;
       } else {
         candidate = value.getClass();
       }
       type.family = determineObjectTarget(type.family, candidate);
-      if (value instanceof List<?> nestedValues) {
+      if (candidate == List.class) {
         if (type.nested == null) {
           type.nested = new ElementType();
         }
-        inferElementType(nestedValues, type.nested);
+        inferElementType(arrayValues(value), type.nested);
       }
     }
   }
@@ -119,12 +123,23 @@ public final class ArrayFunctions {
       } else if (type.family == String.class) {
         coerced.add(value.toString());
       } else if (type.family == List.class) {
-        coerced.add(coerceArrayValues((List<?>) value, type.nested));
+        coerced.add(coerceArrayValues(arrayValues(value), type.nested));
       } else {
         coerced.add(value);
       }
     }
     return Collections.unmodifiableList(coerced);
+  }
+
+  /**
+   * Views a validated nested array as a list without copying its elements.
+   *
+   * @param value
+   *          list or reference array
+   * @return list view of the array elements
+   */
+  private static List<?> arrayValues(Object value) {
+    return value instanceof Object[] array ? Arrays.asList(array) : (List<?>) value;
   }
 
   /**
@@ -151,13 +166,27 @@ public final class ArrayFunctions {
    *
    * @param family
    *          normalized Java element family
-   * @return SQL type name, or OTHER for an unmapped custom class
+   * @return SQL type name, or the simple Java name for an unmapped custom class
    */
   private static String sqlTypeName(Class<?> family) {
     if (family == Number.class) {
       return "NUMERIC";
     }
-    return JDBCType.valueOf(JdbcTypeMapper.mapJavaClassNameToJdbcType(family.getName())).getName();
+    if (Map.class.isAssignableFrom(family)) {
+      return "STRUCT";
+    }
+    JDBCType jdbcType = JDBCType.valueOf(JdbcTypeMapper.mapJavaClassNameToJdbcType(family.getName()));
+    if (jdbcType != JDBCType.OTHER) {
+      return jdbcType.getName();
+    }
+    return switch (family.getName()) {
+      case "java.time.LocalDate" -> "DATE";
+      case "java.time.LocalTime" -> "TIME";
+      case "java.time.LocalDateTime" -> "TIMESTAMP";
+      case "java.time.OffsetTime" -> "TIME_WITH_TIMEZONE";
+      case "java.time.OffsetDateTime", "java.time.ZonedDateTime", "java.time.Instant" -> "TIMESTAMP_WITH_TIMEZONE";
+      default -> family.getSimpleName();
+    };
   }
 
   /**

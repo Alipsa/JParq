@@ -226,7 +226,7 @@ class ArrayFunctionsTest {
   void throwsWhenObjectTypesDoNotMatch() {
     IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
         () -> ArrayFunctions.homogenizeArrayValues(Arrays.asList("one", new Dummy("two"))));
-    assertEquals("ARRAY elements must share a common type; found VARCHAR and OTHER", ex.getMessage());
+    assertEquals("ARRAY elements must share a common type; found VARCHAR and Dummy", ex.getMessage());
   }
 
   /** Uses SQL type names for numeric, temporal, and boolean incompatibilities. */
@@ -238,6 +238,49 @@ class ArrayFunctionsTest {
     var bool = assertThrows(IllegalArgumentException.class,
         () -> ArrayFunctions.homogenizeArrayValues(List.of("one", true)));
     assertEquals("ARRAY elements must share a common type; found VARCHAR and BOOLEAN", bool.getMessage());
+  }
+
+  /**
+   * Names modern temporal types and custom values without ambiguous OTHER
+   * diagnostics.
+   */
+  @Test
+  void namesModernTemporalTypes() {
+    for (var pair : List.of(Arguments.of(java.util.Map.of("x", 1), "STRUCT"),
+        Arguments.of(java.time.LocalDate.of(2026, 1, 1), "DATE"), Arguments.of(java.time.LocalTime.NOON, "TIME"),
+        Arguments.of(java.time.LocalDateTime.of(2026, 1, 1, 12, 0), "TIMESTAMP"),
+        Arguments.of(java.time.OffsetTime.parse("12:00:00Z"), "TIME_WITH_TIMEZONE"),
+        Arguments.of(java.time.OffsetDateTime.parse("2026-01-01T12:00:00Z"), "TIMESTAMP_WITH_TIMEZONE"),
+        Arguments.of(java.time.ZonedDateTime.parse("2026-01-01T12:00:00Z"), "TIMESTAMP_WITH_TIMEZONE"),
+        Arguments.of(java.time.Instant.EPOCH, "TIMESTAMP_WITH_TIMEZONE"))) {
+      var args = pair.get();
+      var failure = assertThrows(IllegalArgumentException.class,
+          () -> ArrayFunctions.homogenizeArrayValues(List.of("x", args[0])));
+      assertEquals("ARRAY elements must share a common type; found VARCHAR and " + args[1], failure.getMessage());
+    }
+  }
+
+  /**
+   * Treats reference arrays as nested arrays while retaining primitive binary
+   * values.
+   */
+  @Test
+  void normalizesReferenceArrays() {
+    assertEquals(List.of(List.of(new BigDecimal("1")), List.of(new BigDecimal("2.5"))),
+        ArrayFunctions.homogenizeArrayValues(List.of(new Integer[]{
+            1
+        }, List.of(new BigDecimal("2.5")))));
+    var failure = assertThrows(IllegalArgumentException.class,
+        () -> ArrayFunctions.homogenizeArrayValues(List.of(new Object[]{
+            1
+        }, new Object[]{
+            "x"
+        })));
+    assertEquals("42000", assertInstanceOf(SQLSyntaxErrorException.class, failure.getCause()).getSQLState());
+    byte[] binary = {
+        1, 2
+    };
+    assertEquals(List.of(binary), ArrayFunctions.homogenizeArrayValues(List.of(binary)));
   }
 
   /**
