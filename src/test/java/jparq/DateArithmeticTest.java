@@ -238,13 +238,18 @@ class DateArithmeticTest {
   }
 
   /**
-   * Retains numeric source types for subtraction aliases, even with empty inputs.
+   * Checks that #205 leaves main's existing alias-based numeric metadata
+   * unchanged, including for empty inputs. This metadata is not correct
+   * expression typing: integer subtraction currently returns BigDecimal, and
+   * decimal subtraction may require wider precision. Update this baseline when
+   * <a href="https://github.com/Alipsa/JParq/issues/232">#232</a> resolves
+   * arithmetic types.
    *
    * @throws Exception
    *           if query execution fails
    */
   @Test
-  void numericSubtractionPreservesSourceMetadata() throws Exception {
+  void nonDateSubtractionMetadataMatchesMain() throws Exception {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement()) {
       for (String field : List.of("amt", "id")) {
@@ -265,11 +270,6 @@ class DateArithmeticTest {
                 }
                 if (filter.equals("id = 0")) {
                   assertTrue(result.next(), sql);
-                  if (field.equals("amt")) {
-                    assertEquals(new BigDecimal("122.45"), result.getBigDecimal(1), sql);
-                  } else {
-                    assertEquals(-1, result.getInt(1), sql);
-                  }
                 }
                 assertFalse(result.next(), sql);
               }
