@@ -194,7 +194,7 @@ public final class ParquetTable {
    */
   private static RecordReader openShard(Shard shard, Configuration configuration, FilterPredicate predicate)
       throws IOException {
-    var builder = ParquetReader.<GenericRecord>builder(new AvroReadSupport<>(), new Path(shard.file().toURI()))
+    var builder = ParquetReader.<GenericRecord>builder(new PrunedAvroReadSupport<>(), new Path(shard.file().toURI()))
         .withConf(configurationFor(shard, configuration));
     if (predicate != null) {
       builder.withFilter(FilterCompat.get(predicate));

@@ -249,8 +249,8 @@ class QuantifiedArrayColumnTest {
   }
 
   /**
-   * Writes old-layout arrays to isolate comparison behavior from issue #217's
-   * modern-list projection problem.
+   * Writes legacy 2-level list arrays; ThreeLevelListLayoutTest covers the
+   * standard 3-level layout, so both physical layouts are exercised.
    *
    * @param directory
    *          dataset directory
