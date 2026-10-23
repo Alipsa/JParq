@@ -203,6 +203,9 @@ Expressions skipped by filtering or CASE branch selection are not evaluated.
 
 SQL syntax rejected by JSqlParser raises `SQLSyntaxErrorException` with SQLState `42000`. Syntax and numeric
 errors retain preparation and nested-query context in their messages and cause chains.
+Select-list scalar subquery failures also retain this classification when reported by `ResultSet.next()` or
+projection getters. Evaluation can be deferred until iteration or value access; `executeQuery()` succeeding
+does not guarantee that a scalar subquery is valid.
 
 Escape an apostrophe in a SQL string literal by doubling it: `'O''Brien'` evaluates to `O'Brien`.
 JDBC `setString` values are escaped automatically. Literal decoding leaves dollar-quoted contents unchanged,
