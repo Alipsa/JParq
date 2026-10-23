@@ -98,13 +98,7 @@ final class GroupedScalarSubquery {
     var result = executor.executeCorrelated(select, mappings.outerQualifiers(), candidates,
         mappings.qualifierColumnMapping(),
         (qualifier, column) -> groupValues.get(groupIndexes.get(new QualifiedColumn(qualifier, column))));
-    if (result.columnLabels().size() != 1) {
-      throw SqlExceptions.syntaxFailure("Scalar subquery must return exactly one column");
-    }
-    if (result.rows().size() > 1) {
-      throw SqlExceptions.syntaxFailure("Scalar subquery returned more than one row");
-    }
-    return result.rows().isEmpty() ? null : result.rows().getFirst().getFirst();
+    return result.scalarValue();
   }
 
   /**

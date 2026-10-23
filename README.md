@@ -111,6 +111,9 @@ result types. COUNT subqueries retain BIGINT metadata when no groups survive; ot
 continue to depend on returned values.
 HAVING evaluates AND/OR operands from left to right: AND stops after FALSE, and OR stops after TRUE.
 Skipped operands are not evaluated, so their errors are suppressed; reordering conditions can expose an error.
+Scalar subqueries must return exactly one column and at most one row. Violations raise SQLSyntaxErrorException
+with SQLState `42000` consistently in scalar expressions and HAVING, including empty results with multiple
+columns. An empty one-column result evaluates to NULL.
 
 Correlated subqueries reuse parsed query shapes and validated source schemas within one outer execution.
 Outer values are bound with their Java types and NULL values intact, and each evaluation reads fresh results.

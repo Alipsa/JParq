@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.sql.SQLSyntaxErrorException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -123,6 +124,30 @@ class GroupedScalarSubqueryTest {
         SQLException error = assertThrows(SQLException.class, () -> rows(connection, sql), sql);
         assertEquals("42000", error.getSQLState(), sql);
       }
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void scalarCardinalityErrorsMatchAcrossSelectAndHaving(boolean predicate, boolean projection) throws Exception {
+    try (var connection = connect(predicate, projection)) {
+      for (String scalar : List.of("SELECT v FROM t", "SELECT v, v FROM t WHERE v = 2",
+          "SELECT v, v FROM t WHERE v > 10")) {
+        for (String sql : List.of("SELECT (" + scalar + ") FROM o", "SELECT n, (" + scalar + ") FROM o GROUP BY n",
+            "SELECT n FROM o GROUP BY n HAVING (" + scalar + ") = 2")) {
+          SQLSyntaxErrorException error = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, sql), sql);
+          assertEquals("42000", error.getSQLState(), sql);
+          assertTrue(error.getMessage().contains(scalar.contains("v, v") ? "one column" : "one row"),
+              error.getMessage());
+        }
+      }
+      assertEquals(List.of(List.of(1), List.of(2), List.of(3)), rows(connection,
+          "SELECT n FROM o GROUP BY n HAVING (SELECT v FROM t WHERE v = 2) = 2 AND n IS NOT NULL ORDER BY n"));
+      assertEquals(List.of(), rows(connection, "SELECT n FROM o GROUP BY n HAVING (SELECT v FROM t WHERE v > 10) = 2"));
+      assertEquals(List.of(),
+          rows(connection, "SELECT n FROM o GROUP BY n HAVING (SELECT v FROM t WHERE v IS NULL) = 2"));
     }
   }
 
