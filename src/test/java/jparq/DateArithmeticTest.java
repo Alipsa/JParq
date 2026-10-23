@@ -243,7 +243,8 @@ class DateArithmeticTest {
    * expression typing: integer subtraction currently returns BigDecimal, and
    * decimal subtraction may require wider precision. Update this baseline when
    * <a href="https://github.com/Alipsa/JParq/issues/232">#232</a> resolves
-   * arithmetic types.
+   * arithmetic types. The converting-getter value assertions remain valid when
+   * result types change.
    *
    * @throws Exception
    *           if query execution fails
@@ -270,6 +271,11 @@ class DateArithmeticTest {
                 }
                 if (filter.equals("id = 0")) {
                   assertTrue(result.next(), sql);
+                  if (field.equals("amt")) {
+                    assertEquals(new BigDecimal("122.45"), result.getBigDecimal(1), sql);
+                  } else {
+                    assertEquals(-1, result.getInt(1), sql);
+                  }
                 }
                 assertFalse(result.next(), sql);
               }
