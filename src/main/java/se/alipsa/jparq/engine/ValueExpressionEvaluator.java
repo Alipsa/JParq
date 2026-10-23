@@ -634,6 +634,10 @@ public final class ValueExpressionEvaluator {
         return temporal;
       }
     }
+    if (DateTimeFunctions.isTemporal(leftVal) || DateTimeFunctions.isTemporal(rightVal)) {
+      throw syntaxFailure("Unsupported temporal arithmetic " + op + " between " + leftVal.getClass().getSimpleName()
+          + " and " + rightVal.getClass().getSimpleName() + "; use an explicit INTERVAL for date/time offsets");
+    }
     return AggregateFunctions.calculate(leftVal, rightVal, op);
   }
 

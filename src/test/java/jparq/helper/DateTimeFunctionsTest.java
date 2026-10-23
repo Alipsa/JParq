@@ -258,10 +258,10 @@ public class DateTimeFunctionsTest {
   void testMinusTemporalMinusTemporalDate() {
     Date d1 = Date.valueOf("2023-01-05");
     Date d2 = Date.valueOf("2023-01-02");
-    TemporalInterval result = (TemporalInterval) DateTimeFunctions.minus(d1, d2);
-    assertNotNull(result);
-    assertEquals(Period.ofDays(3), result.period());
-    assertEquals(Duration.ZERO, result.duration());
+    assertEquals(3L, DateTimeFunctions.minus(d1, d2));
+    assertEquals(-3L, DateTimeFunctions.minus(d2, d1));
+    assertEquals(0L, DateTimeFunctions.minus(d1, d1));
+    assertEquals(3L, DateTimeFunctions.minus(d1.toLocalDate(), d2));
   }
 
   @Test

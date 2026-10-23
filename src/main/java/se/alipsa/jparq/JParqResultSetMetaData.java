@@ -10,7 +10,11 @@ import java.util.Map;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.CastExpression;
+import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
+import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
+import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
@@ -315,6 +319,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    *         computed
    */
   private Schema.Field resolveField(int column) {
+    if (expressionAtColumn(column) instanceof Subtraction && resolveComputedColumnType(column) == Types.BIGINT) {
+      return null;
+    }
     if (schema == null) {
       return null;
     }
@@ -347,6 +354,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
       return Types.BOOLEAN;
     }
     return switch (expression) {
+      case Subtraction subtraction when isDateExpression(subtraction.getLeftExpression())
+          && isDateExpression(subtraction.getRightExpression()) ->
+        Types.BIGINT;
       case AnalyticExpression analytic -> resolveAnalyticFunctionType(analytic);
       case ArrayConstructor arrayConstructor -> Types.ARRAY;
       case net.sf.jsqlparser.expression.Function func when func.getName() != null
@@ -354,6 +364,33 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
         Types.ARRAY;
       case null, default -> Types.OTHER;
     };
+  }
+
+  /**
+   * Recognizes DATE operands without evaluating row values.
+   *
+   * @param expression
+   *          operand expression
+   * @return whether its declared type is DATE
+   */
+  private boolean isDateExpression(Expression expression) {
+    if (expression instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
+      return isDateExpression(list.getFirst());
+    }
+    if (expression instanceof DateValue) {
+      return true;
+    }
+    if (expression instanceof DateTimeLiteralExpression literal) {
+      return literal.getType() == DateTimeLiteralExpression.DateTime.DATE;
+    }
+    if (expression instanceof CastExpression cast) {
+      return cast.getColDataType() != null && "DATE".equalsIgnoreCase(cast.getColDataType().getDataType());
+    }
+    if (expression instanceof Column column) {
+      Schema.Field field = resolveSourceField(column);
+      return field != null && JdbcTypeMapper.mapSchemaToJdbcType(field.schema()) == Types.DATE;
+    }
+    return false;
   }
 
   private String resolveComputedColumnClassName(int column) {
