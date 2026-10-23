@@ -534,7 +534,8 @@ The following SQL statements are supported:
   - Numeric functions (abs, ceil/ceiling, floor, round, sqrt, truncate/trunc, mod, power/pow, exp, log, log10,
     rand/random, sign, sin, cos, tan, cot, asin, acos, atan, atan2, degrees, radians, pi)
   - ARRAY constructor function
-    - Non-NULL elements must share a common type. Numeric elements are promoted to a common numeric type;
+    - Non-NULL elements must share a common type and nesting depth. Numeric elements, including leaves across
+      sibling nested arrays, are promoted to a common numeric type;
       mixing numbers with nested arrays, strings, or other incompatible types raises `SQLSyntaxErrorException`
       with SQLState `42000` when evaluated. NULL elements are preserved.
 - comments (line --) and block (/* */)

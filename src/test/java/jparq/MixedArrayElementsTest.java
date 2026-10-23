@@ -46,7 +46,8 @@ class MixedArrayElementsTest {
   @ParameterizedTest
   @ValueSource(strings = {
       "ARRAY[4,[6]]", "ARRAY[[6],4]", "ARRAY[NULL,4,[6],NULL]", "ARRAY[4,ARRAY[6]]", "ARRAY[4,'6']", "ARRAY['4',6]",
-      "ARRAY[4,TRUE]", "ARRAY[[4,[6]]]"
+      "ARRAY[4,TRUE]", "ARRAY[[4,[6]]]", "ARRAY[[4],['6']]", "ARRAY[[4],[[6]]]", "ARRAY[[NULL,4],NULL,['6',NULL]]",
+      "ARRAY[[[4]],[[TRUE]]]"
   })
   void rejectsMixedElements(String array) throws Exception {
     for (boolean pushdown : List.of(true, false)) {
@@ -108,12 +109,16 @@ class MixedArrayElementsTest {
         var statement = connection.createStatement();
         var result = statement.executeQuery("""
             SELECT ARRAY[NULL,4,6.5,NULL] AS a, ARRAY[[4],[6]] AS b,
-                   CASE WHEN TRUE THEN 7 ELSE ARRAY[4,[6]] END AS c
+                   CASE WHEN TRUE THEN 7 ELSE ARRAY[4,[6]] END AS c, ARRAY[[1],[2.5]] AS d,
+                   ARRAY[[[1]],[[2.5]]] AS e
             """)) {
       assertTrue(result.next());
       assertEquals(Arrays.asList(null, new BigDecimal("4"), new BigDecimal("6.5"), null), result.getObject(1));
       assertEquals(List.of(List.of(4L), List.of(6L)), result.getObject(2));
       assertEquals(7L, result.getObject(3));
+      assertEquals(List.of(List.of(new BigDecimal("1")), List.of(new BigDecimal("2.5"))), result.getObject(4));
+      assertEquals(List.of(List.of(List.of(new BigDecimal("1"))), List.of(List.of(new BigDecimal("2.5")))),
+          result.getObject(5));
       assertFalse(result.next());
     }
   }

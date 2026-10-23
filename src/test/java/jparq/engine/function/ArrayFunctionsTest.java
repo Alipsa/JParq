@@ -127,7 +127,7 @@ class ArrayFunctionsTest {
   }
 
   /**
-   * Verify that homogeneous lists are accepted unchanged and remain unmodifiable.
+   * Verify that homogeneous lists preserve their values and remain unmodifiable.
    */
   @Test
   void preservesHomogeneousLists() {
@@ -169,7 +169,9 @@ class ArrayFunctionsTest {
     return Stream.of(Arguments.of(4L, List.of(6L)), Arguments.of(BigDecimal.ONE, List.of()), Arguments.of(4L, "6"),
         Arguments.of(4L, true), Arguments.of(4L, new Object[]{
             6L
-        }), Arguments.of(List.of(4L), "6"));
+        }), Arguments.of(List.of(4L), "6"), Arguments.of(List.of(4L), List.of("6")),
+        Arguments.of(List.of(4L), List.of(List.of(6L))), Arguments.of(List.of(List.of(4L)), List.of(List.of(true))),
+        Arguments.of(4L, java.sql.Date.valueOf("2026-01-01")));
   }
 
   /** Preserves NULL values while promoting compatible numeric elements. */
@@ -180,13 +182,41 @@ class ArrayFunctionsTest {
   }
 
   /**
+   * Promotes numeric leaves across sibling arrays while preserving NULLs and
+   * empty arrays.
+   */
+  @Test
+  void promotesNestedNumericValues() {
+    var values = Arrays.<Object>asList(null, Arrays.asList(null, 1L), List.of(), List.of(new BigDecimal("2.5")));
+    var normalized = ArrayFunctions.homogenizeArrayValues(values);
+    assertEquals(
+        Arrays.asList(null, Arrays.asList(null, new BigDecimal("1")), List.of(), List.of(new BigDecimal("2.5"))),
+        normalized);
+    assertThrows(UnsupportedOperationException.class, () -> ((List<?>) normalized.get(1)).clear());
+    assertEquals(List.of(List.of(List.of(new BigDecimal("1"))), List.of(List.of(new BigDecimal("2.5")))),
+        ArrayFunctions.homogenizeArrayValues(List.of(List.of(List.of(1L)), List.of(List.of(new BigDecimal("2.5"))))));
+  }
+
+  /**
+   * Normalizes character sequences and preserves all-NULL leaves inside nested
+   * arrays.
+   */
+  @Test
+  void normalizesNestedStringsAndNulls() {
+    assertEquals(Arrays.asList(Arrays.asList(null, null), List.of("a", "b")),
+        ArrayFunctions.homogenizeArrayValues(List.of(Arrays.asList(null, null), List.of(new StringBuilder("a"), "b"))));
+    assertEquals(List.of(Arrays.asList(null, null), List.of()),
+        ArrayFunctions.homogenizeArrayValues(List.of(Arrays.asList(null, null), List.of())));
+  }
+
+  /**
    * Mixing lists with scalars should trigger an error explaining the mismatch.
    */
   @Test
   void throwsWhenMixingListsAndScalars() {
     IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
         () -> ArrayFunctions.homogenizeArrayValues(Arrays.asList(List.of(1), "scalar")));
-    assertTrue(ex.getMessage() != null && ex.getMessage().toLowerCase().contains("list"));
+    assertEquals("ARRAY elements must share a common type; found ARRAY and VARCHAR", ex.getMessage());
   }
 
   /**
@@ -196,8 +226,18 @@ class ArrayFunctionsTest {
   void throwsWhenObjectTypesDoNotMatch() {
     IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
         () -> ArrayFunctions.homogenizeArrayValues(Arrays.asList("one", new Dummy("two"))));
-    assertTrue(ex.getMessage().contains("java.lang.String"));
-    assertTrue(ex.getMessage().contains(Dummy.class.getName()));
+    assertEquals("ARRAY elements must share a common type; found VARCHAR and OTHER", ex.getMessage());
+  }
+
+  /** Uses SQL type names for numeric, temporal, and boolean incompatibilities. */
+  @Test
+  void usesSqlTypeNamesInDiagnostics() {
+    var temporal = assertThrows(IllegalArgumentException.class,
+        () -> ArrayFunctions.homogenizeArrayValues(List.of(4L, java.sql.Date.valueOf("2026-01-01"))));
+    assertEquals("ARRAY elements must share a common type; found NUMERIC and DATE", temporal.getMessage());
+    var bool = assertThrows(IllegalArgumentException.class,
+        () -> ArrayFunctions.homogenizeArrayValues(List.of("one", true)));
+    assertEquals("ARRAY elements must share a common type; found VARCHAR and BOOLEAN", bool.getMessage());
   }
 
   /**
