@@ -1,16 +1,24 @@
 package jparq.engine.function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertIterableEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.sql.SQLSyntaxErrorException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.stream.Stream;
 import net.sf.jsqlparser.statement.select.Select;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.SubqueryExecutor.SubqueryResult;
 import se.alipsa.jparq.engine.function.ArrayFunctions;
@@ -128,6 +136,47 @@ class ArrayFunctionsTest {
     List<Object> homogenized = ArrayFunctions.homogenizeArrayValues(Arrays.asList(listA, listB));
     assertEquals(List.of(listA, listB), homogenized);
     assertThrows(UnsupportedOperationException.class, () -> homogenized.add(List.of(4)));
+  }
+
+  /**
+   * Rejects incompatible element families before conversion, in both orders and
+   * with NULL elements interspersed.
+   *
+   * @param first
+   *          first incompatible element
+   * @param second
+   *          second incompatible element
+   */
+  @ParameterizedTest
+  @MethodSource("incompatibleElements")
+  void rejectsIncompatibleElements(Object first, Object second) {
+    var values = new ArrayList<Object>(Arrays.asList(null, first, null, second, null));
+    for (int order = 0; order < 2; order++) {
+      var failure = assertThrows(IllegalArgumentException.class, () -> ArrayFunctions.homogenizeArrayValues(values));
+      assertTrue(failure.getMessage().contains("ARRAY elements must share a common type"), failure.getMessage());
+      var sql = assertInstanceOf(SQLSyntaxErrorException.class, failure.getCause());
+      assertEquals("42000", sql.getSQLState());
+      Collections.reverse(values);
+    }
+  }
+
+  /**
+   * Supplies numeric and nonnumeric mismatches that must fail before conversion.
+   *
+   * @return incompatible non-NULL element pairs
+   */
+  private static Stream<Arguments> incompatibleElements() {
+    return Stream.of(Arguments.of(4L, List.of(6L)), Arguments.of(BigDecimal.ONE, List.of()), Arguments.of(4L, "6"),
+        Arguments.of(4L, true), Arguments.of(4L, new Object[]{
+            6L
+        }), Arguments.of(List.of(4L), "6"));
+  }
+
+  /** Preserves NULL values while promoting compatible numeric elements. */
+  @Test
+  void preservesNullsDuringNumericPromotion() {
+    assertEquals(Arrays.asList(null, new BigDecimal("4"), new BigDecimal("6.5"), null),
+        ArrayFunctions.homogenizeArrayValues(Arrays.asList(null, 4L, new BigDecimal("6.5"), null)));
   }
 
   /**

@@ -6,6 +6,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import net.sf.jsqlparser.statement.select.Select;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SubqueryExecutor.SubqueryResult;
 
 /**
@@ -25,7 +26,7 @@ public final class ArrayFunctions {
    *          the subquery used in error diagnostics
    * @return homogenized first-column values, or an empty array for no columns
    * @throws IllegalArgumentException
-   *           if the result has multiple columns
+   *           if the result has multiple columns or incompatible element types
    */
   public static List<Object> fromSubquery(SubqueryResult result, Select subSelect) {
     if (result.columnLabels().isEmpty()) {
@@ -45,6 +46,9 @@ public final class ArrayFunctions {
    *          raw values
    * @return homogenized list or {@code List.of()} when {@code values} is null or
    *         empty
+   * @throws IllegalArgumentException
+   *           if non-NULL elements cannot share a common type; the cause carries
+   *           SQLState 42000
    */
   public static List<Object> homogenizeArrayValues(List<Object> values) {
     if (values == null || values.isEmpty()) {
@@ -57,6 +61,7 @@ public final class ArrayFunctions {
         continue;
       }
       if (value instanceof Number number) {
+        objectTarget = determineObjectTarget(objectTarget, Number.class);
         numericTarget = NumericType.promote(numericTarget, NumericType.of(number));
         continue;
       }
@@ -102,11 +107,22 @@ public final class ArrayFunctions {
     return Collections.unmodifiableList(coerced);
   }
 
+  /**
+   * Resolves a common element family, treating all numeric values as compatible.
+   *
+   * @param current
+   *          previously established family, or null for the first non-NULL value
+   * @param candidate
+   *          family of the next non-NULL element
+   * @return the common element family
+   * @throws IllegalArgumentException
+   *           if the families differ; the cause carries SQLState 42000
+   */
   private static Class<?> determineObjectTarget(Class<?> current, Class<?> candidate) {
     if (current == null || current == candidate) {
       return candidate;
     }
-    throw new IllegalArgumentException(
+    throw SqlExceptions.syntaxFailure(
         "ARRAY elements must share a common type; found " + current.getName() + " and " + candidate.getName());
   }
 
