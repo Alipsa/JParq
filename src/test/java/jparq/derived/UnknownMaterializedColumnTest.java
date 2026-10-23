@@ -60,7 +60,9 @@ class UnknownMaterializedColumnTest {
         }
       }
       for (String filter : List.of("id = 1", "id < 0")) {
-        for (String sql : List.of(
+        for (String sql : List.of("SELECT x.id FROM optimized x JOIN (VALUES (1)) y(a) ON optimized.id = y.a",
+            "WITH c AS (SELECT id FROM optimized WHERE " + filter
+                + ") SELECT x.id FROM c x JOIN (VALUES (1)) y(a) ON c.id = y.a",
             "SELECT zzz FROM (SELECT id FROM optimized WHERE " + filter + ") x JOIN (SELECT 1 AS a) y ON TRUE",
             "SELECT x.zzz FROM (SELECT id FROM optimized WHERE " + filter + ") x JOIN (SELECT 1 AS a) y ON TRUE",
             "WITH c AS (SELECT id FROM optimized WHERE " + filter

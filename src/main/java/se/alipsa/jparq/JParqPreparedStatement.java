@@ -377,6 +377,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
           } else if (baseIsInformationSchemaTables || baseIsInformationSchemaColumns) {
+            rejectTableColumnAliases(baseRef);
             CteResult resolved = baseIsInformationSchemaTables
                 ? materializeInformationSchemaTables()
                 : materializeInformationSchemaColumns();
@@ -392,7 +393,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
           } else {
-            rejectPhysicalColumnAliases(baseRef);
+            rejectTableColumnAliases(baseRef);
             tmpConf = HadoopConfigurations.create();
             configureParquetFiltering(tmpConf);
 
@@ -1533,6 +1534,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         continue;
       }
       if (InformationSchemaTables.matchesTableReference(ref.tableName())) {
+        rejectTableColumnAliases(ref);
         CteResult infoResult = materializeInformationSchemaTables();
         String infoName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
         List<GenericRecord> rows = applySampleToRows(ref.tableSample(), infoResult.rows());
@@ -1543,6 +1545,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         continue;
       }
       if (InformationSchemaColumns.matchesTableReference(ref.tableName())) {
+        rejectTableColumnAliases(ref);
         CteResult infoResult = materializeInformationSchemaColumns();
         String infoName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
         List<GenericRecord> rows = applySampleToRows(ref.tableSample(), infoResult.rows());
@@ -1579,7 +1582,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         continue;
       }
       String tableName = ref.tableName();
-      rejectPhysicalColumnAliases(ref);
+      rejectTableColumnAliases(ref);
       if (tableName == null || tableName.isBlank()) {
         throw new SQLException("JOIN requires explicit table names");
       }
@@ -1652,16 +1655,20 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Rejects physical column alias lists until positional physical binding is
-   * implemented.
+   * Rejects alias lists on table inputs without positional alias binding.
    *
    * @param reference
-   *          resolved physical table reference, or null
+   *          resolved physical or information_schema reference, or null
    * @throws SQLException
-   *           if a physical input declares column aliases
+   *           if an unsupported table input declares column aliases
    */
-  private static void rejectPhysicalColumnAliases(SqlParser.TableReference reference) throws SQLException {
+  private static void rejectTableColumnAliases(SqlParser.TableReference reference) throws SQLException {
     if (reference != null && !reference.columnAliases().isEmpty()) {
+      if (InformationSchemaTables.matchesTableReference(reference.tableName())
+          || InformationSchemaColumns.matchesTableReference(reference.tableName())) {
+        throw SqlExceptions.syntaxFailure("Column alias lists on information_schema inputs are not supported; "
+            + "use a derived table or CTE instead");
+      }
       throw SqlExceptions.syntaxFailure(
           "Column alias lists on physical tables are not supported (#263); " + "use a derived table or CTE instead");
     }

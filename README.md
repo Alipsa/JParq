@@ -138,8 +138,13 @@ CTE reference alias lists bind by output position in both `FROM c AS x(a, b)` an
 including wildcard output, grouping, recursive CTEs, joins, and nested queries.
 Column alias lists on physical Parquet tables are currently rejected with SQLState `42000`; use a derived
 table or CTE instead (tracked in [#263](https://github.com/Alipsa/JParq/issues/263)).
+Alias lists on `information_schema.tables` and `information_schema.columns` are also explicitly rejected;
+wrap these inputs in a derived table or CTE to rename their columns.
 Nonparameterized single-input queries validate during preparation; joins validate when their inputs are
 built during execution. ON conditions can reference only columns from inputs joined so far.
+In ON conditions, a table alias hides the original table or CTE name: use `e.id`, rather than `employees.id`,
+after `FROM employees e`. Other clauses retain their existing qualifier resolution; consistency is tracked
+in [#261](https://github.com/Alipsa/JParq/issues/261).
 
 Recursive CTEs retain the anchor's numeric types and decimal precision and scale. Recursive values that require
 fractional truncation or decimal rounding, or exceed integer ranges or decimal precision, fail with `SQLException`
