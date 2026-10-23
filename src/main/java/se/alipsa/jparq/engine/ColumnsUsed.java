@@ -1,7 +1,10 @@
 package se.alipsa.jparq.engine;
 
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
+import java.util.function.Consumer;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.TranscodingFunction;
@@ -55,6 +58,19 @@ public final class ColumnsUsed {
   }
 
   /**
+   * Retains table qualifiers while collecting references in the current scope.
+   *
+   * @param expression
+   *          expression to inspect, or null
+   * @return column nodes without references inside nested queries
+   */
+  public static List<Column> referencesInScope(Expression expression) {
+    List<Column> columns = new ArrayList<>();
+    walk(expression, false, columns::add);
+    return List.copyOf(columns);
+  }
+
+  /**
    * Walks an expression with the requested query-scope boundary.
    *
    * @param where
@@ -64,10 +80,25 @@ public final class ColumnsUsed {
    * @return referenced column names
    */
   private static Set<String> collect(Expression where, boolean includeSubqueries) {
-    if (where == null) {
-      return Set.of();
-    }
     LinkedHashSet<String> cols = new LinkedHashSet<>();
+    walk(where, includeSubqueries, column -> cols.add(column.getColumnName()));
+    return cols;
+  }
+
+  /**
+   * Visits columns with an explicit query-scope boundary.
+   *
+   * @param where
+   *          expression to inspect
+   * @param includeSubqueries
+   *          whether nested expressions should be visited
+   * @param consumer
+   *          receiver for each column reference
+   */
+  private static void walk(Expression where, boolean includeSubqueries, Consumer<Column> consumer) {
+    if (where == null) {
+      return;
+    }
     ExpressionVisitorAdapter<Void> walker = new ExpressionVisitorAdapter<Void>() {
       @Override
       public <S> Void visit(net.sf.jsqlparser.statement.select.Select select, S context) {
@@ -82,7 +113,7 @@ public final class ColumnsUsed {
       @Override
       public <S> Void visit(Column column, S context) {
         if (!SqlParser.isTimeKeyword(column.getColumnName())) {
-          cols.add(column.getColumnName());
+          consumer.accept(column);
         }
         return null;
       }
@@ -91,7 +122,7 @@ public final class ColumnsUsed {
       public <S> Void visit(TranscodingFunction convert, S context) {
         SqlParser.ConvertProcessingResult result = SqlParser.analyzeConvertFunction(convert);
         if (result.syntheticColumnName() != null) {
-          cols.add(result.syntheticColumnName());
+          consumer.accept(new Column(result.syntheticColumnName()));
           return null;
         }
         if (result.processInner() && convert != null) {
@@ -104,6 +135,5 @@ public final class ColumnsUsed {
       }
     };
     where.accept(walker);
-    return cols;
   }
 }

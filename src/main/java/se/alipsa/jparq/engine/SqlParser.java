@@ -1348,10 +1348,9 @@ public final class SqlParser {
       CommonTableExpression cte = resolveCommonTableExpression(t, cteLookup);
       Map<String, String> mapping = Map.of();
       Select innerSelect = null;
-      List<String> columnAliases = List.of();
+      List<String> columnAliases = extractAliasColumns(t.getAlias());
+      validateDerivedColumnAliases(columnAliases);
       if (cte != null) {
-        columnAliases = extractAliasColumns(t.getAlias());
-        validateDerivedColumnAliases(columnAliases);
         if (cte.query() instanceof Select selectQuery) {
           innerSelect = selectQuery;
           mapping = buildColumnMapping(selectQuery);
@@ -1674,13 +1673,11 @@ public final class SqlParser {
       }
     }
 
-    String tableName = aliasName != null ? aliasName : info.tableName();
+    String tableName = info.tableName();
     String tableAlias = aliasName != null ? aliasName : info.tableAlias();
     return new FromInfo(info.schemaName(), tableName, tableAlias, mapping, info.innerSelect(), info.subquerySql(),
         info.commonTableExpression(), valueTable, info.unnest(), info.lateral(), info.tableSample(),
-        (info.subquerySql() != null || info.commonTableExpression() != null) && !aliasColumns.isEmpty()
-            ? aliasColumns
-            : info.columnAliases());
+        !aliasColumns.isEmpty() ? aliasColumns : info.columnAliases());
   }
 
   /**

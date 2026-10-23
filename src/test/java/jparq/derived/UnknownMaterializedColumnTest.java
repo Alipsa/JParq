@@ -69,6 +69,9 @@ class UnknownMaterializedColumnTest {
                 + ") x JOIN (VALUES (1)) y(a) ON x.id = y.a AND zzz = 1",
             "SELECT x.id FROM (SELECT id FROM optimized WHERE " + filter
                 + ") x JOIN (VALUES (1)) y(a) ON zzz = 1 JOIN (VALUES (1)) z(zzz) ON TRUE",
+            "SELECT x.id FROM (SELECT id FROM optimized WHERE " + filter
+                + ") x JOIN (VALUES (1)) y(a) ON y.a = z.id JOIN (VALUES (1)) z(id) ON TRUE",
+            "SELECT x.id FROM (SELECT id FROM optimized WHERE " + filter + ") x JOIN (VALUES (1)) y(a) ON x.a = y.a",
             "SELECT x.id FROM (SELECT id FROM optimized WHERE " + filter + ") x(a) JOIN (SELECT 1 AS b) y ON TRUE")) {
           SQLException exception = assertThrows(SQLException.class, () -> {
             try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {

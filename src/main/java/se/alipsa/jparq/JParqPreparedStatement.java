@@ -392,6 +392,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
           } else {
+            rejectPhysicalColumnAliases(baseRef);
             tmpConf = HadoopConfigurations.create();
             configureParquetFiltering(tmpConf);
 
@@ -1578,6 +1579,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         continue;
       }
       String tableName = ref.tableName();
+      rejectPhysicalColumnAliases(ref);
       if (tableName == null || tableName.isBlank()) {
         throw new SQLException("JOIN requires explicit table names");
       }
@@ -1624,19 +1626,44 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private void validateJoinConditions(List<JoinRecordReader.JoinTable> tables) throws SQLException {
     Set<String> available = new LinkedHashSet<>();
+    Map<String, Set<String>> qualified = new LinkedHashMap<>();
     for (JoinRecordReader.JoinTable table : tables) {
+      Set<String> columns = new LinkedHashSet<>();
       for (Field field : table.schema().getFields()) {
-        available.add(MaterializedNames.lookupKey(field));
+        columns.add(MaterializedNames.lookupKey(field));
       }
+      available.addAll(columns);
+      String qualifier = table.alias() == null ? table.tableName() : table.alias();
+      qualified.put(JParqUtil.normalizeQualifier(qualifier), columns);
       Set<String> missing = new LinkedHashSet<>();
-      for (String column : ColumnsUsed.inScope(table.joinCondition())) {
-        if (!containsColumn(available, normalizeColumnKey(column))) {
-          missing.add(column);
+      for (Column column : ColumnsUsed.referencesInScope(table.joinCondition())) {
+        String referenceQualifier = column.getTable() == null ? null : column.getTable().getName();
+        Set<String> visible = referenceQualifier == null || referenceQualifier.isBlank()
+            ? available
+            : qualified.get(JParqUtil.normalizeQualifier(referenceQualifier));
+        if (visible == null || !containsColumn(visible, normalizeColumnKey(column.getColumnName()))) {
+          missing.add(column.toString());
         }
       }
       if (!missing.isEmpty()) {
         throw SqlExceptions.syntaxFailure("Missing columns in JOIN condition: " + String.join(", ", missing));
       }
+    }
+  }
+
+  /**
+   * Rejects physical column alias lists until positional physical binding is
+   * implemented.
+   *
+   * @param reference
+   *          resolved physical table reference, or null
+   * @throws SQLException
+   *           if a physical input declares column aliases
+   */
+  private static void rejectPhysicalColumnAliases(SqlParser.TableReference reference) throws SQLException {
+    if (reference != null && !reference.columnAliases().isEmpty()) {
+      throw SqlExceptions.syntaxFailure(
+          "Column alias lists on physical tables are not supported (#263); " + "use a derived table or CTE instead");
     }
   }
 

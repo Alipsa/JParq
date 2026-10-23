@@ -135,8 +135,9 @@ Derived tables and CTEs validate column references against their visible output 
 inputs. Unknown names and columns replaced by a column alias list raise `SQLSyntaxErrorException` with
 SQLState `42000`, naming the missing column; generated internal Avro names are not visible SQL columns.
 CTE reference alias lists bind by output position in both `FROM c AS x(a, b)` and `FROM (c) x(a, b)`,
-including wildcard output, grouping, recursive CTEs, and joins. Renamed CTE rows are cached within their
-own materialization and are not reused across fresh correlated or recursive results.
+including wildcard output, grouping, recursive CTEs, joins, and nested queries.
+Column alias lists on physical Parquet tables are currently rejected with SQLState `42000`; use a derived
+table or CTE instead (tracked in [#263](https://github.com/Alipsa/JParq/issues/263)).
 Nonparameterized single-input queries validate during preparation; joins validate when their inputs are
 built during execution. ON conditions can reference only columns from inputs joined so far.
 
