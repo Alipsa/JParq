@@ -147,7 +147,9 @@ with SQLState `42000`, including for NULL inputs and empty results. Casts withou
 
 `DATE - DATE` returns the signed calendar-day difference as a Java `Long` (JDBC `BIGINT`),
 including through derived tables and CTEs. For example, `DATE '2024-03-01' - DATE '2024-02-28'`
-returns `2`. NULL operands produce NULL. Date/time offsets require an explicit `INTERVAL`:
+returns `2`. NULL operands produce NULL. Day counts cannot be compared with or added to
+`INTERVAL` values; these operations raise SQLState `42000`. Compare against numeric days instead,
+for example `d - DATE '2024-02-01' > 7`. Date/time offsets require an explicit `INTERVAL`:
 `DATE '2024-01-01' + INTERVAL '1 day'` is supported; `DATE '2024-01-01' + 1` and other
 unsupported temporal arithmetic raise `SQLException` with SQLState `42000` when evaluated.
 

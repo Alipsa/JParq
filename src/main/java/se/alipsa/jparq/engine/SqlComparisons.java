@@ -1,10 +1,13 @@
 package se.alipsa.jparq.engine;
 
+import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
+
 import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.util.Arrays;
 import java.util.Set;
+import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
  * SQL value comparisons shared by the expression evaluators.
@@ -37,6 +40,9 @@ public final class SqlComparisons {
    * @return negative when {@code l < r}, zero when equal, positive when greater
    * @throws NullPointerException
    *           if either value is null
+   * @throws IllegalArgumentException
+   *           if a number is compared with an interval; the cause carries
+   *           SQLState 42000
    */
   public static int typedCompare(Object l, Object r) {
     if (l instanceof Number ln && r instanceof Number rn) {
@@ -61,9 +67,12 @@ public final class SqlComparisons {
     if (l instanceof Date && r instanceof Date) {
       return Long.compare(((Date) l).getTime(), ((Date) r).getTime());
     }
-    if (l instanceof se.alipsa.jparq.helper.TemporalInterval li
-        && r instanceof se.alipsa.jparq.helper.TemporalInterval ri) {
+    if (l instanceof TemporalInterval li && r instanceof TemporalInterval ri) {
       return li.compareTo(ri);
+    }
+    if (l instanceof Number && r instanceof TemporalInterval || l instanceof TemporalInterval && r instanceof Number) {
+      throw syntaxFailure(
+          "Cannot compare a numeric day count with INTERVAL; compare DATE differences with numeric days");
     }
     return l.toString().compareTo(r.toString());
   }
@@ -122,6 +131,9 @@ public final class SqlComparisons {
    *          right-hand value (may be {@code null})
    * @return the comparison result, or {@code null} when either side is NULL or
    *         the values cannot be compared
+   * @throws IllegalArgumentException
+   *           if a number is compared with an interval; the cause carries
+   *           SQLState 42000
    */
   public static Integer compareOrUnknown(Object left, Object right) {
     if (left == null || right == null) {
@@ -130,6 +142,9 @@ public final class SqlComparisons {
     try {
       return typedCompare(left, right);
     } catch (RuntimeException e) {
+      if (SqlExceptions.findSqlStateFailure(e) != null) {
+        throw e;
+      }
       return null;
     }
   }

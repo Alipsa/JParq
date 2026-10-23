@@ -429,7 +429,7 @@ public class JParqResultSet extends ResultSetAdapter {
       }
       this.rowNum = 0;
     } catch (Exception e) {
-      throw new SQLException("Failed reading first parquet record", e);
+      throw SqlExceptions.wrap("Failed reading first parquet record", e);
     }
   }
 

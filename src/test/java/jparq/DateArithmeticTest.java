@@ -68,7 +68,9 @@ class DateArithmeticTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "d + 1", "DATE '2024-01-01' + 1", "1 + d", "d - 1", "1 - d", "d * 2", "d / 2", "d + d"
+      "d + 1", "DATE '2024-01-01' + 1", "1 + d", "d - 1", "1 - d", "d * 2", "d / 2", "d + d",
+      "(d - d) + INTERVAL '1 day'", "INTERVAL '1 day' + (d - d)", "(d - d) - INTERVAL '1 day'",
+      "(d - d) * INTERVAL '1 day'", "d - '2024-01-01'"
   })
   void unsupportedArithmeticRaisesSqlException(String expression) throws Exception {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
@@ -140,6 +142,110 @@ class DateArithmeticTest {
           if (result.next()) {
             assertEquals(2L, result.getObject(1));
           }
+        }
+      }
+    }
+  }
+
+  /**
+   * Rejects interval comparisons with numeric day counts in either operand order.
+   *
+   * @param operator
+   *          comparison operator
+   * @throws Exception
+   *           if opening the connection fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      ">", "<", "=", "<>", ">=", "<="
+  })
+  void dayCountsCannotBeComparedWithIntervals(String operator) throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String comparison : List.of("d - DATE '2024-02-01' " + operator + " INTERVAL '7 days'",
+          "INTERVAL '7 days' " + operator + " (d - DATE '2024-02-01')")) {
+        for (String sql : List.of("SELECT id FROM small WHERE id = 0 AND " + comparison,
+            "SELECT " + comparison + " FROM small WHERE id = 0")) {
+          var failure = assertThrows(SQLException.class, () -> {
+            try (var result = statement.executeQuery(sql)) {
+              result.next();
+              result.getObject(1);
+            }
+          }, sql);
+          assertEquals("42000", failure.getSQLState(), sql);
+          assertTrue(failure.getMessage().contains("compare"), failure::getMessage);
+        }
+      }
+      try (var result = statement.executeQuery("SELECT id FROM small WHERE d - DATE '2024-02-01' > 7")) {
+        assertTrue(result.next());
+        assertEquals(0, result.getInt(1));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Preserves metadata and values for parenthesized, current-date, and bound-date
+   * differences through materialization and shadowed aliases.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void dayCountShapesPreserveTypes() throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      for (String expression : List.of("(d - DATE '2024-02-28')", "((d - DATE '2024-02-28'))", "CURRENT_DATE - d",
+          "CURRENT_DATE() - d", "? - d")) {
+        long expected = expression.contains("CURRENT_DATE")
+            ? java.time.temporal.ChronoUnit.DAYS.between(LocalDate.of(2024, 3, 1), LocalDate.now())
+            : 2L;
+        for (String filter : List.of("id = 0", "id = 99")) {
+          String inner = "SELECT " + expression + " AS d FROM small WHERE " + filter;
+          for (String sql : List.of(inner, "SELECT * FROM (" + inner + ") t",
+              "WITH t AS (" + inner + ") SELECT * FROM t")) {
+            try (var statement = connection.prepareStatement(sql)) {
+              if (expression.contains("?")) {
+                statement.setDate(1, Date.valueOf("2024-03-03"));
+              }
+              try (var result = statement.executeQuery()) {
+                assertEquals(Types.BIGINT, result.getMetaData().getColumnType(1), sql);
+                assertEquals(Long.class.getName(), result.getMetaData().getColumnClassName(1), sql);
+                if (filter.equals("id = 0")) {
+                  assertTrue(result.next(), sql);
+                  assertEquals(expected, result.getObject(1), sql);
+                }
+                assertFalse(result.next(), sql);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Uses SQL operators and type names with an appropriate conversion hint.
+   *
+   * @throws Exception
+   *           if opening the connection fails
+   */
+  @Test
+  void arithmeticDiagnosticsUseSqlTypes() throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String expression : List.of("d + 1", "d - '2024-01-01'")) {
+        var failure = assertThrows(SQLException.class, () -> {
+          try (var result = statement.executeQuery("SELECT " + expression + " FROM small WHERE id = 0")) {
+            result.next();
+            result.getObject(1);
+          }
+        });
+        assertTrue(
+            failure.getMessage()
+                .contains(expression.contains("+") ? "+ between DATE and BIGINT" : "- between DATE and VARCHAR"),
+            failure::getMessage);
+        if (expression.contains("'")) {
+          assertTrue(failure.getMessage().contains("CAST(... AS DATE)"), failure::getMessage);
         }
       }
     }

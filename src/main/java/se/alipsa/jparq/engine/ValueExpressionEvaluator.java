@@ -48,7 +48,9 @@ import se.alipsa.jparq.engine.function.FunctionSupport;
 import se.alipsa.jparq.engine.function.JsonFunctions;
 import se.alipsa.jparq.engine.function.StringFunctions;
 import se.alipsa.jparq.engine.window.WindowState;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.LiteralConverter;
+import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
  * Evaluates SELECT-list expressions (e.g. computed columns, {@code CASE}
@@ -634,11 +636,45 @@ public final class ValueExpressionEvaluator {
         return temporal;
       }
     }
-    if (DateTimeFunctions.isTemporal(leftVal) || DateTimeFunctions.isTemporal(rightVal)) {
-      throw syntaxFailure("Unsupported temporal arithmetic " + op + " between " + leftVal.getClass().getSimpleName()
-          + " and " + rightVal.getClass().getSimpleName() + "; use an explicit INTERVAL for date/time offsets");
+    if (DateTimeFunctions.isTemporal(leftVal) || DateTimeFunctions.isTemporal(rightVal)
+        || leftVal instanceof TemporalInterval || rightVal instanceof TemporalInterval) {
+      String operator = switch (op) {
+        case ADD -> "+";
+        case SUB -> "-";
+        case MUL -> "*";
+        case DIV -> "/";
+        case MOD -> "%";
+      };
+      String hint = leftVal instanceof CharSequence || rightVal instanceof CharSequence
+          ? "; use CAST(... AS DATE) for date text or an explicit INTERVAL for offsets"
+          : "; date/time offsets require an explicit INTERVAL; numeric day counts require numeric operands";
+      throw syntaxFailure("Unsupported temporal arithmetic " + operator + " between " + sqlOperandType(leftVal)
+          + " and " + sqlOperandType(rightVal) + hint);
     }
     return AggregateFunctions.calculate(leftVal, rightVal, op);
+  }
+
+  /**
+   * Describes an arithmetic operand using SQL type names.
+   *
+   * @param value
+   *          non-null operand
+   * @return SQL type name for diagnostics
+   */
+  private static String sqlOperandType(Object value) {
+    if (value instanceof TemporalInterval) {
+      return "INTERVAL";
+    }
+    if (value instanceof java.time.LocalDate) {
+      return "DATE";
+    }
+    if (value instanceof java.time.LocalDateTime || value instanceof java.time.OffsetDateTime) {
+      return "TIMESTAMP";
+    }
+    if (value instanceof java.time.LocalTime || value instanceof java.time.OffsetTime) {
+      return "TIME";
+    }
+    return java.sql.JDBCType.valueOf(JdbcTypeMapper.mapJavaClassNameToJdbcType(value.getClass().getName())).getName();
   }
 
   private Object columnValue(Column column, GenericRecord record) {

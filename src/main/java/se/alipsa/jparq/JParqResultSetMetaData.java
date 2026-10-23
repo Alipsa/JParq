@@ -13,6 +13,7 @@ import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
 import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
@@ -319,7 +320,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    *         computed
    */
   private Schema.Field resolveField(int column) {
-    if (expressionAtColumn(column) instanceof Subtraction && resolveComputedColumnType(column) == Types.BIGINT) {
+    if (unwrap(expressionAtColumn(column)) instanceof Subtraction) {
       return null;
     }
     if (schema == null) {
@@ -346,7 +347,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * @return the resolved {@link java.sql.Types JDBC type}
    */
   private int resolveComputedColumnType(int column) {
-    Expression expression = expressionAtColumn(column);
+    Expression expression = unwrap(expressionAtColumn(column));
     if (BooleanExpressions.isBoolean(expression, reference -> {
       Schema.Field field = resolveSourceField(reference);
       return field != null && JdbcTypeMapper.mapSchemaToJdbcType(field.schema()) == Types.BOOLEAN;
@@ -377,6 +378,13 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     if (expression instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
       return isDateExpression(list.getFirst());
     }
+    if (expression instanceof TimeKeyExpression key) {
+      return "CURRENT_DATE".equalsIgnoreCase(key.getStringValue())
+          || "CURRENT_DATE()".equalsIgnoreCase(key.getStringValue());
+    }
+    if (expression instanceof net.sf.jsqlparser.expression.Function function) {
+      return "CURRENT_DATE".equalsIgnoreCase(function.getName());
+    }
     if (expression instanceof DateValue) {
       return true;
     }
@@ -394,7 +402,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   }
 
   private String resolveComputedColumnClassName(int column) {
-    Expression expression = expressionAtColumn(column);
+    Expression expression = unwrap(expressionAtColumn(column));
     return switch (expression) {
       case AnalyticExpression analytic -> resolveAnalyticFunctionClassName(analytic);
       case ArrayConstructor arrayConstructor -> List.class.getName();
@@ -403,6 +411,21 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
         List.class.getName();
       case null, default -> null;
     };
+  }
+
+  /**
+   * Removes single-expression parentheses for type recognition.
+   *
+   * @param expression
+   *          expression to inspect
+   * @return the enclosed expression, or the original expression
+   */
+  private static Expression unwrap(Expression expression) {
+    Expression result = expression;
+    while (result instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
+      result = list.getFirst();
+    }
+    return result;
   }
 
   private Expression expressionAtColumn(int column) {

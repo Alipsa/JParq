@@ -66,7 +66,7 @@ public final class DateTimeFunctions {
     }
     ZoneId zone = defaultZone();
     return switch (key.toUpperCase(Locale.ROOT)) {
-      case "CURRENT_DATE" -> Date.valueOf(LocalDate.now(zone));
+      case "CURRENT_DATE", "CURRENT_DATE()" -> Date.valueOf(LocalDate.now(zone));
       case "CURRENT_TIME" -> OffsetTime.now(zone);
       case "LOCALTIME" -> LocalTime.now(zone);
       case "CURRENT_TIMESTAMP" -> OffsetDateTime.now(zone);

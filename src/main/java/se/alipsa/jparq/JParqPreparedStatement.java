@@ -4316,14 +4316,14 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       case Date date -> {
         LocalDate localDate = date.toLocalDate();
-        return "'" + DATE_FORMAT.format(localDate) + "'";
+        return "DATE '" + DATE_FORMAT.format(localDate) + "'";
       }
       case Time time -> {
         LocalTime lt = time.toLocalTime();
         return "'" + TIME_FORMAT.format(lt) + "'";
       }
       case LocalDate ld -> {
-        return "'" + DATE_FORMAT.format(ld) + "'";
+        return "DATE '" + DATE_FORMAT.format(ld) + "'";
       }
       case LocalTime lt -> {
         return "'" + TIME_FORMAT.format(lt) + "'";
