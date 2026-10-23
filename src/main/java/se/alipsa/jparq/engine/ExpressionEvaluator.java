@@ -2,18 +2,14 @@ package se.alipsa.jparq.engine;
 
 import static se.alipsa.jparq.engine.AvroCoercions.coerceLiteral;
 
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import net.sf.jsqlparser.expression.AnyComparisonExpression;
-import net.sf.jsqlparser.expression.AnyType;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.Expression;
-import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.NotExpression;
 import net.sf.jsqlparser.expression.Parenthesis;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
@@ -31,7 +27,6 @@ import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
-import org.apache.avro.generic.IndexedRecord;
 import se.alipsa.jparq.engine.function.StringFunctions;
 import se.alipsa.jparq.engine.window.WindowState;
 
@@ -400,8 +395,7 @@ public final class ExpressionEvaluator {
   }
 
   /**
-   * Executes IN and EXISTS subqueries in the current outer row's correlation
-   * context.
+   * Executes predicate subqueries in the current outer row's correlation context.
    *
    * @param subSelect
    *          subquery to execute
@@ -411,6 +405,9 @@ public final class ExpressionEvaluator {
    */
   private SubqueryExecutor.SubqueryResult executeCorrelatedSubquery(net.sf.jsqlparser.statement.select.Select subSelect,
       GenericRecord rec) {
+    if (subqueryExecutor == null) {
+      throw new IllegalStateException("Predicate subqueries require a subquery executor");
+    }
     return subqueryExecutor.executeCorrelated(subSelect, outerQualifiers, correlationColumns(), qualifierColumnMapping,
         (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
   }
@@ -486,69 +483,10 @@ public final class ExpressionEvaluator {
   private Boolean evalAnyComparison(Expression anyExpr, Expression otherExpr, String operator, GenericRecord rec,
       boolean anyOnLeft) {
     Operand otherOperand = operand(otherExpr, rec);
-    Object otherValue = otherOperand.value;
-
-    List<?> values;
-    boolean isAll;
-    if (anyExpr instanceof AnyComparisonExpression subquery) {
-      values = fetchAnyAllValues(subquery, rec);
-      isAll = subquery.getAnyType() == AnyType.ALL;
-    } else {
-      Function function = (Function) anyExpr;
-      if (function.getParameters() == null || function.getParameters().size() != 1) {
-        throw new IllegalArgumentException("ANY/SOME/ALL requires exactly one array operand");
-      }
-      Operand arrayOperand = operand(function.getParameters().getFirst(), rec);
-      Object array = arrayOperand.value;
-      if (array == null) {
-        return null;
-      }
-      if (array instanceof Object[] objects) {
-        array = Arrays.asList(objects);
-      }
-      if (!(array instanceof List<?> list)) {
-        throw new IllegalArgumentException("ANY/SOME/ALL requires an array operand");
-      }
-      if (list.stream().anyMatch(value -> value instanceof List<?> || value instanceof Map<?, ?>
-          || value instanceof Object[] || value instanceof IndexedRecord)) {
-        throw new IllegalArgumentException("ANY/SOME/ALL requires scalar array elements");
-      }
-      values = list;
-      isAll = "ALL".equalsIgnoreCase(function.getName());
-    }
-    Boolean result = isAll;
-    for (Object rawValue : values) {
-      Object candidate = coerceLiteralToColumnType(rawValue, otherOperand.schemaOrNull);
-      Integer cmp = SqlComparisons.compareOrUnknown(anyOnLeft ? candidate : otherValue,
-          anyOnLeft ? otherValue : candidate);
-      Boolean comparison = SqlComparisons.compare(operator, cmp);
-      result = isAll ? SqlTruth.and(result, comparison) : SqlTruth.or(result, comparison);
-      if (isAll && Boolean.FALSE.equals(result) || !isAll && Boolean.TRUE.equals(result)) {
-        return result;
-      }
-    }
-    return result;
-  }
-
-  /**
-   * Execute the subquery associated with an {@link AnyComparisonExpression} and
-   * return the values of its first column.
-   *
-   * @param anyExpr
-   *          the comparison expression whose subquery should be evaluated
-   * @param rec
-   *          the current record, used when rewriting correlated subqueries
-   * @return the list of values from the first column of the subquery result
-   */
-  private List<Object> fetchAnyAllValues(AnyComparisonExpression anyExpr, GenericRecord rec) {
-    if (subqueryExecutor == null) {
-      throw new IllegalStateException("ANY/ALL subqueries require a subquery executor");
-    }
-    net.sf.jsqlparser.statement.select.Select subSelect = anyExpr.getSelect();
-    SubqueryExecutor.SubqueryResult result = subqueryExecutor.executeCorrelated(subSelect, outerQualifiers,
-        correlationColumns(), qualifierColumnMapping,
-        (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
-    return result.firstColumnValues();
+    return QuantifiedComparisons.evaluate(anyExpr, otherOperand.value, operator, anyOnLeft,
+        expression -> operand(expression, rec).value,
+        subSelect -> executeCorrelatedSubquery(subSelect, rec).firstColumnValues(),
+        candidate -> coerceLiteralToColumnType(candidate, otherOperand.schemaOrNull));
   }
 
   // -------------------------
