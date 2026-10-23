@@ -109,6 +109,8 @@ HAVING filters groups before select-list scalar subqueries run; a subquery alias
 evaluated on demand and reused for that group's output. Only surviving groups contribute to inferred scalar
 result types. COUNT subqueries retain BIGINT metadata when no groups survive; other unknown scalar types
 continue to depend on returned values.
+HAVING evaluates AND/OR operands from left to right: AND stops after FALSE, and OR stops after TRUE.
+Skipped operands are not evaluated, so their errors are suppressed; reordering conditions can expose an error.
 
 Correlated subqueries reuse parsed query shapes and validated source schemas within one outer execution.
 Outer values are bound with their Java types and NULL values intact, and each evaluation reads fresh results.

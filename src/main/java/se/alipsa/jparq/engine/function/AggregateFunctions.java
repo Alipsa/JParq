@@ -2222,6 +2222,8 @@ public final class AggregateFunctions {
     private final AggregatePlan plan;
     private final List<Object> aggregateValues;
     private final SubqueryExecutor subqueryExecutor;
+    // Values can be LazyScalarValue placeholders; every value read must use
+    // resolveScalarValue.
     private final Map<String, Object> labelLookup;
     private final List<String> correlatedQualifiers;
     private final Map<String, Map<String, String>> correlationContext;
