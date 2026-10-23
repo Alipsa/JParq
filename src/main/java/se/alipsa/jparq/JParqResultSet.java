@@ -271,7 +271,7 @@ public class JParqResultSet extends ResultSetAdapter {
         this.aggregateRows = new ArrayList<>(result.rows());
         this.aggregateSqlTypes = result.sqlTypes();
       } catch (Exception e) {
-        throw new SQLException("Failed to compute aggregate query", e);
+        throw SqlExceptions.wrap("Failed to compute aggregate query", e);
       }
       this.columnOrder = labels;
       this.physicalColumnOrder = physical;

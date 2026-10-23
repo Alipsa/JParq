@@ -101,6 +101,11 @@ cannot be determined, unqualified names remain inner; use an explicit qualifier 
 WITH declarations inside subqueries, including derived tables, keep their local scope and override physical
 tables or inherited CTEs with the same name.
 
+Scalar subqueries in grouped SELECT lists can reference outer grouping columns, including grouping columns
+omitted from the output. Each subquery uses the current group's values; NULL grouping keys and keys suppressed
+by grouping sets bind as NULL. Inner names take precedence over outer names. References to ungrouped outer
+columns are rejected, including when the outer input is empty.
+
 Correlated subqueries reuse parsed query shapes and validated source schemas within one outer execution.
 Outer values are bound with their Java types and NULL values intact, and each evaluation reads fresh results.
 Simple physical-table subqueries also reuse their prepared plans; derived tables, joins, and CTEs rebuild
