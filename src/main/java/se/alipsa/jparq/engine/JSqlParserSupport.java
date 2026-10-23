@@ -6,6 +6,7 @@ import java.util.concurrent.TimeoutException;
 import net.sf.jsqlparser.JSQLParserException;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.parser.CCJSqlParser;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
@@ -14,6 +15,17 @@ import net.sf.jsqlparser.parser.StringProvider;
 import net.sf.jsqlparser.parser.TokenMgrException;
 import net.sf.jsqlparser.parser.feature.Feature;
 import net.sf.jsqlparser.statement.Statement;
+import net.sf.jsqlparser.statement.select.FromItemVisitorAdapter;
+import net.sf.jsqlparser.statement.select.LateralSubSelect;
+import net.sf.jsqlparser.statement.select.ParenthesedFromItem;
+import net.sf.jsqlparser.statement.select.ParenthesedSelect;
+import net.sf.jsqlparser.statement.select.PivotVisitorAdapter;
+import net.sf.jsqlparser.statement.select.Select;
+import net.sf.jsqlparser.statement.select.SelectItemVisitorAdapter;
+import net.sf.jsqlparser.statement.select.SelectVisitor;
+import net.sf.jsqlparser.statement.select.SelectVisitorAdapter;
+import net.sf.jsqlparser.statement.select.SetOperationList;
+import net.sf.jsqlparser.statement.select.Values;
 
 /** Shares identifier-aware JSqlParser entry points across query planning. */
 public final class JSqlParserSupport {
@@ -37,6 +49,58 @@ public final class JSqlParserSupport {
       return "ANY".equalsIgnoreCase(name) || "SOME".equalsIgnoreCase(name) || "ALL".equalsIgnoreCase(name);
     }
     return false;
+  }
+
+  /**
+   * Visits expressions throughout a SELECT, including nested sources and CTEs.
+   *
+   * @param statement
+   *          parsed SELECT to traverse
+   * @param expressions
+   *          expression visitor to connect to the SELECT traversal
+   */
+  public static void visitExpressions(Select statement, ExpressionVisitorAdapter<Void> expressions) {
+    FromItemVisitorAdapter<Void> sources = new FromItemVisitorAdapter<>() {
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(ParenthesedSelect select, S context) {
+        return select.accept(getSelectVisitor(), context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(LateralSubSelect select, S context) {
+        return select.accept(getSelectVisitor(), context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(ParenthesedFromItem source, S context) {
+        super.visit(source, context);
+        return visitJoins(source.getJoins(), context);
+      }
+    };
+    SelectVisitorAdapter<Void> selects = new SelectVisitorAdapter<>(expressions, new PivotVisitorAdapter<>(expressions),
+        new SelectItemVisitorAdapter<>(expressions), sources) {
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(SetOperationList set, S context) {
+        visitWithItems(set.getWithItemsList(), context);
+        super.visit(set, context);
+        return expressions.visitOrderBy(set.getOrderByElements(), context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(Values values, S context) {
+        visitWithItems(values.getWithItemsList(), context);
+        return expressions.visitExpressions(values.getExpressions(), context);
+      }
+    };
+    sources.setSelectVisitor(selects);
+    sources.setExpressionVisitor(expressions);
+    expressions.setSelectVisitor(selects);
+    statement.accept((SelectVisitor<Void>) selects, null);
   }
 
   /**

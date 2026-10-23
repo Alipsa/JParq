@@ -633,9 +633,39 @@ public final class SqlParser {
    */
   private static Query parseWithJsqlParser(String sql, boolean allowQualifiedWildcards) throws JSQLParserException {
     var stmt = (net.sf.jsqlparser.statement.select.Select) JSqlParserSupport.parseStatement(sql);
+    validateAggregateFilters(stmt);
     DecimalCasts.validateStatement(stmt);
     SqlExpressionNormalizer.normalize(stmt);
     return parseSelectStatement(stmt, List.of(), Map.of(), allowQualifiedWildcards);
+  }
+
+  /**
+   * Rejects aggregate FILTER clauses before planning can discard their
+   * predicates.
+   *
+   * @param statement
+   *          parsed SELECT, including nested scopes
+   * @throws IllegalArgumentException
+   *           if a FILTER clause is present; the cause carries SQLState 42000
+   */
+  private static void validateAggregateFilters(net.sf.jsqlparser.statement.select.Select statement) {
+    JSqlParserSupport.visitExpressions(statement, new ExpressionVisitorAdapter<Void>() {
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(AnalyticExpression analytic, S context) {
+        if (analytic.getFilterExpression() != null) {
+          String message = "Aggregate FILTER (WHERE ...) clauses are not supported";
+          throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000"));
+        }
+        return super.visit(analytic, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(AnyComparisonExpression comparison, S context) {
+        return comparison.getSelect().accept(getSelectVisitor(), context);
+      }
+    });
   }
 
   private static Query tryParseWithCteWorkaround(String normalizedSql, boolean allowQualifiedWildcards) {
