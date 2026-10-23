@@ -129,7 +129,13 @@ class DecimalCastBoundsTest {
       "SELECT SUM(amount) OVER (ORDER BY CAST(id AS DECIMAL(2,5))) FROM optimized",
       "SELECT SUM(amount) OVER w FROM optimized WINDOW w AS (ORDER BY CAST(id AS NUMBER(2,5)))",
       "SELECT a.id FROM optimized a JOIN optimized b ON a.id = CAST(b.id AS DECIMAL(2,5))",
-      "SELECT m.id FROM optimized m, LATERAL " + "(SELECT CAST(m.amount AS DECIMAL(2,5)) AS n FROM (VALUES (1)) v(z)) x"
+      "SELECT m.id FROM optimized m, LATERAL "
+          + "(SELECT CAST(m.amount AS DECIMAL(2,5)) AS n FROM (VALUES (1)) v(z)) x",
+      "WITH c AS (SELECT CAST(1 AS DECIMAL(2,5)) AS n) SELECT 1 UNION ALL SELECT 2", "VALUES (CAST(1 AS DECIMAL(2,5)))",
+      "SELECT 1 FROM (mtcars m JOIN mtcars n ON m.cyl = CAST(n.cyl AS DECIMAL(2,5)))",
+      "SELECT mpg FROM mtcars LIMIT (SELECT CAST(1 AS DECIMAL(2,5)))",
+      "SELECT 1 UNION ALL SELECT 2 LIMIT (SELECT CAST(1 AS DECIMAL(2,5)))",
+      "SELECT * FROM UNNEST(ARRAY[(SELECT CAST(1 AS DECIMAL(2,5)))]) AS t(x)"
   })
   void invalidDeclarationsFailDuringPreparation(String sql) throws Exception {
     var parsed = (Select) JSqlParserSupport.parseStatement(sql);

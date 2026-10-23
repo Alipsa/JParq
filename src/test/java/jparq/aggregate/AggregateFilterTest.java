@@ -60,7 +60,12 @@ class AggregateFilterTest {
       "SELECT 1 FROM mtcars m JOIN mtcars n ON m.cyl = COUNT(*) FILTER (WHERE n.cyl = 4)",
       "SELECT 1 FROM mtcars GROUP BY COUNT(*) FILTER (WHERE cyl = 4)", "VALUES (COUNT(*) FILTER (WHERE 1 = 1))",
       "WITH c AS (SELECT COUNT(*) FILTER (WHERE cyl = 4) FROM mtcars) SELECT 1 UNION ALL SELECT 2",
-      "SELECT 1 FROM (mtcars m JOIN mtcars n ON m.cyl = COUNT(*) FILTER (WHERE n.cyl = 4))"
+      "SELECT 1 FROM (mtcars m JOIN mtcars n ON m.cyl = COUNT(*) FILTER (WHERE n.cyl = 4))",
+      "SELECT mpg FROM mtcars LIMIT (SELECT COUNT(*) FILTER (WHERE cyl = 4) FROM mtcars)",
+      "SELECT 1 UNION ALL SELECT 2 LIMIT (SELECT COUNT(*) FILTER (WHERE cyl = 4) FROM mtcars)",
+      "SELECT * FROM UNNEST(ARRAY[(SELECT COUNT(*) FILTER (WHERE cyl = 4) FROM mtcars)]) AS t(x)",
+      "SELECT 1 FROM mtcars WHERE 1 < ALL (SELECT COUNT(*) FILTER (WHERE cyl = 4) FROM mtcars)",
+      "SELECT 1 FROM mtcars WHERE 1 < SOME (SELECT COUNT(*) FILTER (WHERE cyl = 4) FROM mtcars)"
   })
   void rejectsFilterBeforeExecution(String sql) throws Exception {
     for (boolean pushdown : List.of(true, false)) {

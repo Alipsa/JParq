@@ -7,9 +7,7 @@ import java.sql.SQLSyntaxErrorException;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.CastExpression;
-import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.LogicalTypes;
 
@@ -75,18 +73,12 @@ public final class DecimalCasts {
    *           if bounds are invalid; the cause carries SQLState 42000
    */
   public static void validateStatement(Select statement) {
-    ExpressionVisitorAdapter<Void> expressions = new ExpressionVisitorAdapter<>() {
+    var expressions = new JSqlParserSupport.StatementExpressionVisitor() {
       /** {@inheritDoc} */
       @Override
       public <S> Void visit(CastExpression cast, S context) {
         validateBounds(cast);
         return super.visit(cast, context);
-      }
-
-      /** {@inheritDoc} */
-      @Override
-      public <S> Void visit(AnyComparisonExpression comparison, S context) {
-        return comparison.getSelect().accept(getSelectVisitor(), context);
       }
     };
     JSqlParserSupport.visitExpressions(statement, expressions);

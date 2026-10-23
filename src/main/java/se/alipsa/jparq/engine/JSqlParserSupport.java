@@ -20,11 +20,13 @@ import net.sf.jsqlparser.statement.select.LateralSubSelect;
 import net.sf.jsqlparser.statement.select.ParenthesedFromItem;
 import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.PivotVisitorAdapter;
+import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.select.SelectItemVisitorAdapter;
 import net.sf.jsqlparser.statement.select.SelectVisitor;
 import net.sf.jsqlparser.statement.select.SelectVisitorAdapter;
 import net.sf.jsqlparser.statement.select.SetOperationList;
+import net.sf.jsqlparser.statement.select.TableFunction;
 import net.sf.jsqlparser.statement.select.Values;
 
 /** Shares identifier-aware JSqlParser entry points across query planning. */
@@ -52,14 +54,15 @@ public final class JSqlParserSupport {
   }
 
   /**
-   * Visits expressions throughout a SELECT, including nested sources and CTEs.
+   * Visits SELECT expressions, including nested sources, CTEs, table-function
+   * arguments, and LIMIT operands.
    *
    * @param statement
    *          parsed SELECT to traverse
    * @param expressions
    *          expression visitor to connect to the SELECT traversal
    */
-  public static void visitExpressions(Select statement, ExpressionVisitorAdapter<Void> expressions) {
+  public static void visitExpressions(Select statement, StatementExpressionVisitor expressions) {
     FromItemVisitorAdapter<Void> sources = new FromItemVisitorAdapter<>() {
       /** {@inheritDoc} */
       @Override
@@ -79,6 +82,12 @@ public final class JSqlParserSupport {
         super.visit(source, context);
         return visitJoins(source.getJoins(), context);
       }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(TableFunction function, S context) {
+        return function.getFunction().accept(getExpressionVisitor(), context);
+      }
     };
     SelectVisitorAdapter<Void> selects = new SelectVisitorAdapter<>(expressions, new PivotVisitorAdapter<>(expressions),
         new SelectItemVisitorAdapter<>(expressions), sources) {
@@ -87,7 +96,15 @@ public final class JSqlParserSupport {
       public <S> Void visit(SetOperationList set, S context) {
         visitWithItems(set.getWithItemsList(), context);
         super.visit(set, context);
-        return expressions.visitOrderBy(set.getOrderByElements(), context);
+        expressions.visitOrderBy(set.getOrderByElements(), context);
+        return expressions.visitLimit(set.getLimit(), context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(PlainSelect select, S context) {
+        super.visit(select, context);
+        return expressions.visitLimit(select.getLimit(), context);
       }
 
       /** {@inheritDoc} */
@@ -101,6 +118,24 @@ public final class JSqlParserSupport {
     sources.setExpressionVisitor(expressions);
     expressions.setSelectVisitor(selects);
     statement.accept((SelectVisitor<Void>) selects, null);
+  }
+
+  /**
+   * Base visitor for statement expressions that also descends into quantified
+   * subqueries. Use with
+   * {@link #visitExpressions(Select, StatementExpressionVisitor)} to connect
+   * nested SELECT traversal automatically.
+   */
+  public abstract static class StatementExpressionVisitor extends ExpressionVisitorAdapter<Void> {
+    /** Creates a visitor whose SELECT traversal is connected by the helper. */
+    protected StatementExpressionVisitor() {
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public final <S> Void visit(AnyComparisonExpression comparison, S context) {
+      return comparison.getSelect().accept(getSelectVisitor(), context);
+    }
   }
 
   /**

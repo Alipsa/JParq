@@ -633,23 +633,23 @@ public final class SqlParser {
    */
   private static Query parseWithJsqlParser(String sql, boolean allowQualifiedWildcards) throws JSQLParserException {
     var stmt = (net.sf.jsqlparser.statement.select.Select) JSqlParserSupport.parseStatement(sql);
-    validateAggregateFilters(stmt);
-    DecimalCasts.validateStatement(stmt);
+    validateExpressions(stmt);
     SqlExpressionNormalizer.normalize(stmt);
     return parseSelectStatement(stmt, List.of(), Map.of(), allowQualifiedWildcards);
   }
 
   /**
-   * Rejects aggregate FILTER clauses before planning can discard their
-   * predicates.
+   * Validates decimal bounds and rejects aggregate FILTER clauses in one pass
+   * before query planning.
    *
    * @param statement
    *          parsed SELECT, including nested scopes
    * @throws IllegalArgumentException
-   *           if a FILTER clause is present; the cause carries SQLState 42000
+   *           if bounds are invalid or FILTER is present; the cause carries
+   *           SQLState 42000
    */
-  private static void validateAggregateFilters(net.sf.jsqlparser.statement.select.Select statement) {
-    JSqlParserSupport.visitExpressions(statement, new ExpressionVisitorAdapter<Void>() {
+  private static void validateExpressions(net.sf.jsqlparser.statement.select.Select statement) {
+    JSqlParserSupport.visitExpressions(statement, new JSqlParserSupport.StatementExpressionVisitor() {
       /** {@inheritDoc} */
       @Override
       public <S> Void visit(AnalyticExpression analytic, S context) {
@@ -662,8 +662,9 @@ public final class SqlParser {
 
       /** {@inheritDoc} */
       @Override
-      public <S> Void visit(AnyComparisonExpression comparison, S context) {
-        return comparison.getSelect().accept(getSelectVisitor(), context);
+      public <S> Void visit(CastExpression cast, S context) {
+        DecimalCasts.validateBounds(cast);
+        return super.visit(cast, context);
       }
     });
   }
