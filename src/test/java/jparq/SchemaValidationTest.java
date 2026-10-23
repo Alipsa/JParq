@@ -1,5 +1,6 @@
 package jparq;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -33,8 +34,8 @@ class SchemaValidationTest {
     Class.forName("se.alipsa.jparq.JParqDriver");
     try (Connection conn = DriverManager.getConnection("jdbc:jparq:" + tempDir)) {
       SQLException ex = assertThrows(SQLException.class, () -> conn.prepareStatement("SELECT department FROM broken"));
-      Throwable cause = ex.getCause() == null ? ex : ex.getCause();
-      String message = cause.getMessage().toLowerCase(Locale.ROOT);
+      assertEquals("42000", ex.getSQLState());
+      String message = ex.getMessage().toLowerCase(Locale.ROOT);
       assertTrue(message.contains("missing columns"));
       assertTrue(message.contains("department"));
     }
@@ -61,8 +62,8 @@ class SchemaValidationTest {
     try (Connection conn = DriverManager.getConnection("jdbc:jparq:" + tempDir);
         var stmt = conn.prepareStatement(sql)) {
       SQLException ex = assertThrows(SQLException.class, stmt::executeQuery);
-      Throwable cause = ex.getCause() == null ? ex : ex.getCause();
-      String message = cause.getMessage().toLowerCase(Locale.ROOT);
+      assertEquals("42000", ex.getSQLState());
+      String message = ex.getMessage().toLowerCase(Locale.ROOT);
       assertTrue(message.contains("missing columns"));
       assertTrue(message.contains("department"));
     }

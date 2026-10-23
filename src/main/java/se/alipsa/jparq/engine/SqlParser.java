@@ -1348,6 +1348,8 @@ public final class SqlParser {
       CommonTableExpression cte = resolveCommonTableExpression(t, cteLookup);
       Map<String, String> mapping = Map.of();
       Select innerSelect = null;
+      List<String> columnAliases = extractAliasColumns(t.getAlias());
+      validateDerivedColumnAliases(columnAliases);
       if (cte != null) {
         if (cte.query() instanceof Select selectQuery) {
           innerSelect = selectQuery;
@@ -1366,7 +1368,7 @@ public final class SqlParser {
         }
       }
       return new FromInfo(schemaName, tableName, tableAlias, mapping, innerSelect, null, cte, null, null, lateral,
-          tableSample, List.of());
+          tableSample, columnAliases);
     }
     if (fromItem instanceof ParenthesedFromItem parenthesed) {
       FromItem inner = parenthesed.getFromItem();
@@ -1643,7 +1645,7 @@ public final class SqlParser {
           aliasMapping.put(columnName, columnName);
         }
         mapping = Map.copyOf(aliasMapping);
-      } else if (info.subquerySql() != null) {
+      } else if (info.subquerySql() != null || info.commonTableExpression() != null) {
         // Bind output names after wildcard expansion, against JDBC ordinals.
         mapping = Map.of();
       } else if (info.innerSelect() != null && info.innerSelect().columnNames() != null
@@ -1671,11 +1673,11 @@ public final class SqlParser {
       }
     }
 
-    String tableName = aliasName != null ? aliasName : info.tableName();
+    String tableName = info.tableName();
     String tableAlias = aliasName != null ? aliasName : info.tableAlias();
     return new FromInfo(info.schemaName(), tableName, tableAlias, mapping, info.innerSelect(), info.subquerySql(),
         info.commonTableExpression(), valueTable, info.unnest(), info.lateral(), info.tableSample(),
-        info.subquerySql() != null && !aliasColumns.isEmpty() ? aliasColumns : info.columnAliases());
+        !aliasColumns.isEmpty() ? aliasColumns : info.columnAliases());
   }
 
   /**
@@ -1788,7 +1790,7 @@ public final class SqlParser {
       if (expr instanceof Column col) {
         underlying = col.getColumnName();
         String mapped = fromInfo.columnMapping().get(underlying);
-        if (mapped != null) {
+        if (mapped != null && fromInfo.subquerySql() == null && fromInfo.commonTableExpression() == null) {
           underlying = mapped;
         }
         if (alias != null && !alias.isEmpty()) {
@@ -2436,6 +2438,23 @@ public final class SqlParser {
    * @return a set of column names that reference one of the qualifiers
    */
   public static Set<String> collectQualifiedColumns(Expression expr, List<String> qualifiers) {
+    return collectQualifiedColumns(expr, qualifiers, true);
+  }
+
+  /**
+   * Collects references to supplied qualifiers, optionally including unqualified
+   * names.
+   *
+   * @param expr
+   *          expression to inspect
+   * @param qualifiers
+   *          table names or aliases to match
+   * @param includeUnqualified
+   *          whether a single qualifier also owns unqualified references
+   * @return matching column names
+   */
+  public static Set<String> collectQualifiedColumns(Expression expr, List<String> qualifiers,
+      boolean includeUnqualified) {
     if (expr == null || qualifiers == null || qualifiers.isEmpty()) {
       return Set.of();
     }
@@ -2453,7 +2472,7 @@ public final class SqlParser {
         }
         Table table = column.getTable();
         if (table == null) {
-          if (normalized.size() == 1) {
+          if (includeUnqualified && normalized.size() == 1) {
             columns.add(column.getColumnName());
           }
           return super.visit(column, context);
