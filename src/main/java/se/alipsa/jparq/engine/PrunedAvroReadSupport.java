@@ -1,7 +1,6 @@
 package se.alipsa.jparq.engine;
 
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -60,10 +59,7 @@ public class PrunedAvroReadSupport<T> extends AvroReadSupport<T> {
     if (requestedProjectionString == null) {
       return super.init(configuration, keyValueMetaData, fileSchema);
     }
-    Set<String> fields = new LinkedHashSet<>();
-    for (Schema.Field field : new Schema.Parser().parse(requestedProjectionString).getFields()) {
-      fields.add(field.name());
-    }
+    Set<String> fields = AvroProjections.fieldNames(new Schema.Parser().parse(requestedProjectionString));
     Map<String, String> metadata = new LinkedHashMap<>();
     String avroReadSchema = configuration.get(AVRO_READ_SCHEMA_CONFIG);
     if (avroReadSchema != null) {

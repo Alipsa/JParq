@@ -5,9 +5,7 @@ import java.io.IOException;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.stream.Collectors;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.hadoop.conf.Configuration;
@@ -142,8 +140,7 @@ public final class ParquetTable {
     result.unset(PrunedAvroReadSupport.AVRO_READ_SCHEMA_CONFIG);
     if (requested != null) {
       Schema projection = new Schema.Parser().parse(requested);
-      Set<String> fields = projection.getFields().stream().map(Schema.Field::name).collect(Collectors.toSet());
-      Schema ownProjection = AvroProjections.project(shard.schema(), fields);
+      Schema ownProjection = AvroProjections.project(shard.schema(), AvroProjections.fieldNames(projection));
       AvroReadSupport.setRequestedProjection(result, ownProjection);
       AvroReadSupport.setAvroReadSchema(result, ownProjection);
     }
