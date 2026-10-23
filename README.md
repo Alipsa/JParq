@@ -109,6 +109,10 @@ HAVING filters groups before select-list scalar subqueries run; a subquery alias
 evaluated on demand and reused for that group's output. Only surviving groups contribute to inferred scalar
 result types. COUNT subqueries retain BIGINT metadata when no groups survive; other unknown scalar types
 continue to depend on returned values.
+Aggregate `FILTER (WHERE ...)` clauses are currently unsupported and raise `SQLSyntaxErrorException`
+with SQLState `42000` during preparation, including when combined with `OVER`. Use a `WHERE` clause
+when all aggregates share one filter, or conditional arguments such as
+`COUNT(CASE WHEN cyl IN (4,6) THEN 1 END)` for separate aggregate filters.
 HAVING supports quantified comparisons with `ANY`, `SOME`, and `ALL` over subqueries and arrays,
 including aggregate values and correlated grouping columns. These comparisons use SQL three-valued logic for
 NULLs; empty inputs yield FALSE for ANY/SOME and TRUE for ALL.

@@ -633,9 +633,40 @@ public final class SqlParser {
    */
   private static Query parseWithJsqlParser(String sql, boolean allowQualifiedWildcards) throws JSQLParserException {
     var stmt = (net.sf.jsqlparser.statement.select.Select) JSqlParserSupport.parseStatement(sql);
-    DecimalCasts.validateStatement(stmt);
+    validateExpressions(stmt);
     SqlExpressionNormalizer.normalize(stmt);
     return parseSelectStatement(stmt, List.of(), Map.of(), allowQualifiedWildcards);
+  }
+
+  /**
+   * Validates decimal bounds and rejects aggregate FILTER clauses in one pass
+   * before query planning.
+   *
+   * @param statement
+   *          parsed SELECT, including nested scopes
+   * @throws IllegalArgumentException
+   *           if bounds are invalid or FILTER is present; the cause carries
+   *           SQLState 42000
+   */
+  private static void validateExpressions(net.sf.jsqlparser.statement.select.Select statement) {
+    JSqlParserSupport.visitExpressions(statement, new JSqlParserSupport.StatementExpressionVisitor() {
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(AnalyticExpression analytic, S context) {
+        if (analytic.getFilterExpression() != null) {
+          String message = "Aggregate FILTER (WHERE ...) clauses are not supported";
+          throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000"));
+        }
+        return super.visit(analytic, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(CastExpression cast, S context) {
+        DecimalCasts.validateBounds(cast);
+        return super.visit(cast, context);
+      }
+    });
   }
 
   private static Query tryParseWithCteWorkaround(String normalizedSql, boolean allowQualifiedWildcards) {

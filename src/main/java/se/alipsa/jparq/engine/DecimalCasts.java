@@ -7,18 +7,7 @@ import java.sql.SQLSyntaxErrorException;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.CastExpression;
-import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
-import net.sf.jsqlparser.statement.select.FromItemVisitorAdapter;
-import net.sf.jsqlparser.statement.select.LateralSubSelect;
-import net.sf.jsqlparser.statement.select.ParenthesedSelect;
-import net.sf.jsqlparser.statement.select.PivotVisitorAdapter;
-import net.sf.jsqlparser.statement.select.Select;
-import net.sf.jsqlparser.statement.select.SelectItemVisitorAdapter;
-import net.sf.jsqlparser.statement.select.SelectVisitor;
-import net.sf.jsqlparser.statement.select.SelectVisitorAdapter;
-import net.sf.jsqlparser.statement.select.SetOperationList;
 import org.apache.avro.LogicalTypes;
 
 /**
@@ -72,57 +61,6 @@ public final class DecimalCasts {
       return null;
     }
     return LogicalTypes.decimal(precision, scale);
-  }
-
-  /**
-   * Validates decimal declarations throughout a statement before query planning.
-   *
-   * @param statement
-   *          the parsed SELECT, including nested queries and CTEs
-   * @throws IllegalArgumentException
-   *           if bounds are invalid; the cause carries SQLState 42000
-   */
-  public static void validateStatement(Select statement) {
-    ExpressionVisitorAdapter<Void> expressions = new ExpressionVisitorAdapter<>() {
-      /** {@inheritDoc} */
-      @Override
-      public <S> Void visit(CastExpression cast, S context) {
-        validateBounds(cast);
-        return super.visit(cast, context);
-      }
-
-      /** {@inheritDoc} */
-      @Override
-      public <S> Void visit(AnyComparisonExpression comparison, S context) {
-        return comparison.getSelect().accept(getSelectVisitor(), context);
-      }
-    };
-    FromItemVisitorAdapter<Void> sources = new FromItemVisitorAdapter<>() {
-      /** {@inheritDoc} */
-      @Override
-      public <S> Void visit(ParenthesedSelect select, S context) {
-        return select.accept(getSelectVisitor(), context);
-      }
-
-      /** {@inheritDoc} */
-      @Override
-      public <S> Void visit(LateralSubSelect select, S context) {
-        return select.accept(getSelectVisitor(), context);
-      }
-    };
-    SelectVisitorAdapter<Void> selects = new SelectVisitorAdapter<>(expressions, new PivotVisitorAdapter<>(expressions),
-        new SelectItemVisitorAdapter<>(expressions), sources) {
-      /** {@inheritDoc} */
-      @Override
-      public <S> Void visit(SetOperationList set, S context) {
-        super.visit(set, context);
-        return expressions.visitOrderBy(set.getOrderByElements(), context);
-      }
-    };
-    sources.setSelectVisitor(selects);
-    sources.setExpressionVisitor(expressions);
-    expressions.setSelectVisitor(selects);
-    statement.accept((SelectVisitor<Void>) selects, null);
   }
 
   /**
