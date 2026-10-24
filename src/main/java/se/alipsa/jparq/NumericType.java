@@ -8,9 +8,9 @@ import org.apache.avro.Schema;
 
 /**
  * Describes a numeric SQL type and its exact decimal bounds. Common types use
- * approximate arithmetic when either input is approximate, then decimal, then
- * the widest integer type. Arithmetic operators can apply their own bounds to
- * the common family.
+ * REAL for two REAL inputs, DOUBLE for other approximate combinations, then
+ * decimal, then the widest integer type. Arithmetic operators can apply their
+ * own bounds to the common family.
  *
  * @param jdbcType
  *          numeric JDBC type
@@ -36,7 +36,8 @@ public record NumericType(int jdbcType, int precision, int scale) {
     return switch (type) {
       case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> new NumericType(Types.INTEGER, 10, 0);
       case Types.BIGINT -> new NumericType(Types.BIGINT, 19, 0);
-      case Types.REAL, Types.FLOAT, Types.DOUBLE -> new NumericType(Types.DOUBLE, 0, 0);
+      case Types.REAL -> new NumericType(Types.REAL, 0, 0);
+      case Types.FLOAT, Types.DOUBLE -> new NumericType(Types.DOUBLE, 0, 0);
       case Types.NUMERIC, Types.DECIMAL -> new NumericType(Types.DECIMAL, Math.max(1, precision), Math.max(0, scale));
       default -> null;
     };
@@ -66,7 +67,11 @@ public record NumericType(int jdbcType, int precision, int scale) {
    * @return common numeric descriptor
    */
   public NumericType common(NumericType other) {
-    if (jdbcType == Types.DOUBLE || other.jdbcType == Types.DOUBLE) {
+    if (jdbcType == Types.REAL && other.jdbcType == Types.REAL) {
+      return this;
+    }
+    if (jdbcType == Types.DOUBLE || other.jdbcType == Types.DOUBLE || jdbcType == Types.REAL
+        || other.jdbcType == Types.REAL) {
       return of(Types.DOUBLE, 0, 0);
     }
     if (jdbcType == Types.DECIMAL || other.jdbcType == Types.DECIMAL) {
@@ -91,6 +96,12 @@ public record NumericType(int jdbcType, int precision, int scale) {
       return null;
     }
     try {
+      if ((jdbcType == Types.REAL && value instanceof Float) || (jdbcType == Types.DOUBLE && value instanceof Double)) {
+        return value;
+      }
+      if (jdbcType == Types.REAL) {
+        return ((Number) value).floatValue();
+      }
       if (jdbcType == Types.DOUBLE) {
         return ((Number) value).doubleValue();
       }
@@ -125,6 +136,7 @@ public record NumericType(int jdbcType, int precision, int scale) {
     return switch (jdbcType) {
       case Types.INTEGER -> Schema.create(Schema.Type.INT);
       case Types.BIGINT -> Schema.create(Schema.Type.LONG);
+      case Types.REAL -> Schema.create(Schema.Type.FLOAT);
       case Types.DOUBLE -> Schema.create(Schema.Type.DOUBLE);
       case Types.DECIMAL -> LogicalTypes.decimal(precision, scale).addToSchema(Schema.create(Schema.Type.BYTES));
       default -> throw new IllegalStateException("Unsupported numeric type: " + jdbcType);

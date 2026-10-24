@@ -600,11 +600,13 @@ The following SQL statements are supported:
 - Join support: INNER, LEFT, RIGHT, FULL, CROSS, and Self Join, join ... using syntax
 - `UNION` and `UNION ALL` support
 - Complete set-operation coverage.
-  Numeric branches use a common output type: INTEGER with BIGINT becomes BIGINT, either approximate
-  input (REAL/FLOAT/DOUBLE) yields DOUBLE, and DECIMAL with exact numeric inputs retains the largest
+  Numeric branches use a common output type: INTEGER with BIGINT becomes BIGINT, two REAL inputs
+  retain REAL and Float values, other approximate combinations use DOUBLE, and DECIMAL with exact numeric inputs retains the largest
   integer-digit count and scale. Values are converted before set comparison, and metadata preserves
-  the common type and decimal bounds, including empty results. Untyped NULL adopts the other branch's
-  type. Numeric and nonnumeric branches remain incompatible. Integer literals currently use BIGINT;
+  the common type and decimal bounds, including empty results. At the top level, untyped NULL adopts
+  the other branch's type, and wholly untyped NULL results retain OTHER metadata. NULL typing across
+  CTE and derived-table boundaries is tracked in [#288](https://github.com/Alipsa/JParq/issues/288).
+  Numeric and nonnumeric branches remain incompatible. Integer literals currently use BIGINT;
   general expression typing is tracked in [#232](https://github.com/Alipsa/JParq/issues/232).
   - `EXCEPT`
   - `INTERSECT`

@@ -4,6 +4,7 @@ import java.sql.JDBCType;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
+import org.apache.avro.LogicalTypes.Decimal;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
@@ -93,7 +94,7 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
     valueSchemas = new ArrayList<>(schemas);
     for (int i = 0; i < schemas.size(); i++) {
       Schema schema = schemas.get(i);
-      if (schema != null && schema.getLogicalType() instanceof org.apache.avro.LogicalTypes.Decimal decimal) {
+      if (schema != null && schema.getLogicalType() instanceof Decimal decimal) {
         precisions[i] = decimal.getPrecision();
         scales[i] = decimal.getScale();
       }

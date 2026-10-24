@@ -36,7 +36,7 @@ class SetNumericPromotionTest {
   @BeforeEach
   void fixture() throws Exception {
     var schema = SchemaBuilder.record("numbers").fields().requiredInt("i").requiredLong("l").requiredDouble("d")
-        .endRecord();
+        .requiredFloat("f").endRecord();
     var conf = new Configuration(false);
     var path = new org.apache.hadoop.fs.Path(directory.resolve("numbers.parquet").toUri());
     try (var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(path, conf)).withSchema(schema)
@@ -46,7 +46,92 @@ class SetNumericPromotionTest {
         row.put("i", i);
         row.put("l", 9007199254740992L + i);
         row.put("d", i + 0.5);
+        row.put("f", 0.1f);
         writer.write(row);
+      }
+    }
+  }
+
+  /**
+   * Preserves REAL metadata and Float comparisons when no widening is needed.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void realBranchesRetainFloatValues(boolean pushdown) throws Exception {
+    try (var connection = DriverManager.getConnection(url(pushdown))) {
+      for (boolean empty : List.of(false, true)) {
+        String filter = empty ? " WHERE i < 0" : "";
+        String body = "SELECT f AS x FROM numbers" + filter + " UNION ALL SELECT f FROM numbers" + filter;
+        for (String sql : List.of(body, "SELECT x FROM (" + body + ") q", "WITH q AS (" + body + ") SELECT x FROM q",
+            "SELECT x FROM (" + body + ") q WHERE x = 0.1",
+            "SELECT x FROM (" + body + ") q WHERE x = CAST(0.1 AS REAL)")) {
+          try (var statement = connection.prepareStatement(sql)) {
+            for (int execution = 0; execution < 2; execution++) {
+              try (var result = statement.executeQuery()) {
+                assertEquals(Types.REAL, result.getMetaData().getColumnType(1), sql);
+                assertEquals(Float.class.getName(), result.getMetaData().getColumnClassName(1), sql);
+                int count = 0;
+                while (result.next()) {
+                  assertEquals(0.1f, result.getObject(1), sql);
+                  count++;
+                }
+                assertEquals(empty ? 0 : 4, count, sql);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Widens REAL when combined with another numeric family in either order.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void mixedRealBranchesWiden(boolean pushdown) throws Exception {
+    try (var connection = DriverManager.getConnection(url(pushdown))) {
+      for (String expression : List.of("i", "l", "d", "CAST(i AS DECIMAL(10,2))", "CAST(i AS FLOAT)")) {
+        for (boolean reverse : List.of(false, true)) {
+          String first = reverse ? expression : "f";
+          String second = reverse ? "f" : expression;
+          for (boolean empty : List.of(false, true)) {
+            String filter = empty ? " WHERE i < 0" : "";
+            String sql = "SELECT " + first + " AS x FROM numbers" + filter + " UNION ALL SELECT " + second
+                + " FROM numbers" + filter;
+            try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+              assertEquals(Types.DOUBLE, result.getMetaData().getColumnType(1), sql);
+              assertEquals(Double.class.getName(), result.getMetaData().getColumnClassName(1), sql);
+              int count = 0;
+              while (result.next()) {
+                double actual = assertInstanceOf(Double.class, result.getObject(1), sql);
+                boolean realRow = reverse ? count >= 2 : count < 2;
+                double expected = realRow
+                    ? (double) 0.1f
+                    : expression.equals("l")
+                        ? (double) (9007199254740993L + count % 2)
+                        : expression.equals("d") ? count % 2 + 1.5 : count % 2 + 1.0;
+                assertEquals(expected, actual, sql);
+                count++;
+              }
+              assertEquals(empty ? 0 : 4, count, sql);
+            }
+          }
+        }
       }
     }
   }

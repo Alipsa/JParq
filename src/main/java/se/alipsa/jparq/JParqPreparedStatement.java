@@ -46,9 +46,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Supplier;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.NullValue;
+import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.OrderByElement;
@@ -70,6 +72,7 @@ import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelatedBindings;
 import se.alipsa.jparq.engine.CorrelationMappings;
+import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.HadoopConfigurations;
 import se.alipsa.jparq.engine.Identifier;
@@ -100,6 +103,7 @@ import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
+import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.meta.InformationSchemaColumns;
 import se.alipsa.jparq.meta.InformationSchemaTables;
@@ -762,12 +766,14 @@ public class JParqPreparedStatement implements PreparedStatement {
       throw new SQLException("Set operation query must contain at least one SELECT statement");
     }
     List<List<List<Object>>> componentRows = new ArrayList<>(components.size());
+    List<List<NumericType>> componentTypes = new ArrayList<>(components.size());
     List<String> labels = null;
     List<Integer> sqlTypes = null;
     List<Schema> sourceSchemas = new ArrayList<>();
     int columnCount = -1;
     for (SqlParser.SetComponent component : components) {
       List<List<Object>> componentData = new ArrayList<>();
+      List<NumericType> normalizedTypes = new ArrayList<>();
       try (JParqPreparedStatement prepared = prepareSubqueryStatement(component.sql(), cteResults);
           ResultSet rs = prepared.executeQuery()) {
         ResultSetMetaData meta = rs.getMetaData();
@@ -792,10 +798,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
         for (int col = 1; col <= columnCount; col++) {
           int index = col - 1;
-          List<Object> values = new ArrayList<>();
-          for (List<Object> row : componentData) {
-            values.add(row.get(index));
-          }
+          Supplier<List<Object>> values = () -> componentData.stream().map(row -> row.get(index)).toList();
           int type = meta.getColumnType(col);
           Schema schema = sourceColumnSchema(meta, col);
           Expression expression = prepared.parsedSelect != null
@@ -803,12 +806,14 @@ public class JParqPreparedStatement implements PreparedStatement {
                   ? prepared.parsedSelect.expressions().get(index)
                   : null;
           Expression projection = ExpressionEvaluator.unwrapParenthesis(expression);
-          boolean simpleDeclaration = projection instanceof CastExpression
-              || projection instanceof net.sf.jsqlparser.expression.SignedExpression
-              || se.alipsa.jparq.helper.LiteralConverter.isLiteral(projection);
+          boolean simpleDeclaration = projection instanceof CastExpression || projection instanceof SignedExpression
+              || LiteralConverter.isLiteral(projection);
           Schema projected = type == Types.OTHER || simpleDeclaration ? setExpressionSchema(projection, values) : null;
           int projectedType = projected == null ? Types.NULL : JdbcTypeMapper.mapSchemaToJdbcType(projected);
-          if (type == Types.OTHER || (simpleDeclaration && projected != null) || projection instanceof NullValue) {
+          boolean numericDeclaration = NumericType.of(projectedType, 0, 0) != null;
+          boolean numericSource = NumericType.of(type, 0, 0) != null;
+          if (type == Types.OTHER || (simpleDeclaration && projected != null && (numericDeclaration || numericSource))
+              || projection instanceof NullValue) {
             boolean unknown = type == Types.OTHER;
             schema = projected;
             type = projectedType;
@@ -824,18 +829,27 @@ public class JParqPreparedStatement implements PreparedStatement {
             if ((meta.getPrecision(col) == 0 || simpleDeclaration) && schema != null
                 && schema.getLogicalType() instanceof LogicalTypes.Decimal decimal) {
               numeric = NumericType.of(type, decimal.getPrecision(), decimal.getScale());
-            } else if (type == Types.DECIMAL || type == Types.NUMERIC) {
-              LogicalTypes.Decimal bounds = DecimalTypeInference.infer(values);
+            } else if ((type == Types.DECIMAL || type == Types.NUMERIC) && meta.getPrecision(col) == 0) {
+              LogicalTypes.Decimal bounds = DecimalTypeInference.infer(values.get());
               numeric = numeric.common(NumericType.of(type, bounds.getPrecision(), bounds.getScale()));
             }
             schema = numeric.schema();
           }
+          NumericType declared = NumericType.of(meta.getColumnType(col), meta.getPrecision(col), meta.getScale(col));
+          // Unknown, overridden, or value-inferred decimal declarations still
+          // need normalization; inferred decimal bounds do not fix row scales.
+          boolean fixedDecimal = sourceColumnSchema(meta, col) != null
+              || (projection instanceof CastExpression cast && DecimalCasts.declaredType(cast) != null);
+          normalizedTypes.add(numeric != null && numeric.jdbcType() == meta.getColumnType(col)
+              && numeric.equals(declared) && (numeric.jdbcType() != Types.DECIMAL || fixedDecimal) ? numeric : null);
           mergeSetColumn(sqlTypes, sourceSchemas, index, type, schema, numeric);
         }
       }
       componentRows.add(componentData);
+      componentTypes.add(normalizedTypes);
     }
-    coerceSetRows(componentRows, sqlTypes, sourceSchemas);
+    sqlTypes.replaceAll(type -> type == Types.NULL ? Types.OTHER : type);
+    coerceSetRows(componentRows, componentTypes, sqlTypes, sourceSchemas);
     List<List<Object>> combined = evaluateSetOperation(components, componentRows);
     List<List<Object>> ordered = applySetOrdering(combined, labels, sqlTypes, parsedSetQuery.orderBy());
     List<List<Object>> sliced = applySetLimitOffset(ordered, parsedSetQuery.limit(), parsedSetQuery.offset());
@@ -850,15 +864,15 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @param expression
    *          projected expression, when available
    * @param values
-   *          returned column values
+   *          lazily supplied returned column values
    * @return inferred schema, or null for an untyped NULL
    */
-  private Schema setExpressionSchema(Expression expression, List<Object> values) {
+  private Schema setExpressionSchema(Expression expression, Supplier<List<Object>> values) {
     Expression projection = ExpressionEvaluator.unwrapParenthesis(expression);
     if (projection instanceof NullValue) {
       return null;
     }
-    if (projection instanceof net.sf.jsqlparser.expression.SignedExpression signed) {
+    if (projection instanceof SignedExpression signed) {
       return setExpressionSchema(signed.getExpression(), values);
     }
     if (projection instanceof CastExpression cast && cast.getColDataType() != null) {
@@ -868,38 +882,33 @@ public class JParqPreparedStatement implements PreparedStatement {
       int type = switch (name) {
         case "TINYINT", "SMALLINT", "INT", "INTEGER" -> Types.INTEGER;
         case "BIGINT" -> Types.BIGINT;
-        case "REAL", "FLOAT", "DOUBLE", "DOUBLE PRECISION" -> Types.DOUBLE;
+        case "REAL" -> Types.REAL;
+        case "FLOAT", "DOUBLE", "DOUBLE PRECISION" -> Types.DOUBLE;
         case "DECIMAL", "NUMERIC", "NUMBER" -> Types.DECIMAL;
         default -> Types.OTHER;
       };
       if (type == Types.DECIMAL) {
-        var decimal = se.alipsa.jparq.engine.DecimalCasts.declaredType(cast);
-        return decimal == null ? decimalSchemaForValues(values) : decimal.addToSchema(Schema.create(Schema.Type.BYTES));
+        var decimal = DecimalCasts.declaredType(cast);
+        return decimal == null
+            ? decimalSchemaForValues(values.get())
+            : decimal.addToSchema(Schema.create(Schema.Type.BYTES));
       }
       NumericType numeric = NumericType.of(type, 0, 0);
       if (numeric != null) {
         return numeric.schema();
       }
-      Schema declared = switch (name) {
-        case "VARCHAR", "CHAR", "CHARACTER", "TEXT", "STRING" -> Schema.create(Schema.Type.STRING);
-        case "BOOLEAN", "BOOL" -> Schema.create(Schema.Type.BOOLEAN);
-        case "DATE" -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
-        case "TIME" -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
-        case "TIMESTAMP" -> LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
-        default -> null;
-      };
-      if (declared != null) {
-        return declared;
-      }
     }
-    if (se.alipsa.jparq.helper.LiteralConverter.isLiteral(projection)) {
-      Object literal = se.alipsa.jparq.helper.LiteralConverter.toLiteral(projection);
+    if (LiteralConverter.isLiteral(projection)) {
+      Object literal = LiteralConverter.toLiteral(projection);
       return schemaForColumnType(classifyValueType(literal), List.of(literal));
     }
-    if (values.stream().allMatch(Objects::isNull)) {
+    List<Object> returned = values.get();
+    // Keep nonnumeric CASTs distinct from untyped NULL; their declared metadata
+    // remains outside numeric promotion and is tracked in #288.
+    if (!(projection instanceof CastExpression) && returned.stream().allMatch(Objects::isNull)) {
       return null;
     }
-    return schemaForColumnType(determineColumnType(values), values);
+    return schemaForColumnType(determineColumnType(returned), returned);
   }
 
   /**
@@ -945,10 +954,13 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Converts every numeric branch before duplicate counting or ordering occurs.
+   * Normalizes changed numeric branches before duplicate counting or ordering.
+   * Already normalized branches and unchanged rows retain their snapshots.
    *
    * @param components
    *          rows of each branch
+   * @param componentTypes
+   *          normalized branch types, with null for unknown representations
    * @param types
    *          resolved output types
    * @param schemas
@@ -956,22 +968,38 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @throws SQLException
    *           if a numeric conversion loses data
    */
-  private void coerceSetRows(List<List<List<Object>>> components, List<Integer> types, List<Schema> schemas)
-      throws SQLException {
+  private void coerceSetRows(List<List<List<Object>>> components, List<List<NumericType>> componentTypes,
+      List<Integer> types, List<Schema> schemas) throws SQLException {
     List<NumericType> numericTypes = new ArrayList<>(types.size());
     for (int col = 0; col < types.size(); col++) {
       numericTypes.add(NumericType.of(types.get(col), schemas.get(col)));
     }
-    for (List<List<Object>> rows : components) {
+    for (int component = 0; component < components.size(); component++) {
+      List<Integer> conversions = new ArrayList<>();
+      for (int col = 0; col < types.size(); col++) {
+        if (numericTypes.get(col) != null && !numericTypes.get(col).equals(componentTypes.get(component).get(col))) {
+          conversions.add(col);
+        }
+      }
+      if (conversions.isEmpty()) {
+        continue;
+      }
+      List<List<Object>> rows = components.get(component);
       for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
-        List<Object> row = new ArrayList<>(rows.get(rowIndex));
-        for (int col = 0; col < types.size(); col++) {
-          NumericType numeric = numericTypes.get(col);
-          if (numeric != null) {
-            row.set(col, numeric.convert(row.get(col)));
+        List<Object> original = rows.get(rowIndex);
+        List<Object> converted = null;
+        for (int col : conversions) {
+          Object value = numericTypes.get(col).convert(original.get(col));
+          if (value != original.get(col)) {
+            if (converted == null) {
+              converted = new ArrayList<>(original);
+            }
+            converted.set(col, value);
           }
         }
-        rows.set(rowIndex, materializeRow(row));
+        if (converted != null) {
+          rows.set(rowIndex, materializeRow(converted));
+        }
       }
     }
   }

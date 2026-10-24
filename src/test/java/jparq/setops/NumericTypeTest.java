@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import java.math.BigDecimal;
 import java.sql.SQLException;
 import java.sql.Types;
+import org.apache.avro.Schema;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.NumericType;
 
@@ -24,7 +25,7 @@ class NumericTypeTest {
     var integer = NumericType.of(Types.INTEGER, 0, 0);
     var bigint = NumericType.of(Types.BIGINT, 0, 0);
     var decimal = NumericType.of(Types.DECIMAL, 10, 4);
-    final var approximate = NumericType.of(Types.REAL, 0, 0);
+    final var approximate = NumericType.of(Types.DOUBLE, 0, 0);
     assertEquals(bigint, integer.common(bigint));
     assertEquals(bigint, bigint.common(integer));
     assertEquals(NumericType.of(Types.DECIMAL, 23, 4), decimal.common(bigint));
@@ -36,6 +37,30 @@ class NumericTypeTest {
     assertEquals(3, integer.convert(new BigDecimal("3.0")));
     assertNull(decimal.convert(null));
     assertNull(NumericType.of(Types.VARCHAR, 0, 0));
+  }
+
+  /**
+   * Retains REAL for matching inputs and widens mixed approximate families.
+   *
+   * @throws SQLException
+   *           if numeric conversion fails
+   */
+  @Test
+  void realPromotion() throws SQLException {
+    var real = NumericType.of(Types.REAL, 0, 0);
+    assertEquals(real, real.common(real));
+    assertEquals(Types.REAL, real.jdbcType());
+    assertEquals(Schema.Type.FLOAT, real.schema().getType());
+    assertEquals(0.1f, real.convert(0.1f));
+    assertEquals(0.1f, real.convert(new BigDecimal("0.1")));
+    for (int jdbcType : new int[]{
+        Types.INTEGER, Types.BIGINT, Types.DECIMAL, Types.DOUBLE, Types.FLOAT
+    }) {
+      var other = NumericType.of(jdbcType, 10, 2);
+      assertEquals(Types.DOUBLE, real.common(other).jdbcType());
+      assertEquals(real.common(other), other.common(real));
+      assertEquals((double) 0.1f, real.common(other).convert(0.1f));
+    }
   }
 
   /** Ensures exact numeric conversion rejects overflow and fractional loss. */

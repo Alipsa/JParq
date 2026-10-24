@@ -24,6 +24,63 @@ class SetNumericBoundaryTest {
   Path directory;
 
   /**
+   * Preserves OTHER for wholly untyped NULL results, including empty sets.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void untypedNullResultsRetainOtherMetadata() throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      for (boolean empty : List.of(false, true)) {
+        String filter = empty ? " WHERE FALSE" : "";
+        String sql = "SELECT NULL AS x" + filter + " UNION SELECT NULL AS x" + filter;
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+          assertEquals(Types.OTHER, result.getMetaData().getColumnType(1));
+          assertEquals("OTHER", result.getMetaData().getColumnTypeName(1));
+          if (!empty) {
+            assertTrue(result.next());
+            assertEquals(null, result.getObject(1));
+          }
+          assertFalse(result.next());
+        }
+      }
+    }
+  }
+
+  /**
+   * Keeps nonnumeric CAST metadata unchanged while numeric promotion is scoped.
+   *
+   * @param empty
+   *          whether the branches are empty
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void nonnumericCastsRetainExistingMetadata(boolean empty) throws Exception {
+    String filter = empty ? " WHERE FALSE" : "";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      for (String type : List.of("BOOLEAN", "VARCHAR", "CHAR", "DATE", "TIME", "TIMESTAMP")) {
+        String body = "SELECT CAST(NULL AS " + type + ") AS x" + filter;
+        try (var statement = connection.createStatement();
+            var result = statement.executeQuery(body + " UNION ALL " + body)) {
+          // Declared metadata for the remaining CAST families is tracked in #288.
+          assertEquals(type.equals("BOOLEAN") ? Types.BOOLEAN : Types.OTHER, result.getMetaData().getColumnType(1),
+              type);
+          for (int row = 0; row < (empty ? 0 : 2); row++) {
+            assertTrue(result.next());
+            assertEquals(null, result.getObject(1));
+          }
+          assertFalse(result.next());
+        }
+      }
+    }
+  }
+
+  /**
    * Preserves declared bounds and exact values through widening and empty sets.
    *
    * @param empty
