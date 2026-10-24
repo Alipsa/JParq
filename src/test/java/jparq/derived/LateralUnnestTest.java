@@ -1,6 +1,8 @@
 package jparq.derived;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 import java.nio.file.Path;
 import java.sql.Date;
@@ -10,6 +12,7 @@ import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
@@ -21,6 +24,10 @@ import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.ParquetTable;
+import se.alipsa.jparq.engine.SqlParser;
 
 /** Regression coverage for typed outer arrays inside LATERAL derived tables. */
 class LateralUnnestTest {
@@ -116,6 +123,100 @@ class LateralUnnestTest {
         var result = statement.executeQuery("SELECT x.t FROM arr a CROSS JOIN LATERAL "
             + "(SELECT u.t FROM UNNEST(a.dates) AS u(t)) x WHERE a.id < 0")) {
       assertEquals(Types.DATE, result.getMetaData().getColumnType(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Nested LATERAL shapes and validated inputs stay bounded as outer rows grow.
+   *
+   * @param scalar
+   *          whether the containing query is a correlated scalar subquery
+   * @throws Exception
+   *           if JDBC execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void nestedLateralsReuseShapes(boolean scalar) throws Exception {
+    List<Integer> previousCounts = null;
+    for (int outerRows : List.of(2, 4)) {
+      var parses = new AtomicInteger();
+      var validations = new AtomicInteger();
+      try (var parser = mockStatic(SqlParser.class, CALLS_REAL_METHODS);
+          var tables = mockStatic(ParquetTable.class, CALLS_REAL_METHODS)) {
+        parser.when(() -> SqlParser.parseQuery(anyString())).thenAnswer(invocation -> {
+          parses.incrementAndGet();
+          return invocation.callRealMethod();
+        });
+        tables.when(() -> ParquetTable.validate(any(), any())).thenAnswer(invocation -> {
+          validations.incrementAndGet();
+          return invocation.callRealMethod();
+        });
+        String inner = "FROM arr b CROSS JOIN LATERAL (SELECT u.t FROM UNNEST(b.dates) AS u(t)) y "
+            + "WHERE b.id = a.id";
+        String sql = scalar
+            ? "SELECT a.id, (SELECT MAX(y.t) " + inner + ") FROM arr a WHERE a.id < " + outerRows + " ORDER BY a.id"
+            : "SELECT a.id, x.t FROM arr a CROSS JOIN LATERAL (SELECT y.t " + inner + ") x WHERE a.id < " + outerRows
+                + " ORDER BY a.id, x.t";
+        try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+            var statement = connection.prepareStatement(sql)) {
+          for (int execution = 0; execution < 2; execution++) {
+            try (var result = statement.executeQuery()) {
+              int count = 0;
+              while (result.next()) {
+                int id = result.getInt(1);
+                if (scalar && id < 2) {
+                  assertNull(result.getObject(2));
+                } else {
+                  assertEquals((scalar || count % 2 == 1 ? 21000 : 20000) + id,
+                      result.getDate(2).toLocalDate().toEpochDay());
+                }
+                count++;
+              }
+              assertEquals(scalar ? outerRows : Math.max(0, outerRows - 2) * 2, count);
+            }
+          }
+        }
+      }
+      var counts = List.of(parses.get(), validations.get());
+      if (previousCounts != null) {
+        assertEquals(previousCounts, counts, "Nested LATERAL work grew with outer row count");
+      }
+      previousCounts = counts;
+    }
+  }
+
+  /**
+   * Direct-column metadata uses the same qualifier resolution as value binding.
+   */
+  @Test
+  void qualifiersPreserveDateSchemasAndValues() throws SQLException {
+    for (String qualifier : List.of("arr", "a", "A", "\"Outer A\"")) {
+      String source = "arr".equals(qualifier) ? "arr" : "arr " + qualifier;
+      try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+          var statement = connection.createStatement();
+          var result = statement.executeQuery("SELECT x.t FROM " + source + " CROSS JOIN LATERAL "
+              + "(SELECT u.t FROM UNNEST(" + qualifier + ".dates) AS u(t)) x ORDER BY x.t")) {
+        assertEquals(Types.DATE, result.getMetaData().getColumnType(1), qualifier);
+        List<Long> days = new ArrayList<>();
+        while (result.next()) {
+          days.add(result.getDate(1).toLocalDate().toEpochDay());
+        }
+        assertEquals(List.of(20002L, 20003L, 21002L, 21003L), days, qualifier);
+      }
+    }
+  }
+
+  /** Standalone NULL arrays produce no rows and retain unknown-type metadata. */
+  @Test
+  void standaloneNullUnnestReturnsNoRows() throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT * FROM UNNEST(NULL) AS u(x)")) {
+      assertEquals("x", result.getMetaData().getColumnLabel(1));
+      assertEquals(Types.VARCHAR, result.getMetaData().getColumnType(1));
       assertFalse(result.next());
     }
   }

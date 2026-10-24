@@ -16,7 +16,14 @@ public final class CorrelatedBindings implements AutoCloseable {
   private final String key;
   private final Frame previous;
 
-  /** Values and optional source schemas belonging to one active query. */
+  /**
+   * Values and optional source schemas belonging to one active query.
+   *
+   * @param values
+   *          current typed values, including nulls
+   * @param schemas
+   *          declared schemas in slot order, or empty when unknown
+   */
   private record Frame(List<Object> values, List<Schema> schemas) {
   }
 
@@ -42,8 +49,13 @@ public final class CorrelatedBindings implements AutoCloseable {
    *          typed values, including nulls
    * @param schemas
    *          source schemas in slot order, or an empty list when unknown
+   * @throws IllegalArgumentException
+   *           if nonempty schemas do not match the value slots
    */
   public CorrelatedBindings(String key, List<Object> values, List<Schema> schemas) {
+    if (!schemas.isEmpty() && schemas.size() != values.size()) {
+      throw new IllegalArgumentException("Binding schemas must match value slots");
+    }
     this.key = key;
     Map<String, Frame> active = ACTIVE.get();
     if (active == null) {
@@ -87,20 +99,8 @@ public final class CorrelatedBindings implements AutoCloseable {
    *           if the call is malformed, inactive, or has an invalid slot
    */
   public static Object value(Function function) {
-    String message = "Invalid correlated binding: reserved for internal query execution";
-    if (!matches(function)) {
-      throw new IllegalArgumentException(message);
-    }
-    var arguments = function.getParameters();
-    String key = ((StringValue) arguments.get(0)).getValue();
-    var index = ((LongValue) arguments.get(1)).getBigIntegerValue();
-    var active = ACTIVE.get();
-    Frame frame = active == null ? null : active.get(key);
-    List<Object> values = frame == null ? null : frame.values();
-    if (values == null || index.signum() < 0 || index.compareTo(java.math.BigInteger.valueOf(values.size())) >= 0) {
-      throw new IllegalArgumentException(message);
-    }
-    return values.get(index.intValue());
+    Slot slot = slot(function);
+    return slot.frame().values().get(slot.index());
   }
 
   /**
@@ -113,11 +113,45 @@ public final class CorrelatedBindings implements AutoCloseable {
    *           if the binding is invalid or inactive
    */
   public static Schema schema(Function function) {
-    value(function);
+    Slot slot = slot(function);
+    return slot.frame().schemas().isEmpty() ? null : slot.frame().schemas().get(slot.index());
+  }
+
+  /**
+   * An active frame and a validated slot index.
+   *
+   * @param frame
+   *          active query frame
+   * @param index
+   *          validated position in its value and optional schema lists
+   */
+  private record Slot(Frame frame, int index) {
+  }
+
+  /**
+   * Resolves and validates a private placeholder once for either accessor.
+   *
+   * @param function
+   *          private placeholder expression
+   * @return active frame and validated index
+   * @throws IllegalArgumentException
+   *           if the call is malformed, inactive, or out of range
+   */
+  private static Slot slot(Function function) {
+    String message = "Invalid correlated binding: reserved for internal query execution";
+    if (!matches(function)) {
+      throw new IllegalArgumentException(message);
+    }
     var arguments = function.getParameters();
-    Frame frame = ACTIVE.get().get(((StringValue) arguments.get(0)).getValue());
-    int index = ((LongValue) arguments.get(1)).getBigIntegerValue().intValue();
-    return frame.schemas().isEmpty() ? null : frame.schemas().get(index);
+    String key = ((StringValue) arguments.get(0)).getValue();
+    var index = ((LongValue) arguments.get(1)).getBigIntegerValue();
+    var active = ACTIVE.get();
+    Frame frame = active == null ? null : active.get(key);
+    if (frame == null || index.signum() < 0
+        || index.compareTo(java.math.BigInteger.valueOf(frame.values().size())) >= 0) {
+      throw new IllegalArgumentException(message);
+    }
+    return new Slot(frame, index.intValue());
   }
 
   /** Restores ancestor bindings and removes thread state after the last frame. */

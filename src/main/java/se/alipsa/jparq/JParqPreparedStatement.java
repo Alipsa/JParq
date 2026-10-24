@@ -69,13 +69,11 @@ import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelatedBindings;
-import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.HadoopConfigurations;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.InMemoryRecordReader;
-import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.JoinPredicatePlanner;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.MaterializedNames;
@@ -2105,8 +2103,8 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Materialize a standalone {@code UNNEST} table reference into an in-memory
-   * representation. Correlated bindings retain declared element schemas even for
-   * null or empty arrays; null arrays produce no rows.
+   * representation. Direct correlated column bindings retain declared element
+   * schemas even for null or empty arrays; null arrays produce no rows.
    *
    * @param baseRef
    *          the table reference describing the {@code UNNEST} invocation
@@ -2567,48 +2565,32 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (priorTables == null || priorTables.isEmpty()) {
       throw new SQLException("LATERAL derived tables require at least one preceding table");
     }
-    net.sf.jsqlparser.statement.select.Select parsed;
-    try {
-      parsed = (net.sf.jsqlparser.statement.select.Select) JSqlParserSupport.parseStatement(sql);
-    } catch (Exception e) {
-      throw new SQLException("Failed to parse LATERAL subquery", e);
-    }
-    List<String> qualifierNames = collectQualifiers(priorTables);
-    String bindingKey = java.util.UUID.randomUUID().toString();
-    var references = new LinkedHashMap<CorrelatedSubqueryRewriter.QualifiedColumn, Integer>();
-    var rewritten = CorrelatedSubqueryRewriter.rewrite(parsed, qualifierNames, (qualifier, column) -> {
-      var reference = new CorrelatedSubqueryRewriter.QualifiedColumn(qualifier, column);
-      int index = references.computeIfAbsent(reference, ignored -> references.size());
-      return new CorrelatedBindings.Reference(bindingKey, index);
-    });
+    var query = executionPlans.lateral(ref, collectQualifiers(priorTables));
     Map<String, Map<String, String>> columnLookup = buildCorrelatedColumnLookup(priorTables);
     List<Schema> bindingSchemas = new ArrayList<>();
-    for (var reference : references.keySet()) {
-      Integer index = qualifierIndex.get(reference.qualifier());
-      Schema source = index == null ? null : priorTables.get(index).schema();
-      String fieldName = columnLookup.getOrDefault(reference.qualifier(), Map.of())
-          .get(normalizeColumnKey(reference.column()));
-      Field field = source == null || fieldName == null ? null : source.getField(fieldName);
-      bindingSchemas.add(field == null ? null : field.schema());
+    for (var reference : query.references()) {
+      var resolved = resolveCorrelatedField(reference.qualifier(), reference.column(), priorTables, qualifierIndex,
+          columnLookup);
+      bindingSchemas.add(resolved == null ? null : resolved.field().schema());
     }
     List<String> fieldNames = new ArrayList<>();
     List<Schema> valueSchemas = new ArrayList<>();
     SubqueryTableData metadata;
-    var initialBindings = new CorrelatedBindings(bindingKey, Collections.nCopies(references.size(), null),
+    var initialBindings = new CorrelatedBindings(query.key(), Collections.nCopies(query.references().size(), null),
         bindingSchemas);
     try (initialBindings) {
-      metadata = executeSubquery(rewritten.sql(), ref, null, fieldNames, valueSchemas);
+      metadata = executeSubquery(query.sql(), ref, null, fieldNames, valueSchemas);
     }
     Schema schema = metadata.schema();
     JoinRecordReader.CorrelatedRowsSupplier supplier = assignments -> {
       List<Object> values = new ArrayList<>();
-      for (var reference : references.keySet()) {
+      for (var reference : query.references()) {
         values.add(resolveCorrelatedValue(reference.qualifier(), reference.column(), assignments, priorTables,
             qualifierIndex, columnLookup));
       }
-      var bindings = new CorrelatedBindings(bindingKey, values, bindingSchemas);
+      var bindings = new CorrelatedBindings(query.key(), values, bindingSchemas);
       try (bindings) {
-        return executeSubquery(rewritten.sql(), ref, schema, fieldNames, valueSchemas).rows();
+        return executeSubquery(query.sql(), ref, schema, fieldNames, valueSchemas).rows();
       } catch (SQLException e) {
         throw new IllegalStateException("Failed to evaluate LATERAL subquery", e);
       }
@@ -2784,39 +2766,68 @@ public class JParqPreparedStatement implements PreparedStatement {
   private Object resolveCorrelatedValue(String qualifier, String column, List<GenericRecord> assignments,
       List<JoinRecordReader.JoinTable> priorTables, Map<String, Integer> qualifierIndex,
       Map<String, Map<String, String>> columnLookup) {
-    if (column == null) {
+    var resolved = resolveCorrelatedField(qualifier, column, priorTables, qualifierIndex, columnLookup);
+    if (resolved == null || assignments == null || resolved.tableIndex() >= assignments.size()) {
       return null;
     }
-    String normalizedQualifier = qualifier;
-    Integer tableIndex = null;
-    if (normalizedQualifier != null && qualifierIndex != null) {
-      tableIndex = qualifierIndex.get(normalizedQualifier);
+    GenericRecord record = assignments.get(resolved.tableIndex());
+    return record == null ? null : AvroCoercions.unwrap(record.get(resolved.field().name()), resolved.field().schema());
+  }
+
+  /**
+   * A source field and the preceding join input that supplies it.
+   *
+   * @param tableIndex
+   *          position in the join assignment
+   * @param field
+   *          declared source field
+   */
+  private record CorrelatedField(int tableIndex, Field field) {
+  }
+
+  /**
+   * Resolves the same source field for correlation values and their schemas.
+   *
+   * @param qualifier
+   *          normalized outer qualifier
+   * @param column
+   *          outer column identifier
+   * @param priorTables
+   *          preceding join inputs
+   * @param qualifierIndex
+   *          qualifier-to-input lookup
+   * @param columnLookup
+   *          qualifier-to-column mappings
+   * @return the resolved field and input position, or null when unavailable
+   */
+  private static CorrelatedField resolveCorrelatedField(String qualifier, String column,
+      List<JoinRecordReader.JoinTable> priorTables, Map<String, Integer> qualifierIndex,
+      Map<String, Map<String, String>> columnLookup) {
+    if (column == null || qualifier == null || priorTables == null) {
+      return null;
     }
-    if (tableIndex == null && normalizedQualifier != null && priorTables != null) {
+    Integer tableIndex = qualifierIndex == null ? null : qualifierIndex.get(qualifier);
+    if (tableIndex == null) {
       for (int i = 0; i < priorTables.size(); i++) {
         JoinRecordReader.JoinTable table = priorTables.get(i);
-        if (normalizedQualifier.equals(JParqUtil.normalizeQualifier(table.alias()))
-            || normalizedQualifier.equals(JParqUtil.normalizeQualifier(table.tableName()))) {
+        if (qualifier.equals(JParqUtil.normalizeQualifier(table.alias()))
+            || qualifier.equals(JParqUtil.normalizeQualifier(table.tableName()))) {
           tableIndex = i;
           break;
         }
       }
     }
-    if (tableIndex == null || assignments == null || tableIndex >= assignments.size()) {
+    if (tableIndex == null) {
       return null;
     }
-    GenericRecord record = assignments.get(tableIndex);
-    if (record == null) {
-      return null;
-    }
-    Map<String, String> mapping = columnLookup.getOrDefault(normalizedQualifier, Map.of());
+    Schema source = priorTables.get(tableIndex).schema();
     String normalizedColumn = normalizeColumnKey(column);
-    String fieldName = mapping.get(normalizedColumn);
+    String fieldName = columnLookup.getOrDefault(qualifier, Map.of()).get(normalizedColumn);
     if (fieldName == null) {
-      fieldName = findFieldName(record.getSchema(), normalizedColumn);
+      fieldName = findFieldName(source, normalizedColumn);
     }
-    Schema.Field field = fieldName == null ? null : record.getSchema().getField(fieldName);
-    return field == null ? null : AvroCoercions.unwrap(record.get(fieldName), field.schema());
+    Field field = fieldName == null ? null : source.getField(fieldName);
+    return field == null ? null : new CorrelatedField(tableIndex, field);
   }
 
   /**
