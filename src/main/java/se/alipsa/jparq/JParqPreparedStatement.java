@@ -777,21 +777,11 @@ public class JParqPreparedStatement implements PreparedStatement {
           sqlTypes = new ArrayList<>(columnCount);
           for (int col = 1; col <= columnCount; col++) {
             labels.add(columnLabel(meta, col));
-            sqlTypes.add(meta.getColumnType(col));
-            sourceSchemas.add(sourceColumnSchema(meta, col));
+            sqlTypes.add(Types.NULL);
+            sourceSchemas.add(null);
           }
         } else if (meta.getColumnCount() != columnCount) {
           throw new SQLException("Set operation components must project the same number of columns");
-        } else {
-          for (int col = 1; col <= columnCount; col++) {
-            if (!Objects.equals(sourceSchemas.get(col - 1), sourceColumnSchema(meta, col))) {
-              sourceSchemas.set(col - 1, null);
-            }
-            Integer expectedType = sqlTypes.get(col - 1);
-            if (expectedType != null && expectedType != meta.getColumnType(col)) {
-              throw new SQLException("Set operation components must use compatible column types");
-            }
-          }
         }
         while (rs.next()) {
           List<Object> row = new ArrayList<>(columnCount);
@@ -800,13 +790,190 @@ public class JParqPreparedStatement implements PreparedStatement {
           }
           componentData.add(materializeRow(row));
         }
+        for (int col = 1; col <= columnCount; col++) {
+          int index = col - 1;
+          List<Object> values = new ArrayList<>();
+          for (List<Object> row : componentData) {
+            values.add(row.get(index));
+          }
+          int type = meta.getColumnType(col);
+          Schema schema = sourceColumnSchema(meta, col);
+          Expression expression = prepared.parsedSelect != null
+              && prepared.parsedSelect.expressions().size() == columnCount
+                  ? prepared.parsedSelect.expressions().get(index)
+                  : null;
+          Expression projection = ExpressionEvaluator.unwrapParenthesis(expression);
+          boolean simpleDeclaration = projection instanceof CastExpression
+              || projection instanceof net.sf.jsqlparser.expression.SignedExpression
+              || se.alipsa.jparq.helper.LiteralConverter.isLiteral(projection);
+          Schema projected = type == Types.OTHER || simpleDeclaration ? setExpressionSchema(projection, values) : null;
+          int projectedType = projected == null ? Types.NULL : JdbcTypeMapper.mapSchemaToJdbcType(projected);
+          if (type == Types.OTHER || (simpleDeclaration && projected != null) || projection instanceof NullValue) {
+            boolean unknown = type == Types.OTHER;
+            schema = projected;
+            type = projectedType;
+            // Preserve the existing contract for unknown nonnumeric projections.
+            // Only numeric values need new coercion and metadata here.
+            if (unknown && type != Types.NULL && NumericType.of(type, 0, 0) == null) {
+              type = Types.OTHER;
+              schema = sourceColumnSchema(meta, col);
+            }
+          }
+          NumericType numeric = NumericType.of(type, meta.getPrecision(col), meta.getScale(col));
+          if (numeric != null) {
+            if ((meta.getPrecision(col) == 0 || simpleDeclaration) && schema != null
+                && schema.getLogicalType() instanceof LogicalTypes.Decimal decimal) {
+              numeric = NumericType.of(type, decimal.getPrecision(), decimal.getScale());
+            } else if (type == Types.DECIMAL || type == Types.NUMERIC) {
+              LogicalTypes.Decimal bounds = DecimalTypeInference.infer(values);
+              numeric = numeric.common(NumericType.of(type, bounds.getPrecision(), bounds.getScale()));
+            }
+            schema = numeric.schema();
+          }
+          mergeSetColumn(sqlTypes, sourceSchemas, index, type, schema, numeric);
+        }
       }
       componentRows.add(componentData);
     }
+    coerceSetRows(componentRows, sqlTypes, sourceSchemas);
     List<List<Object>> combined = evaluateSetOperation(components, componentRows);
     List<List<Object>> ordered = applySetOrdering(combined, labels, sqlTypes, parsedSetQuery.orderBy());
     List<List<Object>> sliced = applySetLimitOffset(ordered, parsedSetQuery.limit(), parsedSetQuery.offset());
     return JParqResultSet.materializedResult("set_operation_result", labels, sqlTypes, sliced, sourceSchemas);
+  }
+
+  /**
+   * Resolves untyped set projections from simple declarations or returned values.
+   * Numeric literal representation is retained until the expression typing work
+   * in issue #232 changes the literal contract.
+   *
+   * @param expression
+   *          projected expression, when available
+   * @param values
+   *          returned column values
+   * @return inferred schema, or null for an untyped NULL
+   */
+  private Schema setExpressionSchema(Expression expression, List<Object> values) {
+    Expression projection = ExpressionEvaluator.unwrapParenthesis(expression);
+    if (projection instanceof NullValue) {
+      return null;
+    }
+    if (projection instanceof net.sf.jsqlparser.expression.SignedExpression signed) {
+      return setExpressionSchema(signed.getExpression(), values);
+    }
+    if (projection instanceof CastExpression cast && cast.getColDataType() != null) {
+      String declaration = cast.getColDataType().getDataType().toUpperCase(Locale.ROOT);
+      int parameters = declaration.indexOf('(');
+      String name = (parameters < 0 ? declaration : declaration.substring(0, parameters)).trim();
+      int type = switch (name) {
+        case "TINYINT", "SMALLINT", "INT", "INTEGER" -> Types.INTEGER;
+        case "BIGINT" -> Types.BIGINT;
+        case "REAL", "FLOAT", "DOUBLE", "DOUBLE PRECISION" -> Types.DOUBLE;
+        case "DECIMAL", "NUMERIC", "NUMBER" -> Types.DECIMAL;
+        default -> Types.OTHER;
+      };
+      if (type == Types.DECIMAL) {
+        var decimal = se.alipsa.jparq.engine.DecimalCasts.declaredType(cast);
+        return decimal == null ? decimalSchemaForValues(values) : decimal.addToSchema(Schema.create(Schema.Type.BYTES));
+      }
+      NumericType numeric = NumericType.of(type, 0, 0);
+      if (numeric != null) {
+        return numeric.schema();
+      }
+      Schema declared = switch (name) {
+        case "VARCHAR", "CHAR", "CHARACTER", "TEXT", "STRING" -> Schema.create(Schema.Type.STRING);
+        case "BOOLEAN", "BOOL" -> Schema.create(Schema.Type.BOOLEAN);
+        case "DATE" -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
+        case "TIME" -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
+        case "TIMESTAMP" -> LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
+        default -> null;
+      };
+      if (declared != null) {
+        return declared;
+      }
+    }
+    if (se.alipsa.jparq.helper.LiteralConverter.isLiteral(projection)) {
+      Object literal = se.alipsa.jparq.helper.LiteralConverter.toLiteral(projection);
+      return schemaForColumnType(classifyValueType(literal), List.of(literal));
+    }
+    if (values.stream().allMatch(Objects::isNull)) {
+      return null;
+    }
+    return schemaForColumnType(determineColumnType(values), values);
+  }
+
+  /**
+   * Merges a branch column into the common set-operation declaration.
+   *
+   * @param types
+   *          common JDBC types
+   * @param schemas
+   *          common source schemas
+   * @param index
+   *          output position
+   * @param type
+   *          branch JDBC type
+   * @param schema
+   *          branch schema, or null
+   * @param numeric
+   *          branch numeric descriptor, or null
+   * @throws SQLException
+   *           if branch types are incompatible
+   */
+  private void mergeSetColumn(List<Integer> types, List<Schema> schemas, int index, int type, Schema schema,
+      NumericType numeric) throws SQLException {
+    int previous = types.get(index);
+    if (type == Types.NULL) {
+      return;
+    }
+    if (previous == Types.NULL) {
+      types.set(index, numeric == null ? type : numeric.jdbcType());
+      schemas.set(index, schema);
+      return;
+    }
+    Schema prior = schemas.get(index);
+    NumericType previousNumeric = NumericType.of(previous, prior);
+    if (previousNumeric != null && numeric != null) {
+      NumericType common = previousNumeric.common(numeric);
+      types.set(index, common.jdbcType());
+      schemas.set(index, common.schema());
+    } else if (previous != type) {
+      throw new SQLException("Set operation components must use compatible column types", "42000");
+    } else if (!Objects.equals(prior, schema)) {
+      schemas.set(index, null);
+    }
+  }
+
+  /**
+   * Converts every numeric branch before duplicate counting or ordering occurs.
+   *
+   * @param components
+   *          rows of each branch
+   * @param types
+   *          resolved output types
+   * @param schemas
+   *          resolved source schemas
+   * @throws SQLException
+   *           if a numeric conversion loses data
+   */
+  private void coerceSetRows(List<List<List<Object>>> components, List<Integer> types, List<Schema> schemas)
+      throws SQLException {
+    List<NumericType> numericTypes = new ArrayList<>(types.size());
+    for (int col = 0; col < types.size(); col++) {
+      numericTypes.add(NumericType.of(types.get(col), schemas.get(col)));
+    }
+    for (List<List<Object>> rows : components) {
+      for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+        List<Object> row = new ArrayList<>(rows.get(rowIndex));
+        for (int col = 0; col < types.size(); col++) {
+          NumericType numeric = numericTypes.get(col);
+          if (numeric != null) {
+            row.set(col, numeric.convert(row.get(col)));
+          }
+        }
+        rows.set(rowIndex, materializeRow(row));
+      }
+    }
   }
 
   /**
@@ -920,6 +1087,8 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          materialized row data
    * @param labels
    *          column labels used for ORDER BY name resolution
+   * @param sqlTypes
+   *          common output JDBC types
    * @param orderBy
    *          order specification parsed from the set operation query
    * @return ordered rows (or the original rows when no ordering is requested)
