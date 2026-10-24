@@ -192,17 +192,7 @@ public class JParqResultSet extends ResultSetAdapter {
     this.tableCatalog = tableCatalog;
     this.selectExpressions = List.copyOf(select.expressions());
     this.subqueryExecutor = subqueryExecutor;
-    List<String> qualifiers = new ArrayList<>();
-    if (select.tableReferences() != null) {
-      for (SqlParser.TableReference ref : select.tableReferences()) {
-        if (ref.tableName() != null && !ref.tableName().isBlank()) {
-          qualifiers.add(ref.tableName());
-        }
-        if (ref.tableAlias() != null && !ref.tableAlias().isBlank()) {
-          qualifiers.add(ref.tableAlias());
-        }
-      }
-    }
+    List<String> qualifiers = new ArrayList<>(SqlParser.visibleQualifiers(select.tableReferences()));
     if (qualifiers.isEmpty() && tableName != null && !tableName.isBlank()) {
       qualifiers.add(tableName);
     }

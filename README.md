@@ -598,6 +598,8 @@ The following SQL statements are supported:
   including with projection and predicate pushdown enabled.
   Quantified comparisons in `HAVING` are not currently supported; see [#214](https://github.com/Alipsa/JParq/issues/214).
 - Join support: INNER, LEFT, RIGHT, FULL, CROSS, and Self Join, join ... using syntax
+  - Parenthesized join groups preserve nested join order, including outer-join NULL extension.
+    Unaliased groups expose their inputs' qualifiers; a group alias exposes the group's output columns instead.
 - `UNION` and `UNION ALL` support
 - Complete set-operation coverage.
   Numeric branches use a common output type: INTEGER with BIGINT becomes BIGINT, two REAL inputs

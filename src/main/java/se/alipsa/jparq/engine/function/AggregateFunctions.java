@@ -1272,7 +1272,7 @@ public final class AggregateFunctions {
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping,
       Map<String, Map<String, String>> correlationContext) throws IOException {
     List<GroupExpression> groupExpressions = plan.groupExpressions();
-    List<GroupingSet> groupingSets = plan.groupingSets();
+    final List<GroupingSet> groupingSets = plan.groupingSets();
     List<GroupTypeTracker> groupTrackers = new ArrayList<>(groupExpressions.size());
     for (int i = 0; i < groupExpressions.size(); i++) {
       groupTrackers.add(new GroupTypeTracker());
