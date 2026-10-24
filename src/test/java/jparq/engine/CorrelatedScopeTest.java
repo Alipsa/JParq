@@ -11,6 +11,21 @@ import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 
 /** Checks query-local alias shadowing during correlated-subquery rewriting. */
 class CorrelatedScopeTest {
+  /**
+   * Table functions bind their arguments even when WHERE also has outer
+   * references.
+   */
+  @Test
+  void tableFunctionArgumentsAreVisited() throws Exception {
+    var select = (Select) CCJSqlParserUtil
+        .parse("SELECT u.t FROM UNNEST(a.dates) WITH ORDINALITY AS u(t, n) WHERE a.id = 3");
+    var rewritten = CorrelatedSubqueryRewriter.rewrite(select, List.of("a"),
+        (qualifier, column) -> "dates".equals(column) ? 7 : 3);
+    assertEquals(Set.of("dates", "id"), rewritten.correlatedColumns());
+    assertTrue(rewritten.sql().contains("UNNEST(7) WITH ORDINALITY AS u(t, n)"), rewritten.sql());
+    assertTrue(rewritten.sql().contains("3 = 3"), rewritten.sql());
+  }
+
   @Test
   void rewritingRetainsNestedCteDeclarations() throws Exception {
     var select = (Select) CCJSqlParserUtil

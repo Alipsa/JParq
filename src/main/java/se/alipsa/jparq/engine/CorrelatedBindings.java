@@ -7,13 +7,18 @@ import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.LongValue;
 import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
+import org.apache.avro.Schema;
 
 /** Supplies typed outer values while an eagerly consumed nested query runs. */
 public final class CorrelatedBindings implements AutoCloseable {
   private static final String FUNCTION_NAME = "__JPARQ_CORRELATED_VALUE";
-  private static final ThreadLocal<Map<String, List<Object>>> ACTIVE = new ThreadLocal<>();
+  private static final ThreadLocal<Map<String, Frame>> ACTIVE = new ThreadLocal<>();
   private final String key;
-  private final List<Object> previous;
+  private final Frame previous;
+
+  /** Values and optional source schemas belonging to one active query. */
+  private record Frame(List<Object> values, List<Schema> schemas) {
+  }
 
   /**
    * Installs one binding frame, preserving ancestor frames for deeper queries.
@@ -24,13 +29,28 @@ public final class CorrelatedBindings implements AutoCloseable {
    *          typed values, including nulls
    */
   public CorrelatedBindings(String key, List<Object> values) {
+    this(key, values, List.of());
+  }
+
+  /**
+   * Installs typed values with source schemas for schema-dependent table
+   * functions.
+   *
+   * @param key
+   *          query-shape identity
+   * @param values
+   *          typed values, including nulls
+   * @param schemas
+   *          source schemas in slot order, or an empty list when unknown
+   */
+  public CorrelatedBindings(String key, List<Object> values, List<Schema> schemas) {
     this.key = key;
-    Map<String, List<Object>> active = ACTIVE.get();
+    Map<String, Frame> active = ACTIVE.get();
     if (active == null) {
       active = new HashMap<>();
       ACTIVE.set(active);
     }
-    previous = active.put(key, values);
+    previous = active.put(key, new Frame(values, schemas));
   }
 
   /**
@@ -75,11 +95,29 @@ public final class CorrelatedBindings implements AutoCloseable {
     String key = ((StringValue) arguments.get(0)).getValue();
     var index = ((LongValue) arguments.get(1)).getBigIntegerValue();
     var active = ACTIVE.get();
-    List<Object> values = active == null ? null : active.get(key);
+    Frame frame = active == null ? null : active.get(key);
+    List<Object> values = frame == null ? null : frame.values();
     if (values == null || index.signum() < 0 || index.compareTo(java.math.BigInteger.valueOf(values.size())) >= 0) {
       throw new IllegalArgumentException(message);
     }
     return values.get(index.intValue());
+  }
+
+  /**
+   * Reads a binding's source schema, including when its current value is null.
+   *
+   * @param function
+   *          private placeholder expression
+   * @return source schema, or null when the binding has no schema information
+   * @throws IllegalArgumentException
+   *           if the binding is invalid or inactive
+   */
+  public static Schema schema(Function function) {
+    value(function);
+    var arguments = function.getParameters();
+    Frame frame = ACTIVE.get().get(((StringValue) arguments.get(0)).getValue());
+    int index = ((LongValue) arguments.get(1)).getBigIntegerValue().intValue();
+    return frame.schemas().isEmpty() ? null : frame.schemas().get(index);
   }
 
   /** Restores ancestor bindings and removes thread state after the last frame. */

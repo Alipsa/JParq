@@ -35,6 +35,22 @@ class CorrelatedBindingsTest {
         () -> LiteralConverter.toLiteral(new CorrelatedBindings.Reference("shape", 0).expression()));
   }
 
+  /** Source schemas survive null values and are restored with nested frames. */
+  @Test
+  void sourceSchemasFollowBindingLifetime() {
+    var schema = SchemaBuilder.array().items().intType();
+    var expression = new CorrelatedBindings.Reference("typed", 0).expression();
+    try (var parent = new CorrelatedBindings("typed", Arrays.asList((Object) null), List.of(schema))) {
+      assertSame(schema, CorrelatedBindings.schema(expression));
+      assertNull(CorrelatedBindings.value(expression));
+      try (var child = new CorrelatedBindings("typed", List.of(1))) {
+        assertNull(CorrelatedBindings.schema(expression));
+      }
+      assertSame(schema, CorrelatedBindings.schema(expression));
+    }
+    assertThrows(IllegalArgumentException.class, () -> CorrelatedBindings.schema(expression));
+  }
+
   /** Rejects malformed, inactive, and out-of-range private calls consistently. */
   @Test
   void invalidPlaceholderCallsHaveOneClearError() throws Exception {

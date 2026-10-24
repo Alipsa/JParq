@@ -68,6 +68,7 @@ import org.slf4j.LoggerFactory;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnsUsed;
+import se.alipsa.jparq.engine.CorrelatedBindings;
 import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
@@ -2104,7 +2105,8 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Materialize a standalone {@code UNNEST} table reference into an in-memory
-   * representation.
+   * representation. Correlated bindings retain declared element schemas even for
+   * null or empty arrays; null arrays produce no rows.
    *
    * @param baseRef
    *          the table reference describing the {@code UNNEST} invocation
@@ -2121,15 +2123,23 @@ public class JParqPreparedStatement implements PreparedStatement {
     GenericData.Record emptyRecord = new GenericData.Record(literalSchema);
     ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(literalSchema);
     Object evaluated = evaluator.eval(baseRef.unnest().expression(), emptyRecord);
+    Schema arraySchema = baseRef.unnest().expression() instanceof net.sf.jsqlparser.expression.Function function
+        && CorrelatedBindings.matches(function)
+            ? JdbcTypeMapper.nonNullSchema(CorrelatedBindings.schema(function))
+            : null;
     Iterable<?> iterable = JParqUtil.toIterable(evaluated);
-    if (iterable == null) {
+    if (iterable == null && evaluated != null) {
       throw new SQLException("UNNEST expression must evaluate to an array or iterable value");
     }
     List<Object> elements = new ArrayList<>();
-    for (Object element : iterable) {
-      elements.add(element);
+    if (iterable != null) {
+      for (Object element : iterable) {
+        elements.add(element);
+      }
     }
-    Schema elementSchema = resolveUnnestElementSchema(elements);
+    Schema elementSchema = arraySchema != null && arraySchema.getType() == Schema.Type.ARRAY
+        ? JdbcTypeMapper.nonNullSchema(arraySchema.getElementType())
+        : resolveUnnestElementSchema(elements);
     String fallbackAlias = baseRef.tableAlias() != null && !baseRef.tableAlias().isBlank()
         ? baseRef.tableAlias()
         : "unnest";
@@ -2564,18 +2574,40 @@ public class JParqPreparedStatement implements PreparedStatement {
       throw new SQLException("Failed to parse LATERAL subquery", e);
     }
     List<String> qualifierNames = collectQualifiers(priorTables);
-    CorrelatedSubqueryRewriter.Result initial = CorrelatedSubqueryRewriter.rewrite(parsed, qualifierNames,
-        (qualifier, column) -> null);
+    String bindingKey = java.util.UUID.randomUUID().toString();
+    var references = new LinkedHashMap<CorrelatedSubqueryRewriter.QualifiedColumn, Integer>();
+    var rewritten = CorrelatedSubqueryRewriter.rewrite(parsed, qualifierNames, (qualifier, column) -> {
+      var reference = new CorrelatedSubqueryRewriter.QualifiedColumn(qualifier, column);
+      int index = references.computeIfAbsent(reference, ignored -> references.size());
+      return new CorrelatedBindings.Reference(bindingKey, index);
+    });
+    Map<String, Map<String, String>> columnLookup = buildCorrelatedColumnLookup(priorTables);
+    List<Schema> bindingSchemas = new ArrayList<>();
+    for (var reference : references.keySet()) {
+      Integer index = qualifierIndex.get(reference.qualifier());
+      Schema source = index == null ? null : priorTables.get(index).schema();
+      String fieldName = columnLookup.getOrDefault(reference.qualifier(), Map.of())
+          .get(normalizeColumnKey(reference.column()));
+      Field field = source == null || fieldName == null ? null : source.getField(fieldName);
+      bindingSchemas.add(field == null ? null : field.schema());
+    }
     List<String> fieldNames = new ArrayList<>();
     List<Schema> valueSchemas = new ArrayList<>();
-    SubqueryTableData metadata = executeSubquery(initial.sql(), ref, null, fieldNames, valueSchemas);
+    SubqueryTableData metadata;
+    var initialBindings = new CorrelatedBindings(bindingKey, Collections.nCopies(references.size(), null),
+        bindingSchemas);
+    try (initialBindings) {
+      metadata = executeSubquery(rewritten.sql(), ref, null, fieldNames, valueSchemas);
+    }
     Schema schema = metadata.schema();
-    Map<String, Map<String, String>> columnLookup = buildCorrelatedColumnLookup(priorTables);
     JoinRecordReader.CorrelatedRowsSupplier supplier = assignments -> {
-      CorrelatedSubqueryRewriter.Result rewritten = CorrelatedSubqueryRewriter.rewrite(parsed, qualifierNames,
-          (qualifier, column) -> resolveCorrelatedValue(qualifier, column, assignments, priorTables, qualifierIndex,
-              columnLookup));
-      try {
+      List<Object> values = new ArrayList<>();
+      for (var reference : references.keySet()) {
+        values.add(resolveCorrelatedValue(reference.qualifier(), reference.column(), assignments, priorTables,
+            qualifierIndex, columnLookup));
+      }
+      var bindings = new CorrelatedBindings(bindingKey, values, bindingSchemas);
+      try (bindings) {
         return executeSubquery(rewritten.sql(), ref, schema, fieldNames, valueSchemas).rows();
       } catch (SQLException e) {
         throw new IllegalStateException("Failed to evaluate LATERAL subquery", e);
@@ -2616,11 +2648,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (sql == null || sql.isBlank()) {
       throw new SQLException("Missing subquery SQL for derived table");
     }
-    // LATERAL suppliers still generate literal SQL per row. Do not retain a
-    // separate parsed shape for every distinct outer value in that path.
-    try (PreparedStatement subStmt = ref != null && ref.lateral()
-        ? prepareSubqueryStatement(sql, cteContext, inheritedCancellation, null)
-        : prepareSubqueryStatement(sql, cteContext); ResultSet rs = subStmt.executeQuery()) {
+    try (PreparedStatement subStmt = prepareSubqueryStatement(sql, cteContext); ResultSet rs = subStmt.executeQuery()) {
       ResultSetMetaData meta = rs.getMetaData();
       int columnCount = meta.getColumnCount();
       List<String> columnAliases = ref == null ? List.of() : ref.columnAliases();
