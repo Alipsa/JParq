@@ -115,6 +115,8 @@ class UnaliasedDerivedJoinTest {
     String url = "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath() + "?predicatePushdown=" + pushdown
         + "&projectionPushdown=" + pushdown;
     try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+      // The first two cases require ambiguous a columns: unknown qualifiers can
+      // still fall back to a unique column, as tracked in #261.
       for (String sql : List.of("SELECT derived_1.a FROM (SELECT 1 AS a) JOIN (SELECT 2 AS a) ON TRUE",
           "SELECT t1.a FROM (SELECT 1 AS a) JOIN (SELECT 2 AS a) ON TRUE",
           "SELECT derived_0.* FROM (SELECT 1 AS a) JOIN (SELECT 2 AS b) ON TRUE",
