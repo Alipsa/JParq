@@ -10,6 +10,29 @@ import se.alipsa.jparq.engine.ColumnMappingUtil;
 /** Tests for {@link ColumnMappingUtil}. */
 class ColumnMappingUtilTest {
 
+  /** Keeps prefix-like text intact when mappings are normalized repeatedly. */
+  @Test
+  void normalizedMappingsRetainPrefixLikeIdentifierText() {
+    var mapping = Map.of("Q:u:x", Map.of("Q:q:y", "field"), "Q:Q:x", Map.of("U:z", "other"));
+    assertEquals(mapping, ColumnMappingUtil.normaliseQualifierMapping(mapping));
+    assertEquals(mapping,
+        ColumnMappingUtil.normaliseQualifierMapping(ColumnMappingUtil.normaliseQualifierMapping(mapping)));
+    assertEquals("field", ColumnMappingUtil.canonicalOrderColumn("\"q:y\"", "\"u:x\"", mapping, Map.of()));
+  }
+
+  /**
+   * Ensures a real mapping wins over a fallback even when its text is unchanged.
+   */
+  @Test
+  void unchangedCanonicalNameWinsOverProjectionFallback() {
+    assertEquals("x", ColumnMappingUtil.canonicalOrderColumn("x", "m", Map.of("U:m", Map.of("U:x", "x")), Map.of(),
+        "projection_alias"));
+    assertEquals("x",
+        ColumnMappingUtil.canonicalOrderColumn("x", null, Map.of(), Map.of("U:x", "x"), "projection_alias"));
+    assertEquals("projection_alias",
+        ColumnMappingUtil.canonicalOrderColumn("missing", null, Map.of(), Map.of(), "projection_alias"));
+  }
+
   /** Verifies the shared fallback for lowercase quoted identifier keys. */
   @Test
   void quotedLowercaseKeysHaveUnquotedAlternatives() {

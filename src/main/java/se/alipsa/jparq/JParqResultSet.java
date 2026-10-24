@@ -834,9 +834,8 @@ public class JParqResultSet extends ResultSetAdapter {
   private static String canonicalColumnName(Column column, String currentValue,
       Map<String, Map<String, String>> qualifierMapping, Map<String, String> unqualifiedMapping) {
     String columnName = column.getColumnName();
-    String canonical = ColumnMappingUtil.canonicalOrderColumn(columnName, resolveQualifier(column), qualifierMapping,
-        unqualifiedMapping);
-    return !columnName.equals(canonical) || currentValue == null ? canonical : currentValue;
+    return ColumnMappingUtil.canonicalOrderColumn(columnName, resolveQualifier(column), qualifierMapping,
+        unqualifiedMapping, currentValue == null ? columnName : currentValue);
   }
 
   /**
@@ -1019,7 +1018,9 @@ public class JParqResultSet extends ResultSetAdapter {
       return expression;
     }
     for (String qualifier : qualifiersInExpression) {
-      if (!availableQualifiers.contains(qualifier)) {
+      String alternative = ColumnMappingUtil.alternativeColumnKey(qualifier);
+      if (!availableQualifiers.contains(qualifier)
+          && (alternative == null || !availableQualifiers.contains(alternative))) {
         return null;
       }
     }

@@ -425,7 +425,9 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
     SchemaContext context = buildSchema(joinTables, mappings, metadata);
     this.schema = context.schema();
     this.columnNames = buildColumnNames(mappings);
-    this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(context.qualifierMapping());
+    Map<String, Map<String, String>> qualifierSnapshot = new LinkedHashMap<>();
+    context.qualifierMapping().forEach((qualifier, columns) -> qualifierSnapshot.put(qualifier, Map.copyOf(columns)));
+    this.qualifierColumnMapping = Map.copyOf(qualifierSnapshot);
     this.unqualifiedColumnMapping = Map.copyOf(context.unqualifiedMapping());
     this.joinTables = joinTables;
     this.fieldMappings = List.copyOf(mappings);

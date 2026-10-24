@@ -604,8 +604,9 @@ The following SQL statements are supported:
 - Join support: INNER, LEFT, RIGHT, FULL, CROSS, and Self Join, join ... using syntax
   - Parenthesized join groups preserve nested join order, including outer-join NULL extension.
     Unaliased groups expose their inputs' qualifiers; a group alias exposes the group's output columns instead.
-    Qualified group wildcards such as `g.*` currently require distinct output labels. Duplicate labels raise
-    SQLState `42000`; assign unique positional column aliases to the group, such as `g(x, y)`, to expand them.
+    Qualified wildcards such as `g.*` currently require distinct output labels for any aliased join input,
+    including groups, derived tables, and CTEs. Duplicate labels raise
+    SQLState `42000`; assign unique positional column aliases to the input, such as `g(x, y)`, to expand them.
 - `UNION` and `UNION ALL` support
 - Complete set-operation coverage.
   Numeric branches use a common output type: INTEGER with BIGINT becomes BIGINT, two REAL inputs

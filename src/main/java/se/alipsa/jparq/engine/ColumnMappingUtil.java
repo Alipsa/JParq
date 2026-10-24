@@ -179,6 +179,28 @@ public final class ColumnMappingUtil {
    */
   public static String canonicalOrderColumn(String columnName, String qualifier,
       Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping) {
+    return canonicalOrderColumn(columnName, qualifier, qualifierColumnMapping, unqualifiedColumnMapping, columnName);
+  }
+
+  /**
+   * Resolves an ordering or projection column, preserving an explicit fallback
+   * only when no mapping exists.
+   *
+   * @param columnName
+   *          SQL column identifier
+   * @param qualifier
+   *          optional table qualifier
+   * @param qualifierColumnMapping
+   *          normalized qualifier mappings, or null
+   * @param unqualifiedColumnMapping
+   *          normalized unqualified mappings, or null
+   * @param fallback
+   *          value to return when no mapping exists
+   * @return the mapped field name, even if unchanged, or the fallback
+   */
+  public static String canonicalOrderColumn(String columnName, String qualifier,
+      Map<String, Map<String, String>> qualifierColumnMapping, Map<String, String> unqualifiedColumnMapping,
+      String fallback) {
     if (columnName == null) {
       return null;
     }
@@ -189,7 +211,7 @@ public final class ColumnMappingUtil {
 
     String normalizedColumn = normalizeLookupKey(columnName);
     if (normalizedColumn == null) {
-      return columnName;
+      return fallback;
     }
 
     if (qualifier != null && !qualifier.isBlank() && !qualifierMapping.isEmpty()) {
@@ -210,7 +232,7 @@ public final class ColumnMappingUtil {
       return canonical;
     }
 
-    return columnName;
+    return fallback;
   }
 
   /**
@@ -383,9 +405,6 @@ public final class ColumnMappingUtil {
     if (looksLikeLookupKey(trimmed)) {
       String prefix = trimmed.substring(0, 2).toUpperCase(Locale.ROOT);
       String body = trimmed.substring(2);
-      while (looksLikeLookupKey(body)) {
-        body = body.substring(2);
-      }
       if ("U:".equals(prefix)) {
         return "U:" + body.toLowerCase(Locale.ROOT);
       }

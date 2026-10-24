@@ -64,9 +64,61 @@ class ParenthesizedJoinTest {
     assertRows(pushdown, "SELECT \"m\".\"cyl\" FROM (mtcars m JOIN (SELECT 1 AS a) x ON TRUE) LIMIT 1",
         List.of(List.of(6)));
     assertRows(pushdown, "SELECT \"m\".\"x\", n.x FROM ((VALUES (1), (2)) m(x) CROSS JOIN (VALUES (3)) n(x))"
-        + " WHERE \"m\".\"x\" > 0 ORDER BY \"m\".\"x\" DESC", List.of(List.of(2, 3), List.of(1, 3)));
+        + " WHERE \"m\".\"x\" > 1 ORDER BY \"m\".\"x\" DESC", List.of(List.of(2, 3)));
+    assertRows(pushdown, "SELECT COUNT(*) FROM (mtcars m JOIN (SELECT 1 AS a) x ON TRUE) WHERE \"m\".cyl = 4",
+        List.of(List.of(11)));
     assertRows(pushdown, "SELECT \"g\".\"x\" FROM ((VALUES (1)) a(x) CROSS JOIN (VALUES (2)) b(y)) g",
         List.of(List.of(1)));
+  }
+
+  /**
+   * Applies quoted lowercase residual predicates to physical and joined inputs.
+   *
+   * @param pushdown
+   *          whether both pushdown options are enabled
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void quotedQualifiersRetainResidualPredicates(boolean pushdown) throws SQLException {
+    for (String input : List.of("mtcars m", "mtcars m JOIN (SELECT 1 AS a) x ON TRUE",
+        "(mtcars m JOIN (SELECT 1 AS a) x ON TRUE)")) {
+      assertRows(pushdown, "SELECT COUNT(*) FROM " + input + " WHERE \"m\".cyl = 4", List.of(List.of(11)));
+      assertRows(pushdown, "SELECT COUNT(*) FROM " + input + " WHERE (\"m\".cyl = 4) AND \"m\".hp > 100",
+          List.of(List.of(2)));
+      assertRows(pushdown, "SELECT COUNT(*) FROM " + input + " WHERE \"m\".cyl = 4 OR \"m\".cyl = 6",
+          List.of(List.of(18)));
+    }
+    String input = "((VALUES (1), (1), (2)) m(x) CROSS JOIN (VALUES (3)) n(y))";
+    assertRows(pushdown, "SELECT DISTINCT m.x AS renamed FROM " + input + " ORDER BY m.x DESC",
+        List.of(List.of(2), List.of(1)));
+    assertRows(pushdown, "SELECT m.x AS renamed FROM " + input + " ORDER BY m.x DESC",
+        List.of(List.of(2), List.of(1), List.of(1)));
+  }
+
+  /**
+   * Preserves quoted aliases whose text resembles an internal lookup prefix.
+   *
+   * @param pushdown
+   *          whether both pushdown options are enabled
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void quotedPrefixNamesResolve(boolean pushdown) throws SQLException {
+    for (String alias : List.of("u:x", "q:x", "U:x", "Q:x")) {
+      String qualifier = "\"" + alias + "\"";
+      String inputs = "(VALUES (1), (2)) " + qualifier + "(a) CROSS JOIN (VALUES (3)) b(c)";
+      assertRows(pushdown, "SELECT " + qualifier + ".* FROM " + inputs, List.of(List.of(1), List.of(2)));
+      assertRows(pushdown, "SELECT " + qualifier + ".a FROM (" + inputs + ") WHERE " + qualifier + ".a > 1",
+          List.of(List.of(2)));
+    }
   }
 
   /**
@@ -88,7 +140,9 @@ class ParenthesizedJoinTest {
       for (String sql : List.of("SELECT g.* FROM " + group,
           "SELECT g.* FROM " + group + " CROSS JOIN (VALUES (3)) c(y)",
           "SELECT g.* FROM ((VALUES (1)) a(x) JOIN (VALUES (2, 3)) b(x, y) ON TRUE) g",
-          "SELECT g.* FROM (mtcars m JOIN mtcars n ON m.model = n.model) g")) {
+          "SELECT g.* FROM (mtcars m JOIN mtcars n ON m.model = n.model) g",
+          "SELECT d.* FROM (SELECT 1 AS x, 2 AS x) d CROSS JOIN (VALUES (3)) b(y)",
+          "WITH c AS (SELECT 1 AS x, 2 AS x) SELECT d.* FROM c d CROSS JOIN (VALUES (3)) b(y)")) {
         SQLException error = assertThrows(SQLException.class, () -> statement.executeQuery(sql), sql);
         assertEquals("42000", error.getSQLState(), sql);
         assertTrue(error.getMessage().contains("Ambiguous column in join alias"), error.getMessage());
