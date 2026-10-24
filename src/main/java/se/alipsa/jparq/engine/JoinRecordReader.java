@@ -63,7 +63,8 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
    * Representation of a table participating in the join.
    *
    * @param tableName
-   *          the referenced table name
+   *          the referenced SQL table name, or null for an anonymous derived
+   *          input
    * @param alias
    *          alias assigned to the table (may be {@code null})
    * @param schema
@@ -86,10 +87,10 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
       CorrelatedRowsSupplier correlatedRowsSupplier) {
 
     /**
-     * Validates mandatory state for the join table to guard against null elements.
+     * Validates mandatory join state while allowing anonymous inputs to omit a
+     * table name.
      */
     public JoinTable {
-      Objects.requireNonNull(tableName, "tableName");
       Objects.requireNonNull(schema, "schema");
       Objects.requireNonNull(rows, "rows");
       Objects.requireNonNull(joinType, "joinType");
@@ -401,7 +402,9 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
     this.fieldMappings = List.copyOf(mappings);
     List<String> qualifiers = new ArrayList<>();
     for (JoinTable table : joinTables) {
-      qualifiers.add(table.tableName());
+      if (table.tableName() != null) {
+        qualifiers.add(table.tableName());
+      }
       if (table.alias() != null) {
         qualifiers.add(table.alias());
       }
@@ -428,7 +431,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
     Set<String> reservedTableQualifiers = new HashSet<>();
     Set<String> unaliasedTableNames = new HashSet<>();
     for (JoinTable table : tables) {
-      if (table.alias() == null || table.alias().isBlank()) {
+      if (table.tableName() != null && (table.alias() == null || table.alias().isBlank())) {
         unaliasedTableNames.add(normalize(table.tableName()));
       }
     }
@@ -437,7 +440,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
       JoinTable joinTable = tables.get(tableIndex);
       Schema tableSchema = joinTable.schema();
       String qualifierPrefix = MaterializedNames.allocate(qualifierPrefix(joinTable, tableIndex), usedPrefixes);
-      Set<String> qualifiers = qualifierSet(joinTable, tableIndex);
+      Set<String> qualifiers = qualifierSet(joinTable);
       boolean aliasPresent = joinTable.alias() != null && !joinTable.alias().isBlank();
       String normalizedTableName = normalize(joinTable.tableName());
       boolean includeTableQualifier = !aliasPresent || !unaliasedTableNames.contains(normalizedTableName);
@@ -596,13 +599,17 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
     return "t" + index;
   }
 
-  private static Set<String> qualifierSet(JoinTable table, int index) {
+  /**
+   * Collects SQL-visible qualifiers, leaving anonymous inputs unqualified.
+   *
+   * @param table
+   *          join input whose name and alias may both be null
+   * @return SQL qualifier variants, or an empty set for an anonymous input
+   */
+  private static Set<String> qualifierSet(JoinTable table) {
     Set<String> qualifiers = new LinkedHashSet<>();
     addQualifierVariant(qualifiers, table.tableName());
     addQualifierVariant(qualifiers, table.alias());
-    if (qualifiers.isEmpty()) {
-      qualifiers.add("t" + index);
-    }
     return qualifiers;
   }
 

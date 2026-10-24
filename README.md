@@ -564,8 +564,8 @@ The following SQL statements are supported:
     LATERAL inputs. The alias count must equal the expanded output column count, including for empty results.
   - Derived tables can contain `UNION`, `UNION ALL`, `INTERSECT`, and `EXCEPT`, including their `ALL` variants,
     nested set operations, and LATERAL inputs. Inner ordering and row bounds apply before the consuming query.
-    Table-free and set-operation derived tables may omit a table alias in joins; reference their output columns
-    by unqualified name when unambiguous.
+    Table-free SELECT and set-operation derived tables may omit a table alias in joins; reference their output
+    columns by unqualified name when unambiguous. Multiple VALUES inputs still require aliases.
   - In the WHERE Clause : Used to filter the results. e.g
     SELECT first_name
     FROM employees

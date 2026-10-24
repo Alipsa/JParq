@@ -3,6 +3,7 @@ package jparq.derived;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
@@ -49,6 +50,8 @@ class UnaliasedDerivedJoinTest {
     assertRows(pushdown, "SELECT * FROM (SELECT 1 AS a UNION SELECT 2) JOIN (VALUES (2)) j(k) ON a = k",
         List.of(List.of(2, 2)));
     assertRows(pushdown, "SELECT * FROM (SELECT 1 AS a), (SELECT 1 AS a)", List.of(List.of(1, 1)));
+    assertRows(pushdown, "SELECT x, x + 1 FROM (SELECT ARRAY[1, 2] AS a), UNNEST(a) AS u(x) ORDER BY x",
+        List.of(List.of(1, 2), List.of(2, 3)));
   }
 
   /**
@@ -93,6 +96,42 @@ class UnaliasedDerivedJoinTest {
     for (String body : List.of("SELECT CAST(1 AS INTEGER) AS a WHERE FALSE",
         "SELECT CAST(1 AS INTEGER) AS a WHERE FALSE UNION SELECT CAST(2 AS INTEGER) WHERE FALSE")) {
       assertRows(pushdown, "SELECT a, k FROM (" + body + ") JOIN (VALUES (2)) j(k) ON TRUE", List.of());
+    }
+  }
+
+  /**
+   * Prevents generated names from qualifying otherwise ambiguous output columns.
+   *
+   * @param pushdown
+   *          whether predicate and projection pushdown are enabled
+   * @throws SQLException
+   *           if JDBC setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void anonymousInputsDoNotExposeQualifiers(boolean pushdown) throws SQLException {
+    String url = "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath() + "?predicatePushdown=" + pushdown
+        + "&projectionPushdown=" + pushdown;
+    try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+      for (String sql : List.of("SELECT derived_1.a FROM (SELECT 1 AS a) JOIN (SELECT 2 AS a) ON TRUE",
+          "SELECT t1.a FROM (SELECT 1 AS a) JOIN (SELECT 2 AS a) ON TRUE",
+          "SELECT derived_0.* FROM (SELECT 1 AS a) JOIN (SELECT 2 AS b) ON TRUE",
+          "SELECT * FROM (SELECT ARRAY[1] AS a) JOIN UNNEST(derived_0.a) AS u(x) ON TRUE")) {
+        assertThrows(SQLException.class, () -> {
+          try (var result = statement.executeQuery(sql)) {
+            while (result.next()) {
+              result.getObject(1);
+            }
+          }
+        }, sql);
+      }
+      for (String qualifier : List.of("derived_0", "t0")) {
+        String sql = "SELECT * FROM (SELECT 1 AS a) JOIN (SELECT 2 AS b) ON " + qualifier + ".a = b";
+        SQLException error = assertThrows(SQLException.class, () -> statement.executeQuery(sql), sql);
+        assertEquals("42000", error.getSQLState(), sql);
+      }
     }
   }
 

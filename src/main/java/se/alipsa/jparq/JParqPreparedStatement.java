@@ -1572,7 +1572,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         continue;
       }
       if (ref.isDerivedTable()) {
-        String tableName = derivedJoinTableName(ref, referenceIndex);
+        String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
         JoinRecordReader.JoinTable table = ref.lateral()
             ? materializeLateralSubqueryTable(ref, tableName, tables, qualifierIndex)
             : materializeSubqueryTable(ref, tableName);
@@ -1637,7 +1637,9 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       available.addAll(columns);
       String qualifier = table.alias() == null ? table.tableName() : table.alias();
-      qualified.put(JParqUtil.normalizeQualifier(qualifier), columns);
+      if (qualifier != null) {
+        qualified.put(JParqUtil.normalizeQualifier(qualifier), columns);
+      }
       Set<String> missing = new LinkedHashSet<>();
       for (Column column : ColumnsUsed.referencesInScope(table.joinCondition())) {
         String referenceQualifier = column.getTable() == null ? null : column.getTable().getName();
@@ -2084,7 +2086,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @param ref
    *          table reference describing the derived table
    * @param tableName
-   *          non-null name identifying this join input
+   *          SQL-visible name, or null for an anonymous join input
    * @return a {@link JoinRecordReader.JoinTable} backed by the subquery result
    * @throws SQLException
    *           if the subquery fails to execute or cannot be converted into an
@@ -2549,7 +2551,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @param ref
    *          the table reference describing the derived table
    * @param tableName
-   *          non-null name identifying this join input
+   *          SQL-visible name, or null for an anonymous join input
    * @param priorTables
    *          tables that precede the lateral subquery and provide correlation
    *          values
@@ -2925,33 +2927,6 @@ public class JParqPreparedStatement implements PreparedStatement {
     Schema schema = Schema.createRecord(MaterializedNames.recordName(recordName), null, null, false);
     schema.setFields(fields);
     return schema;
-  }
-
-  /**
-   * Names a derived join input, assigning anonymous inputs distinct names that do
-   * not collide with explicit table names or aliases in this query.
-   *
-   * @param ref
-   *          derived table reference
-   * @param position
-   *          zero-based position among join inputs
-   * @return existing alias or table name, or a unique synthetic name
-   */
-  private String derivedJoinTableName(SqlParser.TableReference ref, int position) {
-    if (!qualifierList(ref, false).isEmpty()) {
-      return derivedRecordName(ref);
-    }
-    Set<String> reserved = new LinkedHashSet<>();
-    for (var reference : tableReferences) {
-      for (String qualifier : qualifierList(reference, false)) {
-        reserved.add(JParqUtil.normalizeQualifier(qualifier));
-      }
-    }
-    StringBuilder name = new StringBuilder("derived_").append(position);
-    while (reserved.contains(JParqUtil.normalizeQualifier(name.toString()))) {
-      name.insert(0, '_');
-    }
-    return name.toString();
   }
 
   /**
