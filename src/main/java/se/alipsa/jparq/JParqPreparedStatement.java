@@ -798,7 +798,18 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
         for (int col = 1; col <= columnCount; col++) {
           int index = col - 1;
-          Supplier<List<Object>> values = () -> componentData.stream().map(row -> row.get(index)).toList();
+          Supplier<List<Object>> values = new Supplier<>() {
+            private List<Object> cached;
+
+            /** {@inheritDoc} */
+            @Override
+            public List<Object> get() {
+              if (cached == null) {
+                cached = componentData.stream().map(row -> row.get(index)).toList();
+              }
+              return cached;
+            }
+          };
           int type = meta.getColumnType(col);
           Schema schema = sourceColumnSchema(meta, col);
           Expression expression = prepared.parsedSelect != null
