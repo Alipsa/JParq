@@ -824,24 +824,28 @@ public class JParqPreparedStatement implements PreparedStatement {
               schema = sourceColumnSchema(meta, col);
             }
           }
+          boolean trustedBounds = projection instanceof Column
+              || (projection instanceof CastExpression cast && DecimalCasts.declaredType(cast) != null);
           NumericType numeric = NumericType.of(type, meta.getPrecision(col), meta.getScale(col));
           if (numeric != null) {
             if ((meta.getPrecision(col) == 0 || simpleDeclaration) && schema != null
                 && schema.getLogicalType() instanceof LogicalTypes.Decimal decimal) {
               numeric = NumericType.of(type, decimal.getPrecision(), decimal.getScale());
-            } else if ((type == Types.DECIMAL || type == Types.NUMERIC) && meta.getPrecision(col) == 0) {
-              LogicalTypes.Decimal bounds = DecimalTypeInference.infer(values.get());
-              numeric = numeric.common(NumericType.of(type, bounds.getPrecision(), bounds.getScale()));
+            }
+            if ((type == Types.DECIMAL || type == Types.NUMERIC) && (!trustedBounds || meta.getPrecision(col) == 0)) {
+              List<Object> returned = values.get();
+              if (returned.stream().anyMatch(Objects::nonNull)) {
+                LogicalTypes.Decimal bounds = DecimalTypeInference.infer(returned);
+                numeric = numeric.common(NumericType.of(type, bounds.getPrecision(), bounds.getScale()));
+              }
             }
             schema = numeric.schema();
           }
           NumericType declared = NumericType.of(meta.getColumnType(col), meta.getPrecision(col), meta.getScale(col));
-          // Unknown, overridden, or value-inferred decimal declarations still
-          // need normalization; inferred decimal bounds do not fix row scales.
-          boolean fixedDecimal = sourceColumnSchema(meta, col) != null
-              || (projection instanceof CastExpression cast && DecimalCasts.declaredType(cast) != null);
-          normalizedTypes.add(numeric != null && numeric.jdbcType() == meta.getColumnType(col)
-              && numeric.equals(declared) && (numeric.jdbcType() != Types.DECIMAL || fixedDecimal) ? numeric : null);
+          // Computed and aggregate values may disagree with metadata (#232,
+          // #289). Only direct columns can bypass value normalization.
+          normalizedTypes.add(projection instanceof Column && numeric != null
+              && numeric.jdbcType() == meta.getColumnType(col) && numeric.equals(declared) ? numeric : null);
           mergeSetColumn(sqlTypes, sourceSchemas, index, type, schema, numeric);
         }
       }

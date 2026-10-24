@@ -5,10 +5,19 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.Types;
 import java.util.List;
+import org.apache.avro.LogicalTypes;
+import org.apache.avro.Schema;
+import org.apache.avro.SchemaBuilder;
+import org.apache.avro.generic.GenericData;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.parquet.avro.AvroParquetWriter;
+import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -22,6 +31,73 @@ class SetNumericBoundaryTest {
 
   @TempDir
   Path directory;
+
+  /**
+   * Widens computed decimal bounds despite aliases hiding the source metadata.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void arithmeticAliasesUseReturnedDecimalBounds(boolean pushdown) throws Exception {
+    var decimal = LogicalTypes.decimal(5, 2).addToSchema(Schema.create(Schema.Type.BYTES));
+    var schema = SchemaBuilder.record("p").fields().name("dec").type(decimal).noDefault().endRecord();
+    var conf = new Configuration(false);
+    var path = new org.apache.hadoop.fs.Path(directory.resolve("p.parquet").toUri());
+    try (var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(path, conf)).withSchema(schema)
+        .withConf(conf).build()) {
+      for (int i = 0; i < 2; i++) {
+        var row = new GenericData.Record(schema);
+        row.put("dec", ByteBuffer.wrap(new BigDecimal("999.99").unscaledValue().toByteArray()));
+        writer.write(row);
+      }
+    }
+    String url = "jdbc:jparq:" + directory + "?predicatePushdown=" + pushdown + "&projectionPushdown=" + pushdown;
+    try (var connection = DriverManager.getConnection(url)) {
+      for (String operator : List.of("UNION", "UNION ALL", "INTERSECT", "INTERSECT ALL", "EXCEPT", "EXCEPT ALL")) {
+        String sql = "SELECT dec * 1.00 AS dec FROM p " + operator + " SELECT dec FROM p";
+        try (var statement = connection.prepareStatement(sql)) {
+          for (int execution = 0; execution < 2; execution++) {
+            try (var result = statement.executeQuery()) {
+              assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1), sql);
+              assertEquals(7, result.getMetaData().getPrecision(1), sql);
+              assertEquals(4, result.getMetaData().getScale(1), sql);
+              int count = 0;
+              while (result.next()) {
+                assertEquals(new BigDecimal("999.9900"), result.getObject(1), sql);
+                count++;
+              }
+              int expected = operator.startsWith("EXCEPT")
+                  ? 0
+                  : operator.equals("UNION ALL") ? 4 : operator.equals("INTERSECT ALL") ? 2 : 1;
+              assertEquals(expected, count, sql);
+            }
+          }
+        }
+      }
+      for (boolean square : List.of(false, true)) {
+        String sql = square
+            ? "SELECT dec * dec AS dec FROM p UNION ALL SELECT dec FROM p"
+            : "SELECT dec * 10 AS dec FROM p UNION ALL SELECT CAST(1 AS DECIMAL(4,3)) AS dec";
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+          assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1), sql);
+          assertEquals(square ? 10 : 7, result.getMetaData().getPrecision(1), sql);
+          assertEquals(square ? 4 : 3, result.getMetaData().getScale(1), sql);
+          for (int i = 0; i < (square ? 4 : 3); i++) {
+            assertTrue(result.next(), sql);
+            String expected = square ? i < 2 ? "999980.0001" : "999.9900" : i < 2 ? "9999.900" : "1.000";
+            assertEquals(new BigDecimal(expected), result.getObject(1), sql);
+          }
+          assertFalse(result.next(), sql);
+        }
+      }
+    }
+  }
 
   /**
    * Preserves OTHER for wholly untyped NULL results, including empty sets.
@@ -112,6 +188,19 @@ class SetNumericBoundaryTest {
           }
           assertFalse(result.next(), sql);
         }
+      }
+      String fractional = "SELECT 0.1 AS n" + filter + " UNION ALL SELECT 0.2" + filter;
+      try (var statement = connection.createStatement(); var result = statement.executeQuery(fractional)) {
+        assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1));
+        assertEquals(1, result.getMetaData().getPrecision(1));
+        assertEquals(1, result.getMetaData().getScale(1));
+        if (!empty) {
+          assertTrue(result.next());
+          assertEquals(new BigDecimal("0.1"), result.getObject(1));
+          assertTrue(result.next());
+          assertEquals(new BigDecimal("0.2"), result.getObject(1));
+        }
+        assertFalse(result.next());
       }
       String widenedCast = "WITH x AS (SELECT CAST(1.25 AS DECIMAL(6,2)) AS n) "
           + "SELECT CAST(n AS DECIMAL(10,4)) AS n FROM x" + filter + " UNION ALL SELECT CAST(2 AS INTEGER)" + filter;
