@@ -1572,9 +1572,10 @@ public class JParqPreparedStatement implements PreparedStatement {
         continue;
       }
       if (ref.isDerivedTable()) {
+        String tableName = derivedJoinTableName(ref, referenceIndex);
         JoinRecordReader.JoinTable table = ref.lateral()
-            ? materializeLateralSubqueryTable(ref, tables, qualifierIndex)
-            : materializeSubqueryTable(ref);
+            ? materializeLateralSubqueryTable(ref, tableName, tables, qualifierIndex)
+            : materializeSubqueryTable(ref, tableName);
         validateJoinTableColumns(table.schema(), ref);
         tables.add(table);
         registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
@@ -2082,12 +2083,15 @@ public class JParqPreparedStatement implements PreparedStatement {
    *
    * @param ref
    *          table reference describing the derived table
+   * @param tableName
+   *          non-null name identifying this join input
    * @return a {@link JoinRecordReader.JoinTable} backed by the subquery result
    * @throws SQLException
    *           if the subquery fails to execute or cannot be converted into an
    *           Avro representation
    */
-  private JoinRecordReader.JoinTable materializeSubqueryTable(SqlParser.TableReference ref) throws SQLException {
+  private JoinRecordReader.JoinTable materializeSubqueryTable(SqlParser.TableReference ref, String tableName)
+      throws SQLException {
     String sql = ref.subquerySql();
     if (sql == null || sql.isBlank()) {
       throw new SQLException("Missing subquery SQL for derived table");
@@ -2095,7 +2099,6 @@ public class JParqPreparedStatement implements PreparedStatement {
     List<String> fieldNames = new ArrayList<>();
     List<Schema> valueSchemas = new ArrayList<>();
     SubqueryTableData data = executeSubquery(sql, ref, null, fieldNames, valueSchemas);
-    String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
     List<GenericRecord> rows = applySampleToRows(ref.tableSample(), data.rows());
     return new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), data.schema(), rows, ref.joinType(),
         ref.joinCondition(), ref.usingColumns(), null);
@@ -2545,6 +2548,8 @@ public class JParqPreparedStatement implements PreparedStatement {
    *
    * @param ref
    *          the table reference describing the derived table
+   * @param tableName
+   *          non-null name identifying this join input
    * @param priorTables
    *          tables that precede the lateral subquery and provide correlation
    *          values
@@ -2556,7 +2561,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @throws SQLException
    *           if the lateral definition cannot be parsed or executed
    */
-  private JoinRecordReader.JoinTable materializeLateralSubqueryTable(SqlParser.TableReference ref,
+  private JoinRecordReader.JoinTable materializeLateralSubqueryTable(SqlParser.TableReference ref, String tableName,
       List<JoinRecordReader.JoinTable> priorTables, Map<String, Integer> qualifierIndex) throws SQLException {
     String sql = ref.subquerySql();
     if (sql == null || sql.isBlank()) {
@@ -2598,7 +2603,6 @@ public class JParqPreparedStatement implements PreparedStatement {
     JoinRecordReader.CorrelatedRowsSupplier effectiveSupplier = ref.tableSample() == null
         ? supplier
         : assignments -> applySampleUnchecked(ref.tableSample(), supplier.rows(assignments));
-    String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
     return new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), schema, List.of(), ref.joinType(),
         ref.joinCondition(), ref.usingColumns(), effectiveSupplier);
   }
@@ -2923,6 +2927,40 @@ public class JParqPreparedStatement implements PreparedStatement {
     return schema;
   }
 
+  /**
+   * Names a derived join input, assigning anonymous inputs distinct names that do
+   * not collide with explicit table names or aliases in this query.
+   *
+   * @param ref
+   *          derived table reference
+   * @param position
+   *          zero-based position among join inputs
+   * @return existing alias or table name, or a unique synthetic name
+   */
+  private String derivedJoinTableName(SqlParser.TableReference ref, int position) {
+    if (!qualifierList(ref, false).isEmpty()) {
+      return derivedRecordName(ref);
+    }
+    Set<String> reserved = new LinkedHashSet<>();
+    for (var reference : tableReferences) {
+      for (String qualifier : qualifierList(reference, false)) {
+        reserved.add(JParqUtil.normalizeQualifier(qualifier));
+      }
+    }
+    StringBuilder name = new StringBuilder("derived_").append(position);
+    while (reserved.contains(JParqUtil.normalizeQualifier(name.toString()))) {
+      name.insert(0, '_');
+    }
+    return name.toString();
+  }
+
+  /**
+   * Resolves the record name used for derived-table schemas and diagnostics.
+   *
+   * @param ref
+   *          derived table reference, or null for the default name
+   * @return alias, source table name, or {@code derived} for anonymous inputs
+   */
   private static String derivedRecordName(SqlParser.TableReference ref) {
     if (ref == null) {
       return "derived";
