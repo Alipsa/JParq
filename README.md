@@ -183,7 +183,6 @@ Wrapping the argument in an expression such as COALESCE currently loses its decl
 LATERAL output types can then fall back to VARCHAR during schema discovery.
 Null and empty arrays produce no inner rows; a LEFT JOIN LATERAL retains their outer rows with NULL inner columns.
 Standalone `UNNEST(NULL)` also returns no rows and uses VARCHAR metadata because its element type is unknown.
-Nested LATERAL queries reuse one binding identity and query shape per lexical input within an execution.
 
 LATERAL derived tables may still expose numeric values as VARCHAR. In particular, LATERAL decimal
 expressions with unknown precision use VARCHAR to keep one stable schema across correlated executions.

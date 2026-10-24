@@ -142,6 +142,8 @@ class LateralUnnestTest {
   void nestedLateralsReuseShapes(boolean scalar) throws Exception {
     List<Integer> previousCounts = null;
     for (int outerRows : List.of(2, 4)) {
+      // Parse counts detect the binding-key leak; validation counts separately guard
+      // against repeated Parquet footer validation as outer row counts grow.
       var parses = new AtomicInteger();
       var validations = new AtomicInteger();
       try (var parser = mockStatic(SqlParser.class, CALLS_REAL_METHODS);
