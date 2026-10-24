@@ -2,6 +2,7 @@
 
 ### 1.4.0
 
+- **Behavior change:** set operations promote numeric branches to a common type and coerce values before duplicate comparison, multiplicity counting, and ordering (#223). INTEGER/BIGINT uses BIGINT, matching REAL inputs retain REAL/Float, other approximate combinations use DOUBLE, and exact DECIMAL inputs preserve sufficient integer digits and scale. JDBC metadata reports the common type and decimal bounds even for empty results; previously incompatible branches failed or literal branches reported OTHER with mixed Java types.
 - **Behavior change:** quantified comparisons in WHERE now reject array, map, and struct candidates returned by subqueries instead of silently filtering out rows. ANY/SOME/ALL requires scalar candidate values from both arrays and subqueries; the same validation applies in HAVING (#214).
 - Fix HAVING comparisons using ANY, SOME, and ALL over subqueries and arrays, including correlated grouping values, NULLs, and empty inputs (#214). Share quantified comparison semantics with WHERE and reject invalid array operands explicitly.
 - Add regression coverage for select-list scalar subquery failures retaining SQLState `42000` and the original nested diagnostic during projection access and streaming `ResultSet.next()` (#212). The exception handling was already corrected by the SQL error-context changes; document that evaluation can be deferred until iteration or value access.
