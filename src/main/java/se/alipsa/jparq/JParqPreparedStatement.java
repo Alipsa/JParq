@@ -22,6 +22,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.RowId;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.SQLSyntaxErrorException;
 import java.sql.SQLWarning;
 import java.sql.SQLXML;
 import java.sql.Statement;
@@ -69,6 +70,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.AvroProjections;
+import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelatedBindings;
 import se.alipsa.jparq.engine.CorrelationMappings;
@@ -1761,7 +1763,6 @@ public class JParqPreparedStatement implements PreparedStatement {
         // VALUES inputs can reuse relation names in different nested groups.
         // Materialize this reference rather than consulting the name-only cache.
         CteResult valueResult = materializeValueTable(ref.valueTable(), deriveValueTableName(ref));
-        registerValueTableResult(ref, valueResult, valueTableResults);
         String tableName = deriveValueTableName(ref);
         List<GenericRecord> rows = applySampleToRows(ref.tableSample(), valueResult.rows());
         JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(tableName, ref.tableAlias(),
@@ -1876,9 +1877,10 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       CteResult result = applyColumnAliases(new CteResult(nested.schema(), rows), reference);
       Map<String, Map<String, String>> qualifiers = new LinkedHashMap<>();
+      Map<String, Map<String, String>> nestedMappings = nested.qualifierColumnMapping();
       if (reference.tableAlias() == null) {
         for (String qualifier : SqlParser.visibleQualifiers(reference.joinGroup())) {
-          Map<String, String> columns = nested.qualifierColumnMapping().get(JParqUtil.normalizeQualifier(qualifier));
+          Map<String, String> columns = nestedMappings.get(JParqUtil.normalizeQualifier(qualifier));
           if (columns != null) {
             qualifiers.put(qualifier, columns);
           }
@@ -1991,16 +1993,17 @@ public class JParqPreparedStatement implements PreparedStatement {
       addColumns(required, ColumnsUsed.inScope(expression));
     }
     if (tableReferences.stream().anyMatch(ref -> !ref.joinGroup().isEmpty())) {
+      Map<String, Map<String, String>> qualifierMapping = reader.qualifierColumnMapping();
       List<Expression> qualifiedExpressions = new ArrayList<>(expressions);
       qualifiedExpressions.add(parsedSelect.having());
       for (Expression expression : qualifiedExpressions) {
         for (Column column : ColumnsUsed.referencesInScope(expression)) {
           String qualifier = column.getTable() == null ? null : column.getTable().getName();
-          validateGroupedQualifier(reader, qualifier, column.getColumnName());
+          validateGroupedQualifier(qualifierMapping, qualifier, column.getColumnName());
         }
       }
       for (SqlParser.OrderKey key : parsedSelect.orderBy()) {
-        validateGroupedQualifier(reader, key.qualifier(), key.column());
+        validateGroupedQualifier(qualifierMapping, key.qualifier(), key.column());
       }
     }
     Set<String> referenced = new LinkedHashSet<>(required);
@@ -2016,8 +2019,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   /**
    * Validates a qualified reference against the names exported by join groups.
    *
-   * @param reader
-   *          join output and its visible qualifier mappings
+   * @param qualifierMapping
+   *          visible qualifier mappings for the join output
    * @param qualifier
    *          optional SQL relation qualifier
    * @param column
@@ -2025,13 +2028,15 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @throws SQLException
    *           if the qualifier does not export the column
    */
-  private static void validateGroupedQualifier(JoinRecordReader reader, String qualifier, String column)
-      throws SQLException {
+  private static void validateGroupedQualifier(Map<String, Map<String, String>> qualifierMapping, String qualifier,
+      String column) throws SQLException {
     if (qualifier == null || qualifier.isBlank()) {
       return;
     }
-    Map<String, String> columns = reader.qualifierColumnMapping().get(JParqUtil.normalizeQualifier(qualifier));
-    if (columns == null || !columns.containsKey(Identifier.lookupKey(column))) {
+    Map<String, String> columns = ColumnMappingUtil.qualifierColumns(qualifierMapping, qualifier);
+    String columnKey = Identifier.lookupKey(column);
+    String alternative = ColumnMappingUtil.alternativeColumnKey(columnKey);
+    if (!columns.containsKey(columnKey) && (alternative == null || !columns.containsKey(alternative))) {
       throw SqlExceptions.syntaxFailure("Missing columns in parenthesized JOIN: " + qualifier + "." + column);
     }
   }
@@ -2291,13 +2296,14 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForJoin(joinReader);
     if (qualifierColumns.isEmpty()) {
-      throw new SQLException(
+      throw SqlExceptions.syntaxFailure(
           "Unable to resolve columns for qualified wildcard projections: " + parsedSelect.qualifiedWildcards());
     }
     try {
       parsedSelect = SqlParser.expandQualifiedWildcards(parsedSelect, qualifierColumns);
     } catch (IllegalArgumentException e) {
-      throw new SQLException("Failed to expand qualified wildcard projections", e);
+      throw new SQLSyntaxErrorException("Failed to expand qualified wildcard projections: " + e.getMessage(), "42000",
+          e);
     }
   }
 
@@ -2318,7 +2324,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     return mapping;
   }
 
-  private static void addQualifierColumns(Map<String, List<QualifiedExpansionColumn>> target, String qualifier,
+  private void addQualifierColumns(Map<String, List<QualifiedExpansionColumn>> target, String qualifier,
       Map<String, Map<String, String>> qualifierMapping, List<String> columnOrder,
       Map<String, String> canonicalLabels) {
     if (qualifier == null || qualifier.isBlank()) {
@@ -2331,6 +2337,11 @@ public class JParqPreparedStatement implements PreparedStatement {
     Map<String, String> columns = qualifierMapping.getOrDefault(qualifierId.lookupKey(), Map.of());
     if (columns == null || columns.isEmpty()) {
       return;
+    }
+    if (columns.containsValue("") && parsedSelect.qualifiedWildcards().stream().anyMatch(
+        wildcard -> Identifier.lookupKey(wildcard.qualifier()).equals(Identifier.lookupKey(qualifierId.text())))) {
+      throw SqlExceptions.syntaxFailure("Ambiguous column in join alias: " + qualifier
+          + "; assign unique column aliases before using a qualified wildcard");
     }
     LinkedHashSet<String> canonical = new LinkedHashSet<>(columns.values());
     List<QualifiedExpansionColumn> ordered = new ArrayList<>();
@@ -4355,12 +4366,8 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (normalized == null || available.contains(normalized)) {
       return true;
     }
-    if (normalized.startsWith("Q:")) {
-      String body = normalized.substring(2);
-      String lowerCase = body.toLowerCase(Locale.ROOT);
-      return body.equals(lowerCase) && available.contains("U:" + lowerCase);
-    }
-    return false;
+    String alternative = ColumnMappingUtil.alternativeColumnKey(normalized);
+    return alternative != null && available.contains(alternative);
   }
 
   private static void addColumns(Set<String> target, Set<String> source) {

@@ -10,6 +10,19 @@ import se.alipsa.jparq.engine.ColumnMappingUtil;
 /** Tests for {@link ColumnMappingUtil}. */
 class ColumnMappingUtilTest {
 
+  /** Verifies the shared fallback for lowercase quoted identifier keys. */
+  @Test
+  void quotedLowercaseKeysHaveUnquotedAlternatives() {
+    assertEquals("U:m", ColumnMappingUtil.alternativeColumnKey("Q:m"));
+    assertNull(ColumnMappingUtil.alternativeColumnKey("Q:M"));
+    assertNull(ColumnMappingUtil.alternativeColumnKey("U:m"));
+    assertNull(ColumnMappingUtil.alternativeColumnKey(null));
+    var mappings = Map.of("U:m", Map.of("U:x", "mx"), "Q:m", Map.of("U:x", "quoted_mx"));
+    assertEquals("quoted_mx", ColumnMappingUtil.qualifierColumns(mappings, "\"m\"").get("U:x"));
+    assertEquals("mx", ColumnMappingUtil.qualifierColumns(Map.of("U:m", Map.of("U:x", "mx")), "\"m\"").get("U:x"));
+    assertEquals(Map.of(), ColumnMappingUtil.qualifierColumns(mappings, "\"M\""));
+  }
+
   @Test
   void correlationCandidatesIncludePhysicalNamesAndProjectionAliases() {
     assertEquals(java.util.Set.of("U:id", "U:g", "U:grp"), ColumnMappingUtil.correlationColumns(

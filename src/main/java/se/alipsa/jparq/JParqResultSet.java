@@ -833,29 +833,10 @@ public class JParqResultSet extends ResultSetAdapter {
    */
   private static String canonicalColumnName(Column column, String currentValue,
       Map<String, Map<String, String>> qualifierMapping, Map<String, String> unqualifiedMapping) {
-    String qualifier = resolveQualifier(column);
     String columnName = column.getColumnName();
-    String columnKey = Identifier.lookupKey(columnName);
-    if (qualifier != null && qualifierMapping != null) {
-      String qualifierKey = Identifier.lookupKey(qualifier);
-      Map<String, String> mapping = qualifierKey == null ? null : qualifierMapping.get(qualifierKey);
-      if (mapping != null) {
-        String canonical = mapping.get(columnKey);
-        if (canonical != null) {
-          return canonical;
-        }
-      }
-    }
-    if (unqualifiedMapping != null) {
-      String canonical = unqualifiedMapping.get(columnKey);
-      if (canonical != null) {
-        return canonical;
-      }
-    }
-    if (currentValue != null) {
-      return currentValue;
-    }
-    return columnName;
+    String canonical = ColumnMappingUtil.canonicalOrderColumn(columnName, resolveQualifier(column), qualifierMapping,
+        unqualifiedMapping);
+    return !columnName.equals(canonical) || currentValue == null ? canonical : currentValue;
   }
 
   /**

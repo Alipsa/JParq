@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -16,6 +17,87 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 /** Verifies row counts, name binding, and grouping for parenthesized joins. */
 class ParenthesizedJoinTest {
+
+  /**
+   * Keeps reused VALUES aliases independent when an empty derived input reports
+   * types.
+   *
+   * @param pushdown
+   *          whether both pushdown options are enabled
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void valuesAliasesRetainIndependentSchemas(boolean pushdown) throws SQLException {
+    String sql = "SELECT a.y, d.y FROM ((VALUES ('s')) a(y) CROSS JOIN (VALUES (2)) b(z))"
+        + " CROSS JOIN (SELECT a.y FROM (VALUES (1)) a(y) WHERE FALSE) d";
+    try (var connection = DriverManager.getConnection(jdbcUrl(pushdown));
+        var statement = connection.prepareStatement(sql)) {
+      for (int execution = 0; execution < 2; execution++) {
+        try (var result = statement.executeQuery()) {
+          assertEquals(Types.VARCHAR, result.getMetaData().getColumnType(1));
+          assertEquals(Types.BIGINT, result.getMetaData().getColumnType(2));
+          assertFalse(result.next());
+        }
+      }
+    }
+  }
+
+  /**
+   * Applies lowercase quoted-name fallback to qualifiers, columns, and ordering.
+   *
+   * @param pushdown
+   *          whether both pushdown options are enabled
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void quotedLowercaseNamesResolveWithinGroups(boolean pushdown) throws SQLException {
+    assertRows(pushdown, "SELECT \"m\".cyl FROM (mtcars m JOIN (SELECT 1 AS a) x ON TRUE) LIMIT 1",
+        List.of(List.of(6)));
+    assertRows(pushdown, "SELECT \"m\".\"cyl\" FROM (mtcars m JOIN (SELECT 1 AS a) x ON TRUE) LIMIT 1",
+        List.of(List.of(6)));
+    assertRows(pushdown, "SELECT \"m\".\"x\", n.x FROM ((VALUES (1), (2)) m(x) CROSS JOIN (VALUES (3)) n(x))"
+        + " WHERE \"m\".\"x\" > 0 ORDER BY \"m\".\"x\" DESC", List.of(List.of(2, 3), List.of(1, 3)));
+    assertRows(pushdown, "SELECT \"g\".\"x\" FROM ((VALUES (1)) a(x) CROSS JOIN (VALUES (2)) b(y)) g",
+        List.of(List.of(1)));
+  }
+
+  /**
+   * Classifies duplicate-label group wildcards and accepts positional renaming.
+   *
+   * @param pushdown
+   *          whether both pushdown options are enabled
+   * @throws SQLException
+   *           if connection setup or a supported query fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void duplicateGroupWildcardLabelsReportAmbiguity(boolean pushdown) throws SQLException {
+    String group = "((VALUES (1)) a(x) JOIN (VALUES (2)) b(x) ON TRUE) g";
+    try (var connection = DriverManager.getConnection(jdbcUrl(pushdown));
+        var statement = connection.createStatement()) {
+      for (String sql : List.of("SELECT g.* FROM " + group,
+          "SELECT g.* FROM " + group + " CROSS JOIN (VALUES (3)) c(y)",
+          "SELECT g.* FROM ((VALUES (1)) a(x) JOIN (VALUES (2, 3)) b(x, y) ON TRUE) g",
+          "SELECT g.* FROM (mtcars m JOIN mtcars n ON m.model = n.model) g")) {
+        SQLException error = assertThrows(SQLException.class, () -> statement.executeQuery(sql), sql);
+        assertEquals("42000", error.getSQLState(), sql);
+        assertTrue(error.getMessage().contains("Ambiguous column in join alias"), error.getMessage());
+      }
+    }
+    assertRows(pushdown, "SELECT * FROM " + group, List.of(List.of(1, 2)));
+    assertRows(pushdown, "SELECT g.* FROM " + group + "(left_x, right_x)", List.of(List.of(1, 2)));
+    assertRows(pushdown, "SELECT h.* FROM " + group + " CROSS JOIN (VALUES (3)) h(y)", List.of(List.of(3)));
+  }
 
   /**
    * Keeps every input and projected column from the issue's physical-table joins.
@@ -137,7 +219,9 @@ class ParenthesizedJoinTest {
       "SELECT * FROM ((VALUES (1)) a(x) CROSS JOIN (VALUES (2)) b(y)) g(p)",
       "SELECT * FROM ((VALUES (1)) a(x) CROSS JOIN (VALUES (2)) b(y)) g(p, p)",
       "SELECT * FROM ((VALUES (1)) a(x) CROSS JOIN (VALUES (2)) b(y)) g JOIN (VALUES (3)) c(z) ON a.x = c.z",
-      "SELECT a.y FROM ((VALUES (1)) a(x) CROSS JOIN (VALUES (2)) b(y))"
+      "SELECT a.y FROM ((VALUES (1)) a(x) CROSS JOIN (VALUES (2)) b(y))",
+      "SELECT \"M\".cyl FROM (mtcars m JOIN (SELECT 1 AS a) x ON TRUE)",
+      "SELECT m.\"Cyl\" FROM (mtcars m JOIN (SELECT 1 AS a) x ON TRUE)"
   })
   void invalidGroupedInputsReportSyntaxErrors(String sql) throws SQLException {
     try (var connection = DriverManager.getConnection(jdbcUrl(true)); var statement = connection.createStatement()) {
@@ -176,6 +260,10 @@ class ParenthesizedJoinTest {
         List.of(Arrays.asList(1, null), Arrays.asList(null, 2)));
     assertRows(pushdown, "SELECT * FROM ((VALUES (1), (2)) a(x) FULL JOIN (VALUES (2), (3)) b(x) USING (x)) ORDER BY x",
         List.of(List.of(1), List.of(2), List.of(3)));
+    for (String input : List.of("(VALUES (1)) a(x) FULL JOIN (VALUES (2)) b(x) USING (x)",
+        "((VALUES (1)) a(x) FULL JOIN (VALUES (2)) b(x) USING (x))")) {
+      assertRows(pushdown, "SELECT * FROM " + input + " ORDER BY x", List.of(List.of(1), List.of(2)));
+    }
     assertRows(pushdown, "SELECT a.x FROM ((VALUES (1)) a(x) JOIN (SELECT 2 AS y WHERE FALSE) b ON TRUE)", List.of());
   }
 

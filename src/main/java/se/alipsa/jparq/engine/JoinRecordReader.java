@@ -425,8 +425,8 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
     SchemaContext context = buildSchema(joinTables, mappings, metadata);
     this.schema = context.schema();
     this.columnNames = buildColumnNames(mappings);
-    this.qualifierColumnMapping = context.qualifierMapping();
-    this.unqualifiedColumnMapping = context.unqualifiedMapping();
+    this.qualifierColumnMapping = ColumnMappingUtil.normaliseQualifierMapping(context.qualifierMapping());
+    this.unqualifiedColumnMapping = Map.copyOf(context.unqualifiedMapping());
     this.joinTables = joinTables;
     this.fieldMappings = List.copyOf(mappings);
     List<String> qualifiers = new ArrayList<>();
@@ -730,11 +730,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
    */
   @Override
   public Map<String, Map<String, String>> qualifierColumnMapping() {
-    Map<String, Map<String, String>> copy = new LinkedHashMap<>();
-    for (Map.Entry<String, Map<String, String>> entry : qualifierColumnMapping.entrySet()) {
-      copy.put(entry.getKey(), Map.copyOf(entry.getValue()));
-    }
-    return Map.copyOf(copy);
+    return qualifierColumnMapping;
   }
 
   /**
@@ -744,7 +740,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
    */
   @Override
   public Map<String, String> unqualifiedColumnMapping() {
-    return Map.copyOf(unqualifiedColumnMapping);
+    return unqualifiedColumnMapping;
   }
 
   /**

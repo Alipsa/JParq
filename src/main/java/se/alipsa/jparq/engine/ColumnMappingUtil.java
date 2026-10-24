@@ -301,7 +301,7 @@ public final class ColumnMappingUtil {
       throw new IllegalArgumentException("Unknown column '" + columnName + "' for qualifier '" + qualifier + "'");
     }
 
-    Map<String, String> mapping = qualifierColumnMapping.get(normalizedQualifier);
+    Map<String, String> mapping = qualifierColumns(qualifierColumnMapping, normalizedQualifier);
     if (mapping == null || mapping.isEmpty()) {
       String fallback = caseInsensitiveIndex.get(normalizedColumn);
       if (fallback == null) {
@@ -349,7 +349,7 @@ public final class ColumnMappingUtil {
     if (normalizedQualifier == null) {
       return null;
     }
-    Map<String, String> mapping = qualifierMapping.getOrDefault(normalizedQualifier, Map.of());
+    Map<String, String> mapping = qualifierColumns(qualifierMapping, normalizedQualifier);
     if (mapping.isEmpty()) {
       return null;
     }
@@ -397,7 +397,38 @@ public final class ColumnMappingUtil {
     return Identifier.lookupKey(trimmed);
   }
 
-  private static String alternativeColumnKey(String normalizedColumn) {
+  /**
+   * Looks up a qualifier, honoring exact quoted names before lowercase fallback.
+   *
+   * @param mappings
+   *          normalized qualifier-to-column mappings
+   * @param qualifier
+   *          raw SQL qualifier or normalized lookup key
+   * @return the qualifier's columns, or an empty map if it is unknown
+   */
+  public static Map<String, String> qualifierColumns(Map<String, Map<String, String>> mappings, String qualifier) {
+    String key = normalizeLookupKey(qualifier);
+    if (key == null) {
+      return Map.of();
+    }
+    Map<String, String> columns = mappings.get(key);
+    if (columns == null) {
+      String alternative = alternativeColumnKey(key);
+      if (alternative != null) {
+        columns = mappings.get(alternative);
+      }
+    }
+    return columns == null ? Map.of() : columns;
+  }
+
+  /**
+   * Resolves a quoted lowercase identifier key to its unquoted equivalent.
+   *
+   * @param normalizedColumn
+   *          normalized column or qualifier lookup key
+   * @return the unquoted fallback key, or null when no fallback is allowed
+   */
+  public static String alternativeColumnKey(String normalizedColumn) {
     if (normalizedColumn == null || !normalizedColumn.startsWith("Q:") || normalizedColumn.length() <= 2) {
       return null;
     }
