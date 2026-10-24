@@ -7,13 +7,25 @@ import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.LongValue;
 import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
+import org.apache.avro.Schema;
 
 /** Supplies typed outer values while an eagerly consumed nested query runs. */
 public final class CorrelatedBindings implements AutoCloseable {
   private static final String FUNCTION_NAME = "__JPARQ_CORRELATED_VALUE";
-  private static final ThreadLocal<Map<String, List<Object>>> ACTIVE = new ThreadLocal<>();
+  private static final ThreadLocal<Map<String, Frame>> ACTIVE = new ThreadLocal<>();
   private final String key;
-  private final List<Object> previous;
+  private final Frame previous;
+
+  /**
+   * Values and optional source schemas belonging to one active query.
+   *
+   * @param values
+   *          current typed values, including nulls
+   * @param schemas
+   *          declared schemas in slot order, or empty when unknown
+   */
+  private record Frame(List<Object> values, List<Schema> schemas) {
+  }
 
   /**
    * Installs one binding frame, preserving ancestor frames for deeper queries.
@@ -24,13 +36,33 @@ public final class CorrelatedBindings implements AutoCloseable {
    *          typed values, including nulls
    */
   public CorrelatedBindings(String key, List<Object> values) {
+    this(key, values, List.of());
+  }
+
+  /**
+   * Installs typed values with source schemas for schema-dependent table
+   * functions.
+   *
+   * @param key
+   *          query-shape identity
+   * @param values
+   *          typed values, including nulls
+   * @param schemas
+   *          source schemas in slot order, or an empty list when unknown
+   * @throws IllegalArgumentException
+   *           if nonempty schemas do not match the value slots
+   */
+  public CorrelatedBindings(String key, List<Object> values, List<Schema> schemas) {
+    if (!schemas.isEmpty() && schemas.size() != values.size()) {
+      throw new IllegalArgumentException("Binding schemas must match value slots");
+    }
     this.key = key;
-    Map<String, List<Object>> active = ACTIVE.get();
+    Map<String, Frame> active = ACTIVE.get();
     if (active == null) {
       active = new HashMap<>();
       ACTIVE.set(active);
     }
-    previous = active.put(key, values);
+    previous = active.put(key, new Frame(values, schemas));
   }
 
   /**
@@ -67,6 +99,45 @@ public final class CorrelatedBindings implements AutoCloseable {
    *           if the call is malformed, inactive, or has an invalid slot
    */
   public static Object value(Function function) {
+    Slot slot = slot(function);
+    return slot.frame().values().get(slot.index());
+  }
+
+  /**
+   * Reads a binding's source schema, including when its current value is null.
+   *
+   * @param function
+   *          private placeholder expression
+   * @return source schema, or null when the binding has no schema information
+   * @throws IllegalArgumentException
+   *           if the binding is invalid or inactive
+   */
+  public static Schema schema(Function function) {
+    Slot slot = slot(function);
+    return slot.frame().schemas().isEmpty() ? null : slot.frame().schemas().get(slot.index());
+  }
+
+  /**
+   * An active frame and a validated slot index.
+   *
+   * @param frame
+   *          active query frame
+   * @param index
+   *          validated position in its value and optional schema lists
+   */
+  private record Slot(Frame frame, int index) {
+  }
+
+  /**
+   * Resolves and validates a private placeholder once for either accessor.
+   *
+   * @param function
+   *          private placeholder expression
+   * @return active frame and validated index
+   * @throws IllegalArgumentException
+   *           if the call is malformed, inactive, or out of range
+   */
+  private static Slot slot(Function function) {
     String message = "Invalid correlated binding: reserved for internal query execution";
     if (!matches(function)) {
       throw new IllegalArgumentException(message);
@@ -75,11 +146,12 @@ public final class CorrelatedBindings implements AutoCloseable {
     String key = ((StringValue) arguments.get(0)).getValue();
     var index = ((LongValue) arguments.get(1)).getBigIntegerValue();
     var active = ACTIVE.get();
-    List<Object> values = active == null ? null : active.get(key);
-    if (values == null || index.signum() < 0 || index.compareTo(java.math.BigInteger.valueOf(values.size())) >= 0) {
+    Frame frame = active == null ? null : active.get(key);
+    if (frame == null || index.signum() < 0
+        || index.compareTo(java.math.BigInteger.valueOf(frame.values().size())) >= 0) {
       throw new IllegalArgumentException(message);
     }
-    return values.get(index.intValue());
+    return new Slot(frame, index.intValue());
   }
 
   /** Restores ancestor bindings and removes thread state after the last frame. */

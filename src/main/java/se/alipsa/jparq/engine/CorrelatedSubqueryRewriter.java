@@ -29,6 +29,7 @@ import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.select.SelectVisitor;
+import net.sf.jsqlparser.statement.select.TableFunction;
 import net.sf.jsqlparser.util.deparser.ExpressionDeParser;
 import net.sf.jsqlparser.util.deparser.SelectDeParser;
 
@@ -267,6 +268,25 @@ public final class CorrelatedSubqueryRewriter {
     };
 
     SelectDeParser selectDeParser = new SelectDeParser(expressionDeParser, buffer) {
+      /** Visits function arguments instead of appending their unmodified SQL. */
+      @Override
+      public <S> StringBuilder visit(TableFunction function, S context) {
+        if (function.isRowsFrom()) {
+          return super.visit(function, context);
+        }
+        if (function.getPrefix() != null) {
+          getBuilder().append(function.getPrefix()).append(' ');
+        }
+        function.getFunction().accept(expressionDeParser, context);
+        if (function.getWithClause() != null) {
+          getBuilder().append(" WITH ").append(function.getWithClause());
+        }
+        if (function.getAlias() != null) {
+          getBuilder().append(function.getAlias());
+        }
+        return getBuilder();
+      }
+
       @Override
       public <S> StringBuilder visit(PlainSelect plain, S context) {
         Set<String> bindings = new LinkedHashSet<>();

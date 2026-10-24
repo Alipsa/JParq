@@ -35,6 +35,39 @@ class CorrelatedBindingsTest {
         () -> LiteralConverter.toLiteral(new CorrelatedBindings.Reference("shape", 0).expression()));
   }
 
+  /** Source schemas survive null values and are restored with nested frames. */
+  @Test
+  void sourceSchemasFollowBindingLifetime() {
+    var schema = SchemaBuilder.array().items().intType();
+    var expression = new CorrelatedBindings.Reference("typed", 0).expression();
+    try (var parent = new CorrelatedBindings("typed", Arrays.asList((Object) null), List.of(schema))) {
+      assertSame(schema, CorrelatedBindings.schema(expression));
+      assertNull(CorrelatedBindings.value(expression));
+      try (var child = new CorrelatedBindings("typed", List.of(1))) {
+        assertNull(CorrelatedBindings.schema(expression));
+      }
+      assertSame(schema, CorrelatedBindings.schema(expression));
+    }
+    assertThrows(IllegalArgumentException.class, () -> CorrelatedBindings.schema(expression));
+  }
+
+  /** Mismatched schema lists fail before changing any active binding frame. */
+  @Test
+  void schemaCountsMustMatchValueSlots() {
+    var schema = SchemaBuilder.array().items().intType();
+    var expression = new CorrelatedBindings.Reference("typed", 0).expression();
+    try (var parent = new CorrelatedBindings("typed", List.of(7), List.of(schema))) {
+      for (List<Object> values : List.of(List.<Object>of(), List.<Object>of(1, 2))) {
+        var failure = assertThrows(IllegalArgumentException.class,
+            () -> new CorrelatedBindings("typed", values, List.of(schema)));
+        assertEquals("Binding schemas must match value slots", failure.getMessage());
+        assertEquals(7, CorrelatedBindings.value(expression));
+        assertSame(schema, CorrelatedBindings.schema(expression));
+      }
+    }
+    assertThrows(IllegalArgumentException.class, () -> CorrelatedBindings.schema(expression));
+  }
+
   /** Rejects malformed, inactive, and out-of-range private calls consistently. */
   @Test
   void invalidPlaceholderCallsHaveOneClearError() throws Exception {
@@ -44,6 +77,8 @@ class CorrelatedBindingsTest {
       var expression = net.sf.jsqlparser.parser.CCJSqlParserUtil.parseExpression(sql);
       var failure = assertThrows(IllegalArgumentException.class, () -> LiteralConverter.toLiteral(expression));
       assertEquals("Invalid correlated binding: reserved for internal query execution", failure.getMessage());
+      assertThrows(IllegalArgumentException.class,
+          () -> CorrelatedBindings.schema((net.sf.jsqlparser.expression.Function) expression));
     }
     try (var bindings = new CorrelatedBindings("shape", List.of(1))) {
       for (String index : List.of("-1", "1", "2147483648", "9223372036854775808")) {
@@ -51,6 +86,8 @@ class CorrelatedBindingsTest {
             .parseExpression("__JPARQ_CORRELATED_VALUE('shape', " + index + ")");
         var failure = assertThrows(IllegalArgumentException.class, () -> LiteralConverter.toLiteral(expression));
         assertEquals("Invalid correlated binding: reserved for internal query execution", failure.getMessage());
+        assertThrows(IllegalArgumentException.class,
+            () -> CorrelatedBindings.schema((net.sf.jsqlparser.expression.Function) expression));
       }
     }
   }

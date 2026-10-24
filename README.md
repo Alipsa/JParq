@@ -175,6 +175,15 @@ which rows survive filtering: empty or all-NULL unknown-type columns use VARCHAR
 also resolve to VARCHAR. Known column types remain available for empty results.
 For inferred columns, `getObject()` returns the corresponding Java type, such as `java.sql.Date`, `Long`,
 or `BigDecimal`.
+LATERAL derived tables bind outer values with their Java types intact. For example,
+`FROM arr a CROSS JOIN LATERAL (SELECT u.t FROM UNNEST(a.dates) AS u(t)) x`
+expands the current row's array. When the UNNEST argument is a direct outer column reference,
+declared date and nested-array element types are preserved, including metadata when the outer input is empty.
+Wrapping the argument in an expression such as COALESCE currently loses its declared element schema;
+LATERAL output types can then fall back to VARCHAR during schema discovery.
+Null and empty arrays produce no inner rows; a LEFT JOIN LATERAL retains their outer rows with NULL inner columns.
+Standalone `UNNEST(NULL)` also returns no rows and uses VARCHAR metadata because its element type is unknown.
+
 LATERAL derived tables may still expose numeric values as VARCHAR. In particular, LATERAL decimal
 expressions with unknown precision use VARCHAR to keep one stable schema across correlated executions.
 

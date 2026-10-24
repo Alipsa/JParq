@@ -510,6 +510,7 @@ public final class SubqueryExecutor implements AutoCloseable {
     private final Map<String, ExecutionPlans> children = new LinkedHashMap<>();
     private final Map<JParqConnection.TableLocation, ParquetTable> tables = new LinkedHashMap<>();
     private final Map<Select, BoundQuery> correlations = new IdentityHashMap<>();
+    private final Map<SqlParser.TableReference, LateralQuery> laterals = new IdentityHashMap<>();
     private SqlParser.Query query;
 
     /** Creates an empty execution-local shape cache. */
@@ -525,6 +526,41 @@ public final class SubqueryExecutor implements AutoCloseable {
      */
     public ExecutionPlans child(String sql) {
       return children.computeIfAbsent(sql, ignored -> new ExecutionPlans());
+    }
+
+    /**
+     * Reuses one binding identity and rewritten SQL per lexical LATERAL input.
+     * Values and schemas remain owned by each current materialization.
+     *
+     * @param reference
+     *          parsed LATERAL input in this query shape
+     * @param qualifiers
+     *          preceding table qualifiers
+     * @return stable binding slots and SQL for this input
+     * @throws SQLException
+     *           if the LATERAL query cannot be parsed
+     */
+    public LateralQuery lateral(SqlParser.TableReference reference, Collection<String> qualifiers) throws SQLException {
+      LateralQuery cached = laterals.get(reference);
+      if (cached != null) {
+        return cached;
+      }
+      Select parsed;
+      try {
+        parsed = (Select) JSqlParserSupport.parseStatement(reference.subquerySql());
+      } catch (Exception exception) {
+        throw new SQLException("Failed to parse LATERAL subquery", exception);
+      }
+      String key = UUID.randomUUID().toString();
+      var references = new LinkedHashMap<CorrelatedSubqueryRewriter.QualifiedColumn, Integer>();
+      var rewritten = CorrelatedSubqueryRewriter.rewrite(parsed, qualifiers, (qualifier, column) -> {
+        var outer = new CorrelatedSubqueryRewriter.QualifiedColumn(qualifier, column);
+        int index = references.computeIfAbsent(outer, ignored -> references.size());
+        return new CorrelatedBindings.Reference(key, index);
+      });
+      var result = new LateralQuery(rewritten.sql(), key, List.copyOf(references.keySet()));
+      laterals.put(reference, result);
+      return result;
     }
 
     /**
@@ -561,6 +597,19 @@ public final class SubqueryExecutor implements AutoCloseable {
       }
       return table;
     }
+  }
+
+  /**
+   * Stable SQL and binding slots for one lexical LATERAL input.
+   *
+   * @param sql
+   *          rewritten SQL
+   * @param key
+   *          binding frame identity
+   * @param references
+   *          outer columns in binding-slot order
+   */
+  public record LateralQuery(String sql, String key, List<CorrelatedSubqueryRewriter.QualifiedColumn> references) {
   }
 
   /**
