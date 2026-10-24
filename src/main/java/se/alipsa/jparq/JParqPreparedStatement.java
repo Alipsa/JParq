@@ -1895,7 +1895,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Validates ON references against only the inputs visible at that join step.
+   * Validates ON references against only the inputs visible at that join step,
+   * honoring the shared quoted lowercase name fallback.
    *
    * @param tables
    *          ordered join participants
@@ -1904,15 +1905,15 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private void validateJoinConditions(List<JoinRecordReader.JoinTable> tables) throws SQLException {
     Set<String> available = new LinkedHashSet<>();
-    Map<String, Set<String>> qualified = new LinkedHashMap<>();
+    Map<String, Map<String, String>> qualified = new LinkedHashMap<>();
     for (JoinRecordReader.JoinTable table : tables) {
-      Set<String> columns = new LinkedHashSet<>();
+      Map<String, String> columns = new LinkedHashMap<>();
       for (Field field : table.schema().getFields()) {
-        columns.add(MaterializedNames.lookupKey(field));
+        columns.put(MaterializedNames.lookupKey(field), field.name());
       }
-      available.addAll(columns);
+      available.addAll(columns.keySet());
       for (var nested : table.nestedQualifiers().entrySet()) {
-        qualified.put(JParqUtil.normalizeQualifier(nested.getKey()), nested.getValue().keySet());
+        qualified.put(JParqUtil.normalizeQualifier(nested.getKey()), nested.getValue());
       }
       String qualifier = table.alias() == null ? table.tableName() : table.alias();
       if (qualifier != null) {
@@ -1923,8 +1924,8 @@ public class JParqPreparedStatement implements PreparedStatement {
         String referenceQualifier = column.getTable() == null ? null : column.getTable().getName();
         Set<String> visible = referenceQualifier == null || referenceQualifier.isBlank()
             ? available
-            : qualified.get(JParqUtil.normalizeQualifier(referenceQualifier));
-        if (visible == null || !containsColumn(visible, normalizeColumnKey(column.getColumnName()))) {
+            : ColumnMappingUtil.qualifierColumns(qualified, referenceQualifier).keySet();
+        if (!containsColumn(visible, normalizeColumnKey(column.getColumnName()))) {
           missing.add(column.toString());
         }
       }

@@ -100,6 +100,46 @@ class ParenthesizedJoinTest {
   }
 
   /**
+   * Resolves quoted lowercase ON references against the inputs visible at each
+   * join.
+   *
+   * @param pushdown
+   *          whether both pushdown options are enabled
+   * @throws SQLException
+   *           if a supported query fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void quotedQualifiersResolveInJoinConditions(boolean pushdown) throws SQLException {
+    assertRows(pushdown, "SELECT COUNT(*) FROM mtcars m JOIN (SELECT 4 AS a) x ON \"m\".cyl = x.a",
+        List.of(List.of(11)));
+    assertRows(pushdown,
+        "SELECT COUNT(*) FROM mtcars o" + " JOIN (mtcars m JOIN (SELECT 1 AS a) x ON TRUE) ON o.model = \"m\".model",
+        List.of(List.of(32)));
+    assertRows(pushdown,
+        "SELECT m.x, n.x FROM ((VALUES (1), (2)) m(x)" + " JOIN (VALUES (2)) n(x) ON \"m\".\"x\" = \"n\".\"x\")",
+        List.of(List.of(2, 2)));
+    assertRows(pushdown, "SELECT COUNT(*) FROM ((VALUES (1), (2)) m(x)"
+        + " LEFT JOIN (VALUES (2)) n(y) ON \"m\".x = n.y) WHERE n.y IS NULL", List.of(List.of(1)));
+    assertRows(pushdown, "SELECT COUNT(*) FROM (VALUES (1), (2)) \"M\"(x)" + " JOIN (VALUES (2)) n(y) ON \"M\".x = n.y",
+        List.of(List.of(1)));
+    try (var connection = DriverManager.getConnection(jdbcUrl(pushdown));
+        var statement = connection.createStatement()) {
+      for (String sql : List.of("SELECT * FROM (VALUES (1)) m(x) JOIN (VALUES (1)) n(y) ON \"M\".x = n.y",
+          "SELECT * FROM (VALUES (1)) m(x) JOIN (VALUES (1)) n(y) ON zz.x = n.y",
+          "SELECT * FROM (VALUES (1)) m(x) JOIN (VALUES (1)) n(y) ON \"m\".missing = n.y",
+          "SELECT * FROM (VALUES (1)) m(x) JOIN (VALUES (1)) n(y) ON \"p\".z = n.y"
+              + " JOIN (VALUES (1)) p(z) ON TRUE")) {
+        SQLException error = assertThrows(SQLException.class, () -> statement.executeQuery(sql), sql);
+        assertEquals("42000", error.getSQLState(), sql);
+        assertTrue(error.getMessage().contains("Missing columns in JOIN condition"), error.getMessage());
+      }
+    }
+  }
+
+  /**
    * Preserves quoted aliases whose text resembles an internal lookup prefix.
    *
    * @param pushdown
