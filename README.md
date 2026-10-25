@@ -217,7 +217,9 @@ from SELECT. Columns outside aggregates must be grouping expressions. Scalar fun
 value evaluator; remaining HAVING predicate classification differences are tracked in
 [#247](https://github.com/Alipsa/JParq/issues/247). Ungrouped column references in HAVING are rejected
 with SQLState `42000`, including for empty inputs. Grouped ORDER BY supports scalar subqueries and
-evaluates sort keys once per group. Window functions in grouped queries are rejected during preparation
+evaluates sort keys once per group. Predicate subqueries using IN, EXISTS, ANY, SOME, or ALL retain
+set semantics and SQL three-valued logic inside CASE and other scalar expressions in SELECT, HAVING,
+and ORDER BY. Window functions in grouped queries are rejected during preparation
 with SQLState `42000`; separate inner queries retain their own window-function scope.
 Direct correlated scalar subqueries used as aggregate arguments still have a separate binding limitation
 ([#307](https://github.com/Alipsa/JParq/issues/307)).

@@ -7,6 +7,9 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.operators.relational.ExistsExpression;
+import net.sf.jsqlparser.expression.operators.relational.InExpression;
+import net.sf.jsqlparser.expression.operators.relational.OldOracleJoinBinaryExpression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.statement.select.ParenthesedSelect;
@@ -28,6 +31,8 @@ final class GroupedExpression {
 
   /**
    * Compiles a scalar expression, replacing group-dependent operands with slots.
+   * Predicate subqueries bind their whole predicate so their query results retain
+   * set semantics rather than being reduced to scalar values.
    *
    * @param source
    *          source expression
@@ -148,6 +153,16 @@ final class GroupedExpression {
       }
 
       @Override
+      public <S> StringBuilder visit(InExpression predicate, S context) {
+        return binding(predicate) ? sql : super.visit(predicate, context);
+      }
+
+      @Override
+      public <S> StringBuilder visit(ExistsExpression predicate, S context) {
+        return binding(predicate) ? sql : super.visit(predicate, context);
+      }
+
+      @Override
       public <S> StringBuilder visit(Select select, S context) {
         binding(select);
         return sql;
@@ -158,6 +173,12 @@ final class GroupedExpression {
         binding(select);
         return sql;
       }
+      @Override
+      public <S> StringBuilder deparse(OldOracleJoinBinaryExpression binary, String operator, S context) {
+        // Ordinary SQL comparisons also use this JSqlParser overload.
+        return binding(binary) ? sql : super.deparse(binary, operator, context);
+      }
+
       @Override
       protected <S> void deparse(BinaryExpression binary, String operator, S context) {
         if (!binding(binary)) {

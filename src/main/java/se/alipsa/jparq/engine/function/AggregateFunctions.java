@@ -651,6 +651,22 @@ public final class AggregateFunctions {
   }
 
   /**
+   * Identifies predicates whose subquery or quantified operands require grouped
+   * evaluation.
+   *
+   * @param expression
+   *          candidate predicate
+   * @return whether the whole predicate must use the grouped evaluator
+   */
+  private static boolean isGroupedPredicate(Expression expression) {
+    return expression instanceof InExpression in && in.getRightExpression() instanceof Select
+        || expression instanceof ExistsExpression
+        || expression instanceof BinaryExpression binary
+            && (JSqlParserSupport.isQuantifiedOperand(binary.getLeftExpression())
+                || JSqlParserSupport.isQuantifiedOperand(binary.getRightExpression()));
+  }
+
+  /**
    * Removes surrounding single-expression parentheses without crossing query
    * scopes.
    *
@@ -2685,6 +2701,9 @@ public final class AggregateFunctions {
       if (groupIndex != null) {
         return groupValues.get(groupIndex);
       }
+      if (isGroupedPredicate(expr)) {
+        return evalTruth(expr);
+      }
       if (expr instanceof Select subSelect) {
         GroupedScalarSubquery grouped = groupedSubqueries.get(subSelect.toString());
         return grouped == null ? evaluateScalarSubquery(subSelect) : grouped.evaluate(groupValues);
@@ -2744,7 +2763,8 @@ public final class AggregateFunctions {
     }
 
     /**
-     * Evaluates scalar operators through the shared SQL value evaluator.
+     * Evaluates scalar operators through the shared SQL value evaluator. Whole
+     * predicate bindings use the grouped evaluator and preserve UNKNOWN as NULL.
      *
      * @param expression
      *          scalar expression containing group-dependent operands
@@ -2752,8 +2772,8 @@ public final class AggregateFunctions {
      */
     private Object scalarValue(Expression expression) {
       GroupedExpression scalar = scalarExpressions.computeIfAbsent(expression.toString(),
-          text -> new GroupedExpression(expression,
-              operand -> isGroupOperand(operand, groupIndexLookup, plan.groupExpressions())));
+          text -> new GroupedExpression(expression, operand -> isGroupedPredicate(operand)
+              || isGroupOperand(operand, groupIndexLookup, plan.groupExpressions())));
       return scalar.evaluate(operand -> {
         Integer groupIndex = findGroupIndex(operand, groupIndexLookup, plan.groupExpressions());
         return groupIndex == null ? value(operand) : groupValues.get(groupIndex);
