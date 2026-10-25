@@ -226,9 +226,11 @@ projection getters. Evaluation can be deferred until iteration or value access; 
 does not guarantee that a scalar subquery is valid.
 
 Escape an apostrophe in a SQL string literal by doubling it: `'O''Brien'` evaluates to `O'Brien`.
-JDBC `setString` values are escaped automatically. Literal decoding leaves dollar-quoted contents unchanged,
-but the SQL pre-pass does not fully recognize dollar quotes: unmatched apostrophes and comment markers inside
-them can still cause parsing failures (tracked in [#226](https://github.com/Alipsa/JParq/issues/226)).
+JDBC `setString` values are escaped automatically. Dollar-quoted strings preserve their contents literally,
+including apostrophes, identifier quotes, and comment markers: `$$it's$$` returns `it's`, and
+`$$a--b$$` returns `a--b`.
+JDBC parameter scanning does not yet recognize dollar quotes: parameter markers inside their contents and
+real parameters following quoted contents can be misidentified (tracked in [#296](https://github.com/Alipsa/JParq/issues/296)).
 
 ### Connection options
 
