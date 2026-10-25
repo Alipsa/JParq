@@ -226,7 +226,8 @@ projection getters. Evaluation can be deferred until iteration or value access; 
 does not guarantee that a scalar subquery is valid.
 
 Escape an apostrophe in a SQL string literal by doubling it: `'O''Brien'` evaluates to `O'Brien`.
-JDBC `setString` values are escaped automatically. Dollar-quoted strings preserve their contents literally,
+JDBC `setString` values are escaped automatically. Only untagged `$$...$$` dollar-quoted strings are supported;
+tagged forms such as `$tag$...$tag$` are not enabled. Untagged strings preserve their contents literally,
 including apostrophes, identifier quotes, and comment markers: `$$it's$$` returns `it's`, and
 `$$a--b$$` returns `a--b`.
 JDBC parameter scanning does not yet recognize dollar quotes: parameter markers inside their contents and

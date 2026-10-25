@@ -106,8 +106,7 @@ class SqlParserCommentTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "$$it's$$", "$$a--b$$", "$$a/*b$$", "$$a\"b$$", "$$a`b$$", "$$$$", "$tag$it's -- /* \" `$tag$",
-      "$_tag1$a$$b$other$c$_tag1$", "$Tag$a$tag$b$Tag$", "$$first\n--second\r\n/*third*/$$"
+      "$$it's$$", "$$a--b$$", "$$a/*b$$", "$$a\"b$$", "$$a`b$$", "$$$$", "$$first\n--second\r\n/*third*/$$"
   })
   void stripCommentsPreservesDollarQuotedStrings(String literal) {
     String sql = "SELECT " + literal + " AS x";
@@ -123,10 +122,25 @@ class SqlParserCommentTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "$$unfinished", "$tag$unfinished", "$Tag$unfinished$tag$", "$tag$unfinished$$", "$$"
+      "$$unfinished", "$$"
   })
   void stripCommentsRejectsUnterminatedDollarQuotes(String literal) {
     assertThrows(IllegalArgumentException.class, () -> SqlParser.stripSqlComments("SELECT " + literal));
+  }
+
+  /**
+   * Leaves tagged openers as identifier text while tagged literals are disabled.
+   *
+   * @param identifier
+   *          an identifier containing a tagged opener
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "$a$b", "$tag$unfinished", "$tag$abc$tag$", "$_tag1$a$$b$other$c$_tag1$", "$Tag$a$tag$b$Tag$"
+  })
+  void stripCommentsPreservesTaggedOpeners(String identifier) {
+    String sql = "SELECT 1 AS " + identifier;
+    assertEquals(sql + " \n", SqlParser.stripSqlComments(sql + " -- trailing\n"));
   }
 
   /** Keeps dollar signs in identifiers, ordinary quotes, and comments literal. */

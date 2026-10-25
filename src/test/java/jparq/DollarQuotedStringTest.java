@@ -19,6 +19,33 @@ class DollarQuotedStringTest {
   Path directory;
 
   /**
+   * Preserves identifiers starting with tagged openers through JDBC preparation.
+   *
+   * @param identifier
+   *          the output alias and derived column name
+   * @throws SQLException
+   *           if preparing or executing a query fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "$a$b", "$tag$abc$tag$", "$_tag1$x"
+  })
+  void retainsIdentifiersStartingWithTaggedOpeners(String identifier) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      for (String sql : new String[]{
+          "SELECT 1 AS " + identifier, "SELECT " + identifier + " FROM (SELECT 1 AS " + identifier + ") d"
+      }) {
+        try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
+          assertEquals(identifier, result.getMetaData().getColumnLabel(1), sql);
+          assertTrue(result.next(), sql);
+          assertEquals(1, result.getInt(1), sql);
+          assertFalse(result.next(), sql);
+        }
+      }
+    }
+  }
+
+  /**
    * Retains quotes and comment markers through projection and materialization.
    *
    * @param body
