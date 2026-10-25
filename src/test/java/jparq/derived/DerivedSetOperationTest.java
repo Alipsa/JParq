@@ -14,11 +14,77 @@ import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import org.apache.avro.SchemaBuilder;
+import org.apache.avro.generic.GenericData;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.parquet.avro.AvroParquetWriter;
+import org.apache.parquet.hadoop.util.HadoopOutputFile;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /** Verifies set operations materialized as derived-table inputs. */
 class DerivedSetOperationTest {
+
+  /**
+   * Preserves computed Boolean types, values, and NULL multiplicity from a
+   * nullable physical column through derived UNION and UNION ALL inputs.
+   *
+   * @param pushdown
+   *          whether predicate and projection pushdown are enabled
+   * @param directory
+   *          the temporary fixture directory
+   * @throws Exception
+   *           if writing the fixture or executing a query fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void nullablePhysicalComparisonsRemainBoolean(boolean pushdown, @TempDir Path directory) throws Exception {
+    var schema = SchemaBuilder.record("nullable_numbers").fields().optionalInt("n").endRecord();
+    var file = new org.apache.hadoop.fs.Path(directory.resolve("o.parquet").toUri());
+    var configuration = new Configuration(false);
+    try (var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(file, configuration))
+        .withSchema(schema).withConf(configuration).build()) {
+      Integer[] numbers = {
+          null, 1, 2, 4
+      };
+      for (Integer number : numbers) {
+        var record = new GenericData.Record(schema);
+        record.put("n", number);
+        writer.write(record);
+      }
+    }
+    try (var connection = DriverManager.getConnection(
+        "jdbc:jparq:" + directory + "?predicatePushdown=" + pushdown + "&projectionPushdown=" + pushdown)) {
+      for (String operator : List.of("UNION", "UNION ALL")) {
+        String sql = "SELECT c FROM (SELECT n > 1 AS c FROM o " + operator + " SELECT n > 3 AS c FROM o) d";
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+          assertEquals(1, result.getMetaData().getColumnCount(), sql);
+          assertEquals("c", result.getMetaData().getColumnLabel(1), sql);
+          assertEquals(Types.BOOLEAN, result.getMetaData().getColumnType(1), sql);
+          List<Boolean> actual = new ArrayList<>();
+          while (result.next()) {
+            Object value = result.getObject(1);
+            assertEquals(value == null, result.wasNull(), sql);
+            if (value != null) {
+              assertInstanceOf(Boolean.class, value, sql);
+            }
+            actual.add((Boolean) value);
+          }
+          boolean all = operator.equals("UNION ALL");
+          assertEquals(all ? 8 : 3, actual.size(), sql);
+          assertEquals(all ? 3 : 1, Collections.frequency(actual, false), sql);
+          assertEquals(all ? 3 : 1, Collections.frequency(actual, true), sql);
+          assertEquals(all ? 2 : 1, Collections.frequency(actual, null), sql);
+          assertFalse(result.next(), sql);
+          assertEquals(Types.BOOLEAN, result.getMetaData().getColumnType(1), sql);
+        }
+      }
+    }
+  }
 
   /**
    * Reproduces issue 198 using a physical input and verifies duplicate counts.
