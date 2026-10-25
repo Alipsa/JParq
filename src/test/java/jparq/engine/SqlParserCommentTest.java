@@ -98,4 +98,56 @@ class SqlParserCommentTest {
     assertThrows(IllegalArgumentException.class, () -> SqlParser.stripSqlComments("SELECT " + quote + "unfinished"));
   }
 
+  /**
+   * Preserves dollar-quoted bodies while removing surrounding SQL comments.
+   *
+   * @param literal
+   *          the dollar-quoted literal
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "$$it's$$", "$$a--b$$", "$$a/*b$$", "$$a\"b$$", "$$a`b$$", "$$$$", "$$first\n--second\r\n/*third*/$$"
+  })
+  void stripCommentsPreservesDollarQuotedStrings(String literal) {
+    String sql = "SELECT " + literal + " AS x";
+    assertEquals(" " + sql + " \n", SqlParser.stripSqlComments("/* leading */" + sql + " -- trailing\n"));
+    assertEquals("SELECT " + literal + " AS x", SqlParser.stripSqlComments("SELECT/*c*/" + literal + "/*c*/AS x"));
+  }
+
+  /**
+   * Rejects dollar quotes without an exact matching closing delimiter.
+   *
+   * @param literal
+   *          the unfinished literal
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "$$unfinished", "$$"
+  })
+  void stripCommentsRejectsUnterminatedDollarQuotes(String literal) {
+    assertThrows(IllegalArgumentException.class, () -> SqlParser.stripSqlComments("SELECT " + literal));
+  }
+
+  /**
+   * Leaves tagged openers as identifier text while tagged literals are disabled.
+   *
+   * @param identifier
+   *          an identifier containing a tagged opener
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "$a$b", "$tag$unfinished", "$tag$abc$tag$", "$_tag1$a$$b$other$c$_tag1$", "$Tag$a$tag$b$Tag$"
+  })
+  void stripCommentsPreservesTaggedOpeners(String identifier) {
+    String sql = "SELECT 1 AS " + identifier;
+    assertEquals(sql + " \n", SqlParser.stripSqlComments(sql + " -- trailing\n"));
+  }
+
+  /** Keeps dollar signs in identifiers, ordinary quotes, and comments literal. */
+  @Test
+  void stripCommentsDistinguishesDollarQuoteOpeners() {
+    String sql = "SELECT a$tag$b, $1, $bad-tag$, '$$it''s', \"$tag$\", `$tag$`";
+    assertEquals(sql + " \n", SqlParser.stripSqlComments(sql + " -- $$ ' \"\n/* $tag$ */"));
+  }
+
 }

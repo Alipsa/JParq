@@ -2387,8 +2387,9 @@ public final class SqlParser {
    * inline positions. This helper processes the SQL text and strips both
    * {@code --} line comments and {@code /* ... *&#47;} block comments so that
    * {@link JSqlParserSupport} receives a clean statement. Content that appears
-   * inside single-quoted literals or double-quoted and backtick identifiers is
-   * preserved verbatim.
+   * inside single-quoted or untagged {@code $$} literals, or double-quoted and
+   * backtick identifiers, is preserved verbatim. Tagged dollar quotes are not
+   * enabled in the parser, so tagged openers remain identifier text here.
    * </p>
    *
    * @param sql
@@ -2470,6 +2471,16 @@ public final class SqlParser {
         } else if (c == identifierEnd) {
           identifierEnd = '\0';
         }
+        continue;
+      }
+      if (c == '$' && next == '$'
+          && (i == 0 || sql.charAt(i - 1) != '$' && !Character.isUnicodeIdentifierPart(sql.codePointBefore(i)))) {
+        int closing = sql.indexOf("$$", i + 2);
+        if (closing < 0) {
+          throw new IllegalArgumentException("Unterminated dollar-quoted literal in SQL");
+        }
+        result.append(sql, i, closing + 2);
+        i = closing + 1;
         continue;
       }
       if (c == '`') {
