@@ -210,8 +210,12 @@ Unknown or unsupported scalar functions and unsupported expression types raise `
 with SQLState `42000`
 when evaluated, instead of returning their SQL text as a value. Evaluation can occur during query
 execution, materialization, or a result-set getter; function names are not checked by a preparation-time
-allowlist. Scalar functions in HAVING and grouped select lists remain limited;
-NULLIF support and SQLState classification there remain tracked in [#247](https://github.com/Alipsa/JParq/issues/247).
+allowlist. Aggregate results can be operands of arithmetic and scalar functions in SELECT, HAVING,
+and ORDER BY, with or without GROUP BY. For example, `SUM(cyl) * 2`, `COALESCE(MAX(cyl), 0)`,
+and `ROUND(AVG(mpg), 1)` evaluate once per group. ORDER BY and HAVING may use aggregates omitted
+from SELECT. Columns outside aggregates must be grouping expressions. Scalar functions use the shared
+value evaluator; remaining HAVING predicate classification differences are tracked in
+[#247](https://github.com/Alipsa/JParq/issues/247).
 Unary signs convert numeric text and report invalid numeric text as `SQLDataException` with SQLState `22018`;
 unsupported operand types raise SQLState `42000`. Expression diagnostics preserve the SQL structure while replacing internal correlated bindings with
 `<outer value>`, including bindings inside nested subqueries.
