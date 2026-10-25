@@ -621,7 +621,8 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
   }
 
   /**
-   * Carries nested SQL names forward when an enclosing join renames fields.
+   * Carries nested SQL names and ambiguity markers forward when an enclosing join
+   * renames fields.
    *
    * @param target
    *          mappings for the enclosing join
@@ -636,9 +637,9 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
       Map<String, Map<String, String>> nested, String sourceField, String targetField) {
     for (var qualifier : nested.entrySet()) {
       for (var column : qualifier.getValue().entrySet()) {
-        if (sourceField.equals(column.getValue())) {
+        if (sourceField.equals(column.getValue()) || column.getValue().isEmpty()) {
           target.computeIfAbsent(normalize(qualifier.getKey()), key -> new LinkedHashMap<>()).put(column.getKey(),
-              targetField);
+              column.getValue().isEmpty() ? "" : targetField);
         }
       }
     }

@@ -2,6 +2,8 @@
 
 ### 1.4.0
 
+- Preserve real table-name qualifiers alongside aliases for single-table correlations and ordinary joined-table wildcards. Preserve duplicate-label ambiguity diagnostics through nested unaliased join groups (#290).
+
 - Fix parenthesized joins in FROM silently dropping joined inputs (#224). Preserve nested join boundaries, outer-join NULL extension, qualified columns and wildcards, group aliases, and positional column aliases. Add regression coverage for invalid decimal declarations inside grouped join inputs.
 - Preserve quoted lowercase names in grouped column projections, ON conditions, residual WHERE predicates, and ORDER BY (#224, #292); quoted columns in computed expressions remain tracked in #244. Preserve quoted aliases containing prefix-like text such as `"u:x"`. Report duplicate-label qualified join-input wildcards with a clear ambiguity error and SQLState `42000` (#224). Cache immutable join mappings once and remove name-based VALUES cache writes from join execution. Document eager group materialization and the lack of predicate pushdown into groups.
 - Fix independent VALUES join inputs reusing another input's cached rows (#224). In particular, `FULL JOIN ... USING` over non-overlapping VALUES inputs now retains both unmatched rows instead of returning one.

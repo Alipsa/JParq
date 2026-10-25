@@ -162,6 +162,66 @@ class ParenthesizedJoinTest {
   }
 
   /**
+   * Preserves real table names for correlations when an outer table has an alias.
+   *
+   * @param pushdown
+   *          whether both pushdown options are enabled
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void aliasedOuterTablesRetainRealNameCorrelations(boolean pushdown) throws SQLException {
+    for (String input : List.of("mtcars m", "mtcars m JOIN (SELECT 1 AS a) x ON TRUE")) {
+      for (String inner : List.of("mtcars i WHERE i.cyl = mtcars.cyl",
+          "(VALUES (4),(6),(6)) v(c) WHERE v.c = mtcars.cyl")) {
+        String sql = "SELECT m.model, (SELECT COUNT(*) FROM " + inner + ") AS c FROM " + input + " LIMIT 2";
+        try (var connection = DriverManager.getConnection(jdbcUrl(pushdown));
+            var statement = connection.createStatement();
+            var result = statement.executeQuery(sql)) {
+          for (String model : List.of("Mazda RX4", "Mazda RX4 Wag")) {
+            assertTrue(result.next(), sql);
+            assertEquals(model, result.getString(1), sql);
+            assertEquals(inner.startsWith("mtcars") ? 7 : 2, result.getInt(2), sql);
+          }
+          assertFalse(result.next(), sql);
+        }
+      }
+    }
+  }
+
+  /**
+   * Preserves both the table name and alias for ordinary joined-input wildcards.
+   *
+   * @param pushdown
+   *          whether both pushdown options are enabled
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void aliasedJoinTablesRetainRealNameWildcards(boolean pushdown) throws SQLException {
+    for (String qualifier : List.of("mtcars", "m")) {
+      String sql = "SELECT " + qualifier + ".* FROM mtcars m JOIN (SELECT 1 AS a) x ON TRUE LIMIT 2";
+      try (var connection = DriverManager.getConnection(jdbcUrl(pushdown));
+          var statement = connection.createStatement();
+          var result = statement.executeQuery(sql)) {
+        assertEquals(12, result.getMetaData().getColumnCount(), sql);
+        for (String model : List.of("Mazda RX4", "Mazda RX4 Wag")) {
+          assertTrue(result.next(), sql);
+          assertEquals(model, result.getString("model"), sql);
+          assertEquals(6, result.getInt("cyl"), sql);
+        }
+        assertFalse(result.next(), sql);
+      }
+    }
+  }
+
+  /**
    * Classifies duplicate-label group wildcards and accepts positional renaming.
    *
    * @param pushdown
@@ -178,14 +238,28 @@ class ParenthesizedJoinTest {
     try (var connection = DriverManager.getConnection(jdbcUrl(pushdown));
         var statement = connection.createStatement()) {
       for (String sql : List.of("SELECT g.* FROM " + group,
+          "SELECT g.* FROM (" + group + " CROSS JOIN (VALUES (3)) c(z))",
+          "SELECT g.x FROM (" + group + " CROSS JOIN (VALUES (3)) c(z))",
+          "SELECT g.* FROM ((" + group + " CROSS JOIN (VALUES (3)) c(z)) CROSS JOIN (VALUES (4)) e(w))",
+          "SELECT d.* FROM ((SELECT 1 AS x, 2 AS x) d CROSS JOIN (VALUES (3)) b(y))",
+          "WITH c AS (SELECT 1 AS x, 2 AS x) SELECT d.* FROM (c d CROSS JOIN (VALUES (3)) b(y))",
           "SELECT g.* FROM " + group + " CROSS JOIN (VALUES (3)) c(y)",
           "SELECT g.* FROM ((VALUES (1)) a(x) JOIN (VALUES (2, 3)) b(x, y) ON TRUE) g",
           "SELECT g.* FROM (mtcars m JOIN mtcars n ON m.model = n.model) g",
           "SELECT d.* FROM (SELECT 1 AS x, 2 AS x) d CROSS JOIN (VALUES (3)) b(y)",
           "WITH c AS (SELECT 1 AS x, 2 AS x) SELECT d.* FROM c d CROSS JOIN (VALUES (3)) b(y)")) {
-        SQLException error = assertThrows(SQLException.class, () -> statement.executeQuery(sql), sql);
+        SQLException error = assertThrows(SQLException.class, () -> {
+          try (var result = statement.executeQuery(sql)) {
+            while (result.next()) {
+              result.getObject(1);
+            }
+          }
+        }, sql);
         assertEquals("42000", error.getSQLState(), sql);
-        assertTrue(error.getMessage().contains("Ambiguous column in join alias"), error.getMessage());
+        String diagnostic = sql.startsWith("SELECT g.x")
+            ? "Ambiguous column reference"
+            : "Ambiguous column in join alias";
+        assertTrue(error.getMessage().contains(diagnostic), error.getMessage());
       }
     }
     assertRows(pushdown, "SELECT * FROM " + group, List.of(List.of(1, 2)));

@@ -2027,7 +2027,8 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @param column
    *          SQL column identifier
    * @throws SQLException
-   *           if the qualifier does not export the column
+   *           if the qualifier does not export the column or its label is
+   *           ambiguous
    */
   private static void validateGroupedQualifier(Map<String, Map<String, String>> qualifierMapping, String qualifier,
       String column) throws SQLException {
@@ -2039,6 +2040,10 @@ public class JParqPreparedStatement implements PreparedStatement {
     String alternative = ColumnMappingUtil.alternativeColumnKey(columnKey);
     if (!columns.containsKey(columnKey) && (alternative == null || !columns.containsKey(alternative))) {
       throw SqlExceptions.syntaxFailure("Missing columns in parenthesized JOIN: " + qualifier + "." + column);
+    }
+    String canonical = columns.containsKey(columnKey) ? columns.get(columnKey) : columns.get(alternative);
+    if ("".equals(canonical)) {
+      throw SqlExceptions.syntaxFailure("Ambiguous column reference: " + qualifier + "." + column);
     }
   }
 
@@ -2319,8 +2324,14 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (qualifierMapping == null || qualifierMapping.isEmpty() || columnOrder == null || columnOrder.isEmpty()) {
       return mapping;
     }
-    for (String qualifier : SqlParser.visibleQualifiers(tableReferences)) {
-      addQualifierColumns(mapping, qualifier, qualifierMapping, columnOrder, canonicalLabels);
+    for (SqlParser.TableReference reference : tableReferences) {
+      addQualifierColumns(mapping, reference.tableAlias(), qualifierMapping, columnOrder, canonicalLabels);
+      addQualifierColumns(mapping, reference.tableName(), qualifierMapping, columnOrder, canonicalLabels);
+      if (reference.tableAlias() == null && !reference.joinGroup().isEmpty()) {
+        for (String qualifier : SqlParser.visibleQualifiers(reference.joinGroup())) {
+          addQualifierColumns(mapping, qualifier, qualifierMapping, columnOrder, canonicalLabels);
+        }
+      }
     }
     return mapping;
   }
