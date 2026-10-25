@@ -127,6 +127,28 @@ public final class JSqlParserSupport {
   }
 
   /**
+   * Expression visitor that includes named function arguments such as POSITION's
+   * IN operands, which JSqlParser's default adapter does not traverse. Subclasses
+   * retain control over nested query scope boundaries.
+   */
+  public abstract static class NamedArgumentVisitor extends ExpressionVisitorAdapter<Void> {
+    /** Creates a visitor that traverses named and positional function arguments. */
+    protected NamedArgumentVisitor() {
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public <S> Void visit(Function function, S context) {
+      if (function.getNamedParameters() != null) {
+        for (Expression argument : function.getNamedParameters()) {
+          argument.accept(this, context);
+        }
+      }
+      return super.visit(function, context);
+    }
+  }
+
+  /**
    * Base visitor for statement expressions that also descends into quantified
    * subqueries. Use with
    * {@link #visitExpressions(Select, StatementExpressionVisitor)} to connect

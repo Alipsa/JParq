@@ -6,7 +6,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
 import net.sf.jsqlparser.expression.Expression;
-import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.TranscodingFunction;
 import net.sf.jsqlparser.schema.Column;
 /** Collects column names referenced by an expression. */
@@ -99,7 +98,7 @@ public final class ColumnsUsed {
     if (where == null) {
       return;
     }
-    ExpressionVisitorAdapter<Void> walker = new ExpressionVisitorAdapter<Void>() {
+    var walker = new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(net.sf.jsqlparser.statement.select.Select select, S context) {
         return includeSubqueries ? super.visit(select, context) : null;
