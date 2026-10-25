@@ -25,6 +25,7 @@ import net.sf.jsqlparser.expression.TimestampValue;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.FromItem;
+import net.sf.jsqlparser.statement.select.ParenthesedFromItem;
 import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
@@ -287,6 +288,31 @@ public final class CorrelatedSubqueryRewriter {
         return getBuilder();
       }
 
+      /** Keeps a group's internal ON scope separate from its exported alias. */
+      @Override
+      public <S> StringBuilder visit(ParenthesedFromItem group, S context) {
+        Set<String> bindings = new LinkedHashSet<>();
+        addLocalQualifier(bindings, group.getFromItem());
+        if (group.getJoins() != null) {
+          group.getJoins().forEach(join -> addLocalQualifier(bindings, join.getFromItem()));
+        }
+        PlainSelect scope = new PlainSelect();
+        scope.setFromItem(group.getFromItem());
+        scope.setJoins(group.getJoins());
+        if (!columnScopes.isEmpty()) {
+          scope.setWithItemsList(columnScopes.peek().getWithItemsList());
+        }
+        localScopes.push(bindings);
+        columnScopes.push(scope);
+        locallyBound.addAll(bindings);
+        try {
+          return super.visit(group, context);
+        } finally {
+          localScopes.pop();
+          columnScopes.pop();
+        }
+      }
+
       @Override
       public <S> StringBuilder visit(PlainSelect plain, S context) {
         Set<String> bindings = new LinkedHashSet<>();
@@ -340,6 +366,13 @@ public final class CorrelatedSubqueryRewriter {
    */
   private static void addLocalQualifier(Set<String> qualifiers, FromItem item) {
     if (item == null) {
+      return;
+    }
+    if (item instanceof ParenthesedFromItem group && group.getAlias() == null) {
+      addLocalQualifier(qualifiers, group.getFromItem());
+      if (group.getJoins() != null) {
+        group.getJoins().forEach(join -> addLocalQualifier(qualifiers, join.getFromItem()));
+      }
       return;
     }
     String name = item.getAlias() != null

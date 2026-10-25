@@ -194,12 +194,14 @@ public class JParqResultSet extends ResultSetAdapter {
     this.subqueryExecutor = subqueryExecutor;
     List<String> qualifiers = new ArrayList<>();
     if (select.tableReferences() != null) {
-      for (SqlParser.TableReference ref : select.tableReferences()) {
-        if (ref.tableName() != null && !ref.tableName().isBlank()) {
-          qualifiers.add(ref.tableName());
+      for (SqlParser.TableReference reference : select.tableReferences()) {
+        if (reference.tableName() != null && !reference.tableName().isBlank()) {
+          qualifiers.add(reference.tableName());
         }
-        if (ref.tableAlias() != null && !ref.tableAlias().isBlank()) {
-          qualifiers.add(ref.tableAlias());
+        if (reference.tableAlias() != null && !reference.tableAlias().isBlank()) {
+          qualifiers.add(reference.tableAlias());
+        } else if (!reference.joinGroup().isEmpty()) {
+          qualifiers.addAll(SqlParser.visibleQualifiers(reference.joinGroup()));
         }
       }
     }
@@ -843,29 +845,9 @@ public class JParqResultSet extends ResultSetAdapter {
    */
   private static String canonicalColumnName(Column column, String currentValue,
       Map<String, Map<String, String>> qualifierMapping, Map<String, String> unqualifiedMapping) {
-    String qualifier = resolveQualifier(column);
     String columnName = column.getColumnName();
-    String columnKey = Identifier.lookupKey(columnName);
-    if (qualifier != null && qualifierMapping != null) {
-      String qualifierKey = Identifier.lookupKey(qualifier);
-      Map<String, String> mapping = qualifierKey == null ? null : qualifierMapping.get(qualifierKey);
-      if (mapping != null) {
-        String canonical = mapping.get(columnKey);
-        if (canonical != null) {
-          return canonical;
-        }
-      }
-    }
-    if (unqualifiedMapping != null) {
-      String canonical = unqualifiedMapping.get(columnKey);
-      if (canonical != null) {
-        return canonical;
-      }
-    }
-    if (currentValue != null) {
-      return currentValue;
-    }
-    return columnName;
+    return ColumnMappingUtil.canonicalOrderColumn(columnName, resolveQualifier(column), qualifierMapping,
+        unqualifiedMapping, currentValue == null ? columnName : currentValue);
   }
 
   /**
@@ -1048,7 +1030,9 @@ public class JParqResultSet extends ResultSetAdapter {
       return expression;
     }
     for (String qualifier : qualifiersInExpression) {
-      if (!availableQualifiers.contains(qualifier)) {
+      String alternative = ColumnMappingUtil.alternativeColumnKey(qualifier);
+      if (!availableQualifiers.contains(qualifier)
+          && (alternative == null || !availableQualifiers.contains(alternative))) {
         return null;
       }
     }

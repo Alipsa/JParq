@@ -101,7 +101,8 @@ public final class MaterializedNames {
     if (field != null && identifier != null && canonical.equals(identifier.text())
         && field.getProp(SQL_LABEL) != null) {
       String key = lookupKey(field);
-      if (!key.equals(identifier.lookupKey())) {
+      if (!key.equals(identifier.lookupKey())
+          && !key.equals(ColumnMappingUtil.alternativeColumnKey(identifier.lookupKey()))) {
         return null;
       }
     }

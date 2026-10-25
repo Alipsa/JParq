@@ -68,7 +68,7 @@ public final class UnnestTableBuilder {
 
     int sourceIndex = resolveSourceIndex(column, columnName, priorTables, qualifierIndex);
     JoinTable sourceTable = priorTables.get(sourceIndex);
-    Schema.Field arrayField = resolveField(sourceTable.schema(), columnName);
+    Schema.Field arrayField = resolveField(sourceTable, column);
     if (arrayField == null) {
       throw new SQLException("Column '" + columnName + "' not found in table '" + sourceTable.tableName() + "'");
     }
@@ -142,6 +142,29 @@ public final class UnnestTableBuilder {
       throw new SQLException("UNNEST column '" + columnName + "' not found in preceding tables");
     }
     return resolved;
+  }
+
+  /**
+   * Resolves an array column through a nested join's qualifier mappings.
+   *
+   * @param table
+   *          input owning the array
+   * @param column
+   *          SQL array reference
+   * @return resolved field, or null if the reference is unknown
+   */
+  private static Schema.Field resolveField(JoinTable table, Column column) {
+    String qualifier = column.getTable() == null ? null : column.getTable().getName();
+    String normalized = JParqUtil.normalizeQualifier(qualifier);
+    if (normalized != null) {
+      for (var nested : table.nestedQualifiers().entrySet()) {
+        if (normalized.equals(JParqUtil.normalizeQualifier(nested.getKey()))) {
+          String field = nested.getValue().get(Identifier.lookupKey(column.getColumnName()));
+          return field == null ? null : table.schema().getField(field);
+        }
+      }
+    }
+    return resolveField(table.schema(), column.getColumnName());
   }
 
   private static Schema.Field resolveField(Schema schema, String columnName) {

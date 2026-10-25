@@ -10,6 +10,42 @@ import se.alipsa.jparq.engine.ColumnMappingUtil;
 /** Tests for {@link ColumnMappingUtil}. */
 class ColumnMappingUtilTest {
 
+  /** Keeps prefix-like text intact when mappings are normalized repeatedly. */
+  @Test
+  void normalizedMappingsRetainPrefixLikeIdentifierText() {
+    var mapping = Map.of("Q:u:x", Map.of("Q:q:y", "field"), "Q:Q:x", Map.of("U:z", "other"));
+    assertEquals(mapping, ColumnMappingUtil.normaliseQualifierMapping(mapping));
+    assertEquals(mapping,
+        ColumnMappingUtil.normaliseQualifierMapping(ColumnMappingUtil.normaliseQualifierMapping(mapping)));
+    assertEquals("field", ColumnMappingUtil.canonicalOrderColumn("\"q:y\"", "\"u:x\"", mapping, Map.of()));
+  }
+
+  /**
+   * Ensures a real mapping wins over a fallback even when its text is unchanged.
+   */
+  @Test
+  void unchangedCanonicalNameWinsOverProjectionFallback() {
+    assertEquals("x", ColumnMappingUtil.canonicalOrderColumn("x", "m", Map.of("U:m", Map.of("U:x", "x")), Map.of(),
+        "projection_alias"));
+    assertEquals("x",
+        ColumnMappingUtil.canonicalOrderColumn("x", null, Map.of(), Map.of("U:x", "x"), "projection_alias"));
+    assertEquals("projection_alias",
+        ColumnMappingUtil.canonicalOrderColumn("missing", null, Map.of(), Map.of(), "projection_alias"));
+  }
+
+  /** Verifies the shared fallback for lowercase quoted identifier keys. */
+  @Test
+  void quotedLowercaseKeysHaveUnquotedAlternatives() {
+    assertEquals("U:m", ColumnMappingUtil.alternativeColumnKey("Q:m"));
+    assertNull(ColumnMappingUtil.alternativeColumnKey("Q:M"));
+    assertNull(ColumnMappingUtil.alternativeColumnKey("U:m"));
+    assertNull(ColumnMappingUtil.alternativeColumnKey(null));
+    var mappings = Map.of("U:m", Map.of("U:x", "mx"), "Q:m", Map.of("U:x", "quoted_mx"));
+    assertEquals("quoted_mx", ColumnMappingUtil.qualifierColumns(mappings, "\"m\"").get("U:x"));
+    assertEquals("mx", ColumnMappingUtil.qualifierColumns(Map.of("U:m", Map.of("U:x", "mx")), "\"m\"").get("U:x"));
+    assertEquals(Map.of(), ColumnMappingUtil.qualifierColumns(mappings, "\"M\""));
+  }
+
   @Test
   void correlationCandidatesIncludePhysicalNamesAndProjectionAliases() {
     assertEquals(java.util.Set.of("U:id", "U:g", "U:grp"), ColumnMappingUtil.correlationColumns(

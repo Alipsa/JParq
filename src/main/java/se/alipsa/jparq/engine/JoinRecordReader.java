@@ -81,10 +81,38 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
    * @param correlatedRowsSupplier
    *          supplier invoked to produce rows when the table originates from a
    *          correlated table function (may be {@code null})
+   * @param nestedQualifiers
+   *          visible qualifiers mapped to fields of a nested join input
    */
   public record JoinTable(String tableName, String alias, Schema schema, List<GenericRecord> rows,
       SqlParser.JoinType joinType, Expression joinCondition, List<String> usingColumns,
-      CorrelatedRowsSupplier correlatedRowsSupplier) {
+      CorrelatedRowsSupplier correlatedRowsSupplier, Map<String, Map<String, String>> nestedQualifiers) {
+
+    /**
+     * Creates an ordinary join input without nested qualifier mappings.
+     *
+     * @param tableName
+     *          SQL table name
+     * @param alias
+     *          visible alias
+     * @param schema
+     *          input schema
+     * @param rows
+     *          materialized rows
+     * @param joinType
+     *          introducing join type
+     * @param joinCondition
+     *          ON predicate
+     * @param usingColumns
+     *          merged columns
+     * @param correlatedRowsSupplier
+     *          correlated row producer
+     */
+    public JoinTable(String tableName, String alias, Schema schema, List<GenericRecord> rows,
+        SqlParser.JoinType joinType, Expression joinCondition, List<String> usingColumns,
+        CorrelatedRowsSupplier correlatedRowsSupplier) {
+      this(tableName, alias, schema, rows, joinType, joinCondition, usingColumns, correlatedRowsSupplier, Map.of());
+    }
 
     /**
      * Validates mandatory join state while allowing anonymous inputs to omit a
@@ -99,6 +127,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
         throw new IllegalArgumentException("The base table cannot specify a join condition");
       }
       rows = List.copyOf(rows);
+      nestedQualifiers = Map.copyOf(nestedQualifiers);
     }
 
     /**
@@ -396,8 +425,10 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
     SchemaContext context = buildSchema(joinTables, mappings, metadata);
     this.schema = context.schema();
     this.columnNames = buildColumnNames(mappings);
-    this.qualifierColumnMapping = context.qualifierMapping();
-    this.unqualifiedColumnMapping = context.unqualifiedMapping();
+    Map<String, Map<String, String>> qualifierSnapshot = new LinkedHashMap<>();
+    context.qualifierMapping().forEach((qualifier, columns) -> qualifierSnapshot.put(qualifier, Map.copyOf(columns)));
+    this.qualifierColumnMapping = Map.copyOf(qualifierSnapshot);
+    this.unqualifiedColumnMapping = Map.copyOf(context.unqualifiedMapping());
     this.joinTables = joinTables;
     this.fieldMappings = List.copyOf(mappings);
     List<String> qualifiers = new ArrayList<>();
@@ -408,6 +439,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
       if (table.alias() != null) {
         qualifiers.add(table.alias());
       }
+      qualifiers.addAll(table.nestedQualifiers().keySet());
     }
     this.evaluator = new ExpressionEvaluator(schema, subqueryExecutor, qualifiers, qualifierColumnMapping,
         unqualifiedColumnMapping);
@@ -477,6 +509,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
         String originalKey = lookupKey;
         registerQualifierMappings(qualifierMap, qualifiers, includeTableQualifier, normalizedTableName, originalKey,
             canonical);
+        registerNestedQualifierMappings(qualifierMap, joinTable.nestedQualifiers(), name, canonical);
         if (usingColumn) {
           final boolean owner = usingInfo.isOwner(tableIndex);
           UsingFieldState state = usingFieldStates.computeIfAbsent(canonical, key -> new UsingFieldState());
@@ -587,6 +620,31 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
     }
   }
 
+  /**
+   * Carries nested SQL names and ambiguity markers forward when an enclosing join
+   * renames fields.
+   *
+   * @param target
+   *          mappings for the enclosing join
+   * @param nested
+   *          mappings from qualifiers to the nested input's field names
+   * @param sourceField
+   *          field name in the nested input
+   * @param targetField
+   *          corresponding field in the enclosing output
+   */
+  private static void registerNestedQualifierMappings(Map<String, Map<String, String>> target,
+      Map<String, Map<String, String>> nested, String sourceField, String targetField) {
+    for (var qualifier : nested.entrySet()) {
+      for (var column : qualifier.getValue().entrySet()) {
+        if (sourceField.equals(column.getValue()) || column.getValue().isEmpty()) {
+          target.computeIfAbsent(normalize(qualifier.getKey()), key -> new LinkedHashMap<>()).put(column.getKey(),
+              column.getValue().isEmpty() ? "" : targetField);
+        }
+      }
+    }
+  }
+
   private static String qualifierPrefix(JoinTable table, int index) {
     String alias = IdentifierUtil.sanitizeIdentifier(table.alias());
     if (alias != null && !alias.isBlank()) {
@@ -675,11 +733,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
    */
   @Override
   public Map<String, Map<String, String>> qualifierColumnMapping() {
-    Map<String, Map<String, String>> copy = new LinkedHashMap<>();
-    for (Map.Entry<String, Map<String, String>> entry : qualifierColumnMapping.entrySet()) {
-      copy.put(entry.getKey(), Map.copyOf(entry.getValue()));
-    }
-    return Map.copyOf(copy);
+    return qualifierColumnMapping;
   }
 
   /**
@@ -689,7 +743,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
    */
   @Override
   public Map<String, String> unqualifiedColumnMapping() {
-    return Map.copyOf(unqualifiedColumnMapping);
+    return unqualifiedColumnMapping;
   }
 
   /**

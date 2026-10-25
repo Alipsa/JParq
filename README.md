@@ -280,6 +280,10 @@ for sampled inputs: `TABLESAMPLE` chooses from the unfiltered input before `WHER
 are independent of the pushdown setting. `ORDER BY` projections retain sorting and correlated-subquery inputs
 while excluding unrelated columns such as embedded media.
 
+Parenthesized join groups currently materialize their inputs eagerly. Outer `WHERE` predicates are evaluated
+after the grouped join and are not pushed into its physical tables, so grouping can increase reads and memory
+use for large inputs. Pushdown into nested groups is not yet implemented.
+
 Nanosecond timestamps, local timestamps, float16, lists, and image structs are readable. UTC-adjusted timestamps
 are returned as `java.sql.Timestamp` instants; local timestamps retain their stored wall-clock values in the
 JVM's default time zone. Microsecond and nanosecond precision is preserved. Lists are available through
@@ -598,6 +602,12 @@ The following SQL statements are supported:
   including with projection and predicate pushdown enabled.
   Quantified comparisons in `HAVING` are not currently supported; see [#214](https://github.com/Alipsa/JParq/issues/214).
 - Join support: INNER, LEFT, RIGHT, FULL, CROSS, and Self Join, join ... using syntax
+  - Parenthesized join groups preserve nested join order, including outer-join NULL extension.
+    Unaliased groups expose their inputs' qualifiers; a group alias exposes the group's output columns instead.
+    For aliased inputs, groups expose only the aliases, not the real table names.
+    Qualified wildcards such as `g.*` currently require distinct output labels for any aliased join input,
+    including groups, derived tables, and CTEs. Duplicate labels raise
+    SQLState `42000`; assign unique positional column aliases to the input, such as `g(x, y)`, to expand them.
 - `UNION` and `UNION ALL` support
 - Complete set-operation coverage.
   Numeric branches use a common output type: INTEGER with BIGINT becomes BIGINT, two REAL inputs

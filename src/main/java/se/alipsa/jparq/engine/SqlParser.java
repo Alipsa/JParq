@@ -224,14 +224,15 @@ public final class SqlParser {
     }
 
     /**
-     * Determine whether the SELECT statement references more than one table in the
-     * {@code FROM} clause.
+     * Determines whether the SELECT needs join evaluation, including nested
+     * parenthesized join groups.
      *
      * @return {@code true} if multiple tables participate in the query, otherwise
      *         {@code false}
      */
     public boolean hasMultipleTables() {
-      return tableReferences != null && tableReferences.size() > 1;
+      return tableReferences != null
+          && (tableReferences.size() > 1 || tableReferences.stream().anyMatch(ref -> !ref.joinGroup().isEmpty()));
     }
   }
 
@@ -363,11 +364,14 @@ public final class SqlParser {
    *          {@code null})
    * @param columnAliases
    *          derived-table output names in ordinal order, empty when absent
+   * @param joinGroup
+   *          nested join participants, empty for an ordinary input
    */
   private record FromInfo(String schemaName, String tableName, String tableAlias, Map<String, String> columnMapping,
       Select innerSelect, String subquerySql, CommonTableExpression commonTableExpression,
       ValueTableDefinition valueTable, UnnestDefinition unnest, boolean lateral, TableSampleDefinition tableSample,
-      List<String> columnAliases) {
+      List<String> columnAliases, List<TableReference> joinGroup) {
+
   }
 
   /**
@@ -433,11 +437,60 @@ public final class SqlParser {
    *          {@code null})
    * @param columnAliases
    *          derived-table output names in ordinal order, empty when absent
+   * @param joinGroup
+   *          nested join participants, empty for an ordinary input
    */
   public record TableReference(String schemaName, String tableName, String tableAlias, JoinType joinType,
       Expression joinCondition, Select subquery, String subquerySql, CommonTableExpression commonTableExpression,
       List<String> usingColumns, ValueTableDefinition valueTable, UnnestDefinition unnest, boolean lateral,
-      TableSampleDefinition tableSample, List<String> columnAliases) {
+      TableSampleDefinition tableSample, List<String> columnAliases, List<TableReference> joinGroup) {
+    /** Copies the nested inputs so a prepared join plan remains immutable. */
+    public TableReference {
+      joinGroup = List.copyOf(joinGroup);
+    }
+
+    /**
+     * Creates an ordinary reference without a nested join group. Retains the
+     * original constructor signature for existing callers.
+     *
+     * @param schemaName
+     *          referenced schema
+     * @param tableName
+     *          referenced table
+     * @param tableAlias
+     *          visible alias
+     * @param joinType
+     *          introducing join type
+     * @param joinCondition
+     *          ON predicate
+     * @param subquery
+     *          parsed derived query
+     * @param subquerySql
+     *          derived SQL
+     * @param commonTableExpression
+     *          referenced CTE
+     * @param usingColumns
+     *          merged columns
+     * @param valueTable
+     *          inline values
+     * @param unnest
+     *          table function
+     * @param lateral
+     *          whether correlated
+     * @param tableSample
+     *          sampling specification
+     * @param columnAliases
+     *          positional column aliases
+     */
+    @SuppressWarnings("PMD.ExcessiveParameterList")
+    public TableReference(String schemaName, String tableName, String tableAlias, JoinType joinType,
+        Expression joinCondition, Select subquery, String subquerySql, CommonTableExpression commonTableExpression,
+        List<String> usingColumns, ValueTableDefinition valueTable, UnnestDefinition unnest, boolean lateral,
+        TableSampleDefinition tableSample, List<String> columnAliases) {
+      this(schemaName, tableName, tableAlias, joinType, joinCondition, subquery, subquerySql, commonTableExpression,
+          usingColumns, valueTable, unnest, lateral, tableSample, columnAliases, List.of());
+    }
+
     /**
      * Identifies a FROM subquery by its own SQL, rather than a CTE's stored plan.
      *
@@ -997,7 +1050,7 @@ public final class SqlParser {
     // A table-free SELECT evaluates its expressions once over an empty row.
     FromInfo fromInfo = ps.getFromItem() == null
         ? new FromInfo(null, null, null, Map.of(), null, null, null,
-            new ValueTableDefinition(List.of(List.of()), List.of()), null, false, null, List.of())
+            new ValueTableDefinition(List.of(List.of()), List.of()), null, false, null, List.of(), List.of())
         : parseFromItem(ps.getFromItem(), ctes, cteLookup, allowQualifiedWildcards);
     List<JoinInfo> joinInfos = parseJoins(ps.getJoins(), ctes, cteLookup, allowQualifiedWildcards);
     List<TableReference> tableRefs = buildTableReferences(fromInfo, joinInfos);
@@ -1353,14 +1406,42 @@ public final class SqlParser {
   }
 
   /**
-   * Parses the FROM clause, ensuring it's a single table and extracts its
-   * name/alias.
+   * Parses an input relation, retaining nested parenthesized joins.
+   *
+   * @param fromItem
+   *          input relation
+   * @param ctes
+   *          visible CTE declarations
+   * @param cteLookup
+   *          CTE declarations indexed by identifier
+   * @param allowQualifiedWildcards
+   *          whether qualified wildcards may remain unresolved
+   * @return parsed input and any nested join participants
+   * @throws IllegalArgumentException
+   *           if the input is unsupported or invalid
    */
   private static FromInfo parseFromItem(FromItem fromItem, List<CommonTableExpression> ctes,
       Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
     return parseFromItem(fromItem, ctes, cteLookup, allowQualifiedWildcards, false);
   }
 
+  /**
+   * Parses a relation with an optional inherited LATERAL context.
+   *
+   * @param fromItem
+   *          input relation
+   * @param ctes
+   *          visible CTE declarations
+   * @param cteLookup
+   *          CTE declarations indexed by identifier
+   * @param allowQualifiedWildcards
+   *          whether qualified wildcards may remain unresolved
+   * @param lateralHint
+   *          whether the enclosing join requests LATERAL evaluation
+   * @return parsed input and any nested join participants
+   * @throws IllegalArgumentException
+   *           if the input is unsupported or invalid
+   */
   private static FromInfo parseFromItem(FromItem fromItem, List<CommonTableExpression> ctes,
       Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateralHint) {
     boolean lateral = lateralHint;
@@ -1368,7 +1449,7 @@ public final class SqlParser {
     if (fromItem instanceof Table t) {
       String tableName = t.getName();
       String schemaName = t.getSchemaName();
-      String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
+      final String tableAlias = (t.getAlias() != null) ? t.getAlias().getName() : null;
       if (InformationSchemaTables.matchesQualifiedName(schemaName, tableName, t.getFullyQualifiedName())) {
         tableName = InformationSchemaTables.TABLE_IDENTIFIER;
         schemaName = IdentifierUtil.sanitizeIdentifier(t.getSchemaName());
@@ -1399,10 +1480,17 @@ public final class SqlParser {
         }
       }
       return new FromInfo(schemaName, tableName, tableAlias, mapping, innerSelect, null, cte, null, null, lateral,
-          tableSample, columnAliases);
+          tableSample, columnAliases, List.of());
     }
     if (fromItem instanceof ParenthesedFromItem parenthesed) {
       FromItem inner = parenthesed.getFromItem();
+      if (parenthesed.getJoins() != null && !parenthesed.getJoins().isEmpty()) {
+        FromInfo base = parseFromItem(inner, ctes, cteLookup, allowQualifiedWildcards, lateral);
+        List<JoinInfo> joins = parseJoins(parenthesed.getJoins(), ctes, cteLookup, allowQualifiedWildcards);
+        FromInfo group = new FromInfo(null, null, null, Map.of(), null, null, null, null, null, lateral, tableSample,
+            List.of(), buildTableReferences(base, joins));
+        return applyAlias(group, parenthesed.getAlias());
+      }
       FromInfo innerInfo = parseFromItem(inner, ctes, cteLookup, allowQualifiedWildcards, lateral);
       FromInfo aliased = applyAlias(innerInfo, parenthesed.getAlias());
       return applySample(aliased, tableSample);
@@ -1474,7 +1562,7 @@ public final class SqlParser {
     }
     return new FromInfo(info.schemaName(), info.tableName(), info.tableAlias(), info.columnMapping(),
         info.innerSelect(), info.subquerySql(), info.commonTableExpression(), info.valueTable(), info.unnest(),
-        info.lateral(), tableSample, info.columnAliases());
+        info.lateral(), tableSample, info.columnAliases(), info.joinGroup());
   }
 
   /**
@@ -1524,7 +1612,7 @@ public final class SqlParser {
     }
     String subquerySql = body.toString();
     return new FromInfo(null, tableName, alias, mapping, innerSelect, subquerySql, null, null, null, lateral, null,
-        columnAliases);
+        columnAliases, List.of());
   }
 
   private static FromInfo parseTableFunction(TableFunction tableFunction, boolean lateral) {
@@ -1558,7 +1646,8 @@ public final class SqlParser {
     boolean withOrdinality = tableFunction.getWithClause() != null
         && "ORDINALITY".equalsIgnoreCase(tableFunction.getWithClause().trim());
     UnnestDefinition unnest = new UnnestDefinition(expression, withOrdinality, columnAliases);
-    return new FromInfo(null, null, aliasName, Map.of(), null, null, null, null, unnest, lateral, null, List.of());
+    return new FromInfo(null, null, aliasName, Map.of(), null, null, null, null, unnest, lateral, null, List.of(),
+        List.of());
   }
 
   private static Function unwrapTableWrapper(Function function, TableFunction tableFunction) {
@@ -1646,7 +1735,7 @@ public final class SqlParser {
     String tableName = (aliasName != null && !aliasName.isBlank()) ? aliasName : "values";
     ValueTableDefinition valueTable = new ValueTableDefinition(rows, columnNames);
     return new FromInfo(null, tableName, aliasName, Map.copyOf(mapping), null, null, null, valueTable, null, lateral,
-        null, List.of());
+        null, List.of(), List.of());
   }
 
   private static FromInfo applyAlias(FromInfo info, Alias aliasNode) {
@@ -1708,7 +1797,7 @@ public final class SqlParser {
     String tableAlias = aliasName != null ? aliasName : info.tableAlias();
     return new FromInfo(info.schemaName(), tableName, tableAlias, mapping, info.innerSelect(), info.subquerySql(),
         info.commonTableExpression(), valueTable, info.unnest(), info.lateral(), info.tableSample(),
-        !aliasColumns.isEmpty() ? aliasColumns : info.columnAliases());
+        !aliasColumns.isEmpty() ? aliasColumns : info.columnAliases(), info.joinGroup());
   }
 
   /**
@@ -2239,7 +2328,7 @@ public final class SqlParser {
         Expression expressionReference = (ex instanceof Column) ? null : ex;
         if (ex instanceof Column c) {
           keyText = c.getColumnName();
-          if (tableRefs.size() > 1) {
+          if (tableRefs.size() > 1 || !tableRefs.getFirst().joinGroup().isEmpty()) {
             qualifier = extractQualifier(c);
           }
         } else if (ex instanceof StringValue sv) {
@@ -2801,7 +2890,7 @@ public final class SqlParser {
     List<TableReference> refs = new ArrayList<>();
     refs.add(new TableReference(base.schemaName(), base.tableName(), base.tableAlias(), JoinType.BASE, null,
         base.innerSelect(), base.subquerySql(), base.commonTableExpression(), List.of(), base.valueTable(),
-        base.unnest(), base.lateral(), base.tableSample(), base.columnAliases()));
+        base.unnest(), base.lateral(), base.tableSample(), base.columnAliases(), base.joinGroup()));
     if (joins != null) {
       for (JoinInfo join : joins) {
         FromInfo info = join.table();
@@ -2810,7 +2899,7 @@ public final class SqlParser {
         refs.add(new TableReference(info.schemaName(), info.tableName(), info.tableAlias(), join.joinType(),
             combinedCondition, info.innerSelect(), info.subquerySql(), info.commonTableExpression(),
             join.usingColumns(), info.valueTable(), info.unnest(), info.lateral(), info.tableSample(),
-            info.columnAliases()));
+            info.columnAliases(), info.joinGroup()));
       }
     }
     return List.copyOf(refs);
@@ -2892,6 +2981,30 @@ public final class SqlParser {
       return false;
     }
     return TIME_KEYWORDS.contains(name.toUpperCase(Locale.ROOT));
+  }
+
+  /**
+   * Lists SQL qualifiers visible through unaliased join groups.
+   *
+   * @param references
+   *          inputs in the current query scope
+   * @return table names and aliases, preserving identifier quoting
+   */
+  public static List<String> visibleQualifiers(List<TableReference> references) {
+    List<String> names = new ArrayList<>();
+    if (references == null) {
+      return List.of();
+    }
+    for (TableReference reference : references) {
+      if (reference.tableAlias() != null) {
+        names.add(reference.tableAlias());
+      } else if (!reference.joinGroup().isEmpty()) {
+        names.addAll(visibleQualifiers(reference.joinGroup()));
+      } else if (reference.tableName() != null) {
+        names.add(reference.tableName());
+      }
+    }
+    return List.copyOf(names);
   }
 
   private static List<String> qualifiers(List<TableReference> tableRefs) {
