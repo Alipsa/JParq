@@ -699,8 +699,10 @@ Quoted members require a leading dot: use `$."a"`, while `$"a"` raises an error.
 Plain spaces (U+0020) after quoted members are accepted, for example `$."a" [1]` and `$."a" .b`.
 Missing members return NULL for supported paths. Malformed quoted members and unsupported array
 subscripts raise `SQLException` when evaluated, even after a missing member. Subscripts must be
-integer indexes, with optional `+` or `-` signs. Subscripts trim surrounding characters U+0000–U+0020,
-including tabs and newlines; tabs and newlines after quoted members are rejected.
+zero-based integer indexes. An optional `+` sign is accepted (`[+1]` selects the second element).
+Negative indexes such as `[-1]` always return NULL; they do not count backward from the end of the array.
+Subscripts trim surrounding characters U+0000–U+0020, including tabs and newlines;
+tabs and newlines after quoted members are rejected.
 `[*]`, `[last]`, and ranges remain unsupported
 ([#303](https://github.com/Alipsa/JParq/issues/303)). For example, `$.missing[*]` now raises
 `Unsupported array subscript in JSON path: [*]` instead of returning NULL.

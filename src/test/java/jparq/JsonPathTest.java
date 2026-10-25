@@ -82,6 +82,35 @@ class JsonPathTest {
   }
 
   /**
+   * Returns SQL NULL for negative indexes and selects zero-based positive
+   * indexes.
+   *
+   * @param function
+   *          the extraction function
+   * @throws SQLException
+   *           if querying fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "JSON_VALUE", "JSON_QUERY"
+  })
+  void resolvesSignedArrayIndexes(String function) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT " + function + """
+            ('{"a":{"c":[5,6]}}', '$."a".c[-1]'),
+            """ + function + """
+            ('{"a":{"c":[5,6]}}', '$."a".c[+1]')
+            """)) {
+      assertTrue(result.next());
+      assertNull(result.getObject(1));
+      assertTrue(result.wasNull());
+      assertEquals("6", result.getString(2));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
    * Reports invalid paths as JDBC errors with path-specific diagnostics.
    *
    * @param function

@@ -75,6 +75,18 @@ class JsonFunctionsTest {
   }
 
   /**
+   * Negative indexes have no matching element, while positive signs are accepted.
+   */
+  @Test
+  void resolvesSignedArrayIndexes() {
+    String json = "{\"a\":{\"c\":[5,6]}}";
+    assertNull(JsonFunctions.jsonValue(json, "$.\"a\".c[-1]"));
+    assertNull(JsonFunctions.jsonQuery(json, "$.\"a\".c[-1]"));
+    assertEquals(6, JsonFunctions.jsonValue(json, "$.\"a\".c[+1]"));
+    assertEquals("6", JsonFunctions.jsonQuery(json, "$.\"a\".c[+1]"));
+  }
+
+  /**
    * Gives unsupported subscripts a path-specific diagnostic even after a miss.
    */
   @Test
