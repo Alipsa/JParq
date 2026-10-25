@@ -28,6 +28,7 @@ import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.AnalyticExpression;
+import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.CaseExpression;
@@ -1428,6 +1429,7 @@ public final class AggregateFunctions {
       }
     }
     List<Expression> groupedScalars = new ArrayList<>(projectionExpressions.values());
+    groupedScalars.add(having);
     if (orderBy != null) {
       orderBy.forEach(key -> groupedScalars.add(key.expression()));
     }
@@ -1445,8 +1447,20 @@ public final class AggregateFunctions {
           }
 
           @Override
+          public <S> Void visit(AnyComparisonExpression comparison, S context) {
+            return visit(comparison.getSelect(), context);
+          }
+
+          @Override
           public <S> Void visit(Select select, S context) {
             Objects.requireNonNull(subqueryExecutor, "Scalar subqueries require a subquery executor");
+            if (expression == having) {
+              Set<String> aliases = plan.resultColumns().stream().map(column -> Identifier.lookupKey(column.label()))
+                  .collect(Collectors.toSet());
+              GroupedScalarSubquery.validateCorrelations(select, groupExpressions, subqueryExecutor,
+                  CorrelationMappings.of(outerQualifiers, qualifierColumnMapping, unqualifiedColumnMapping), aliases);
+              return null;
+            }
             groupedSubqueries.computeIfAbsent(select.toString(),
                 text -> new GroupedScalarSubquery(select, groupExpressions, subqueryExecutor,
                     CorrelationMappings.of(outerQualifiers, qualifierColumnMapping, unqualifiedColumnMapping)));

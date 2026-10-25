@@ -189,6 +189,40 @@ class GroupedPredicateSubqueryTest {
   }
 
   /**
+   * Rejects ungrouped correlations consistently before reading groups, including
+   * empty input and predicates nested inside HAVING expressions.
+   *
+   * @param pushdown
+   *          whether predicate and projection pushdown are enabled
+   * @throws Exception
+   *           if fixture setup or connection creation fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void validatesSubqueryCorrelationsWithoutGroups(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown); var statement = connection.createStatement()) {
+      for (String where : List.of(" WHERE m.cyl < 0", "")) {
+        String from = " FROM mtcars m" + where + " GROUP BY m.cyl";
+        String subquery = "(SELECT n.gear FROM mtcars n WHERE n.gear = m.gear)";
+        for (String predicate : List.of("EXISTS " + subquery, "m.cyl IN " + subquery, "COUNT(*) = ANY " + subquery,
+            "COUNT(*) > ALL " + subquery, "COUNT(*) = (SELECT MAX(n.gear) FROM mtcars n WHERE n.gear = m.gear)")) {
+          for (String sql : List.of("SELECT m.cyl, CASE WHEN " + predicate + " THEN 1 ELSE 0 END + COUNT(*)" + from,
+              "SELECT m.cyl" + from + " HAVING " + predicate,
+              "SELECT m.cyl" + from + " HAVING CASE WHEN " + predicate + " THEN 1 ELSE 0 END = 1",
+              "SELECT m.cyl" + from + " ORDER BY CASE WHEN " + predicate + " THEN 0 ELSE 1 END")) {
+            SQLException failure = assertThrows(SQLException.class, () -> statement.executeQuery(sql), sql);
+            assertEquals("42000", failure.getSQLState(), sql);
+            assertEquals("Failed to compute aggregate query: Subquery references ungrouped outer column 'gear'; "
+                + "outer columns must appear in the GROUP BY clause", failure.getMessage(), sql);
+          }
+        }
+      }
+    }
+  }
+
+  /**
    * Compares cylinder values returned by a query in order.
    *
    * @param connection
