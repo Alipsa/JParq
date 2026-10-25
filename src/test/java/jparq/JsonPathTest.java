@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -36,7 +37,9 @@ class JsonPathTest {
                    JSON_VALUE('{"a.b":[{"c[d]":7}]}', '$."a.b"[0]."c[d]"'),
                    JSON_QUERY('{"a b":{"it''s":[1,2]}}', '$."a b"."it''s"'),
                    JSON_VALUE('{"a\\"b":2}', '$."a\\"b"'),
-                   JSON_QUERY('{"a b":1}', '$."missing"')
+                   JSON_QUERY('{"a b":1}', '$."missing"'),
+                   JSON_VALUE('{"a":[3,7]}', '$."a" [ 1 ]'),
+                   JSON_QUERY('{"a":{"b":9}}', '$."a" .b')
             """)) {
       assertTrue(result.next());
       assertEquals(1, result.getInt(1));
@@ -47,6 +50,8 @@ class JsonPathTest {
       assertEquals(2, result.getInt(6));
       assertNull(result.getObject(7));
       assertTrue(result.wasNull());
+      assertEquals(7, result.getInt(8));
+      assertEquals("9", result.getString(9));
       assertFalse(result.next());
     }
   }
@@ -77,7 +82,7 @@ class JsonPathTest {
   }
 
   /**
-   * Reports malformed quoted paths as JDBC errors rather than missing values.
+   * Reports invalid paths as JDBC errors with path-specific diagnostics.
    *
    * @param function
    *          the extraction function
@@ -88,17 +93,23 @@ class JsonPathTest {
   @ValueSource(strings = {
       "JSON_VALUE", "JSON_QUERY"
   })
-  void rejectsMalformedQuotedMembers(String function) throws SQLException {
+  void rejectsInvalidPaths(String function) throws SQLException {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement()) {
-      SQLException failure = assertThrows(SQLException.class, () -> {
-        try (var result = statement.executeQuery("SELECT " + function + "('{}', '$.missing.\"bad\\q\"')")) {
-          while (result.next()) {
-            result.getObject(1);
+      Map<String, String> invalidPaths = Map.of("$.missing.\"bad\\q\"", "Invalid quoted member in JSON path",
+          "$.missing[*]", "Unsupported array subscript in JSON path: *", "$.missing[last]",
+          "Unsupported array subscript in JSON path: last", "$\"a\"",
+          "Quoted member in JSON path must be preceded by a dot");
+      for (var entry : invalidPaths.entrySet()) {
+        SQLException failure = assertThrows(SQLException.class, () -> {
+          try (var result = statement.executeQuery("SELECT " + function + "('{}', '" + entry.getKey() + "')")) {
+            while (result.next()) {
+              result.getObject(1);
+            }
           }
-        }
-      });
-      assertTrue(failure.getMessage().contains("Invalid quoted member in JSON path"), failure::getMessage);
+        });
+        assertTrue(failure.getMessage().contains(entry.getValue()), failure::getMessage);
+      }
     }
   }
 }

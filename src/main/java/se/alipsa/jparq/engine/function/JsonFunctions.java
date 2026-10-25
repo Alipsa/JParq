@@ -194,12 +194,20 @@ public final class JsonFunctions {
           throw new IllegalArgumentException("Unclosed array index in JSON path");
         }
         String idxStr = path.substring(index + 1, close);
-        int arrayIndex = Integer.parseInt(idxStr);
+        int arrayIndex;
+        try {
+          arrayIndex = Integer.parseInt(idxStr.trim());
+        } catch (NumberFormatException e) {
+          throw new IllegalArgumentException("Unsupported array subscript in JSON path: " + idxStr, e);
+        }
         current = current != null && current.isArray() ? current.get(arrayIndex) : null;
         index = close + 1;
       } else if (ch == ' ') {
         index++;
       } else {
+        if (ch == '"') {
+          throw new IllegalArgumentException("Quoted member in JSON path must be preceded by a dot");
+        }
         int start = ch == '.' ? index + 1 : index;
         int next = findNextDelimiter(path, start);
         String prop = decodeMember(path.substring(start, next));
@@ -274,7 +282,7 @@ public final class JsonFunctions {
         i++;
       } else if (ch == '"') {
         int next = i + 1;
-        if (next < path.length() && path.charAt(next) != '.' && path.charAt(next) != '[') {
+        if (next < path.length() && ".[ ".indexOf(path.charAt(next)) < 0) {
           throw new IllegalArgumentException("Unexpected character after quoted member in JSON path");
         }
         return next;

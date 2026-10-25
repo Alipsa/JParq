@@ -59,6 +59,62 @@ class JsonFunctionsTest {
     }
   }
 
+  /** Allows spaces between quoted member steps and trims numeric subscripts. */
+  @Test
+  void allowsSpacesAfterQuotedMembers() {
+    String json = "{\"a\":[3,7],\"obj\":{\"b\":9}}";
+    for (String path : List.of("$.\"a\" [1]", "$.\"a\"  [ 1 ]")) {
+      assertEquals(7, JsonFunctions.jsonValue(json, path), path);
+      assertEquals("7", JsonFunctions.jsonQuery(json, path), path);
+    }
+    assertEquals(9, JsonFunctions.jsonValue(json, "$.\"obj\" .b"));
+    assertEquals("9", JsonFunctions.jsonQuery(json, "$.\"obj\" .b"));
+  }
+
+  /**
+   * Gives unsupported subscripts a path-specific diagnostic even after a miss.
+   */
+  @Test
+  void rejectsUnsupportedArraySubscripts() {
+    for (String subscript : List.of("*", "last", "0 to 1", "", "2147483648")) {
+      for (String member : List.of("a", "missing")) {
+        String path = "$." + member + "[" + subscript + "]";
+        String expected = "Unsupported array subscript in JSON path: " + subscript;
+        var valueFailure = assertThrows(IllegalArgumentException.class,
+            () -> JsonFunctions.jsonValue("{\"a\":[1]}", path), path);
+        var queryFailure = assertThrows(IllegalArgumentException.class,
+            () -> JsonFunctions.jsonQuery("{\"a\":[1]}", path), path);
+        assertEquals(expected, valueFailure.getMessage());
+        assertEquals(expected, queryFailure.getMessage());
+        assertInstanceOf(NumberFormatException.class, valueFailure.getCause());
+        assertInstanceOf(NumberFormatException.class, queryFailure.getCause());
+      }
+    }
+  }
+
+  /** Requires a dot before quoted members at the root and after array steps. */
+  @Test
+  void rejectsQuotedMembersWithoutDot() {
+    for (String path : List.of("$\"a\"", "$ \"a\"", "$[0]\"a\"", "$.missing[0]\"a\"")) {
+      var valueFailure = assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue("{\"a\":1}", path),
+          path);
+      var queryFailure = assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonQuery("{\"a\":1}", path),
+          path);
+      assertEquals("Quoted member in JSON path must be preceded by a dot", valueFailure.getMessage());
+      assertEquals(valueFailure.getMessage(), queryFailure.getMessage());
+    }
+  }
+
+  /** Distinguishes a member's delimiters from literal quotes within the key. */
+  @Test
+  void distinguishesKeysContainingLiteralQuotes() {
+    JsonNode node = JsonNodeFactory.instance.objectNode().put("a", 1).put("\"a\"", 2);
+    assertEquals(1, JsonFunctions.jsonValue(node, "$.\"a\""));
+    assertEquals("1", JsonFunctions.jsonQuery(node, "$.\"a\""));
+    assertEquals(2, JsonFunctions.jsonValue(node, "$.\"\\\"a\\\"\""));
+    assertEquals("2", JsonFunctions.jsonQuery(node, "$.\"\\\"a\\\"\""));
+  }
+
   @Test
   void buildsJsonObjectAndArray() {
     List<Object> objectArgs = Arrays.asList("name", "Alice", "\"age\"", 30, null, "ignored", " active ", true);
