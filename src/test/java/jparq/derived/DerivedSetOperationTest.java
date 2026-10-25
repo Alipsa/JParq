@@ -3,6 +3,7 @@ package jparq.derived;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -29,7 +30,8 @@ class DerivedSetOperationTest {
 
   /**
    * Preserves computed Boolean types, values, and NULL multiplicity from a
-   * nullable physical column through derived UNION and UNION ALL inputs.
+   * nullable physical column through derived UNION and UNION ALL inputs,
+   * including NULLs retained by an outer filter.
    *
    * @param pushdown
    *          whether predicate and projection pushdown are enabled
@@ -81,6 +83,21 @@ class DerivedSetOperationTest {
           assertEquals(all ? 2 : 1, Collections.frequency(actual, null), sql);
           assertFalse(result.next(), sql);
           assertEquals(Types.BOOLEAN, result.getMetaData().getColumnType(1), sql);
+        }
+        String filteredSql = sql + " WHERE c IS NULL";
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(filteredSql)) {
+          assertEquals(Types.BOOLEAN, result.getMetaData().getColumnType(1), filteredSql);
+          int count = 0;
+          while (result.next()) {
+            assertNull(result.getObject(1), filteredSql);
+            assertTrue(result.wasNull(), filteredSql);
+            assertFalse(result.getBoolean(1), filteredSql);
+            assertTrue(result.wasNull(), filteredSql);
+            count++;
+          }
+          assertEquals(operator.equals("UNION ALL") ? 2 : 1, count, filteredSql);
+          assertFalse(result.next(), filteredSql);
+          assertEquals(Types.BOOLEAN, result.getMetaData().getColumnType(1), filteredSql);
         }
       }
     }

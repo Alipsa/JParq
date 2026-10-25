@@ -33,4 +33,7 @@ Implemented by [PR #221](https://github.com/Alipsa/JParq/pull/221). Follow-up co
 `DerivedSetOperationTest.nullablePhysicalComparisonsRemainBoolean` exercises the exact query above
 and its `UNION` variant over a nullable physical numeric column, with predicate and projection pushdown
 both enabled and disabled. It verifies JDBC BOOLEAN metadata, Java Boolean values, and NULL and duplicate
-counts, including stable metadata after exhaustion.
+counts, including stable metadata after exhaustion. An outer `WHERE c IS NULL` filter retains two NULL
+rows for `UNION ALL` and one for `UNION`; these rows also verify that JDBC `getBoolean` returns false
+with `wasNull()` set to true. The connection settings are exercised in both modes; these queries do not
+assert that a physical Parquet predicate is pushed down.
