@@ -692,6 +692,11 @@ The following SQL statements are supported:
 - STRING_AGG(expression, separator)     Aggregates values into a single string with a separator.        STRING_AGG(name, ', ') → 'Alice, Bob, Carol'
 - JSON_VALUE, JSON_QUERY, JSON_OBJECT, JSON_ARRAY       JSON construction/extraction—technically not core string functions but string-returning functions standardized in SQL:2016–2023.
 
+`JSON_VALUE` and `JSON_QUERY` support double-quoted path member names, including spaces,
+dots, brackets, and JSON string escapes such as `\"`, `\\`, and `\u0061`.
+For example, `JSON_VALUE('{"a b":1}', '$."a b"')` returns `1`.
+Missing members return NULL; malformed quoted members raise `SQLException` when evaluated.
+
 ##### Non-standard extensions
 - ASCII(string)    Returns the ASCII code of the first character.    ASCII('A') → 65
 - LOCATE(substring, string[, start])    Locates substring in string with optional start position.    LOCATE('c', 'abcabc', 3) → 3

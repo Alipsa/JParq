@@ -24,9 +24,12 @@ public final class JsonFunctions {
    * @param document
    *          JSON document (string or {@link JsonNode})
    * @param path
-   *          JSON path expression beginning with {@code $}
+   *          JSON path expression beginning with {@code $}; double-quoted member
+   *          names use JSON string escapes
    * @return extracted scalar value or {@code null} when the path cannot be
    *         resolved
+   * @throws IllegalArgumentException
+   *           if the document or path is malformed
    */
   public static Object jsonValue(Object document, Object path) {
     JsonNode node = resolve(document, path);
@@ -55,6 +58,8 @@ public final class JsonFunctions {
    * @param args
    *          positional arguments
    * @return extracted value or {@code null} when inputs are missing
+   * @throws IllegalArgumentException
+   *           if the document or path is malformed
    */
   public static Object jsonValue(List<Object> args) {
     if (args == null || args.size() < 2) {
@@ -69,8 +74,11 @@ public final class JsonFunctions {
    * @param document
    *          JSON document (string or {@link JsonNode})
    * @param path
-   *          JSON path expression beginning with {@code $}
+   *          JSON path expression beginning with {@code $}; double-quoted member
+   *          names use JSON string escapes
    * @return JSON string or {@code null} when the path cannot be resolved
+   * @throws IllegalArgumentException
+   *           if the document or path is malformed
    */
   public static String jsonQuery(Object document, Object path) {
     JsonNode node = resolve(document, path);
@@ -87,6 +95,8 @@ public final class JsonFunctions {
    * @param args
    *          positional arguments
    * @return JSON fragment or {@code null} when inputs are missing
+   * @throws IllegalArgumentException
+   *           if the document or path is malformed
    */
   public static String jsonQuery(List<Object> args) {
     if (args == null || args.size() < 2) {
@@ -161,18 +171,24 @@ public final class JsonFunctions {
     return navigate(node, pathExpr.substring(1));
   }
 
+  /**
+   * Traverses member and array steps, validating the remaining path after missing
+   * values.
+   *
+   * @param node
+   *          the document root
+   * @param path
+   *          the path after the root marker
+   * @return the selected node, or null if a step has no match
+   * @throws IllegalArgumentException
+   *           if a path step is malformed
+   */
   private static JsonNode navigate(JsonNode node, String path) {
     JsonNode current = node;
     int index = 0;
-    while (index < path.length() && current != null && !current.isMissingNode()) {
+    while (index < path.length()) {
       char ch = path.charAt(index);
-      if (ch == '.') {
-        index++;
-        int next = findNextDelimiter(path, index);
-        String prop = path.substring(index, next);
-        current = current.get(prop);
-        index = next;
-      } else if (ch == '[') {
+      if (ch == '[') {
         int close = path.indexOf(']', index);
         if (close < 0) {
           throw new IllegalArgumentException("Unclosed array index in JSON path");
@@ -184,16 +200,51 @@ public final class JsonFunctions {
       } else if (ch == ' ') {
         index++;
       } else {
-        int next = findNextDelimiter(path, index);
-        String prop = path.substring(index, next);
-        current = current.get(prop);
+        int start = ch == '.' ? index + 1 : index;
+        int next = findNextDelimiter(path, start);
+        String prop = decodeMember(path.substring(start, next));
+        current = current == null ? null : current.get(prop);
         index = next;
       }
     }
     return current;
   }
 
+  /**
+   * Decodes a quoted member using JSON string rules, preserving unquoted names.
+   *
+   * @param member
+   *          the member token, including any quotes
+   * @return the lookup key
+   * @throws IllegalArgumentException
+   *           if the quoted member has invalid JSON escapes
+   */
+  private static String decodeMember(String member) {
+    if (!member.startsWith("\"")) {
+      return member;
+    }
+    try {
+      return MAPPER.readValue(member, String.class);
+    } catch (JsonProcessingException e) {
+      throw new IllegalArgumentException("Invalid quoted member in JSON path", e);
+    }
+  }
+
+  /**
+   * Finds the end of a member token without splitting inside quoted names.
+   *
+   * @param path
+   *          the path after the root marker
+   * @param start
+   *          the member's starting offset
+   * @return the offset after the member token
+   * @throws IllegalArgumentException
+   *           if a quoted member is unclosed or has a suffix
+   */
   private static int findNextDelimiter(String path, int start) {
+    if (start < path.length() && path.charAt(start) == '"') {
+      return findQuotedMemberEnd(path, start);
+    }
     int i = start;
     while (i < path.length()) {
       char c = path.charAt(i);
@@ -203,6 +254,33 @@ public final class JsonFunctions {
       i++;
     }
     return i;
+  }
+
+  /**
+   * Locates the closing quote while skipping escaped characters.
+   *
+   * @param path
+   *          the path after the root marker
+   * @param start
+   *          the opening quote's offset
+   * @return the offset after the closing quote
+   * @throws IllegalArgumentException
+   *           if the member is unclosed or has a suffix
+   */
+  private static int findQuotedMemberEnd(String path, int start) {
+    for (int i = start + 1; i < path.length(); i++) {
+      char ch = path.charAt(i);
+      if (ch == '\\') {
+        i++;
+      } else if (ch == '"') {
+        int next = i + 1;
+        if (next < path.length() && path.charAt(next) != '.' && path.charAt(next) != '[') {
+          throw new IllegalArgumentException("Unexpected character after quoted member in JSON path");
+        }
+        return next;
+      }
+    }
+    throw new IllegalArgumentException("Unclosed quoted member in JSON path");
   }
 
   private static JsonNode toNode(Object value) {
