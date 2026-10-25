@@ -692,6 +692,24 @@ The following SQL statements are supported:
 - STRING_AGG(expression, separator)     Aggregates values into a single string with a separator.        STRING_AGG(name, ', ') → 'Alice, Bob, Carol'
 - JSON_VALUE, JSON_QUERY, JSON_OBJECT, JSON_ARRAY       JSON construction/extraction—technically not core string functions but string-returning functions standardized in SQL:2016–2023.
 
+`JSON_VALUE` and `JSON_QUERY` support double-quoted path member names, including spaces,
+dots, brackets, and JSON string escapes such as `\"`, `\\`, and `\u0061`.
+For example, `JSON_VALUE('{"a b":1}', '$."a b"')` returns `1`.
+Quoted members require a leading dot: use `$."a"`, while `$"a"` raises an error.
+Plain spaces (U+0020) after quoted members are accepted, for example `$."a" [1]` and `$."a" .b`.
+Missing members return NULL for supported paths. Malformed quoted members and unsupported array
+subscripts raise `SQLException` when evaluated, even after a missing member. Subscripts must be
+zero-based integer indexes. An optional `+` sign is accepted (`[+1]` selects the second element).
+Negative indexes such as `[-1]` always return NULL; they do not count backward from the end of the array.
+Subscripts trim surrounding characters U+0000–U+0020, including tabs and newlines;
+tabs and newlines after quoted members are rejected.
+`[*]`, `[last]`, and ranges remain unsupported
+([#303](https://github.com/Alipsa/JParq/issues/303)). For example, `$.missing[*]` now raises
+`Unsupported array subscript in JSON path: [*]` instead of returning NULL.
+
+**Behavior change:** `$."a"` now matches the key `a`, rather than a key containing literal quotes
+(`"a"`). To select a key containing literal quotes, escape them in the path: `$."\"a\""`.
+
 ##### Non-standard extensions
 - ASCII(string)    Returns the ASCII code of the first character.    ASCII('A') → 65
 - LOCATE(substring, string[, start])    Locates substring in string with optional start position.    LOCATE('c', 'abcabc', 3) → 3
