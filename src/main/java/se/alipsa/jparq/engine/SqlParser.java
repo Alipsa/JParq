@@ -2473,22 +2473,15 @@ public final class SqlParser {
         }
         continue;
       }
-      if (c == '$'
+      if (c == '$' && next == '$'
           && (i == 0 || sql.charAt(i - 1) != '$' && !Character.isUnicodeIdentifierPart(sql.codePointBefore(i)))) {
-        int delimiterEnd = sql.indexOf('$', i + 1);
-        String delimiter = delimiterEnd < 0
-            ? null
-            : StringValue.getDollarQuoteDelimiter(sql.substring(i, delimiterEnd + 1));
-        if (delimiter != null && delimiter.length() == 2) {
-          int closing = sql.indexOf(delimiter, i + delimiter.length());
-          if (closing < 0) {
-            throw new IllegalArgumentException("Unterminated dollar-quoted literal in SQL");
-          }
-          int end = closing + delimiter.length();
-          result.append(sql, i, end);
-          i = end - 1;
-          continue;
+        int closing = sql.indexOf("$$", i + 2);
+        if (closing < 0) {
+          throw new IllegalArgumentException("Unterminated dollar-quoted literal in SQL");
         }
+        result.append(sql, i, closing + 2);
+        i = closing + 1;
+        continue;
       }
       if (c == '`') {
         identifierEnd = '`';
