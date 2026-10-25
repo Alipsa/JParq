@@ -111,13 +111,6 @@ final class GroupedExpression {
       }
 
       @Override
-      protected <S> void deparse(BinaryExpression binary, String operator, S context) {
-        if (!binding(binary)) {
-          super.deparse(binary, operator, context);
-        }
-      }
-
-      @Override
       public <S> StringBuilder visit(Select select, S context) {
         binding(select);
         return sql;
@@ -128,6 +121,13 @@ final class GroupedExpression {
         binding(select);
         return sql;
       }
+      @Override
+      protected <S> void deparse(BinaryExpression binary, String operator, S context) {
+        if (!binding(binary)) {
+          super.deparse(binary, operator, context);
+        }
+      }
+
     };
     source.accept(deparser, null);
     try {

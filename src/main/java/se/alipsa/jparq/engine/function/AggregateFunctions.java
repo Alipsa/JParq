@@ -1323,7 +1323,7 @@ public final class AggregateFunctions {
       groupTrackers.add(new GroupTypeTracker());
     }
 
-    Map<String, Map<String, String>> normalizedCorrelationContext = ColumnMappingUtil
+    final Map<String, Map<String, String>> normalizedCorrelationContext = ColumnMappingUtil
         .normaliseQualifierMapping(correlationContext);
 
     Map<Integer, GroupedScalarSubquery> scalarSubqueries = new HashMap<>();
@@ -1451,8 +1451,8 @@ public final class AggregateFunctions {
       boolean include = true;
       if (normalizedHaving != null) {
         HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues, labelLookup, subqueryExecutor,
-            outerQualifiers, normalizedCorrelationContext, state.groupingSetIndex(), booleanColumn, state.groupValues(),
-            scalarExpressions, Map.of());
+            outerQualifiers, normalizedCorrelationContext, booleanColumn,
+            new GroupEvaluation(state.groupValues(), state.groupingSetIndex(), scalarExpressions, Map.of()));
         include = evaluator.eval(normalizedHaving);
       }
       if (include) {
@@ -1558,8 +1558,8 @@ public final class AggregateFunctions {
   private static Object orderExpressionValue(OrderKey key, AggregatedRow row, AggregatePlan plan,
       Map<String, GroupedExpression> scalarExpressions) {
     HavingEvaluator evaluator = new HavingEvaluator(plan, row.aggregateValues(),
-        buildLabelLookup(plan, row.rowValues(), row.groupValues()), null, List.of(), Map.of(), row.groupingSetIndex(),
-        column -> false, row.groupValues(), scalarExpressions, Map.of());
+        buildLabelLookup(plan, row.rowValues(), row.groupValues()), null, List.of(), Map.of(), column -> false,
+        new GroupEvaluation(row.groupValues(), row.groupingSetIndex(), scalarExpressions, Map.of()));
     return evaluator.value(key.expression() == null ? parseGroupedExpression(key.column()) : key.expression());
   }
 
@@ -1840,8 +1840,8 @@ public final class AggregateFunctions {
     }
     Map<String, Object> labels = buildLabelLookup(plan, row, state.groupValues());
     HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues, labels, subqueryExecutor, outerQualifiers,
-        correlationContext, state.groupingSetIndex(), column -> false, state.groupValues(), scalarExpressions,
-        projectionSubqueries);
+        correlationContext, column -> false,
+        new GroupEvaluation(state.groupValues(), state.groupingSetIndex(), scalarExpressions, projectionSubqueries));
     for (int index = 0; index < plan.resultColumns().size(); index++) {
       ResultColumn column = plan.resultColumns().get(index);
       if (column.kind() == ColumnKind.EXPRESSION) {
@@ -2368,6 +2368,22 @@ public final class AggregateFunctions {
     };
   }
 
+  /**
+   * Current group values and the caches shared by its scalar evaluators.
+   *
+   * @param groupValues
+   *          grouping values, including suppressed NULL keys
+   * @param groupingSetIndex
+   *          current grouping set
+   * @param scalarExpressions
+   *          execution-local compiled scalar expressions
+   * @param projectionSubqueries
+   *          validated scalar subqueries inside projections
+   */
+  private record GroupEvaluation(List<Object> groupValues, int groupingSetIndex,
+      Map<String, GroupedExpression> scalarExpressions, Map<String, GroupedScalarSubquery> projectionSubqueries) {
+  }
+
   private static final class HavingEvaluator {
     private final AggregatePlan plan;
     private final List<Object> aggregateValues;
@@ -2386,20 +2402,18 @@ public final class AggregateFunctions {
 
     HavingEvaluator(AggregatePlan plan, List<Object> aggregateValues, Map<String, Object> labelLookup,
         SubqueryExecutor subqueryExecutor, List<String> correlatedQualifiers,
-        Map<String, Map<String, String>> correlationContext, int groupingSetIndex, Predicate<Column> booleanColumn,
-        List<Object> groupValues, Map<String, GroupedExpression> scalarExpressions,
-        Map<String, GroupedScalarSubquery> projectionSubqueries) {
+        Map<String, Map<String, String>> correlationContext, Predicate<Column> booleanColumn, GroupEvaluation group) {
       this.plan = plan;
-      this.groupValues = groupValues;
-      this.scalarExpressions = scalarExpressions;
-      this.projectionSubqueries = projectionSubqueries;
+      this.groupValues = group.groupValues();
+      this.scalarExpressions = group.scalarExpressions();
+      this.projectionSubqueries = group.projectionSubqueries();
       this.aggregateValues = aggregateValues;
       this.labelLookup = Collections.unmodifiableMap(new HashMap<>(labelLookup));
       this.subqueryExecutor = subqueryExecutor;
       this.correlatedQualifiers = correlatedQualifiers == null ? List.of() : List.copyOf(correlatedQualifiers);
       this.correlationContext = ColumnMappingUtil
           .normaliseQualifierMapping(correlationContext == null ? Map.of() : correlationContext);
-      this.groupingSetIndex = groupingSetIndex;
+      this.groupingSetIndex = group.groupingSetIndex();
       this.groupIndexLookup = groupIndexLookup(plan.groupExpressions());
       this.booleanColumn = Objects.requireNonNull(booleanColumn, "booleanColumn");
     }
