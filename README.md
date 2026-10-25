@@ -215,7 +215,12 @@ and ORDER BY, with or without GROUP BY. For example, `SUM(cyl) * 2`, `COALESCE(M
 and `ROUND(AVG(mpg), 1)` evaluate once per group. ORDER BY and HAVING may use aggregates omitted
 from SELECT. Columns outside aggregates must be grouping expressions. Scalar functions use the shared
 value evaluator; remaining HAVING predicate classification differences are tracked in
-[#247](https://github.com/Alipsa/JParq/issues/247).
+[#247](https://github.com/Alipsa/JParq/issues/247). Ungrouped column references in HAVING are rejected
+with SQLState `42000`, including for empty inputs. Grouped ORDER BY supports scalar subqueries and
+evaluates sort keys once per group. Window functions in grouped queries are rejected during preparation
+with SQLState `42000`; separate inner queries retain their own window-function scope.
+Direct correlated scalar subqueries used as aggregate arguments still have a separate binding limitation
+([#307](https://github.com/Alipsa/JParq/issues/307)).
 Unary signs convert numeric text and report invalid numeric text as `SQLDataException` with SQLState `22018`;
 unsupported operand types raise SQLState `42000`. Expression diagnostics preserve the SQL structure while replacing internal correlated bindings with
 `<outer value>`, including bindings inside nested subqueries.

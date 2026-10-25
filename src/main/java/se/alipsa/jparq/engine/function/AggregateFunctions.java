@@ -1,5 +1,7 @@
 package se.alipsa.jparq.engine.function;
 
+import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
+
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.MathContext;
@@ -25,6 +27,7 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
+import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.CaseExpression;
@@ -487,7 +490,7 @@ public final class AggregateFunctions {
         || !aggregateFunctions(select.having()).isEmpty()
         || select.orderBy().stream().anyMatch(key -> !aggregateFunctions(key.expression()).isEmpty());
     List<GroupExpression> groupExpressions = buildGroupExpressions(select.groupByExpressions());
-    Map<String, Integer> groupIndexByText = groupIndexLookup(groupExpressions);
+    final Map<String, Integer> groupIndexByText = groupIndexLookup(groupExpressions);
     List<GroupingSet> groupingSets = buildGroupingSets(select.groupingSets(), groupExpressions.size(),
         containsAggregate);
 
@@ -495,6 +498,11 @@ public final class AggregateFunctions {
     if (!hasGroupBy && !containsAggregate) {
       return null;
     }
+
+    List<Expression> aggregateSources = new ArrayList<>(expressions);
+    aggregateSources.add(select.having());
+    select.orderBy().forEach(key -> aggregateSources.add(key.expression()));
+    aggregateSources.forEach(AggregateFunctions::rejectGroupedWindows);
 
     List<String> labels = select.labels();
     List<AggregateSpec> specs = new ArrayList<>();
@@ -527,9 +535,9 @@ public final class AggregateFunctions {
 
       Integer groupIndex = findGroupIndex(expr, groupIndexByText, groupExpressions);
       if (groupIndex == null) {
-        new GroupedExpression(expr, operand -> {
+        GroupedExpression.validate(expr, operand -> {
           if (operand instanceof Column && findGroupIndex(operand, groupIndexByText, groupExpressions) == null) {
-            throw new IllegalArgumentException(
+            throw syntaxFailure(
                 "SELECT expression '" + expr + "' must appear in the GROUP BY clause when aggregates are present");
           }
           return isGroupOperand(operand, groupIndexByText, groupExpressions);
@@ -542,22 +550,11 @@ public final class AggregateFunctions {
 
     Set<String> outputNames = resultColumns.stream().map(column -> Identifier.lookupKey(column.label()))
         .collect(Collectors.toSet());
+    validateGroupReferences(select.having(), "HAVING", groupIndexByText, groupExpressions, outputNames);
     for (OrderKey key : select.orderBy()) {
-      if (key.expression() != null) {
-        new GroupedExpression(key.expression(), operand -> {
-          if (operand instanceof Column column && findGroupIndex(column, groupIndexByText, groupExpressions) == null
-              && !outputNames.contains(Identifier.lookupKey(column.getColumnName()))) {
-            throw new IllegalArgumentException(
-                "ORDER BY column '" + column + "' must appear in the GROUP BY clause or SELECT list");
-          }
-          return isGroupOperand(operand, groupIndexByText, groupExpressions);
-        });
-      }
+      validateGroupReferences(key.expression(), "ORDER BY", groupIndexByText, groupExpressions, outputNames);
     }
 
-    List<Expression> aggregateSources = new ArrayList<>(expressions);
-    aggregateSources.add(select.having());
-    select.orderBy().forEach(key -> aggregateSources.add(key.expression()));
     for (Expression source : aggregateSources) {
       for (Function func : aggregateFunctions(source)) {
         AggregateSpec spec = aggregateSpec(func, func.toString());
@@ -568,6 +565,70 @@ public final class AggregateFunctions {
     }
 
     return new AggregatePlan(specs, resultColumns, groupExpressions, groupingSets);
+  }
+
+  /**
+   * Validates grouped scalar references without entering aggregate or subquery
+   * scopes.
+   *
+   * @param expression
+   *          scalar expression, or null
+   * @param clause
+   *          clause name for diagnostics
+   * @param groupIndexByText
+   *          grouping expression lookup
+   * @param groups
+   *          grouping expressions
+   * @param aliases
+   *          visible SELECT aliases
+   * @throws IllegalArgumentException
+   *           if an ungrouped column is referenced
+   */
+  private static void validateGroupReferences(Expression expression, String clause,
+      Map<String, Integer> groupIndexByText, List<GroupExpression> groups, Set<String> aliases) {
+    if (expression == null) {
+      return;
+    }
+    GroupedExpression.validate(expression, operand -> {
+      if (operand instanceof Column column && findGroupIndex(column, groupIndexByText, groups) == null
+          && !aliases.contains(Identifier.lookupKey(column.getColumnName()))) {
+        throw syntaxFailure("Missing columns in " + clause + " grouped scope: " + column
+            + "; columns must appear in the GROUP BY clause or SELECT list");
+      }
+      return isGroupOperand(operand, groupIndexByText, groups);
+    });
+  }
+
+  /**
+   * Rejects windows in the current aggregate query while preserving nested query
+   * scopes.
+   *
+   * @param expression
+   *          expression to inspect, or null
+   * @throws IllegalArgumentException
+   *           if a window expression is present
+   */
+  private static void rejectGroupedWindows(Expression expression) {
+    if (expression == null) {
+      return;
+    }
+    expression.accept(new ExpressionVisitorAdapter<Void>() {
+      @Override
+      public <S> Void visit(AnalyticExpression analytic, S context) {
+        throw syntaxFailure("Window functions are not supported in grouped queries: "
+            + se.alipsa.jparq.engine.SqlExceptions.describe(analytic));
+      }
+
+      @Override
+      public <S> Void visit(ParenthesedSelect select, S context) {
+        return null;
+      }
+
+      @Override
+      public <S> Void visit(Select select, S context) {
+        return null;
+      }
+    }, null);
   }
 
   /**
@@ -692,7 +753,7 @@ public final class AggregateFunctions {
     }
 
     if (args.stream().anyMatch(argument -> !aggregateFunctions(argument).isEmpty())) {
-      throw new IllegalArgumentException("Nested aggregate functions are not supported: " + func);
+      throw syntaxFailure("Nested aggregate functions are not supported: " + func);
     }
     return new AggregateSpec(type, args, label, countStar);
   }
@@ -1342,14 +1403,26 @@ public final class AggregateFunctions {
       }
     }
 
-    Map<String, GroupedScalarSubquery> projectionSubqueries = new HashMap<>();
+    Map<String, GroupedScalarSubquery> groupedSubqueries = new HashMap<>();
     Map<Integer, Expression> projectionExpressions = new HashMap<>();
     for (int index = 0; index < plan.resultColumns().size(); index++) {
       ResultColumn column = plan.resultColumns().get(index);
       if (column.kind() == ColumnKind.EXPRESSION) {
-        Expression expression = parseGroupedExpression(column.expressionText());
-        projectionExpressions.put(index, expression);
+        projectionExpressions.put(index, parseGroupedExpression(column.expressionText()));
+      }
+    }
+    List<Expression> groupedScalars = new ArrayList<>(projectionExpressions.values());
+    if (orderBy != null) {
+      orderBy.forEach(key -> groupedScalars.add(key.expression()));
+    }
+    for (Expression expression : groupedScalars) {
+      if (expression != null) {
         expression.accept(new ExpressionVisitorAdapter<Void>() {
+          @Override
+          public <S> Void visit(Function function, S context) {
+            return isAggregateName(function.getName()) ? null : super.visit(function, context);
+          }
+
           @Override
           public <S> Void visit(ParenthesedSelect select, S context) {
             return visit((Select) select, context);
@@ -1358,7 +1431,7 @@ public final class AggregateFunctions {
           @Override
           public <S> Void visit(Select select, S context) {
             Objects.requireNonNull(subqueryExecutor, "Scalar subqueries require a subquery executor");
-            projectionSubqueries.computeIfAbsent(select.toString(),
+            groupedSubqueries.computeIfAbsent(select.toString(),
                 text -> new GroupedScalarSubquery(select, groupExpressions, subqueryExecutor,
                     CorrelationMappings.of(outerQualifiers, qualifierColumnMapping, unqualifiedColumnMapping)));
             return null;
@@ -1446,12 +1519,12 @@ public final class AggregateFunctions {
     for (GroupState state : states.values()) {
       List<Object> aggregateValues = state.results();
       List<Object> row = buildRow(plan, state, aggregateValues, scalarSubqueries, projectionExpressions,
-          scalarExpressions, subqueryExecutor, outerQualifiers, normalizedCorrelationContext, projectionSubqueries);
-      Map<String, Object> labelLookup = buildLabelLookup(plan, row, state.groupValues());
+          scalarExpressions, subqueryExecutor, outerQualifiers, normalizedCorrelationContext, groupedSubqueries);
       boolean include = true;
       if (normalizedHaving != null) {
-        HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues, labelLookup, subqueryExecutor,
-            outerQualifiers, normalizedCorrelationContext, booleanColumn,
+        HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues,
+            buildLabelLookup(plan, row, state.groupValues()), subqueryExecutor, outerQualifiers,
+            normalizedCorrelationContext, booleanColumn,
             new GroupEvaluation(state.groupValues(), state.groupingSetIndex(), scalarExpressions, Map.of()));
         include = evaluator.eval(normalizedHaving);
       }
@@ -1467,7 +1540,8 @@ public final class AggregateFunctions {
     }
 
     if (orderBy != null && !orderBy.isEmpty()) {
-      sortAggregatedRows(rows, plan, orderBy, scalarExpressions);
+      sortAggregatedRows(rows, plan, orderBy, new ScalarExecution(subqueryExecutor, outerQualifiers,
+          normalizedCorrelationContext, scalarExpressions, groupedSubqueries));
     }
 
     List<Integer> columnSqlTypes = new ArrayList<>(plan.resultColumns().size());
@@ -1492,21 +1566,52 @@ public final class AggregateFunctions {
     return new AggregateResult(List.copyOf(projectedRows), List.copyOf(columnSqlTypes));
   }
 
+  /**
+   * Evaluates sort keys once per group, then sorts using the cached values.
+   *
+   * @param rows
+   *          completed groups to sort
+   * @param plan
+   *          aggregate plan
+   * @param orderBy
+   *          ordering expressions
+   * @param execution
+   *          scalar execution context
+   */
   private static void sortAggregatedRows(List<AggregatedRow> rows, AggregatePlan plan, List<OrderKey> orderBy,
-      Map<String, GroupedExpression> scalarExpressions) {
+      ScalarExecution execution) {
     Map<String, OrderValueAccessor> accessorByColumn = buildOrderAccessors(plan);
+    List<OrderValueAccessor> accessors = new ArrayList<>(orderBy.size());
+    for (OrderKey key : orderBy) {
+      OrderValueAccessor accessor = accessorByColumn.get(Identifier.lookupKey(key.column()));
+      if (accessor == null && key.expression() == null) {
+        throw syntaxFailure(
+            "ORDER BY column '" + key.column() + "' is not present in the SELECT list or grouping expressions");
+      }
+      accessors.add(accessor);
+    }
+    boolean needsEvaluator = accessors.contains(null);
+    Map<AggregatedRow, List<Object>> sortKeys = new HashMap<>();
+    for (AggregatedRow row : rows) {
+      HavingEvaluator evaluator = needsEvaluator
+          ? new HavingEvaluator(plan, row.aggregateValues(), buildLabelLookup(plan, row.rowValues(), row.groupValues()),
+              execution.subqueryExecutor(), execution.outerQualifiers(), execution.correlationContext(),
+              column -> false,
+              new GroupEvaluation(row.groupValues(), row.groupingSetIndex(), execution.scalarExpressions(),
+                  execution.subqueries()))
+          : null;
+      List<Object> values = new ArrayList<>(orderBy.size());
+      for (int index = 0; index < orderBy.size(); index++) {
+        OrderValueAccessor accessor = accessors.get(index);
+        values.add(accessor == null ? evaluator.value(orderBy.get(index).expression()) : accessor.value(row));
+      }
+      sortKeys.put(row, values);
+    }
     Comparator<AggregatedRow> comparator = (left, right) -> {
-      for (OrderKey key : orderBy) {
-        String lookupKey = Identifier.lookupKey(key.column());
-        OrderValueAccessor accessor = lookupKey == null ? null : accessorByColumn.get(lookupKey);
-        if (accessor == null && key.expression() == null) {
-          throw new IllegalArgumentException(
-              "ORDER BY column '" + key.column() + "' is not present in the SELECT list or grouping expressions");
-        }
-        Object lv = accessor == null ? orderExpressionValue(key, left, plan, scalarExpressions) : accessor.value(left);
-        Object rv = accessor == null
-            ? orderExpressionValue(key, right, plan, scalarExpressions)
-            : accessor.value(right);
+      for (int index = 0; index < orderBy.size(); index++) {
+        OrderKey key = orderBy.get(index);
+        Object lv = sortKeys.get(left).get(index);
+        Object rv = sortKeys.get(right).get(index);
         boolean hasNull = lv == null || rv == null;
         int nullCmp = OrderingUtil.compareNulls(lv, rv, key.asc(), key.nullOrdering());
         if (nullCmp != 0) {
@@ -1542,27 +1647,6 @@ public final class AggregateFunctions {
     }
   }
 
-  /**
-   * Evaluates an ORDER BY expression using a completed group's values.
-   *
-   * @param key
-   *          ordering expression
-   * @param row
-   *          completed group
-   * @param plan
-   *          aggregate plan
-   * @param scalarExpressions
-   *          execution-local scalar compilation cache
-   * @return ordering value, possibly null
-   */
-  private static Object orderExpressionValue(OrderKey key, AggregatedRow row, AggregatePlan plan,
-      Map<String, GroupedExpression> scalarExpressions) {
-    HavingEvaluator evaluator = new HavingEvaluator(plan, row.aggregateValues(),
-        buildLabelLookup(plan, row.rowValues(), row.groupValues()), null, List.of(), Map.of(), column -> false,
-        new GroupEvaluation(row.groupValues(), row.groupingSetIndex(), scalarExpressions, Map.of()));
-    return evaluator.value(key.expression() == null ? parseGroupedExpression(key.column()) : key.expression());
-  }
-
   private static Map<String, OrderValueAccessor> buildOrderAccessors(AggregatePlan plan) {
     Map<String, OrderValueAccessor> mapping = new HashMap<>();
     List<ResultColumn> columns = plan.resultColumns();
@@ -1574,7 +1658,7 @@ public final class AggregateFunctions {
         OrderValueAccessor aggregateAccessor = OrderValueAccessor.aggregate(column.aggregateIndex());
         registerOrderAccessor(mapping, spec.label(), aggregateAccessor);
         registerOrderAccessor(mapping, aggregateExpressionText(spec), aggregateAccessor);
-      } else if (column.isGrouping()) {
+      } else if (column.isGrouping() || column.kind() == ColumnKind.EXPRESSION) {
         registerOrderAccessor(mapping, column.expressionText(), OrderValueAccessor.projection(i));
       } else if (column.subquery() != null) {
         registerOrderAccessor(mapping, column.subquery().toString(), OrderValueAccessor.projection(i));
@@ -1813,15 +1897,16 @@ public final class AggregateFunctions {
    *          visible outer qualifiers
    * @param correlationContext
    *          outer correlation mappings
-   * @param projectionSubqueries
-   *          validated scalar subqueries within projections
+   * @param groupedSubqueries
+   *          validated scalar subqueries within projections or ordering
+   *          expressions
    * @return mutable row whose scalar placeholders share one cached value per
    *         group
    */
   private static List<Object> buildRow(AggregatePlan plan, GroupState state, List<Object> aggregateValues,
       Map<Integer, GroupedScalarSubquery> scalarSubqueries, Map<Integer, Expression> projectionExpressions,
       Map<String, GroupedExpression> scalarExpressions, SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
-      Map<String, Map<String, String>> correlationContext, Map<String, GroupedScalarSubquery> projectionSubqueries) {
+      Map<String, Map<String, String>> correlationContext, Map<String, GroupedScalarSubquery> groupedSubqueries) {
     List<Object> row = new ArrayList<>(plan.resultColumns().size());
     for (int index = 0; index < plan.resultColumns().size(); index++) {
       ResultColumn column = plan.resultColumns().get(index);
@@ -1838,15 +1923,17 @@ public final class AggregateFunctions {
         row.add(state.groupValues().get(column.groupIndex()));
       }
     }
-    Map<String, Object> labels = buildLabelLookup(plan, row, state.groupValues());
-    HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues, labels, subqueryExecutor, outerQualifiers,
-        correlationContext, column -> false,
-        new GroupEvaluation(state.groupValues(), state.groupingSetIndex(), scalarExpressions, projectionSubqueries));
-    for (int index = 0; index < plan.resultColumns().size(); index++) {
-      ResultColumn column = plan.resultColumns().get(index);
-      if (column.kind() == ColumnKind.EXPRESSION) {
-        Expression expression = projectionExpressions.get(index);
-        row.set(index, new LazyScalarValue(() -> evaluator.value(expression)));
+    if (!projectionExpressions.isEmpty()) {
+      Map<String, Object> labels = buildLabelLookup(plan, row, state.groupValues());
+      HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues, labels, subqueryExecutor, outerQualifiers,
+          correlationContext, column -> false,
+          new GroupEvaluation(state.groupValues(), state.groupingSetIndex(), scalarExpressions, groupedSubqueries));
+      for (int index = 0; index < plan.resultColumns().size(); index++) {
+        ResultColumn column = plan.resultColumns().get(index);
+        if (column.kind() == ColumnKind.EXPRESSION) {
+          Expression expression = projectionExpressions.get(index);
+          row.set(index, new LazyScalarValue(() -> evaluator.value(expression)));
+        }
       }
     }
     return row;
@@ -2369,6 +2456,25 @@ public final class AggregateFunctions {
   }
 
   /**
+   * Dependencies shared by scalar ORDER BY evaluations.
+   *
+   * @param subqueryExecutor
+   *          nested query executor
+   * @param outerQualifiers
+   *          visible source qualifiers
+   * @param correlationContext
+   *          correlation mappings
+   * @param scalarExpressions
+   *          execution-local compiled expressions
+   * @param subqueries
+   *          validated grouped subqueries
+   */
+  private record ScalarExecution(SubqueryExecutor subqueryExecutor, List<String> outerQualifiers,
+      Map<String, Map<String, String>> correlationContext, Map<String, GroupedExpression> scalarExpressions,
+      Map<String, GroupedScalarSubquery> subqueries) {
+  }
+
+  /**
    * Current group values and the caches shared by its scalar evaluators.
    *
    * @param groupValues
@@ -2377,11 +2483,11 @@ public final class AggregateFunctions {
    *          current grouping set
    * @param scalarExpressions
    *          execution-local compiled scalar expressions
-   * @param projectionSubqueries
-   *          validated scalar subqueries inside projections
+   * @param groupedSubqueries
+   *          validated scalar subqueries inside grouped expressions
    */
   private record GroupEvaluation(List<Object> groupValues, int groupingSetIndex,
-      Map<String, GroupedExpression> scalarExpressions, Map<String, GroupedScalarSubquery> projectionSubqueries) {
+      Map<String, GroupedExpression> scalarExpressions, Map<String, GroupedScalarSubquery> groupedSubqueries) {
   }
 
   private static final class HavingEvaluator {
@@ -2398,7 +2504,7 @@ public final class AggregateFunctions {
     private final Predicate<Column> booleanColumn;
     private final List<Object> groupValues;
     private final Map<String, GroupedExpression> scalarExpressions;
-    private final Map<String, GroupedScalarSubquery> projectionSubqueries;
+    private final Map<String, GroupedScalarSubquery> groupedSubqueries;
 
     HavingEvaluator(AggregatePlan plan, List<Object> aggregateValues, Map<String, Object> labelLookup,
         SubqueryExecutor subqueryExecutor, List<String> correlatedQualifiers,
@@ -2406,7 +2512,7 @@ public final class AggregateFunctions {
       this.plan = plan;
       this.groupValues = group.groupValues();
       this.scalarExpressions = group.scalarExpressions();
-      this.projectionSubqueries = group.projectionSubqueries();
+      this.groupedSubqueries = group.groupedSubqueries();
       this.aggregateValues = aggregateValues;
       this.labelLookup = Collections.unmodifiableMap(new HashMap<>(labelLookup));
       this.subqueryExecutor = subqueryExecutor;
@@ -2580,7 +2686,7 @@ public final class AggregateFunctions {
         return groupValues.get(groupIndex);
       }
       if (expr instanceof Select subSelect) {
-        GroupedScalarSubquery grouped = projectionSubqueries.get(subSelect.toString());
+        GroupedScalarSubquery grouped = groupedSubqueries.get(subSelect.toString());
         return grouped == null ? evaluateScalarSubquery(subSelect) : grouped.evaluate(groupValues);
       }
       if (expr instanceof ArrayConstructor array) {
@@ -2800,7 +2906,10 @@ public final class AggregateFunctions {
         return null;
       }
       String key = Identifier.lookupKey(name);
-      return key == null ? null : resolveScalarValue(labelLookup.get(key));
+      if (key == null || !labelLookup.containsKey(key)) {
+        throw syntaxFailure("Unknown or ungrouped column in grouped expression: " + name);
+      }
+      return resolveScalarValue(labelLookup.get(key));
     }
   }
 

@@ -38,7 +38,44 @@ final class GroupedExpression {
    */
   GroupedExpression(Expression source, Predicate<Expression> bind) {
     StringBuilder sql = new StringBuilder();
-    ExpressionDeParser deparser = new ExpressionDeParser(null, sql) {
+    source.accept(bindingDeparser(sql, bind, bindings), null);
+    try {
+      expression = CCJSqlParserUtil.parseExpression(sql.toString());
+    } catch (net.sf.jsqlparser.JSQLParserException e) {
+      throw new IllegalArgumentException("Cannot compile grouped expression: " + source, e);
+    }
+  }
+
+  /**
+   * Validates operands without reparsing the rewritten scalar form. Predicate
+   * subqueries such as EXISTS and ANY retain their original query syntax.
+   *
+   * @param source
+   *          expression to validate
+   * @param bind
+   *          validates operands and identifies scope boundaries
+   * @throws IllegalArgumentException
+   *           if operand validation fails
+   */
+  static void validate(Expression source, Predicate<Expression> bind) {
+    source.accept(bindingDeparser(new StringBuilder(), bind, new ArrayList<>()), null);
+  }
+
+  /**
+   * Creates the shared scope-aware traversal for validation and scalar
+   * compilation.
+   *
+   * @param sql
+   *          rewritten scalar text
+   * @param bind
+   *          validates operands and identifies scope boundaries
+   * @param bindings
+   *          group-dependent operands in slot order
+   * @return a deparser that stops at each bound operand
+   */
+  private static ExpressionDeParser bindingDeparser(StringBuilder sql, Predicate<Expression> bind,
+      List<Expression> bindings) {
+    return new ExpressionDeParser(null, sql) {
       /**
        * Emits a typed slot for a group-dependent operand.
        *
@@ -129,12 +166,6 @@ final class GroupedExpression {
       }
 
     };
-    source.accept(deparser, null);
-    try {
-      expression = CCJSqlParserUtil.parseExpression(sql.toString());
-    } catch (net.sf.jsqlparser.JSQLParserException e) {
-      throw new IllegalArgumentException("Cannot compile grouped expression: " + source, e);
-    }
   }
 
   /**

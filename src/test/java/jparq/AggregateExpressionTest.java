@@ -87,6 +87,11 @@ class AggregateExpressionTest {
 
   /**
    * Tests NULLs, empty inputs, derived outputs, and ungrouped-column validation.
+   *
+   * @param pushdown
+   *          whether predicate and projection pushdown are enabled
+   * @throws Exception
+   *           if fixture setup or query execution fails
    */
   @ParameterizedTest
   @ValueSource(booleans = {
@@ -101,8 +106,9 @@ class AggregateExpressionTest {
       assertRows(connection, "WITH c AS (SELECT COUNT(*) + 1 AS n FROM mtcars) SELECT n FROM c",
           List.of(List.of("33")));
       for (String suffix : List.of("", " WHERE cyl < 0", " GROUP BY cyl")) {
-        assertThrows(SQLException.class,
+        SQLException failure = assertThrows(SQLException.class,
             () -> connection.prepareStatement("SELECT SUM(cyl) + mpg FROM mtcars" + suffix));
+        assertEquals("42000", failure.getSQLState());
       }
     }
   }
@@ -145,20 +151,24 @@ class AggregateExpressionTest {
               + "FROM mtcars m GROUP BY m.cyl ORDER BY m.cyl",
           List.of(List.of("4", "15"), List.of("6", "13"), List.of("8", "22")));
       for (String where : List.of("", " WHERE m.cyl < 0")) {
-        assertThrows(SQLException.class, () -> {
+        SQLException failure = assertThrows(SQLException.class, () -> {
           try (var statement = connection.createStatement()) {
             statement.executeQuery("SELECT COUNT(*) + (SELECT MAX(n.cyl) FROM mtcars n WHERE n.cyl = m.mpg) "
                 + "FROM mtcars m" + where + " GROUP BY m.cyl");
           }
         });
+        assertEquals("42000", failure.getSQLState());
       }
-      assertThrows(SQLException.class, () -> connection.prepareStatement("SELECT SUM(SUM(cyl)) FROM mtcars"));
+      SQLException nested = assertThrows(SQLException.class,
+          () -> connection.prepareStatement("SELECT SUM(SUM(cyl)) FROM mtcars"));
+      assertEquals("42000", nested.getSQLState());
       for (String order : List.of("mpg", "ABS(mpg)", "mpg + COUNT(*)")) {
-        assertThrows(SQLException.class, () -> {
+        SQLException failure = assertThrows(SQLException.class, () -> {
           try (var statement = connection.createStatement()) {
             statement.executeQuery("SELECT cyl, COUNT(*) FROM mtcars GROUP BY cyl ORDER BY " + order);
           }
         });
+        assertEquals("42000", failure.getSQLState());
       }
     }
   }
