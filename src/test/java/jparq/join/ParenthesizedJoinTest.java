@@ -31,8 +31,8 @@ class ParenthesizedJoinTest {
       true, false
   })
   void mixedDerivedAndValuesInputsRetainIndependentAliases(boolean pushdown) throws SQLException {
-    assertRows(pushdown, "SELECT a, k FROM (SELECT 1 AS a) named, (VALUES (2)) first_input(k),"
-        + " (VALUES (3)) second_input(z) WHERE a = 1 AND k = 2", List.of(List.of(1, 2)));
+    assertRows(pushdown, "SELECT a, k, z FROM (SELECT 1 AS a) named, (VALUES (2)) first_input(k),"
+        + " (VALUES (3)) second_input(z) WHERE a = 1 AND k = 2", List.of(List.of(1, 2, 3)));
   }
 
   /**
