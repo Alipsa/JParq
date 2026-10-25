@@ -2534,7 +2534,7 @@ public final class SqlParser {
 
     List<String> allowed = allowedQualifiers == null ? List.of() : allowedQualifiers;
 
-    expr.accept(new ExpressionVisitorAdapter<Void>() {
+    expr.accept(new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(Column column, S context) {
         Table t = column.getTable();
@@ -2595,7 +2595,7 @@ public final class SqlParser {
       return Set.of();
     }
     Set<String> columns = new LinkedHashSet<>();
-    expr.accept(new ExpressionVisitorAdapter<Void>() {
+    expr.accept(new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(Column column, S context) {
         if (isTimeKeyword(column.getColumnName())) {
