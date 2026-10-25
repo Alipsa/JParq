@@ -604,6 +604,7 @@ The following SQL statements are supported:
 - Join support: INNER, LEFT, RIGHT, FULL, CROSS, and Self Join, join ... using syntax
   - Parenthesized join groups preserve nested join order, including outer-join NULL extension.
     Unaliased groups expose their inputs' qualifiers; a group alias exposes the group's output columns instead.
+    For aliased inputs, groups expose only the aliases, not the real table names.
     Qualified wildcards such as `g.*` currently require distinct output labels for any aliased join input,
     including groups, derived tables, and CTEs. Duplicate labels raise
     SQLState `42000`; assign unique positional column aliases to the input, such as `g(x, y)`, to expand them.
