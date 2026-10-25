@@ -53,7 +53,8 @@ class JsonFunctionsTest {
   @Test
   void rejectsMalformedQuotedMembers() {
     for (String path : List.of("$.\"unterminated", "$.\"trailing\\", "$.\"bad\\q\"", "$.\"bad\\u12\"",
-        "$.\"line\nbreak\"", "$.\"a\"suffix", "$.\"a\"\"b\"", "$.missing.\"unterminated")) {
+        "$.\"line\nbreak\"", "$.\"a\"suffix", "$.\"a\"\"b\"", "$.missing.\"unterminated", "$.\"a\" b",
+        "$.\"a\".\"b\" x", "$.\"a\" \"b\"", "$.\"a\"\t.b")) {
       assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue("{}", path), path);
       assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonQuery("{}", path), path);
     }
@@ -63,12 +64,14 @@ class JsonFunctionsTest {
   @Test
   void allowsSpacesAfterQuotedMembers() {
     String json = "{\"a\":[3,7],\"obj\":{\"b\":9}}";
-    for (String path : List.of("$.\"a\" [1]", "$.\"a\"  [ 1 ]")) {
+    for (String path : List.of("$.\"a\" [1]", "$.\"a\"  [ 1 ]", "$.\"a\"[\t+1\n]")) {
       assertEquals(7, JsonFunctions.jsonValue(json, path), path);
       assertEquals("7", JsonFunctions.jsonQuery(json, path), path);
     }
     assertEquals(9, JsonFunctions.jsonValue(json, "$.\"obj\" .b"));
     assertEquals("9", JsonFunctions.jsonQuery(json, "$.\"obj\" .b"));
+    assertEquals(9, JsonFunctions.jsonValue(json, "$.\"obj\".\"b\"  "));
+    assertEquals("9", JsonFunctions.jsonQuery(json, "$.\"obj\".\"b\"  "));
   }
 
   /**
@@ -76,10 +79,10 @@ class JsonFunctionsTest {
    */
   @Test
   void rejectsUnsupportedArraySubscripts() {
-    for (String subscript : List.of("*", "last", "0 to 1", "", "2147483648")) {
+    for (String subscript : List.of("*", "last", "0 to 1", "", " ", "2147483648")) {
       for (String member : List.of("a", "missing")) {
         String path = "$." + member + "[" + subscript + "]";
-        String expected = "Unsupported array subscript in JSON path: " + subscript;
+        String expected = "Unsupported array subscript in JSON path: [" + subscript + "]";
         var valueFailure = assertThrows(IllegalArgumentException.class,
             () -> JsonFunctions.jsonValue("{\"a\":[1]}", path), path);
         var queryFailure = assertThrows(IllegalArgumentException.class,

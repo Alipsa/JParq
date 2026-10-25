@@ -198,7 +198,7 @@ public final class JsonFunctions {
         try {
           arrayIndex = Integer.parseInt(idxStr.trim());
         } catch (NumberFormatException e) {
-          throw new IllegalArgumentException("Unsupported array subscript in JSON path: " + idxStr, e);
+          throw new IllegalArgumentException("Unsupported array subscript in JSON path: [" + idxStr + "]", e);
         }
         current = current != null && current.isArray() ? current.get(arrayIndex) : null;
         index = close + 1;
@@ -265,7 +265,7 @@ public final class JsonFunctions {
   }
 
   /**
-   * Locates the closing quote while skipping escaped characters.
+   * Locates the closing quote and validates the next step after any plain spaces.
    *
    * @param path
    *          the path after the root marker
@@ -282,7 +282,11 @@ public final class JsonFunctions {
         i++;
       } else if (ch == '"') {
         int next = i + 1;
-        if (next < path.length() && ".[ ".indexOf(path.charAt(next)) < 0) {
+        int after = next;
+        while (after < path.length() && path.charAt(after) == ' ') {
+          after++;
+        }
+        if (after < path.length() && path.charAt(after) != '.' && path.charAt(after) != '[') {
           throw new IllegalArgumentException("Unexpected character after quoted member in JSON path");
         }
         return next;
