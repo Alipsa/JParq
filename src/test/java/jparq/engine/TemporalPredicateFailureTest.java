@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.SqlExceptions;
 
 /**
  * Verifies temporal and predicate classifications across JDBC query boundaries.
@@ -115,6 +116,45 @@ class TemporalPredicateFailureTest {
         String invalidOperand = predicate.startsWith("NOT ") ? predicate.substring(4) : predicate;
         assertTrue(failure.getMessage().contains("Unsupported predicate: " + invalidOperand), failure::getMessage);
       }
+    }
+  }
+
+  /**
+   * Names the original grouped expression when private operand slots fail
+   * validation.
+   *
+   * @param source
+   *          the grouped source expression
+   * @param clause
+   *          whether the expression appears in SELECT or HAVING
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "CASE WHEN COUNT(*) THEN 1 ELSE 0 END | SELECT", "NOT MAX(model) | SELECT",
+      "CASE WHEN cyl THEN 1 ELSE 0 END | SELECT", "CASE WHEN COUNT(*) THEN true END | HAVING"
+  })
+  void groupedPredicateDiagnosticsRetainSource(String source, String clause) throws Exception {
+    String url = "jdbc:jparq:" + Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    String sql = "SELECT".equals(clause)
+        ? "SELECT cyl, " + source + " FROM mtcars GROUP BY cyl"
+        : "SELECT cyl FROM mtcars GROUP BY cyl HAVING " + source;
+    try (var connection = DriverManager.getConnection(url)) {
+      var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
+        try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
+          result.next();
+          result.getObject(1);
+        }
+      }, sql);
+      assertEquals("42000", failure.getSQLState(), sql);
+      assertTrue(failure.getMessage().contains(source), failure::getMessage);
+      assertTrue(failure.getMessage().contains("Unsupported predicate"), failure::getMessage);
+      assertTrue(!failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure::getMessage);
+      assertTrue(!failure.getMessage().contains("grouped-expression"), failure::getMessage);
+      assertInstanceOf(IllegalArgumentException.class, failure.getCause());
+      assertInstanceOf(IllegalArgumentException.class, failure.getCause().getCause());
+      assertEquals("42000", SqlExceptions.findSqlStateFailure(failure.getCause()).getSQLState());
     }
   }
 

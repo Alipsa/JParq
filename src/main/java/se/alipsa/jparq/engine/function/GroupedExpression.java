@@ -23,6 +23,7 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import se.alipsa.jparq.engine.CorrelatedBindings;
 import se.alipsa.jparq.engine.JSqlParserSupport;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 
 /**
@@ -32,6 +33,7 @@ final class GroupedExpression {
   private static final String BINDING_KEY = "grouped-expression";
   private final List<Expression> bindings = new ArrayList<>();
   private final Expression expression;
+  private final String sourceDescription;
   private final Schema schema = Schema.createRecord("grouped", null, null, false, List.of());
   private final ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema);
 
@@ -48,6 +50,7 @@ final class GroupedExpression {
    *           if compilation or operand validation fails
    */
   GroupedExpression(Expression source, Predicate<Expression> bind) {
+    sourceDescription = SqlExceptions.describe(source);
     StringBuilder sql = new StringBuilder();
     source.accept(bindingDeparser(sql, bind, bindings), null);
     try {
@@ -253,6 +256,9 @@ final class GroupedExpression {
    * @param values
    *          resolves each bound operand
    * @return scalar value, possibly null
+   * @throws IllegalArgumentException
+   *           if a classified evaluation failure occurs, preserving its SQLState
+   *           and original cause with the source expression as diagnostic context
    */
   Object evaluate(Function<Expression, Object> values) {
     List<Object> operands = new AbstractList<>() {
@@ -269,6 +275,11 @@ final class GroupedExpression {
     var frame = new CorrelatedBindings(BINDING_KEY, operands);
     try (frame) {
       return evaluator.eval(expression, new GenericData.Record(schema));
+    } catch (RuntimeException failure) {
+      if (SqlExceptions.findSqlStateFailure(failure) == null) {
+        throw failure;
+      }
+      throw new IllegalArgumentException("Failed to evaluate grouped expression: " + sourceDescription, failure);
     }
   }
 }
