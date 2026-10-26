@@ -2,8 +2,11 @@ package se.alipsa.jparq.engine;
 
 import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 
+import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.sql.SQLException;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
@@ -239,7 +242,20 @@ public final class ValueExpressionEvaluator {
     }
 
     if (expression instanceof CaseExpression caseExpr) {
-      return evaluateCase(caseExpr, record);
+      Object value = evaluateCase(caseExpr, record);
+      NumericType type = numericType(caseExpr);
+      if (type == null || value == null) {
+        return value;
+      }
+      // Division and unbounded decimal casts retain value-specific scales.
+      if (type.jdbcType() == Types.DECIMAL && type.precision() == 0) {
+        return value instanceof BigDecimal ? value : new BigDecimal(value.toString());
+      }
+      try {
+        return type.convert(value);
+      } catch (SQLException e) {
+        throw new IllegalArgumentException("Cannot convert CASE result to its common numeric type", e);
+      }
     }
 
     if (expression instanceof TimeKeyExpression tk) {
@@ -655,7 +671,7 @@ public final class ValueExpressionEvaluator {
    * Resolves and caches operand declarations independently of current row values.
    *
    * @param expression
-   *          arithmetic operand
+   *          numeric expression or arithmetic operand
    * @return its numeric declaration, or null when unknown
    */
   private NumericType numericType(Expression expression) {

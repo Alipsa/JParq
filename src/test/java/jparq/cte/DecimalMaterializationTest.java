@@ -133,7 +133,7 @@ class DecimalMaterializationTest {
    * @param expectedValues
    *          the expected values in row order, separated by spaces
    * @param precision
-   *          the precision needed by all rows
+   *          the declared or inferred result precision
    * @param scale
    *          the largest fractional scale
    * @throws Exception
@@ -143,7 +143,7 @@ class DecimalMaterializationTest {
   @CsvSource(delimiter = '|', value = {
       "0.05 | 0.05 0.05 0.05 | 2 | 2", "amount * 3 | 0.03 0.06 0.09 | 13 | 2",
       "amount / 3 | 0.003333333333333333 0.006666666666666667 0.01 | 18 | 18",
-      "CASE WHEN id > 1 THEN id * 10 ELSE 0.5 END | 0.5 20.0 30.0 | 3 | 1"
+      "CASE WHEN id > 1 THEN id * 10 ELSE 0.5 END | 0.5 20.0 30.0 | 20 | 1"
   })
   void computedCteDecimalsHaveSufficientBounds(String expression, String expectedValues, int precision, int scale)
       throws Exception {

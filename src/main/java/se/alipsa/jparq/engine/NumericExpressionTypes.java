@@ -2,9 +2,11 @@ package se.alipsa.jparq.engine;
 
 import java.math.BigDecimal;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.Locale;
 import java.util.function.Function;
 import net.sf.jsqlparser.expression.BinaryExpression;
+import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DoubleValue;
 import net.sf.jsqlparser.expression.Expression;
@@ -27,7 +29,7 @@ public final class NumericExpressionTypes {
   }
 
   /**
-   * Resolves literals, numeric casts, aggregates, and arithmetic operators.
+   * Resolves literals, numeric casts, aggregates, CASE, and arithmetic operators.
    *
    * @param expression
    *          the expression to resolve
@@ -41,6 +43,9 @@ public final class NumericExpressionTypes {
     }
     if (expression instanceof Column column) {
       return columns.apply(column);
+    }
+    if (expression instanceof CaseExpression choice) {
+      return resolveCase(choice, columns);
     }
     if (expression instanceof LongValue literal) {
       var integer = literal.getBigIntegerValue();
@@ -122,6 +127,42 @@ public final class NumericExpressionTypes {
       return left == null || right == null ? null : left.arithmetic(right, operation);
     }
     return null;
+  }
+
+  /**
+   * Combines numeric result branches without evaluating conditions or values.
+   * Untyped NULL branches do not constrain the result type.
+   *
+   * @param choice
+   *          simple or searched CASE expression
+   * @param columns
+   *          declared numeric source column types
+   * @return common numeric type, or null if any non-NULL branch is unresolved
+   */
+  private static NumericType resolveCase(CaseExpression choice, Function<Column, NumericType> columns) {
+    var branches = new ArrayList<Expression>();
+    if (choice.getWhenClauses() != null) {
+      choice.getWhenClauses().forEach(clause -> branches.add(clause.getThenExpression()));
+    }
+    if (choice.getElseExpression() != null) {
+      branches.add(choice.getElseExpression());
+    }
+    NumericType common = null;
+    boolean unknownDecimal = false;
+    for (Expression branch : branches) {
+      if (isNull(branch)) {
+        continue;
+      }
+      NumericType type = resolve(branch, columns);
+      if (type == null) {
+        return null;
+      }
+      unknownDecimal |= type.jdbcType() == Types.DECIMAL && type.precision() == 0;
+      common = common == null ? type : common.common(type);
+    }
+    return common != null && common.jdbcType() == Types.DECIMAL && unknownDecimal
+        ? new NumericType(Types.DECIMAL, 0, 0)
+        : common;
   }
 
   /**

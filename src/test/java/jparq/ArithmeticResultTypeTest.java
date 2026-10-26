@@ -115,6 +115,10 @@ class ArithmeticResultTypeTest {
       check(connection, "SUM(dec) * 2", Types.DECIMAL, new BigDecimal("1999.98"));
       check(connection, "AVG(n) + 1", Types.DOUBLE, 8.0);
       check(connection, "CAST(d AS DECIMAL) * 2", Types.DECIMAL, new BigDecimal("0.2"));
+      check(connection, "CASE WHEN id = 0 THEN n ELSE 1.00 END", Types.DECIMAL, new BigDecimal("7.00"));
+      check(connection, "CASE WHEN id = 0 THEN dec ELSE n END", Types.DECIMAL, new BigDecimal("999.99"));
+      check(connection, "CASE WHEN id = 0 THEN r ELSE d END", Types.DOUBLE, 0.5);
+      check(connection, "CASE WHEN id = 0 THEN n ELSE l END", Types.BIGINT, 7L);
       check(connection, "1.5", Types.DECIMAL, new BigDecimal("1.5"));
       check(connection, "2147483648", Types.BIGINT, 2147483648L);
       check(connection, "-9223372036854775808", Types.BIGINT, Long.MIN_VALUE);
@@ -287,8 +291,8 @@ class ArithmeticResultTypeTest {
   }
 
   /**
-   * Keeps mixed INTEGER literal and BIGINT branch keys equal without changing the
-   * values exposed by CASE and COALESCE.
+   * Keeps mixed INTEGER literal and BIGINT branch keys equal through CASE and
+   * COALESCE.
    *
    * @param pushdown
    *          whether both pushdown settings are enabled

@@ -563,7 +563,10 @@ The following SQL statements are supported:
   - alias support for columns and tables
   - Support computed expressions with aliases (e.g. SELECT mpg*2 AS double_mpg)
   - Quoted identifiers using "double quotes" as per the SQL standard.
-  - `CASE` support
+  - `CASE` support. Numeric result branches use a common type derived from all numeric branches before
+    rows are read; untyped NULL branches do not constrain it. Selected values use that type consistently
+    for JDBC metadata, DISTINCT, GROUP BY, and window PARTITION BY. Decimal branches share a scale when
+    their bounds are known; unbounded division retains value-specific scales. Unselected branches are not evaluated.
 - `SELECT` statements with `WHERE` supporting:
   - `BETWEEN`, `IN`, `LIKE` operators
   - `AND`, `OR`, `NOT` logical operators
