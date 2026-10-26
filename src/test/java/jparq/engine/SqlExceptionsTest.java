@@ -47,7 +47,8 @@ class SqlExceptionsTest {
     String sql = "-(SELECT __JPARQ_CORRELATED_VALUE('private-key', 0) "
         + "+ __JPARQ_CORRELATED_VALUE('another-key', 12))";
     var expression = CCJSqlParserUtil.parseExpression(sql);
-    assertEquals("-(SELECT <outer value> + <outer value>)", SqlExceptions.describe(expression));
+    assertEquals("-(SELECT " + SqlExceptions.OUTER_VALUE + " + " + SqlExceptions.OUTER_VALUE + ")",
+        SqlExceptions.describe(expression));
     assertTrue(expression.toString().contains("private-key"));
     var ordinary = CCJSqlParserUtil.parseExpression("cyl & 2");
     assertEquals(ordinary.toString(), SqlExceptions.describe(ordinary));
@@ -66,7 +67,7 @@ class SqlExceptionsTest {
     assertEquals("42000", SqlExceptions.findSqlStateFailure(ordinary).getSQLState());
     var bound = SqlExceptions
         .unsupportedPredicate(CCJSqlParserUtil.parseExpression("__JPARQ_CORRELATED_VALUE('private-key', 0)"));
-    assertEquals("Unsupported predicate: <outer value>", bound.getMessage());
+    assertEquals("Unsupported predicate: " + SqlExceptions.OUTER_VALUE, bound.getMessage());
     assertInstanceOf(SQLSyntaxErrorException.class, bound.getCause());
     assertEquals("42000", SqlExceptions.findSqlStateFailure(bound).getSQLState());
   }

@@ -153,7 +153,7 @@ class TemporalPredicateFailureTest {
       assertTrue(failure.getMessage().contains("Unsupported predicate"), failure::getMessage);
       assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure::getMessage);
       assertFalse(failure.getMessage().contains("grouped-expression"), failure::getMessage);
-      assertFalse(failure.getMessage().contains("<outer value>"), failure::getMessage);
+      assertFalse(failure.getMessage().contains(SqlExceptions.OUTER_VALUE), failure::getMessage);
       assertInstanceOf(IllegalArgumentException.class, failure.getCause());
       var contextual = assertInstanceOf(SQLSyntaxErrorException.class, failure.getCause().getCause());
       var original = assertInstanceOf(IllegalArgumentException.class, contextual.getCause());
@@ -189,7 +189,7 @@ class TemporalPredicateFailureTest {
       assertEquals("42000", failure.getSQLState());
       assertTrue(failure.getMessage().contains("Unsupported predicate in grouped expression:"), failure::getMessage);
       assertTrue(failure.getMessage().contains("Unsupported predicate: 'x' || 'y'"), failure::getMessage);
-      assertFalse(failure.getMessage().contains("<outer value>"), failure::getMessage);
+      assertFalse(failure.getMessage().contains(SqlExceptions.OUTER_VALUE), failure::getMessage);
     }
   }
 

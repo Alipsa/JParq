@@ -285,7 +285,7 @@ final class GroupedExpression {
       if ("42000".equals(classified.getSQLState()) && detail != null
           && detail.startsWith(SqlExceptions.UNSUPPORTED_PREDICATE)) {
         String message = "Unsupported predicate in grouped expression: " + sourceDescription;
-        if (!detail.contains("<outer value>")) {
+        if (!detail.contains(SqlExceptions.OUTER_VALUE)) {
           message += " (" + detail + ")";
         }
         // Keep the original slot diagnostic in the cause chain, while JDBC

@@ -15,6 +15,8 @@ import net.sf.jsqlparser.expression.Expression;
 public final class SqlExceptions {
   /** Shared diagnostic prefix for unsupported Boolean predicates. */
   public static final String UNSUPPORTED_PREDICATE = "Unsupported predicate:";
+  /** Diagnostic marker replacing private correlated value bindings. */
+  public static final String OUTER_VALUE = "<outer value>";
   private static final int DIAGNOSTIC_VALUE_LIMIT = 64;
   private static final Set<String> CLASSIFIED_STATES = Set.of("42000", "22003", "22007", "22008", "22018");
   private static final Pattern CORRELATED_BINDING = Pattern
@@ -31,7 +33,7 @@ public final class SqlExceptions {
    *         token
    */
   public static String describe(Expression expression) {
-    return CORRELATED_BINDING.matcher(expression.toString()).replaceAll("<outer value>");
+    return CORRELATED_BINDING.matcher(expression.toString()).replaceAll(OUTER_VALUE);
   }
 
   /** Prevents utility class instantiation. */
