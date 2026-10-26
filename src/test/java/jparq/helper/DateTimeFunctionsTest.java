@@ -630,6 +630,17 @@ public class DateTimeFunctionsTest {
     assertEquals("Cannot cast value '" + "x".repeat(63) + "…' to a numeric value", emojiFailure.getMessage());
   }
 
+  /** Keeps invalid BOOLEAN diagnostics bounded and Unicode-safe. */
+  @Test
+  void booleanCastDiagnosticsBoundValues() {
+    for (String value : List.of("x".repeat(200000), "x".repeat(63) + "😀tail")) {
+      var failure = assertThrows(IllegalArgumentException.class,
+          () -> DateTimeFunctions.castLiteral(createCastExpression("BOOLEAN"), value));
+      assertEquals("Cannot cast value '" + SqlExceptions.diagnosticValue(value) + "' to BOOLEAN", failure.getMessage());
+      assertTrue(failure.getMessage().length() < 120);
+    }
+  }
+
   /** Checks finite floating-point boundaries and overflow for all aliases. */
   @Test
   void floatingCastsRejectOverflow() {

@@ -71,17 +71,8 @@ public final class NumericExpressionTypes {
                 ? new NumericType(Types.DECIMAL, 0, 0)
                 : new NumericType(Types.DECIMAL, operand.precision(), operand.scale());
       }
-      int parameters = name.indexOf('(');
-      String baseName = parameters < 0 ? name : name.substring(0, parameters);
-      return switch (baseName) {
-        case "TINYINT" -> new NumericType(Types.TINYINT, 3, 0);
-        case "SMALLINT", "INT2" -> new NumericType(Types.SMALLINT, 5, 0);
-        case "INT", "INTEGER", "SIGNED", "INT4" -> NumericType.of(Types.INTEGER, 0, 0);
-        case "BIGINT", "INT8" -> NumericType.of(Types.BIGINT, 0, 0);
-        case "FLOAT", "REAL", "FLOAT4" -> NumericType.of(Types.REAL, 0, 0);
-        case "DOUBLE", "DOUBLEPRECISION", "FLOAT8" -> NumericType.of(Types.DOUBLE, 0, 0);
-        default -> null;
-      };
+      NumericCastTarget target = NumericCastTarget.fromName(name);
+      return target == null ? null : target.numericType();
     }
     if (expression instanceof SignedExpression signed) {
       if (signed.getSign() == '-' && signed.getExpression() instanceof LongValue literal

@@ -31,6 +31,7 @@ import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.statement.create.table.ColDataType;
 import se.alipsa.jparq.engine.DecimalCasts;
+import se.alipsa.jparq.engine.NumericCastTarget;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.helper.TemporalInterval;
 
@@ -643,15 +644,16 @@ public final class DateTimeFunctions {
     if (dataType == null) {
       return value;
     }
+    NumericCastTarget target = NumericCastTarget.fromName(dataType);
+    if (target != null) {
+      return castNumeric(value, target, colType.toString());
+    }
     String normalized = normalizeTypeName(dataType);
     return switch (normalized) {
       case "boolean", "bool" -> toBoolean(value);
       case "char", "character", "nchar", "varchar", "charactervarying", "nvarchar", "string" ->
         castToString(cast, value);
       case "text", "clob" -> value.toString();
-      case "tinyint", "smallint", "int2", "int", "integer", "signed", "int4", "bigint", "int8", "float", "real",
-          "float4", "double", "doubleprecision", "float8" ->
-        castNumeric(value, normalized, colType.toString());
       default -> value;
     };
   }
@@ -662,24 +664,24 @@ public final class DateTimeFunctions {
    * @param value
    *          the numeric input
    * @param type
-   *          the normalized numeric target name
+   *          the resolved numeric target
    * @param target
    *          the declared SQL target type for diagnostics
    * @return the narrowed number, truncating integer fractions toward zero
    * @throws IllegalArgumentException
    *           if the input is invalid (22018) or out of range (22003)
    */
-  private static Number castNumeric(Object value, String type, String target) {
+  private static Number castNumeric(Object value, NumericCastTarget type, String target) {
     BigDecimal decimal = toBigDecimalValue(value);
     try {
       switch (type) {
-        case "float", "real", "float4":
+        case REAL:
           float result = decimal.floatValue();
           if (!Float.isFinite(result)) {
             throw new ArithmeticException("Floating-point overflow");
           }
           return result;
-        case "double", "doubleprecision", "float8":
+        case DOUBLE:
           double doubleResult = decimal.doubleValue();
           if (!Double.isFinite(doubleResult)) {
             throw new ArithmeticException("Floating-point overflow");
@@ -694,9 +696,9 @@ public final class DateTimeFunctions {
           }
           BigDecimal integer = digits <= 0 ? BigDecimal.ZERO : decimal.setScale(0, RoundingMode.DOWN);
           return switch (type) {
-            case "tinyint" -> integer.byteValueExact();
-            case "smallint", "int2" -> integer.shortValueExact();
-            case "int", "integer", "signed", "int4" -> integer.intValueExact();
+            case TINYINT -> integer.byteValueExact();
+            case SMALLINT -> integer.shortValueExact();
+            case INTEGER -> integer.intValueExact();
             default -> integer.longValueExact();
           };
       }
@@ -798,7 +800,7 @@ public final class DateTimeFunctions {
         || "0".equals(normalized)) {
       return Boolean.FALSE;
     }
-    throw new IllegalArgumentException("Cannot cast value '" + value + "' to BOOLEAN");
+    throw new IllegalArgumentException("Cannot cast value '" + SqlExceptions.diagnosticValue(value) + "' to BOOLEAN");
   }
 
   private static String normalizeTypeName(String dataType) {
