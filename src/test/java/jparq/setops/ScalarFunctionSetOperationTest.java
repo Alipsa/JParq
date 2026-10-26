@@ -37,6 +37,9 @@ class ScalarFunctionSetOperationTest {
         Arguments.of("SELECT ROUND(1.25, 1) UNION SELECT 1.3", 2, 1, List.of("1.3")),
         Arguments.of("SELECT 1 UNION ALL SELECT ABS(CAST(1.5 AS DOUBLE))", 11, 1, List.of("1.0", "1.5")),
         Arguments.of("SELECT 21 EXCEPT SELECT ROUND(20.4, 0)", 10, 0, List.of("21")),
+        Arguments.of(
+            "SELECT ABS(x) FROM (SELECT cyl AS x FROM mtcars WHERE cyl = 4 AND gear = 5) t UNION ALL SELECT 1.5", 11, 1,
+            List.of("4.0", "4.0", "1.5")),
         Arguments.of("SELECT ROUND(mpg, 1) FROM mtcars WHERE cyl = 99 UNION ALL SELECT 1", 10, 0, List.of("1")),
         Arguments.of("SELECT 1 UNION ALL SELECT ROUND(mpg, 1) FROM mtcars WHERE cyl = 99", 10, 0, List.of("1")),
         Arguments.of("SELECT ABS(mpg) FROM mtcars WHERE cyl = 99 UNION ALL SELECT 1", 10, 0, List.of("1")),
@@ -57,6 +60,39 @@ class ScalarFunctionSetOperationTest {
       args[args.length - 1] = pushdown;
       return Arguments.of(args);
     }));
+  }
+
+  /**
+   * COALESCE uses both joined source declarations even when every selected value
+   * comes from its INTEGER argument.
+   *
+   * @param pushdown
+   *          whether predicate and projection pushdown are enabled
+   * @throws Exception
+   *           if fixture lookup or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void promotesJoinedCoalesceToDouble(boolean pushdown) throws Exception {
+    String sql = "SELECT COALESCE(a.cyl, b.mpg) FROM mtcars a JOIN mtcars b ON a.model = b.model "
+        + "WHERE a.cyl = 4 AND a.gear = 5 UNION ALL SELECT 1";
+    Path directory = Path.of(Objects.requireNonNull(getClass().getResource("/mtcars.parquet")).toURI()).getParent();
+    try (
+        var connection = DriverManager.getConnection(
+            "jdbc:jparq:" + directory + "?predicatePushdown=" + pushdown + "&projectionPushdown=" + pushdown);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      var metadata = result.getMetaData();
+      assertEquals(Types.DOUBLE, metadata.getColumnType(1), sql);
+      assertEquals(Double.class.getName(), metadata.getColumnClassName(1), sql);
+      for (Double value : List.of(4.0, 4.0, 1.0)) {
+        assertTrue(result.next(), sql);
+        assertEquals(value, result.getObject(1), sql);
+      }
+      assertFalse(result.next(), sql);
+    }
   }
 
   /**
