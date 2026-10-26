@@ -563,7 +563,14 @@ The following SQL statements are supported:
   - alias support for columns and tables
   - Support computed expressions with aliases (e.g. SELECT mpg*2 AS double_mpg)
   - Quoted identifiers using "double quotes" as per the SQL standard.
-  - `CASE` support
+  - `CASE` support. Numeric result branches built from literals, columns, numeric casts, arithmetic,
+    aggregates, COALESCE, ABS, and ROUND use a common type derived before rows are read; untyped NULL
+    branches do not constrain it. Selected values use that type consistently for JDBC metadata and
+    `getObject()`, including grouped aggregate branches. Decimal branches share a scale when their
+    bounds are known; unbounded expressions retain value-specific scales. Decimal equality keys ignore
+    scale for DISTINCT, GROUP BY, and window PARTITION BY. Unselected branches are not evaluated.
+    Scalar subqueries and other functions without numeric type derivation still leave CASE untyped;
+    mixed numeric values can still split keys in those cases (see [#319](https://github.com/Alipsa/JParq/issues/319)).
 - `SELECT` statements with `WHERE` supporting:
   - `BETWEEN`, `IN`, `LIKE` operators
   - `AND`, `OR`, `NOT` logical operators

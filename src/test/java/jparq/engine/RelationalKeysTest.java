@@ -18,15 +18,57 @@ import se.alipsa.jparq.engine.RelationalKeys;
  */
 class RelationalKeysTest {
 
-  /** Scalar rows reuse their input list, including NULL and decimal values. */
+  /** Compatible scalar rows reuse their input list, including NULL values. */
   @Test
   void reusesScalarRows() {
-    List<Object> values = Arrays.asList("text", 1L, 2L, new BigDecimal("1.50"), true, null);
+    List<Object> values = Arrays.asList("text", 1L, 2L, new BigDecimal("1.5"), true, null);
     assertSame(values, RelationalKeys.row(values));
     List<Object> empty = List.of();
     assertSame(empty, RelationalKeys.row(empty));
     List<Object> immutable = List.of("text", 1L);
     assertSame(immutable, RelationalKeys.row(immutable));
+  }
+
+  /** Decimal equality and hashes ignore scale without changing output values. */
+  @Test
+  void decimalKeysIgnoreScale() {
+    for (String first : List.of("1", "0", "1000", "-1.5")) {
+      BigDecimal value = new BigDecimal(first);
+      BigDecimal scaled = value.setScale(4);
+      List<Object> original = List.of(scaled);
+      for (boolean normalizeIntegers : List.of(false, true)) {
+        List<Object> key = RelationalKeys.row(original, normalizeIntegers);
+        List<Object> other = RelationalKeys.row(List.of(value), normalizeIntegers);
+        assertEquals(other, key);
+        assertEquals(other.hashCode(), key.hashCode());
+        assertEquals(RelationalKeys.row(List.of(value), new boolean[]{
+            false
+        }), RelationalKeys.row(original, new boolean[]{
+            false
+        }));
+      }
+      assertSame(scaled, original.getFirst());
+      assertEquals(4, scaled.scale());
+      assertEquals(RelationalKeys.value(List.of(value)), RelationalKeys.value(List.of(scaled)));
+    }
+  }
+
+  /** Zero and negative scales still normalize powers of ten consistently. */
+  @Test
+  void normalizesDecimalPowersOfTen() {
+    Object expected = RelationalKeys.value(new BigDecimal("1000.00"));
+    for (String text : List.of("1000", "1E+3", "10E+2", "100E+1", "1000.0000")) {
+      Object key = RelationalKeys.value(new BigDecimal(text));
+      assertEquals(expected, key, text);
+      assertEquals(expected.hashCode(), key.hashCode(), text);
+    }
+    for (String text : List.of("0", "0.00", "0E+3")) {
+      assertEquals(BigDecimal.ZERO, RelationalKeys.value(new BigDecimal(text)), text);
+    }
+    for (String text : List.of("12.31", "-12.31", "1E+3")) {
+      BigDecimal canonical = new BigDecimal(text);
+      assertSame(canonical, RelationalKeys.value(canonical), text);
+    }
   }
 
   /**

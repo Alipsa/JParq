@@ -170,8 +170,8 @@ class DerivedNumericTypeTest {
   }
 
   /**
-   * Pins the VARCHAR fallback for unknown expressions without non-null values
-   * while preserving known source column types.
+   * Retains declared arithmetic and numeric CASE types without non-null values,
+   * along with known source column types.
    *
    * @param body
    *          the empty or all-null projection
@@ -185,17 +185,15 @@ class DerivedNumericTypeTest {
       "SELECT id, id * 1 AS x FROM small WHERE id > 100 | 0",
       "SELECT id, CASE WHEN id > 100 THEN id * 1 END AS x FROM small | 5"
   })
-  void unknownTypesWithoutValuesFallBackToVarchar(String body, int expectedRows) throws Exception {
+  void numericTypesWithoutValuesRemainDeclared(String body, int expectedRows) throws Exception {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
       for (String sql : List.of("SELECT t.x, t.id FROM (" + body + ") t",
           "SELECT t.x, t.id FROM (" + body + ") t JOIN small s ON s.id = 0",
           "SELECT t.x, t.id FROM small s JOIN (" + body + ") t ON s.id = 0",
           "WITH t AS (" + body + ") SELECT x, id FROM t")) {
         try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
-          assertEquals(body.contains("CASE") ? Types.VARCHAR : Types.BIGINT, result.getMetaData().getColumnType(1),
-              sql);
-          assertEquals(body.contains("CASE") ? String.class.getName() : Long.class.getName(),
-              result.getMetaData().getColumnClassName(1), sql);
+          assertEquals(Types.BIGINT, result.getMetaData().getColumnType(1), sql);
+          assertEquals(Long.class.getName(), result.getMetaData().getColumnClassName(1), sql);
           assertEquals(Types.INTEGER, result.getMetaData().getColumnType(2), sql);
           assertEquals(Integer.class.getName(), result.getMetaData().getColumnClassName(2), sql);
           int count = 0;

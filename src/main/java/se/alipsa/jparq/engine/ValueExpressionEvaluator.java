@@ -4,6 +4,7 @@ import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
@@ -239,7 +240,16 @@ public final class ValueExpressionEvaluator {
     }
 
     if (expression instanceof CaseExpression caseExpr) {
-      return evaluateCase(caseExpr, record);
+      Object value = evaluateCase(caseExpr, record);
+      NumericType type = numericType(caseExpr);
+      if (type == null || value == null) {
+        return value;
+      }
+      try {
+        return NumericExpressionTypes.convert(type, value);
+      } catch (SQLException e) {
+        throw new IllegalArgumentException("Cannot convert CASE result to its common numeric type", e);
+      }
     }
 
     if (expression instanceof TimeKeyExpression tk) {
@@ -655,7 +665,7 @@ public final class ValueExpressionEvaluator {
    * Resolves and caches operand declarations independently of current row values.
    *
    * @param expression
-   *          arithmetic operand
+   *          numeric expression or arithmetic operand
    * @return its numeric declaration, or null when unknown
    */
   private NumericType numericType(Expression expression) {

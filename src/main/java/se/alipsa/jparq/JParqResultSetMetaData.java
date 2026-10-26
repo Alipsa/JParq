@@ -356,6 +356,17 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     if (expression instanceof Column || expression instanceof net.sf.jsqlparser.expression.Function) {
       return null;
     }
+    return numericExpressionType(expression);
+  }
+
+  /**
+   * Resolves a numeric expression using the source column declarations.
+   *
+   * @param expression
+   *          projected expression, including scalar function wrappers
+   * @return the numeric declaration, or null when unresolved
+   */
+  NumericType numericExpressionType(Expression expression) {
     return NumericExpressionTypes.resolve(expression, reference -> {
       Schema.Field field = resolveSourceField(reference);
       return field == null
