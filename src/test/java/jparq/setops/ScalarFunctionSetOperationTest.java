@@ -36,7 +36,22 @@ class ScalarFunctionSetOperationTest {
         Arguments.of("SELECT ROUND(1.25, 1) UNION ALL SELECT ROUND(2.5, 0)", 2, 1, List.of("1.3", "3.0")),
         Arguments.of("SELECT ROUND(1.25, 1) UNION SELECT 1.3", 2, 1, List.of("1.3")),
         Arguments.of("SELECT 1 UNION ALL SELECT ABS(CAST(1.5 AS DOUBLE))", 11, 1, List.of("1.0", "1.5")),
-        Arguments.of("SELECT 21 EXCEPT SELECT ROUND(20.4, 0)", 10, 0, List.of("21")));
+        Arguments.of("SELECT 21 EXCEPT SELECT ROUND(20.4, 0)", 10, 0, List.of("21")),
+        Arguments.of("SELECT ROUND(mpg, 1) FROM mtcars WHERE cyl = 99 UNION ALL SELECT 1", 10, 0, List.of("1")),
+        Arguments.of("SELECT 1 UNION ALL SELECT ROUND(mpg, 1) FROM mtcars WHERE cyl = 99", 10, 0, List.of("1")),
+        Arguments.of("SELECT ABS(mpg) FROM mtcars WHERE cyl = 99 UNION ALL SELECT 1", 10, 0, List.of("1")),
+        Arguments.of(
+            "SELECT COALESCE(NULL, CAST(mpg AS DECIMAL(5,2)) / 4) FROM mtcars WHERE cyl = 99 UNION ALL SELECT 1", 10, 0,
+            List.of("1")),
+        Arguments.of("SELECT ROUND(CAST(NULL AS DECIMAL(5,2)), 1) UNION ALL SELECT 1", 10, 0, Arrays.asList(null, "1")),
+        Arguments.of("SELECT ABS(CAST(NULL AS DOUBLE)) UNION ALL SELECT 1", 10, 0, Arrays.asList(null, "1")),
+        Arguments.of("SELECT COALESCE(NULL, CAST(NULL AS DECIMAL(5,2)) / 4) UNION ALL SELECT 1", 10, 0,
+            Arrays.asList(null, "1")),
+        Arguments.of("SELECT ROUND(mpg, 1) FROM mtcars WHERE cyl = 99 UNION ALL SELECT ROUND(NULL, 1)", 1, 0,
+            Arrays.asList((String) null)),
+        Arguments.of(
+            "SELECT ROUND(mpg, 1) FROM mtcars WHERE cyl = 99 UNION ALL " + "SELECT ABS(mpg) FROM mtcars WHERE cyl = 99",
+            1, 0, List.of()));
     return cases.stream().flatMap(value -> Stream.of(true, false).map(pushdown -> {
       Object[] args = Arrays.copyOf(value.get(), value.get().length + 1);
       args[args.length - 1] = pushdown;
@@ -77,7 +92,7 @@ class ScalarFunctionSetOperationTest {
       assertEquals(scale, metadata.getScale(1), sql);
       for (String value : expected) {
         assertTrue(result.next(), sql);
-        assertEquals(new BigDecimal(value), result.getObject(1), sql);
+        assertEquals(value == null ? null : new BigDecimal(value), result.getObject(1), sql);
       }
       assertFalse(result.next(), sql);
     }
@@ -93,7 +108,10 @@ class ScalarFunctionSetOperationTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "ROUND(1.234, 2)", "ABS(CAST(1.5 AS DOUBLE))", "COALESCE(NULL, 1 / 4)"
+      "ROUND(1.234, 2)", "ABS(CAST(1.5 AS DOUBLE))", "COALESCE(NULL, 1 / 4)",
+      "ROUND(mpg, 1) FROM mtcars WHERE cyl = 99", "ABS(mpg) FROM mtcars WHERE cyl = 99",
+      "COALESCE(NULL, mpg / 4) FROM mtcars WHERE cyl = 99", "ROUND(CAST(NULL AS DECIMAL(5,2)), 1)",
+      "ABS(CAST(NULL AS DOUBLE))", "COALESCE(NULL, CAST(NULL AS DOUBLE) / 4)"
   })
   void rejectsNonnumericBranch(String expression) throws Exception {
     Path directory = Path.of(Objects.requireNonNull(getClass().getResource("/mtcars.parquet")).toURI()).getParent();

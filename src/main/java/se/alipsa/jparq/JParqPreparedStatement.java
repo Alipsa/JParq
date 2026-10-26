@@ -823,7 +823,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           Expression projection = ExpressionEvaluator.unwrapParenthesis(expression);
           boolean simpleDeclaration = projection instanceof CastExpression || projection instanceof SignedExpression
               || LiteralConverter.isLiteral(projection);
-          Schema projected = type == Types.OTHER ? setExpressionSchema(projection, values) : null;
+          Schema projected = type == Types.OTHER ? setExpressionSchema(projection, values, meta) : null;
           int projectedType = projected == null ? Types.NULL : JdbcTypeMapper.mapSchemaToJdbcType(projected);
           if (type == Types.OTHER || projection instanceof NullValue) {
             boolean unknown = type == Types.OTHER;
@@ -880,22 +880,27 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          projected expression, when available
    * @param values
    *          lazily supplied returned column values
+   * @param metadata
+   *          branch metadata providing source column declarations
    * @return inferred schema, or null for an untyped NULL
    */
-  private Schema setExpressionSchema(Expression expression, Supplier<List<Object>> values) {
+  private Schema setExpressionSchema(Expression expression, Supplier<List<Object>> values, ResultSetMetaData metadata) {
     Expression projection = ExpressionEvaluator.unwrapParenthesis(expression);
     if (projection instanceof NullValue) {
       return null;
     }
-    NumericType resolved = NumericExpressionTypes.resolve(projection, column -> null);
+    NumericType resolved = metadata instanceof JParqResultSetMetaData jparq
+        ? jparq.numericExpressionType(projection)
+        : NumericExpressionTypes.resolve(projection, column -> null);
     if (resolved != null) {
       Schema declared = resolved.schema();
       if (declared != null) {
         return declared;
       }
+      // Unknown bounds do not erase a known decimal family. Empty or all-NULL
+      // values use the decimal inference default of precision one, scale zero.
+      return decimalSchemaForValues(values.get());
     }
-    // Unbounded decimals still have a numeric type; infer their bounds from
-    // values rather than returning the sentinel for an untyped NULL.
     if (LiteralConverter.isLiteral(projection)) {
       Object literal = LiteralConverter.toLiteral(projection);
       return schemaForColumnType(classifyValueType(literal), List.of(literal));
