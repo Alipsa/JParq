@@ -11,6 +11,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -51,6 +52,7 @@ import se.alipsa.jparq.engine.function.SystemFunctions;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.engine.window.WindowState;
+import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.model.ResultSetAdapter;
 
 /** An implementation of the java.sql.ResultSet interface. */
@@ -1243,6 +1245,9 @@ public class JParqResultSet extends ResultSetAdapter {
       case byte[] bytes -> {
         return new String(bytes, StandardCharsets.UTF_8);
       }
+      case Object[] objects -> {
+        return Arrays.deepToString(objects);
+      }
       case ByteBuffer buffer -> {
         ByteBuffer dup = buffer.duplicate();
         byte[] bytes = new byte[dup.remaining()];
@@ -1417,7 +1422,8 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public Object getObject(int columnIndex) throws SQLException {
-    return value(columnIndex);
+    Object value = value(columnIndex);
+    return value instanceof List<?> ? JParqUtil.normalizeArrayValue(value) : value;
   }
 
   @Override

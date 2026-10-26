@@ -436,10 +436,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     Expression expression = unwrap(expressionAtColumn(column));
     return switch (expression) {
       case AnalyticExpression analytic -> resolveAnalyticFunctionClassName(analytic);
-      case ArrayConstructor arrayConstructor -> List.class.getName();
+      case ArrayConstructor arrayConstructor -> Object[].class.getName();
       case net.sf.jsqlparser.expression.Function func when func.getName() != null
           && "ARRAY".equalsIgnoreCase(func.getName()) ->
-        List.class.getName();
+        Object[].class.getName();
       case null, default -> null;
     };
   }

@@ -185,7 +185,9 @@ class CorrelatedExecutionShapeTest {
           "SELECT b.id, ARRAY(SELECT s.id FROM small s WHERE s.g = b.g) " + "AS ids FROM big b ORDER BY b.id")) {
         for (int id = 0; id < 40; id++) {
           assertTrue(result.next());
-          assertEquals(id % 5 == 0 ? List.of() : List.of(id % 5), result.getObject(2));
+          assertArrayEquals(id % 5 == 0 ? new Object[0] : new Object[]{
+              id % 5
+          }, (Object[]) result.getObject(2));
         }
         assertFalse(result.next());
       }

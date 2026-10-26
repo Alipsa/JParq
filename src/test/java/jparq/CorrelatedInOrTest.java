@@ -181,12 +181,18 @@ class CorrelatedInOrTest {
             + "FROM big b WHERE b.id IN (0,4) ORDER BY b.id")) {
       assertTrue(result.next());
       assertEquals(0, result.getInt(1));
-      assertEquals(List.of(4), result.getObject(2));
-      assertEquals(List.of(), result.getObject(3));
+      assertArrayEquals(new Object[]{
+          4
+      }, (Object[]) result.getObject(2));
+      assertArrayEquals(new Object[0], (Object[]) result.getObject(3));
       assertTrue(result.next());
       assertEquals(4, result.getInt(1));
-      assertEquals(List.of(4), result.getObject(2));
-      assertEquals(List.of(4), result.getObject(3));
+      assertArrayEquals(new Object[]{
+          4
+      }, (Object[]) result.getObject(2));
+      assertArrayEquals(new Object[]{
+          4
+      }, (Object[]) result.getObject(3));
       assertFalse(result.next());
     }
   }
