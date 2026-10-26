@@ -45,10 +45,41 @@ public final class RelationalKeys {
    * @return the supplied list if unchanged, otherwise an unmodifiable key list
    */
   public static List<Object> row(List<Object> values, boolean normalizeWholeNumbers) {
+    return row(values, normalizeWholeNumbers, null);
+  }
+
+  /**
+   * Builds a content key using the scalar normalization policy for each column.
+   * Known scalar types can retain their original objects while unknown columns
+   * normalize whole-number representations. Nested content is always normalized.
+   *
+   * @param values
+   *          row values, including SQL NULLs
+   * @param normalizeColumns
+   *          normalization flags in column order, matching the row width
+   * @return the supplied list if unchanged, otherwise an unmodifiable key list
+   */
+  public static List<Object> row(List<Object> values, boolean[] normalizeColumns) {
+    return row(values, false, normalizeColumns);
+  }
+
+  /**
+   * Shares copy-on-change row construction across uniform and per-column
+   * policies.
+   *
+   * @param values
+   *          row values
+   * @param normalizeWholeNumbers
+   *          uniform scalar policy when column flags are absent
+   * @param normalizeColumns
+   *          per-column flags, or null for the uniform policy
+   * @return the original list or an unmodifiable normalized copy
+   */
+  private static List<Object> row(List<Object> values, boolean normalizeWholeNumbers, boolean[] normalizeColumns) {
     List<Object> keys = null;
     int index = 0;
     for (Object original : values) {
-      Object key = value(original, normalizeWholeNumbers);
+      Object key = value(original, normalizeColumns == null ? normalizeWholeNumbers : normalizeColumns[index]);
       if (keys == null && key != original) {
         keys = new ArrayList<>(values);
       }

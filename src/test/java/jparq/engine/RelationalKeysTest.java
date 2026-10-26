@@ -41,7 +41,30 @@ class RelationalKeysTest {
     assertSame(integer, RelationalKeys.value(integer, false));
     assertSame(whole, RelationalKeys.value(whole, false));
     assertEquals(200000L, RelationalKeys.value(integer, true));
-    assertSame(values, RelationalKeys.row(values, false));
+  }
+
+  /**
+   * Column flags normalize unknown integers while preserving known scalar
+   * objects.
+   */
+  @Test
+  void normalizesOnlySelectedScalarColumns() {
+    Integer known = 200000;
+    Integer unknown = 200001;
+    List<Object> values = List.of(known, unknown);
+    List<Object> key = RelationalKeys.row(values, new boolean[]{
+        false, true
+    });
+    assertSame(known, key.get(0));
+    assertEquals(200001L, key.get(1));
+    assertSame(unknown, values.get(1));
+    assertSame(values, RelationalKeys.row(values, new boolean[]{
+        false, false
+    }));
+    List<Object> text = List.of(known, "text");
+    assertSame(text, RelationalKeys.row(text, new boolean[]{
+        false, true
+    }));
   }
 
   /**

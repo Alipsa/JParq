@@ -48,6 +48,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.NullValue;
@@ -865,7 +866,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     sqlTypes.replaceAll(type -> type == Types.NULL ? Types.OTHER : type);
     coerceSetRows(componentRows, componentTypes, sqlTypes, sourceSchemas);
-    List<List<Object>> combined = evaluateSetOperation(components, componentRows);
+    List<List<Object>> combined = evaluateSetOperation(components, componentRows, setKeyFunction(sqlTypes));
     List<List<Object>> ordered = applySetOrdering(combined, labels, sqlTypes, parsedSetQuery.orderBy());
     List<List<Object>> sliced = applySetLimitOffset(ordered, parsedSetQuery.limit(), parsedSetQuery.offset());
     return JParqResultSet.materializedResult("set_operation_result", labels, sqlTypes, sliced, sourceSchemas);
@@ -997,6 +998,26 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
+   * Resolves key normalization once for the common set-operation output types.
+   * Known numeric columns have already been coerced; OTHER columns may still
+   * contain mixed Integer and Long values that must compare as one number.
+   *
+   * @param sqlTypes
+   *          final output JDBC types
+   * @return a key function retaining compatible scalar rows without copying
+   */
+  private UnaryOperator<List<Object>> setKeyFunction(List<Integer> sqlTypes) {
+    if (!sqlTypes.contains(Types.OTHER)) {
+      return row -> RelationalKeys.row(row, false);
+    }
+    boolean[] normalizeColumns = new boolean[sqlTypes.size()];
+    for (int column = 0; column < sqlTypes.size(); column++) {
+      normalizeColumns[column] = sqlTypes.get(column) == Types.OTHER;
+    }
+    return row -> RelationalKeys.row(row, normalizeColumns);
+  }
+
+  /**
    * Evaluate the list of set operation components honoring SQL operator
    * precedence (INTERSECT before UNION/UNION ALL/EXCEPT/EXCEPT ALL).
    *
@@ -1004,12 +1025,14 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          parsed set operation components in encounter order
    * @param rowsPerComponent
    *          materialized rows corresponding to each component
+   * @param keyFunction
+   *          key normalization policy for the final output column types
    * @return combined rows representing the full set operation result
    * @throws SQLException
    *           if an unsupported operator is encountered or if evaluation fails
    */
   private List<List<Object>> evaluateSetOperation(List<SqlParser.SetComponent> components,
-      List<List<List<Object>>> rowsPerComponent) throws SQLException {
+      List<List<List<Object>>> rowsPerComponent, UnaryOperator<List<Object>> keyFunction) throws SQLException {
     if (components.isEmpty()) {
       return List.of();
     }
@@ -1025,7 +1048,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         SqlParser.SetOperator top = operatorStack.removeLast();
         List<List<Object>> right = valueStack.removeLast();
         List<List<Object>> left = valueStack.removeLast();
-        valueStack.add(applySetOperator(left, right, top));
+        valueStack.add(applySetOperator(left, right, top, keyFunction));
       }
       operatorStack.add(operator);
       valueStack.add(new ArrayList<>(rowsPerComponent.get(i)));
@@ -1034,7 +1057,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       SqlParser.SetOperator top = operatorStack.removeLast();
       List<List<Object>> right = valueStack.removeLast();
       List<List<Object>> left = valueStack.removeLast();
-      valueStack.add(applySetOperator(left, right, top));
+      valueStack.add(applySetOperator(left, right, top, keyFunction));
     }
     return valueStack.isEmpty() ? List.<List<Object>>of() : valueStack.getFirst();
   }
@@ -1066,24 +1089,26 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          right operand rows
    * @param operator
    *          operator describing how to combine the operands
+   * @param keyFunction
+   *          key normalization policy for the final output column types
    * @return combined rows representing the operator result
    * @throws SQLException
    *           if the operator is not supported
    */
   private List<List<Object>> applySetOperator(List<List<Object>> left, List<List<Object>> right,
-      SqlParser.SetOperator operator) throws SQLException {
+      SqlParser.SetOperator operator, UnaryOperator<List<Object>> keyFunction) throws SQLException {
     return switch (operator) {
-      case UNION -> mergeDistinct(left, right);
+      case UNION -> mergeDistinct(left, right, keyFunction);
       case UNION_ALL -> {
         List<List<Object>> combined = new ArrayList<>(left.size() + right.size());
         combined.addAll(left);
         combined.addAll(right);
         yield combined;
       }
-      case INTERSECT -> intersectDistinct(left, right);
-      case INTERSECT_ALL -> intersectAll(left, right);
-      case EXCEPT -> exceptDistinct(left, right);
-      case EXCEPT_ALL -> exceptAll(left, right);
+      case INTERSECT -> intersectDistinct(left, right, keyFunction);
+      case INTERSECT_ALL -> intersectAll(left, right, keyFunction);
+      case EXCEPT -> exceptDistinct(left, right, keyFunction);
+      case EXCEPT_ALL -> exceptAll(left, right, keyFunction);
       default -> throw new SQLException("Unsupported set operator: " + operator);
     };
   }
@@ -1217,28 +1242,32 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Merge set operation components using DISTINCT semantics. Scalar numeric
-   * values already share the common set type, so keys only normalize nested
-   * content. All duplicates present in the accumulated rows or the incoming rows
-   * are removed while preserving the original encounter order.
+   * Merge set operation components using DISTINCT semantics. Known scalar numeric
+   * columns share the common set type; OTHER columns normalize mixed whole-number
+   * representations as well as nested content. All duplicates present in the
+   * accumulated rows or the incoming rows are removed while preserving the
+   * original encounter order.
    *
    * @param accumulated
    *          rows previously materialized
    * @param incoming
    *          rows produced by the current component
+   * @param keyFunction
+   *          key normalization policy for the final output column types
    * @return a combined list containing only distinct rows
    */
-  private List<List<Object>> mergeDistinct(List<List<Object>> accumulated, List<List<Object>> incoming) {
+  private List<List<Object>> mergeDistinct(List<List<Object>> accumulated, List<List<Object>> incoming,
+      UnaryOperator<List<Object>> keyFunction) {
     LinkedHashSet<List<Object>> unique = new LinkedHashSet<>(accumulated.size() + incoming.size());
     List<List<Object>> result = new ArrayList<>(accumulated.size() + incoming.size());
     for (List<Object> row : accumulated) {
-      List<Object> key = RelationalKeys.row(row, false);
+      List<Object> key = keyFunction.apply(row);
       if (unique.add(key)) {
         result.add(row);
       }
     }
     for (List<Object> row : incoming) {
-      List<Object> key = RelationalKeys.row(row, false);
+      List<Object> key = keyFunction.apply(row);
       if (unique.add(key)) {
         result.add(row);
       }
@@ -1255,18 +1284,20 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          rows previously materialized
    * @param incoming
    *          rows produced by the current set operation component
+   * @param keyFunction
+   *          key normalization policy for the final output column types
    * @return a list containing rows that appear in both inputs without duplicates
    */
-  private List<List<Object>> intersectDistinct(List<List<Object>> accumulated, List<List<Object>> incoming) {
+  private List<List<Object>> intersectDistinct(List<List<Object>> accumulated, List<List<Object>> incoming,
+      UnaryOperator<List<Object>> keyFunction) {
     if (accumulated.isEmpty() || incoming.isEmpty()) {
       return new ArrayList<>();
     }
-    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(
-        incoming.stream().map(row -> RelationalKeys.row(row, false)).toList());
+    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(incoming.stream().map(keyFunction).toList());
     LinkedHashSet<List<Object>> result = new LinkedHashSet<>();
     List<List<Object>> ordered = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      List<Object> key = RelationalKeys.row(row, false);
+      List<Object> key = keyFunction.apply(row);
       if (incomingSet.contains(key) && result.add(key)) {
         ordered.add(row);
       }
@@ -1283,21 +1314,24 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          rows previously materialized
    * @param incoming
    *          rows produced by the current set operation component
+   * @param keyFunction
+   *          key normalization policy for the final output column types
    * @return a list containing rows that appear in both inputs according to
    *         INTERSECT ALL semantics
    */
-  private List<List<Object>> intersectAll(List<List<Object>> accumulated, List<List<Object>> incoming) {
+  private List<List<Object>> intersectAll(List<List<Object>> accumulated, List<List<Object>> incoming,
+      UnaryOperator<List<Object>> keyFunction) {
     if (accumulated.isEmpty() || incoming.isEmpty()) {
       return new ArrayList<>();
     }
     Map<List<Object>, Integer> remaining = new HashMap<>();
     for (List<Object> row : incoming) {
-      List<Object> key = RelationalKeys.row(row, false);
+      List<Object> key = keyFunction.apply(row);
       remaining.merge(key, 1, Integer::sum);
     }
     List<List<Object>> result = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      List<Object> key = RelationalKeys.row(row, false);
+      List<Object> key = keyFunction.apply(row);
       Integer count = remaining.get(key);
       if (count != null && count > 0) {
         result.add(row);
@@ -1320,21 +1354,23 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          rows previously materialized
    * @param incoming
    *          rows produced by the current set operation component
+   * @param keyFunction
+   *          key normalization policy for the final output column types
    * @return a list containing rows that appear only in the left operand
    */
-  private List<List<Object>> exceptDistinct(List<List<Object>> accumulated, List<List<Object>> incoming) {
+  private List<List<Object>> exceptDistinct(List<List<Object>> accumulated, List<List<Object>> incoming,
+      UnaryOperator<List<Object>> keyFunction) {
     if (accumulated.isEmpty()) {
       return new ArrayList<>();
     }
     if (incoming.isEmpty()) {
-      return mergeDistinct(accumulated, List.of());
+      return mergeDistinct(accumulated, List.of(), keyFunction);
     }
-    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(
-        incoming.stream().map(row -> RelationalKeys.row(row, false)).toList());
+    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(incoming.stream().map(keyFunction).toList());
     LinkedHashSet<List<Object>> emitted = new LinkedHashSet<>();
     List<List<Object>> ordered = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      List<Object> key = RelationalKeys.row(row, false);
+      List<Object> key = keyFunction.apply(row);
       if (!incomingSet.contains(key) && emitted.add(key)) {
         ordered.add(row);
       }
@@ -1351,10 +1387,13 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          rows previously materialized
    * @param incoming
    *          rows produced by the current set operation component
+   * @param keyFunction
+   *          key normalization policy for the final output column types
    * @return a list containing rows that remain after applying EXCEPT ALL
    *         semantics
    */
-  private List<List<Object>> exceptAll(List<List<Object>> accumulated, List<List<Object>> incoming) {
+  private List<List<Object>> exceptAll(List<List<Object>> accumulated, List<List<Object>> incoming,
+      UnaryOperator<List<Object>> keyFunction) {
     if (accumulated.isEmpty()) {
       return new ArrayList<>();
     }
@@ -1363,12 +1402,12 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     Map<List<Object>, Integer> remaining = new HashMap<>();
     for (List<Object> row : incoming) {
-      List<Object> key = RelationalKeys.row(row, false);
+      List<Object> key = keyFunction.apply(row);
       remaining.merge(key, 1, Integer::sum);
     }
     List<List<Object>> result = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      List<Object> key = RelationalKeys.row(row, false);
+      List<Object> key = keyFunction.apply(row);
       Integer count = remaining.get(key);
       if (count == null) {
         result.add(row);
