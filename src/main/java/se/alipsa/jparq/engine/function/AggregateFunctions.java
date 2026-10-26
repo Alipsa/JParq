@@ -1421,7 +1421,7 @@ public final class AggregateFunctions {
       }
     }
 
-    Map<String, GroupedScalarSubquery> groupedSubqueries = new HashMap<>();
+    final Map<String, GroupedScalarSubquery> groupedSubqueries = new HashMap<>();
     Map<Integer, Expression> projectionExpressions = new HashMap<>();
     for (int index = 0; index < plan.resultColumns().size(); index++) {
       ResultColumn column = plan.resultColumns().get(index);

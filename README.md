@@ -637,7 +637,11 @@ The following SQL statements are supported:
   strings can be `Utf8`, dates epoch-day integers, decimals `ByteBuffer`, and timestamps stored longs.
   The record's schema describes those field types; nested struct fields are not recursively decoded.
   DISTINCT, GROUP BY, set-operation keys, and window PARTITION BY compare struct fields and array elements by content,
-  independently of Avro record names. JSON_OBJECT and JSON_ARRAY embed struct values as JSON objects.
+  independently of Avro record names. JSON_OBJECT and JSON_ARRAY embed struct values as JSON objects and
+  SQL ARRAY values (stored columns or computed constructors) as JSON arrays, recursively. NULL elements become
+  JSON `null`, and empty arrays become `[]`. Struct fields use their declared Avro logical types, including
+  numeric decimals and date/timestamp strings. Binary fields use base64 strings; non-finite floating-point
+  values retain their string representations, such as `"NaN"`.
   Array columns are read correctly from both the legacy 2-level and the standard 3-level Parquet LIST layout,
   including with projection and predicate pushdown enabled.
   Quantified comparisons in `HAVING` are not currently supported; see [#214](https://github.com/Alipsa/JParq/issues/214).

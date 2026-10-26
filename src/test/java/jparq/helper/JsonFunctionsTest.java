@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -158,6 +159,59 @@ class JsonFunctionsTest {
     String json = "{\"s\":\"it's\",\"child\":{\"n\":7},\"missing\":null}";
     assertEquals("{\"k\":" + json + "}", JsonFunctions.jsonObject(List.of("k", record)));
     assertEquals("[" + json + "]", JsonFunctions.jsonArray(List.of(record)));
+  }
+
+  /** Recursively embeds stored arrays and constructor lists, retaining NULLs. */
+  @Test
+  void embedsArraysRecursively() {
+    Object[] values = {
+        1, null, List.of(2, 3), new Object[]{
+            true, "x"
+        }, new Object[0]
+    };
+    String expected = "[1,null,[2,3],[true,\"x\"],[]]";
+    assertEquals("{\"k\":" + expected + "}", JsonFunctions.jsonObject(List.of("k", values)));
+    assertEquals("[" + expected + "]", JsonFunctions.jsonArray(List.of((Object) values)));
+    assertEquals("[[1,2]]", JsonFunctions.jsonArray(List.of(List.of(1, 2))));
+    assertEquals("[[]]", JsonFunctions.jsonArray(List.of(List.of())));
+  }
+
+  /** Encodes remaining binary bytes without moving the source buffer. */
+  @Test
+  void encodesBinaryValues() {
+    ByteBuffer buffer = ByteBuffer.wrap(new byte[]{
+        9, 1, 2, 8
+    });
+    buffer.position(1);
+    buffer.limit(3);
+    assertEquals("[\"AQI=\",\"AQI=\"]", JsonFunctions.jsonArray(List.of(new byte[]{
+        1, 2
+    }, buffer)));
+    assertEquals(1, buffer.position());
+    assertEquals(3, buffer.limit());
+  }
+
+  /** Converts Avro array and map fields with their declared logical types. */
+  @Test
+  void decodesLogicalContainers() {
+    var date = org.apache.avro.LogicalTypes.date()
+        .addToSchema(org.apache.avro.Schema.create(org.apache.avro.Schema.Type.INT));
+    var dates = org.apache.avro.Schema.createArray(date);
+    var schema = org.apache.avro.SchemaBuilder.record("containers").fields().name("dates").type(dates).noDefault()
+        .name("map").type(org.apache.avro.Schema.createMap(date)).noDefault().endRecord();
+    var record = new org.apache.avro.generic.GenericData.Record(schema);
+    var array = new org.apache.avro.generic.GenericData.Array<>(dates, List.of(19723));
+    record.put("dates", array);
+    record.put("map", Map.of("d", 19723));
+    assertEquals("[[\"2024-01-01\"]]", JsonFunctions.jsonArray(List.of(array)));
+    assertEquals("[{\"dates\":[\"2024-01-01\"],\"map\":{\"d\":\"2024-01-01\"}}]",
+        JsonFunctions.jsonArray(List.of(record)));
+    record.put("dates", new Object[]{
+        19723
+    });
+    assertEquals("{\"k\":{\"dates\":[\"2024-01-01\"],\"map\":{\"d\":\"2024-01-01\"}}}",
+        JsonFunctions.jsonObject(List.of("k", record)));
+    assertEquals("[{\"a\":[1,null]}]", JsonFunctions.jsonArray(List.of(Map.of("a", Arrays.asList(1, null)))));
   }
 
   @Test
