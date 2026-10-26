@@ -404,7 +404,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
       case AnalyticExpression analytic -> resolveAnalyticFunctionType(analytic);
       case ArrayConstructor arrayConstructor -> Types.ARRAY;
       case net.sf.jsqlparser.statement.select.Select select ->
-        isArrayConstructor(scalarSubqueryProjection(select)) ? Types.ARRAY : Types.OTHER;
+        isArrayConstructor(unwrap(scalarSubqueryProjection(select))) ? Types.ARRAY : Types.OTHER;
       case net.sf.jsqlparser.expression.Function func when func.getName() != null
           && "ARRAY".equalsIgnoreCase(func.getName()) ->
         Types.ARRAY;
@@ -504,7 +504,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
       case AnalyticExpression analytic -> resolveAnalyticFunctionClassName(analytic);
       case ArrayConstructor arrayConstructor -> Object[].class.getName();
       case net.sf.jsqlparser.statement.select.Select select ->
-        isArrayConstructor(scalarSubqueryProjection(select)) ? Object[].class.getName() : null;
+        isArrayConstructor(unwrap(scalarSubqueryProjection(select))) ? Object[].class.getName() : null;
       case net.sf.jsqlparser.expression.Function func when func.getName() != null
           && "ARRAY".equalsIgnoreCase(func.getName()) ->
         Object[].class.getName();

@@ -239,6 +239,18 @@ class ArrayResultRepresentationTest {
       }, (Object[]) result.getObject(1));
       assertFalse(result.next());
     }
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT (ARRAY[1,2])) FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.ARRAY, metaData.getColumnType(1));
+      assertEquals(Object[].class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertArrayEquals(new Object[]{
+          1, 2
+      }, (Object[]) result.getObject(1));
+      assertFalse(result.next());
+    }
   }
 
   @Test
