@@ -30,6 +30,32 @@ class RelationalKeysTest {
   }
 
   /**
+   * Typed integer rows retain both the row list and the original boxed values.
+   */
+  @Test
+  void reusesTypedIntegerRowsWithoutReboxing() {
+    Integer integer = 200000;
+    Long whole = 200000L;
+    List<Object> values = Arrays.asList(integer, whole, null, "text");
+    assertSame(values, RelationalKeys.row(values, false));
+    assertSame(integer, RelationalKeys.value(integer, false));
+    assertSame(whole, RelationalKeys.value(whole, false));
+    assertEquals(200000L, RelationalKeys.value(integer, true));
+    assertSame(values, RelationalKeys.row(values, false));
+  }
+
+  /**
+   * Typed top-level scalars retain recursive numeric equality for nested content.
+   */
+  @Test
+  void typedRowsStillNormalizeNestedContent() {
+    List<Object> first = List.of(List.of(200000));
+    List<Object> second = List.of(List.of(200000L));
+    assertEquals(RelationalKeys.row(first, false), RelationalKeys.row(second, false));
+    assertEquals(RelationalKeys.row(first, false).hashCode(), RelationalKeys.row(second, false).hashCode());
+  }
+
+  /**
    * Whole-number keys share equality and hashes without mutating projected
    * values.
    */

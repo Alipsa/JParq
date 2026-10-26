@@ -30,10 +30,25 @@ public final class RelationalKeys {
    * @return the supplied list if unchanged, otherwise an unmodifiable key list
    */
   public static List<Object> row(List<Object> values) {
+    return row(values, true);
+  }
+
+  /**
+   * Builds a content key, optionally normalizing scalar whole-number types.
+   * Homogeneously typed scalar columns can retain their original objects and
+   * list. Nested content is always normalized because its leaves may mix types.
+   *
+   * @param values
+   *          row values, including SQL NULLs
+   * @param normalizeWholeNumbers
+   *          whether scalar whole-number types may differ
+   * @return the supplied list if unchanged, otherwise an unmodifiable key list
+   */
+  public static List<Object> row(List<Object> values, boolean normalizeWholeNumbers) {
     List<Object> keys = null;
     int index = 0;
     for (Object original : values) {
-      Object key = value(original);
+      Object key = value(original, normalizeWholeNumbers);
       if (keys == null && key != original) {
         keys = new ArrayList<>(values);
       }
@@ -69,8 +84,25 @@ public final class RelationalKeys {
    * @return content key, or the original scalar
    */
   public static Object value(Object value) {
-    if (value instanceof Byte || value instanceof Short || value instanceof Integer) {
-      return ((Number) value).longValue();
+    return value(value, true);
+  }
+
+  /**
+   * Builds a value key without boxing already compatible scalar integers again.
+   * Structured values still snapshot and normalize their nested contents.
+   *
+   * @param value
+   *          the scalar or structured value
+   * @param normalizeWholeNumbers
+   *          whether scalar whole-number types may differ
+   * @return the original scalar when compatible, or a normalized content key
+   */
+  public static Object value(Object value, boolean normalizeWholeNumbers) {
+    if (value instanceof Number number) {
+      if (normalizeWholeNumbers && (value instanceof Byte || value instanceof Short || value instanceof Integer)) {
+        return number.longValue();
+      }
+      return value;
     }
     if (value instanceof GenericRecord record) {
       Map<String, Object> fields = new LinkedHashMap<>();

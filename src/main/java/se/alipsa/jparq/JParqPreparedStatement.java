@@ -1217,9 +1217,10 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Merge set operation components using DISTINCT semantics. All duplicates
-   * present in the accumulated rows or the incoming rows are removed while
-   * preserving the original encounter order.
+   * Merge set operation components using DISTINCT semantics. Scalar numeric
+   * values already share the common set type, so keys only normalize nested
+   * content. All duplicates present in the accumulated rows or the incoming rows
+   * are removed while preserving the original encounter order.
    *
    * @param accumulated
    *          rows previously materialized
@@ -1231,13 +1232,13 @@ public class JParqPreparedStatement implements PreparedStatement {
     LinkedHashSet<List<Object>> unique = new LinkedHashSet<>(accumulated.size() + incoming.size());
     List<List<Object>> result = new ArrayList<>(accumulated.size() + incoming.size());
     for (List<Object> row : accumulated) {
-      List<Object> key = RelationalKeys.row(row);
+      List<Object> key = RelationalKeys.row(row, false);
       if (unique.add(key)) {
         result.add(row);
       }
     }
     for (List<Object> row : incoming) {
-      List<Object> key = RelationalKeys.row(row);
+      List<Object> key = RelationalKeys.row(row, false);
       if (unique.add(key)) {
         result.add(row);
       }
@@ -1260,11 +1261,12 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (accumulated.isEmpty() || incoming.isEmpty()) {
       return new ArrayList<>();
     }
-    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(incoming.stream().map(RelationalKeys::row).toList());
+    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(
+        incoming.stream().map(row -> RelationalKeys.row(row, false)).toList());
     LinkedHashSet<List<Object>> result = new LinkedHashSet<>();
     List<List<Object>> ordered = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      List<Object> key = RelationalKeys.row(row);
+      List<Object> key = RelationalKeys.row(row, false);
       if (incomingSet.contains(key) && result.add(key)) {
         ordered.add(row);
       }
@@ -1290,12 +1292,12 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     Map<List<Object>, Integer> remaining = new HashMap<>();
     for (List<Object> row : incoming) {
-      List<Object> key = RelationalKeys.row(row);
+      List<Object> key = RelationalKeys.row(row, false);
       remaining.merge(key, 1, Integer::sum);
     }
     List<List<Object>> result = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      List<Object> key = RelationalKeys.row(row);
+      List<Object> key = RelationalKeys.row(row, false);
       Integer count = remaining.get(key);
       if (count != null && count > 0) {
         result.add(row);
@@ -1327,11 +1329,12 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (incoming.isEmpty()) {
       return mergeDistinct(accumulated, List.of());
     }
-    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(incoming.stream().map(RelationalKeys::row).toList());
+    LinkedHashSet<List<Object>> incomingSet = new LinkedHashSet<>(
+        incoming.stream().map(row -> RelationalKeys.row(row, false)).toList());
     LinkedHashSet<List<Object>> emitted = new LinkedHashSet<>();
     List<List<Object>> ordered = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      List<Object> key = RelationalKeys.row(row);
+      List<Object> key = RelationalKeys.row(row, false);
       if (!incomingSet.contains(key) && emitted.add(key)) {
         ordered.add(row);
       }
@@ -1360,12 +1363,12 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     Map<List<Object>, Integer> remaining = new HashMap<>();
     for (List<Object> row : incoming) {
-      List<Object> key = RelationalKeys.row(row);
+      List<Object> key = RelationalKeys.row(row, false);
       remaining.merge(key, 1, Integer::sum);
     }
     List<List<Object>> result = new ArrayList<>();
     for (List<Object> row : accumulated) {
-      List<Object> key = RelationalKeys.row(row);
+      List<Object> key = RelationalKeys.row(row, false);
       Integer count = remaining.get(key);
       if (count == null) {
         result.add(row);
