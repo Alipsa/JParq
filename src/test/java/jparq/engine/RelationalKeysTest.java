@@ -18,15 +18,39 @@ import se.alipsa.jparq.engine.RelationalKeys;
  */
 class RelationalKeysTest {
 
-  /** Scalar rows reuse their input list, including NULL and decimal values. */
+  /** Compatible scalar rows reuse their input list, including NULL values. */
   @Test
   void reusesScalarRows() {
-    List<Object> values = Arrays.asList("text", 1L, 2L, new BigDecimal("1.50"), true, null);
+    List<Object> values = Arrays.asList("text", 1L, 2L, new BigDecimal("1.5"), true, null);
     assertSame(values, RelationalKeys.row(values));
     List<Object> empty = List.of();
     assertSame(empty, RelationalKeys.row(empty));
     List<Object> immutable = List.of("text", 1L);
     assertSame(immutable, RelationalKeys.row(immutable));
+  }
+
+  /** Decimal equality and hashes ignore scale without changing output values. */
+  @Test
+  void decimalKeysIgnoreScale() {
+    for (String first : List.of("1", "0", "1000", "-1.5")) {
+      BigDecimal value = new BigDecimal(first);
+      BigDecimal scaled = value.setScale(4);
+      List<Object> original = List.of(scaled);
+      for (boolean normalizeIntegers : List.of(false, true)) {
+        List<Object> key = RelationalKeys.row(original, normalizeIntegers);
+        List<Object> other = RelationalKeys.row(List.of(value), normalizeIntegers);
+        assertEquals(other, key);
+        assertEquals(other.hashCode(), key.hashCode());
+        assertEquals(RelationalKeys.row(List.of(value), new boolean[]{
+            false
+        }), RelationalKeys.row(original, new boolean[]{
+            false
+        }));
+      }
+      assertSame(scaled, original.getFirst());
+      assertEquals(4, scaled.scale());
+      assertEquals(RelationalKeys.value(List.of(value)), RelationalKeys.value(List.of(scaled)));
+    }
   }
 
   /**

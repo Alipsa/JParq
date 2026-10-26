@@ -1,5 +1,6 @@
 package se.alipsa.jparq.engine;
 
+import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -108,7 +109,7 @@ public final class RelationalKeys {
 
   /**
    * Snapshots structured values by content, ignoring Avro record names, and
-   * normalizes whole-number representations so equal integers share one key.
+   * normalizes whole-number representations and decimal scales for equality.
    *
    * @param value
    *          a scalar, record, array, collection, or map
@@ -120,7 +121,8 @@ public final class RelationalKeys {
 
   /**
    * Builds a value key without boxing already compatible scalar integers again.
-   * Structured values still snapshot and normalize their nested contents.
+   * Decimal keys always ignore scale. Structured values still snapshot and
+   * normalize their nested contents.
    *
    * @param value
    *          the scalar or structured value
@@ -129,6 +131,10 @@ public final class RelationalKeys {
    * @return the original scalar when compatible, or a normalized content key
    */
   public static Object value(Object value, boolean normalizeWholeNumbers) {
+    if (value instanceof BigDecimal decimal) {
+      BigDecimal normalized = decimal.stripTrailingZeros();
+      return decimal.equals(normalized) ? decimal : normalized;
+    }
     if (value instanceof Number number) {
       if (normalizeWholeNumbers && (value instanceof Byte || value instanceof Short || value instanceof Integer)) {
         return number.longValue();

@@ -39,6 +39,7 @@ import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.MaterializedNames;
+import se.alipsa.jparq.engine.NumericExpressionTypes;
 import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.QueryProcessor;
@@ -618,6 +619,32 @@ public class JParqResultSet extends ResultSetAdapter {
     }
   }
 
+  /**
+   * Converts grouped projections using their original declarations, before
+   * aggregate operands were replaced with untyped evaluation slots.
+   *
+   * @param projected
+   *          metadata derived from original expressions and source schema
+   * @throws SQLException
+   *           if a value cannot be represented by its declared type
+   */
+  private void coerceAggregateNumericValues(JParqResultSetMetaData projected) throws SQLException {
+    List<NumericType> numericTypes = new ArrayList<>();
+    for (int column = 1; column <= columnOrder.size(); column++) {
+      numericTypes.add(projected.numericType(column));
+    }
+    for (int index = 0; index < aggregateRows.size(); index++) {
+      List<Object> row = new ArrayList<>(aggregateRows.get(index));
+      for (int column = 0; column < row.size(); column++) {
+        NumericType numeric = numericTypes.get(column);
+        if (numeric != null) {
+          row.set(column, NumericExpressionTypes.convert(numeric, row.get(column)));
+        }
+      }
+      aggregateRows.set(index, row);
+    }
+  }
+
   private Object value(int idx) throws SQLException {
     if (aggregateQuery) {
       if (!aggregateOnRow || aggregateRowIndex < 0) {
@@ -1183,10 +1210,17 @@ public class JParqResultSet extends ResultSetAdapter {
    *
    * @param schema
    *          the source schema, including for empty results
+   * @throws SQLException
+   *           if a grouped value cannot be represented by its declared type
    */
-  void setMetadataSchema(Schema schema) {
+  void setMetadataSchema(Schema schema) throws SQLException {
     if (metadataSchema == null) {
       metadataSchema = schema;
+    }
+    if (aggregateQuery) {
+      coerceAggregateNumericValues(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
+          canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings));
+      aggregateMetadata = null;
     }
     if (!aggregateQuery && columnOrder.isEmpty() && selectExpressions.isEmpty() && schema != null) {
       for (Schema.Field field : schema.getFields()) {

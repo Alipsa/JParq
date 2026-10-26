@@ -1,8 +1,9 @@
 package se.alipsa.jparq.engine;
 
 import java.math.BigDecimal;
+import java.sql.SQLException;
 import java.sql.Types;
-import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.function.Function;
 import net.sf.jsqlparser.expression.BinaryExpression;
@@ -45,7 +46,7 @@ public final class NumericExpressionTypes {
       return columns.apply(column);
     }
     if (expression instanceof CaseExpression choice) {
-      return resolveCase(choice, columns);
+      return commonBranches(ExpressionBranches.caseResults(choice), columns);
     }
     if (expression instanceof LongValue literal) {
       var integer = literal.getBigIntegerValue();
@@ -92,6 +93,13 @@ public final class NumericExpressionTypes {
     }
     if (expression instanceof net.sf.jsqlparser.expression.Function function && function.getName() != null) {
       String name = function.getName().toUpperCase(Locale.ROOT);
+      if ("COALESCE".equals(name) && function.getParameters() != null) {
+        return commonBranches(function.getParameters(), columns);
+      }
+      if ("ROUND".equals(name)) {
+        // The requested scale may depend on a row; retain value-specific bounds.
+        return new NumericType(Types.DECIMAL, 0, 0);
+      }
       if ("COUNT".equals(name)) {
         return NumericType.of(Types.BIGINT, 0, 0);
       }
@@ -109,6 +117,9 @@ public final class NumericExpressionTypes {
             };
             case "AVG" -> NumericType.of(Types.DOUBLE, 0, 0);
             case "MIN", "MAX" -> argument;
+            case "ABS" -> argument.jdbcType() == Types.REAL || argument.jdbcType() == Types.DOUBLE
+                ? new NumericType(Types.DECIMAL, 0, 0)
+                : new NumericType(Types.DECIMAL, argument.precision(), argument.scale());
             default -> null;
           };
         }
@@ -133,20 +144,14 @@ public final class NumericExpressionTypes {
    * Combines numeric result branches without evaluating conditions or values.
    * Untyped NULL branches do not constrain the result type.
    *
-   * @param choice
-   *          simple or searched CASE expression
+   * @param branches
+   *          CASE or COALESCE result branches
    * @param columns
    *          declared numeric source column types
    * @return common numeric type, or null if any non-NULL branch is unresolved
    */
-  private static NumericType resolveCase(CaseExpression choice, Function<Column, NumericType> columns) {
-    var branches = new ArrayList<Expression>();
-    if (choice.getWhenClauses() != null) {
-      choice.getWhenClauses().forEach(clause -> branches.add(clause.getThenExpression()));
-    }
-    if (choice.getElseExpression() != null) {
-      branches.add(choice.getElseExpression());
-    }
+  private static NumericType commonBranches(List<? extends Expression> branches,
+      Function<Column, NumericType> columns) {
     NumericType common = null;
     boolean unknownDecimal = false;
     for (Expression branch : branches) {
@@ -163,6 +168,27 @@ public final class NumericExpressionTypes {
     return common != null && common.jdbcType() == Types.DECIMAL && unknownDecimal
         ? new NumericType(Types.DECIMAL, 0, 0)
         : common;
+  }
+
+  /**
+   * Converts a numeric result while preserving scales of unbounded decimals.
+   *
+   * @param type
+   *          the common result type
+   * @param value
+   *          selected or grouped result, possibly null
+   * @return value converted to the common Java representation
+   * @throws SQLException
+   *           if conversion loses numeric data
+   */
+  public static Object convert(NumericType type, Object value) throws SQLException {
+    if (value == null) {
+      return null;
+    }
+    if (type.jdbcType() == Types.DECIMAL && type.precision() == 0) {
+      return value instanceof BigDecimal ? value : new BigDecimal(value.toString());
+    }
+    return type.convert(value);
   }
 
   /**

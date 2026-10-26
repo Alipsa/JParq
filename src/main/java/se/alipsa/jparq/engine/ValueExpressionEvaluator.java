@@ -2,11 +2,9 @@ package se.alipsa.jparq.engine;
 
 import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 
-import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
-import java.sql.Types;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
@@ -247,12 +245,8 @@ public final class ValueExpressionEvaluator {
       if (type == null || value == null) {
         return value;
       }
-      // Division and unbounded decimal casts retain value-specific scales.
-      if (type.jdbcType() == Types.DECIMAL && type.precision() == 0) {
-        return value instanceof BigDecimal ? value : new BigDecimal(value.toString());
-      }
       try {
-        return type.convert(value);
+        return NumericExpressionTypes.convert(type, value);
       } catch (SQLException e) {
         throw new IllegalArgumentException("Cannot convert CASE result to its common numeric type", e);
       }
