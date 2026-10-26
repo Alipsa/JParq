@@ -21,12 +21,76 @@ class RelationalKeysTest {
   /** Scalar rows reuse their input list, including NULL and decimal values. */
   @Test
   void reusesScalarRows() {
-    List<Object> values = Arrays.asList("text", 1, 2L, new BigDecimal("1.50"), true, null);
+    List<Object> values = Arrays.asList("text", 1L, 2L, new BigDecimal("1.50"), true, null);
     assertSame(values, RelationalKeys.row(values));
     List<Object> empty = List.of();
     assertSame(empty, RelationalKeys.row(empty));
-    List<Object> immutable = List.of("text", 1);
+    List<Object> immutable = List.of("text", 1L);
     assertSame(immutable, RelationalKeys.row(immutable));
+  }
+
+  /**
+   * Typed integer rows retain both the row list and the original boxed values.
+   */
+  @Test
+  void reusesTypedIntegerRowsWithoutReboxing() {
+    Integer integer = 200000;
+    Long whole = 200000L;
+    List<Object> values = Arrays.asList(integer, whole, null, "text");
+    assertSame(values, RelationalKeys.row(values, false));
+    assertSame(integer, RelationalKeys.value(integer, false));
+    assertSame(whole, RelationalKeys.value(whole, false));
+    assertEquals(200000L, RelationalKeys.value(integer, true));
+  }
+
+  /**
+   * Column flags normalize unknown integers while preserving known scalar
+   * objects.
+   */
+  @Test
+  void normalizesOnlySelectedScalarColumns() {
+    Integer known = 200000;
+    Integer unknown = 200001;
+    List<Object> values = List.of(known, unknown);
+    List<Object> key = RelationalKeys.row(values, new boolean[]{
+        false, true
+    });
+    assertSame(known, key.get(0));
+    assertEquals(200001L, key.get(1));
+    assertSame(unknown, values.get(1));
+    assertSame(values, RelationalKeys.row(values, new boolean[]{
+        false, false
+    }));
+    List<Object> text = List.of(known, "text");
+    assertSame(text, RelationalKeys.row(text, new boolean[]{
+        false, true
+    }));
+  }
+
+  /**
+   * Typed top-level scalars retain recursive numeric equality for nested content.
+   */
+  @Test
+  void typedRowsStillNormalizeNestedContent() {
+    List<Object> first = List.of(List.of(200000));
+    List<Object> second = List.of(List.of(200000L));
+    assertEquals(RelationalKeys.row(first, false), RelationalKeys.row(second, false));
+    assertEquals(RelationalKeys.row(first, false).hashCode(), RelationalKeys.row(second, false).hashCode());
+  }
+
+  /**
+   * Whole-number keys share equality and hashes without mutating projected
+   * values.
+   */
+  @Test
+  void normalizesWholeNumberKeys() {
+    for (Object value : List.of((byte) 5, (short) 5, 5, 5L)) {
+      List<Object> original = List.of(value);
+      List<Object> key = RelationalKeys.row(original);
+      assertEquals(List.of(5L), key);
+      assertEquals(List.of(5L).hashCode(), key.hashCode());
+      assertSame(value, original.getFirst());
+    }
   }
 
   /** Converted text and nested scalar lists remain independent of mutations. */
@@ -40,7 +104,7 @@ class RelationalKeysTest {
     values.set(1, "changed");
     text.set("changed");
     nested.set(0, 9);
-    assertEquals(Arrays.asList(7, "prefix", "same", Arrays.asList(1, "two", null)), key);
+    assertEquals(Arrays.asList(7L, "prefix", "same", Arrays.asList(1L, "two", null)), key);
     assertThrows(UnsupportedOperationException.class, () -> key.add("extra"));
   }
 

@@ -123,7 +123,7 @@ class LiteralConverterTest {
   void convertsBasicLiteralExpressions() {
     assertNull(LiteralConverter.toLiteral(new net.sf.jsqlparser.expression.NullValue()));
     assertEquals("hello", LiteralConverter.toLiteral(new StringValue("hello")));
-    assertEquals(42L, LiteralConverter.toLiteral(new LongValue(42)));
+    assertEquals(42, LiteralConverter.toLiteral(new LongValue(42)));
     assertEquals(new BigDecimal("3.5"), LiteralConverter.toLiteral(new DoubleValue("3.5")));
     assertEquals(Boolean.TRUE, LiteralConverter.toLiteral(new BooleanValue("true")));
 
@@ -142,7 +142,7 @@ class LiteralConverterTest {
     SignedExpression negativeNumber = new SignedExpression();
     negativeNumber.setSign('-');
     negativeNumber.setExpression(new LongValue(7));
-    assertEquals(new BigDecimal("-7"), LiteralConverter.toLiteral(negativeNumber));
+    assertEquals(-7L, LiteralConverter.toLiteral(negativeNumber));
 
     SignedExpression decimalString = new SignedExpression();
     decimalString.setSign('+');

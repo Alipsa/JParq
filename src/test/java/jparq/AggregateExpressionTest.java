@@ -44,7 +44,7 @@ class AggregateExpressionTest {
       try (var statement = connection.createStatement();
           var result = statement.executeQuery("SELECT SUM(cyl) * 2 AS x FROM mtcars")) {
         assertEquals("x", result.getMetaData().getColumnLabel(1));
-        assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1));
+        assertEquals(Types.BIGINT, result.getMetaData().getColumnType(1));
       }
     }
   }

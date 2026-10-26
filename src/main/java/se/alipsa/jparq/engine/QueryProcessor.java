@@ -10,11 +10,14 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
+import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.engine.window.WindowState;
+import se.alipsa.jparq.helper.LiteralConverter;
 
 /**
  * Processes a {@link RecordReader} with projection, WHERE clause, LIMIT, and
@@ -36,6 +39,7 @@ public final class QueryProcessor implements AutoCloseable {
   private final boolean hasPreStage;
   private final List<String> distinctColumns;
   private final List<Expression> distinctExpressions;
+  private final boolean[] mixedDistinctTypes;
   private final List<String> preStageDistinctColumns;
   private final List<String> outerQualifiers;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
@@ -390,6 +394,10 @@ public final class QueryProcessor implements AutoCloseable {
     List<String> distinctCols = opts.distinctColumns == null ? this.projection : opts.distinctColumns;
     this.distinctColumns = distinctCols;
     this.distinctExpressions = opts.distinctExpressions;
+    this.mixedDistinctTypes = new boolean[distinctExpressions.size()];
+    for (int column = 0; column < distinctExpressions.size(); column++) {
+      mixedDistinctTypes[column] = mayMixWholeNumberTypes(distinctExpressions.get(column));
+    }
     this.preStageDistinctColumns = (opts.preStageDistinctColumns == null || opts.preStageDistinctColumns.isEmpty())
         ? distinctCols
         : opts.preStageDistinctColumns;
@@ -817,10 +825,26 @@ public final class QueryProcessor implements AutoCloseable {
     }
     ensureValueEvaluator(rec.getSchema());
     List<Object> key = new ArrayList<>(distinctExpressions.size());
-    for (Expression expression : distinctExpressions) {
-      key.add(valueEvaluator.eval(expression, rec));
+    for (int column = 0; column < distinctExpressions.size(); column++) {
+      Object value = valueEvaluator.eval(distinctExpressions.get(column), rec);
+      key.add(RelationalKeys.value(value, mixedDistinctTypes[column]));
     }
-    return RelationalKeys.row(key);
+    return key;
+  }
+
+  /**
+   * Identifies projections whose scalar values may mix INTEGER and BIGINT. Source
+   * columns and literals have stable Java types, including in parentheses.
+   *
+   * @param expression
+   *          projection expression
+   * @return whether whole-number scalar keys require normalization
+   */
+  private static boolean mayMixWholeNumberTypes(Expression expression) {
+    if (expression instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
+      return mayMixWholeNumberTypes(list.getFirst());
+    }
+    return !(expression instanceof Column) && !LiteralConverter.isLiteral(expression);
   }
 
   /**
@@ -845,7 +869,7 @@ public final class QueryProcessor implements AutoCloseable {
       Object value = AvroCoercions.unwrap(rec.get(col), field.schema());
       key.add(value);
     }
-    return RelationalKeys.row(key);
+    return RelationalKeys.row(key, false);
   }
 
   private static List<String> augmentProjectionWithOrderColumns(List<String> projection, List<SqlParser.OrderKey> order,

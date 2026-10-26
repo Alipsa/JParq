@@ -115,8 +115,8 @@ class MixedArrayElementsTest {
             """)) {
       assertTrue(result.next());
       assertEquals(Arrays.asList(null, new BigDecimal("4"), new BigDecimal("6.5"), null), result.getObject(1));
-      assertEquals(List.of(List.of(4L), List.of(6L)), result.getObject(2));
-      assertEquals(7L, result.getObject(3));
+      assertEquals(List.of(List.of(4), List.of(6)), result.getObject(2));
+      assertEquals(7, result.getObject(3));
       assertEquals(List.of(List.of(new BigDecimal("1")), List.of(new BigDecimal("2.5"))), result.getObject(4));
       assertEquals(List.of(List.of(List.of(new BigDecimal("1"))), List.of(List.of(new BigDecimal("2.5")))),
           result.getObject(5));

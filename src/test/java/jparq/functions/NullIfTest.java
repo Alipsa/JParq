@@ -41,12 +41,12 @@ class NullIfTest {
       assertTrue(result.next());
       assertNull(result.getObject(1));
       assertTrue(result.wasNull());
-      assertEquals(1L, result.getObject(2));
+      assertEquals(1, result.getObject(2));
       assertFalse(result.wasNull());
       for (int column : List.of(3, 4, 6, 7, 9)) {
         assertNull(result.getObject(column));
       }
-      assertEquals(1L, result.getObject(5));
+      assertEquals(1, result.getObject(5));
       assertEquals(new BigDecimal("1.50"), result.getObject(8));
       assertEquals("a", result.getObject(10));
       assertEquals(true, result.getObject(11));

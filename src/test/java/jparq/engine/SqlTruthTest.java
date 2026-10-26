@@ -116,7 +116,7 @@ class SqlTruthTest {
       assertFalse(evaluator.eval(predicate, row), expression);
       assertNull(values.eval(predicate, row), expression);
     }
-    assertEquals(0L, values.eval(CCJSqlParserUtil.parseExpression("CASE WHEN NOT (n = 1) THEN 1 ELSE 0 END"), row));
+    assertEquals(0, values.eval(CCJSqlParserUtil.parseExpression("CASE WHEN NOT (n = 1) THEN 1 ELSE 0 END"), row));
     for (String expression : Arrays.asList("n IS NULL", "n IS NOT DISTINCT FROM NULL")) {
       assertTrue(evaluator.eval(CCJSqlParserUtil.parseCondExpression(expression), row));
     }

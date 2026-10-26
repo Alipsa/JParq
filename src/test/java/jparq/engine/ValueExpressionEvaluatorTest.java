@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
@@ -75,8 +74,8 @@ class ValueExpressionEvaluatorTest {
    */
   @Test
   void evaluatesSignedOperands() throws Exception {
-    assertEquals(new BigDecimal("-2"), eval("-2", nullNoteRecord));
-    assertEquals(new BigDecimal("2"), eval("+2", nullNoteRecord));
+    assertEquals(-2L, eval("-2", nullNoteRecord));
+    assertEquals(2L, eval("+2", nullNoteRecord));
     assertNull(eval("-NULL", nullNoteRecord));
     assertEquals(TemporalInterval.parse("-2", "DAY"), eval("-INTERVAL '2 days'", nullNoteRecord));
     assertEquals(TemporalInterval.parse("2", "DAY"), eval("+INTERVAL '2 days'", nullNoteRecord));

@@ -42,7 +42,7 @@ class GroupedScalarSubqueryTest {
     try (var connection = connect(predicate, projection)) {
       String sql = "SELECT o.n, (SELECT COUNT(*) FROM (VALUES (1), (1), (2)) t(v) WHERE t.v = o.n) c "
           + "FROM (VALUES (1), (1), (2), (3), (NULL)) o(n) GROUP BY o.n ORDER BY o.n NULLS LAST";
-      assertEquals(Arrays.asList(List.of(1L, 2L), List.of(2L, 1L), List.of(3L, 0L), Arrays.asList(null, 0L)),
+      assertEquals(Arrays.asList(List.of(1, 2L), List.of(2, 1L), List.of(3, 0L), Arrays.asList(null, 0L)),
           rows(connection, sql));
       String select = "SELECT o.n, (SELECT COUNT(*) FROM t WHERE t.v = o.n) c FROM ";
       String grouped = " o GROUP BY o.n ORDER BY o.n NULLS LAST";

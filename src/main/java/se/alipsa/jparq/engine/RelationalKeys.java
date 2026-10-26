@@ -30,10 +30,56 @@ public final class RelationalKeys {
    * @return the supplied list if unchanged, otherwise an unmodifiable key list
    */
   public static List<Object> row(List<Object> values) {
+    return row(values, true);
+  }
+
+  /**
+   * Builds a content key, optionally normalizing scalar whole-number types.
+   * Homogeneously typed scalar columns can retain their original objects and
+   * list. Nested content is always normalized because its leaves may mix types.
+   *
+   * @param values
+   *          row values, including SQL NULLs
+   * @param normalizeWholeNumbers
+   *          whether scalar whole-number types may differ
+   * @return the supplied list if unchanged, otherwise an unmodifiable key list
+   */
+  public static List<Object> row(List<Object> values, boolean normalizeWholeNumbers) {
+    return row(values, normalizeWholeNumbers, null);
+  }
+
+  /**
+   * Builds a content key using the scalar normalization policy for each column.
+   * Known scalar types can retain their original objects while unknown columns
+   * normalize whole-number representations. Nested content is always normalized.
+   *
+   * @param values
+   *          row values, including SQL NULLs
+   * @param normalizeColumns
+   *          normalization flags in column order, matching the row width
+   * @return the supplied list if unchanged, otherwise an unmodifiable key list
+   */
+  public static List<Object> row(List<Object> values, boolean[] normalizeColumns) {
+    return row(values, false, normalizeColumns);
+  }
+
+  /**
+   * Shares copy-on-change row construction across uniform and per-column
+   * policies.
+   *
+   * @param values
+   *          row values
+   * @param normalizeWholeNumbers
+   *          uniform scalar policy when column flags are absent
+   * @param normalizeColumns
+   *          per-column flags, or null for the uniform policy
+   * @return the original list or an unmodifiable normalized copy
+   */
+  private static List<Object> row(List<Object> values, boolean normalizeWholeNumbers, boolean[] normalizeColumns) {
     List<Object> keys = null;
     int index = 0;
     for (Object original : values) {
-      Object key = value(original);
+      Object key = value(original, normalizeColumns == null ? normalizeWholeNumbers : normalizeColumns[index]);
       if (keys == null && key != original) {
         keys = new ArrayList<>(values);
       }
@@ -61,13 +107,34 @@ public final class RelationalKeys {
   }
 
   /**
-   * Snapshots structured values by content, ignoring Avro record names.
+   * Snapshots structured values by content, ignoring Avro record names, and
+   * normalizes whole-number representations so equal integers share one key.
    *
    * @param value
    *          a scalar, record, array, collection, or map
    * @return content key, or the original scalar
    */
   public static Object value(Object value) {
+    return value(value, true);
+  }
+
+  /**
+   * Builds a value key without boxing already compatible scalar integers again.
+   * Structured values still snapshot and normalize their nested contents.
+   *
+   * @param value
+   *          the scalar or structured value
+   * @param normalizeWholeNumbers
+   *          whether scalar whole-number types may differ
+   * @return the original scalar when compatible, or a normalized content key
+   */
+  public static Object value(Object value, boolean normalizeWholeNumbers) {
+    if (value instanceof Number number) {
+      if (normalizeWholeNumbers && (value instanceof Byte || value instanceof Short || value instanceof Integer)) {
+        return number.longValue();
+      }
+      return value;
+    }
     if (value instanceof GenericRecord record) {
       Map<String, Object> fields = new LinkedHashMap<>();
       for (Schema.Field field : record.getSchema().getFields()) {
