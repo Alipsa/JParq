@@ -45,6 +45,7 @@ class NumericCastTargetTest {
   /** Prevents strict lookups from stripping characters from column names. */
   @Test
   void normalizedLookupRequiresAnExactAlias() {
+    assertNull(NumericCastTarget.fromNormalizedName(null));
     assertEquals(NumericCastTarget.BIGINT, NumericCastTarget.fromNormalizedName("bigint"));
     assertNull(NumericCastTarget.fromNormalizedName("big_int"));
     assertNull(NumericCastTarget.fromNormalizedName("double precision"));

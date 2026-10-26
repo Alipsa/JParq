@@ -73,11 +73,11 @@ public enum NumericCastTarget {
    * Looks up an exact alias without treating column names as normalized types.
    *
    * @param normalized
-   *          the already-normalized alias
+   *          the already-normalized alias, possibly null
    * @return the numeric target, or null for an unrecognized alias
    */
   public static NumericCastTarget fromNormalizedName(String normalized) {
-    return BY_NAME.get(normalized);
+    return normalized == null ? null : BY_NAME.get(normalized);
   }
 
   /**
