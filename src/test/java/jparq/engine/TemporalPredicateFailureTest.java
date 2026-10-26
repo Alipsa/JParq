@@ -1,6 +1,7 @@
 package jparq.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -150,11 +151,14 @@ class TemporalPredicateFailureTest {
       assertEquals("42000", failure.getSQLState(), sql);
       assertTrue(failure.getMessage().contains(source), failure::getMessage);
       assertTrue(failure.getMessage().contains("Unsupported predicate"), failure::getMessage);
-      assertTrue(!failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure::getMessage);
-      assertTrue(!failure.getMessage().contains("grouped-expression"), failure::getMessage);
+      assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure::getMessage);
+      assertFalse(failure.getMessage().contains("grouped-expression"), failure::getMessage);
+      assertFalse(failure.getMessage().contains("<outer value>"), failure::getMessage);
       assertInstanceOf(IllegalArgumentException.class, failure.getCause());
-      assertInstanceOf(IllegalArgumentException.class, failure.getCause().getCause());
-      assertEquals("42000", SqlExceptions.findSqlStateFailure(failure.getCause()).getSQLState());
+      var contextual = assertInstanceOf(SQLSyntaxErrorException.class, failure.getCause().getCause());
+      var original = assertInstanceOf(IllegalArgumentException.class, contextual.getCause());
+      assertEquals("42000", contextual.getSQLState());
+      assertEquals("42000", SqlExceptions.findSqlStateFailure(original).getSQLState());
     }
   }
 

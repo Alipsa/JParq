@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine.function;
 
 import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 
+import java.sql.SQLSyntaxErrorException;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.List;
@@ -276,8 +277,17 @@ final class GroupedExpression {
     try (frame) {
       return evaluator.eval(expression, new GenericData.Record(schema));
     } catch (RuntimeException failure) {
-      if (SqlExceptions.findSqlStateFailure(failure) == null) {
+      var classified = SqlExceptions.findSqlStateFailure(failure);
+      if (classified == null) {
         throw failure;
+      }
+      if ("42000".equals(classified.getSQLState()) && classified.getMessage() != null
+          && classified.getMessage().startsWith("Unsupported predicate:")) {
+        String message = "Unsupported predicate in grouped expression: " + sourceDescription;
+        // Keep the original slot diagnostic in the cause chain, while JDBC
+        // wrappers use the grouped source as their classified diagnostic.
+        throw new IllegalArgumentException(message,
+            new SQLSyntaxErrorException(message, classified.getSQLState(), classified.getErrorCode(), failure));
       }
       throw new IllegalArgumentException("Failed to evaluate grouped expression: " + sourceDescription, failure);
     }
