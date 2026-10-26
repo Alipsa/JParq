@@ -7,8 +7,16 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericArray;
+import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.engine.AvroCoercions;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 
 /** Minimal implementations of SQL JSON_* functions using Jackson. */
 public final class JsonFunctions {
@@ -108,10 +116,16 @@ public final class JsonFunctions {
   /**
    * Construct a JSON object from an alternating sequence of evaluated keys and
    * values. Key text is preserved, including whitespace and literal quotes.
+   * Arrays and records are converted recursively, using Avro logical types for
+   * record fields. Binary values use base64 strings and NULLs use JSON null.
+   * Strings nested in containers remain text; only direct value arguments use the
+   * JSON-text parsing heuristic.
    *
    * @param args
    *          alternating key/value arguments
    * @return serialized JSON object
+   * @throws IllegalArgumentException
+   *           if the argument count is odd
    */
   public static String jsonObject(List<Object> args) {
     if (args == null || args.isEmpty()) {
@@ -134,7 +148,11 @@ public final class JsonFunctions {
   }
 
   /**
-   * Construct a JSON array from the supplied arguments.
+   * Construct a JSON array from the supplied arguments. Nested arrays and records
+   * are converted recursively, using Avro logical types for record fields. Binary
+   * values use base64 strings and NULLs use JSON null. Strings nested in
+   * containers remain text; only direct arguments use the JSON-text parsing
+   * heuristic.
    *
    * @param args
    *          values to include in the array
@@ -295,6 +313,13 @@ public final class JsonFunctions {
     throw new IllegalArgumentException("Unclosed quoted member in JSON path");
   }
 
+  /**
+   * Converts a Java or Avro value into a JSON node recursively.
+   *
+   * @param value
+   *          evaluated value
+   * @return corresponding JSON node
+   */
   private static JsonNode toNode(Object value) {
     if (value == null) {
       return MAPPER.nullNode();
@@ -302,8 +327,33 @@ public final class JsonFunctions {
     if (value instanceof JsonNode node) {
       return node;
     }
-    if (value instanceof org.apache.avro.generic.GenericRecord record) {
-      return toNode(record.toString());
+    if (value instanceof GenericRecord record) {
+      ObjectNode object = MAPPER.createObjectNode();
+      for (Schema.Field field : record.getSchema().getFields()) {
+        object.set(field.name(), toNode(record.get(field.pos()), field.schema()));
+      }
+      return object;
+    }
+    if (value instanceof GenericArray<?> array) {
+      return arrayNode(array, array.getSchema().getElementType());
+    }
+    if (value instanceof List<?> list) {
+      return arrayNode(list, null);
+    }
+    if (value instanceof Object[] array) {
+      return arrayNode(Arrays.asList(array), null);
+    }
+    if (value instanceof byte[] bytes) {
+      return MAPPER.getNodeFactory().binaryNode(bytes);
+    }
+    if (value instanceof ByteBuffer buffer) {
+      ByteBuffer duplicate = buffer.duplicate();
+      byte[] bytes = new byte[duplicate.remaining()];
+      duplicate.get(bytes);
+      return MAPPER.getNodeFactory().binaryNode(bytes);
+    }
+    if (value instanceof Map<?, ?> map) {
+      return mapNode(map, null);
     }
     if (value instanceof String str) {
       String trimmed = str.trim();
@@ -325,6 +375,75 @@ public final class JsonFunctions {
     return MAPPER.getNodeFactory().textNode(value.toString());
   }
 
+  /**
+   * Applies an Avro schema before converting a nested value to JSON. Without a
+   * schema, nested strings remain text rather than being parsed as JSON.
+   *
+   * @param value
+   *          raw field or element value
+   * @param schema
+   *          declared Avro schema, or null for an already decoded Java value
+   * @return corresponding JSON node
+   */
+  private static JsonNode toNode(Object value, Schema schema) {
+    if (schema == null && value instanceof String text) {
+      return MAPPER.getNodeFactory().textNode(text);
+    }
+    if (value == null || schema == null) {
+      return toNode(value);
+    }
+    Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    return switch (effective.getType()) {
+      case ARRAY -> arrayNode(value instanceof Object[] array ? Arrays.asList(array) : (Iterable<?>) value,
+          effective.getElementType());
+      case MAP -> mapNode((Map<?, ?>) value, effective.getValueType());
+      case STRING, ENUM -> MAPPER.getNodeFactory().textNode(value.toString());
+      case BYTES -> toNode(effective.getLogicalType() == null ? value : AvroCoercions.unwrap(value, effective));
+      default -> toNode(AvroCoercions.unwrap(value, effective));
+    };
+  }
+
+  /**
+   * Converts array elements recursively, preserving their order and NULLs.
+   *
+   * @param values
+   *          array elements
+   * @param elementSchema
+   *          element schema, or null for decoded values
+   * @return JSON array
+   */
+  private static ArrayNode arrayNode(Iterable<?> values, Schema elementSchema) {
+    ArrayNode array = MAPPER.createArrayNode();
+    for (Object value : values) {
+      array.add(toNode(value, elementSchema));
+    }
+    return array;
+  }
+
+  /**
+   * Converts map values recursively while preserving string keys.
+   *
+   * @param values
+   *          map entries
+   * @param valueSchema
+   *          value schema, or null for decoded values
+   * @return JSON object
+   */
+  private static ObjectNode mapNode(Map<?, ?> values, Schema valueSchema) {
+    ObjectNode object = MAPPER.createObjectNode();
+    for (var entry : values.entrySet()) {
+      object.set(entry.getKey().toString(), toNode(entry.getValue(), valueSchema));
+    }
+    return object;
+  }
+
+  /**
+   * Preserves the numeric type and precision when constructing a JSON node.
+   *
+   * @param number
+   *          numeric value
+   * @return numeric node, or text for an unparseable custom number
+   */
   private static JsonNode numberNode(Number number) {
     if (number instanceof Byte || number instanceof Short || number instanceof Integer) {
       return MAPPER.getNodeFactory().numberNode(number.intValue());
