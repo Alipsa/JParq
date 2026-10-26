@@ -641,7 +641,7 @@ The following SQL statements are supported:
   SQL ARRAY values (stored columns or computed constructors) as JSON arrays, recursively. NULL elements become
   JSON `null`, and empty arrays become `[]`. Strings inside arrays and maps remain JSON strings, even when
   their text looks like JSON. This also applies to strings returned by JSON constructors inside an SQL ARRAY:
-  `JSON_ARRAY(ARRAY[JSON_OBJECT(KEY 'a' VALUE 1)])` returns `["{\"a\":1}"]`.
+  `JSON_ARRAY(ARRAY[JSON_OBJECT(KEY 'a' VALUE 1)])` returns `[["{\"a\":1}"]]`.
   Direct JSON constructor arguments retain the existing heuristic that embeds JSON-looking text as JSON.
   Struct fields use their declared Avro logical types, including numeric decimals and date/timestamp strings.
   This schema-aware conversion includes maps nested within struct fields. Top-level map columns and maps
