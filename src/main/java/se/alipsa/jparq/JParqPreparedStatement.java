@@ -1487,7 +1487,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       Comparable<Object> cmp = (Comparable<Object>) comparable;
       return cmp.compareTo(right);
     }
-    return left.toString().compareTo(right.toString());
+    return SqlComparisons.typedCompare(left, right);
   }
 
   private Schema buildSetOrderSchema(List<String> labels, List<Integer> sqlTypes) {

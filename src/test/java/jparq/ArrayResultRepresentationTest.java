@@ -186,7 +186,41 @@ class ArrayResultRepresentationTest {
     try (var connection = connect(directory); var statement = connection.createStatement()) {
       assertIds(statement, "SELECT id FROM s WHERE ints = ARRAY[1,2] ORDER BY id", 1);
       assertIds(statement, "SELECT id FROM s WHERE ints = (SELECT ints FROM s WHERE id = 1) ORDER BY id", 1);
+      assertIds(statement, "SELECT id FROM s WHERE ints = ints ORDER BY id", 1);
       assertIds(statement, "SELECT id FROM s WHERE ARRAY[1,2] <> ints ORDER BY id");
+      assertIds(statement, "SELECT id FROM s WHERE ints <> ints ORDER BY id");
+    }
+  }
+
+  @Test
+  void setOperationOrderBySortsArraysByContent(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      assertArrayColumn(statement, "SELECT ARRAY[2] UNION ALL SELECT ARRAY[1] UNION ALL SELECT ARRAY[3] ORDER BY 1",
+          new Object[]{
+              1
+          }, new Object[]{
+              2
+          }, new Object[]{
+              3
+          });
+      assertArrayColumn(statement,
+          "SELECT ARRAY[2] UNION ALL SELECT ARRAY[1] UNION ALL SELECT ARRAY[3] ORDER BY 1 DESC", new Object[]{
+              3
+          }, new Object[]{
+              2
+          }, new Object[]{
+              1
+          });
+      assertArrayColumn(statement, "SELECT ARRAY[ARRAY[2]] UNION ALL SELECT ARRAY[ARRAY[1]] ORDER BY 1", new Object[]{
+          new Object[]{
+              1
+          }
+      }, new Object[]{
+          new Object[]{
+              2
+          }
+      });
     }
   }
 
@@ -207,6 +241,41 @@ class ArrayResultRepresentationTest {
     }
   }
 
+  @Test
+  void scalarSubqueryMetadataDoesNotResolveInnerColumnsAgainstOuterSchema(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    // s.b is BOOLEAN while t2.b is INT; the subquery type must not inherit the
+    // outer column's type
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT b FROM t2) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.OTHER, metaData.getColumnType(1));
+      assertEquals(Object.class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  @Test
+  void scalarSubqueryOverStoredArrayReportsOtherUntilColumnSchemasAreResolved(@TempDir Path directory)
+      throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT ints FROM s WHERE id = 1) FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.OTHER, metaData.getColumnType(1));
+      assertEquals(Object.class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertArrayEquals(new Object[]{
+          1, 2
+      }, (Object[]) result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
   private static void assertIds(java.sql.Statement statement, String sql, int... expected)
       throws java.sql.SQLException {
     List<Integer> ids = new java.util.ArrayList<>();
@@ -218,13 +287,28 @@ class ArrayResultRepresentationTest {
     assertEquals(java.util.Arrays.stream(expected).boxed().toList(), ids, sql);
   }
 
+  private static void assertArrayColumn(java.sql.Statement statement, String sql, Object[]... expected)
+      throws java.sql.SQLException {
+    List<Object> actual = new java.util.ArrayList<>();
+    try (var result = statement.executeQuery(sql)) {
+      while (result.next()) {
+        actual.add(result.getObject(1));
+      }
+    }
+    assertEquals(expected.length, actual.size(), sql);
+    for (int i = 0; i < expected.length; i++) {
+      assertArrayEquals(expected[i], (Object[]) actual.get(i), sql + " row " + (i + 1));
+    }
+  }
+
   private static Connection connect(Path directory) throws Exception {
     Class.forName("se.alipsa.jparq.JParqDriver");
     return DriverManager.getConnection("jdbc:jparq:" + directory.toAbsolutePath());
   }
 
   /**
-   * Writes a minimal dataset with one physical array column.
+   * Writes a minimal dataset with one physical array column plus a second table
+   * whose column names shadow the first table's with different types.
    *
    * @param directory
    *          dataset directory
@@ -234,7 +318,7 @@ class ArrayResultRepresentationTest {
   private static void writeDataset(Path directory) throws IOException {
     Schema schema = SchemaBuilder.record("array_row").fields().requiredInt("id").name("ints")
         .type(Schema.createUnion(Schema.create(Schema.Type.NULL), Schema.createArray(Schema.create(Schema.Type.INT))))
-        .noDefault().endRecord();
+        .noDefault().name("b").type(Schema.create(Schema.Type.BOOLEAN)).withDefault(false).endRecord();
     var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve("s.parquet").toUri()),
         new org.apache.hadoop.conf.Configuration());
     try (var writer = AvroParquetWriter.<GenericRecord>builder(output).withSchema(schema).build()) {
@@ -245,8 +329,17 @@ class ArrayResultRepresentationTest {
             id == 1
                 ? new GenericData.Array<>(schema.getField("ints").schema().getTypes().get(1), List.of(1, 2))
                 : null);
+        record.put("b", id == 1);
         writer.write(record);
       }
+    }
+    Schema t2Schema = SchemaBuilder.record("t2_row").fields().requiredInt("b").endRecord();
+    var t2Output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve("t2.parquet").toUri()),
+        new org.apache.hadoop.conf.Configuration());
+    try (var writer = AvroParquetWriter.<GenericRecord>builder(t2Output).withSchema(t2Schema).build()) {
+      var record = new GenericData.Record(t2Schema);
+      record.put("b", 42);
+      writer.write(record);
     }
   }
 }

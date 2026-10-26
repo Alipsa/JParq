@@ -403,15 +403,29 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
         Types.BIGINT;
       case AnalyticExpression analytic -> resolveAnalyticFunctionType(analytic);
       case ArrayConstructor arrayConstructor -> Types.ARRAY;
-      case net.sf.jsqlparser.statement.select.Select select -> {
-        Expression projection = scalarSubqueryProjection(select);
-        yield projection == null ? Types.OTHER : computedColumnType(unwrap(projection));
-      }
+      case net.sf.jsqlparser.statement.select.Select select ->
+        isArrayConstructor(scalarSubqueryProjection(select)) ? Types.ARRAY : Types.OTHER;
       case net.sf.jsqlparser.expression.Function func when func.getName() != null
           && "ARRAY".equalsIgnoreCase(func.getName()) ->
         Types.ARRAY;
       case null, default -> Types.OTHER;
     };
+  }
+
+  /**
+   * Determines whether an expression constructs an array independently of any
+   * table data, i.e. an {@code ARRAY[...]} constructor or an {@code ARRAY(...)}
+   * function. Scalar subquery projections are classified only when they build
+   * such a constructor, so inner column references are never resolved against the
+   * outer query's schema.
+   *
+   * @param expression
+   *          projection expression to inspect (may be {@code null})
+   * @return {@code true} when the expression is an array constructor
+   */
+  private static boolean isArrayConstructor(Expression expression) {
+    return expression instanceof ArrayConstructor || expression instanceof net.sf.jsqlparser.expression.Function func
+        && func.getName() != null && "ARRAY".equalsIgnoreCase(func.getName());
   }
 
   /**
@@ -489,10 +503,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     return switch (expression) {
       case AnalyticExpression analytic -> resolveAnalyticFunctionClassName(analytic);
       case ArrayConstructor arrayConstructor -> Object[].class.getName();
-      case net.sf.jsqlparser.statement.select.Select select -> {
-        Expression projection = scalarSubqueryProjection(select);
-        yield projection == null ? null : computedColumnClassName(unwrap(projection));
-      }
+      case net.sf.jsqlparser.statement.select.Select select ->
+        isArrayConstructor(scalarSubqueryProjection(select)) ? Object[].class.getName() : null;
       case net.sf.jsqlparser.expression.Function func when func.getName() != null
           && "ARRAY".equalsIgnoreCase(func.getName()) ->
         Object[].class.getName();
