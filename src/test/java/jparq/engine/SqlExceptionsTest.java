@@ -47,10 +47,29 @@ class SqlExceptionsTest {
     String sql = "-(SELECT __JPARQ_CORRELATED_VALUE('private-key', 0) "
         + "+ __JPARQ_CORRELATED_VALUE('another-key', 12))";
     var expression = CCJSqlParserUtil.parseExpression(sql);
-    assertEquals("-(SELECT <outer value> + <outer value>)", SqlExceptions.describe(expression));
+    assertEquals("-(SELECT " + SqlExceptions.OUTER_VALUE + " + " + SqlExceptions.OUTER_VALUE + ")",
+        SqlExceptions.describe(expression));
     assertTrue(expression.toString().contains("private-key"));
     var ordinary = CCJSqlParserUtil.parseExpression("cyl & 2");
     assertEquals(ordinary.toString(), SqlExceptions.describe(ordinary));
+  }
+
+  /**
+   * Uses one predicate diagnostic contract and redacts private operand bindings.
+   *
+   * @throws Exception
+   *           if expression parsing fails
+   */
+  @Test
+  void unsupportedPredicateFactoryClassifiesAndRedacts() throws Exception {
+    var ordinary = SqlExceptions.unsupportedPredicate(CCJSqlParserUtil.parseExpression("cyl"));
+    assertEquals("Unsupported predicate: cyl", ordinary.getMessage());
+    assertEquals("42000", SqlExceptions.findSqlStateFailure(ordinary).getSQLState());
+    var bound = SqlExceptions
+        .unsupportedPredicate(CCJSqlParserUtil.parseExpression("__JPARQ_CORRELATED_VALUE('private-key', 0)"));
+    assertEquals("Unsupported predicate: " + SqlExceptions.OUTER_VALUE, bound.getMessage());
+    assertInstanceOf(SQLSyntaxErrorException.class, bound.getCause());
+    assertEquals("42000", SqlExceptions.findSqlStateFailure(bound).getSQLState());
   }
 
   /**
@@ -74,11 +93,11 @@ class SqlExceptionsTest {
    * boundary.
    * 
    * @param state
-   *          the syntax or numeric SQLState
+   *          the syntax or data SQLState
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "42000", "22003", "22018"
+      "42000", "22003", "22007", "22008", "22018"
   })
   void wrappingRetainsSubqueryContext(String state) {
     SQLException classified = new SQLException("Inner query failed", state, 7);
@@ -102,13 +121,13 @@ class SqlExceptionsTest {
    * Retains nested-subquery context when iteration fails after returning a row.
    * 
    * @param state
-   *          the syntax or numeric SQLState
+   *          the syntax or data SQLState
    * @throws Exception
    *           if fixture construction fails
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "42000", "22003", "22018"
+      "42000", "22003", "22007", "22008", "22018"
   })
   void iterationRetainsSubqueryContext(String state) throws Exception {
     var schema = SchemaBuilder.record("Row").fields().requiredInt("id").endRecord();
@@ -139,6 +158,17 @@ class SqlExceptionsTest {
     assertEquals("😀".repeat(32), SqlExceptions.diagnosticValue("😀".repeat(32)));
   }
 
+  /** Ensures unclassified wrappers do not hide a classified nested failure. */
+  @Test
+  void nullSqlStateDoesNotHideClassifiedCause() {
+    var classified = new SQLException("Invalid temporal value", "22008");
+    var wrapper = new SQLException("Unclassified wrapper", classified);
+    assertSame(classified, SqlExceptions.findSqlStateFailure(wrapper));
+    var unclassified = new SQLException("Unclassified failure");
+    assertNull(SqlExceptions.findSqlStateFailure(unclassified));
+    assertNull(SqlExceptions.wrap("Evaluation failed", unclassified).getSQLState());
+  }
+
   /**
    * Preserves ordinary exceptions without claiming a syntax or numeric SQLState.
    */
@@ -150,5 +180,9 @@ class SqlExceptionsTest {
     assertNull(failure.getSQLState());
     assertSame(original, failure.getCause());
     assertEquals("Failed to prepare query", failure.getMessage());
+    var unexpected = new IllegalArgumentException("Unexpected engine failure");
+    var wrapped = SqlExceptions.wrap("Evaluation failed", unexpected);
+    assertNull(wrapped.getSQLState());
+    assertSame(unexpected, wrapped.getCause());
   }
 }

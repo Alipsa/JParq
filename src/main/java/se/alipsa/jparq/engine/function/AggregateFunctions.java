@@ -71,6 +71,7 @@ import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.NumericType;
+import se.alipsa.jparq.engine.BooleanExpressions;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.CorrelatedBindings;
 import se.alipsa.jparq.engine.CorrelationMappings;
@@ -84,6 +85,7 @@ import se.alipsa.jparq.engine.QuantifiedComparisons;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlComparisons;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.OrderKey;
 import se.alipsa.jparq.engine.SqlTruth;
@@ -617,8 +619,8 @@ public final class AggregateFunctions {
     expression.accept(new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(AnalyticExpression analytic, S context) {
-        throw syntaxFailure("Window functions are not supported in grouped queries: "
-            + se.alipsa.jparq.engine.SqlExceptions.describe(analytic));
+        throw syntaxFailure(
+            "Window functions are not supported in grouped queries: " + SqlExceptions.describe(analytic));
       }
 
       @Override
@@ -2617,17 +2619,20 @@ public final class AggregateFunctions {
         return evalLike(like);
       }
       if (expr instanceof BinaryExpression be) {
+        if (!BooleanExpressions.isPredicate(expr)) {
+          throw SqlExceptions.unsupportedPredicate(expr);
+        }
         return evalBinary(be);
       }
       if (expr instanceof Column column && (findGroupIndex(column, groupIndexLookup, plan.groupExpressions()) == null
           || !booleanColumn.test(column))) {
-        throw new IllegalArgumentException("Unsupported predicate: " + expr);
+        throw SqlExceptions.unsupportedPredicate(expr);
       }
       Object result = value(expr);
       if (result == null || result instanceof Boolean) {
         return (Boolean) result;
       }
-      throw new IllegalArgumentException("Unsupported predicate: " + expr);
+      throw SqlExceptions.unsupportedPredicate(expr);
     }
 
     private Boolean evalIn(InExpression in) {

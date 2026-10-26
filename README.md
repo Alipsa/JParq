@@ -192,6 +192,12 @@ reject precision overflow with SQLState `22003`. Omitting scale while specifying
 zero. Bounds must satisfy `1 <= p` and `0 <= s <= p`; invalid declarations fail during statement preparation
 with SQLState `42000`, including for NULL inputs and empty results. Casts without precision preserve the decimal value.
 
+Invalid DATE, TIME, and TIMESTAMP formats raise `SQLDataException` with SQLState `22007`;
+out-of-range calendar and clock fields use `22008`. Non-Boolean predicates, such as `CASE WHEN cyl`
+or `NOT model`, raise `SQLSyntaxErrorException` with `42000`. These classifications and their causes
+are preserved through getters, WHERE/HAVING filters, and nested query evaluation. Errors can be deferred until
+iteration or value access.
+
 Numeric arithmetic derives JDBC types before reading rows, including through derived tables and CTEs.
 Whole-number `+`, `-`, `*`, `%`, and unary signs return BIGINT (`Long`); BIGINT overflow raises
 SQLState `22003`. REAL or DOUBLE operands produce DOUBLE (`Double`) using double arithmetic.

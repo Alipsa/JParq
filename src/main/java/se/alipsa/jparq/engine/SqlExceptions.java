@@ -4,6 +4,7 @@ import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Pattern;
 import net.sf.jsqlparser.expression.Expression;
 
@@ -12,7 +13,12 @@ import net.sf.jsqlparser.expression.Expression;
  * boundaries.
  */
 public final class SqlExceptions {
+  /** Shared diagnostic prefix for unsupported Boolean predicates. */
+  public static final String UNSUPPORTED_PREDICATE = "Unsupported predicate:";
+  /** Diagnostic marker replacing private correlated value bindings. */
+  public static final String OUTER_VALUE = "<outer value>";
   private static final int DIAGNOSTIC_VALUE_LIMIT = 64;
+  private static final Set<String> CLASSIFIED_STATES = Set.of("42000", "22003", "22007", "22008", "22018");
   private static final Pattern CORRELATED_BINDING = Pattern
       .compile("__JPARQ_CORRELATED_VALUE\\s*\\(\\s*'[^']*'\\s*,\\s*\\d+\\s*\\)", Pattern.CASE_INSENSITIVE);
 
@@ -27,7 +33,7 @@ public final class SqlExceptions {
    *         token
    */
   public static String describe(Expression expression) {
-    return CORRELATED_BINDING.matcher(expression.toString()).replaceAll("<outer value>");
+    return CORRELATED_BINDING.matcher(expression.toString()).replaceAll(OUTER_VALUE);
   }
 
   /** Prevents utility class instantiation. */
@@ -66,19 +72,31 @@ public final class SqlExceptions {
   }
 
   /**
-   * Finds classified syntax, numeric range, or numeric conversion errors inside
-   * engine wrappers.
+   * Creates a syntax failure naming an unsupported predicate without private
+   * bindings.
+   *
+   * @param expression
+   *          the invalid predicate
+   * @return an engine exception carrying SQLState 42000 and a redacted diagnostic
+   */
+  public static IllegalArgumentException unsupportedPredicate(Expression expression) {
+    return syntaxFailure(UNSUPPORTED_PREDICATE + " " + describe(expression));
+  }
+
+  /**
+   * Finds classified syntax, numeric, or temporal data errors inside engine
+   * wrappers.
    *
    * @param failure
    *          the exception or wrapper to inspect
-   * @return the SQLState 42000, 22003, or 22018 exception, or null without a
-   *         recognized state
+   * @return the SQLState 42000, 22003, 22007, 22008, or 22018 exception, or null
+   *         without a recognized state
    */
   public static SQLException findSqlStateFailure(Throwable failure) {
     Throwable current = failure;
     while (current != null) {
-      if (current instanceof SQLException sql && ("22003".equals(sql.getSQLState()) || "42000".equals(sql.getSQLState())
-          || "22018".equals(sql.getSQLState()))) {
+      if (current instanceof SQLException sql && sql.getSQLState() != null
+          && CLASSIFIED_STATES.contains(sql.getSQLState())) {
         return sql;
       }
       current = current.getCause();

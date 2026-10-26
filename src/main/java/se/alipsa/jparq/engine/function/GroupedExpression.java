@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine.function;
 
 import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 
+import java.sql.SQLSyntaxErrorException;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,6 +24,7 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import se.alipsa.jparq.engine.CorrelatedBindings;
 import se.alipsa.jparq.engine.JSqlParserSupport;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 
 /**
@@ -32,6 +34,7 @@ final class GroupedExpression {
   private static final String BINDING_KEY = "grouped-expression";
   private final List<Expression> bindings = new ArrayList<>();
   private final Expression expression;
+  private final String sourceDescription;
   private final Schema schema = Schema.createRecord("grouped", null, null, false, List.of());
   private final ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema);
 
@@ -48,6 +51,7 @@ final class GroupedExpression {
    *           if compilation or operand validation fails
    */
   GroupedExpression(Expression source, Predicate<Expression> bind) {
+    sourceDescription = SqlExceptions.describe(source);
     StringBuilder sql = new StringBuilder();
     source.accept(bindingDeparser(sql, bind, bindings), null);
     try {
@@ -253,6 +257,9 @@ final class GroupedExpression {
    * @param values
    *          resolves each bound operand
    * @return scalar value, possibly null
+   * @throws IllegalArgumentException
+   *           if a classified evaluation failure occurs, preserving its SQLState
+   *           and original cause with the source expression as diagnostic context
    */
   Object evaluate(Function<Expression, Object> values) {
     List<Object> operands = new AbstractList<>() {
@@ -269,6 +276,24 @@ final class GroupedExpression {
     var frame = new CorrelatedBindings(BINDING_KEY, operands);
     try (frame) {
       return evaluator.eval(expression, new GenericData.Record(schema));
+    } catch (RuntimeException failure) {
+      var classified = SqlExceptions.findSqlStateFailure(failure);
+      if (classified == null) {
+        throw failure;
+      }
+      String detail = classified.getMessage();
+      if ("42000".equals(classified.getSQLState()) && detail != null
+          && detail.startsWith(SqlExceptions.UNSUPPORTED_PREDICATE)) {
+        String message = "Unsupported predicate in grouped expression: " + sourceDescription;
+        if (!detail.contains(SqlExceptions.OUTER_VALUE)) {
+          message += " (" + detail + ")";
+        }
+        // Keep the original slot diagnostic in the cause chain, while JDBC
+        // wrappers use the grouped source as their classified diagnostic.
+        throw new IllegalArgumentException(message,
+            new SQLSyntaxErrorException(message, classified.getSQLState(), classified.getErrorCode(), failure));
+      }
+      throw new IllegalArgumentException("Failed to evaluate grouped expression: " + sourceDescription, failure);
     }
   }
 }
