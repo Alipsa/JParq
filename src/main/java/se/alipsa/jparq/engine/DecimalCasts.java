@@ -104,7 +104,8 @@ public final class DecimalCasts {
     }
     BigDecimal result = value.setScale(type.getScale(), RoundingMode.HALF_UP);
     if (result.precision() > type.getPrecision()) {
-      throw numericFailure("Value '" + value + "' exceeds decimal precision " + type.getPrecision());
+      throw numericFailure(
+          "Value '" + SqlExceptions.diagnosticValue(value) + "' exceeds decimal precision " + type.getPrecision());
     }
     return result;
   }

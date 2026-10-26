@@ -10,10 +10,12 @@ import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLDataException;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** Verifies numeric conversion failures at JDBC evaluation boundaries. */
 class NumericCastFailureTest {
@@ -59,6 +61,142 @@ class NumericCastFailureTest {
           assertInstanceOf(NumberFormatException.class, root, sql);
         }
       }
+    }
+  }
+
+  /**
+   * Reports range overflow through each JDBC evaluation and materialization path.
+   *
+   * @param predicatePushdown
+   *          whether predicate pushdown is enabled
+   * @param projectionPushdown
+   *          whether projection pushdown is enabled
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void overflowingNumericCastsReportSqlState(boolean predicatePushdown, boolean projectionPushdown) throws Exception {
+    String url = jdbcUrl() + "?predicatePushdown=" + predicatePushdown + "&projectionPushdown=" + projectionPushdown;
+    try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+      for (String expression : List.of("CAST('1e10' AS INTEGER)", "CAST('300' AS TINYINT)",
+          "CAST('-32769' AS SMALLINT)", "CAST('1e999999999' AS BIGINT)", "CAST('1e400' AS DOUBLE)",
+          "CAST('-1e39' AS REAL)", "CAST(mpg * 1000000000000 AS INTEGER)")) {
+        String body = "SELECT " + expression + " AS x FROM mtcars WHERE cyl = 6 LIMIT 1";
+        for (String sql : List.of(body, "SELECT x FROM (" + body + ") d", "WITH c AS (" + body + ") SELECT x FROM c",
+            "SELECT (" + body + ") AS x", "SELECT cyl FROM mtcars WHERE mpg > " + expression + " LIMIT 1",
+            "SELECT a.cyl FROM mtcars a JOIN mtcars b ON a.cyl = b.cyl WHERE b.mpg > "
+                + expression.replace("mpg *", "b.mpg *") + " LIMIT 1")) {
+          var failure = assertThrows(SQLDataException.class, () -> {
+            try (var result = statement.executeQuery(sql)) {
+              assertTrue(result.next(), sql);
+              result.getObject(1);
+            }
+          }, sql);
+          assertEquals("22003", failure.getSQLState(), sql);
+        }
+        if (!expression.contains("mpg")) {
+          var failure = assertThrows(SQLDataException.class, () -> {
+            try (var result = statement.executeQuery("SELECT " + expression)) {
+              assertTrue(result.next());
+              result.getObject(1);
+            }
+          });
+          assertEquals("22003", failure.getSQLState());
+        }
+      }
+    }
+  }
+
+  /**
+   * Documents the single-precision FLOAT mapping even with explicit precision.
+   *
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @Test
+  void precisionQualifiedFloatRetainsSinglePrecision() throws Exception {
+    try (var connection = DriverManager.getConnection(jdbcUrl()); var statement = connection.createStatement()) {
+      for (int precision : List.of(24, 25, 53)) {
+        String body = "SELECT CAST(1.25 AS FLOAT(" + precision + ")) AS x FROM mtcars LIMIT 1";
+        for (String sql : List.of(body, "SELECT x FROM (" + body + ") d", "WITH c AS (" + body + ") SELECT x FROM c")) {
+          try (var result = statement.executeQuery(sql)) {
+            assertEquals(Types.REAL, result.getMetaData().getColumnType(1), sql);
+            assertTrue(result.next(), sql);
+            assertEquals(Float.valueOf(1.25f), result.getObject(1), sql);
+          }
+        }
+        try (var result = statement.executeQuery(body.replace("LIMIT 1", "WHERE 1 = 0"))) {
+          assertEquals(Types.REAL, result.getMetaData().getColumnType(1));
+          assertFalse(result.next());
+        }
+        String sql = "SELECT CAST(1e300 AS FLOAT(" + precision + ")) FROM mtcars LIMIT 1";
+        var failure = assertThrows(SQLDataException.class, () -> {
+          try (var result = statement.executeQuery(sql)) {
+            assertTrue(result.next(), sql);
+            result.getObject(1);
+          }
+        }, sql);
+        assertEquals("22003", failure.getSQLState(), sql);
+      }
+    }
+  }
+
+  /**
+   * Bounds numeric diagnostics when the large input is produced by an expression.
+   *
+   * @param target
+   *          the numeric target type
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "INTEGER", "DECIMAL(5,0)"
+  })
+  void numericCastDiagnosticsBoundComputedInputs(String target) throws Exception {
+    String sql = "SELECT CAST(REPEAT('9', 200000) AS " + target + ") FROM mtcars LIMIT 1";
+    try (var connection = DriverManager.getConnection(jdbcUrl()); var statement = connection.createStatement()) {
+      var failure = assertThrows(SQLDataException.class, () -> {
+        try (var result = statement.executeQuery(sql)) {
+          assertTrue(result.next());
+          result.getObject(1);
+        }
+      });
+      assertEquals("22003", failure.getSQLState());
+      assertTrue(failure.getMessage().length() < 512, () -> "Message length: " + failure.getMessage().length());
+      assertTrue(failure.getMessage().contains("9".repeat(64) + "…"));
+    }
+  }
+
+  /**
+   * Checks declared target names through the SQL parser and JDBC error wrappers.
+   *
+   * @param target
+   *          the declared cast type
+   * @param displayedTarget
+   *          the parser-rendered type name
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "DOUBLE PRECISION | DOUBLE PRECISION", "INT4 | INT4", "SIGNED | SIGNED", "FLOAT(53) | FLOAT (53)",
+      "INT(11) | INT (11)"
+  })
+  void numericCastDiagnosticsRetainParsedTargetNames(String target, String displayedTarget) throws Exception {
+    String sql = "SELECT CAST('1e400' AS " + target + ") FROM mtcars LIMIT 1";
+    try (var connection = DriverManager.getConnection(jdbcUrl()); var statement = connection.createStatement()) {
+      var failure = assertThrows(SQLDataException.class, () -> {
+        try (var result = statement.executeQuery(sql)) {
+          assertTrue(result.next());
+          result.getObject(1);
+        }
+      });
+      assertEquals("22003", failure.getSQLState());
+      assertTrue(failure.getMessage().contains("to " + displayedTarget + ": value out of range"), failure::getMessage);
     }
   }
 

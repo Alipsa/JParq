@@ -12,6 +12,7 @@ import net.sf.jsqlparser.expression.Expression;
  * boundaries.
  */
 public final class SqlExceptions {
+  private static final int DIAGNOSTIC_VALUE_LIMIT = 64;
   private static final Pattern CORRELATED_BINDING = Pattern
       .compile("__JPARQ_CORRELATED_VALUE\\s*\\(\\s*'[^']*'\\s*,\\s*\\d+\\s*\\)", Pattern.CASE_INSENSITIVE);
 
@@ -31,6 +32,26 @@ public final class SqlExceptions {
 
   /** Prevents utility class instantiation. */
   private SqlExceptions() {
+  }
+
+  /**
+   * Bounds values embedded in conversion diagnostics without splitting surrogate
+   * pairs.
+   *
+   * @param value
+   *          the input value
+   * @return at most 64 UTF-16 code units plus an ellipsis when truncated
+   */
+  public static String diagnosticValue(Object value) {
+    String text = String.valueOf(value);
+    if (text.length() <= DIAGNOSTIC_VALUE_LIMIT) {
+      return text;
+    }
+    int end = DIAGNOSTIC_VALUE_LIMIT;
+    if (Character.isHighSurrogate(text.charAt(end - 1)) && Character.isLowSurrogate(text.charAt(end))) {
+      end--;
+    }
+    return text.substring(0, end) + "…";
   }
 
   /**

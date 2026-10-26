@@ -569,6 +569,98 @@ public class DateTimeFunctionsTest {
       }
     }
   }
+
+  /**
+   * Checks integer bounds after truncation for every supported target alias.
+   */
+  @Test
+  void integerCastsCheckRangeAfterTruncation() {
+    for (String type : List.of("TINYINT", "SMALLINT", "INT2", "INT", "INTEGER", "SIGNED", "INT4", "BIGINT", "INT8")) {
+      long minimum = switch (type) {
+        case "TINYINT" -> Byte.MIN_VALUE;
+        case "SMALLINT", "INT2" -> Short.MIN_VALUE;
+        case "BIGINT", "INT8" -> Long.MIN_VALUE;
+        default -> Integer.MIN_VALUE;
+      };
+      BigDecimal min = BigDecimal.valueOf(minimum);
+      BigDecimal max = min.negate().subtract(BigDecimal.ONE);
+      for (BigDecimal boundary : List.of(min, max)) {
+        Number result = (Number) DateTimeFunctions.castLiteral(createCastExpression(type), boundary);
+        assertEquals(boundary.longValueExact(), result.longValue(), type);
+        BigDecimal fraction = new BigDecimal(boundary.signum() < 0 ? "-0.9" : "0.9");
+        assertEquals(result, DateTimeFunctions.castLiteral(createCastExpression(type), boundary.add(fraction)), type);
+      }
+      for (Object value : List.of(min.subtract(BigDecimal.ONE), max.add(BigDecimal.ONE), "1e999999999",
+          "-1e999999999")) {
+        var failure = assertThrows(IllegalArgumentException.class,
+            () -> DateTimeFunctions.castLiteral(createCastExpression(type), value), value + " AS " + type);
+        assertEquals("22003",
+            assertInstanceOf(SQLDataException.class, SqlExceptions.findSqlStateFailure(failure)).getSQLState());
+      }
+      for (String value : List.of("1e-999999999", "-1e-999999999", "0e999999999", "0e-999999999")) {
+        Number result = (Number) DateTimeFunctions.castLiteral(createCastExpression(type), value);
+        assertEquals(0L, result.longValue(), type);
+      }
+      assertNull(DateTimeFunctions.castLiteral(createCastExpression(type), null));
+    }
+  }
+
+  /** Ensures long inputs do not overwhelm numeric conversion diagnostics. */
+  @Test
+  void numericCastDiagnosticsBoundValues() {
+    for (String value : List.of("9".repeat(200000), "x".repeat(200000))) {
+      var failure = assertThrows(IllegalArgumentException.class,
+          () -> DateTimeFunctions.castLiteral(createCastExpression("DOUBLE PRECISION"), value));
+      assertTrue(failure.getMessage().length() < 200, failure::getMessage);
+      assertTrue(failure.getMessage().contains(value.substring(0, 64) + "…"));
+      var classified = assertInstanceOf(SQLDataException.class, SqlExceptions.findSqlStateFailure(failure));
+      assertTrue(classified.getMessage().length() < 200, classified::getMessage);
+      assertEquals(value.startsWith("9") ? "22003" : "22018", classified.getSQLState());
+    }
+    String digits = "9".repeat(200000);
+    var decimalFailure = assertThrows(IllegalArgumentException.class,
+        () -> DateTimeFunctions.castLiteral(createCastExpression("DECIMAL(5,0)"), digits));
+    assertTrue(decimalFailure.getMessage().length() < 200, decimalFailure::getMessage);
+    assertTrue(decimalFailure.getMessage().contains(digits.substring(0, 64) + "…"));
+    assertEquals("22003",
+        assertInstanceOf(SQLDataException.class, SqlExceptions.findSqlStateFailure(decimalFailure)).getSQLState());
+    String emojiValue = "x".repeat(63) + "😀tail";
+    var emojiFailure = assertThrows(IllegalArgumentException.class,
+        () -> DateTimeFunctions.castLiteral(createCastExpression("INTEGER"), emojiValue));
+    assertEquals("Cannot cast value '" + "x".repeat(63) + "…' to a numeric value", emojiFailure.getMessage());
+  }
+
+  /** Keeps invalid BOOLEAN diagnostics bounded and Unicode-safe. */
+  @Test
+  void booleanCastDiagnosticsBoundValues() {
+    for (String value : List.of("x".repeat(200000), "x".repeat(63) + "😀tail")) {
+      var failure = assertThrows(IllegalArgumentException.class,
+          () -> DateTimeFunctions.castLiteral(createCastExpression("BOOLEAN"), value));
+      assertEquals("Cannot cast value '" + SqlExceptions.diagnosticValue(value) + "' to BOOLEAN", failure.getMessage());
+      assertTrue(failure.getMessage().length() < 120);
+    }
+  }
+
+  /** Checks finite floating-point boundaries and overflow for all aliases. */
+  @Test
+  void floatingCastsRejectOverflow() {
+    for (String type : List.of("FLOAT", "REAL", "FLOAT4", "DOUBLE", "DOUBLE PRECISION", "FLOAT8")) {
+      boolean single = List.of("FLOAT", "REAL", "FLOAT4").contains(type);
+      Object maximum = single ? Float.toString(Float.MAX_VALUE) : Double.toString(Double.MAX_VALUE);
+      for (String sign : List.of("", "-")) {
+        Number result = (Number) DateTimeFunctions.castLiteral(createCastExpression(type), sign + maximum);
+        assertTrue(Double.isFinite(result.doubleValue()), type);
+        assertEquals(single ? Float.class : Double.class, result.getClass(), type);
+        String overflow = sign + (single ? "1e39" : "1e400");
+        var failure = assertThrows(IllegalArgumentException.class,
+            () -> DateTimeFunctions.castLiteral(createCastExpression(type), overflow));
+        assertEquals("22003",
+            assertInstanceOf(SQLDataException.class, SqlExceptions.findSqlStateFailure(failure)).getSQLState());
+      }
+      assertNull(DateTimeFunctions.castLiteral(createCastExpression(type), null));
+    }
+  }
+
   @Test
   void testCastToNumericTypes() {
     assertEquals((byte) 123, DateTimeFunctions.castLiteral(createCastExpression("TINYINT"), "123"));

@@ -39,8 +39,7 @@ public final class SqlParser {
   private static final Set<String> TIME_KEYWORDS = Set.of("CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP",
       "LOCALTIME", "LOCALTIMESTAMP");
   private static final Set<String> CONVERT_TYPE_NAMES = Set.of("boolean", "bool", "char", "character", "nchar",
-      "varchar", "charactervarying", "nvarchar", "string", "text", "clob", "tinyint", "smallint", "int", "integer",
-      "signed", "int2", "int4", "bigint", "int8", "float", "real", "float4", "double", "doubleprecision", "float8");
+      "varchar", "charactervarying", "nvarchar", "string", "text", "clob");
   private static final Pattern SINGLE_CTE_PATTERN = Pattern.compile(
       "^\\s*with\\s+(?:\"([A-Za-z_][\\w]*)\"|([A-Za-z_][\\w]*))\\s+as\\s*\\(",
       Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
@@ -57,7 +56,8 @@ public final class SqlParser {
     if (paren > 0) {
       normalized = normalized.substring(0, paren).trim();
     }
-    return CONVERT_TYPE_NAMES.contains(normalized) || DecimalCasts.isDecimalType(normalized);
+    return CONVERT_TYPE_NAMES.contains(normalized) || NumericCastTarget.fromNormalizedName(normalized) != null
+        || DecimalCasts.isDecimalType(normalized);
   }
 
   /**

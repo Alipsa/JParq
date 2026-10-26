@@ -129,6 +129,16 @@ class SqlExceptionsTest {
     }
   }
 
+  /** Checks truncation boundaries without splitting supplementary characters. */
+  @Test
+  void diagnosticValuesPreserveSurrogatePairs() {
+    assertEquals("x".repeat(64), SqlExceptions.diagnosticValue("x".repeat(64)));
+    assertEquals("x".repeat(64) + "…", SqlExceptions.diagnosticValue("x".repeat(65)));
+    assertEquals("x".repeat(63) + "…", SqlExceptions.diagnosticValue("x".repeat(63) + "😀tail"));
+    assertEquals("x".repeat(62) + "😀…", SqlExceptions.diagnosticValue("x".repeat(62) + "😀tail"));
+    assertEquals("😀".repeat(32), SqlExceptions.diagnosticValue("😀".repeat(32)));
+  }
+
   /**
    * Preserves ordinary exceptions without claiming a syntax or numeric SQLState.
    */
