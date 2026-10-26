@@ -114,8 +114,10 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
       NumericType numeric = projected.numericType(column);
       if (numeric != null) {
         sqlTypes.set(i, numeric.jdbcType());
-        precisions[i] = numeric.precision();
-        scales[i] = numeric.scale();
+        if (numeric.jdbcType() != Types.DECIMAL || numeric.precision() > 0) {
+          precisions[i] = numeric.jdbcPrecision();
+          scales[i] = numeric.scale();
+        }
       }
       schemas.add(numeric == null ? columnValueSchema(column) : numeric.schema());
     }
@@ -185,7 +187,7 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
   /** {@inheritDoc} */
   @Override
   public int getPrecision(int column) {
-    return precisions[column - 1];
+    return NumericType.jdbcPrecision(getColumnType(column), precisions[column - 1]);
   }
 
   /** {@inheritDoc} */

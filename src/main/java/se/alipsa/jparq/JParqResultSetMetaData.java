@@ -222,7 +222,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   public int getPrecision(int column) {
     NumericType numeric = numericType(column);
     LogicalTypes.Decimal decimal = decimalType(column);
-    return numeric != null ? numeric.precision() : decimal == null ? 0 : decimal.getPrecision();
+    return NumericType.jdbcPrecision(getColumnType(column),
+        numeric != null ? numeric.precision() : decimal == null ? 0 : decimal.getPrecision());
   }
 
   /** {@inheritDoc} */

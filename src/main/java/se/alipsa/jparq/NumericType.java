@@ -102,10 +102,8 @@ public record NumericType(int jdbcType, int precision, int scale) {
       return new NumericType(Types.DECIMAL, 0, 0);
     }
     if (operation == Operation.DIV) {
-      // DECIMAL64 may need leading fractional zeros and an integer carry digit.
-      int resultScale = Math.max(16, scale + other.precision + 16);
-      int integerDigits = Math.max(1, precision - scale + other.scale) + 1;
-      return of(Types.DECIMAL, integerDigits + resultScale, resultScale);
+      // DECIMAL64 determines each value's scale; infer bounds at materialization.
+      return new NumericType(Types.DECIMAL, 0, 0);
     }
     if (common.jdbcType != Types.DECIMAL) {
       return of(Types.BIGINT, 0, 0);
@@ -116,6 +114,35 @@ public record NumericType(int jdbcType, int precision, int scale) {
       case MOD ->
         of(Types.DECIMAL, Math.min(precision - scale, other.precision - other.scale) + common.scale, common.scale);
       default -> throw new IllegalArgumentException("Unsupported arithmetic operator: " + operation);
+    };
+  }
+
+  /**
+   * Reports standard JDBC precision without exposing literal-specific bounds.
+   *
+   * @return the whole-number type's precision, or this decimal/approximate
+   *         precision
+   */
+  public int jdbcPrecision() {
+    return jdbcPrecision(jdbcType, precision);
+  }
+
+  /**
+   * Reports standard integer precision consistently for columns and expressions.
+   *
+   * @param type
+   *          the JDBC type
+   * @param declaredPrecision
+   *          declared or inferred precision for other types
+   * @return the integer type's digit capacity, or the supplied precision
+   */
+  public static int jdbcPrecision(int type, int declaredPrecision) {
+    return switch (type) {
+      case Types.TINYINT -> 3;
+      case Types.SMALLINT -> 5;
+      case Types.INTEGER -> 10;
+      case Types.BIGINT -> 19;
+      default -> declaredPrecision;
     };
   }
 

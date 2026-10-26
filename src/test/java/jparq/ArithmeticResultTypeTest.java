@@ -57,6 +57,18 @@ class ArithmeticResultTypeTest {
         writer.write(record);
       }
     }
+    Schema keys = SchemaBuilder.record("keys").fields().requiredInt("id").requiredLong("l").endRecord();
+    var keyOutput = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve("keys.parquet").toUri()),
+        configuration);
+    try (var writer = AvroParquetWriter.<GenericRecord>builder(keyOutput).withSchema(keys).withConf(configuration)
+        .build()) {
+      for (int id = 0; id < 3; id++) {
+        var record = new GenericData.Record(keys);
+        record.put("id", id);
+        record.put("l", id == 0 ? 5L : id == 1 ? 9L : 99L);
+        writer.write(record);
+      }
+    }
   }
 
   /**
@@ -275,6 +287,158 @@ class ArithmeticResultTypeTest {
   }
 
   /**
+   * Keeps mixed INTEGER literal and BIGINT branch keys equal without changing the
+   * values exposed by CASE and COALESCE.
+   *
+   * @param pushdown
+   *          whether both pushdown settings are enabled
+   * @throws Exception
+   *           if JDBC execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void mixedWholeNumberKeys(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown); var statement = connection.createStatement()) {
+      String expression = "CASE WHEN id = 2 THEN 5 ELSE l END";
+      String grouped = "SELECT " + expression + " AS k, COUNT(*) FROM keys WHERE id >= 0 GROUP BY " + expression;
+      for (String sql : boundaries(grouped)) {
+        try (var result = statement.executeQuery(sql + " ORDER BY k")) {
+          assertTrue(result.next(), sql);
+          assertEquals(5L, result.getLong(1), sql);
+          assertEquals(2L, result.getLong(2), sql);
+          assertTrue(result.next(), sql);
+          assertEquals(9L, result.getLong(1), sql);
+          assertEquals(1L, result.getLong(2), sql);
+          assertFalse(result.next(), sql);
+        }
+      }
+      String distinct = "SELECT DISTINCT COALESCE(CASE WHEN id = 2 THEN NULL ELSE l END, 5) AS k "
+          + "FROM keys WHERE id >= 0";
+      for (String sql : boundaries(distinct)) {
+        try (var result = statement.executeQuery(sql + " ORDER BY k")) {
+          assertTrue(result.next(), sql);
+          assertEquals(5L, result.getLong(1), sql);
+          assertTrue(result.next(), sql);
+          assertEquals(9L, result.getLong(1), sql);
+          assertFalse(result.next(), sql);
+        }
+      }
+    }
+  }
+
+  /**
+   * Preserves DECIMAL64 division text and scale across materialization
+   * boundaries.
+   *
+   * @param pushdown
+   *          whether both pushdown settings are enabled
+   * @throws Exception
+   *           if JDBC execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void divisionScales(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown); var statement = connection.createStatement()) {
+      for (String expression : List.of("7 / 2", "1 / 3", "CAST(1 AS DECIMAL(38,10)) / CAST(1 AS DECIMAL(38,10))",
+          "(CAST(1 AS DECIMAL(38,10)) / 3) / 3", "SUM(n) / 2")) {
+        String inner = "SELECT " + expression + " AS x FROM o WHERE id = 0";
+        BigDecimal expected;
+        try (var result = statement.executeQuery(inner)) {
+          assertTrue(result.next());
+          expected = assertInstanceOf(BigDecimal.class, result.getObject(1));
+          assertEquals(expected.toString(), result.getString(1));
+        }
+        for (String sql : boundaries(inner)) {
+          try (var result = statement.executeQuery(sql)) {
+            assertTrue(result.next(), sql);
+            assertEquals(expected, result.getObject(1), sql);
+            assertEquals(expected.toString(), result.getString(1), sql);
+            assertTrue(result.getMetaData().getPrecision(1) <= 38, sql);
+            assertFalse(result.next(), sql);
+          }
+          try (var result = statement.executeQuery("SELECT CAST(x AS VARCHAR(30)) FROM (" + sql + ") v")) {
+            assertTrue(result.next(), sql);
+            assertEquals(expected.toString(), result.getString(1), sql);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Widens SUM's narrow whole-number inputs before deriving decimal product
+   * bounds.
+   *
+   * @param pushdown
+   *          whether both pushdown settings are enabled
+   * @throws Exception
+   *           if JDBC execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void narrowSums(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown); var statement = connection.createStatement()) {
+      for (String type : List.of("SMALLINT", "TINYINT")) {
+        int operand = type.equals("SMALLINT") ? 32000 : 127;
+        String inner = "SELECT SUM(CAST(" + operand + " AS " + type
+            + ")) * CAST(1 AS DECIMAL(1,0)) AS x FROM keys a CROSS JOIN keys b "
+            + "CROSS JOIN keys c CROSS JOIN keys d";
+        for (String sql : boundaries(inner)) {
+          try (var result = statement.executeQuery(sql)) {
+            assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1), sql);
+            assertEquals(20, result.getMetaData().getPrecision(1), sql);
+            assertTrue(result.next(), sql);
+            assertEquals(BigDecimal.valueOf(81L * operand), result.getObject(1), sql);
+            assertFalse(result.next(), sql);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Reports whole-number type precision while retaining narrower literal bounds
+   * internally for decimal arithmetic, and documents unary-sign promotion.
+   *
+   * @param pushdown
+   *          whether both pushdown settings are enabled
+   * @throws Exception
+   *           if JDBC execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void literalMetadata(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT 1, 2147483648, -1, +1, 1.5, n, l FROM o WHERE id = 0")) {
+      assertEquals(Types.INTEGER, result.getMetaData().getColumnType(1));
+      assertEquals(10, result.getMetaData().getPrecision(1));
+      for (int column : List.of(2, 3, 4)) {
+        assertEquals(Types.BIGINT, result.getMetaData().getColumnType(column));
+        assertEquals(19, result.getMetaData().getPrecision(column));
+      }
+      assertEquals(2, result.getMetaData().getPrecision(5));
+      assertEquals(1, result.getMetaData().getScale(5));
+      assertEquals(10, result.getMetaData().getPrecision(6));
+      assertEquals(19, result.getMetaData().getPrecision(7));
+      assertTrue(result.next());
+      assertEquals(1, result.getObject(1));
+      assertEquals(2147483648L, result.getObject(2));
+      assertEquals(-1L, result.getObject(3));
+      assertEquals(1L, result.getObject(4));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
    * Executes one projection across all materialization boundaries.
    *
    * @param connection
@@ -297,7 +461,7 @@ class ArithmeticResultTypeTest {
         Object actual = result.getObject(1);
         if (expected instanceof BigDecimal decimal) {
           assertInstanceOf(BigDecimal.class, actual, sql);
-          assertEquals(0, decimal.compareTo((BigDecimal) actual), sql);
+          assertEquals(decimal, actual, sql);
         } else {
           assertEquals(expected, actual, sql);
         }

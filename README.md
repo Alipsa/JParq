@@ -197,9 +197,14 @@ Whole-number `+`, `-`, `*`, `%`, and unary signs return BIGINT (`Long`); BIGINT 
 SQLState `22003`. REAL or DOUBLE operands produce DOUBLE (`Double`) using double arithmetic.
 Exact decimal operands produce DECIMAL (`BigDecimal`), with declared bounds reserving carry and
 product digits. Non-approximate division retains `MathContext.DECIMAL64`, so `7 / 2` returns `3.5`;
-its metadata reserves sufficient integer and fractional digits. NULL operands produce NULL, and
+its precision and scale are unknown until materialization infers them from the values, preserving
+value scales such as `3.5`. NULL operands produce NULL, and
 division or remainder by zero continues to return NULL. Integer literals fitting INTEGER return
-`Integer`; larger literals use `Long` or exact decimal values. Decimal literals such as `1.5` are exact.
+`Integer`; larger literals use `Long` or exact decimal values. Unary signs promote whole-number
+literals to BIGINT (`Long`), so `-1` and `+1` return `Long`. Whole-number grouping and DISTINCT
+keys compare equally across these Java representations. JDBC precision is 10 for INTEGER and 19
+for BIGINT; literal-specific digit bounds are retained internally for decimal arithmetic.
+Decimal literals such as `1.5` are exact.
 Decimal casts without declared bounds can report unknown precision until materialization infers it.
 
 `DATE - DATE` returns the signed calendar-day difference as a Java `Long` (JDBC `BIGINT`),

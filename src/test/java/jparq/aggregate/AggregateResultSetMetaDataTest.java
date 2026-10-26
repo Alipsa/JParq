@@ -120,7 +120,7 @@ public class AggregateResultSetMetaDataTest {
         List.of(List.of(new BigDecimal("1.25"), 1), List.of(new BigDecimal("10000.0"), 2), Arrays.asList(null, 3)));
     assertEquals(7, metadata.getPrecision(1));
     assertEquals(2, metadata.getScale(1));
-    assertEquals(0, metadata.getPrecision(2));
+    assertEquals(10, metadata.getPrecision(2));
     assertEquals(0, metadata.getScale(2));
   }
   /**

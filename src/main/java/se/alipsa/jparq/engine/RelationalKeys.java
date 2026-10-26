@@ -61,13 +61,17 @@ public final class RelationalKeys {
   }
 
   /**
-   * Snapshots structured values by content, ignoring Avro record names.
+   * Snapshots structured values by content, ignoring Avro record names, and
+   * normalizes whole-number representations so equal integers share one key.
    *
    * @param value
    *          a scalar, record, array, collection, or map
    * @return content key, or the original scalar
    */
   public static Object value(Object value) {
+    if (value instanceof Byte || value instanceof Short || value instanceof Integer) {
+      return ((Number) value).longValue();
+    }
     if (value instanceof GenericRecord record) {
       Map<String, Object> fields = new LinkedHashMap<>();
       for (Schema.Field field : record.getSchema().getFields()) {

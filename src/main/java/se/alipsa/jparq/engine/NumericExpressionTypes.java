@@ -95,7 +95,7 @@ public final class NumericExpressionTypes {
         if (argument != null) {
           return switch (name) {
             case "SUM" -> switch (argument.jdbcType()) {
-              case Types.INTEGER -> NumericType.of(Types.BIGINT, 0, 0);
+              case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> NumericType.of(Types.BIGINT, 0, 0);
               case Types.REAL -> NumericType.of(Types.DOUBLE, 0, 0);
               case Types.DECIMAL -> argument.precision() == 0
                   ? argument
