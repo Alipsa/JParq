@@ -54,6 +54,24 @@ class SqlExceptionsTest {
   }
 
   /**
+   * Uses one predicate diagnostic contract and redacts private operand bindings.
+   *
+   * @throws Exception
+   *           if expression parsing fails
+   */
+  @Test
+  void unsupportedPredicateFactoryClassifiesAndRedacts() throws Exception {
+    var ordinary = SqlExceptions.unsupportedPredicate(CCJSqlParserUtil.parseExpression("cyl"));
+    assertEquals("Unsupported predicate: cyl", ordinary.getMessage());
+    assertEquals("42000", SqlExceptions.findSqlStateFailure(ordinary).getSQLState());
+    var bound = SqlExceptions
+        .unsupportedPredicate(CCJSqlParserUtil.parseExpression("__JPARQ_CORRELATED_VALUE('private-key', 0)"));
+    assertEquals("Unsupported predicate: <outer value>", bound.getMessage());
+    assertInstanceOf(SQLSyntaxErrorException.class, bound.getCause());
+    assertEquals("42000", SqlExceptions.findSqlStateFailure(bound).getSQLState());
+  }
+
+  /**
    * Documents the JDBC syntax error contract, including preparation context.
    * 
    * @throws Exception

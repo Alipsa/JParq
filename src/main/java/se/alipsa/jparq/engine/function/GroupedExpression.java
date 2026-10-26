@@ -281,9 +281,13 @@ final class GroupedExpression {
       if (classified == null) {
         throw failure;
       }
-      if ("42000".equals(classified.getSQLState()) && classified.getMessage() != null
-          && classified.getMessage().startsWith("Unsupported predicate:")) {
+      String detail = classified.getMessage();
+      if ("42000".equals(classified.getSQLState()) && detail != null
+          && detail.startsWith(SqlExceptions.UNSUPPORTED_PREDICATE)) {
         String message = "Unsupported predicate in grouped expression: " + sourceDescription;
+        if (!detail.contains("<outer value>")) {
+          message += " (" + detail + ")";
+        }
         // Keep the original slot diagnostic in the cause chain, while JDBC
         // wrappers use the grouped source as their classified diagnostic.
         throw new IllegalArgumentException(message,

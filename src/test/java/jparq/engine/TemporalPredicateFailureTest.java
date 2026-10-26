@@ -163,6 +163,37 @@ class TemporalPredicateFailureTest {
   }
 
   /**
+   * Keeps a specific ordinary SQL operand alongside its grouped source context.
+   *
+   * @param clause
+   *          whether the predicate appears in SELECT or HAVING
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT", "HAVING"
+  })
+  void groupedPredicateDiagnosticsRetainOrdinaryOperand(String clause) throws Exception {
+    String url = "jdbc:jparq:" + Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    String sql = "SELECT".equals(clause)
+        ? "SELECT cyl, CASE WHEN COUNT(*) > 0 AND 'x' || 'y' THEN 1 END FROM mtcars GROUP BY cyl"
+        : "SELECT cyl FROM mtcars GROUP BY cyl HAVING COUNT(*) > 0 AND CASE WHEN 'x' || 'y' THEN TRUE END";
+    try (var connection = DriverManager.getConnection(url)) {
+      var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
+        try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
+          result.next();
+          result.getObject(1);
+        }
+      }, sql);
+      assertEquals("42000", failure.getSQLState());
+      assertTrue(failure.getMessage().contains("Unsupported predicate in grouped expression:"), failure::getMessage);
+      assertTrue(failure.getMessage().contains("Unsupported predicate: 'x' || 'y'"), failure::getMessage);
+      assertFalse(failure.getMessage().contains("<outer value>"), failure::getMessage);
+    }
+  }
+
+  /**
    * Keeps expression errors classified regardless of the JDBC getter used.
    *
    * @param getter

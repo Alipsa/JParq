@@ -2620,19 +2620,19 @@ public final class AggregateFunctions {
       }
       if (expr instanceof BinaryExpression be) {
         if (!BooleanExpressions.isPredicate(expr)) {
-          throw syntaxFailure("Unsupported predicate: " + SqlExceptions.describe(expr));
+          throw SqlExceptions.unsupportedPredicate(expr);
         }
         return evalBinary(be);
       }
       if (expr instanceof Column column && (findGroupIndex(column, groupIndexLookup, plan.groupExpressions()) == null
           || !booleanColumn.test(column))) {
-        throw syntaxFailure("Unsupported predicate: " + SqlExceptions.describe(expr));
+        throw SqlExceptions.unsupportedPredicate(expr);
       }
       Object result = value(expr);
       if (result == null || result instanceof Boolean) {
         return (Boolean) result;
       }
-      throw syntaxFailure("Unsupported predicate: " + SqlExceptions.describe(expr));
+      throw SqlExceptions.unsupportedPredicate(expr);
     }
 
     private Boolean evalIn(InExpression in) {

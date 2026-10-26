@@ -13,6 +13,8 @@ import net.sf.jsqlparser.expression.Expression;
  * boundaries.
  */
 public final class SqlExceptions {
+  /** Shared diagnostic prefix for unsupported Boolean predicates. */
+  public static final String UNSUPPORTED_PREDICATE = "Unsupported predicate:";
   private static final int DIAGNOSTIC_VALUE_LIMIT = 64;
   private static final Set<String> CLASSIFIED_STATES = Set.of("42000", "22003", "22007", "22008", "22018");
   private static final Pattern CORRELATED_BINDING = Pattern
@@ -65,6 +67,18 @@ public final class SqlExceptions {
    */
   public static IllegalArgumentException syntaxFailure(String message) {
     return new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000"));
+  }
+
+  /**
+   * Creates a syntax failure naming an unsupported predicate without private
+   * bindings.
+   *
+   * @param expression
+   *          the invalid predicate
+   * @return an engine exception carrying SQLState 42000 and a redacted diagnostic
+   */
+  public static IllegalArgumentException unsupportedPredicate(Expression expression) {
+    return syntaxFailure(UNSUPPORTED_PREDICATE + " " + describe(expression));
   }
 
   /**

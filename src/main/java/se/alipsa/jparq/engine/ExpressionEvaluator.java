@@ -225,7 +225,7 @@ public final class ExpressionEvaluator {
 
     if (expr instanceof BinaryExpression be) {
       if (!BooleanExpressions.isPredicate(expr)) {
-        throw SqlExceptions.syntaxFailure("Unsupported predicate: " + SqlExceptions.describe(expr));
+        throw SqlExceptions.unsupportedPredicate(expr);
       }
       if (involvesAnyComparison(be.getLeftExpression(), be.getRightExpression())) {
         return evalAnyComparison(be, rec);
@@ -234,7 +234,7 @@ public final class ExpressionEvaluator {
     }
 
     if (expr instanceof Column column && !isBooleanColumn(column)) {
-      throw SqlExceptions.syntaxFailure("Unsupported predicate: " + SqlExceptions.describe(expr));
+      throw SqlExceptions.unsupportedPredicate(expr);
     }
 
     // Fallback for value expressions used as predicates (e.g. boolean columns):
@@ -244,7 +244,7 @@ public final class ExpressionEvaluator {
     if (value == null || value instanceof Boolean) {
       return (Boolean) value;
     }
-    throw SqlExceptions.syntaxFailure("Unsupported predicate: " + SqlExceptions.describe(expr));
+    throw SqlExceptions.unsupportedPredicate(expr);
   }
 
   /**
