@@ -71,7 +71,9 @@ public final class NumericExpressionTypes {
                 ? new NumericType(Types.DECIMAL, 0, 0)
                 : new NumericType(Types.DECIMAL, operand.precision(), operand.scale());
       }
-      return switch (name) {
+      int parameters = name.indexOf('(');
+      String baseName = parameters < 0 ? name : name.substring(0, parameters);
+      return switch (baseName) {
         case "TINYINT" -> new NumericType(Types.TINYINT, 3, 0);
         case "SMALLINT", "INT2" -> new NumericType(Types.SMALLINT, 5, 0);
         case "INT", "INTEGER", "SIGNED", "INT4" -> NumericType.of(Types.INTEGER, 0, 0);

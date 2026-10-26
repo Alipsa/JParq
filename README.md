@@ -221,6 +221,9 @@ text, with `SQLDataException` and SQLState `22018`. Projection evaluation failur
 Numeric casts reject integer range overflow and floating-point overflow to infinity with
 `SQLDataException` and SQLState `22003`. Integer casts truncate fractions toward zero before checking
 the target range; floating-point rounding and underflow to zero retain Java conversion behavior.
+`FLOAT`, including `FLOAT(p)` for any precision such as `FLOAT(53)`, always uses single precision
+(Java `Float`, JDBC `REAL`). The precision argument does not select double precision. Use `DOUBLE`,
+`DOUBLE PRECISION`, or `FLOAT8` for double precision; for example, cast `1e300` to `DOUBLE` rather than `FLOAT(53)`.
 
 Unknown or unsupported scalar functions and unsupported expression types raise `SQLSyntaxErrorException`
 with SQLState `42000`

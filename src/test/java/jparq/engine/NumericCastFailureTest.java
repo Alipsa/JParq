@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLDataException;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -104,6 +105,40 @@ class NumericCastFailureTest {
           });
           assertEquals("22003", failure.getSQLState());
         }
+      }
+    }
+  }
+
+  /**
+   * Documents the single-precision FLOAT mapping even with explicit precision.
+   *
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @Test
+  void precisionQualifiedFloatRetainsSinglePrecision() throws Exception {
+    try (var connection = DriverManager.getConnection(jdbcUrl()); var statement = connection.createStatement()) {
+      for (int precision : List.of(24, 25, 53)) {
+        String body = "SELECT CAST(1.25 AS FLOAT(" + precision + ")) AS x FROM mtcars LIMIT 1";
+        for (String sql : List.of(body, "SELECT x FROM (" + body + ") d", "WITH c AS (" + body + ") SELECT x FROM c")) {
+          try (var result = statement.executeQuery(sql)) {
+            assertEquals(Types.REAL, result.getMetaData().getColumnType(1), sql);
+            assertTrue(result.next(), sql);
+            assertEquals(Float.valueOf(1.25f), result.getObject(1), sql);
+          }
+        }
+        try (var result = statement.executeQuery(body.replace("LIMIT 1", "WHERE 1 = 0"))) {
+          assertEquals(Types.REAL, result.getMetaData().getColumnType(1));
+          assertFalse(result.next());
+        }
+        String sql = "SELECT CAST(1e300 AS FLOAT(" + precision + ")) FROM mtcars LIMIT 1";
+        var failure = assertThrows(SQLDataException.class, () -> {
+          try (var result = statement.executeQuery(sql)) {
+            assertTrue(result.next(), sql);
+            result.getObject(1);
+          }
+        }, sql);
+        assertEquals("22003", failure.getSQLState(), sql);
       }
     }
   }

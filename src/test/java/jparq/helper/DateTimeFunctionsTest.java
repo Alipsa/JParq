@@ -569,6 +569,7 @@ public class DateTimeFunctionsTest {
       }
     }
   }
+
   /**
    * Checks integer bounds after truncation for every supported target alias.
    */
@@ -601,6 +602,25 @@ public class DateTimeFunctionsTest {
         assertEquals(0L, result.longValue(), type);
       }
       assertNull(DateTimeFunctions.castLiteral(createCastExpression(type), null));
+    }
+  }
+
+  /** Ensures long inputs do not overwhelm numeric conversion diagnostics. */
+  @Test
+  void numericCastDiagnosticsBoundValuesAndRetainTargetNames() {
+    for (String value : List.of("9".repeat(200000), "x".repeat(200000))) {
+      var failure = assertThrows(IllegalArgumentException.class,
+          () -> DateTimeFunctions.castLiteral(createCastExpression("DOUBLE PRECISION"), value));
+      assertTrue(failure.getMessage().length() < 200, failure::getMessage);
+      assertTrue(failure.getMessage().contains(value.substring(0, 64) + "…"));
+      var classified = assertInstanceOf(SQLDataException.class, SqlExceptions.findSqlStateFailure(failure));
+      assertTrue(classified.getMessage().length() < 200, classified::getMessage);
+      assertEquals(value.startsWith("9") ? "22003" : "22018", classified.getSQLState());
+    }
+    for (String type : List.of("DOUBLE PRECISION", "INT4", "SIGNED", "FLOAT(53)")) {
+      var failure = assertThrows(IllegalArgumentException.class,
+          () -> DateTimeFunctions.castLiteral(createCastExpression(type), "1e400"));
+      assertTrue(failure.getMessage().contains("to " + type + ":"), failure::getMessage);
     }
   }
 

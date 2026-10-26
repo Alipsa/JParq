@@ -650,7 +650,7 @@ public final class DateTimeFunctions {
       case "text", "clob" -> value.toString();
       case "tinyint", "smallint", "int2", "int", "integer", "signed", "int4", "bigint", "int8", "float", "real",
           "float4", "double", "doubleprecision", "float8" ->
-        castNumeric(value, normalized);
+        castNumeric(value, normalized, colType.toString());
       default -> value;
     };
   }
@@ -662,11 +662,13 @@ public final class DateTimeFunctions {
    *          the numeric input
    * @param type
    *          the normalized numeric target name
+   * @param target
+   *          the declared SQL target type for diagnostics
    * @return the narrowed number, truncating integer fractions toward zero
    * @throws IllegalArgumentException
    *           if the input is invalid (22018) or out of range (22003)
    */
-  private static Number castNumeric(Object value, String type) {
+  private static Number castNumeric(Object value, String type, String target) {
     BigDecimal decimal = toBigDecimalValue(value);
     try {
       switch (type) {
@@ -698,7 +700,8 @@ public final class DateTimeFunctions {
           };
       }
     } catch (ArithmeticException exception) {
-      String message = "Cannot cast numeric value '" + value + "' to " + type + ": value out of range";
+      String message = "Cannot cast numeric value '" + diagnosticValue(value) + "' to " + target
+          + ": value out of range";
       throw new IllegalArgumentException(message, new SQLDataException(message, "22003", exception));
     }
   }
@@ -722,9 +725,21 @@ public final class DateTimeFunctions {
     try {
       return new BigDecimal(value.toString().trim());
     } catch (NumberFormatException exception) {
-      String message = "Cannot cast value '" + value + "' to a numeric value";
+      String message = "Cannot cast value '" + diagnosticValue(value) + "' to a numeric value";
       throw new IllegalArgumentException(message, new SQLDataException(message, "22018", exception));
     }
+  }
+
+  /**
+   * Bounds input values embedded in numeric conversion diagnostics.
+   *
+   * @param value
+   *          the input value
+   * @return at most 64 input characters followed by an ellipsis when truncated
+   */
+  private static String diagnosticValue(Object value) {
+    String text = value.toString();
+    return text.length() > 64 ? text.substring(0, 64) + "…" : text;
   }
 
   private static String castToString(CastExpression cast, Object value) {
