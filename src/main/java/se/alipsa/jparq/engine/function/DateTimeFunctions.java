@@ -1,6 +1,7 @@
 package se.alipsa.jparq.engine.function;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.Date;
 import java.sql.SQLDataException;
 import java.sql.Time;
@@ -615,8 +616,9 @@ public final class DateTimeFunctions {
    * @return the cast result converted to the requested type when possible
    * @throws IllegalArgumentException
    *           if decimal bounds are invalid (SQLState 42000) or the rounded value
-   *           exceeds precision (SQLState 22003), or numeric input is invalid or
-   *           non-finite (SQLState 22018), carried by the cause
+   *           exceeds the target's range or precision (SQLState 22003), or
+   *           numeric input is invalid or non-finite (SQLState 22018), carried by
+   *           the cause
    */
   public static Object castLiteral(CastExpression cast, Object value) {
     if (cast != null && cast.getColDataType() != null
@@ -646,14 +648,59 @@ public final class DateTimeFunctions {
       case "char", "character", "nchar", "varchar", "charactervarying", "nvarchar", "string" ->
         castToString(cast, value);
       case "text", "clob" -> value.toString();
-      case "tinyint" -> toBigDecimalValue(value).byteValue();
-      case "smallint", "int2" -> toBigDecimalValue(value).shortValue();
-      case "int", "integer", "signed", "int4" -> toBigDecimalValue(value).intValue();
-      case "bigint", "int8" -> toBigDecimalValue(value).longValue();
-      case "float", "real", "float4" -> toBigDecimalValue(value).floatValue();
-      case "double", "doubleprecision", "float8" -> toBigDecimalValue(value).doubleValue();
+      case "tinyint", "smallint", "int2", "int", "integer", "signed", "int4", "bigint", "int8", "float", "real",
+          "float4", "double", "doubleprecision", "float8" ->
+        castNumeric(value, normalized);
       default -> value;
     };
+  }
+
+  /**
+   * Narrows finite numeric inputs while rejecting overflow.
+   *
+   * @param value
+   *          the numeric input
+   * @param type
+   *          the normalized numeric target name
+   * @return the narrowed number, truncating integer fractions toward zero
+   * @throws IllegalArgumentException
+   *           if the input is invalid (22018) or out of range (22003)
+   */
+  private static Number castNumeric(Object value, String type) {
+    BigDecimal decimal = toBigDecimalValue(value);
+    try {
+      switch (type) {
+        case "float", "real", "float4":
+          float result = decimal.floatValue();
+          if (!Float.isFinite(result)) {
+            throw new ArithmeticException("Floating-point overflow");
+          }
+          return result;
+        case "double", "doubleprecision", "float8":
+          double doubleResult = decimal.doubleValue();
+          if (!Double.isFinite(doubleResult)) {
+            throw new ArithmeticException("Floating-point overflow");
+          }
+          return doubleResult;
+        default:
+          // Bound the integer digits before rescaling to avoid expanding extreme
+          // exponents.
+          long digits = (long) decimal.precision() - decimal.scale();
+          if (digits > 19 && decimal.signum() != 0) {
+            throw new ArithmeticException("Integer overflow");
+          }
+          BigDecimal integer = digits <= 0 ? BigDecimal.ZERO : decimal.setScale(0, RoundingMode.DOWN);
+          return switch (type) {
+            case "tinyint" -> integer.byteValueExact();
+            case "smallint", "int2" -> integer.shortValueExact();
+            case "int", "integer", "signed", "int4" -> integer.intValueExact();
+            default -> integer.longValueExact();
+          };
+      }
+    } catch (ArithmeticException exception) {
+      String message = "Cannot cast numeric value '" + value + "' to " + type + ": value out of range";
+      throw new IllegalArgumentException(message, new SQLDataException(message, "22003", exception));
+    }
   }
 
   /**

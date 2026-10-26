@@ -218,8 +218,9 @@ unsupported temporal arithmetic raise `SQLException` with SQLState `42000` when 
 Numeric casts reject non-finite inputs such as `'Infinity'`, `'-Infinity'`, and `'NaN'`, as well as invalid numeric
 text, with `SQLDataException` and SQLState `22018`. Projection evaluation failures are reported as
 `SQLException` with their original causes, including when retrieving values through result-set getters.
-Range checks for finite inputs narrowed to integer or floating-point targets remain incomplete; those casts
-can still wrap or overflow to infinity (tracked in [#238](https://github.com/Alipsa/JParq/issues/238)).
+Numeric casts reject integer range overflow and floating-point overflow to infinity with
+`SQLDataException` and SQLState `22003`. Integer casts truncate fractions toward zero before checking
+the target range; floating-point rounding and underflow to zero retain Java conversion behavior.
 
 Unknown or unsupported scalar functions and unsupported expression types raise `SQLSyntaxErrorException`
 with SQLState `42000`
