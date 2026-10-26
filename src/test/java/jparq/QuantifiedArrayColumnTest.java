@@ -223,11 +223,27 @@ class QuantifiedArrayColumnTest {
             var result = statement.executeQuery("SELECT ARRAY[nums,decs], ARRAY[nums,ARRAY[1.5]], "
                 + "ARRAY[tags,ARRAY['x']] FROM " + input + " WHERE id = 1")) {
           assertTrue(result.next());
-          assertEquals(List.of(List.of(new BigDecimal("2"), new BigDecimal("4")),
-              List.of(new BigDecimal("1.50"), new BigDecimal("2.50"))), result.getObject(1));
-          assertEquals(List.of(List.of(new BigDecimal("2"), new BigDecimal("4")), List.of(new BigDecimal("1.5"))),
-              result.getObject(2));
-          assertEquals(List.of(List.of("Sport", "Comfort"), List.of("x")), result.getObject(3));
+          assertArrayEquals(new Object[]{
+              new Object[]{
+                  new BigDecimal("2"), new BigDecimal("4")
+              }, new Object[]{
+                  new BigDecimal("1.50"), new BigDecimal("2.50")
+              }
+          }, (Object[]) result.getObject(1));
+          assertArrayEquals(new Object[]{
+              new Object[]{
+                  new BigDecimal("2"), new BigDecimal("4")
+              }, new Object[]{
+                  new BigDecimal("1.5")
+              }
+          }, (Object[]) result.getObject(2));
+          assertArrayEquals(new Object[]{
+              new Object[]{
+                  "Sport", "Comfort"
+              }, new Object[]{
+                  "x"
+              }
+          }, (Object[]) result.getObject(3));
           assertFalse(result.next());
         }
       }
@@ -235,7 +251,9 @@ class QuantifiedArrayColumnTest {
       try (var statement = connection.createStatement();
           var result = statement.executeQuery("SELECT ARRAY(SELECT dates FROM arrays WHERE id = 1)")) {
         assertTrue(result.next());
-        assertEquals(List.of(dates), result.getObject(1));
+        Object[] outer = (Object[]) result.getObject(1);
+        assertEquals(1, outer.length);
+        assertArrayEquals(dates.toArray(), (Object[]) outer[0]);
         assertFalse(result.next());
       }
       try (var statement = connection.createStatement();

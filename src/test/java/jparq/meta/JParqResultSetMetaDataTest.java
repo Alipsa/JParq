@@ -129,13 +129,13 @@ class JParqResultSetMetaDataTest {
   }
 
   @Test
-  void arraySchemaFieldsReportListClass() {
+  void arraySchemaFieldsReportObjectArrayClass() {
     Schema schema = schemaWithArrayField();
     JParqResultSetMetaData metaData = createMetadataWithExpression(schema, List.of("entries"),
         Collections.singletonList("entries"), Collections.emptyList());
 
-    assertEquals(List.class.getName(), metaData.getColumnClassName(1),
-        "Array schema fields should report java.util.List");
+    assertEquals(Object[].class.getName(), metaData.getColumnClassName(1),
+        "Array schema fields should report the Object[] representation used by getObject()");
   }
 
   @Test
@@ -149,14 +149,14 @@ class JParqResultSetMetaDataTest {
   }
 
   @Test
-  void computedArrayExpressionsReportListClass() {
+  void computedArrayExpressionsReportObjectArrayClass() {
     Schema schema = schemaWithField();
     ArrayConstructor arrayConstructor = new ArrayConstructor();
     JParqResultSetMetaData metaData = createMetadataWithExpression(schema, List.of("computed_array"),
         Collections.singletonList(null), List.of(arrayConstructor));
 
-    assertEquals(List.class.getName(), metaData.getColumnClassName(1),
-        "Computed array expressions should report java.util.List");
+    assertEquals(Object[].class.getName(), metaData.getColumnClassName(1),
+        "Computed array expressions should report the Object[] representation used by getObject()");
   }
 
   @Test

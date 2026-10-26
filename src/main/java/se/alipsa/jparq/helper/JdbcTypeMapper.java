@@ -5,7 +5,6 @@ import java.sql.Date;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
-import java.util.List;
 import java.util.Map;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
@@ -136,7 +135,7 @@ public final class JdbcTypeMapper {
                 ? BigDecimal.class.getName()
                 : byte[].class.getName();
       case RECORD -> org.apache.avro.generic.GenericRecord.class.getName();
-      case ARRAY -> List.class.getName();
+      case ARRAY -> Object[].class.getName();
       case MAP -> Map.class.getName();
       default -> Object.class.getName();
     };
@@ -166,7 +165,7 @@ public final class JdbcTypeMapper {
       case Types.TIME, Types.TIME_WITH_TIMEZONE -> Time.class.getName();
       case Types.TIMESTAMP, Types.TIMESTAMP_WITH_TIMEZONE -> Timestamp.class.getName();
       case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY -> byte[].class.getName();
-      case Types.ARRAY -> List.class.getName();
+      case Types.ARRAY -> Object[].class.getName();
       case Types.CLOB, Types.NCLOB -> java.sql.Clob.class.getName();
       case Types.BLOB -> java.sql.Blob.class.getName();
       case Types.STRUCT -> org.apache.avro.generic.GenericRecord.class.getName();
@@ -201,6 +200,7 @@ public final class JdbcTypeMapper {
       case "java.sql.Timestamp" -> Types.TIMESTAMP;
       case "[B", "byte[]" -> Types.VARBINARY;
       case "java.util.List", "java.util.Collection" -> Types.ARRAY;
+      case "[Ljava.lang.Object;", "java.lang.Object[]" -> Types.ARRAY;
       case "java.util.Map" -> Types.STRUCT;
       default -> Types.OTHER;
     };

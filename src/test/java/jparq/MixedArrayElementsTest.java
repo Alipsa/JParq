@@ -1,5 +1,6 @@
 package jparq;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -11,7 +12,6 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
-import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -114,12 +114,35 @@ class MixedArrayElementsTest {
                    ARRAY[[[1]],[[2.5]]] AS e
             """)) {
       assertTrue(result.next());
-      assertEquals(Arrays.asList(null, new BigDecimal("4"), new BigDecimal("6.5"), null), result.getObject(1));
-      assertEquals(List.of(List.of(4), List.of(6)), result.getObject(2));
+      assertArrayEquals(new Object[]{
+          null, new BigDecimal("4"), new BigDecimal("6.5"), null
+      }, (Object[]) result.getObject(1));
+      assertArrayEquals(new Object[]{
+          new Object[]{
+              4
+          }, new Object[]{
+              6
+          }
+      }, (Object[]) result.getObject(2));
       assertEquals(7, result.getObject(3));
-      assertEquals(List.of(List.of(new BigDecimal("1")), List.of(new BigDecimal("2.5"))), result.getObject(4));
-      assertEquals(List.of(List.of(List.of(new BigDecimal("1"))), List.of(List.of(new BigDecimal("2.5")))),
-          result.getObject(5));
+      assertArrayEquals(new Object[]{
+          new Object[]{
+              new BigDecimal("1")
+          }, new Object[]{
+              new BigDecimal("2.5")
+          }
+      }, (Object[]) result.getObject(4));
+      assertArrayEquals(new Object[]{
+          new Object[]{
+              new Object[]{
+                  new BigDecimal("1")
+              }
+          }, new Object[]{
+              new Object[]{
+                  new BigDecimal("2.5")
+              }
+          }
+      }, (Object[]) result.getObject(5));
       assertFalse(result.next());
     }
   }

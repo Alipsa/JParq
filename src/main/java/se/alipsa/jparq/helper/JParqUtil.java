@@ -4,7 +4,9 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import org.apache.avro.generic.GenericData;
 import se.alipsa.jparq.engine.Identifier;
@@ -117,6 +119,44 @@ public final class JParqUtil {
    */
   public static String normalizeQualifier(String qualifier) {
     return Identifier.lookupKey(qualifier);
+  }
+
+  /**
+   * Normalizes a JDBC-facing value to the uniform {@code Object[]} array
+   * representation. Lists (including Avro's {@link GenericData.Array}) become
+   * {@code Object[]} with their elements normalized recursively, so nested arrays
+   * use the same representation as physical Parquet array columns. Map values are
+   * normalized recursively as well; the original map is retained when no nested
+   * value required conversion. All other values pass through unchanged.
+   *
+   * @param raw
+   *          the value read for an ARRAY column
+   * @return the supplied value with every nested list replaced by an
+   *         {@code Object[]}
+   */
+  public static Object normalizeArrayValue(Object raw) {
+    if (raw instanceof List<?> list) {
+      Object[] elements = new Object[list.size()];
+      for (int i = 0; i < elements.length; i++) {
+        elements[i] = normalizeArrayValue(list.get(i));
+      }
+      return elements;
+    }
+    if (raw instanceof Map<?, ?> map) {
+      Map<Object, Object> normalized = null;
+      for (Map.Entry<?, ?> entry : map.entrySet()) {
+        Object value = normalizeArrayValue(entry.getValue());
+        if (value != entry.getValue()) {
+          if (normalized == null) {
+            normalized = new LinkedHashMap<>();
+            normalized.putAll((Map<Object, Object>) map);
+          }
+          normalized.put(entry.getKey(), value);
+        }
+      }
+      return normalized == null ? raw : normalized;
+    }
+    return raw;
   }
 
   /**
