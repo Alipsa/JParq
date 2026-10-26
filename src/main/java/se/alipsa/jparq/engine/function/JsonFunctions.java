@@ -118,6 +118,8 @@ public final class JsonFunctions {
    * values. Key text is preserved, including whitespace and literal quotes.
    * Arrays and records are converted recursively, using Avro logical types for
    * record fields. Binary values use base64 strings and NULLs use JSON null.
+   * Strings nested in containers remain text; only direct value arguments use the
+   * JSON-text parsing heuristic.
    *
    * @param args
    *          alternating key/value arguments
@@ -148,7 +150,9 @@ public final class JsonFunctions {
   /**
    * Construct a JSON array from the supplied arguments. Nested arrays and records
    * are converted recursively, using Avro logical types for record fields. Binary
-   * values use base64 strings and NULLs use JSON null.
+   * values use base64 strings and NULLs use JSON null. Strings nested in
+   * containers remain text; only direct arguments use the JSON-text parsing
+   * heuristic.
    *
    * @param args
    *          values to include in the array
@@ -372,7 +376,8 @@ public final class JsonFunctions {
   }
 
   /**
-   * Applies an Avro schema before converting a nested value to JSON.
+   * Applies an Avro schema before converting a nested value to JSON. Without a
+   * schema, nested strings remain text rather than being parsed as JSON.
    *
    * @param value
    *          raw field or element value
@@ -381,6 +386,9 @@ public final class JsonFunctions {
    * @return corresponding JSON node
    */
   private static JsonNode toNode(Object value, Schema schema) {
+    if (schema == null && value instanceof String text) {
+      return MAPPER.getNodeFactory().textNode(text);
+    }
     if (value == null || schema == null) {
       return toNode(value);
     }

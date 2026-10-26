@@ -176,6 +176,26 @@ class JsonFunctionsTest {
     assertEquals("[[]]", JsonFunctions.jsonArray(List.of(List.of())));
   }
 
+  /** Keeps JSON-looking strings as text at every array and map nesting level. */
+  @Test
+  void preservesContainerStrings() {
+    String arrayText = "[1,2]";
+    String objectText = "{\"a\":1}";
+    String quotedArray = "\"[1,2]\"";
+    String quotedObject = "\"{\\\"a\\\":1}\"";
+    for (Object container : List.of(List.of(arrayText, objectText), new Object[]{
+        arrayText, objectText
+    })) {
+      String expected = "[" + quotedArray + "," + quotedObject + "]";
+      assertEquals("[" + expected + "]", JsonFunctions.jsonArray(List.of(container)));
+      assertEquals("{\"k\":" + expected + "}", JsonFunctions.jsonObject(List.of("k", container)));
+      assertEquals("[[" + expected + "]]", JsonFunctions.jsonArray(List.of(List.of(container))));
+    }
+    assertEquals("[{\"a\":" + quotedObject + "}]", JsonFunctions.jsonArray(List.of(Map.of("a", objectText))));
+    assertEquals("[[1,2],{\"a\":1}]", JsonFunctions.jsonArray(List.of(arrayText, objectText)));
+    assertEquals("{\"k\":[1,2]}", JsonFunctions.jsonObject(List.of("k", arrayText)));
+  }
+
   /** Encodes remaining binary bytes without moving the source buffer. */
   @Test
   void encodesBinaryValues() {

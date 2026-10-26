@@ -639,9 +639,18 @@ The following SQL statements are supported:
   DISTINCT, GROUP BY, set-operation keys, and window PARTITION BY compare struct fields and array elements by content,
   independently of Avro record names. JSON_OBJECT and JSON_ARRAY embed struct values as JSON objects and
   SQL ARRAY values (stored columns or computed constructors) as JSON arrays, recursively. NULL elements become
-  JSON `null`, and empty arrays become `[]`. Struct fields use their declared Avro logical types, including
-  numeric decimals and date/timestamp strings. Binary fields use base64 strings; non-finite floating-point
-  values retain their string representations, such as `"NaN"`.
+  JSON `null`, and empty arrays become `[]`. Strings inside arrays and maps remain JSON strings, even when
+  their text looks like JSON. This also applies to strings returned by JSON constructors inside an SQL ARRAY:
+  `JSON_ARRAY(ARRAY[JSON_OBJECT(KEY 'a' VALUE 1)])` returns `["{\"a\":1}"]`.
+  Direct JSON constructor arguments retain the existing heuristic that embeds JSON-looking text as JSON.
+  Struct fields use their declared Avro logical types, including numeric decimals and date/timestamp strings.
+  This schema-aware conversion includes maps nested within struct fields. Top-level map columns and maps
+  inside stored arrays currently retain raw Avro logical values, such as epoch-day integers for dates;
+  consistent map decoding is tracked in [#313](https://github.com/Alipsa/JParq/issues/313).
+  Raw BYTES fields within structs use base64 strings. Top-level columns and stored-array elements pass through
+  JDBC coercion first, so BYTES may become UTF-8 text unless `jparq.binary` prefers binary values. For example,
+  the bytes of `hello` can render as `"hello"` in a column or stored array and `"aGVsbG8="` in a struct field.
+  Non-finite floating-point values retain their string representations, such as `"NaN"`.
   Array columns are read correctly from both the legacy 2-level and the standard 3-level Parquet LIST layout,
   including with projection and predicate pushdown enabled.
   Quantified comparisons in `HAVING` are not currently supported; see [#214](https://github.com/Alipsa/JParq/issues/214).

@@ -58,6 +58,12 @@ class JsonArraySerializationTest {
             "ARRAY['x','it''s',NULL]", "[\"x\",\"it's\",null]"
         }, new String[]{
             "ARRAY(SELECT 1 UNION ALL SELECT 2)", "[1,2]"
+        }, new String[]{
+            "ARRAY['[1,2]','{\"a\":1}','x']", "[\"[1,2]\",\"{\\\"a\\\":1}\",\"x\"]"
+        }, new String[]{
+            "ARRAY[ARRAY['[1,2]'],ARRAY['{\"a\":1}']]", "[[\"[1,2]\"],[\"{\\\"a\\\":1}\"]]"
+        }, new String[]{
+            "ARRAY[JSON_OBJECT(KEY 'a' VALUE 1)]", "[\"{\\\"a\\\":1}\"]"
         })) {
           assertJson(connection, function, sample[0], "", sample[1]);
         }
@@ -81,7 +87,7 @@ class JsonArraySerializationTest {
   void serializesStoredArrays(boolean pushdown) throws Exception {
     writeArrays();
     String record = "{\"m\":\"m\\\"1\",\"w\":7,\"dec\":1.50,\"dt\":\"2024-01-01\","
-        + "\"b\":\"AQI=\",\"nums\":[1,null,2],\"text\":\"[1,2]\"}";
+        + "\"b\":\"AQI=\",\"nums\":[1,null,2],\"text\":\"[1,2]\",\"hello\":\"aGVsbG8=\"}";
     try (var connection = DriverManager.getConnection(
         "jdbc:jparq:" + directory + "?projectionPushdown=" + pushdown + "&predicatePushdown=" + pushdown)) {
       for (String input : List.of("arrays", "(SELECT * FROM arrays) a",
@@ -90,6 +96,10 @@ class JsonArraySerializationTest {
           assertJson(connection, function, "ints", " FROM " + input + " WHERE id = 1", "[1,null,2]");
           assertJson(connection, function, "recs", " FROM " + input + " WHERE id = 1", "[" + record + ",null]");
           assertJson(connection, function, "details", " FROM " + input + " WHERE id = 1", record);
+          assertJson(connection, function, "strs", " FROM " + input + " WHERE id = 1",
+              "[\"[1,2]\",\"{\\\"a\\\":1}\",\"x\",null]");
+          assertJson(connection, function, "b", " FROM " + input + " WHERE id = 1", "\"hello\"");
+          assertJson(connection, function, "bs", " FROM " + input + " WHERE id = 1", "[\"hello\"]");
           for (String field : List.of("ints", "recs")) {
             assertJson(connection, function, field, " FROM " + input + " WHERE id = 2", "[]");
             assertJson(connection, function, field, " FROM " + input + " WHERE id = 3", "null");
@@ -139,9 +149,11 @@ class JsonArraySerializationTest {
     Schema date = LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
     Schema details = SchemaBuilder.record("details").fields().requiredString("m").requiredInt("w").name("dec")
         .type(decimal).noDefault().name("dt").type(date).noDefault().requiredBytes("b").name("nums").type(ints)
-        .noDefault().requiredString("text").endRecord();
+        .noDefault().requiredString("text").requiredBytes("hello").endRecord();
     final Schema schema = SchemaBuilder.record("arrays").fields().requiredInt("id").name("ints").type(ints).noDefault()
-        .name("recs").type(nullableArray(details)).noDefault().name("details").type(details).noDefault().endRecord();
+        .name("recs").type(nullableArray(details)).noDefault().name("details").type(details).noDefault().name("strs")
+        .type(nullableArray(Schema.create(Schema.Type.STRING))).noDefault().requiredBytes("b").name("bs")
+        .type(nullableArray(Schema.create(Schema.Type.BYTES))).noDefault().endRecord();
     var detail = new GenericData.Record(details);
     detail.put("m", "m\"1");
     detail.put("w", 7);
@@ -152,6 +164,7 @@ class JsonArraySerializationTest {
     }));
     detail.put("nums", Arrays.asList(1, null, 2));
     detail.put("text", "[1,2]");
+    detail.put("hello", ByteBuffer.wrap("hello".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
     Configuration configuration = new Configuration(false);
     configuration.setBoolean("parquet.avro.write-old-list-structure", false);
     var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve("arrays.parquet").toUri()),
@@ -164,6 +177,9 @@ class JsonArraySerializationTest {
         row.put("ints", id == 1 ? Arrays.asList(1, null, 2) : id == 2 ? List.of() : null);
         row.put("recs", id == 1 ? Arrays.asList(detail, null) : id == 2 ? List.of() : null);
         row.put("details", detail);
+        row.put("strs", Arrays.asList("[1,2]", "{\"a\":1}", "x", null));
+        row.put("b", ByteBuffer.wrap("hello".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        row.put("bs", List.of(ByteBuffer.wrap("hello".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
         writer.write(row);
       }
     }
