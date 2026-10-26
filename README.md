@@ -327,9 +327,9 @@ use for large inputs. Pushdown into nested groups is not yet implemented.
 Nanosecond timestamps, local timestamps, float16, lists, and image structs are readable. UTC-adjusted timestamps
 are returned as `java.sql.Timestamp` instants; local timestamps retain their stored wall-clock values in the
 JVM's default time zone. Microsecond and nanosecond precision is preserved. List (array) columns are available
-through `ResultSet.getObject` as `Object[]` values, and structs through their JSON string representation. Shards
-remain separate tables by
-default; opt into logical multi-file tables with `datasetLayout=hf` as described below.
+through `ResultSet.getObject` as `Object[]` values, and structs through their JSON string representation.
+Shards remain separate tables by default; opt into logical multi-file tables with `datasetLayout=hf` as described
+below.
 
 Small PyArrow fixtures are committed, so Maven does not need Python. Regeneration instructions and the exact
 PyArrow dependency are in `tools/createHfOptimizedData.py`.
@@ -634,9 +634,12 @@ The following SQL statements are supported:
   set-branch schemas in non-LATERAL derived tables and CTEs infer element types
   from returned values, recursively; empty or all-NULL elements use a nullable VARCHAR element schema.
   JDBC `getObject()` returns every ARRAY value, whether from a stored column or a computed constructor, as
-  `Object[]` (including mixed set-operation results), and struct columns as Avro `GenericRecord` values. Struct fields retain their raw Avro representations:
+  `Object[]` (including mixed set-operation results), and struct columns as Avro `GenericRecord` values. Struct
+  fields retain their raw Avro representations:
   strings can be `Utf8`, dates epoch-day integers, decimals `ByteBuffer`, and timestamps stored longs.
   The record's schema describes those field types; nested struct fields are not recursively decoded.
+  Predicates compare ARRAY values by content, element by element, treating stored and computed representations
+  alike; a NULL element orders before non-NULL elements, and a shared prefix orders the shorter array first.
   DISTINCT, GROUP BY, set-operation keys, and window PARTITION BY compare struct fields and array elements by content,
   independently of Avro record names. JSON_OBJECT and JSON_ARRAY embed struct values as JSON objects and
   SQL ARRAY values (stored columns or computed constructors) as JSON arrays, recursively. NULL elements become

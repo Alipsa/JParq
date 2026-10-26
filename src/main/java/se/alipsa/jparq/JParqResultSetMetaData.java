@@ -378,7 +378,19 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * @return the resolved {@link java.sql.Types JDBC type}
    */
   private int resolveComputedColumnType(int column) {
-    Expression expression = unwrap(expressionAtColumn(column));
+    return computedColumnType(unwrap(expressionAtColumn(column)));
+  }
+
+  /**
+   * Determine the JDBC type of a computed expression when no Avro schema field is
+   * available, including Boolean predicates, arrays, scalar subqueries, and
+   * analytic functions.
+   *
+   * @param expression
+   *          the computed projection expression
+   * @return the resolved {@link java.sql.Types JDBC type}
+   */
+  private int computedColumnType(Expression expression) {
     if (BooleanExpressions.isBoolean(expression, reference -> {
       Schema.Field field = resolveSourceField(reference);
       return field != null && JdbcTypeMapper.mapSchemaToJdbcType(field.schema()) == Types.BOOLEAN;
@@ -391,11 +403,39 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
         Types.BIGINT;
       case AnalyticExpression analytic -> resolveAnalyticFunctionType(analytic);
       case ArrayConstructor arrayConstructor -> Types.ARRAY;
+      case net.sf.jsqlparser.statement.select.Select select -> {
+        Expression projection = scalarSubqueryProjection(select);
+        yield projection == null ? Types.OTHER : computedColumnType(unwrap(projection));
+      }
       case net.sf.jsqlparser.expression.Function func when func.getName() != null
           && "ARRAY".equalsIgnoreCase(func.getName()) ->
         Types.ARRAY;
       case null, default -> Types.OTHER;
     };
+  }
+
+  /**
+   * Extracts the first projected expression of a scalar subquery, unwrapping
+   * parentheses and set operations.
+   *
+   * @param select
+   *          the subquery to inspect
+   * @return the first projection expression, or {@code null} when the shape is
+   *         unsupported or projects nothing
+   */
+  private static Expression scalarSubqueryProjection(net.sf.jsqlparser.statement.select.Select select) {
+    net.sf.jsqlparser.statement.select.Select unwrapped = select;
+    while (unwrapped instanceof net.sf.jsqlparser.statement.select.ParenthesedSelect parenthesed) {
+      unwrapped = parenthesed.getSelect();
+    }
+    if (unwrapped instanceof net.sf.jsqlparser.statement.select.SetOperationList set && !set.getSelects().isEmpty()) {
+      unwrapped = set.getSelects().getFirst();
+    }
+    if (!(unwrapped instanceof net.sf.jsqlparser.statement.select.PlainSelect plain)
+        || plain.getSelectItems().isEmpty()) {
+      return null;
+    }
+    return plain.getSelectItems().getFirst().getExpression();
   }
 
   /**
@@ -433,10 +473,26 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   }
 
   private String resolveComputedColumnClassName(int column) {
-    Expression expression = unwrap(expressionAtColumn(column));
+    return computedColumnClassName(unwrap(expressionAtColumn(column)));
+  }
+
+  /**
+   * Resolve the Java class name of a computed expression when no Avro schema
+   * field is available, deriving scalar subqueries from their projection.
+   *
+   * @param expression
+   *          the computed projection expression
+   * @return the fully qualified class name, or {@code null} when it cannot be
+   *         determined
+   */
+  private String computedColumnClassName(Expression expression) {
     return switch (expression) {
       case AnalyticExpression analytic -> resolveAnalyticFunctionClassName(analytic);
       case ArrayConstructor arrayConstructor -> Object[].class.getName();
+      case net.sf.jsqlparser.statement.select.Select select -> {
+        Expression projection = scalarSubqueryProjection(select);
+        yield projection == null ? null : computedColumnClassName(unwrap(projection));
+      }
       case net.sf.jsqlparser.expression.Function func when func.getName() != null
           && "ARRAY".equalsIgnoreCase(func.getName()) ->
         Object[].class.getName();

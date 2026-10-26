@@ -165,6 +165,59 @@ class ArrayResultRepresentationTest {
     }
   }
 
+  @Test
+  void arraysCompareByContentWithScalarSubqueryArrays(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      assertIds(statement, "SELECT id FROM s WHERE ARRAY[1,2] = (SELECT ARRAY[1,2]) ORDER BY id", 1, 2);
+      assertIds(statement, "SELECT id FROM s WHERE (SELECT ARRAY[1,2]) = ARRAY[1,2] ORDER BY id", 1, 2);
+      assertIds(statement, "SELECT id FROM s WHERE ARRAY[1,2] IN (SELECT ARRAY[1,2]) ORDER BY id", 1, 2);
+      assertIds(statement, "SELECT id FROM s WHERE ARRAY[s.id] IN (SELECT ARRAY[i.id] FROM s i) ORDER BY id", 1, 2);
+      assertIds(statement, "SELECT id FROM s WHERE ARRAY[1,2] <> (SELECT ARRAY[1,2]) ORDER BY id");
+      assertIds(statement, "SELECT id FROM s WHERE ARRAY[1,2] NOT IN (SELECT ARRAY[1,2]) ORDER BY id");
+      assertIds(statement, "SELECT id FROM s WHERE ARRAY[1,2] = (SELECT ARRAY[1,3]) ORDER BY id");
+      assertIds(statement, "SELECT id FROM s WHERE ARRAY[1,2] < (SELECT ARRAY[1,3]) ORDER BY id", 1, 2);
+    }
+  }
+
+  @Test
+  void storedArraysCompareByContentWithComputedArrays(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      assertIds(statement, "SELECT id FROM s WHERE ints = ARRAY[1,2] ORDER BY id", 1);
+      assertIds(statement, "SELECT id FROM s WHERE ints = (SELECT ints FROM s WHERE id = 1) ORDER BY id", 1);
+      assertIds(statement, "SELECT id FROM s WHERE ARRAY[1,2] <> ints ORDER BY id");
+    }
+  }
+
+  @Test
+  void scalarSubqueryArrayReportsArrayTypeAndClass(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT ARRAY[1,2]) FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.ARRAY, metaData.getColumnType(1));
+      assertEquals(Object[].class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertArrayEquals(new Object[]{
+          1, 2
+      }, (Object[]) result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  private static void assertIds(java.sql.Statement statement, String sql, int... expected)
+      throws java.sql.SQLException {
+    List<Integer> ids = new java.util.ArrayList<>();
+    try (var result = statement.executeQuery(sql)) {
+      while (result.next()) {
+        ids.add(result.getInt(1));
+      }
+    }
+    assertEquals(java.util.Arrays.stream(expected).boxed().toList(), ids, sql);
+  }
+
   private static Connection connect(Path directory) throws Exception {
     Class.forName("se.alipsa.jparq.JParqDriver");
     return DriverManager.getConnection("jdbc:jparq:" + directory.toAbsolutePath());

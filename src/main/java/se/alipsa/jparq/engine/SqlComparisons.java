@@ -73,7 +73,58 @@ public final class SqlComparisons {
     if (l instanceof Number && r instanceof TemporalInterval || l instanceof TemporalInterval && r instanceof Number) {
       throw syntaxFailure("Cannot compare a numeric value with INTERVAL; DATE differences are numeric day counts");
     }
+    if (isArrayValue(l) && isArrayValue(r)) {
+      return compareArrays(l, r);
+    }
     return l.toString().compareTo(r.toString());
+  }
+
+  /**
+   * Determines whether a value uses an array representation (reference array or
+   * list-based container such as a computed SQL array or an Avro array).
+   *
+   * @param value
+   *          the value to inspect
+   * @return {@code true} when the value is an array or list
+   */
+  private static boolean isArrayValue(Object value) {
+    return value instanceof Object[] || value instanceof java.util.List<?>;
+  }
+
+  /**
+   * Compare two array values element by element, treating {@code Object[]} and
+   * list-based arrays the same. Elements are compared recursively, so nested
+   * arrays compare by content as well. Arrays are ordered lexicographically with
+   * a total order: a NULL element orders before a non-NULL element, a shared
+   * prefix orders the shorter array first, and arrays of equal length with
+   * pair-wise equal elements are equal.
+   *
+   * @param l
+   *          non-null left-hand array value
+   * @param r
+   *          non-null right-hand array value
+   * @return negative when {@code l < r}, zero when equal, positive when greater
+   */
+  private static int compareArrays(Object l, Object r) {
+    java.util.List<?> left = l instanceof Object[] array ? Arrays.asList(array) : (java.util.List<?>) l;
+    java.util.List<?> right = r instanceof Object[] array ? Arrays.asList(array) : (java.util.List<?>) r;
+    int shared = Math.min(left.size(), right.size());
+    for (int index = 0; index < shared; index++) {
+      Object leftElement = left.get(index);
+      Object rightElement = right.get(index);
+      if (leftElement == null || rightElement == null) {
+        int comparison = Boolean.compare(leftElement != null, rightElement != null);
+        if (comparison != 0) {
+          return comparison;
+        }
+        continue;
+      }
+      int comparison = typedCompare(leftElement, rightElement);
+      if (comparison != 0) {
+        return comparison;
+      }
+    }
+    return Integer.compare(left.size(), right.size());
   }
 
   /**
