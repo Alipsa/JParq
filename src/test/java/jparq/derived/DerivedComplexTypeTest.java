@@ -118,7 +118,7 @@ class DerivedComplexTypeTest {
           Object[] expected = input.contains("ARRAY(SELECT") ? new Object[]{
               1, 2
           } : new Object[]{
-              4L, 6L
+              4, 6
           };
           assertArrayEquals(expected, assertInstanceOf(Object[].class, result.getObject(1)), input);
         }
@@ -206,10 +206,10 @@ class DerivedComplexTypeTest {
             }, values);
           } else {
             assertArrayEquals(new Object[]{
-                1L, 2L
+                1, 2
             }, assertInstanceOf(Object[].class, values[0]));
             assertArrayEquals(new Object[]{
-                3L, 4L
+                3, 4
             }, assertInstanceOf(Object[].class, values[1]));
           }
           assertFalse(result.next(), sql);

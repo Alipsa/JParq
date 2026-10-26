@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.sql.Date;
+import java.sql.SQLDataException;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
@@ -69,6 +70,7 @@ import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.NumericType;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.CorrelatedBindings;
 import se.alipsa.jparq.engine.CorrelationMappings;
@@ -2927,9 +2929,66 @@ public final class AggregateFunctions {
    *          the value on the right
    * @param op
    *          the operation to perform (ADD, SUB, MUL etc.)
-   * @return the result of the calculation.
+   * @return the numeric result, or null for NULL operands or a zero divisor
+   * @throws IllegalArgumentException
+   *           if BIGINT arithmetic overflows, carrying SQLState 22003
    */
   public static Object calculate(Object leftVal, Object rightVal, Operation op) {
+    return calculate(leftVal, rightVal, op, null);
+  }
+
+  /**
+   * Calculates arithmetic in the declared numeric family, falling back to operand
+   * representations when a declaration is unavailable.
+   *
+   * @param leftVal
+   *          evaluated left operand
+   * @param rightVal
+   *          evaluated right operand
+   * @param op
+   *          arithmetic operator
+   * @param resultType
+   *          statically resolved result type, or null
+   * @return the numeric result, or null for NULL operands or a zero divisor
+   * @throws IllegalArgumentException
+   *           if BIGINT arithmetic overflows, carrying SQLState 22003
+   */
+  public static Object calculate(Object leftVal, Object rightVal, Operation op, NumericType resultType) {
+    if (leftVal == null || rightVal == null) {
+      return null;
+    }
+    if (resultType != null
+        ? resultType.jdbcType() == Types.DOUBLE
+        : leftVal instanceof Double || leftVal instanceof Float || rightVal instanceof Double
+            || rightVal instanceof Float) {
+      double left = leftVal instanceof Number number ? number.doubleValue() : Double.parseDouble(leftVal.toString());
+      double right = rightVal instanceof Number number ? number.doubleValue() : Double.parseDouble(rightVal.toString());
+      return switch (op) {
+        case ADD -> left + right;
+        case SUB -> left - right;
+        case MUL -> left * right;
+        case DIV -> right == 0 ? null : left / right;
+        case MOD -> right == 0 ? null : left % right;
+      };
+    }
+    if (resultType != null
+        ? resultType.jdbcType() == Types.BIGINT
+        : isWholeNumber(leftVal) && isWholeNumber(rightVal) && op != Operation.DIV) {
+      long left = ((Number) leftVal).longValue();
+      long right = ((Number) rightVal).longValue();
+      try {
+        return switch (op) {
+          case ADD -> Math.addExact(left, right);
+          case SUB -> Math.subtractExact(left, right);
+          case MUL -> Math.multiplyExact(left, right);
+          case MOD -> right == 0 ? null : left % right;
+          default -> throw new IllegalStateException("Unexpected whole-number operation: " + op);
+        };
+      } catch (ArithmeticException failure) {
+        throw new IllegalArgumentException("BIGINT arithmetic overflow",
+            new SQLDataException("BIGINT arithmetic overflow", "22003", failure));
+      }
+    }
     BigDecimal leftNum = toBigDecimal(leftVal);
     BigDecimal rightNum = toBigDecimal(rightVal);
     return switch (op) {
@@ -2940,4 +2999,16 @@ public final class AggregateFunctions {
       case MOD -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.remainder(rightNum);
     };
   }
+
+  /**
+   * Identifies Java whole-number operands eligible for exact long arithmetic.
+   *
+   * @param value
+   *          evaluated operand
+   * @return whether the operand has an integral Java type
+   */
+  private static boolean isWholeNumber(Object value) {
+    return value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long;
+  }
+
 }

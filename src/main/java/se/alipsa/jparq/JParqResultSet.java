@@ -1200,6 +1200,9 @@ public class JParqResultSet extends ResultSetAdapter {
         List<Integer> types = aggregateSqlTypes == null ? List.of() : aggregateSqlTypes;
         aggregateMetadata = new AggregateResultSetMetaData(columnOrder, types, tableName, tableSchema, tableCatalog,
             aggregateRows == null ? List.of() : aggregateRows);
+        aggregateMetadata
+            .retainNumericExpressions(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
+                canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings));
       }
       return aggregateMetadata;
     }

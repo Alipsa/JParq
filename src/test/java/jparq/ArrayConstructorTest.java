@@ -47,7 +47,7 @@ class ArrayConstructorTest {
     Expression expression = CCJSqlParserUtil.parseExpression("ARRAY[1, 2, 3]");
     Object result = evaluator.eval(expression, record);
     assertInstanceOf(List.class, result);
-    assertEquals(List.of(1L, 2L, 3L), result);
+    assertEquals(List.of(1, 2, 3), result);
   }
 
   @Test

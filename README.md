@@ -192,6 +192,16 @@ reject precision overflow with SQLState `22003`. Omitting scale while specifying
 zero. Bounds must satisfy `1 <= p` and `0 <= s <= p`; invalid declarations fail during statement preparation
 with SQLState `42000`, including for NULL inputs and empty results. Casts without precision preserve the decimal value.
 
+Numeric arithmetic derives JDBC types before reading rows, including through derived tables and CTEs.
+Whole-number `+`, `-`, `*`, `%`, and unary signs return BIGINT (`Long`); BIGINT overflow raises
+SQLState `22003`. REAL or DOUBLE operands produce DOUBLE (`Double`) using double arithmetic.
+Exact decimal operands produce DECIMAL (`BigDecimal`), with declared bounds reserving carry and
+product digits. Non-approximate division retains `MathContext.DECIMAL64`, so `7 / 2` returns `3.5`;
+its metadata reserves sufficient integer and fractional digits. NULL operands produce NULL, and
+division or remainder by zero continues to return NULL. Integer literals fitting INTEGER return
+`Integer`; larger literals use `Long` or exact decimal values. Decimal literals such as `1.5` are exact.
+Decimal casts without declared bounds can report unknown precision until materialization infers it.
+
 `DATE - DATE` returns the signed calendar-day difference as a Java `Long` (JDBC `BIGINT`),
 including through derived tables and CTEs. For example, `DATE '2024-03-01' - DATE '2024-02-28'`
 returns `2`. NULL operands produce NULL. Day counts cannot be compared with or added to

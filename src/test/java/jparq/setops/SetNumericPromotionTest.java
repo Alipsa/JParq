@@ -158,11 +158,15 @@ class SetNumericPromotionTest {
             String sql = "SELECT " + first + " AS x FROM numbers" + filter + " UNION ALL SELECT " + second
                 + " FROM numbers" + filter;
             try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
-              assertEquals(Types.DOUBLE, result.getMetaData().getColumnType(1), sql);
-              assertEquals(Double.class.getName(), result.getMetaData().getColumnClassName(1), sql);
+              boolean realOnly = expression.equals("CAST(i AS FLOAT)");
+              assertEquals(realOnly ? Types.REAL : Types.DOUBLE, result.getMetaData().getColumnType(1), sql);
+              assertEquals(realOnly ? Float.class.getName() : Double.class.getName(),
+                  result.getMetaData().getColumnClassName(1), sql);
               int count = 0;
               while (result.next()) {
-                double actual = assertInstanceOf(Double.class, result.getObject(1), sql);
+                Object value = result.getObject(1);
+                assertEquals(realOnly ? Float.class : Double.class, value.getClass(), sql);
+                double actual = ((Number) value).doubleValue();
                 boolean realRow = reverse ? count >= 2 : count < 2;
                 double expected = realRow
                     ? (double) 0.1f
@@ -300,11 +304,12 @@ class SetNumericPromotionTest {
           "SELECT 1 AS n UNION SELECT CAST(2 AS INTEGER)", "SELECT NULL AS n UNION ALL SELECT l FROM numbers")) {
         for (String sql : List.of(body, "SELECT n FROM (" + body + ") x", "WITH x AS (" + body + ") SELECT n FROM x")) {
           try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
-            assertEquals(Types.BIGINT, result.getMetaData().getColumnType(1), sql);
+            int expectedType = body.contains("SELECT NULL") ? Types.BIGINT : Types.INTEGER;
+            assertEquals(expectedType, result.getMetaData().getColumnType(1), sql);
             while (result.next()) {
               Object value = result.getObject(1);
               if (value != null) {
-                assertInstanceOf(Long.class, value, sql);
+                assertEquals(body.contains("SELECT NULL") ? Long.class : Integer.class, value.getClass(), sql);
               }
             }
           }
@@ -319,8 +324,8 @@ class SetNumericPromotionTest {
       try (var statement = connection.createStatement();
           var result = statement.executeQuery("SELECT x.n FROM numbers m CROSS JOIN LATERAL "
               + "(SELECT i AS n FROM numbers WHERE i = m.i UNION SELECT 99) x ORDER BY m.i, x.n")) {
-        assertEquals(Types.BIGINT, result.getMetaData().getColumnType(1));
-        for (long expected : List.of(1L, 99L, 2L, 99L)) {
+        assertEquals(Types.INTEGER, result.getMetaData().getColumnType(1));
+        for (int expected : List.of(1, 99, 2, 99)) {
           assertTrue(result.next());
           assertEquals(expected, result.getObject(1));
         }
@@ -343,14 +348,14 @@ class SetNumericPromotionTest {
         String aliased = "SELECT " + projection + " AS i FROM numbers UNION ALL SELECT i FROM numbers";
         boolean approximate = projection.contains("DOUBLE");
         try (var statement = connection.createStatement(); var result = statement.executeQuery(aliased)) {
-          assertEquals(approximate ? Types.DOUBLE : Types.BIGINT, result.getMetaData().getColumnType(1), aliased);
+          assertEquals(approximate ? Types.DOUBLE : Types.INTEGER, result.getMetaData().getColumnType(1), aliased);
           for (int i = 0; i < 4; i++) {
             assertTrue(result.next());
             long expected = i >= 2 || approximate ? i % 2 + 1 : 1;
             if (approximate) {
               assertEquals((double) expected, result.getObject(1), aliased);
             } else {
-              assertEquals(expected, result.getObject(1), aliased);
+              assertEquals((int) expected, result.getObject(1), aliased);
             }
           }
           assertFalse(result.next());

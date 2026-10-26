@@ -56,7 +56,7 @@ class ParenthesizedJoinTest {
       for (int execution = 0; execution < 2; execution++) {
         try (var result = statement.executeQuery()) {
           assertEquals(Types.VARCHAR, result.getMetaData().getColumnType(1));
-          assertEquals(Types.BIGINT, result.getMetaData().getColumnType(2));
+          assertEquals(Types.INTEGER, result.getMetaData().getColumnType(2));
           assertFalse(result.next());
         }
       }

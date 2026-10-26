@@ -59,8 +59,8 @@ public class LiteralConverter {
    *          the signed expression; diagnostics omit internal correlated bindings
    * @return the signed value or NULL
    * @throws IllegalArgumentException
-   *           if conversion fails (SQLState 22018) or the operand type is invalid
-   *           (SQLState 42000)
+   *           if conversion fails (SQLState 22018), BIGINT negation overflows
+   *           (SQLState 22003), or the operand type is invalid (SQLState 42000)
    */
   public static Object applySign(Object value, SignedExpression expression) {
     char sign = expression.getSign();
@@ -70,8 +70,25 @@ public class LiteralConverter {
     if (value instanceof TemporalInterval interval) {
       return sign == '-' ? interval.negate() : interval;
     }
+    if (sign == '-' && value instanceof BigDecimal && expression.getExpression() instanceof LongValue literal
+        && literal.getBigIntegerValue().negate().bitLength() < 64) {
+      return literal.getBigIntegerValue().negate().longValueExact();
+    }
     if (value instanceof Number || value instanceof String) {
       try {
+        if (value instanceof Double || value instanceof Float) {
+          double number = ((Number) value).doubleValue();
+          return sign == '-' ? -number : number;
+        }
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+          long number = ((Number) value).longValue();
+          try {
+            return sign == '-' ? Math.negateExact(number) : number;
+          } catch (ArithmeticException failure) {
+            throw new IllegalArgumentException("BIGINT unary sign overflow",
+                new SQLDataException("BIGINT unary sign overflow", "22003", failure));
+          }
+        }
         BigDecimal number = toBigDecimal(value);
         return sign == '-' ? number.negate() : number;
       } catch (NumberFormatException failure) {
@@ -109,6 +126,9 @@ public class LiteralConverter {
     }
     if (e instanceof LongValue lv) {
       var value = lv.getBigIntegerValue();
+      if (value.bitLength() < 32) {
+        return value.intValue();
+      }
       if (value.bitLength() < 64) {
         return value.longValue();
       }

@@ -6,6 +6,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -42,6 +43,7 @@ import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.statement.create.table.ColDataType;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.NumericType;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.engine.function.FunctionSupport;
@@ -60,6 +62,7 @@ import se.alipsa.jparq.helper.TemporalInterval;
 public final class ValueExpressionEvaluator {
 
   private final Map<String, Schema> fieldSchemas;
+  private final Map<Expression, NumericType> numericTypes = new IdentityHashMap<>();
   private final Map<String, String> caseInsensitiveIndex;
   private final Schema schema;
   private final SubqueryExecutor subqueryExecutor;
@@ -212,7 +215,8 @@ public final class ValueExpressionEvaluator {
    * @throws IllegalArgumentException
    *           if an expression is unsupported or a unary sign has an invalid
    *           operand; the cause carries SQLState 42000 for unsupported types or
-   *           expressions, or 22018 for numeric conversion failures
+   *           expressions, 22018 for numeric conversion failures, or 22003 for
+   *           BIGINT overflow
    */
   public Object eval(Expression expression, GenericRecord record) {
     return evalInternal(ExpressionEvaluator.unwrapParenthesis(expression), record);
@@ -641,7 +645,31 @@ public final class ValueExpressionEvaluator {
       throw syntaxFailure("Unsupported temporal arithmetic " + operator + " between " + sqlOperandType(leftVal)
           + " and " + sqlOperandType(rightVal) + hint);
     }
-    return AggregateFunctions.calculate(leftVal, rightVal, op);
+    NumericType leftType = numericType(left);
+    NumericType rightType = numericType(right);
+    NumericType resultType = leftType == null || rightType == null ? null : leftType.arithmetic(rightType, op);
+    return AggregateFunctions.calculate(leftVal, rightVal, op, resultType);
+  }
+
+  /**
+   * Resolves and caches operand declarations independently of current row values.
+   *
+   * @param expression
+   *          arithmetic operand
+   * @return its numeric declaration, or null when unknown
+   */
+  private NumericType numericType(Expression expression) {
+    if (!numericTypes.containsKey(expression)) {
+      NumericType numeric = NumericExpressionTypes.resolve(expression, column -> {
+        String canonical = resolveColumnName(column);
+        Schema field = canonical == null ? null : fieldSchemas.get(canonical);
+        return field == null
+            ? null
+            : NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(field), JdbcTypeMapper.nonNullSchema(field));
+      });
+      numericTypes.put(expression, numeric);
+    }
+    return numericTypes.get(expression);
   }
 
   /**

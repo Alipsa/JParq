@@ -25,6 +25,7 @@ import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.MaterializedNames;
+import se.alipsa.jparq.engine.NumericExpressionTypes;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 
@@ -178,8 +179,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
 
   @Override
   public int getColumnType(int column) {
-    if (declaredDecimalType(column) != null) {
-      return Types.DECIMAL;
+    NumericType numeric = numericType(column);
+    if (numeric != null) {
+      return numeric.jdbcType();
     }
     int computedType = resolveComputedColumnType(column);
     // A computed Boolean alias may have the same name as a source field.
@@ -202,9 +204,12 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    */
   @Override
   public Schema columnValueSchema(int column) {
+    NumericType numeric = numericType(column);
+    if (numeric != null) {
+      return numeric.schema();
+    }
     Schema.Field field = resolveField(column);
-    Schema valueSchema = field == null ? null : JdbcTypeMapper.nonNullSchema(field.schema());
-    return valueSchema;
+    return field == null ? null : JdbcTypeMapper.nonNullSchema(field.schema());
   }
 
   @Override
@@ -215,15 +220,17 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   /** {@inheritDoc} */
   @Override
   public int getPrecision(int column) {
+    NumericType numeric = numericType(column);
     LogicalTypes.Decimal decimal = decimalType(column);
-    return decimal == null ? 0 : decimal.getPrecision();
+    return numeric != null ? numeric.precision() : decimal == null ? 0 : decimal.getPrecision();
   }
 
   /** {@inheritDoc} */
   @Override
   public int getScale(int column) {
+    NumericType numeric = numericType(column);
     LogicalTypes.Decimal decimal = decimalType(column);
-    return decimal == null ? 0 : decimal.getScale();
+    return numeric != null ? numeric.scale() : decimal == null ? 0 : decimal.getScale();
   }
 
   /**
@@ -263,8 +270,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    */
   @Override
   public String getColumnClassName(int column) {
-    if (getColumnType(column) == Types.BOOLEAN) {
-      return Boolean.class.getName();
+    if (numericType(column) != null || getColumnType(column) == Types.BOOLEAN) {
+      return JdbcTypeMapper.mapJdbcTypeToClassName(getColumnType(column));
     }
     Schema.Field field = resolveField(column);
     if (field != null) {
@@ -321,7 +328,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    */
   private Schema.Field resolveField(int column) {
     Expression expression = unwrap(expressionAtColumn(column));
-    if (expression instanceof Subtraction && resolveComputedColumnType(column) == Types.BIGINT) {
+    if (numericType(column) != null && !(expression instanceof Column)
+        || expression instanceof Subtraction && resolveComputedColumnType(column) == Types.BIGINT) {
       return null;
     }
     if (schema == null) {
@@ -333,6 +341,27 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
       return field;
     }
     return fieldBySchemaName(getColumnLabel(column));
+  }
+
+  /**
+   * Resolves numeric expressions against source fields independently of aliases.
+   *
+   * @param column
+   *          one-based projection index
+   * @return the declared numeric result type, or null
+   */
+  NumericType numericType(int column) {
+    Expression expression = unwrap(expressionAtColumn(column));
+    if (expression instanceof Column || expression instanceof net.sf.jsqlparser.expression.Function) {
+      return null;
+    }
+    return NumericExpressionTypes.resolve(expression, reference -> {
+      Schema.Field field = resolveSourceField(reference);
+      return field == null
+          ? null
+          : NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(field.schema()),
+              JdbcTypeMapper.nonNullSchema(field.schema()));
+    });
   }
 
   private String canonicalName(int column) {

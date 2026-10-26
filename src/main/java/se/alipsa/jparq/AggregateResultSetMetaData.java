@@ -101,6 +101,27 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
     }
   }
 
+  /**
+   * Applies declared numeric expression types, including for empty groups.
+   *
+   * @param projected
+   *          metadata resolved from the source schema and expressions
+   */
+  void retainNumericExpressions(JParqResultSetMetaData projected) {
+    List<Schema> schemas = new ArrayList<>();
+    for (int i = 0; i < labels.size(); i++) {
+      int column = i + 1;
+      NumericType numeric = projected.numericType(column);
+      if (numeric != null) {
+        sqlTypes.set(i, numeric.jdbcType());
+        precisions[i] = numeric.precision();
+        scales[i] = numeric.scale();
+      }
+      schemas.add(numeric == null ? columnValueSchema(column) : numeric.schema());
+    }
+    valueSchemas = schemas;
+  }
+
   /** {@inheritDoc} */
   @Override
   public Schema columnValueSchema(int column) {

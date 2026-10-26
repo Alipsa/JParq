@@ -5,6 +5,7 @@ import java.sql.SQLException;
 import java.sql.Types;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
+import se.alipsa.jparq.engine.Operation;
 
 /**
  * Describes a numeric SQL type and its exact decimal bounds. Common types use
@@ -15,7 +16,8 @@ import org.apache.avro.Schema;
  * @param jdbcType
  *          numeric JDBC type
  * @param precision
- *          maximum exact digit count, or zero for approximate types
+ *          maximum exact digit count, or zero for approximate types or unknown
+ *          decimal bounds
  * @param scale
  *          decimal scale, or zero for nondecimal types
  */
@@ -83,6 +85,41 @@ public record NumericType(int jdbcType, int precision, int scale) {
   }
 
   /**
+   * Resolves arithmetic bounds using the same numeric families as set operations.
+   *
+   * @param other
+   *          the other operand type
+   * @param operation
+   *          the arithmetic operator
+   * @return the result type, reserving decimal carry and product digits
+   */
+  public NumericType arithmetic(NumericType other, Operation operation) {
+    NumericType common = common(other);
+    if (common.jdbcType == Types.DOUBLE || common.jdbcType == Types.REAL) {
+      return of(Types.DOUBLE, 0, 0);
+    }
+    if (jdbcType == Types.DECIMAL && precision == 0 || other.jdbcType == Types.DECIMAL && other.precision == 0) {
+      return new NumericType(Types.DECIMAL, 0, 0);
+    }
+    if (operation == Operation.DIV) {
+      // DECIMAL64 may need leading fractional zeros and an integer carry digit.
+      int resultScale = Math.max(16, scale + other.precision + 16);
+      int integerDigits = Math.max(1, precision - scale + other.scale) + 1;
+      return of(Types.DECIMAL, integerDigits + resultScale, resultScale);
+    }
+    if (common.jdbcType != Types.DECIMAL) {
+      return of(Types.BIGINT, 0, 0);
+    }
+    return switch (operation) {
+      case ADD, SUB -> of(Types.DECIMAL, common.precision + 1, common.scale);
+      case MUL -> of(Types.DECIMAL, precision + other.precision, scale + other.scale);
+      case MOD ->
+        of(Types.DECIMAL, Math.min(precision - scale, other.precision - other.scale) + common.scale, common.scale);
+      default -> throw new IllegalArgumentException("Unsupported arithmetic operator: " + operation);
+    };
+  }
+
+  /**
    * Converts a value to the Java representation of this type.
    *
    * @param value
@@ -111,6 +148,8 @@ public record NumericType(int jdbcType, int precision, int scale) {
       }
       BigDecimal decimal = value instanceof BigDecimal bd ? bd : new BigDecimal(value.toString());
       return switch (jdbcType) {
+        case Types.TINYINT -> decimal.byteValueExact();
+        case Types.SMALLINT -> decimal.shortValueExact();
         case Types.INTEGER -> decimal.intValueExact();
         case Types.BIGINT -> decimal.longValueExact();
         case Types.DECIMAL -> {
@@ -130,15 +169,16 @@ public record NumericType(int jdbcType, int precision, int scale) {
   /**
    * Builds the schema used to preserve the common type through materialization.
    *
-   * @return nonnullable Avro value schema
+   * @return nonnullable Avro value schema, or null for unknown decimal bounds
    */
   public Schema schema() {
     return switch (jdbcType) {
-      case Types.INTEGER -> Schema.create(Schema.Type.INT);
+      case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> Schema.create(Schema.Type.INT);
       case Types.BIGINT -> Schema.create(Schema.Type.LONG);
       case Types.REAL -> Schema.create(Schema.Type.FLOAT);
       case Types.DOUBLE -> Schema.create(Schema.Type.DOUBLE);
-      case Types.DECIMAL -> LogicalTypes.decimal(precision, scale).addToSchema(Schema.create(Schema.Type.BYTES));
+      case Types.DECIMAL ->
+        precision == 0 ? null : LogicalTypes.decimal(precision, scale).addToSchema(Schema.create(Schema.Type.BYTES));
       default -> throw new IllegalStateException("Unsupported numeric type: " + jdbcType);
     };
   }

@@ -75,7 +75,8 @@ class RecursiveCteConversionTest {
         Throwable cause = failure;
         while (cause != null) {
           if (cause instanceof SQLException sqlException && "22003".equals(sqlException.getSQLState())) {
-            assertTrue(cause.getMessage().contains(message), cause.getMessage());
+            assertTrue(cause.getMessage().contains(message) || anchor.startsWith("9223372036854775807")
+                && cause.getMessage().contains("BIGINT arithmetic overflow"), cause.getMessage());
             return;
           }
           cause = cause.getCause();

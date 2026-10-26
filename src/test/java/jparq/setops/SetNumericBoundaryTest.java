@@ -44,7 +44,7 @@ class SetNumericBoundaryTest {
   @ValueSource(booleans = {
       true, false
   })
-  void arithmeticAliasesUseReturnedDecimalBounds(boolean pushdown) throws Exception {
+  void arithmeticAliasesUseDeclaredDecimalBounds(boolean pushdown) throws Exception {
     var decimal = LogicalTypes.decimal(5, 2).addToSchema(Schema.create(Schema.Type.BYTES));
     var schema = SchemaBuilder.record("p").fields().name("dec").type(decimal).noDefault().endRecord();
     var conf = new Configuration(false);
@@ -65,7 +65,7 @@ class SetNumericBoundaryTest {
           for (int execution = 0; execution < 2; execution++) {
             try (var result = statement.executeQuery()) {
               assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1), sql);
-              assertEquals(7, result.getMetaData().getPrecision(1), sql);
+              assertEquals(8, result.getMetaData().getPrecision(1), sql);
               assertEquals(4, result.getMetaData().getScale(1), sql);
               int count = 0;
               while (result.next()) {
@@ -86,7 +86,7 @@ class SetNumericBoundaryTest {
             : "SELECT dec * 10 AS dec FROM p UNION ALL SELECT CAST(1 AS DECIMAL(4,3)) AS dec";
         try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
           assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1), sql);
-          assertEquals(square ? 10 : 7, result.getMetaData().getPrecision(1), sql);
+          assertEquals(square ? 10 : 8, result.getMetaData().getPrecision(1), sql);
           assertEquals(square ? 4 : 3, result.getMetaData().getScale(1), sql);
           for (int i = 0; i < (square ? 4 : 3); i++) {
             assertTrue(result.next(), sql);

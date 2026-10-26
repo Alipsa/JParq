@@ -81,11 +81,11 @@ class DerivedNumericTypeTest {
       try (var statement = connection.createStatement();
           var result = statement.executeQuery(
               "SELECT x FROM (SELECT id, large * 1 AS x FROM small WHERE id >= 1) t WHERE id < 4 ORDER BY id")) {
-        assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1));
-        assertEquals(BigDecimal.class.getName(), result.getMetaData().getColumnClassName(1));
+        assertEquals(Types.BIGINT, result.getMetaData().getColumnType(1));
+        assertEquals(Long.class.getName(), result.getMetaData().getColumnClassName(1));
         for (long expected = 9007199254740994L; expected <= 9007199254740996L; expected++) {
           assertTrue(result.next());
-          assertEquals(BigDecimal.valueOf(expected), result.getObject(1));
+          assertEquals(expected, result.getObject(1));
         }
         assertFalse(result.next());
       }
@@ -101,12 +101,18 @@ class DerivedNumericTypeTest {
             "SELECT SUM(t.x) FROM small s JOIN (" + body + ") t ON s.id = 0")) {
           try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
             var metadata = result.getMetaData();
-            assertEquals(Types.DECIMAL, metadata.getColumnType(1), sql);
-            assertEquals("DECIMAL", metadata.getColumnTypeName(1), sql);
-            assertEquals(BigDecimal.class.getName(), metadata.getColumnClassName(1), sql);
+            boolean division = expression.contains("/");
+            assertEquals(division ? Types.DECIMAL : Types.BIGINT, metadata.getColumnType(1), sql);
+            assertEquals(division ? "DECIMAL" : "BIGINT", metadata.getColumnTypeName(1), sql);
+            assertEquals(division ? BigDecimal.class.getName() : Long.class.getName(), metadata.getColumnClassName(1),
+                sql);
             assertTrue(result.next(), sql);
-            var value = assertInstanceOf(BigDecimal.class, result.getObject(1), sql);
-            assertEquals(0, expected.compareTo(value), sql);
+            if (division) {
+              var value = assertInstanceOf(BigDecimal.class, result.getObject(1), sql);
+              assertEquals(0, expected.compareTo(value), sql);
+            } else {
+              assertEquals(expected.longValueExact(), result.getObject(1), sql);
+            }
             assertFalse(result.next(), sql);
           }
         }
@@ -122,8 +128,7 @@ class DerivedNumericTypeTest {
   static Stream<Arguments> computedValues() {
     return Stream.of(Arguments.of("CAST(s AS DATE)", Types.DATE, Collections.nCopies(5, Date.valueOf("2024-01-02"))),
         Arguments.of("SUM(id) OVER (ORDER BY id)", Types.BIGINT, List.of(0L, 1L, 3L, 6L, 10L)),
-        Arguments.of("LAG(id * 2) OVER (ORDER BY id)", Types.DECIMAL,
-            Arrays.asList(null, new BigDecimal("0"), new BigDecimal("2"), new BigDecimal("4"), new BigDecimal("6"))),
+        Arguments.of("LAG(id * 2) OVER (ORDER BY id)", Types.BIGINT, Arrays.asList(null, 0L, 2L, 4L, 6L)),
         Arguments.of("CASE WHEN id = 1 THEN 1 ELSE 2.5 END", Types.DECIMAL,
             List.of(new BigDecimal("2.5"), new BigDecimal("1.0"), new BigDecimal("2.5"), new BigDecimal("2.5"),
                 new BigDecimal("2.5"))),
@@ -187,8 +192,10 @@ class DerivedNumericTypeTest {
           "SELECT t.x, t.id FROM small s JOIN (" + body + ") t ON s.id = 0",
           "WITH t AS (" + body + ") SELECT x, id FROM t")) {
         try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
-          assertEquals(Types.VARCHAR, result.getMetaData().getColumnType(1), sql);
-          assertEquals(String.class.getName(), result.getMetaData().getColumnClassName(1), sql);
+          assertEquals(body.contains("CASE") ? Types.VARCHAR : Types.BIGINT, result.getMetaData().getColumnType(1),
+              sql);
+          assertEquals(body.contains("CASE") ? String.class.getName() : Long.class.getName(),
+              result.getMetaData().getColumnClassName(1), sql);
           assertEquals(Types.INTEGER, result.getMetaData().getColumnType(2), sql);
           assertEquals(Integer.class.getName(), result.getMetaData().getColumnClassName(2), sql);
           int count = 0;

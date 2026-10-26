@@ -238,19 +238,14 @@ class DateArithmeticTest {
   }
 
   /**
-   * Checks that #205 leaves main's existing alias-based numeric metadata
-   * unchanged, including for empty inputs. This metadata is not correct
-   * expression typing: integer subtraction currently returns BigDecimal, and
-   * decimal subtraction may require wider precision. Update this baseline when
-   * <a href="https://github.com/Alipsa/JParq/issues/232">#232</a> resolves
-   * arithmetic types. The converting-getter value assertions remain valid when
-   * result types change.
+   * Reports arithmetic types independently of matching source aliases, even for
+   * empty inputs and materialization boundaries.
    *
    * @throws Exception
    *           if query execution fails
    */
   @Test
-  void nonDateSubtractionMetadataMatchesMain() throws Exception {
+  void numericSubtractionUsesExpressionMetadata() throws Exception {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement()) {
       for (String field : List.of("amt", "id")) {
@@ -261,13 +256,13 @@ class DateArithmeticTest {
                 "WITH t AS (" + inner + ") SELECT * FROM t")) {
               try (var result = statement.executeQuery(sql)) {
                 var metadata = result.getMetaData();
-                assertEquals(field.equals("amt") ? Types.DECIMAL : Types.INTEGER, metadata.getColumnType(1), sql);
+                assertEquals(field.equals("amt") ? Types.DECIMAL : Types.BIGINT, metadata.getColumnType(1), sql);
                 if (field.equals("amt")) {
-                  assertEquals(10, metadata.getPrecision(1), sql);
+                  assertEquals(11, metadata.getPrecision(1), sql);
                   assertEquals(2, metadata.getScale(1), sql);
                 }
                 if (sql.equals(inner)) {
-                  assertEquals(java.sql.ResultSetMetaData.columnNoNulls, metadata.isNullable(1), sql);
+                  assertEquals(java.sql.ResultSetMetaData.columnNullableUnknown, metadata.isNullable(1), sql);
                 }
                 if (filter.equals("id = 0")) {
                   assertTrue(result.next(), sql);
@@ -337,7 +332,7 @@ class DateArithmeticTest {
         });
         assertTrue(
             failure.getMessage()
-                .contains(expression.contains("+") ? "+ between DATE and BIGINT" : "- between DATE and VARCHAR"),
+                .contains(expression.contains("+") ? "+ between DATE and INTEGER" : "- between DATE and VARCHAR"),
             failure::getMessage);
         if (expression.contains("'")) {
           assertTrue(failure.getMessage().contains("CAST(... AS DATE)"), failure::getMessage);

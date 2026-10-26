@@ -82,6 +82,7 @@ import se.alipsa.jparq.engine.InMemoryRecordReader;
 import se.alipsa.jparq.engine.JoinPredicatePlanner;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.MaterializedNames;
+import se.alipsa.jparq.engine.NumericExpressionTypes;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
 import se.alipsa.jparq.engine.ParquetTable;
@@ -821,12 +822,9 @@ public class JParqPreparedStatement implements PreparedStatement {
           Expression projection = ExpressionEvaluator.unwrapParenthesis(expression);
           boolean simpleDeclaration = projection instanceof CastExpression || projection instanceof SignedExpression
               || LiteralConverter.isLiteral(projection);
-          Schema projected = type == Types.OTHER || simpleDeclaration ? setExpressionSchema(projection, values) : null;
+          Schema projected = type == Types.OTHER ? setExpressionSchema(projection, values) : null;
           int projectedType = projected == null ? Types.NULL : JdbcTypeMapper.mapSchemaToJdbcType(projected);
-          boolean numericDeclaration = NumericType.of(projectedType, 0, 0) != null;
-          boolean numericSource = NumericType.of(type, 0, 0) != null;
-          if (type == Types.OTHER || (simpleDeclaration && projected != null && (numericDeclaration || numericSource))
-              || projection instanceof NullValue) {
+          if (type == Types.OTHER || projection instanceof NullValue) {
             boolean unknown = type == Types.OTHER;
             schema = projected;
             type = projectedType;
@@ -855,8 +853,8 @@ public class JParqPreparedStatement implements PreparedStatement {
             schema = numeric.schema();
           }
           NumericType declared = NumericType.of(meta.getColumnType(col), meta.getPrecision(col), meta.getScale(col));
-          // Computed and aggregate values may disagree with metadata (#232,
-          // #289). Only direct columns can bypass value normalization.
+          // Unknown aggregate values may still disagree with metadata (#289).
+          // Only direct columns can bypass value normalization.
           normalizedTypes.add(projection instanceof Column && numeric != null
               && numeric.jdbcType() == meta.getColumnType(col) && numeric.equals(declared) ? numeric : null);
           mergeSetColumn(sqlTypes, sourceSchemas, index, type, schema, numeric);
@@ -875,8 +873,7 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Resolves untyped set projections from simple declarations or returned values.
-   * Numeric literal representation is retained until the expression typing work
-   * in issue #232 changes the literal contract.
+   * Declared numeric expressions use the shared expression type resolver.
    *
    * @param expression
    *          projected expression, when available
@@ -889,31 +886,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (projection instanceof NullValue) {
       return null;
     }
-    if (projection instanceof SignedExpression signed) {
-      return setExpressionSchema(signed.getExpression(), values);
-    }
-    if (projection instanceof CastExpression cast && cast.getColDataType() != null) {
-      String declaration = cast.getColDataType().getDataType().toUpperCase(Locale.ROOT);
-      int parameters = declaration.indexOf('(');
-      String name = (parameters < 0 ? declaration : declaration.substring(0, parameters)).trim();
-      int type = switch (name) {
-        case "TINYINT", "SMALLINT", "INT", "INTEGER" -> Types.INTEGER;
-        case "BIGINT" -> Types.BIGINT;
-        case "REAL" -> Types.REAL;
-        case "FLOAT", "DOUBLE", "DOUBLE PRECISION" -> Types.DOUBLE;
-        case "DECIMAL", "NUMERIC", "NUMBER" -> Types.DECIMAL;
-        default -> Types.OTHER;
-      };
-      if (type == Types.DECIMAL) {
-        var decimal = DecimalCasts.declaredType(cast);
-        return decimal == null
-            ? decimalSchemaForValues(values.get())
-            : decimal.addToSchema(Schema.create(Schema.Type.BYTES));
-      }
-      NumericType numeric = NumericType.of(type, 0, 0);
-      if (numeric != null) {
-        return numeric.schema();
-      }
+    NumericType resolved = NumericExpressionTypes.resolve(projection, column -> null);
+    if (resolved != null) {
+      return resolved.schema();
     }
     if (LiteralConverter.isLiteral(projection)) {
       Object literal = LiteralConverter.toLiteral(projection);
@@ -2730,29 +2705,43 @@ public class JParqPreparedStatement implements PreparedStatement {
     };
   }
 
+  /**
+   * Promotes materialized numeric values using the common SQL numeric families.
+   *
+   * @param left
+   *          first numeric family
+   * @param right
+   *          second numeric family
+   * @return the common value family
+   */
   private ValueColumnType widenNumericType(ValueColumnType left, ValueColumnType right) {
-    if (left == ValueColumnType.DECIMAL || right == ValueColumnType.DECIMAL) {
-      return ValueColumnType.DECIMAL;
-    }
-    if (left == ValueColumnType.DOUBLE || right == ValueColumnType.DOUBLE) {
-      return ValueColumnType.DOUBLE;
-    }
-    if (left == ValueColumnType.FLOAT && right == ValueColumnType.FLOAT) {
-      return ValueColumnType.FLOAT;
-    }
-    if ((left == ValueColumnType.FLOAT && right == ValueColumnType.INT)
-        || (left == ValueColumnType.INT && right == ValueColumnType.FLOAT)) {
-      return ValueColumnType.FLOAT;
-    }
-    // FLOAT combined with LONG widens to DOUBLE because LONG exceeds FLOAT
-    // precision.
-    if (left == ValueColumnType.FLOAT || right == ValueColumnType.FLOAT) {
-      return ValueColumnType.DOUBLE;
-    }
-    if (left == ValueColumnType.LONG || right == ValueColumnType.LONG) {
-      return ValueColumnType.LONG;
-    }
-    return ValueColumnType.INT;
+    NumericType common = numericValueType(left).common(numericValueType(right));
+    return switch (common.jdbcType()) {
+      case Types.INTEGER -> ValueColumnType.INT;
+      case Types.BIGINT -> ValueColumnType.LONG;
+      case Types.REAL -> ValueColumnType.FLOAT;
+      case Types.DOUBLE -> ValueColumnType.DOUBLE;
+      case Types.DECIMAL -> ValueColumnType.DECIMAL;
+      default -> throw new IllegalStateException("Unexpected numeric type: " + common);
+    };
+  }
+
+  /**
+   * Maps a materialized numeric family to the shared numeric descriptor.
+   *
+   * @param type
+   *          materialized numeric family
+   * @return its numeric descriptor
+   */
+  private NumericType numericValueType(ValueColumnType type) {
+    return NumericType.of(switch (type) {
+      case INT -> Types.INTEGER;
+      case LONG -> Types.BIGINT;
+      case FLOAT -> Types.REAL;
+      case DOUBLE -> Types.DOUBLE;
+      case DECIMAL -> Types.DECIMAL;
+      default -> throw new IllegalArgumentException("Not a numeric family: " + type);
+    }, 0, 0);
   }
 
   private Schema schemaForColumnType(ValueColumnType type, List<Object> values) {
