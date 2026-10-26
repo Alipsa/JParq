@@ -31,6 +31,7 @@ import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.statement.create.table.ColDataType;
 import se.alipsa.jparq.engine.DecimalCasts;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
@@ -700,7 +701,7 @@ public final class DateTimeFunctions {
           };
       }
     } catch (ArithmeticException exception) {
-      String message = "Cannot cast numeric value '" + diagnosticValue(value) + "' to " + target
+      String message = "Cannot cast numeric value '" + SqlExceptions.diagnosticValue(value) + "' to " + target
           + ": value out of range";
       throw new IllegalArgumentException(message, new SQLDataException(message, "22003", exception));
     }
@@ -725,21 +726,9 @@ public final class DateTimeFunctions {
     try {
       return new BigDecimal(value.toString().trim());
     } catch (NumberFormatException exception) {
-      String message = "Cannot cast value '" + diagnosticValue(value) + "' to a numeric value";
+      String message = "Cannot cast value '" + SqlExceptions.diagnosticValue(value) + "' to a numeric value";
       throw new IllegalArgumentException(message, new SQLDataException(message, "22018", exception));
     }
-  }
-
-  /**
-   * Bounds input values embedded in numeric conversion diagnostics.
-   *
-   * @param value
-   *          the input value
-   * @return at most 64 input characters followed by an ellipsis when truncated
-   */
-  private static String diagnosticValue(Object value) {
-    String text = value.toString();
-    return text.length() > 64 ? text.substring(0, 64) + "…" : text;
   }
 
   private static String castToString(CastExpression cast, Object value) {

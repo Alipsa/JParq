@@ -607,7 +607,7 @@ public class DateTimeFunctionsTest {
 
   /** Ensures long inputs do not overwhelm numeric conversion diagnostics. */
   @Test
-  void numericCastDiagnosticsBoundValuesAndRetainTargetNames() {
+  void numericCastDiagnosticsBoundValues() {
     for (String value : List.of("9".repeat(200000), "x".repeat(200000))) {
       var failure = assertThrows(IllegalArgumentException.class,
           () -> DateTimeFunctions.castLiteral(createCastExpression("DOUBLE PRECISION"), value));
@@ -617,11 +617,17 @@ public class DateTimeFunctionsTest {
       assertTrue(classified.getMessage().length() < 200, classified::getMessage);
       assertEquals(value.startsWith("9") ? "22003" : "22018", classified.getSQLState());
     }
-    for (String type : List.of("DOUBLE PRECISION", "INT4", "SIGNED", "FLOAT(53)")) {
-      var failure = assertThrows(IllegalArgumentException.class,
-          () -> DateTimeFunctions.castLiteral(createCastExpression(type), "1e400"));
-      assertTrue(failure.getMessage().contains("to " + type + ":"), failure::getMessage);
-    }
+    String digits = "9".repeat(200000);
+    var decimalFailure = assertThrows(IllegalArgumentException.class,
+        () -> DateTimeFunctions.castLiteral(createCastExpression("DECIMAL(5,0)"), digits));
+    assertTrue(decimalFailure.getMessage().length() < 200, decimalFailure::getMessage);
+    assertTrue(decimalFailure.getMessage().contains(digits.substring(0, 64) + "…"));
+    assertEquals("22003",
+        assertInstanceOf(SQLDataException.class, SqlExceptions.findSqlStateFailure(decimalFailure)).getSQLState());
+    String emojiValue = "x".repeat(63) + "😀tail";
+    var emojiFailure = assertThrows(IllegalArgumentException.class,
+        () -> DateTimeFunctions.castLiteral(createCastExpression("INTEGER"), emojiValue));
+    assertEquals("Cannot cast value '" + "x".repeat(63) + "…' to a numeric value", emojiFailure.getMessage());
   }
 
   /** Checks finite floating-point boundaries and overflow for all aliases. */

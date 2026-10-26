@@ -34,6 +34,23 @@ public final class SqlExceptions {
   }
 
   /**
+   * Bounds values embedded in conversion diagnostics without splitting surrogate
+   * pairs.
+   *
+   * @param value
+   *          the input value
+   * @return at most 64 UTF-16 code units plus an ellipsis when truncated
+   */
+  public static String diagnosticValue(Object value) {
+    String text = String.valueOf(value);
+    if (text.length() <= 64) {
+      return text;
+    }
+    int end = Character.isHighSurrogate(text.charAt(63)) && Character.isLowSurrogate(text.charAt(64)) ? 63 : 64;
+    return text.substring(0, end) + "…";
+  }
+
+  /**
    * Creates an engine failure carrying the JDBC syntax classification.
    *
    * @param message
