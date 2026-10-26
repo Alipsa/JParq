@@ -58,6 +58,7 @@ class TemporalPredicateFailureTest {
         String condition = predicate ? expression.startsWith("NOT") ? expression : "cyl" : expression + " IS NOT NULL";
         for (String sql : List.of(body, "SELECT x FROM (" + body + ") d", "WITH c AS (" + body + ") SELECT x FROM c",
             "SELECT (" + body + ") AS x", "SELECT cyl FROM mtcars WHERE " + condition + " LIMIT 1",
+            "SELECT cyl FROM mtcars GROUP BY cyl, model HAVING " + condition + " LIMIT 1",
             "SELECT a.cyl FROM mtcars a JOIN mtcars b ON a.cyl = b.cyl WHERE "
                 + condition.replace("model", "b.model").replace("cyl", "b.cyl") + " LIMIT 1")) {
           SQLException failure = assertThrows(SQLException.class, () -> {
@@ -81,6 +82,38 @@ class TemporalPredicateFailureTest {
             assertTrue(hasParseCause(failure), sql + ": " + root);
           }
         }
+      }
+    }
+  }
+
+  /**
+   * Classifies non-Boolean grouping columns, aggregates, and arithmetic in
+   * HAVING.
+   *
+   * @param predicate
+   *          the invalid grouped predicate
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "cyl", "COUNT(*)", "cyl + 1", "NOT MAX(model)"
+  })
+  void havingRejectsNonBooleanPredicates(String predicate) throws Exception {
+    String url = "jdbc:jparq:" + Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    String body = "SELECT cyl FROM mtcars GROUP BY cyl HAVING " + predicate;
+    try (var connection = DriverManager.getConnection(url)) {
+      for (String sql : List.of(body, "SELECT cyl FROM (" + body + ") d", "WITH c AS (" + body + ") SELECT cyl FROM c",
+          "SELECT (" + body + ") AS x")) {
+        var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
+          try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
+            result.next();
+            result.getObject(1);
+          }
+        }, sql);
+        assertEquals("42000", failure.getSQLState(), sql);
+        String invalidOperand = predicate.startsWith("NOT ") ? predicate.substring(4) : predicate;
+        assertTrue(failure.getMessage().contains("Unsupported predicate: " + invalidOperand), failure::getMessage);
       }
     }
   }

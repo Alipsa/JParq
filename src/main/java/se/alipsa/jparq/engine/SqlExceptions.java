@@ -4,6 +4,7 @@ import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Pattern;
 import net.sf.jsqlparser.expression.Expression;
 
@@ -13,6 +14,7 @@ import net.sf.jsqlparser.expression.Expression;
  */
 public final class SqlExceptions {
   private static final int DIAGNOSTIC_VALUE_LIMIT = 64;
+  private static final Set<String> CLASSIFIED_STATES = Set.of("42000", "22003", "22007", "22008", "22018");
   private static final Pattern CORRELATED_BINDING = Pattern
       .compile("__JPARQ_CORRELATED_VALUE\\s*\\(\\s*'[^']*'\\s*,\\s*\\d+\\s*\\)", Pattern.CASE_INSENSITIVE);
 
@@ -77,9 +79,8 @@ public final class SqlExceptions {
   public static SQLException findSqlStateFailure(Throwable failure) {
     Throwable current = failure;
     while (current != null) {
-      if (current instanceof SQLException sql && ("22003".equals(sql.getSQLState()) || "42000".equals(sql.getSQLState())
-          || "22018".equals(sql.getSQLState()) || "22007".equals(sql.getSQLState())
-          || "22008".equals(sql.getSQLState()))) {
+      if (current instanceof SQLException sql && sql.getSQLState() != null
+          && CLASSIFIED_STATES.contains(sql.getSQLState())) {
         return sql;
       }
       current = current.getCause();

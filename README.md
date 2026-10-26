@@ -195,7 +195,8 @@ with SQLState `42000`, including for NULL inputs and empty results. Casts withou
 Invalid DATE, TIME, and TIMESTAMP formats raise `SQLDataException` with SQLState `22007`;
 out-of-range calendar and clock fields use `22008`. Non-Boolean predicates, such as `CASE WHEN cyl`
 or `NOT model`, raise `SQLSyntaxErrorException` with `42000`. These classifications and their causes
-are preserved through getters and nested query evaluation. Errors can be deferred until iteration or value access.
+are preserved through getters, WHERE/HAVING filters, and nested query evaluation. Errors can be deferred until
+iteration or value access.
 
 Numeric arithmetic derives JDBC types before reading rows, including through derived tables and CTEs.
 Whole-number `+`, `-`, `*`, `%`, and unary signs return BIGINT (`Long`); BIGINT overflow raises

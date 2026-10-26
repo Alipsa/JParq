@@ -139,6 +139,17 @@ class SqlExceptionsTest {
     assertEquals("😀".repeat(32), SqlExceptions.diagnosticValue("😀".repeat(32)));
   }
 
+  /** Ensures unclassified wrappers do not hide a classified nested failure. */
+  @Test
+  void nullSqlStateDoesNotHideClassifiedCause() {
+    var classified = new SQLException("Invalid temporal value", "22008");
+    var wrapper = new SQLException("Unclassified wrapper", classified);
+    assertSame(classified, SqlExceptions.findSqlStateFailure(wrapper));
+    var unclassified = new SQLException("Unclassified failure");
+    assertNull(SqlExceptions.findSqlStateFailure(unclassified));
+    assertNull(SqlExceptions.wrap("Evaluation failed", unclassified).getSQLState());
+  }
+
   /**
    * Preserves ordinary exceptions without claiming a syntax or numeric SQLState.
    */

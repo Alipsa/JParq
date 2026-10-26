@@ -216,8 +216,9 @@ class SqlTruthTest {
         "(VALUES (1, CAST(NULL AS INTEGER), CAST(NULL AS VARCHAR))) AS t(id, n, s)")) {
       for (String expression : List.of("n", "t.n", "s", "1", "n + 1", "s || 'x'")) {
         assertThrows(SQLException.class, () -> query("SELECT id FROM " + input + " WHERE " + expression));
-        assertThrows(SQLException.class,
+        var havingFailure = assertThrows(SQLException.class,
             () -> query("SELECT id FROM " + input + " GROUP BY id, n, s HAVING " + expression));
+        assertEquals("42000", havingFailure.getSQLState());
       }
       var caseFailure = assertThrows(SQLException.class,
           () -> query("SELECT CASE WHEN n THEN 1 ELSE 0 END FROM " + input));
