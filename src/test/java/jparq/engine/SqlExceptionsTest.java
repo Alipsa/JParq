@@ -74,11 +74,11 @@ class SqlExceptionsTest {
    * boundary.
    * 
    * @param state
-   *          the syntax or numeric SQLState
+   *          the syntax or data SQLState
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "42000", "22003", "22018"
+      "42000", "22003", "22007", "22008", "22018"
   })
   void wrappingRetainsSubqueryContext(String state) {
     SQLException classified = new SQLException("Inner query failed", state, 7);
@@ -102,13 +102,13 @@ class SqlExceptionsTest {
    * Retains nested-subquery context when iteration fails after returning a row.
    * 
    * @param state
-   *          the syntax or numeric SQLState
+   *          the syntax or data SQLState
    * @throws Exception
    *           if fixture construction fails
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "42000", "22003", "22018"
+      "42000", "22003", "22007", "22008", "22018"
   })
   void iterationRetainsSubqueryContext(String state) throws Exception {
     var schema = SchemaBuilder.record("Row").fields().requiredInt("id").endRecord();
@@ -150,5 +150,9 @@ class SqlExceptionsTest {
     assertNull(failure.getSQLState());
     assertSame(original, failure.getCause());
     assertEquals("Failed to prepare query", failure.getMessage());
+    var unexpected = new IllegalArgumentException("Unexpected engine failure");
+    var wrapped = SqlExceptions.wrap("Evaluation failed", unexpected);
+    assertNull(wrapped.getSQLState());
+    assertSame(unexpected, wrapped.getCause());
   }
 }

@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.SqlComparisons;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlTruth;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.window.WindowState;
@@ -203,10 +204,13 @@ class SqlTruthTest {
     var evaluator = new ExpressionEvaluator(schema);
     for (String expression : List.of("n", "s", "1", "n + 1", "s || 'x'")) {
       var predicate = CCJSqlParserUtil.parseCondExpression(expression);
-      assertThrows(IllegalArgumentException.class, () -> evaluator.eval(predicate, row), expression);
+      var failure = assertThrows(IllegalArgumentException.class, () -> evaluator.eval(predicate, row), expression);
+      assertEquals("42000", SqlExceptions.findSqlStateFailure(failure).getSQLState());
       var nullRow = new GenericData.Record(schema);
       nullRow.put("id", 1);
-      assertThrows(IllegalArgumentException.class, () -> evaluator.eval(predicate, nullRow), expression);
+      var nullFailure = assertThrows(IllegalArgumentException.class, () -> evaluator.eval(predicate, nullRow),
+          expression);
+      assertEquals("42000", SqlExceptions.findSqlStateFailure(nullFailure).getSQLState());
     }
     for (String input : List.of("(VALUES (1, 1, 'a'), (2, 2, 'b')) AS t(id, n, s)",
         "(VALUES (1, CAST(NULL AS INTEGER), CAST(NULL AS VARCHAR))) AS t(id, n, s)")) {

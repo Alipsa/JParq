@@ -6,6 +6,7 @@ import java.sql.Date;
 import java.sql.SQLDataException;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -619,8 +620,9 @@ public final class DateTimeFunctions {
    * @throws IllegalArgumentException
    *           if decimal bounds are invalid (SQLState 42000) or the rounded value
    *           exceeds the target's range or precision (SQLState 22003), or
-   *           numeric input is invalid or non-finite (SQLState 22018), carried by
-   *           the cause
+   *           numeric input is invalid or non-finite (SQLState 22018), or
+   *           temporal input has invalid format (22007) or out-of-range fields
+   *           (22008), carried by the cause
    */
   public static Object castLiteral(CastExpression cast, Object value) {
     if (cast != null && cast.getColDataType() != null
@@ -875,7 +877,8 @@ public final class DateTimeFunctions {
    *          the temporal, numeric, or string value
    * @return the converted SQL temporal value
    * @throws IllegalArgumentException
-   *           if the value cannot be converted
+   *           if the value cannot be converted, carrying SQLState 22007 for
+   *           invalid format or 22008 for out-of-range fields
    */
   public static Timestamp toTimestamp(Object value) {
     if (value instanceof Timestamp ts) {
@@ -914,7 +917,7 @@ public final class DateTimeFunctions {
           try {
             return Timestamp.valueOf(LocalDate.parse(text, SQL_DATE).atStartOfDay());
           } catch (DateTimeParseException invalid) {
-            throw new IllegalArgumentException("Invalid TIMESTAMP value: " + text, invalid);
+            throw temporalFailure("TIMESTAMP", text, ex, ignore, ignore2, invalid);
           }
         }
       }
@@ -929,7 +932,8 @@ public final class DateTimeFunctions {
    *          the temporal, numeric, or string value
    * @return the converted SQL temporal value
    * @throws IllegalArgumentException
-   *           if the value cannot be converted
+   *           if the value cannot be converted, carrying SQLState 22007 for
+   *           invalid format or 22008 for out-of-range fields
    */
   public static Date toDate(Object value) {
     if (value instanceof Date d) {
@@ -955,7 +959,7 @@ public final class DateTimeFunctions {
         LocalDate parsed = LocalDate.parse(text.replace(' ', 'T'), DateTimeFormatter.ISO_DATE_TIME);
         return Date.valueOf(parsed);
       } catch (DateTimeParseException invalid) {
-        throw new IllegalArgumentException("Invalid DATE value: " + text, invalid);
+        throw temporalFailure("DATE", text, ex, invalid);
       }
     }
   }
@@ -968,7 +972,8 @@ public final class DateTimeFunctions {
    *          the temporal, numeric, or string value
    * @return the converted SQL temporal value
    * @throws IllegalArgumentException
-   *           if the value cannot be converted
+   *           if the value cannot be converted, carrying SQLState 22007 for
+   *           invalid format or 22008 for out-of-range fields
    */
   public static Time toTime(Object value) {
     if (value instanceof Time t) {
@@ -991,8 +996,38 @@ public final class DateTimeFunctions {
         LocalTime parsed = LocalTime.parse(text.replace(' ', 'T'), DateTimeFormatter.ISO_DATE_TIME);
         return Time.valueOf(parsed);
       } catch (DateTimeParseException invalid) {
-        throw new IllegalArgumentException("Invalid TIME value: " + text, invalid);
+        throw temporalFailure("TIME", text, ex, invalid);
       }
     }
   }
+
+  /**
+   * Classifies failed temporal parsing after all supported formats were tried. A
+   * parser failure caused by DateTimeException means the format was read but its
+   * fields could not be resolved; lexical failures have no such cause.
+   *
+   * @param target
+   *          the SQL temporal type
+   * @param text
+   *          the input text
+   * @param failures
+   *          the failures from supported formats, in preference order
+   * @return an engine exception carrying a data SQLState and the original parser
+   *         failure
+   */
+  private static IllegalArgumentException temporalFailure(String target, String text,
+      DateTimeParseException... failures) {
+    DateTimeParseException original = failures[0];
+    String state = "22007";
+    for (DateTimeParseException failure : failures) {
+      if (failure.getCause() instanceof DateTimeException) {
+        original = failure;
+        state = "22008";
+        break;
+      }
+    }
+    String message = "Invalid " + target + " value: " + SqlExceptions.diagnosticValue(text);
+    return new IllegalArgumentException(message, new SQLDataException(message, state, original));
+  }
+
 }

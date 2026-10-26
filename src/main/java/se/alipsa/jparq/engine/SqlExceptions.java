@@ -66,19 +66,20 @@ public final class SqlExceptions {
   }
 
   /**
-   * Finds classified syntax, numeric range, or numeric conversion errors inside
-   * engine wrappers.
+   * Finds classified syntax, numeric, or temporal data errors inside engine
+   * wrappers.
    *
    * @param failure
    *          the exception or wrapper to inspect
-   * @return the SQLState 42000, 22003, or 22018 exception, or null without a
-   *         recognized state
+   * @return the SQLState 42000, 22003, 22007, 22008, or 22018 exception, or null
+   *         without a recognized state
    */
   public static SQLException findSqlStateFailure(Throwable failure) {
     Throwable current = failure;
     while (current != null) {
       if (current instanceof SQLException sql && ("22003".equals(sql.getSQLState()) || "42000".equals(sql.getSQLState())
-          || "22018".equals(sql.getSQLState()))) {
+          || "22018".equals(sql.getSQLState()) || "22007".equals(sql.getSQLState())
+          || "22008".equals(sql.getSQLState()))) {
         return sql;
       }
       current = current.getCause();
