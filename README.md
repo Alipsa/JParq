@@ -220,7 +220,12 @@ uses the same numeric and temporal rules as row expressions.
 Columns outside aggregates must be grouping expressions. Scalar functions use the shared
 value evaluator; remaining HAVING predicate classification differences are tracked in
 [#247](https://github.com/Alipsa/JParq/issues/247). Ungrouped column references in HAVING are rejected
-with SQLState `42000`, including for empty inputs. Grouped ORDER BY supports scalar subqueries and
+with SQLState `42000`, including for empty inputs. As a deliberate non-standard extension, HAVING
+also accepts unqualified SELECT aliases: `SELECT SUM(mpg) AS mpg FROM mtcars m GROUP BY cyl
+HAVING mpg > 200` filters on the aggregate alias. A qualified name such as `m.mpg` refers to the
+input column and must satisfy the grouping rules; replacing `mpg` with `m.mpg` in that HAVING clause
+raises SQLState `42000`. For standard SQL, repeat the aggregate expression: `HAVING SUM(mpg) > 200`.
+Grouped ORDER BY supports scalar subqueries and
 evaluates sort keys once per group. Predicate subqueries using IN, EXISTS, ANY, SOME, or ALL retain
 set semantics and SQL three-valued logic inside CASE and other scalar expressions in SELECT, HAVING,
 and ORDER BY. Subquery correlations in all three clauses reject ungrouped outer columns with
