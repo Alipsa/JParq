@@ -166,6 +166,34 @@ class AggregateExpressionReviewTest {
   }
 
   /**
+   * Rejects operands skipped by a deparser instead of evaluating unbound values.
+   * Full-text operands exercise JSqlParser's append-only traversal path.
+   *
+   * @param pushdown
+   *          whether predicate and projection pushdown are enabled
+   * @throws Exception
+   *           if fixture setup or connection creation fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void rejectsUnboundCompiledOperands(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown)) {
+      String sql = "SELECT CASE WHEN MATCH(model) AGAINST(model) THEN 1 ELSE 0 END " + "FROM mtcars GROUP BY model";
+      SQLException failure = assertThrows(SQLException.class, () -> {
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+          while (result.next()) {
+            result.getObject(1);
+          }
+        }
+      }, sql);
+      assertEquals("42000", failure.getSQLState(), sql);
+      assertTrue(failure.getMessage().contains("Unbound column"), failure.getMessage());
+    }
+  }
+
+  /**
    * Asserts that a syntax failure occurs during preparation without exposing
    * bindings.
    *

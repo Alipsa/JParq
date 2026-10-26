@@ -174,6 +174,148 @@ class AggregateExpressionTest {
   }
 
   /**
+   * Binds distinct predicates in projections, filters, and sort keys.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void distinctPredicates(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown)) {
+      assertRows(connection,
+          "SELECT cyl, CASE WHEN cyl IS DISTINCT FROM 4 THEN 'distinct' ELSE 'same' END "
+              + "FROM mtcars GROUP BY cyl ORDER BY 1",
+          List.of(List.of("4", "same"), List.of("6", "distinct"), List.of("8", "distinct")));
+      assertRows(connection,
+          "SELECT cyl FROM mtcars GROUP BY cyl " + "ORDER BY CASE WHEN cyl IS DISTINCT FROM 8 THEN 1 ELSE 0 END, cyl",
+          List.of(List.of("8"), List.of("4"), List.of("6")));
+      assertRows(connection,
+          "SELECT cyl FROM mtcars GROUP BY cyl "
+              + "HAVING CASE WHEN cyl IS DISTINCT FROM 4 THEN 1 ELSE 0 END = 1 ORDER BY cyl",
+          List.of(List.of("6"), List.of("8")));
+      assertRows(connection, "SELECT CASE WHEN MAX(cyl) IS DISTINCT FROM 8 THEN 1 ELSE 0 END FROM mtcars",
+          List.of(List.of("0")));
+      assertRows(connection, "SELECT CASE WHEN MAX(cyl) IS NOT DISTINCT FROM (SELECT 8) THEN 1 ELSE 0 END FROM mtcars",
+          List.of(List.of("1")));
+      for (String where : List.of("", " WHERE cyl < 0")) {
+        for (String sql : List.of(
+            "SELECT cyl, CASE WHEN mpg IS NOT DISTINCT FROM NULL THEN 'null' END FROM mtcars" + where + " GROUP BY cyl",
+            "SELECT cyl FROM mtcars" + where + " GROUP BY cyl HAVING CASE WHEN mpg IS DISTINCT FROM 4 THEN 1 END = 1",
+            "SELECT cyl FROM mtcars" + where + " GROUP BY cyl ORDER BY CASE WHEN mpg IS DISTINCT FROM 4 THEN 1 END")) {
+          SQLException failure = assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql);
+          assertEquals("42000", failure.getSQLState(), sql);
+        }
+      }
+    }
+  }
+
+  /**
+   * Discovers aggregates and subqueries in SQL named string-function operands.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void namedStringOperands(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown)) {
+      assertRows(connection,
+          "SELECT SUBSTRING(MAX(model) FROM 1 FOR 3), "
+              + "TRIM(BOTH 'V' FROM MAX(model)), POSITION('o' IN MAX(model)) FROM mtcars",
+          List.of(List.of("Vol", "olvo 142E", "2")));
+      for (String expression : List.of("SUBSTRING(MAX(model) FROM 1 FOR 3)", "TRIM(BOTH 'V' FROM MAX(model))",
+          "POSITION('o' IN MAX(model))")) {
+        assertRows(connection, "SELECT cyl FROM mtcars GROUP BY cyl ORDER BY " + expression + ", cyl",
+            namedOrder(connection, expression));
+      }
+      assertRows(connection, "SELECT SUBSTRING((SELECT MAX(model) FROM mtcars) FROM 1 FOR 3), COUNT(*) FROM mtcars",
+          List.of(List.of("Vol", "32")));
+      assertRows(connection, "SELECT TRIM(BOTH 'V' FROM (SELECT MAX(model) FROM mtcars)), COUNT(*) FROM mtcars",
+          List.of(List.of("olvo 142E", "32")));
+      for (String expression : List.of("SUBSTRING(MAX(model) OVER () FROM 1 FOR 3)",
+          "TRIM(BOTH 'V' FROM MAX(model) OVER ())", "POSITION('o' IN MAX(model) OVER ())")) {
+        SQLException failure = assertThrows(SQLException.class,
+            () -> connection.prepareStatement("SELECT " + expression + " FROM mtcars GROUP BY cyl"));
+        assertEquals("42000", failure.getSQLState());
+      }
+    }
+  }
+
+  /**
+   * Reads expected ordering with the aggregate explicitly selected.
+   *
+   * @param connection
+   *          fixture connection
+   * @param expression
+   *          sort expression
+   * @return ordered cylinder rows
+   * @throws SQLException
+   *           if query execution fails
+   */
+  private static List<List<String>> namedOrder(Connection connection, String expression) throws SQLException {
+    List<List<String>> rows = new ArrayList<>();
+    try (var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("SELECT cyl, MAX(model) FROM mtcars GROUP BY cyl ORDER BY " + expression + ", cyl")) {
+      while (result.next()) {
+        rows.add(List.of(result.getString(1)));
+      }
+    }
+    return rows;
+  }
+
+  /**
+   * Uses shared arithmetic semantics for temporal values and invalid numeric
+   * text.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void sharedArithmetic(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown)) {
+      assertRows(connection, "SELECT MAX(DATE '2024-03-01') - MIN(DATE '2024-02-01'), "
+          + "MAX(DATE '2024-03-01') + INTERVAL '1 day' FROM mtcars", List.of(List.of("29", "2024-03-02")));
+      assertRows(connection,
+          "SELECT COUNT(*) FROM mtcars " + "HAVING MAX(DATE '2024-03-01') - MIN(DATE '2024-02-01') > 1",
+          List.of(List.of("32")));
+      assertRows(connection,
+          "SELECT cyl FROM mtcars GROUP BY cyl " + "ORDER BY MAX(DATE '2024-03-01') - MIN(DATE '2024-02-01'), cyl",
+          List.of(List.of("4"), List.of("6"), List.of("8")));
+      for (String sql : List.of("SELECT -MAX(model) FROM mtcars", "SELECT COUNT(*) FROM mtcars HAVING -MAX(model) > 0",
+          "SELECT cyl FROM mtcars GROUP BY cyl ORDER BY -MAX(model)")) {
+        SQLException failure = assertThrows(SQLException.class, () -> assertRows(connection, sql, List.of()), sql);
+        assertEquals("22018", failure.getSQLState(), sql);
+      }
+      for (String where : List.of("", " WHERE cyl < 0")) {
+        SQLException failure = assertThrows(SQLException.class, () -> connection
+            .prepareStatement("SELECT SUM(mpg) AS mpg FROM mtcars m" + where + " GROUP BY cyl HAVING m.mpg > 200"));
+        assertEquals("42000", failure.getSQLState());
+      }
+      assertRows(connection, "SELECT m.cyl FROM mtcars m GROUP BY m.cyl HAVING m.cyl > 4 ORDER BY m.cyl",
+          List.of(List.of("6"), List.of("8")));
+      assertRows(connection, "SELECT ABS(cyl) FROM mtcars m GROUP BY ABS(cyl) HAVING ABS(m.cyl) > 4 ORDER BY ABS(cyl)",
+          List.of(List.of("6"), List.of("8")));
+      assertRows(connection, "SELECT SUM(mpg) AS mpg FROM mtcars m GROUP BY cyl HAVING mpg > 200 ORDER BY mpg",
+          List.of(List.of("211.4"), List.of("293.3")));
+    }
+  }
+
+  /**
    * Opens the fixture database with the requested pushdown setting.
    *
    * @param pushdown

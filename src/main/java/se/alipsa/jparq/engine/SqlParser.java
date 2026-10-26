@@ -1091,7 +1091,10 @@ public final class SqlParser {
 
     Expression havingExpr = ps.getHaving();
     if (tableRefs.size() == 1) {
-      stripQualifier(havingExpr, qualifiers(tableRefs));
+      // Keep qualifiers where removing them could turn an input column into a
+      // SELECT alias during grouped validation.
+      Set<String> outputNames = labels.stream().map(Identifier::lookupKey).collect(Collectors.toSet());
+      stripQualifier(havingExpr, qualifiers(tableRefs), outputNames);
     }
 
     Expression joinCondition = combineJoinConditions(joinInfos, tableRefs);
@@ -2528,6 +2531,20 @@ public final class SqlParser {
    * only).
    */
   private static void stripQualifier(Expression expr, List<String> allowedQualifiers) {
+    stripQualifier(expr, allowedQualifiers, Set.of());
+  }
+
+  /**
+   * Removes known input qualifiers while retaining possible alias collisions.
+   *
+   * @param expr
+   *          expression to normalize
+   * @param allowedQualifiers
+   *          qualifiers belonging to the input
+   * @param retainedColumns
+   *          normalized names whose qualifiers must remain visible
+   */
+  private static void stripQualifier(Expression expr, List<String> allowedQualifiers, Set<String> retainedColumns) {
     if (expr == null) {
       return;
     }
@@ -2542,7 +2559,7 @@ public final class SqlParser {
           String q = t.getName();
           if (q != null) {
             boolean known = allowed.stream().anyMatch(name -> name.equalsIgnoreCase(q));
-            if (known) {
+            if (known && !retainedColumns.contains(Identifier.lookupKey(column.getColumnName()))) {
               column.setTable(null);
             }
           }

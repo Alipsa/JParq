@@ -35,7 +35,6 @@ import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.Expression;
-import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.JdbcNamedParameter;
 import net.sf.jsqlparser.expression.JdbcParameter;
@@ -592,7 +591,7 @@ public final class AggregateFunctions {
     }
     GroupedExpression.validate(expression, operand -> {
       if (operand instanceof Column column && findGroupIndex(column, groupIndexByText, groups) == null
-          && !aliases.contains(Identifier.lookupKey(column.getColumnName()))) {
+          && (column.getTable() != null || !aliases.contains(Identifier.lookupKey(column.getColumnName())))) {
         throw syntaxFailure("Missing columns in " + clause + " grouped scope: " + column
             + "; columns must appear in the GROUP BY clause or SELECT list");
       }
@@ -613,7 +612,7 @@ public final class AggregateFunctions {
     if (expression == null) {
       return;
     }
-    expression.accept(new ExpressionVisitorAdapter<Void>() {
+    expression.accept(new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(AnalyticExpression analytic, S context) {
         throw syntaxFailure("Window functions are not supported in grouped queries: "
@@ -928,7 +927,7 @@ public final class AggregateFunctions {
       return List.of();
     }
     List<Function> functions = new ArrayList<>();
-    expression.accept(new ExpressionVisitorAdapter<Void>() {
+    expression.accept(new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(Function function, S context) {
         if (AggregateType.from(function.getName()) != null) {
@@ -1435,7 +1434,7 @@ public final class AggregateFunctions {
     }
     for (Expression expression : groupedScalars) {
       if (expression != null) {
-        expression.accept(new ExpressionVisitorAdapter<Void>() {
+        expression.accept(new JSqlParserSupport.NamedArgumentVisitor() {
           @Override
           public <S> Void visit(Function function, S context) {
             return isAggregateName(function.getName()) ? null : super.visit(function, context);
@@ -2725,28 +2724,9 @@ public final class AggregateFunctions {
       if (expr instanceof ArrayConstructor array) {
         return arrayValues(array.getExpressions());
       }
-      if (expr instanceof SignedExpression signed) {
-        Object inner = value(signed.getExpression());
-        if (inner == null) {
-          return null;
-        }
-        BigDecimal numeric = toBigDecimal(inner);
-        return signed.getSign() == '-' ? numeric.negate() : numeric;
-      }
-      if (expr instanceof Addition add) {
-        return arithmetic(add.getLeftExpression(), add.getRightExpression(), Operation.ADD);
-      }
-      if (expr instanceof Subtraction sub) {
-        return arithmetic(sub.getLeftExpression(), sub.getRightExpression(), Operation.SUB);
-      }
-      if (expr instanceof Multiplication mul) {
-        return arithmetic(mul.getLeftExpression(), mul.getRightExpression(), Operation.MUL);
-      }
-      if (expr instanceof Division div) {
-        return arithmetic(div.getLeftExpression(), div.getRightExpression(), Operation.DIV);
-      }
-      if (expr instanceof Modulo mod) {
-        return arithmetic(mod.getLeftExpression(), mod.getRightExpression(), Operation.MOD);
+      if (expr instanceof SignedExpression || expr instanceof Addition || expr instanceof Subtraction
+          || expr instanceof Multiplication || expr instanceof Division || expr instanceof Modulo) {
+        return scalarValue(expr);
       }
       if (expr instanceof Function func) {
         if ("ARRAY".equalsIgnoreCase(func.getName())) {
@@ -2809,15 +2789,6 @@ public final class AggregateFunctions {
         }
       }
       return ArrayFunctions.homogenizeArrayValues(elements);
-    }
-
-    private Object arithmetic(Expression left, Expression right, Operation op) {
-      Object leftVal = value(left);
-      Object rightVal = value(right);
-      if (leftVal == null || rightVal == null) {
-        return null;
-      }
-      return calculate(leftVal, rightVal, op);
     }
 
     private Object evaluateScalarSubquery(Select subSelect) {

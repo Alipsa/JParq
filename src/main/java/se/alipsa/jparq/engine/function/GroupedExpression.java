@@ -1,14 +1,18 @@
 package se.alipsa.jparq.engine.function;
 
+import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
+
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.operators.relational.ExistsExpression;
 import net.sf.jsqlparser.expression.operators.relational.InExpression;
+import net.sf.jsqlparser.expression.operators.relational.IsDistinctExpression;
 import net.sf.jsqlparser.expression.operators.relational.OldOracleJoinBinaryExpression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
@@ -18,6 +22,7 @@ import net.sf.jsqlparser.util.deparser.ExpressionDeParser;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import se.alipsa.jparq.engine.CorrelatedBindings;
+import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 
 /**
@@ -28,6 +33,7 @@ final class GroupedExpression {
   private final List<Expression> bindings = new ArrayList<>();
   private final Expression expression;
   private final Schema schema = Schema.createRecord("grouped", null, null, false, List.of());
+  private final ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(schema);
 
   /**
    * Compiles a scalar expression, replacing group-dependent operands with slots.
@@ -46,9 +52,51 @@ final class GroupedExpression {
     source.accept(bindingDeparser(sql, bind, bindings), null);
     try {
       expression = CCJSqlParserUtil.parseExpression(sql.toString());
+      rejectUnboundOperands(expression);
     } catch (net.sf.jsqlparser.JSQLParserException e) {
       throw new IllegalArgumentException("Cannot compile grouped expression: " + source, e);
     }
+  }
+
+  /**
+   * Rejects group-dependent operands left behind by incomplete deparser
+   * traversal.
+   *
+   * @param compiled
+   *          rewritten scalar expression
+   * @throws IllegalArgumentException
+   *           if a column, aggregate, or subquery remains unbound
+   */
+  private static void rejectUnboundOperands(Expression compiled) {
+    compiled.accept(new JSqlParserSupport.NamedArgumentVisitor() {
+      @Override
+      public <S> Void visit(Column column, S context) {
+        throw syntaxFailure("Unbound column in grouped expression: " + column);
+      }
+
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.expression.Function function, S context) {
+        if (AggregateFunctions.isAggregateName(function.getName())) {
+          throw syntaxFailure("Unbound aggregate in grouped expression: " + function);
+        }
+        return super.visit(function, context);
+      }
+
+      @Override
+      public <S> Void visit(AnyComparisonExpression comparison, S context) {
+        return visit(comparison.getSelect(), context);
+      }
+
+      @Override
+      public <S> Void visit(Select select, S context) {
+        throw syntaxFailure("Unbound subquery in grouped expression: " + select);
+      }
+
+      @Override
+      public <S> Void visit(ParenthesedSelect select, S context) {
+        return visit((Select) select, context);
+      }
+    }, null);
   }
 
   /**
@@ -153,6 +201,16 @@ final class GroupedExpression {
       }
 
       @Override
+      public <S> StringBuilder visit(IsDistinctExpression expression, S context) {
+        if (!binding(expression)) {
+          expression.getLeftExpression().accept(this, context);
+          sql.append(' ').append(expression.getStringExpression()).append(' ');
+          expression.getRightExpression().accept(this, context);
+        }
+        return sql;
+      }
+
+      @Override
       public <S> StringBuilder visit(InExpression predicate, S context) {
         return binding(predicate) ? sql : super.visit(predicate, context);
       }
@@ -210,7 +268,7 @@ final class GroupedExpression {
     };
     var frame = new CorrelatedBindings(BINDING_KEY, operands);
     try (frame) {
-      return new ValueExpressionEvaluator(schema).eval(expression, new GenericData.Record(schema));
+      return evaluator.eval(expression, new GenericData.Record(schema));
     }
   }
 }

@@ -213,7 +213,11 @@ execution, materialization, or a result-set getter; function names are not check
 allowlist. Aggregate results can be operands of arithmetic and scalar functions in SELECT, HAVING,
 and ORDER BY, with or without GROUP BY. For example, `SUM(cyl) * 2`, `COALESCE(MAX(cyl), 0)`,
 and `ROUND(AVG(mpg), 1)` evaluate once per group. ORDER BY and HAVING may use aggregates omitted
-from SELECT. Columns outside aggregates must be grouping expressions. Scalar functions use the shared
+from SELECT. This includes aggregates in the standard `SUBSTRING(... FROM ... FOR ...)`,
+`POSITION(... IN ...)`, and `TRIM(... FROM ...)` forms. Grouped `IS [NOT] DISTINCT FROM` predicates
+bind grouping columns, aggregates, and subqueries with their NULL semantics intact. Grouped arithmetic
+uses the same numeric and temporal rules as row expressions.
+Columns outside aggregates must be grouping expressions. Scalar functions use the shared
 value evaluator; remaining HAVING predicate classification differences are tracked in
 [#247](https://github.com/Alipsa/JParq/issues/247). Ungrouped column references in HAVING are rejected
 with SQLState `42000`, including for empty inputs. Grouped ORDER BY supports scalar subqueries and
