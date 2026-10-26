@@ -146,8 +146,7 @@ public final class FunctionSupport {
           throw syntaxFailure("Window function " + name + " requires an OVER clause");
         }
         if (AggregateFunctions.isAggregateName(name)) {
-          throw syntaxFailure(
-              "Aggregate function " + name + " is not supported inside this scalar expression (see #231)");
+          throw syntaxFailure("Aggregate function " + name + " requires an aggregate query context");
         }
         throw syntaxFailure("Unsupported function: " + name);
       }

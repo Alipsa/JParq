@@ -67,7 +67,7 @@ class UnsupportedFunctionTest {
   }
 
   /**
-   * Distinguishes supported aggregates in scalar contexts from unknown functions.
+   * Rejects aggregate calls in predicates evaluated before grouping.
    *
    * @param predicatePushdown
    *          whether predicate pushdown is enabled
@@ -80,27 +80,24 @@ class UnsupportedFunctionTest {
   @CsvSource({
       "true,true", "true,false", "false,true", "false,false"
   })
-  void explainsAggregatesInScalarExpressions(boolean predicatePushdown, boolean projectionPushdown) throws Exception {
+  void rejectsAggregatesInRowPredicates(boolean predicatePushdown, boolean projectionPushdown) throws Exception {
     Path directory = Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
     String url = "jdbc:jparq:" + directory + "?predicatePushdown=" + predicatePushdown + "&projectionPushdown="
         + projectionPushdown;
-    Map<String, String> queries = Map.of("SELECT COALESCE(MAX(cyl), 0) FROM mtcars", "MAX",
-        "SELECT UPPER(MAX(model)) FROM mtcars", "MAX", "SELECT ROUND(AVG(mpg), 1) FROM mtcars", "AVG",
-        "SELECT SUM(cyl) + 1 FROM mtcars", "SUM", "SELECT cyl FROM mtcars WHERE COUNT(*) > 1", "COUNT",
-        "SELECT NULLIF(MIN(cyl), 0) FROM mtcars", "MIN", "SELECT UPPER(STRING_AGG(model, ',')) FROM mtcars",
-        "STRING_AGG", "SELECT ROUND(average(mpg), 1) FROM mtcars", "average");
+    Map<String, String> queries = Map.of("COALESCE(MAX(cyl), 0) > 0", "MAX", "UPPER(MAX(model)) = 'X'", "MAX",
+        "ROUND(AVG(mpg), 1) > 0", "AVG", "SUM(cyl) + 1 > 0", "SUM", "COUNT(*) > 1", "COUNT", "NULLIF(MIN(cyl), 0) > 0",
+        "MIN", "UPPER(STRING_AGG(model, ',')) = 'X'", "STRING_AGG", "ROUND(average(mpg), 1) > 0", "average");
     try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
       for (var query : queries.entrySet()) {
         var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
-          try (var result = statement.executeQuery(query.getKey())) {
+          try (var result = statement.executeQuery("SELECT cyl FROM mtcars WHERE " + query.getKey())) {
             while (result.next()) {
               result.getObject(1);
             }
           }
         }, query.getKey());
         assertEquals("42000", failure.getSQLState(), query.getKey());
-        String message = "Aggregate function " + query.getValue()
-            + " is not supported inside this scalar expression (see #231)";
+        String message = "Aggregate function " + query.getValue() + " requires an aggregate query context";
         assertTrue(failure.getMessage().contains(message), failure::getMessage);
       }
     }

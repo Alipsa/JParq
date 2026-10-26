@@ -21,7 +21,10 @@ import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 
-/** Binds scalar subquery correlations exclusively to grouped column values. */
+/**
+ * Binds scalar and predicate subquery correlations exclusively to grouped
+ * column values.
+ */
 final class GroupedScalarSubquery {
   private final Select select;
   private final SubqueryExecutor executor;
@@ -34,7 +37,7 @@ final class GroupedScalarSubquery {
    * inputs.
    *
    * @param select
-   *          scalar subquery
+   *          scalar or predicate subquery
    * @param groups
    *          outer grouping expressions
    * @param executor
@@ -48,23 +51,50 @@ final class GroupedScalarSubquery {
     this.executor = executor;
     this.mappings = mappings;
     this.candidates = columnNames(select);
+    groupIndexes.putAll(validateCorrelations(select, groups, executor, mappings, Set.of()));
+  }
+
+  /**
+   * Validates grouped correlations without evaluating subqueries or output
+   * aliases.
+   *
+   * @param select
+   *          scalar or predicate subquery
+   * @param groups
+   *          outer grouping expressions
+   * @param executor
+   *          schema-aware subquery executor
+   * @param mappings
+   *          outer source column mappings
+   * @param aliases
+   *          normalized output aliases available in the consuming clause
+   * @return indexes for references bound to grouping columns
+   */
+  static Map<QualifiedColumn, Integer> validateCorrelations(Select select,
+      List<AggregateFunctions.GroupExpression> groups, SubqueryExecutor executor, CorrelationMappings mappings,
+      Set<String> aliases) {
+    Map<QualifiedColumn, Integer> indexes = new HashMap<>();
     Map<String, Integer> groupedColumns = new HashMap<>();
     for (int index = 0; index < groups.size(); index++) {
       if (AggregateFunctions.unwrap(groups.get(index).expression()) instanceof Column column) {
         String qualifier = column.getTable() == null ? null : column.getTable().getName();
-        groupedColumns.put(canonical(qualifier, column.getColumnName()), index);
+        groupedColumns.put(canonical(qualifier, column.getColumnName(), mappings), index);
       }
     }
-    executor.rewrite(select, mappings.outerQualifiers(), candidates, mappings.qualifierColumnMapping(),
+    executor.rewrite(select, mappings.outerQualifiers(), columnNames(select), mappings.qualifierColumnMapping(),
         (qualifier, column) -> {
-          Integer index = groupedColumns.get(canonical(qualifier, column));
+          if (qualifier == null && aliases.contains(Identifier.lookupKey(column))) {
+            return null;
+          }
+          Integer index = groupedColumns.get(canonical(qualifier, column, mappings));
           if (index == null) {
-            throw SqlExceptions.syntaxFailure("Scalar subquery references ungrouped outer column '" + column
+            throw SqlExceptions.syntaxFailure("Subquery references ungrouped outer column '" + column
                 + "'; outer columns must appear in the GROUP BY clause");
           }
-          groupIndexes.put(new QualifiedColumn(qualifier, column), index);
+          indexes.put(new QualifiedColumn(qualifier, column), index);
           return null;
         });
+    return indexes;
   }
 
   /**
@@ -75,9 +105,11 @@ final class GroupedScalarSubquery {
    *          optional table qualifier
    * @param column
    *          SQL column name
+   * @param mappings
+   *          outer source column mappings
    * @return normalized canonical field identity
    */
-  private String canonical(String qualifier, String column) {
+  private static String canonical(String qualifier, String column, CorrelationMappings mappings) {
     if (mappings.qualifierColumnMapping().isEmpty()) {
       return Identifier
           .lookupKey(mappings.unqualifiedColumnMapping().getOrDefault(Identifier.lookupKey(column), column));

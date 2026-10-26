@@ -210,8 +210,30 @@ Unknown or unsupported scalar functions and unsupported expression types raise `
 with SQLState `42000`
 when evaluated, instead of returning their SQL text as a value. Evaluation can occur during query
 execution, materialization, or a result-set getter; function names are not checked by a preparation-time
-allowlist. Scalar functions in HAVING and grouped select lists remain limited;
-NULLIF support and SQLState classification there remain tracked in [#247](https://github.com/Alipsa/JParq/issues/247).
+allowlist. Aggregate results can be operands of arithmetic and scalar functions in SELECT, HAVING,
+and ORDER BY, with or without GROUP BY. For example, `SUM(cyl) * 2`, `COALESCE(MAX(cyl), 0)`,
+and `ROUND(AVG(mpg), 1)` evaluate once per group. ORDER BY and HAVING may use aggregates omitted
+from SELECT. This includes aggregates in the standard `SUBSTRING(... FROM ... FOR ...)`,
+`POSITION(... IN ...)`, and `TRIM(... FROM ...)` forms. Grouped `IS [NOT] DISTINCT FROM` predicates
+bind grouping columns, aggregates, and subqueries with their NULL semantics intact. Grouped arithmetic
+uses the same numeric and temporal rules as row expressions.
+Columns outside aggregates must be grouping expressions. Scalar functions use the shared
+value evaluator; remaining HAVING predicate classification differences are tracked in
+[#247](https://github.com/Alipsa/JParq/issues/247). Ungrouped column references in HAVING are rejected
+with SQLState `42000`, including for empty inputs. As a deliberate non-standard extension, HAVING
+also accepts unqualified SELECT aliases: `SELECT SUM(mpg) AS mpg FROM mtcars m GROUP BY cyl
+HAVING mpg > 200` filters on the aggregate alias. A qualified name such as `m.mpg` refers to the
+input column and must satisfy the grouping rules; replacing `mpg` with `m.mpg` in that HAVING clause
+raises SQLState `42000`. For standard SQL, repeat the aggregate expression: `HAVING SUM(mpg) > 200`.
+Grouped ORDER BY supports scalar subqueries and
+evaluates sort keys once per group. Predicate subqueries using IN, EXISTS, ANY, SOME, or ALL retain
+set semantics and SQL three-valued logic inside CASE and other scalar expressions in SELECT, HAVING,
+and ORDER BY. Subquery correlations in all three clauses reject ungrouped outer columns with
+SQLState `42000` before reading groups, including when the outer input is empty.
+Window functions in grouped queries are rejected during preparation
+with SQLState `42000`; separate inner queries retain their own window-function scope.
+Direct correlated scalar subqueries used as aggregate arguments still have a separate binding limitation
+([#307](https://github.com/Alipsa/JParq/issues/307)).
 Unary signs convert numeric text and report invalid numeric text as `SQLDataException` with SQLState `22018`;
 unsupported operand types raise SQLState `42000`. Expression diagnostics preserve the SQL structure while replacing internal correlated bindings with
 `<outer value>`, including bindings inside nested subqueries.

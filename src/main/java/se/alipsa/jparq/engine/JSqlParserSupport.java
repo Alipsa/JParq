@@ -8,6 +8,7 @@ import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.Function;
+import net.sf.jsqlparser.expression.TrimFunction;
 import net.sf.jsqlparser.parser.CCJSqlParser;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.parser.ParseException;
@@ -128,8 +129,9 @@ public final class JSqlParserSupport {
 
   /**
    * Expression visitor that includes named function arguments such as POSITION's
-   * IN operands, which JSqlParser's default adapter does not traverse. Subclasses
-   * retain control over nested query scope boundaries.
+   * IN operands and TRIM's FROM expression, which JSqlParser's default adapter
+   * does not traverse. Subclasses retain control over nested query scope
+   * boundaries.
    */
   public abstract static class NamedArgumentVisitor extends ExpressionVisitorAdapter<Void> {
     /** Creates a visitor that traverses named and positional function arguments. */
@@ -146,6 +148,16 @@ public final class JSqlParserSupport {
       }
       return super.visit(function, context);
     }
+
+    /** {@inheritDoc} */
+    @Override
+    public <S> Void visit(TrimFunction trim, S context) {
+      if (trim.getFromExpression() != null) {
+        trim.getFromExpression().accept(this, context);
+      }
+      return super.visit(trim, context);
+    }
+
   }
 
   /**
