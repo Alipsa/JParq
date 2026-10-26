@@ -42,6 +42,16 @@ class NumericCastTargetTest {
     assertEquals(javaClass, DateTimeFunctions.castLiteral(cast, 1).getClass().getSimpleName());
   }
 
+  /** Prevents strict lookups from stripping characters from column names. */
+  @Test
+  void normalizedLookupRequiresAnExactAlias() {
+    assertEquals(NumericCastTarget.BIGINT, NumericCastTarget.fromNormalizedName("bigint"));
+    assertNull(NumericCastTarget.fromNormalizedName("big_int"));
+    assertNull(NumericCastTarget.fromNormalizedName("double precision"));
+    assertNull(NumericCastTarget.fromNormalizedName("FLOAT"));
+    assertEquals(NumericCastTarget.DOUBLE, NumericCastTarget.fromName("DOUBLE PRECISION"));
+  }
+
   /** Leaves nonnumeric and unsupported names outside the shared mapping. */
   @Test
   void unrelatedNamesRemainUnrecognized() {

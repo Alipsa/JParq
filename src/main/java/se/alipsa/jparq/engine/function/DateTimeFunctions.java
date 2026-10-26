@@ -644,11 +644,11 @@ public final class DateTimeFunctions {
     if (dataType == null) {
       return value;
     }
-    NumericCastTarget target = NumericCastTarget.fromName(dataType);
+    String normalized = normalizeTypeName(dataType);
+    NumericCastTarget target = NumericCastTarget.fromNormalizedName(normalized);
     if (target != null) {
       return castNumeric(value, target, colType.toString());
     }
-    String normalized = normalizeTypeName(dataType);
     return switch (normalized) {
       case "boolean", "bool" -> toBoolean(value);
       case "char", "character", "nchar", "varchar", "charactervarying", "nvarchar", "string" ->

@@ -66,7 +66,18 @@ public enum NumericCastTarget {
     }
     int parameters = name.indexOf('(');
     String base = parameters < 0 ? name : name.substring(0, parameters);
-    return BY_NAME.get(base.toLowerCase(Locale.ROOT).trim().replace(" ", "").replace("_", ""));
+    return fromNormalizedName(base.toLowerCase(Locale.ROOT).trim().replace(" ", "").replace("_", ""));
+  }
+
+  /**
+   * Looks up an exact alias without treating column names as normalized types.
+   *
+   * @param normalized
+   *          the already-normalized alias
+   * @return the numeric target, or null for an unrecognized alias
+   */
+  public static NumericCastTarget fromNormalizedName(String normalized) {
+    return BY_NAME.get(normalized);
   }
 
   /**
