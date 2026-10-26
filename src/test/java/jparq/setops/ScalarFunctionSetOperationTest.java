@@ -3,7 +3,9 @@ package jparq.setops;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.math.BigDecimal;
+import java.net.URISyntaxException;
 import java.nio.file.Path;
+import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Types;
@@ -78,10 +80,7 @@ class ScalarFunctionSetOperationTest {
   void promotesJoinedCoalesceToDouble(boolean pushdown) throws Exception {
     String sql = "SELECT COALESCE(a.cyl, b.mpg) FROM mtcars a JOIN mtcars b ON a.model = b.model "
         + "WHERE a.cyl = 4 AND a.gear = 5 UNION ALL SELECT 1";
-    Path directory = Path.of(Objects.requireNonNull(getClass().getResource("/mtcars.parquet")).toURI()).getParent();
-    try (
-        var connection = DriverManager.getConnection(
-            "jdbc:jparq:" + directory + "?predicatePushdown=" + pushdown + "&projectionPushdown=" + pushdown);
+    try (var connection = connect(pushdown);
         var statement = connection.createStatement();
         var result = statement.executeQuery(sql)) {
       var metadata = result.getMetaData();
@@ -115,10 +114,7 @@ class ScalarFunctionSetOperationTest {
   @MethodSource("numericFunctions")
   void retainsNumericType(String sql, int precision, int scale, List<String> expected, boolean pushdown)
       throws Exception {
-    Path directory = Path.of(Objects.requireNonNull(getClass().getResource("/mtcars.parquet")).toURI()).getParent();
-    try (
-        var connection = DriverManager.getConnection(
-            "jdbc:jparq:" + directory + "?predicatePushdown=" + pushdown + "&projectionPushdown=" + pushdown);
+    try (var connection = connect(pushdown);
         var statement = connection.createStatement();
         var result = statement.executeQuery(sql)) {
       var metadata = result.getMetaData();
@@ -150,13 +146,11 @@ class ScalarFunctionSetOperationTest {
       "ABS(CAST(NULL AS DOUBLE))", "COALESCE(NULL, CAST(NULL AS DOUBLE) / 4)"
   })
   void rejectsNonnumericBranch(String expression) throws Exception {
-    Path directory = Path.of(Objects.requireNonNull(getClass().getResource("/mtcars.parquet")).toURI()).getParent();
     for (boolean reverse : List.of(false, true)) {
       String sql = reverse
           ? "SELECT 'a' UNION ALL SELECT " + expression
           : "SELECT " + expression + " UNION ALL SELECT 'a'";
-      try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
-          var statement = connection.createStatement()) {
+      try (var connection = connect(true); var statement = connection.createStatement()) {
         SQLException error = assertThrows(SQLException.class, () -> {
           try (var result = statement.executeQuery(sql)) {
             while (result.next()) {
@@ -168,4 +162,23 @@ class ScalarFunctionSetOperationTest {
       }
     }
   }
+
+  /**
+   * Opens a connection to the shared mtcars fixture with explicit pushdown
+   * settings.
+   *
+   * @param pushdown
+   *          whether predicate and projection pushdown are enabled
+   * @return the fixture connection, to be closed by the caller
+   * @throws URISyntaxException
+   *           if the fixture resource URL is invalid
+   * @throws SQLException
+   *           if opening the connection fails
+   */
+  private Connection connect(boolean pushdown) throws URISyntaxException, SQLException {
+    Path directory = Path.of(Objects.requireNonNull(getClass().getResource("/mtcars.parquet")).toURI()).getParent();
+    return DriverManager.getConnection(
+        "jdbc:jparq:" + directory + "?predicatePushdown=" + pushdown + "&projectionPushdown=" + pushdown);
+  }
+
 }
