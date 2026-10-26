@@ -53,6 +53,24 @@ class RelationalKeysTest {
     }
   }
 
+  /** Zero and negative scales still normalize powers of ten consistently. */
+  @Test
+  void normalizesDecimalPowersOfTen() {
+    Object expected = RelationalKeys.value(new BigDecimal("1000.00"));
+    for (String text : List.of("1000", "1E+3", "10E+2", "100E+1", "1000.0000")) {
+      Object key = RelationalKeys.value(new BigDecimal(text));
+      assertEquals(expected, key, text);
+      assertEquals(expected.hashCode(), key.hashCode(), text);
+    }
+    for (String text : List.of("0", "0.00", "0E+3")) {
+      assertEquals(BigDecimal.ZERO, RelationalKeys.value(new BigDecimal(text)), text);
+    }
+    for (String text : List.of("12.31", "-12.31", "1E+3")) {
+      BigDecimal canonical = new BigDecimal(text);
+      assertSame(canonical, RelationalKeys.value(canonical), text);
+    }
+  }
+
   /**
    * Typed integer rows retain both the row list and the original boxed values.
    */

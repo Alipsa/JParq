@@ -132,6 +132,10 @@ public final class RelationalKeys {
    */
   public static Object value(Object value, boolean normalizeWholeNumbers) {
     if (value instanceof BigDecimal decimal) {
+      // An odd unscaled value cannot end in a zero at any scale.
+      if (decimal.unscaledValue().testBit(0)) {
+        return decimal;
+      }
       BigDecimal normalized = decimal.stripTrailingZeros();
       return decimal.equals(normalized) ? decimal : normalized;
     }

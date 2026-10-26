@@ -889,8 +889,13 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     NumericType resolved = NumericExpressionTypes.resolve(projection, column -> null);
     if (resolved != null) {
-      return resolved.schema();
+      Schema declared = resolved.schema();
+      if (declared != null) {
+        return declared;
+      }
     }
+    // Unbounded decimals still have a numeric type; infer their bounds from
+    // values rather than returning the sentinel for an untyped NULL.
     if (LiteralConverter.isLiteral(projection)) {
       Object literal = LiteralConverter.toLiteral(projection);
       return schemaForColumnType(classifyValueType(literal), List.of(literal));

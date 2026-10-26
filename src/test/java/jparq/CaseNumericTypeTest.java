@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.Types;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
@@ -46,7 +47,7 @@ class CaseNumericTypeTest {
         Arguments.of("CASE WHEN id = 1 THEN ABS(id) ELSE 1.00 END", Types.DECIMAL, -1, 2, Set.of()),
         Arguments.of("CASE WHEN id = 1 THEN ROUND(id, 1) ELSE 1.0 END", Types.DECIMAL, -1, 1, Set.of()));
     return cases.stream().flatMap(value -> Stream.of(true, false).map(pushdown -> {
-      Object[] args = java.util.Arrays.copyOf(value.get(), value.get().length + 1);
+      Object[] args = Arrays.copyOf(value.get(), value.get().length + 1);
       args[args.length - 1] = pushdown;
       return Arguments.of(args);
     }));
