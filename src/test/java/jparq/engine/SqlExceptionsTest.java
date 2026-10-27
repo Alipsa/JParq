@@ -149,7 +149,7 @@ class SqlExceptionsTest {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + fixtures + "?predicatePushdown=" + pushdown);
         var statement = connection.createStatement()) {
       for (String sql : List.of(
-          "SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL " + "(SELECT a.mpg FROM nosuchtable a WHERE a.cyl = o.cyl) x",
+          "SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.mpg FROM nosuchtable a WHERE a.cyl = o.cyl) x",
           "SELECT * FROM mtcars o JOIN (SELECT * FROM nosuchtable) x ON TRUE")) {
         var failure = assertThrows(SQLException.class, () -> statement.executeQuery(sql), sql);
         String context = "Failed to execute derived table 'x': ";
