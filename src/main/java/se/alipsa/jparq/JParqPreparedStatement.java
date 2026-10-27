@@ -3057,7 +3057,11 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (e.getMessage() != null && e.getMessage().contains(context)) {
         throw e;
       }
-      throw SqlExceptions.wrap(context + derivedRecordName(ref) + "'", e);
+      String message = context + derivedRecordName(ref) + "': " + e.getMessage();
+      if (SqlExceptions.findSqlStateFailure(e) == null) {
+        throw new SQLException(message, e.getSQLState(), e.getErrorCode(), e);
+      }
+      throw SqlExceptions.wrap(message, e);
     }
   }
 

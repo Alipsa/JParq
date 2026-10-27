@@ -120,6 +120,50 @@ class SqlExceptionsTest {
   }
 
   /**
+   * Preserves a classified exception's nonzero vendor code and original cause.
+   */
+  @Test
+  void wrappingRetainsVendorErrorCode() {
+    var original = new SQLDataException("Numeric conversion failed", "22003", 1234);
+    var failure = SqlExceptions.wrap("Failed to execute derived table 'l'", original);
+    assertInstanceOf(SQLDataException.class, failure);
+    assertEquals("22003", failure.getSQLState());
+    assertEquals(1234, failure.getErrorCode());
+    assertSame(original, failure.getCause());
+  }
+
+  /**
+   * Retains unclassified failure details in joined and LATERAL derived tables.
+   *
+   * @param pushdown
+   *          whether predicate pushdown is enabled
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void derivedTableFailuresRetainUnclassifiedDetails(boolean pushdown) throws Exception {
+    Path fixtures = Path.of(SqlExceptionsTest.class.getResource("/mtcars.parquet").toURI()).getParent();
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + fixtures + "?predicatePushdown=" + pushdown);
+        var statement = connection.createStatement()) {
+      for (String sql : List.of(
+          "SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL " + "(SELECT a.mpg FROM nosuchtable a WHERE a.cyl = o.cyl) x",
+          "SELECT * FROM mtcars o JOIN (SELECT * FROM nosuchtable) x ON TRUE")) {
+        var failure = assertThrows(SQLException.class, () -> statement.executeQuery(sql), sql);
+        String context = "Failed to execute derived table 'x': ";
+        assertTrue(failure.getMessage().contains(context + "Failed to prepare query:"), failure::getMessage);
+        assertTrue(failure.getMessage().contains("nosuchtable"), failure::getMessage);
+        var cause = assertInstanceOf(SQLException.class, failure.getCause());
+        assertNull(SqlExceptions.findSqlStateFailure(cause));
+        assertEquals(cause.getSQLState(), failure.getSQLState());
+        assertEquals(cause.getMessage(), failure.getMessage().substring(context.length()));
+      }
+    }
+  }
+
+  /**
    * Preserves classified failures and derived-table context in LATERAL queries.
    *
    * @param predicate
@@ -162,7 +206,6 @@ class SqlExceptionsTest {
           var cause = SqlExceptions.findSqlStateFailure(failure.getCause());
           assertNotNull(cause);
           assertEquals(state, cause.getSQLState());
-          assertEquals(cause.getErrorCode(), failure.getErrorCode());
         }
       }
     }
