@@ -2,6 +2,7 @@ package jparq.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -22,6 +23,7 @@ import org.apache.avro.generic.GenericData;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.JParqResultSet;
 import se.alipsa.jparq.engine.RecordReader;
@@ -114,6 +116,55 @@ class SqlExceptionsTest {
       assertInstanceOf(SQLSyntaxErrorException.class, failure);
     } else {
       assertInstanceOf(SQLDataException.class, failure);
+    }
+  }
+
+  /**
+   * Preserves classified failures and derived-table context in LATERAL queries.
+   *
+   * @param predicate
+   *          the failing inner predicate
+   * @param state
+   *          the expected SQLState
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "a.mpg > CAST(123.45 AS DECIMAL(2,1)) | 22003", "a.mpg > CAST('NaN' AS DOUBLE) | 22018", "NOT a.model | 42000"
+  })
+  void lateralFailuresRetainClassification(String predicate, String state) throws Exception {
+    Path fixtures = Path.of(SqlExceptionsTest.class.getResource("/mtcars.parquet").toURI()).getParent();
+    for (boolean pushdown : List.of(true, false)) {
+      String url = "jdbc:jparq:" + fixtures + "?predicatePushdown=" + pushdown;
+      try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+        for (String condition : List.of("a.cyl = o.cyl AND " + predicate,
+            "o.cyl IS NOT NULL AND a.cyl = o.cyl AND " + predicate)) {
+          String sql = "SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.mpg FROM mtcars a WHERE " + condition
+              + ") l";
+          var failure = assertThrows(SQLException.class, () -> {
+            try (var result = statement.executeQuery(sql)) {
+              while (result.next()) {
+                result.getObject(1);
+              }
+            }
+          }, sql);
+          assertEquals(state, failure.getSQLState(), sql);
+          if ("42000".equals(state)) {
+            assertInstanceOf(SQLSyntaxErrorException.class, failure, sql);
+          } else {
+            assertInstanceOf(SQLDataException.class, failure, sql);
+          }
+          String context = "Failed to execute derived table 'l'";
+          assertTrue(failure.getMessage().contains(context), failure::getMessage);
+          assertEquals(failure.getMessage().indexOf(context), failure.getMessage().lastIndexOf(context),
+              failure::getMessage);
+          var cause = SqlExceptions.findSqlStateFailure(failure.getCause());
+          assertNotNull(cause);
+          assertEquals(state, cause.getSQLState());
+          assertEquals(cause.getErrorCode(), failure.getErrorCode());
+        }
+      }
     }
   }
 
