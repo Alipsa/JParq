@@ -1421,7 +1421,7 @@ public class JParqResultSet extends ResultSetAdapter {
           ? metadata.getColumnLabel(columnIndex)
           : "?";
       return SqlExceptions.diagnosticValue(SqlExceptions.describe(label));
-    } catch (SQLException | IndexOutOfBoundsException exception) {
+    } catch (SQLException | RuntimeException exception) {
       return "?";
     }
   }
