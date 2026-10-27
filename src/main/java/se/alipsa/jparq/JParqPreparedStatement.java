@@ -3001,7 +3001,8 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          mutable list receiving non-null Avro schemas for each column
    * @return the materialised rows and schema information
    * @throws SQLException
-   *           if the subquery execution fails
+   *           if the subquery execution fails, preserving classified JDBC
+   *           subclasses, SQLState, and vendor error codes
    */
   private SubqueryTableData executeSubquery(String sql, SqlParser.TableReference ref, Schema schema,
       List<String> fieldNames, List<Schema> valueSchemas) throws SQLException {
@@ -3056,7 +3057,11 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (e.getMessage() != null && e.getMessage().contains(context)) {
         throw e;
       }
-      throw new SQLException(context + derivedRecordName(ref) + "': " + e.getMessage(), e.getSQLState(), e);
+      String message = context + derivedRecordName(ref) + "': " + e.getMessage();
+      if (SqlExceptions.findSqlStateFailure(e) == null) {
+        throw new SQLException(message, e.getSQLState(), e.getErrorCode(), e);
+      }
+      throw SqlExceptions.wrap(message, e);
     }
   }
 
