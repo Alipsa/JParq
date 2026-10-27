@@ -56,6 +56,17 @@ class SqlExceptionsTest {
     assertEquals(ordinary.toString(), SqlExceptions.describe(ordinary));
   }
 
+  /** Checks rendered labels use the same redaction as parsed expressions. */
+  @Test
+  void describesTextWithoutPrivateBindings() {
+    String text = "CONCAT('z', __jparq_correlated_value ( 'private-key' , 0 ), "
+        + "__JPARQ_CORRELATED_VALUE('another-key', 12))";
+    assertEquals("CONCAT('z', " + SqlExceptions.OUTER_VALUE + ", " + SqlExceptions.OUTER_VALUE + ")",
+        SqlExceptions.describe(text));
+    assertEquals("price", SqlExceptions.describe("price"));
+    assertEquals("null", SqlExceptions.describe((String) null));
+  }
+
   /**
    * Uses one predicate diagnostic contract and redacts private operand bindings.
    *

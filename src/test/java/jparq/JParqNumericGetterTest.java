@@ -5,11 +5,16 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.when;
 
 import java.math.BigInteger;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.util.List;
@@ -17,7 +22,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.JParqResultSet;
 import se.alipsa.jparq.engine.NumericCastTarget;
+import se.alipsa.jparq.engine.SqlExceptions;
 
 /** Verifies numeric ResultSet getters for both column indexes and labels. */
 class JParqNumericGetterTest {
@@ -153,6 +161,111 @@ class JParqNumericGetterTest {
         assertEquals("22018", failure.getSQLState());
         assertTrue(failure.getMessage().contains("column 2 ('price') as INTEGER"), failure::getMessage);
       }
+    }
+  }
+
+  /**
+   * Redacts private bindings before bounding unaliased LATERAL expression labels.
+   *
+   * @param target
+   *          the getter's numeric target
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @EnumSource(NumericCastTarget.class)
+  void lateralDiagnosticsRedactAndBoundLabels(NumericCastTarget target) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String expression : List.of("'z' || CAST(a.n AS VARCHAR)", "CONCAT('z', a.n)",
+          "'" + "z".repeat(100) + "' || CAST(a.n AS VARCHAR)")) {
+        String sql = "SELECT x.* FROM (VALUES (1)) a(n) CROSS JOIN LATERAL (SELECT " + expression
+            + " FROM (VALUES (1)) s(z)) x";
+        try (var result = statement.executeQuery(sql)) {
+          assertTrue(result.next());
+          String label = result.getMetaData().getColumnLabel(1);
+          assertTrue(label.contains("__JPARQ_CORRELATED_VALUE"), label);
+          String expected = SqlExceptions.diagnosticValue(SqlExceptions.describe(label));
+          var failure = assertThrows(SQLDataException.class, () -> read(result, target, false));
+          assertEquals("22018", failure.getSQLState());
+          assertTrue(failure.getMessage().contains("column 1 ('" + expected + "')"), failure::getMessage);
+          assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure::getMessage);
+          if (expression.length() < 64) {
+            assertTrue(failure.getMessage().contains(SqlExceptions.OUTER_VALUE), failure::getMessage);
+          } else {
+            assertEquals("'" + "z".repeat(63) + "…", expected);
+            assertFalse(failure.getMessage().contains("z".repeat(65)), failure::getMessage);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Uses the metadata label for wildcard columns with a different internal name.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void lateralDiagnosticsUseMetadataLabels() throws SQLException {
+    String sql = "SELECT * FROM (VALUES (1)) a(n) "
+        + "CROSS JOIN LATERAL (SELECT CONCAT('z', a.n) FROM (VALUES (1)) s(z)) x";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      assertTrue(result.next());
+      String label = result.getMetaData().getColumnLabel(2);
+      assertTrue(label.startsWith("CONCAT("), label);
+      assertEquals(2, result.findColumn(label));
+      String expected = SqlExceptions.diagnosticValue(SqlExceptions.describe(label));
+      for (boolean byLabel : List.of(false, true)) {
+        var failure = assertThrows(SQLDataException.class, () -> {
+          if (byLabel) {
+            result.getInt(label);
+          } else {
+            result.getInt(2);
+          }
+        });
+        assertEquals("22018", failure.getSQLState());
+        assertTrue(failure.getMessage().contains("column 2 ('" + expected + "')"), failure::getMessage);
+        assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure::getMessage);
+      }
+    }
+  }
+
+  /**
+   * Preserves conversion failures when diagnostic metadata cannot supply a label.
+   *
+   * @param scenario
+   *          missing columns, inconsistent indexes, or failing metadata
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "missing", "inconsistent", "failed"
+  })
+  void metadataLookupCannotHideConversionFailure(String scenario) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT 'bad' AS price")) {
+      assertTrue(result.next());
+      var metadata = mock(ResultSetMetaData.class);
+      if (!"missing".equals(scenario)) {
+        when(metadata.getColumnCount()).thenReturn(1);
+        if ("inconsistent".equals(scenario)) {
+          when(metadata.getColumnLabel(1)).thenThrow(new IndexOutOfBoundsException("Missing label"));
+        } else {
+          when(metadata.getColumnLabel(1)).thenThrow(new SQLException("Metadata unavailable"));
+        }
+      }
+      var diagnostic = spy((JParqResultSet) result);
+      doReturn(metadata).when(diagnostic).getMetaData();
+      var failure = assertThrows(SQLDataException.class, () -> diagnostic.getInt(1));
+      assertEquals("22018", failure.getSQLState());
+      assertTrue(failure.getMessage().contains("column 1 ('?') as INTEGER"), failure::getMessage);
+      assertTrue(failure.getMessage().contains("Cannot cast value 'bad'"), failure::getMessage);
     }
   }
 

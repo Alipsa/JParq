@@ -1402,8 +1402,27 @@ public class JParqResultSet extends ResultSetAdapter {
       return NumericCasts.convert(input, target, target.name());
     } catch (IllegalArgumentException exception) {
       throw SqlExceptions.wrap(
-          "Cannot read column " + columnIndex + " ('" + columnOrder.get(columnIndex - 1) + "') as " + target,
-          exception);
+          "Cannot read column " + columnIndex + " ('" + numericColumnLabel(columnIndex) + "') as " + target, exception);
+    }
+  }
+
+  /**
+   * Looks up a bounded, redacted metadata label without hiding a conversion
+   * error.
+   *
+   * @param columnIndex
+   *          the one-based column index
+   * @return the diagnostic label, or "?" if metadata cannot supply one
+   */
+  private String numericColumnLabel(int columnIndex) {
+    try {
+      ResultSetMetaData metadata = getMetaData();
+      String label = columnIndex > 0 && columnIndex <= metadata.getColumnCount()
+          ? metadata.getColumnLabel(columnIndex)
+          : "?";
+      return SqlExceptions.diagnosticValue(SqlExceptions.describe(label));
+    } catch (SQLException | IndexOutOfBoundsException exception) {
+      return "?";
     }
   }
 

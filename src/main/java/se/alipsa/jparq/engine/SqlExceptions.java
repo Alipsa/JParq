@@ -33,7 +33,19 @@ public final class SqlExceptions {
    *         token
    */
   public static String describe(Expression expression) {
-    return CORRELATED_BINDING.matcher(expression.toString()).replaceAll(OUTER_VALUE);
+    return describe(expression.toString());
+  }
+
+  /**
+   * Redacts private correlated bindings from rendered SQL or column labels.
+   *
+   * @param text
+   *          the diagnostic text, possibly null
+   * @return text with each private binding replaced by a neutral outer-value
+   *         token, or "null" for null input
+   */
+  public static String describe(String text) {
+    return CORRELATED_BINDING.matcher(String.valueOf(text)).replaceAll(OUTER_VALUE);
   }
 
   /** Prevents utility class instantiation. */
