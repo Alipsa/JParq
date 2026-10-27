@@ -40,6 +40,7 @@ import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.engine.NumericCastTarget;
+import se.alipsa.jparq.engine.NumericCasts;
 import se.alipsa.jparq.engine.NumericExpressionTypes;
 import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.QueryCancellation;
@@ -50,7 +51,6 @@ import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
-import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.engine.function.SystemFunctions;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
@@ -1399,9 +1399,11 @@ public class JParqResultSet extends ResultSetAdapter {
       return number;
     }
     try {
-      return DateTimeFunctions.castNumeric(input, target, target.name());
+      return NumericCasts.convert(input, target, target.name());
     } catch (IllegalArgumentException exception) {
-      throw SqlExceptions.wrap("Cannot read column " + columnIndex + " as " + target, exception);
+      throw SqlExceptions.wrap(
+          "Cannot read column " + columnIndex + " ('" + columnOrder.get(columnIndex - 1) + "') as " + target,
+          exception);
     }
   }
 

@@ -6,12 +6,14 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.math.BigInteger;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.util.List;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -54,7 +56,7 @@ class JParqNumericGetterTest {
   }
 
   /**
-   * Keeps numeric values and SQL NULL behavior consistent across both overloads.
+   * Keeps numbers, booleans, and SQL NULL consistent across both overloads.
    *
    * @param target
    *          the getter's numeric target
@@ -67,12 +69,19 @@ class JParqNumericGetterTest {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement()) {
       for (String expression : List.of("42", "CAST(42 AS BIGINT)", "CAST(42 AS REAL)", "CAST(42 AS DOUBLE)",
-          "CAST(42 AS DECIMAL(5,2))", "CAST(NULL AS VARCHAR)", "CAST(NULL AS INTEGER)")) {
+          "CAST(42 AS DECIMAL(5,2))", "TRUE", "FALSE", "CAST(TRUE AS BOOLEAN)", "CAST(FALSE AS BOOLEAN)",
+          "CAST(NULL AS VARCHAR)", "CAST(NULL AS INTEGER)", "CAST(NULL AS BOOLEAN)")) {
         boolean isNull = expression.contains("NULL");
+        double expected = 42d;
+        if (isNull || expression.contains("FALSE")) {
+          expected = 0d;
+        } else if (expression.contains("TRUE")) {
+          expected = 1d;
+        }
         try (var result = statement.executeQuery("SELECT " + expression + " AS v")) {
           assertTrue(result.next());
           for (boolean byLabel : List.of(false, true)) {
-            assertEquals(isNull ? 0d : 42d, read(result, target, byLabel).doubleValue(), expression);
+            assertEquals(expected, read(result, target, byLabel).doubleValue(), expression);
             assertEquals(isNull, result.wasNull(), expression);
           }
         }
@@ -108,6 +117,7 @@ class JParqNumericGetterTest {
           for (boolean byLabel : List.of(false, true)) {
             var failure = assertThrows(SQLDataException.class, () -> read(result, target, byLabel), expression);
             assertEquals("22018", failure.getSQLState(), expression);
+            assertTrue(failure.getMessage().contains("column 1 ('v')"), failure::getMessage);
             Throwable cause = failure.getCause();
             while (cause != null && !(cause instanceof NumberFormatException)) {
               cause = cause.getCause();
@@ -116,6 +126,32 @@ class JParqNumericGetterTest {
             assertFalse(result.wasNull());
           }
         }
+      }
+    }
+  }
+
+  /**
+   * Names the column label and position when either overload fails conversion.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void conversionDiagnosticsIncludeColumnLabel() throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT 1 AS id, 'bad' AS price")) {
+      assertTrue(result.next());
+      for (boolean byLabel : List.of(false, true)) {
+        var failure = assertThrows(SQLDataException.class, () -> {
+          if (byLabel) {
+            result.getInt("price");
+          } else {
+            result.getInt(2);
+          }
+        });
+        assertEquals("22018", failure.getSQLState());
+        assertTrue(failure.getMessage().contains("column 2 ('price') as INTEGER"), failure::getMessage);
       }
     }
   }
@@ -139,9 +175,13 @@ class JParqNumericGetterTest {
       case REAL -> "1e39";
       case DOUBLE -> "1e309";
     };
+    String negativeOverflow = switch (target) {
+      case REAL, DOUBLE -> "-" + overflow;
+      default -> new BigInteger(overflow).negate().subtract(BigInteger.ONE).toString();
+    };
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement()) {
-      for (String expression : List.of("'" + overflow + "'", "'-" + overflow + "0'")) {
+      for (String expression : List.of("'" + overflow + "'", "'" + negativeOverflow + "'")) {
         try (var result = statement.executeQuery("SELECT " + expression + " AS v")) {
           assertTrue(result.next());
           for (boolean byLabel : List.of(false, true)) {

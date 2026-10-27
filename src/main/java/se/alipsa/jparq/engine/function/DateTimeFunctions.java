@@ -1,7 +1,6 @@
 package se.alipsa.jparq.engine.function;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.sql.Date;
 import java.sql.SQLDataException;
 import java.sql.Time;
@@ -33,6 +32,7 @@ import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.statement.create.table.ColDataType;
 import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.NumericCastTarget;
+import se.alipsa.jparq.engine.NumericCasts;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.helper.TemporalInterval;
 
@@ -649,7 +649,7 @@ public final class DateTimeFunctions {
     String normalized = normalizeTypeName(dataType);
     NumericCastTarget target = NumericCastTarget.fromNormalizedName(normalized);
     if (target != null) {
-      return castNumeric(value, target, colType.toString());
+      return NumericCasts.convert(value, target, colType.toString());
     }
     return switch (normalized) {
       case "boolean", "bool" -> toBoolean(value);
@@ -658,81 +658,6 @@ public final class DateTimeFunctions {
       case "text", "clob" -> value.toString();
       default -> value;
     };
-  }
-
-  /**
-   * Narrows finite numeric inputs while rejecting overflow.
-   *
-   * @param value
-   *          the numeric input
-   * @param type
-   *          the resolved numeric target
-   * @param target
-   *          the declared SQL target type for diagnostics
-   * @return the narrowed number, truncating integer fractions toward zero
-   * @throws IllegalArgumentException
-   *           if the input is invalid (22018) or out of range (22003)
-   */
-  public static Number castNumeric(Object value, NumericCastTarget type, String target) {
-    BigDecimal decimal = toBigDecimalValue(value);
-    try {
-      switch (type) {
-        case REAL:
-          float result = decimal.floatValue();
-          if (!Float.isFinite(result)) {
-            throw new ArithmeticException("Floating-point overflow");
-          }
-          return result;
-        case DOUBLE:
-          double doubleResult = decimal.doubleValue();
-          if (!Double.isFinite(doubleResult)) {
-            throw new ArithmeticException("Floating-point overflow");
-          }
-          return doubleResult;
-        default:
-          // Bound the integer digits before rescaling to avoid expanding extreme
-          // exponents.
-          long digits = (long) decimal.precision() - decimal.scale();
-          if (digits > 19 && decimal.signum() != 0) {
-            throw new ArithmeticException("Integer overflow");
-          }
-          BigDecimal integer = digits <= 0 ? BigDecimal.ZERO : decimal.setScale(0, RoundingMode.DOWN);
-          return switch (type) {
-            case TINYINT -> integer.byteValueExact();
-            case SMALLINT -> integer.shortValueExact();
-            case INTEGER -> integer.intValueExact();
-            default -> integer.longValueExact();
-          };
-      }
-    } catch (ArithmeticException exception) {
-      String message = "Cannot cast numeric value '" + SqlExceptions.diagnosticValue(value) + "' to " + target
-          + ": value out of range";
-      throw new IllegalArgumentException(message, new SQLDataException(message, "22003", exception));
-    }
-  }
-
-  /**
-   * Converts a finite numeric input without leaking unclassified parse errors.
-   *
-   * @param value
-   *          the numeric input or its textual representation
-   * @return the decimal value, with booleans represented as zero or one
-   * @throws IllegalArgumentException
-   *           if conversion fails, carrying SQLState 22018
-   */
-  private static BigDecimal toBigDecimalValue(Object value) {
-    if (value instanceof BigDecimal bd) {
-      return bd;
-    }
-    if (value instanceof Boolean bool) {
-      return bool ? BigDecimal.ONE : BigDecimal.ZERO;
-    }
-    try {
-      return new BigDecimal(value.toString().trim());
-    } catch (NumberFormatException exception) {
-      String message = "Cannot cast value '" + SqlExceptions.diagnosticValue(value) + "' to a numeric value";
-      throw new IllegalArgumentException(message, new SQLDataException(message, "22018", exception));
-    }
   }
 
   private static String castToString(CastExpression cast, Object value) {
@@ -760,7 +685,7 @@ public final class DateTimeFunctions {
    *           if the declared bounds cannot represent the result
    */
   private static BigDecimal castToBigDecimal(CastExpression cast, Object value) {
-    return DecimalCasts.convert(cast, value == null ? null : toBigDecimalValue(value));
+    return DecimalCasts.convert(cast, NumericCasts.toBigDecimal(value));
   }
 
   private static Integer firstIntegerArgument(CastExpression cast) {

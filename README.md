@@ -191,7 +191,7 @@ convert numeric text through both column indexes and labels. They return zero fo
 `wasNull()` returning true. For text conversions, they follow numeric CAST rules: truncate integer
 fractions toward zero, reject invalid or non-finite text with SQLState `22018`, and reject range
 overflow with `22003`. Native numeric values retain Java numeric conversion behavior, including
-NaN and infinity for floating-point getters.
+NaN and infinity for floating-point getters. BOOLEAN values convert to one for TRUE and zero for FALSE.
 
 `DECIMAL(p,s)`, `NUMERIC(p,s)`, and `NUMBER(p,s)` casts round to the declared scale with HALF_UP and then
 reject precision overflow with SQLState `22003`. Omitting scale while specifying precision defaults to scale
