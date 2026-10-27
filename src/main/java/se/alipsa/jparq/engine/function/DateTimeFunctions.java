@@ -673,7 +673,7 @@ public final class DateTimeFunctions {
    * @throws IllegalArgumentException
    *           if the input is invalid (22018) or out of range (22003)
    */
-  private static Number castNumeric(Object value, NumericCastTarget type, String target) {
+  public static Number castNumeric(Object value, NumericCastTarget type, String target) {
     BigDecimal decimal = toBigDecimalValue(value);
     try {
       switch (type) {
