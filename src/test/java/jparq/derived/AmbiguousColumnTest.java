@@ -42,7 +42,12 @@ class AmbiguousColumnTest {
           "SELECT * FROM (SELECT 1 AS x WHERE FALSE) a JOIN (SELECT 2 AS x) b ON TRUE ORDER BY x",
           "SELECT * FROM (SELECT 1 AS x, 2 AS x) t ORDER BY t.x", "SELECT 1 AS x, 2 AS x ORDER BY x",
           "SELECT a.x, b.x FROM (SELECT 1 AS x) a JOIN (SELECT 2 AS x) b ON TRUE ORDER BY x",
+          "SELECT a.x, x FROM (VALUES (1)) a(x) JOIN (VALUES (2)) b(x) ON TRUE ORDER BY x",
           "SELECT 'A' AS x, 'a' AS x ORDER BY x", "SELECT 'a  b' AS x, 'a b' AS x ORDER BY x",
+          "SELECT LOWER('A') AS x, lower('a') AS x ORDER BY x",
+          "SELECT LOWER($$A$$) AS x, lower($$a$$) AS x ORDER BY x",
+          "SELECT LOWER(\"Mixed\") AS x, lower(\"mixed\") AS x "
+              + "FROM (SELECT 'A' AS \"Mixed\", 'B' AS \"mixed\") t ORDER BY x",
           "SELECT a.*, b.x FROM (VALUES (3),(1),(2)) a(x) CROSS JOIN (VALUES (9),(7)) b(x) ORDER BY x",
           "SELECT a.x, b.* FROM (VALUES (3),(1),(2)) a(x) CROSS JOIN (VALUES (9),(7)) b(x) ORDER BY x DESC",
           "SELECT a.*, b.x FROM (SELECT 1 AS x WHERE FALSE) a CROSS JOIN (VALUES (2)) b(x) ORDER BY x",
@@ -163,6 +168,62 @@ class AmbiguousColumnTest {
         rows++;
       }
       assertEquals(expectedRows, rows, sql);
+    }
+  }
+
+  /**
+   * Resolves equivalent column spellings and case-insensitive SQL names.
+   *
+   * @param sql
+   *          the query whose repeated expressions share an ordering label
+   * @param expected
+   *          the expected first-column values in sorted order
+   * @throws Exception
+   *           if JDBC execution fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "SELECT a.x, x FROM (VALUES (3),(1)) a(x) JOIN (VALUES (2)) b(y) ON TRUE ORDER BY x | 1,3",
+      "SELECT x, a.x FROM (VALUES (3),(1)) a(x) JOIN (VALUES (2)) b(y) ON TRUE ORDER BY x | 1,3",
+      "SELECT LOWER(model) AS c, lower(model) AS c FROM mtcars ORDER BY c LIMIT 1 | amc javelin",
+      "SELECT LOWER(model) AS c, lower(MODEL) AS c FROM mtcars ORDER BY c LIMIT 1 | amc javelin"
+  })
+  void permitsEquivalentOrderingExpressions(String sql, String expected) throws Exception {
+    String url = "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath();
+    try (var connection = DriverManager.getConnection(url);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      for (String value : expected.split(",")) {
+        assertTrue(result.next(), sql);
+        assertEquals(value, result.getString(1), sql);
+        assertEquals(value, result.getString(2), sql);
+      }
+      assertFalse(result.next(), sql);
+    }
+  }
+
+  /**
+   * Keeps bound columns stable when a prepared join query is executed again.
+   *
+   * @throws Exception
+   *           if JDBC execution fails
+   */
+  @Test
+  void repeatedExecutionRetainsOrderingBinding() throws Exception {
+    String url = "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath();
+    String sql = "SELECT x AS y, a.z AS x FROM (VALUES (3,1),(1,3)) a(x,z) "
+        + "JOIN (VALUES (2)) b(q) ON TRUE ORDER BY y";
+    try (var connection = DriverManager.getConnection(url); var statement = connection.prepareStatement(sql)) {
+      for (int execution = 0; execution < 3; execution++) {
+        try (var result = statement.executeQuery()) {
+          for (int expected : List.of(1, 3)) {
+            assertTrue(result.next(), sql);
+            assertEquals(expected, result.getInt(1), sql);
+            assertEquals(4 - expected, result.getInt(2), sql);
+          }
+          assertFalse(result.next(), sql);
+        }
+      }
     }
   }
 

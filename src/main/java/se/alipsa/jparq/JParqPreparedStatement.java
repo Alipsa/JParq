@@ -1747,6 +1747,11 @@ public class JParqPreparedStatement implements PreparedStatement {
   private JoinRecordReader buildJoinReader(QueryCancellation cancellation) throws SQLException {
     JoinRecordReader joinReader = buildJoinReader(tableReferences, joinPredicates, cancellation);
     expandJoinQualifiedWildcards(joinReader);
+    if (!parsedSelect.orderBy().isEmpty() || !parsedSelect.preOrderBy().isEmpty()) {
+      ValueExpressionEvaluator binding = new ValueExpressionEvaluator(joinReader.schema(), null, List.of(),
+          joinReader.qualifierColumnMapping(), joinReader.unqualifiedColumnMapping());
+      parsedSelect = SqlParser.resolveJoinOrdering(parsedSelect, binding::resolveColumnName);
+    }
     validateJoinOutputColumns(joinReader);
     return joinReader;
   }
