@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.List;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
@@ -41,6 +42,10 @@ class AmbiguousColumnTest {
           "SELECT * FROM (SELECT 1 AS x WHERE FALSE) a JOIN (SELECT 2 AS x) b ON TRUE ORDER BY x",
           "SELECT * FROM (SELECT 1 AS x, 2 AS x) t ORDER BY t.x", "SELECT 1 AS x, 2 AS x ORDER BY x",
           "SELECT a.x, b.x FROM (SELECT 1 AS x) a JOIN (SELECT 2 AS x) b ON TRUE ORDER BY x",
+          "SELECT 'A' AS x, 'a' AS x ORDER BY x", "SELECT 'a  b' AS x, 'a b' AS x ORDER BY x",
+          "SELECT a.*, b.x FROM (VALUES (3),(1),(2)) a(x) CROSS JOIN (VALUES (9),(7)) b(x) ORDER BY x",
+          "SELECT a.x, b.* FROM (VALUES (3),(1),(2)) a(x) CROSS JOIN (VALUES (9),(7)) b(x) ORDER BY x DESC",
+          "SELECT a.*, b.x FROM (SELECT 1 AS x WHERE FALSE) a CROSS JOIN (VALUES (2)) b(x) ORDER BY x",
           "SELECT * FROM (SELECT 1 AS x, 2 AS x) t ORDER BY x + 1",
           "SELECT * FROM (SELECT 1 AS x, 2 AS x) t WHERE x = 1",
           "SELECT * FROM (SELECT 1 AS x, 2 AS x) t WHERE FALSE ORDER BY x",
@@ -100,18 +105,21 @@ class AmbiguousColumnTest {
   /**
    * Sorts by the chosen join input without binding unrelated duplicate labels.
    *
+   * @param projection
+   *          selected columns, including qualified wildcard variants
    * @param order
    *          the ordering reference
    * @throws Exception
    *           if query execution fails
    */
   @ParameterizedTest
-  @CsvSource({
-      "a.x", "1", "chosen"
+  @CsvSource(delimiter = '|', value = {
+      "a.x AS chosen, b.x AS x | a.x", "a.x AS chosen, b.x AS x | 1", "a.x AS chosen, b.x AS x | chosen",
+      "a.*, b.x AS other | x", "a.*, b.x AS other | 1"
   })
-  void sortsChosenJoinColumn(String order) throws Exception {
+  void sortsChosenJoinColumn(String projection, String order) throws Exception {
     String url = "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath();
-    String sql = "SELECT a.x AS chosen, b.x AS x FROM (VALUES (3), (1), (2)) a(x) "
+    String sql = "SELECT " + projection + " FROM (VALUES (3), (1), (2)) a(x) "
         + "CROSS JOIN (VALUES (7)) b(x) ORDER BY " + order;
     try (var connection = DriverManager.getConnection(url);
         var statement = connection.createStatement();
@@ -122,6 +130,61 @@ class AmbiguousColumnTest {
         assertEquals(7, result.getInt(2), sql);
       }
       assertFalse(result.next(), sql);
+    }
+  }
+
+  /**
+   * Allows repeated output labels when their expressions agree.
+   *
+   * @param sql
+   *          the query with repeated expressions
+   * @param expectedRows
+   *          the number of rows returned by the fixture
+   * @throws Exception
+   *           if JDBC execution fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "SELECT cyl, cyl FROM mtcars ORDER BY cyl LIMIT 2 | 2",
+      "SELECT cyl AS c, cyl AS c FROM mtcars ORDER BY c LIMIT 2 | 2", "SELECT 1 AS x, 1 AS x ORDER BY x | 1",
+      "SELECT cyl + 1 AS c, cyl + 1 AS c FROM mtcars ORDER BY c LIMIT 2 | 2",
+      "SELECT a.x, a.x FROM (VALUES (1)) a(x) CROSS JOIN (VALUES (2)) b(x) ORDER BY x | 1",
+      "SELECT a.x AS c, a.X AS c FROM (VALUES (1)) a(x) CROSS JOIN (VALUES (2)) b(x) ORDER BY c | 1",
+      "SELECT a.*, a.x FROM (VALUES (1)) a(x) CROSS JOIN (VALUES (2)) b(x) ORDER BY x | 1"
+  })
+  void permitsRepeatedOrderingExpressions(String sql, int expectedRows) throws Exception {
+    String url = "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath();
+    try (var connection = DriverManager.getConnection(url);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      int rows = 0;
+      while (result.next()) {
+        assertEquals(result.getObject(1), result.getObject(2), sql);
+        rows++;
+      }
+      assertEquals(expectedRows, rows, sql);
+    }
+  }
+
+  /**
+   * Distinguishes unknown qualifiers from ambiguous visible column names.
+   *
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @Test
+  void unknownQualifierIsNotAmbiguous() throws Exception {
+    String url = "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath();
+    try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+      SQLException failure = assertThrows(SQLException.class, () -> {
+        try (var result = statement.executeQuery("SELECT z.x FROM (VALUES (1)) a(x) JOIN (VALUES (2)) b(x) ON TRUE")) {
+          while (result.next()) {
+            result.getObject(1);
+          }
+        }
+      });
+      assertEquals("42000", failure.getSQLState());
+      assertTrue(failure.getMessage().contains("Unknown table qualifier 'z'"), failure::getMessage);
     }
   }
 

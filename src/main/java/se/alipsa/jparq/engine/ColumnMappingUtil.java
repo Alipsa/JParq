@@ -332,6 +332,10 @@ public final class ColumnMappingUtil {
           fallback = caseInsensitiveIndex.get(alternative);
         }
       }
+      if ("".equals(fallback)) {
+        throw SqlExceptions
+            .syntaxFailure("Unknown table qualifier '" + qualifier + "' for column '" + columnName + "'");
+      }
       if (fallback != null) {
         return fallback;
       }

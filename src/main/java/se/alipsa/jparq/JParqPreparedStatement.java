@@ -1746,8 +1746,8 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private JoinRecordReader buildJoinReader(QueryCancellation cancellation) throws SQLException {
     JoinRecordReader joinReader = buildJoinReader(tableReferences, joinPredicates, cancellation);
-    validateJoinOutputColumns(joinReader);
     expandJoinQualifiedWildcards(joinReader);
+    validateJoinOutputColumns(joinReader);
     return joinReader;
   }
 
@@ -2336,8 +2336,11 @@ public class JParqPreparedStatement implements PreparedStatement {
     try {
       parsedSelect = SqlParser.expandQualifiedWildcards(parsedSelect, qualifierColumns);
     } catch (IllegalArgumentException e) {
-      throw new SQLSyntaxErrorException("Failed to expand qualified wildcard projections: " + e.getMessage(), "42000",
-          e);
+      String message = "Failed to expand qualified wildcard projections: " + e.getMessage();
+      if (SqlExceptions.findSqlStateFailure(e) != null) {
+        throw SqlExceptions.wrap(message, e);
+      }
+      throw new SQLSyntaxErrorException(message, "42000", e);
     }
   }
 

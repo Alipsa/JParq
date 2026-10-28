@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -1988,7 +1989,11 @@ public final class SqlParser {
    *          mapping from qualifier to the ordered column definitions exposed by
    *          that qualifier
    * @return a {@link Select} instance where each qualified wildcard has been
-   *         replaced with concrete column projections
+   *         replaced with concrete column projections and ordering references
+   *         resolved against the complete output
+   * @throws IllegalArgumentException
+   *           if a wildcard qualifier is unknown or an ordering label is
+   *           ambiguous
    */
   public static Select expandQualifiedWildcards(Select select,
       Map<String, List<QualifiedExpansionColumn>> qualifierColumns) {
@@ -2018,6 +2023,8 @@ public final class SqlParser {
     int fallbackIndex = expressions.size();
     for (QualifiedWildcard wildcard : select.qualifiedWildcards()) {
       String qualifier = wildcard.qualifier();
+      String expressionQualifier = visibleQualifiers(select.tableReferences()).stream()
+          .filter(name -> Objects.equals(Identifier.of(name).text(), qualifier)).findFirst().orElse(qualifier);
       List<QualifiedExpansionColumn> columns = resolveQualifierColumns(qualifier, normalized);
       if (columns == null || columns.isEmpty()) {
         throw new IllegalArgumentException("Qualified wildcard references unknown qualifier: " + qualifier);
@@ -2034,7 +2041,7 @@ public final class SqlParser {
         column.setColumnName(label);
         if (qualifier != null && !qualifier.isBlank()) {
           Table table = new Table();
-          table.setName(qualifier);
+          table.setName(expressionQualifier);
           column.setTable(table);
         }
         ordered.add(new OrderedSelectItem(orderIndex, subIndex, label, physicalName, column));
@@ -2063,9 +2070,10 @@ public final class SqlParser {
     List<Integer> orderCopy = List.copyOf(newExpressionOrder);
 
     return new Select(labelCopy, physicalCopy, select.table(), select.tableAlias(), select.where(), select.limit(),
-        select.offset(), select.orderBy(), select.distinct(), select.innerDistinct(), select.innerDistinctColumns(),
-        expressionCopy, orderCopy, List.of(), select.groupByExpressions(), select.groupingSets(), select.having(),
-        select.preLimit(), select.preOffset(), select.preOrderBy(), select.tableReferences(),
+        select.offset(), resolveOrderKeys(select.orderBy(), labelCopy, expressionCopy), select.distinct(),
+        select.innerDistinct(), select.innerDistinctColumns(), expressionCopy, orderCopy, List.of(),
+        select.groupByExpressions(), select.groupingSets(), select.having(), select.preLimit(), select.preOffset(),
+        resolveOrderKeys(select.preOrderBy(), labelCopy, expressionCopy), select.tableReferences(),
         select.commonTableExpressions());
   }
 
@@ -2306,73 +2314,128 @@ public final class SqlParser {
     List<OrderKey> orderKeys = new ArrayList<>();
     List<OrderByElement> ob = ps.getOrderByElements();
     if (ob != null) {
-      Map<String, Expression> aliasExpressions = new HashMap<>();
-      Set<String> duplicateLabels = new LinkedHashSet<>();
-      for (int i = 0; i < labels.size(); i++) {
-        String labelKey = Identifier.lookupKey(labels.get(i));
-        if (labelKey != null && i < expressions.size()) {
-          Expression selected = expressions.get(i);
-          if (aliasExpressions.putIfAbsent(labelKey, selected) != null) {
-            duplicateLabels.add(labelKey);
-          }
-        }
-      }
-
-      for (OrderByElement e : ob) {
-        Expression ex = e.getExpression();
-        String qualifier = null;
-
-        // normalize qualifiers (t.col -> col) for single-table
+      for (OrderByElement element : ob) {
+        Expression expression = element.getExpression();
         if (tableRefs.size() == 1) {
-          stripQualifier(ex, qualifiers(tableRefs));
+          stripQualifier(expression, qualifiers(tableRefs));
         }
-
-        // Extract the ORDER BY token as text
-        String keyText;
-        Expression expressionReference = (ex instanceof Column) ? null : ex;
-        if (ex instanceof Column c) {
-          keyText = c.getColumnName();
-          if (tableRefs.size() > 1 || !tableRefs.isEmpty() && !tableRefs.getFirst().joinGroup().isEmpty()) {
-            qualifier = extractQualifier(c);
-          }
-        } else if (ex instanceof StringValue sv) {
-          keyText = LiteralConverter.decodeStringLiteral(sv);
+        String column;
+        String qualifier = null;
+        Expression evaluation = expression;
+        if (expression instanceof Column reference) {
+          column = reference.getColumnName();
+          qualifier = extractQualifier(reference);
+          evaluation = null;
+        } else if (expression instanceof StringValue value) {
+          column = LiteralConverter.decodeStringLiteral(value);
         } else {
-          keyText = ex.toString();
+          column = expression.toString();
+          if (expression instanceof LongValue) {
+            evaluation = null;
+          }
         }
+        boolean asc = !element.isAscDescPresent() || element.isAsc();
+        orderKeys.add(new OrderKey(column, asc, qualifier, element.getNullOrdering(), evaluation));
+      }
+    }
+    boolean pendingWildcards = ps.getSelectItems().stream()
+        .anyMatch(item -> item.getExpression() instanceof AllTableColumns);
+    return pendingWildcards ? List.copyOf(orderKeys) : resolveOrderKeys(orderKeys, labels, expressions);
+  }
 
-        Expression selected = null;
-        if (ex instanceof LongValue ordinal) {
-          int position = ordinal.getBigIntegerValue().intValueExact();
+  /**
+   * Binds ordering labels and positions after the complete output is known.
+   * Repeated labels are usable when they denote the same expression.
+   *
+   * @param keys
+   *          the original ordering references
+   * @param labels
+   *          output labels, including expanded wildcard columns
+   * @param expressions
+   *          expressions aligned with the output labels
+   * @return ordering keys bound to the selected expressions
+   * @throws IllegalArgumentException
+   *           if a label is ambiguous or a position is invalid
+   */
+  private static List<OrderKey> resolveOrderKeys(List<OrderKey> keys, List<String> labels,
+      List<Expression> expressions) {
+    if (keys.isEmpty()) {
+      return List.of();
+    }
+    Map<String, Expression> aliases = new HashMap<>();
+    Set<String> ambiguous = new LinkedHashSet<>();
+    for (int i = 0; i < Math.min(labels.size(), expressions.size()); i++) {
+      String label = Identifier.lookupKey(labels.get(i));
+      Expression selected = expressions.get(i);
+      Expression previous = aliases.putIfAbsent(label, selected);
+      if (previous != null && !sameOrderingExpression(previous, selected)) {
+        ambiguous.add(label);
+      }
+    }
+    List<OrderKey> resolved = new ArrayList<>(keys.size());
+    for (OrderKey key : keys) {
+      String column = key.column();
+      String qualifier = key.qualifier();
+      Expression evaluation = key.expression();
+      Expression selected = null;
+      if (evaluation == null && qualifier == null) {
+        if (column != null && column.matches("[0-9]+")) {
+          int position = Integer.parseInt(column);
           if (position < 1 || !labels.isEmpty() && position > labels.size()) {
             throw new IllegalArgumentException("ORDER BY position is outside the select list: " + position);
           }
-          if (!labels.isEmpty() && position <= expressions.size()) {
+          if (!labels.isEmpty()) {
             selected = expressions.get(position - 1);
           }
-          expressionReference = null;
-        } else if (ex instanceof Column && qualifier == null) {
-          String labelKey = Identifier.lookupKey(keyText);
-          if (duplicateLabels.contains(labelKey)) {
-            throw SqlExceptions.ambiguousColumn(keyText);
+        } else {
+          String label = Identifier.lookupKey(column);
+          if (ambiguous.contains(label)) {
+            throw SqlExceptions.ambiguousColumn(column);
           }
-          selected = aliasExpressions.get(labelKey);
+          selected = aliases.get(label);
         }
-        if (selected instanceof Column column) {
-          keyText = column.getColumnName();
-          qualifier = tableRefs.size() > 1 || !tableRefs.isEmpty() && !tableRefs.getFirst().joinGroup().isEmpty()
-              ? extractQualifier(column)
-              : null;
-        } else if (selected != null) {
-          expressionReference = selected;
-        }
-
-        boolean asc = !e.isAscDescPresent() || e.isAsc(); // default ASC
-        OrderByElement.NullOrdering nullOrdering = e.getNullOrdering();
-        orderKeys.add(new OrderKey(keyText, asc, qualifier, nullOrdering, expressionReference));
       }
+      if (selected instanceof Column reference) {
+        column = reference.getColumnName();
+        qualifier = extractQualifier(reference);
+      } else if (selected != null) {
+        evaluation = selected;
+      }
+      resolved.add(new OrderKey(column, key.asc(), qualifier, key.nullOrdering(), evaluation));
     }
-    return orderKeys;
+    return List.copyOf(resolved);
+  }
+
+  /**
+   * Compares column identifiers using SQL quoting rules and other expressions
+   * using the parser's rendered SQL, preserving literal values and case.
+   *
+   * @param left
+   *          the first projected expression
+   * @param right
+   *          the second projected expression
+   * @return true when both ordering targets have the same expression
+   */
+  private static boolean sameOrderingExpression(Expression left, Expression right) {
+    if (left instanceof Column leftColumn && right instanceof Column rightColumn) {
+      return Objects.equals(orderingIdentifier(leftColumn.getColumnName()),
+          orderingIdentifier(rightColumn.getColumnName()))
+          && Objects.equals(orderingIdentifier(extractQualifier(leftColumn)),
+              orderingIdentifier(extractQualifier(rightColumn)));
+    }
+    return left.toString().equals(right.toString());
+  }
+
+  /**
+   * Normalizes an identifier while retaining the case of delimited names.
+   *
+   * @param name
+   *          the SQL identifier, or null for an absent qualifier
+   * @return the identifier's comparison text, or null when absent
+   */
+  private static String orderingIdentifier(String name) {
+    Identifier identifier = Identifier.of(name);
+    return identifier == null ? null : identifier.normalized();
   }
 
   private static String extractQualifier(Column column) {

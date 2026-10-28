@@ -140,7 +140,9 @@ quoted operands such as `"id" + 1`. Generated internal names are not SQL column 
 projection, predicate, and ORDER BY references to duplicate output names raise an SQL exception
 with SQLState `42702` naming the ambiguous column, including for empty inputs. Qualify join columns
 with a table alias to resolve ambiguity; duplicate outputs remain available by position through `SELECT *`
-and positional ORDER BY. Unused duplicate output labels do not invalidate ordering by another column.
+and positional ORDER BY. Repeated SELECT labels may be used by ORDER BY when they denote the same
+expression; different expressions with the same label are ambiguous, including columns contributed by
+qualified wildcards. Unused duplicate output labels do not invalidate ordering by another column.
 
 Derived tables and CTEs validate column references against their visible output names, including for empty
 inputs. Unknown names and columns replaced by a column alias list raise `SQLSyntaxErrorException` with
