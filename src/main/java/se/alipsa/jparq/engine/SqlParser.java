@@ -12,6 +12,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -1623,11 +1624,11 @@ public final class SqlParser {
   }
 
   private static FromInfo parseTableFunction(TableFunction tableFunction, boolean lateral) {
-    Function function = tableFunction.getFunction();
+    net.sf.jsqlparser.expression.Function function = tableFunction.getFunction();
     if (function == null || function.getName() == null) {
       throw new IllegalArgumentException("Unsupported table function in FROM clause: " + tableFunction);
     }
-    Function effectiveFunction = unwrapTableWrapper(function, tableFunction);
+    net.sf.jsqlparser.expression.Function effectiveFunction = unwrapTableWrapper(function, tableFunction);
     String name = effectiveFunction.getName();
     if (!"unnest".equalsIgnoreCase(name)) {
       throw new IllegalArgumentException("Only UNNEST table functions are supported: " + tableFunction);
@@ -1657,7 +1658,8 @@ public final class SqlParser {
         List.of());
   }
 
-  private static Function unwrapTableWrapper(Function function, TableFunction tableFunction) {
+  private static net.sf.jsqlparser.expression.Function unwrapTableWrapper(
+      net.sf.jsqlparser.expression.Function function, TableFunction tableFunction) {
     if (!"table".equalsIgnoreCase(function.getName())) {
       return function;
     }
@@ -1669,7 +1671,7 @@ public final class SqlParser {
       throw new IllegalArgumentException("TABLE wrapper accepts exactly one argument: " + tableFunction);
     }
     Object parameter = parameters.get(0);
-    if (!(parameter instanceof Function innerFunction)) {
+    if (!(parameter instanceof net.sf.jsqlparser.expression.Function innerFunction)) {
       throw new IllegalArgumentException("TABLE wrapper must contain a function call: " + tableFunction);
     }
     return innerFunction;
@@ -2366,7 +2368,7 @@ public final class SqlParser {
    * @throws IllegalArgumentException
    *           if a referenced ordering label is ambiguous
    */
-  public static Select resolveJoinOrdering(Select select, java.util.function.Function<Column, String> columnBinding) {
+  public static Select resolveJoinOrdering(Select select, Function<Column, String> columnBinding) {
     Objects.requireNonNull(columnBinding, "columnBinding");
     return new Select(select.labels(), select.columnNames(), select.table(), select.tableAlias(), select.where(),
         select.limit(), select.offset(),
@@ -2395,7 +2397,7 @@ public final class SqlParser {
    *           if a label is ambiguous or a position is invalid
    */
   private static List<OrderKey> resolveOrderKeys(List<OrderKey> keys, List<String> labels, List<Expression> expressions,
-      java.util.function.Function<Column, String> columnBinding) {
+      Function<Column, String> columnBinding) {
     if (keys.isEmpty()) {
       return List.of();
     }
@@ -2461,7 +2463,7 @@ public final class SqlParser {
    * @return true when both ordering targets have the same expression
    */
   private static boolean sameOrderingExpression(Expression left, Expression right,
-      java.util.function.Function<Column, String> columnBinding) {
+      Function<Column, String> columnBinding) {
     if (left instanceof Column leftColumn && right instanceof Column rightColumn) {
       if (columnBinding != null) {
         return Objects.equals(columnBinding.apply(leftColumn), columnBinding.apply(rightColumn));
@@ -2846,7 +2848,7 @@ public final class SqlParser {
     ExpressionList<?> expressionList = groupBy.getGroupByExpressionList();
     if (expressionList != null && !expressionList.isEmpty()) {
       for (Expression expr : expressionList) {
-        if (expr instanceof Function func) {
+        if (expr instanceof net.sf.jsqlparser.expression.Function func) {
           String name = func.getName();
           if ("ROLLUP".equalsIgnoreCase(name)) {
             if (encounteredRollup) {
