@@ -137,8 +137,15 @@ expressions such as `id + 1`; internal Avro names do not restrict SQL output lab
 such as `"My T"` are supported at these materialization boundaries. Doubled quotes in delimited identifiers
 are decoded (`"a""b"` has label `a"b`). Unaliased expression labels keep their SQL text, including
 quoted operands such as `"id" + 1`. Generated internal names are not SQL column aliases, and ambiguous
-projection and predicate references to duplicate output names raise an SQL exception; duplicate outputs remain available by position
-through `SELECT *`.
+projection, predicate, and ORDER BY references to duplicate output names raise an SQL exception
+with SQLState `42702` naming the ambiguous column, including for empty inputs. Qualify join columns
+with a table alias to resolve ambiguity; duplicate outputs remain available by position through `SELECT *`
+and positional ORDER BY. Repeated SELECT labels may be used by ORDER BY when they denote the same
+expression; different expressions with the same label are ambiguous, including columns contributed by
+qualified wildcards. Column equivalence uses the bound input field, so an unqualified reference and its
+qualified form can share a label. Function names and unquoted identifiers compare without regard to case;
+quoted identifiers and string literal contents retain their case. Unused duplicate output labels do not
+invalidate ordering by another column.
 
 Derived tables and CTEs validate column references against their visible output names, including for empty
 inputs. Unknown names and columns replaced by a column alias list raise `SQLSyntaxErrorException` with

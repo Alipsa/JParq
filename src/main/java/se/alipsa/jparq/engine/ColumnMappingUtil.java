@@ -61,12 +61,12 @@ public final class ColumnMappingUtil {
     Objects.requireNonNull(caseInsensitiveIndex, "caseInsensitiveIndex");
     String key = normalizeLookupKey(columnName);
     if (key != null && !hasQualifier(qualifier) && "".equals(caseInsensitiveIndex.get(key))) {
-      throw new IllegalArgumentException("Ambiguous column reference: " + columnName);
+      throw SqlExceptions.ambiguousColumn(columnName);
     }
     String canonical = resolveCanonicalFieldName(qualifier, columnName, qualifierColumnMapping,
         unqualifiedColumnMapping, caseInsensitiveIndex);
     if ("".equals(canonical)) {
-      throw new IllegalArgumentException("Ambiguous column reference: " + columnName);
+      throw SqlExceptions.ambiguousColumn(columnName);
     }
     return canonical;
   }
@@ -122,7 +122,7 @@ public final class ColumnMappingUtil {
       if (canonical != null) {
         return canonical;
       }
-      throw new IllegalArgumentException("Ambiguous column reference: " + columnName);
+      throw SqlExceptions.ambiguousColumn(columnName);
     }
 
     String canonical = caseInsensitiveIndex.get(normalizedColumn);
@@ -331,6 +331,10 @@ public final class ColumnMappingUtil {
         if (alternative != null) {
           fallback = caseInsensitiveIndex.get(alternative);
         }
+      }
+      if ("".equals(fallback)) {
+        throw SqlExceptions
+            .syntaxFailure("Unknown table qualifier '" + qualifier + "' for column '" + columnName + "'");
       }
       if (fallback != null) {
         return fallback;
