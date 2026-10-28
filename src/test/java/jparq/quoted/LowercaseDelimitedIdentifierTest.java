@@ -122,4 +122,53 @@ class LowercaseDelimitedIdentifierTest {
       }
     }
   }
+
+  /**
+   * Keeps scalar subqueries and later declarations in the nearest CTE scope.
+   *
+   * @param predicatePushdown
+   *          whether predicate pushdown is enabled
+   * @param projectionPushdown
+   *          whether projection pushdown is enabled
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void nestedCtesHideEquivalentOuterNames(boolean predicatePushdown, boolean projectionPushdown) throws Exception {
+    String url = "jdbc:jparq:" + Path.of("src/test/resources/hf").toAbsolutePath() + "?predicatePushdown="
+        + predicatePushdown + "&projectionPushdown=" + projectionPushdown;
+    try (var connection = DriverManager.getConnection(url)) {
+      for (String sql : List.of(
+          "WITH c AS (SELECT 1 AS x) SELECT v FROM "
+              + "(WITH \"c\" AS (SELECT 2 AS x) SELECT (SELECT x FROM c) AS v) t",
+          "WITH \"c\" AS (SELECT 1 AS x) SELECT v FROM "
+              + "(WITH c AS (SELECT 2 AS x) SELECT (SELECT x FROM \"c\") AS v) t",
+          "WITH c AS (SELECT 1 AS x) SELECT v FROM " + "(WITH c AS (SELECT 2 AS x) SELECT (SELECT x FROM c) AS v) t",
+          "WITH c AS (SELECT 1 AS x) SELECT x FROM (WITH \"c\" AS (SELECT 2 AS x), "
+              + "d AS (SELECT (SELECT x FROM c) AS x) SELECT x FROM d) t")) {
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+          assertTrue(result.next(), sql);
+          assertEquals(2, result.getInt(1), sql);
+          assertFalse(result.wasNull(), sql);
+          assertFalse(result.next(), sql);
+        }
+      }
+      for (String sql : List.of(
+          "WITH c AS (SELECT 1 AS x) SELECT v FROM "
+              + "(WITH \"C\" AS (SELECT 2 AS x) SELECT (SELECT x FROM c) AS v) t",
+          "WITH \"C\" AS (SELECT 1 AS x) SELECT v FROM "
+              + "(WITH c AS (SELECT 2 AS x) SELECT (SELECT x FROM \"C\") AS v) t")) {
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+          assertTrue(result.next(), sql);
+          assertEquals(1, result.getInt(1), sql);
+          assertFalse(result.wasNull(), sql);
+          assertFalse(result.next(), sql);
+        }
+      }
+    }
+  }
+
 }

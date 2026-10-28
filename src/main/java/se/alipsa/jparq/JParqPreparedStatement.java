@@ -3814,6 +3814,17 @@ public class JParqPreparedStatement implements PreparedStatement {
     return timestamp.toInstant().toEpochMilli();
   }
 
+  /**
+   * Evaluates local CTEs and replaces equivalent inherited names in the runtime
+   * scope.
+   *
+   * @param ctes
+   *          local declarations in evaluation order
+   * @param target
+   *          mutable runtime scope initially containing inherited CTE results
+   * @throws SQLException
+   *           if a declaration cannot be evaluated
+   */
   private void evaluateCommonTableExpressions(List<SqlParser.CommonTableExpression> ctes,
       Map<Identifier, CteResult> target) throws SQLException {
     if (ctes == null || ctes.isEmpty()) {
@@ -3828,11 +3839,15 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (key == null) {
         throw new SQLException("CTE definition is missing a name");
       }
+      // Defensive guard: SqlParser.buildCteLookup already rejects duplicate SQL
+      // declarations.
       if (key.resolve(declared) != null) {
         throw SqlExceptions.syntaxFailure("Duplicate CTE name detected: " + cte.name().text());
       }
       declared.put(key, Boolean.TRUE);
       CteResult result = evaluateCte(cte, target);
+      Map<Identifier, Boolean> localName = Map.of(key, Boolean.TRUE);
+      target.keySet().removeIf(existing -> existing.resolve(localName) != null);
       target.put(key, result);
     }
   }

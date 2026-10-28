@@ -136,7 +136,8 @@ WHERE "id" = 1`. This also applies to GROUP BY, derived tables, CTEs, VALUES inp
 join expressions with qualified duplicate column names. Lowercase CTE names can be declared or referenced
 with quotes (`WITH "c" AS (SELECT 1 AS x) SELECT x FROM c`), including in correlated subqueries.
 Equivalent CTE declarations such as `c` and `"c"` in the same WITH list are rejected with SQLState `42000`;
-a nested WITH can still shadow an outer declaration using either form.
+a nested WITH shadows an outer declaration using either form, including in scalar subqueries
+and subsequent CTE declarations in that nested scope.
 Quoted mixed-case names still require exact case. Unquoted column references to explicitly quoted lowercase
 materialized aliases, such as `SELECT x FROM (SELECT 1 AS "x") t`, remain unsupported
 ([#338](https://github.com/Alipsa/JParq/issues/338)).
