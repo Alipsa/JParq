@@ -146,7 +146,7 @@ class LowercaseDelimitedIdentifierTest {
               + "(WITH \"c\" AS (SELECT 2 AS x) SELECT (SELECT x FROM c) AS v) t",
           "WITH \"c\" AS (SELECT 1 AS x) SELECT v FROM "
               + "(WITH c AS (SELECT 2 AS x) SELECT (SELECT x FROM \"c\") AS v) t",
-          "WITH c AS (SELECT 1 AS x) SELECT v FROM " + "(WITH c AS (SELECT 2 AS x) SELECT (SELECT x FROM c) AS v) t",
+          "WITH c AS (SELECT 1 AS x) SELECT v FROM (WITH c AS (SELECT 2 AS x) SELECT (SELECT x FROM c) AS v) t",
           "WITH c AS (SELECT 1 AS x) SELECT x FROM (WITH \"c\" AS (SELECT 2 AS x), "
               + "d AS (SELECT (SELECT x FROM c) AS x) SELECT x FROM d) t")) {
         try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
@@ -170,5 +170,4 @@ class LowercaseDelimitedIdentifierTest {
       }
     }
   }
-
 }
