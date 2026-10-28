@@ -186,6 +186,7 @@ Standalone `UNNEST(NULL)` also returns no rows and uses VARCHAR metadata because
 
 LATERAL derived tables may still expose numeric values as VARCHAR. In particular, LATERAL decimal
 expressions with unknown precision use VARCHAR to keep one stable schema across correlated executions.
+
 The numeric ResultSet getters (`getByte`, `getShort`, `getInt`, `getLong`, `getFloat`, and `getDouble`)
 convert numeric text through both column indexes and labels. They return zero for SQL NULL, with
 `wasNull()` returning true. For text conversions, they follow numeric CAST rules: truncate integer
