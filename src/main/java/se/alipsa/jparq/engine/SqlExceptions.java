@@ -18,7 +18,7 @@ public final class SqlExceptions {
   /** Diagnostic marker replacing private correlated value bindings. */
   public static final String OUTER_VALUE = "<outer value>";
   private static final int DIAGNOSTIC_VALUE_LIMIT = 64;
-  private static final Set<String> CLASSIFIED_STATES = Set.of("42000", "22003", "22007", "22008", "22018");
+  private static final Set<String> CLASSIFIED_STATES = Set.of("42000", "42702", "22003", "22007", "22008", "22018");
   private static final Pattern CORRELATED_BINDING = Pattern
       .compile("__JPARQ_CORRELATED_VALUE\\s*\\(\\s*'[^']*'\\s*,\\s*\\d+\\s*\\)", Pattern.CASE_INSENSITIVE);
 
@@ -84,6 +84,18 @@ public final class SqlExceptions {
   }
 
   /**
+   * Creates an engine failure for an ambiguous SQL column reference.
+   *
+   * @param column
+   *          the referenced SQL column
+   * @return an engine exception carrying SQLState 42702
+   */
+  public static IllegalArgumentException ambiguousColumn(String column) {
+    String message = "Ambiguous column reference: " + column;
+    return new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42702"));
+  }
+
+  /**
    * Creates a syntax failure naming an unsupported predicate without private
    * bindings.
    *
@@ -101,8 +113,8 @@ public final class SqlExceptions {
    *
    * @param failure
    *          the exception or wrapper to inspect
-   * @return the SQLState 42000, 22003, 22007, 22008, or 22018 exception, or null
-   *         without a recognized state
+   * @return the SQLState 42000, 42702, 22003, 22007, 22008, or 22018 exception,
+   *         or null without a recognized state
    */
   public static SQLException findSqlStateFailure(Throwable failure) {
     Throwable current = failure;
@@ -143,7 +155,7 @@ public final class SqlExceptions {
     if (classifiedDetail != null && !classifiedDetail.isBlank() && message.indexOf(classifiedDetail) < 0) {
       message.append(": ").append(classifiedDetail);
     }
-    if ("42000".equals(classified.getSQLState())) {
+    if ("42000".equals(classified.getSQLState()) || "42702".equals(classified.getSQLState())) {
       return new SQLSyntaxErrorException(message.toString(), classified.getSQLState(), classified.getErrorCode(),
           failure);
     }

@@ -1878,7 +1878,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       validateJoinConditions(tables);
       return new JoinRecordReader(tables, executor);
     } catch (IllegalArgumentException e) {
-      throw new SQLException("Failed to build join reader", e);
+      throw SqlExceptions.wrap("Failed to build join reader", e);
     }
   }
 
@@ -2010,6 +2010,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private void validateJoinOutputColumns(JoinRecordReader reader) throws SQLException {
     final Schema schema = reader.schema();
+    validateAmbiguousColumns(parsedSelect, schema, reader.qualifierColumnMapping());
     final Set<String> required = new LinkedHashSet<>();
     List<Expression> expressions = new ArrayList<>(parsedSelect.expressions());
     expressions.add(parsedSelect.where());
@@ -2070,7 +2071,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     String canonical = columns.containsKey(columnKey) ? columns.get(columnKey) : columns.get(alternative);
     if ("".equals(canonical)) {
-      throw SqlExceptions.syntaxFailure("Ambiguous column reference: " + qualifier + "." + column);
+      throw SqlExceptions.ambiguousColumn(qualifier + "." + column);
     }
   }
 
@@ -4210,6 +4211,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   private Set<String> validateSelectColumns(SqlParser.Select select, Schema schema,
       AggregateFunctions.AggregatePlan aggregatePlan, Map<Identifier, CteResult> ctes, Configuration configuration)
       throws SQLException {
+    validateAmbiguousColumns(select, schema, Map.of());
     ColumnRequirement requirement = requiredColumns(select, aggregatePlan);
     collectSubqueryDependencies(select, schema, requirement.required(),
         new SubqueryExecutor(stmt.getConn(), null, table -> subqueryTableColumns(table, ctes, configuration)));
@@ -4217,6 +4219,76 @@ public class JParqPreparedStatement implements PreparedStatement {
     validateRequiredColumns(schema, requirement.required(), referenceName(baseRef), select.labels(),
         select.columnNames(), requirement.referenced());
     return requirement.required();
+  }
+
+  /**
+   * Checks actual references before execution, even when no rows survive.
+   * Projection labels that are not referenced by ORDER BY need no binding.
+   *
+   * @param select
+   *          the parsed query
+   * @param schema
+   *          the visible input schema
+   * @param qualifiers
+   *          qualified input name mappings
+   * @throws IllegalArgumentException
+   *           if a referenced input column is ambiguous
+   */
+  private void validateAmbiguousColumns(SqlParser.Select select, Schema schema,
+      Map<String, Map<String, String>> qualifiers) {
+    Map<String, String> index = MaterializedNames.lookupIndex(schema);
+    Map<String, Map<String, String>> qualified = ColumnMappingUtil.normaliseQualifierMapping(qualifiers);
+    List<Expression> expressions = new ArrayList<>(select.expressions());
+    expressions.add(select.where());
+    expressions.addAll(select.groupByExpressions());
+    for (Expression expression : expressions) {
+      for (Column column : ColumnsUsed.referencesInScope(expression)) {
+        String qualifier = column.getTable() == null ? null : column.getTable().getName();
+        validateAmbiguousColumn(column.getColumnName(), qualifier, index, qualified);
+      }
+    }
+    List<SqlParser.OrderKey> orders = new ArrayList<>(select.orderBy());
+    orders.addAll(select.preOrderBy());
+    for (SqlParser.OrderKey order : orders) {
+      if (order.expression() != null) {
+        for (Column column : ColumnsUsed.referencesInScope(order.expression())) {
+          String qualifier = column.getTable() == null ? null : column.getTable().getName();
+          validateAmbiguousColumn(column.getColumnName(), qualifier, index, qualified);
+        }
+      } else if (!isOrdinalReference(order.column())) {
+        validateAmbiguousColumn(order.column(), order.qualifier(), index, qualified);
+      }
+    }
+  }
+
+  /**
+   * Rejects an ambiguity marker in the reference's visible input scope.
+   *
+   * @param column
+   *          the SQL column identifier
+   * @param qualifier
+   *          an optional table qualifier
+   * @param index
+   *          unqualified input names
+   * @param qualified
+   *          qualified input names
+   * @throws IllegalArgumentException
+   *           if the visible name maps to multiple input columns
+   */
+  private static void validateAmbiguousColumn(String column, String qualifier, Map<String, String> index,
+      Map<String, Map<String, String>> qualified) {
+    Map<String, String> names = qualifier == null || qualifier.isBlank() || qualified.isEmpty()
+        ? index
+        : ColumnMappingUtil.qualifierColumns(qualified, qualifier);
+    String key = Identifier.lookupKey(column);
+    String alternative = ColumnMappingUtil.alternativeColumnKey(key);
+    String canonical = names.get(key);
+    if (canonical == null && alternative != null) {
+      canonical = names.get(alternative);
+    }
+    if ("".equals(canonical)) {
+      throw SqlExceptions.ambiguousColumn(qualifier == null ? column : qualifier + "." + column);
+    }
   }
 
   /**

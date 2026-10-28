@@ -272,7 +272,7 @@ class ParenthesizedJoinTest {
             }
           }
         }, sql);
-        assertEquals("42000", error.getSQLState(), sql);
+        assertEquals(sql.startsWith("SELECT g.x") ? "42702" : "42000", error.getSQLState(), sql);
         String diagnostic = sql.startsWith("SELECT g.x")
             ? "Ambiguous column reference"
             : "Ambiguous column in join alias";

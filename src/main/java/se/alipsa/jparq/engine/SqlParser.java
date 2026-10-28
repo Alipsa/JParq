@@ -1065,7 +1065,7 @@ public final class SqlParser {
     // The consuming SELECT uses only its own bounds, ordering, and DISTINCT.
     final int limit = computeLimit(ps);
     final int offset = computeOffset(ps);
-    List<OrderKey> orderKeys = computeOrderKeys(ps, projection.labels(), projection.physicalCols(), tableRefs);
+    List<OrderKey> orderKeys = computeOrderKeys(ps, projection.labels(), projection.expressions(), tableRefs);
     final boolean distinct = ps.getDistinct() != null;
 
     List<String> labels = projection.labels();
@@ -2291,29 +2291,30 @@ public final class SqlParser {
    * @param labels
    *          the projection labels (aliases or column names as exposed in the
    *          SELECT list)
-   * @param physicalCols
-   *          the underlying physical column names corresponding to {@code labels}
+   * @param expressions
+   *          projection expressions aligned with the labels, excluding wildcards
    * @param tableRefs
-   *          table references participating in the query (used to normalise
+   *          table references participating in the query (used to normalize
    *          qualifiers)
    * @return a list of {@link OrderKey} objects representing the resolved ORDER BY
    *         keys; an empty list if the query has no ORDER BY clause
+   * @throws IllegalArgumentException
+   *           if a referenced output label is ambiguous or an ordinal is invalid
    */
-  private static List<OrderKey> computeOrderKeys(PlainSelect ps, List<String> labels, List<String> physicalCols,
+  private static List<OrderKey> computeOrderKeys(PlainSelect ps, List<String> labels, List<Expression> expressions,
       List<TableReference> tableRefs) {
     List<OrderKey> orderKeys = new ArrayList<>();
     List<OrderByElement> ob = ps.getOrderByElements();
     if (ob != null) {
-      // Build alias->physical map from the current projection lists we just built
-      // - labels.get(i) = projection label (alias if present, else column name)
-      // - physicalCols.get(i) = underlying physical column name (null if not a simple
-      // column)
-      Map<String, String> aliasToPhysical = new HashMap<>();
+      Map<String, Expression> aliasExpressions = new HashMap<>();
+      Set<String> duplicateLabels = new LinkedHashSet<>();
       for (int i = 0; i < labels.size(); i++) {
-        String lab = labels.get(i);
-        String phys = (i < physicalCols.size()) ? physicalCols.get(i) : null;
-        if (lab != null && phys != null && !lab.isBlank() && !phys.isBlank()) {
-          aliasToPhysical.put(lab, phys);
+        String labelKey = Identifier.lookupKey(labels.get(i));
+        if (labelKey != null && i < expressions.size()) {
+          Expression selected = expressions.get(i);
+          if (aliasExpressions.putIfAbsent(labelKey, selected) != null) {
+            duplicateLabels.add(labelKey);
+          }
         }
       }
 
@@ -2331,7 +2332,7 @@ public final class SqlParser {
         Expression expressionReference = (ex instanceof Column) ? null : ex;
         if (ex instanceof Column c) {
           keyText = c.getColumnName();
-          if (tableRefs.size() > 1 || !tableRefs.getFirst().joinGroup().isEmpty()) {
+          if (tableRefs.size() > 1 || !tableRefs.isEmpty() && !tableRefs.getFirst().joinGroup().isEmpty()) {
             qualifier = extractQualifier(c);
           }
         } else if (ex instanceof StringValue sv) {
@@ -2340,23 +2341,35 @@ public final class SqlParser {
           keyText = ex.toString();
         }
 
+        Expression selected = null;
         if (ex instanceof LongValue ordinal) {
           int position = ordinal.getBigIntegerValue().intValueExact();
           if (position < 1 || !labels.isEmpty() && position > labels.size()) {
             throw new IllegalArgumentException("ORDER BY position is outside the select list: " + position);
           }
-          if (!labels.isEmpty()) {
-            keyText = labels.get(position - 1);
+          if (!labels.isEmpty() && position <= expressions.size()) {
+            selected = expressions.get(position - 1);
           }
           expressionReference = null;
+        } else if (ex instanceof Column && qualifier == null) {
+          String labelKey = Identifier.lookupKey(keyText);
+          if (duplicateLabels.contains(labelKey)) {
+            throw SqlExceptions.ambiguousColumn(keyText);
+          }
+          selected = aliasExpressions.get(labelKey);
         }
-
-        // If it's an alias used in SELECT, map to the physical column name
-        String physicalKey = aliasToPhysical.getOrDefault(keyText, keyText);
+        if (selected instanceof Column column) {
+          keyText = column.getColumnName();
+          qualifier = tableRefs.size() > 1 || !tableRefs.isEmpty() && !tableRefs.getFirst().joinGroup().isEmpty()
+              ? extractQualifier(column)
+              : null;
+        } else if (selected != null) {
+          expressionReference = selected;
+        }
 
         boolean asc = !e.isAscDescPresent() || e.isAsc(); // default ASC
         OrderByElement.NullOrdering nullOrdering = e.getNullOrdering();
-        orderKeys.add(new OrderKey(physicalKey, asc, qualifier, nullOrdering, expressionReference));
+        orderKeys.add(new OrderKey(keyText, asc, qualifier, nullOrdering, expressionReference));
       }
     }
     return orderKeys;
