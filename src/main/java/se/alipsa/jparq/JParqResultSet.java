@@ -39,6 +39,8 @@ import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.MaterializedNames;
+import se.alipsa.jparq.engine.NumericCastTarget;
+import se.alipsa.jparq.engine.NumericCasts;
 import se.alipsa.jparq.engine.NumericExpressionTypes;
 import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.QueryCancellation;
@@ -1312,20 +1314,30 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public byte getByte(int columnIndex) throws SQLException {
-    Object v = value(columnIndex);
-    return v == null ? 0 : ((Number) v).byteValue();
+    Number number = numericValue(columnIndex, NumericCastTarget.TINYINT);
+    return number == null ? 0 : number.byteValue();
+  }
+
+  @Override
+  public byte getByte(String columnLabel) throws SQLException {
+    return getByte(findColumn(columnLabel));
   }
 
   @Override
   public short getShort(int columnIndex) throws SQLException {
-    Object v = value(columnIndex);
-    return v == null ? 0 : ((Number) v).shortValue();
+    Number number = numericValue(columnIndex, NumericCastTarget.SMALLINT);
+    return number == null ? 0 : number.shortValue();
+  }
+
+  @Override
+  public short getShort(String columnLabel) throws SQLException {
+    return getShort(findColumn(columnLabel));
   }
 
   @Override
   public int getInt(int columnIndex) throws SQLException {
-    Object v = value(columnIndex);
-    return v == null ? 0 : ((Number) v).intValue();
+    Number number = numericValue(columnIndex, NumericCastTarget.INTEGER);
+    return number == null ? 0 : number.intValue();
   }
 
   @Override
@@ -1335,8 +1347,8 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public long getLong(int columnIndex) throws SQLException {
-    Object v = value(columnIndex);
-    return v == null ? 0 : ((Number) v).longValue();
+    Number number = numericValue(columnIndex, NumericCastTarget.BIGINT);
+    return number == null ? 0 : number.longValue();
   }
 
   @Override
@@ -1346,8 +1358,8 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public float getFloat(int columnIndex) throws SQLException {
-    Object v = value(columnIndex);
-    return v == null ? 0f : ((Number) v).floatValue();
+    Number number = numericValue(columnIndex, NumericCastTarget.REAL);
+    return number == null ? 0f : number.floatValue();
   }
 
   @Override
@@ -1357,13 +1369,61 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public double getDouble(int columnIndex) throws SQLException {
-    Object v = value(columnIndex);
-    return v == null ? 0d : ((Number) v).doubleValue();
+    Number number = numericValue(columnIndex, NumericCastTarget.DOUBLE);
+    return number == null ? 0d : number.doubleValue();
   }
 
   @Override
   public double getDouble(String columnLabel) throws SQLException {
     return getDouble(findColumn(columnLabel));
+  }
+
+  /**
+   * Converts numeric text using CAST rules while preserving native numbers.
+   *
+   * @param columnIndex
+   *          the one-based column index
+   * @param target
+   *          the requested numeric type
+   * @return the native or converted number, or null for SQL NULL
+   * @throws SQLException
+   *           if column access fails, conversion is invalid (22018), or the value
+   *           exceeds the target range (22003)
+   */
+  private Number numericValue(int columnIndex, NumericCastTarget target) throws SQLException {
+    Object input = value(columnIndex);
+    if (input == null) {
+      return null;
+    }
+    if (input instanceof Number number) {
+      return number;
+    }
+    try {
+      return NumericCasts.convert(input, target, target.name());
+    } catch (IllegalArgumentException exception) {
+      throw SqlExceptions.wrap(
+          "Cannot read column " + columnIndex + " ('" + numericColumnLabel(columnIndex) + "') as " + target, exception);
+    }
+  }
+
+  /**
+   * Looks up a bounded, redacted metadata label without hiding a conversion
+   * error.
+   *
+   * @param columnIndex
+   *          the one-based column index
+   * @return the diagnostic label, or "?" if metadata cannot supply one
+   */
+  private String numericColumnLabel(int columnIndex) {
+    try {
+      ResultSetMetaData metadata = getMetaData();
+      String label = columnIndex > 0 && columnIndex <= metadata.getColumnCount()
+          ? metadata.getColumnLabel(columnIndex)
+          : "?";
+      return SqlExceptions.diagnosticValue(SqlExceptions.describe(label));
+    } catch (SQLException | RuntimeException exception) {
+      return "?";
+    }
   }
 
   @Override
