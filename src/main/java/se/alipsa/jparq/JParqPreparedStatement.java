@@ -49,6 +49,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
+import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.NullValue;
@@ -3444,7 +3445,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         schema = validatedTable(location, configuration == null ? HadoopConfigurations.create() : configuration)
             .schema();
       }
-      return schema.getFields().stream().map(Schema.Field::name).collect(java.util.stream.Collectors.toSet());
+      return schema.getFields().stream().map(Schema.Field::name).collect(Collectors.toSet());
     } catch (SQLException exception) {
       if (QueryCancellation.findCancellation(exception).isPresent()) {
         throw new IllegalStateException("Canceled while resolving subquery columns", exception);
@@ -3818,7 +3819,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (ctes == null || ctes.isEmpty()) {
       return;
     }
-    Set<Identifier> declared = new LinkedHashSet<>();
+    Map<Identifier, Boolean> declared = new HashMap<>();
     for (SqlParser.CommonTableExpression cte : ctes) {
       if (cte == null) {
         continue;
@@ -3827,9 +3828,10 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (key == null) {
         throw new SQLException("CTE definition is missing a name");
       }
-      if (!declared.add(key)) {
-        throw new SQLException("Duplicate CTE name detected: " + cte.name().text());
+      if (key.resolve(declared) != null) {
+        throw SqlExceptions.syntaxFailure("Duplicate CTE name detected: " + cte.name().text());
       }
+      declared.put(key, Boolean.TRUE);
       CteResult result = evaluateCte(cte, target);
       target.put(key, result);
     }
@@ -4196,7 +4198,11 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
 
     if (stmt.getConn().isProjectionPushdown() && !requiredColumns.isEmpty()) {
-      Schema avroProjection = AvroProjections.project(schema, requiredColumns);
+      Map<String, String> sourceIndex = MaterializedNames.lookupIndex(schema);
+      Set<String> physicalColumns = requiredColumns.stream()
+          .map(column -> ColumnMappingUtil.canonicalOrderColumn(column, null, Map.of(), sourceIndex))
+          .collect(Collectors.toSet());
+      Schema avroProjection = AvroProjections.project(schema, physicalColumns);
       AvroReadSupport.setRequestedProjection(configuration, avroProjection);
       AvroReadSupport.setAvroReadSchema(configuration, avroProjection);
     }
@@ -4317,8 +4323,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private void collectSubqueryDependencies(SqlParser.Select select, Schema schema, Set<String> required,
       SubqueryExecutor resolver) {
-    Set<String> candidates = schema.getFields().stream().map(Schema.Field::name)
-        .collect(java.util.stream.Collectors.toSet());
+    Set<String> candidates = schema.getFields().stream().map(Schema.Field::name).collect(Collectors.toSet());
     var baseRef = select.tableReferences().isEmpty() ? null : select.tableReferences().getFirst();
     List<String> qualifiers = qualifierList(baseRef, false);
     final var visitor = new net.sf.jsqlparser.expression.ExpressionVisitorAdapter<Void>() {

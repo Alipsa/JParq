@@ -147,7 +147,8 @@ public final class Identifier {
   /**
    * Looks up a name, preferring its exact key before an equivalent lowercase
    * name. Quoted names containing uppercase letters never use an unquoted
-   * fallback.
+   * fallback. Unlike column-key fallback, this also resolves unquoted names to
+   * quoted lowercase declarations because CTE declaration keys retain quoting.
    *
    * @param <T>
    *          mapped value type

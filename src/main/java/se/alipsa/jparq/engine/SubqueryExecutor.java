@@ -302,10 +302,14 @@ public final class SubqueryExecutor implements AutoCloseable {
     }
     if (input instanceof Table table) {
       if (scope.getWithItemsList() != null) {
+        Map<Identifier, WithItem<?>> declarations = new LinkedHashMap<>();
         for (var cte : scope.getWithItemsList()) {
-          if (Identifier.lookupKey(cte.getAliasName()).equals(Identifier.lookupKey(table.getName()))) {
-            return cteColumns(cte);
-          }
+          declarations.put(Identifier.of(cte.getAliasName()), cte);
+        }
+        Identifier name = Identifier.of(table.getName());
+        WithItem<?> declaration = name == null ? null : name.resolve(declarations);
+        if (declaration != null) {
+          return cteColumns(declaration);
         }
       }
       return sourceColumns.computeIfAbsent(table.getFullyQualifiedName(),

@@ -46,6 +46,18 @@ class ColumnMappingUtilTest {
     assertEquals(Map.of(), ColumnMappingUtil.qualifierColumns(mappings, "\"M\""));
   }
 
+  /**
+   * Binds quoted correlation targets through source keys in scalar and grouped
+   * evaluation.
+   */
+  @Test
+  void quotedCorrelationTargetsResolveToSourceFields() {
+    assertEquals("id", ColumnMappingUtil.canonicalFieldName(null, "\"id\"", Map.of("U:t", Map.of("Q:id", "\"id\"")),
+        Map.of("Q:id", "\"id\""), Map.of("U:id", "id")));
+    assertEquals("left_id", ColumnMappingUtil.canonicalFieldName("\"o\"", "\"id\"",
+        Map.of("U:o", Map.of("Q:id", "\"id\"", "U:id", "left_id")), Map.of(), Map.of("U:id", "")));
+  }
+
   @Test
   void correlationCandidatesIncludePhysicalNamesAndProjectionAliases() {
     assertEquals(java.util.Set.of("U:id", "U:g", "U:grp"), ColumnMappingUtil.correlationColumns(

@@ -398,11 +398,7 @@ public class JParqResultSet extends ResultSetAdapter {
           }
         }
       }
-      // Bind delimited references before adding projection aliases to the maps;
-      // otherwise a self-mapping such as Q:id -> "id" hides the physical U:id.
-      Map<String, String> sourceIndex = MaterializedNames.lookupIndex(schema);
-      List<String> correlationColumns = buildCorrelationColumns(this.canonicalColumnNames, correlationLabels, proj)
-          .stream().map(name -> resolveCorrelationColumn(name, sourceIndex)).toList();
+      List<String> correlationColumns = buildCorrelationColumns(this.canonicalColumnNames, correlationLabels, proj);
       this.unqualifiedColumnMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping, correlationColumns);
       this.qualifierColumnMapping = CorrelationContextBuilder.build(queryQualifiers, correlationLabels,
           correlationColumns, qualifierMapping);
@@ -841,26 +837,6 @@ public class JParqResultSet extends ResultSetAdapter {
       return new ArrayList<>(canonicalColumns);
     }
     return fallback == null ? new ArrayList<>() : new ArrayList<>(fallback);
-  }
-
-  /**
-   * Binds a delimited correlation name when the source schema has a unique match.
-   * Ambiguous names remain unresolved so qualified references can still bind
-   * through the reader's mappings without evaluating an unqualified reference.
-   *
-   * @param name
-   *          projected or required column name
-   * @param sourceIndex
-   *          visible source names mapped to physical fields
-   * @return the unique source field, or the original name
-   */
-  private static String resolveCorrelationColumn(String name, Map<String, String> sourceIndex) {
-    Identifier identifier = Identifier.of(name);
-    if (identifier == null || !identifier.quoted()) {
-      return name;
-    }
-    String canonical = ColumnMappingUtil.canonicalOrderColumn(name, null, Map.of(), sourceIndex);
-    return canonical == null || canonical.isBlank() ? name : canonical;
   }
 
   private static Map<String, String> enrichUnqualifiedMapping(Map<String, String> baseMapping,
