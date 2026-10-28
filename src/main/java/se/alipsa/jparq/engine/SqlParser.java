@@ -764,9 +764,9 @@ public final class SqlParser {
     if (declared.isEmpty()) {
       return parseSelectBody(stmt, ctes, cteLookup, allowQualifiedWildcards);
     }
-    Set<Identifier> localNames = declared.stream().map(CommonTableExpression::name).collect(Collectors.toSet());
+    Map<Identifier, CommonTableExpression> localNames = buildCteLookup(declared);
     List<CommonTableExpression> scoped = new ArrayList<>();
-    ctes.stream().filter(cte -> !localNames.contains(cte.name())).forEach(scoped::add);
+    ctes.stream().filter(cte -> cte.name().resolve(localNames) == null).forEach(scoped::add);
     scoped.addAll(declared);
     List<CommonTableExpression> visible = List.copyOf(scoped);
     return parseSelectBody(stmt, visible, buildCteLookup(visible), allowQualifiedWildcards);
@@ -849,7 +849,10 @@ public final class SqlParser {
       if (cte == null || cte.name() == null) {
         continue;
       }
-      lookup.putIfAbsent(cte.name(), cte);
+      if (cte.name().resolve(lookup) != null) {
+        throw SqlExceptions.syntaxFailure("Duplicate CTE name detected: " + cte.name().text());
+      }
+      lookup.put(cte.name(), cte);
     }
     return Map.copyOf(lookup);
   }
@@ -1043,7 +1046,7 @@ public final class SqlParser {
     if (identifier == null) {
       return null;
     }
-    return cteLookup.get(identifier);
+    return identifier.resolve(cteLookup);
   }
 
   private static Select parsePlainSelect(PlainSelect ps, List<CommonTableExpression> ctes,

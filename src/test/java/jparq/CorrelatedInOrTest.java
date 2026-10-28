@@ -268,7 +268,8 @@ class CorrelatedInOrTest {
       try (var statement = conn.createStatement()) {
         var failure = assertThrows(java.sql.SQLException.class, () -> statement
             .executeQuery("WITH small AS (SELECT id FROM big), small AS (SELECT id FROM big) SELECT id FROM small"));
-        assertTrue(failure.getCause().getMessage().contains("Duplicate CTE"));
+        assertEquals("42000", failure.getSQLState());
+        assertTrue(failure.getMessage().contains("Duplicate CTE"), failure.getMessage());
       }
     }
   }

@@ -65,6 +65,16 @@ public final class ColumnMappingUtil {
     }
     String canonical = resolveCanonicalFieldName(qualifier, columnName, qualifierColumnMapping,
         unqualifiedColumnMapping, caseInsensitiveIndex);
+    // Correlation mappings can contain SQL references instead of physical fields.
+    // Rebind a lowercase delimited target through its unquoted source key before
+    // reading values when that name exists in the source schema. This includes
+    // qualified joins and aggregate input expressions.
+    Identifier target = Identifier.of(canonical);
+    String sourceKey = target == null ? null : alternativeColumnKey(target.lookupKey());
+    if (sourceKey != null && caseInsensitiveIndex.containsKey(sourceKey)) {
+      canonical = resolveCanonicalFieldName(qualifier, target.text(), qualifierColumnMapping, unqualifiedColumnMapping,
+          caseInsensitiveIndex);
+    }
     if ("".equals(canonical)) {
       throw SqlExceptions.ambiguousColumn(columnName);
     }
