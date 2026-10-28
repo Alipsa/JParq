@@ -2,6 +2,8 @@
 
 ### 1.4.0
 
+- Fix bare JDBC `SQL_TSI_*` interval constants in TIMESTAMPADD and TIMESTAMPDIFF being resolved as columns (#246). Support all nine units in native calls and JDBC escapes, with or without FROM and with predicate/projection pushdown enabled or disabled. Correct SQL_TSI_FRAC_SECOND to count nanoseconds instead of seconds.
+
 - Fix delimited lowercase column references returning NULL in projections and computed expressions or failing residual predicates (#244). Bind projection-pushdown fields to physical names and rebind delimited correlation targets to source fields in the shared resolver, including physical GROUP BY keys and computed qualified join expressions with duplicate column names. Allow lowercase CTE names to resolve between quoted and unquoted forms during correlated scope discovery and recursive execution. Reject equivalent duplicate CTE declarations with SQLState `42000`, preserve mixed-case sensitivity, and allow nested declarations to shadow outer names in scalar subqueries and subsequent CTE declarations as well as direct table references.
 
 - Classify invalid temporal formats with SQLState `22007` and out-of-range date/time fields with `22008` (`SQLDataException`). Non-Boolean predicates now raise `SQLSyntaxErrorException` with `42000`. Preserve these classifications, diagnostic context, and parser causes through JDBC getters, preparation, WHERE/HAVING filters, joins, derived tables, CTEs, and nested queries (#239). Grouped expression failures also retain the original SQL expression in diagnostics instead of identifying only a private operand placeholder.

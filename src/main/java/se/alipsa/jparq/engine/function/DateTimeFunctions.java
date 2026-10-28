@@ -232,7 +232,8 @@ public final class DateTimeFunctions {
   }
 
   /**
-   * JDBC TIMESTAMPADD implementation supporting common SQL_TSI units.
+   * JDBC TIMESTAMPADD implementation supporting SQL_TSI units, with
+   * SQL_TSI_FRAC_SECOND measured in nanoseconds.
    *
    * @param args
    *          arguments: interval unit, interval value, timestamp
@@ -263,7 +264,8 @@ public final class DateTimeFunctions {
   }
 
   /**
-   * JDBC TIMESTAMPDIFF implementation supporting common SQL_TSI units.
+   * JDBC TIMESTAMPDIFF implementation supporting SQL_TSI units, with
+   * SQL_TSI_FRAC_SECOND measured in nanoseconds.
    *
    * @param args
    *          arguments: interval unit, start timestamp, end timestamp
@@ -535,7 +537,8 @@ public final class DateTimeFunctions {
   private static ChronoUnit toChronoUnit(String token) {
     String normalized = token.replace("'", "").trim().toUpperCase(Locale.ROOT);
     return switch (normalized) {
-      case "SQL_TSI_FRAC_SECOND", "SQL_TSI_SECOND", "SECOND" -> ChronoUnit.SECONDS;
+      case "SQL_TSI_FRAC_SECOND" -> ChronoUnit.NANOS;
+      case "SQL_TSI_SECOND", "SECOND" -> ChronoUnit.SECONDS;
       case "SQL_TSI_MINUTE", "MINUTE" -> ChronoUnit.MINUTES;
       case "SQL_TSI_HOUR", "HOUR" -> ChronoUnit.HOURS;
       case "SQL_TSI_DAY", "DAYOFMONTH", "DAYOFYEAR", "DAY" -> ChronoUnit.DAYS;

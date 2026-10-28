@@ -16,6 +16,7 @@ import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.NotExpression;
 import net.sf.jsqlparser.expression.SignedExpression;
+import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.WhenClause;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
@@ -26,6 +27,7 @@ import net.sf.jsqlparser.expression.operators.relational.IsBooleanExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsNullExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsUnknownExpression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
+import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.statement.select.FromItem;
 import net.sf.jsqlparser.statement.select.Join;
 import net.sf.jsqlparser.statement.select.ParenthesedFromItem;
@@ -37,10 +39,13 @@ import net.sf.jsqlparser.statement.select.SetOperationList;
 import net.sf.jsqlparser.statement.select.Values;
 
 /**
- * Restores IN precedence throughout a statement before any SQL scopes are
- * extracted or serialized.
+ * Normalizes parser expression shapes and JDBC timestamp interval constants
+ * before any SQL scopes are extracted or serialized.
  */
 public final class SqlExpressionNormalizer {
+  private static final Set<String> JDBC_TIMESTAMP_UNITS = Set.of("SQL_TSI_FRAC_SECOND", "SQL_TSI_SECOND",
+      "SQL_TSI_MINUTE", "SQL_TSI_HOUR", "SQL_TSI_DAY", "SQL_TSI_WEEK", "SQL_TSI_MONTH", "SQL_TSI_QUARTER",
+      "SQL_TSI_YEAR");
   private final Set<Select> visited = Collections.newSetFromMap(new IdentityHashMap<>());
   private final Map<Expression, Expression> absorbedHeads = new IdentityHashMap<>();
   private final Children children = new Children();
@@ -55,7 +60,38 @@ public final class SqlExpressionNormalizer {
    *          parsed SELECT, including CTEs and set operations
    */
   public static void normalize(Select statement) {
+    JSqlParserSupport.visitExpressions(statement, new JSqlParserSupport.StatementExpressionVisitor() {
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(Function function, S context) {
+        normalizeTimestampUnit(function);
+        return super.visit(function, context);
+      }
+    });
     new SqlExpressionNormalizer().select(statement);
+  }
+
+  /**
+   * Converts a bare JDBC interval constant to a literal in a timestamp function's
+   * first argument. Quoted and qualified identifiers remain column references.
+   *
+   * @param function
+   *          parsed function call
+   */
+  private static void normalizeTimestampUnit(Function function) {
+    if (!("TIMESTAMPADD".equalsIgnoreCase(function.getName())
+        || "TIMESTAMPDIFF".equalsIgnoreCase(function.getName()))) {
+      return;
+    }
+    var parameters = function.getParameters();
+    if (parameters != null && !parameters.isEmpty() && parameters.getFirst() instanceof Column column
+        && column.getTable() == null
+        && JDBC_TIMESTAMP_UNITS.contains(column.getColumnName().toUpperCase(Locale.ROOT))) {
+      ExpressionList<Expression> normalized = new ExpressionList<>();
+      normalized.addAll(parameters);
+      normalized.set(0, new StringValue(column.getColumnName()));
+      function.setParameters(normalized);
+    }
   }
 
   /**
