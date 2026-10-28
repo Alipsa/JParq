@@ -1043,7 +1043,7 @@ public final class SqlParser {
     if (identifier == null) {
       return null;
     }
-    return cteLookup.get(identifier);
+    return identifier.resolve(cteLookup);
   }
 
   private static Select parsePlainSelect(PlainSelect ps, List<CommonTableExpression> ctes,

@@ -131,6 +131,13 @@ row-dependent materializations. Eligible correlated predicates are rebuilt from 
 predicate pushdown on every evaluation; the Java residual filter still checks current outer values.
 Caches are local to the owning execution, and uncorrelated subqueries continue to reuse their results.
 
+Delimited lowercase column references resolve to unquoted lowercase columns: `SELECT "id" + 0 FROM optimized
+WHERE "id" = 1`. This also applies to derived tables, CTEs, VALUES inputs, and joins. Lowercase CTE names
+can be declared or referenced with quotes (`WITH "c" AS (SELECT 1 AS x) SELECT x FROM c`).
+Quoted mixed-case names still require exact case. Unquoted column references to explicitly quoted lowercase
+materialized aliases, such as `SELECT x FROM (SELECT 1 AS "x") t`, remain unsupported
+([#338](https://github.com/Alipsa/JParq/issues/338)).
+
 Delimited column aliases retain their case and appear in JDBC column labels without the surrounding
 identifier quotes. Derived tables and CTEs preserve these labels, including spaces and unnamed computed
 expressions such as `id + 1`; internal Avro names do not restrict SQL output labels. Quoted table aliases

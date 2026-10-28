@@ -3926,17 +3926,21 @@ public class JParqPreparedStatement implements PreparedStatement {
       return false;
     }
     if (query instanceof SqlParser.Select select) {
+      Map<Identifier, Boolean> names = Map.of(cteName, Boolean.TRUE);
       List<SqlParser.TableReference> refs = select.tableReferences();
       if (refs != null) {
         for (SqlParser.TableReference ref : refs) {
           if (ref == null) {
             continue;
           }
-          if (ref.commonTableExpression() != null && cteName.matches(ref.commonTableExpression().name())) {
-            return true;
+          if (ref.commonTableExpression() != null) {
+            if (cteName.matches(ref.commonTableExpression().name())) {
+              return true;
+            }
+            continue;
           }
           Identifier refTable = Identifier.of(ref.tableName());
-          if (refTable != null && cteName.matches(refTable)) {
+          if (refTable != null && refTable.resolve(names) != null) {
             return true;
           }
         }
@@ -4025,7 +4029,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (cte == null || available == null || available.isEmpty()) {
       return null;
     }
-    return available.get(cte.name());
+    return cte.name().resolve(available);
   }
 
   private CteResult resolveCteResultByName(String name, Map<Identifier, CteResult> available) {
@@ -4036,7 +4040,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (key == null) {
       return null;
     }
-    return available.get(key);
+    return key.resolve(available);
   }
 
   private boolean schemasCompatible(Schema expected, Schema actual) {

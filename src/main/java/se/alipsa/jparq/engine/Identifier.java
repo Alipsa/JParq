@@ -1,6 +1,7 @@
 package se.alipsa.jparq.engine;
 
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -141,6 +142,26 @@ public final class Identifier {
   public static String lookupKey(String raw) {
     Identifier identifier = of(raw);
     return identifier == null ? null : identifier.lookupKey();
+  }
+
+  /**
+   * Looks up a name, preferring its exact key before an equivalent lowercase
+   * name. Quoted names containing uppercase letters never use an unquoted
+   * fallback.
+   *
+   * @param <T>
+   *          mapped value type
+   * @param names
+   *          identifier mapping
+   * @return the exact or equivalent mapped value, or null if absent
+   */
+  public <T> T resolve(Map<Identifier, T> names) {
+    T exact = names.get(this);
+    if (exact != null || (quoted && !text.equals(text.toLowerCase(Locale.ROOT)))) {
+      return exact;
+    }
+    Identifier alternative = new Identifier(normalized(), !quoted);
+    return names.get(alternative);
   }
 
   /**
