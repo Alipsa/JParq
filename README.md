@@ -267,9 +267,13 @@ from SELECT. This includes aggregates in the standard `SUBSTRING(... FROM ... FO
 `POSITION(... IN ...)`, and `TRIM(... FROM ...)` forms. Grouped `IS [NOT] DISTINCT FROM` predicates
 bind grouping columns, aggregates, and subqueries with their NULL semantics intact. Grouped arithmetic
 uses the same numeric and temporal rules as row expressions.
-Columns outside aggregates must be grouping expressions. Scalar functions use the shared
-value evaluator; remaining HAVING predicate classification differences are tracked in
-[#247](https://github.com/Alipsa/JParq/issues/247). Ungrouped column references in HAVING are rejected
+Scalar expressions outside aggregates may use grouping expressions and constants.
+For example, `SELECT cyl, ABS(cyl) FROM mtcars GROUP BY cyl` and
+`SELECT cyl FROM mtcars GROUP BY cyl HAVING NULLIF(cyl, 4) IS NOT NULL` evaluate scalar functions
+using each group's keys, including NULL keys and keys suppressed by grouping sets. Grouping keys
+used by HAVING need not appear in SELECT. Scalar functions use the shared value evaluator;
+unknown functions in grouped SELECT and HAVING raise `SQLSyntaxErrorException` with SQLState `42000`
+when evaluated. Ungrouped column references in HAVING are rejected
 with SQLState `42000`, including for empty inputs. As a deliberate non-standard extension, HAVING
 also accepts unqualified SELECT aliases: `SELECT SUM(mpg) AS mpg FROM mtcars m GROUP BY cyl
 HAVING mpg > 200` filters on the aggregate alias. A qualified name such as `m.mpg` refers to the

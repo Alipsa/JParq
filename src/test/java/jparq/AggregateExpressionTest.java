@@ -8,14 +8,130 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.sql.SQLSyntaxErrorException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-/** Regression coverage for scalar expressions over aggregate results (#231). */
+/**
+ * Regression coverage for scalar expressions over aggregates and grouping keys
+ * (#231, #247).
+ */
 class AggregateExpressionTest {
+  /**
+   * Evaluates scalar functions over grouping keys without requiring aggregates.
+   *
+   * @param pushdown
+   *          whether predicate and projection pushdown are enabled
+   * @throws Exception
+   *           if fixture setup or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void scalarGroupingKeys(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown)) {
+      for (String expression : List.of("ABS(cyl)", "COALESCE(cyl, 4)", "ABS(COALESCE(cyl, 4))")) {
+        assertRows(connection, "SELECT cyl, " + expression + " FROM mtcars GROUP BY cyl ORDER BY cyl",
+            List.of(List.of("4", "4"), List.of("6", "6"), List.of("8", "8")));
+      }
+      assertRows(connection, "SELECT ABS(m.cyl) AS magnitude FROM mtcars m GROUP BY m.cyl ORDER BY magnitude",
+          List.of(List.of("4"), List.of("6"), List.of("8")));
+      assertRows(connection, "SELECT ABS(cyl + 1) FROM mtcars GROUP BY cyl + 1 ORDER BY cyl + 1",
+          List.of(List.of("5"), List.of("7"), List.of("9")));
+      assertRows(connection, "SELECT cyl, ABS(cyl) FROM mtcars WHERE cyl < 0 GROUP BY cyl", List.of());
+    }
+  }
+
+  /**
+   * Filters groups using scalar functions over visible and hidden grouping keys.
+   *
+   * @param pushdown
+   *          whether predicate and projection pushdown are enabled
+   * @throws Exception
+   *           if fixture setup or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void scalarGroupingKeysInHaving(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown)) {
+      assertRows(connection, "SELECT cyl, COUNT(*) FROM mtcars GROUP BY cyl HAVING ABS(cyl) > 0 ORDER BY cyl",
+          List.of(List.of("4", "11"), List.of("6", "7"), List.of("8", "14")));
+      assertRows(connection,
+          "SELECT cyl, COUNT(*) FROM mtcars GROUP BY cyl HAVING NULLIF(cyl, 4) IS NOT NULL ORDER BY cyl",
+          List.of(List.of("6", "7"), List.of("8", "14")));
+      assertRows(connection, "SELECT COUNT(*) FROM mtcars m GROUP BY m.cyl HAVING ABS(m.cyl) > 4 ORDER BY m.cyl",
+          List.of(List.of("7"), List.of("14")));
+      assertRows(connection, "SELECT cyl FROM mtcars GROUP BY cyl HAVING COALESCE(MAX(mpg), 0) > 25 ORDER BY cyl",
+          List.of(List.of("4")));
+      assertRows(connection,
+          "SELECT cyl FROM mtcars GROUP BY cyl HAVING ABS(COALESCE(NULLIF(cyl, 4), 0)) > 0 ORDER BY cyl",
+          List.of(List.of("6"), List.of("8")));
+    }
+  }
+
+  /**
+   * Preserves NULL keys and keys suppressed by grouping sets in scalar functions.
+   *
+   * @param pushdown
+   *          whether predicate and projection pushdown are enabled
+   * @throws Exception
+   *           if fixture setup or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void nullableScalarGroupingKeys(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown)) {
+      assertRows(connection,
+          "SELECT COALESCE(cyl, 0), COUNT(*) FROM mtcars GROUP BY ROLLUP(cyl) " + "HAVING ABS(COALESCE(cyl, 0)) = 0",
+          List.of(List.of("0", "32")));
+      assertRows(connection,
+          "SELECT COALESCE(k, 0), COUNT(*) FROM (SELECT NULLIF(cyl, 4) AS k FROM mtcars) d "
+              + "GROUP BY k HAVING NULLIF(k, 6) IS NULL ORDER BY COALESCE(k, 0)",
+          List.of(List.of("0", "11"), List.of("6", "7")));
+      assertRows(connection, "SELECT COALESCE(cyl, 0) FROM mtcars GROUP BY ROLLUP(cyl) ORDER BY COALESCE(cyl, 0)",
+          List.of(List.of("0"), List.of("4"), List.of("6"), List.of("8")));
+    }
+  }
+
+  /**
+   * Classifies unknown functions and rejects scalar references to ungrouped keys.
+   *
+   * @param pushdown
+   *          whether predicate and projection pushdown are enabled
+   * @throws Exception
+   *           if fixture setup or connection creation fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void scalarGroupingFailures(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown)) {
+      for (String sql : List.of("SELECT cyl FROM mtcars GROUP BY cyl HAVING NO_SUCH(MAX(mpg)) > 1",
+          "SELECT cyl FROM mtcars GROUP BY cyl HAVING NO_SUCH(cyl) > 1",
+          "SELECT NO_SUCH(cyl) FROM mtcars GROUP BY cyl")) {
+        var failure = assertThrows(SQLSyntaxErrorException.class, () -> assertRows(connection, sql, List.of()), sql);
+        assertEquals("42000", failure.getSQLState(), sql);
+      }
+      for (String where : List.of("", " WHERE cyl < 0")) {
+        for (String sql : List.of("SELECT ABS(mpg) FROM mtcars" + where + " GROUP BY cyl",
+            "SELECT cyl FROM mtcars" + where + " GROUP BY cyl HAVING COALESCE(mpg, 0) > 0",
+            "SELECT ABS(cyl) FROM mtcars" + where + " GROUP BY cyl + 1")) {
+          var failure = assertThrows(SQLSyntaxErrorException.class, () -> connection.prepareStatement(sql), sql);
+          assertEquals("42000", failure.getSQLState(), sql);
+        }
+      }
+    }
+  }
+
   /**
    * Tests arithmetic and scalar wrappers, including labels and result
    * cardinality.
