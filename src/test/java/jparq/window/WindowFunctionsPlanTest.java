@@ -1,5 +1,6 @@
 package jparq.window;
 
+import java.sql.SQLSyntaxErrorException;
 import java.util.Collections;
 import java.util.List;
 import net.sf.jsqlparser.JSQLParserException;
@@ -115,8 +116,8 @@ class WindowFunctionsPlanTest {
   }
 
   /**
-   * Confirm that null, unsupported or incomplete analytic definitions are safely
-   * ignored during planning.
+   * Confirm that null definitions are ignored and unsupported or invalid analytic
+   * definitions are rejected during planning.
    *
    * @throws JSQLParserException
    *           if expressions cannot be parsed
@@ -133,7 +134,12 @@ class WindowFunctionsPlanTest {
 
     AnalyticExpression unsupported = new AnalyticExpression();
     unsupported.setName("ROW_NUM");
-    Assertions.assertNull(WindowFunctions.plan(List.of(unsupported)), "Unsupported analytics should be ignored");
+    IllegalArgumentException unsupportedException = Assertions.assertThrows(IllegalArgumentException.class,
+        () -> WindowFunctions.plan(List.of(unsupported)));
+    Assertions.assertEquals("Unsupported window function: ROW_NUM", unsupportedException.getMessage());
+    SQLSyntaxErrorException syntax = Assertions.assertInstanceOf(SQLSyntaxErrorException.class,
+        unsupportedException.getCause());
+    Assertions.assertEquals("42000", syntax.getSQLState());
 
     AnalyticExpression distinctSum = (AnalyticExpression) CCJSqlParserUtil
         .parseExpression("SUM(DISTINCT salary) OVER (ORDER BY salary)");

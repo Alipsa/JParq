@@ -2,6 +2,8 @@
 
 ### 1.4.0
 
+- Reject unsupported window function names in SELECT lists during planning with `SQLSyntaxErrorException`, SQLState `42000`, and a message naming the function instead of an internal precomputed-state error (#248). Reject `WITHIN GROUP` clauses for all function names, with or without `OVER`, instead of treating supported names as windows; diagnostics name the unsupported clause. Validation outside SELECT lists remains tracked in #350.
+
 - Confirm scalar functions over grouping expressions in SELECT and HAVING, including queries without aggregates, NULL keys, and grouping sets (#247). Add regression coverage with predicate and projection pushdown enabled and disabled, verify unknown functions raise `SQLSyntaxErrorException` with SQLState `42000`, and remove the resolved limitation from the documentation. The shared grouped scalar evaluator introduced for #231 already supplies this behavior.
 
 - Fix bare JDBC `SQL_TSI_*` interval constants in TIMESTAMPADD and TIMESTAMPDIFF being resolved as columns (#246). Support all nine units in native calls and JDBC escapes, with or without FROM and with predicate/projection pushdown enabled or disabled. Correct SQL_TSI_FRAC_SECOND to count nanoseconds instead of seconds. Handle nested JDBC timestamp/date literal escapes, retain 64-bit interval amounts, and classify numeric interval overflow with SQLState `22003` and datetime field overflow with `22008`, including JDBC DATE/TIMESTAMP results before year 1 and storage overflow that would otherwise silently wrap. Preserve JDBC normalization across daylight-saving gaps and the Gregorian calendar cutover.

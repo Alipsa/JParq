@@ -91,6 +91,7 @@ import se.alipsa.jparq.engine.SqlParser.OrderKey;
 import se.alipsa.jparq.engine.SqlTruth;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
+import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
@@ -604,13 +605,14 @@ public final class AggregateFunctions {
   }
 
   /**
-   * Rejects windows in the current aggregate query while preserving nested query
-   * scopes.
+   * Rejects windows and WITHIN GROUP clauses in the current aggregate query while
+   * preserving nested query scopes.
    *
    * @param expression
    *          expression to inspect, or null
    * @throws IllegalArgumentException
-   *           if a window expression is present
+   *           if a window expression or WITHIN GROUP clause is present; the cause
+   *           carries SQLState 42000
    */
   private static void rejectGroupedWindows(Expression expression) {
     if (expression == null) {
@@ -619,6 +621,7 @@ public final class AggregateFunctions {
     expression.accept(new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(AnalyticExpression analytic, S context) {
+        WindowFunctions.rejectWithinGroup(analytic);
         throw syntaxFailure(
             "Window functions are not supported in grouped queries: " + SqlExceptions.describe(analytic));
       }

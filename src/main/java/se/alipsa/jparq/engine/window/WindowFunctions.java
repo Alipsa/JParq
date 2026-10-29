@@ -15,6 +15,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import net.sf.jsqlparser.expression.AnalyticExpression;
+import net.sf.jsqlparser.expression.AnalyticType;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.WindowElement;
@@ -31,6 +32,7 @@ import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlComparisons;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.helper.LiteralConverter;
@@ -46,6 +48,8 @@ public final class WindowFunctions {
   public static final Set<String> WINDOW_ONLY_FUNCTION_NAMES = Set.of("ROW_NUMBER", "RANK", "DENSE_RANK",
       "PERCENT_RANK", "CUME_DIST", "NTILE", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE");
 
+  private static final Set<String> AGGREGATE_WINDOW_FUNCTION_NAMES = Set.of("COUNT", "SUM", "AVG", "MIN", "MAX");
+
   private static final Logger log = LoggerFactory.getLogger(WindowFunctions.class);
 
   private WindowFunctions() {
@@ -59,6 +63,9 @@ public final class WindowFunctions {
    *          expressions present in the SELECT list
    * @return a window plan capturing supported analytic expressions or
    *         {@code null} when none are present
+   * @throws IllegalArgumentException
+   *           if an analytic function is unsupported or invalid; unsupported
+   *           names and WITHIN GROUP clauses carry SQLState 42000 in the cause
    */
   public static WindowPlan plan(List<Expression> expressions) {
     if (expressions == null || expressions.isEmpty()) {
@@ -84,6 +91,22 @@ public final class WindowFunctions {
   }
 
   /**
+   * Rejects WITHIN GROUP clauses, which are not supported.
+   *
+   * @param analytic
+   *          analytic expression to inspect
+   * @throws IllegalArgumentException
+   *           if the expression uses WITHIN GROUP; the cause carries SQLState
+   *           42000
+   */
+  public static void rejectWithinGroup(AnalyticExpression analytic) {
+    AnalyticType type = analytic.getType();
+    if (type == AnalyticType.WITHIN_GROUP || type == AnalyticType.WITHIN_GROUP_OVER) {
+      throw SqlExceptions.syntaxFailure("WITHIN GROUP is not supported: " + analytic.getName());
+    }
+  }
+
+  /**
    * Register analytic expressions discovered during planning into the provided
    * collector.
    *
@@ -100,9 +123,10 @@ public final class WindowFunctions {
     if (name == null) {
       return;
     }
-    if (!WINDOW_ONLY_FUNCTION_NAMES.contains(name.toUpperCase(Locale.ROOT))
-        && !Set.of("COUNT", "SUM", "AVG", "MIN", "MAX").contains(name.toUpperCase(Locale.ROOT))) {
-      return;
+    String upper = name.toUpperCase(Locale.ROOT);
+    rejectWithinGroup(analytic);
+    if (!WINDOW_ONLY_FUNCTION_NAMES.contains(upper) && !AGGREGATE_WINDOW_FUNCTION_NAMES.contains(upper)) {
+      throw SqlExceptions.syntaxFailure("Unsupported window function: " + name);
     }
     if ((analytic.isDistinct() || analytic.isUnique()) && !"COUNT".equalsIgnoreCase(name)) {
       throw new IllegalArgumentException(name + " does not support DISTINCT or UNIQUE modifiers: " + analytic);

@@ -737,6 +737,10 @@ The following SQL statements are supported:
     - `SUM`, `AVG`, `MIN`, `MAX`, `COUNT`
   - Analytic Value/Navigation Functions
     -  `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE`
+  - Unsupported function names used with `OVER` in SELECT lists raise `SQLSyntaxErrorException` with
+    SQLState `42000`, naming the unsupported window function. Validation outside SELECT lists is tracked in
+    [#350](https://github.com/Alipsa/JParq/issues/350).
+  - `WITHIN GROUP` clauses in SELECT lists are unsupported, with or without `OVER`, and raise SQLState `42000`.
 - Advanced GROUP BY constructs i.e:
   - `GROUPING SETS`
   - `ROLLUP`
@@ -793,6 +797,7 @@ The following SQL statements are supported:
 ##### SQL:2016–2023 Additions
 - NORMALIZE(string [USING form])        Normalizes Unicode text (SQL:2016).     NORMALIZE('é') → 'é'
 - STRING_AGG(expression, separator)     Aggregates values into a single string with a separator.        STRING_AGG(name, ', ') → 'Alice, Bob, Carol'
+  The `WITHIN GROUP (ORDER BY ...)` form is unsupported and raises SQLState `42000`.
 - JSON_VALUE, JSON_QUERY, JSON_OBJECT, JSON_ARRAY       JSON construction/extraction—technically not core string functions but string-returning functions standardized in SQL:2016–2023.
 
 `JSON_VALUE` and `JSON_QUERY` support double-quoted path member names, including spaces,
