@@ -548,7 +548,8 @@ public final class DateTimeFunctions {
    * Adds a signed interval without narrowing its amount, rejecting JDBC storage
    * overflow while preserving calendar and time-zone normalization. Normalization
    * may cross New Year, so a one-year difference is allowed; millisecond wrapping
-   * shifts the result by hundreds of millions of years.
+   * shifts the result by hundreds of millions of years. JDBC date and timestamp
+   * results before year 1 are rejected because their era cannot round-trip.
    *
    * @param target
    *          temporal input
@@ -572,7 +573,7 @@ public final class DateTimeFunctions {
     if (target instanceof Timestamp ts) {
       LocalDateTime adjusted = ts.toLocalDateTime().plus(amount, unit);
       Timestamp result = Timestamp.valueOf(adjusted);
-      if (Math.abs((long) result.toLocalDateTime().getYear() - adjusted.getYear()) > 1) {
+      if (adjusted.getYear() < 1 || Math.abs((long) result.toLocalDateTime().getYear() - adjusted.getYear()) > 1) {
         throw new DateTimeException("TIMESTAMP out of range: " + adjusted);
       }
       return result;
@@ -580,7 +581,7 @@ public final class DateTimeFunctions {
     if (target instanceof Date d) {
       LocalDate adjusted = d.toLocalDate().plus(amount, unit);
       Date result = Date.valueOf(adjusted);
-      if (Math.abs((long) result.toLocalDate().getYear() - adjusted.getYear()) > 1) {
+      if (adjusted.getYear() < 1 || Math.abs((long) result.toLocalDate().getYear() - adjusted.getYear()) > 1) {
         throw new DateTimeException("DATE out of range: " + adjusted);
       }
       return result;
