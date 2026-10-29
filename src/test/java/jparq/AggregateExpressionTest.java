@@ -34,14 +34,16 @@ class AggregateExpressionTest {
   })
   void scalarGroupingKeys(boolean pushdown) throws Exception {
     try (var connection = connect(pushdown)) {
-      for (String expression : List.of("ABS(cyl)", "COALESCE(cyl, 4)", "ABS(COALESCE(cyl, 4))")) {
-        assertRows(connection, "SELECT cyl, " + expression + " FROM mtcars GROUP BY cyl ORDER BY cyl",
-            List.of(List.of("4", "4"), List.of("6", "6"), List.of("8", "8")));
-      }
-      assertRows(connection, "SELECT ABS(m.cyl) AS magnitude FROM mtcars m GROUP BY m.cyl ORDER BY magnitude",
-          List.of(List.of("4"), List.of("6"), List.of("8")));
-      assertRows(connection, "SELECT ABS(cyl + 1) FROM mtcars GROUP BY cyl + 1 ORDER BY cyl + 1",
-          List.of(List.of("5"), List.of("7"), List.of("9")));
+      assertRows(connection, "SELECT cyl, ABS(cyl - 5) FROM mtcars GROUP BY cyl ORDER BY cyl",
+          List.of(List.of("4", "1"), List.of("6", "1"), List.of("8", "3")));
+      assertRows(connection, "SELECT cyl, COALESCE(NULLIF(cyl, 4), 0) FROM mtcars GROUP BY cyl ORDER BY cyl",
+          List.of(List.of("4", "0"), List.of("6", "6"), List.of("8", "8")));
+      assertRows(connection, "SELECT cyl, ABS(COALESCE(NULLIF(cyl, 6), -1)) FROM mtcars GROUP BY cyl ORDER BY cyl",
+          List.of(List.of("4", "4"), List.of("6", "1"), List.of("8", "8")));
+      assertRows(connection, "SELECT ABS(m.cyl - 7) AS magnitude FROM mtcars m GROUP BY m.cyl ORDER BY magnitude",
+          List.of(List.of("1"), List.of("1"), List.of("3")));
+      assertRows(connection, "SELECT ABS(cyl - 7) FROM mtcars GROUP BY cyl - 7 ORDER BY cyl - 7",
+          List.of(List.of("3"), List.of("1"), List.of("1")));
       assertRows(connection, "SELECT cyl, ABS(cyl) FROM mtcars WHERE cyl < 0 GROUP BY cyl", List.of());
     }
   }
@@ -60,13 +62,13 @@ class AggregateExpressionTest {
   })
   void scalarGroupingKeysInHaving(boolean pushdown) throws Exception {
     try (var connection = connect(pushdown)) {
-      assertRows(connection, "SELECT cyl, COUNT(*) FROM mtcars GROUP BY cyl HAVING ABS(cyl) > 0 ORDER BY cyl",
-          List.of(List.of("4", "11"), List.of("6", "7"), List.of("8", "14")));
+      assertRows(connection, "SELECT cyl, COUNT(*) FROM mtcars GROUP BY cyl HAVING ABS(cyl - 5) > 1 ORDER BY cyl",
+          List.of(List.of("8", "14")));
       assertRows(connection,
           "SELECT cyl, COUNT(*) FROM mtcars GROUP BY cyl HAVING NULLIF(cyl, 4) IS NOT NULL ORDER BY cyl",
           List.of(List.of("6", "7"), List.of("8", "14")));
-      assertRows(connection, "SELECT COUNT(*) FROM mtcars m GROUP BY m.cyl HAVING ABS(m.cyl) > 4 ORDER BY m.cyl",
-          List.of(List.of("7"), List.of("14")));
+      assertRows(connection, "SELECT COUNT(*) FROM mtcars m GROUP BY m.cyl HAVING ABS(m.cyl - 7) > 2 ORDER BY m.cyl",
+          List.of(List.of("11")));
       assertRows(connection, "SELECT cyl FROM mtcars GROUP BY cyl HAVING COALESCE(MAX(mpg), 0) > 25 ORDER BY cyl",
           List.of(List.of("4")));
       assertRows(connection,
