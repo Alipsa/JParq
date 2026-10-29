@@ -21,6 +21,7 @@ import java.time.format.ResolverStyle;
 import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAccessor;
+import java.time.temporal.UnsupportedTemporalTypeException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -232,11 +233,17 @@ public final class DateTimeFunctions {
   }
 
   /**
-   * JDBC TIMESTAMPADD implementation supporting common SQL_TSI units.
+   * JDBC TIMESTAMPADD implementation supporting SQL_TSI units, with
+   * SQL_TSI_FRAC_SECOND measured in nanoseconds.
    *
    * @param args
    *          arguments: interval unit, interval value, timestamp
    * @return adjusted temporal or {@code null} on invalid input
+   * @throws IllegalArgumentException
+   *           if the amount is invalid (22018), numeric arithmetic overflows
+   *           (22003), or the resulting datetime exceeds its range (22008)
+   * @throws UnsupportedTemporalTypeException
+   *           if the interval unit is unsupported by the target temporal type
    */
   public static Object timestampAdd(List<Object> args) {
     if (args == null || args.size() < 3) {
@@ -248,26 +255,38 @@ public final class DateTimeFunctions {
     }
     ChronoUnit unit = toChronoUnit(unitToken);
     boolean quarter = isQuarter(unitToken);
-    Integer amount = NumericFunctions.toInteger(args.get(1));
+    Number amount = NumericCasts.convert(args.get(1), NumericCastTarget.BIGINT, "BIGINT");
     if (amount == null) {
       return null;
     }
     Object target = args.get(2);
-    if (quarter) {
-      return applyAdd(target, amount * 3, ChronoUnit.MONTHS);
+    try {
+      if (quarter) {
+        return applyAdd(target, Math.multiplyExact(amount.longValue(), 3L), ChronoUnit.MONTHS);
+      }
+      if (unit == null) {
+        return null;
+      }
+      return applyAdd(target, amount.longValue(), unit);
+    } catch (ArithmeticException exception) {
+      throw timestampOverflow("TIMESTAMPADD", "22003", "numeric value out of range", exception);
+    } catch (UnsupportedTemporalTypeException exception) {
+      // Unsupported units are distinct from datetime range overflow (issue #345).
+      throw exception;
+    } catch (DateTimeException exception) {
+      throw timestampOverflow("TIMESTAMPADD", "22008", "datetime field overflow", exception);
     }
-    if (unit == null) {
-      return null;
-    }
-    return applyAdd(target, amount, unit);
   }
 
   /**
-   * JDBC TIMESTAMPDIFF implementation supporting common SQL_TSI units.
+   * JDBC TIMESTAMPDIFF implementation supporting SQL_TSI units, with
+   * SQL_TSI_FRAC_SECOND measured in nanoseconds.
    *
    * @param args
    *          arguments: interval unit, start timestamp, end timestamp
    * @return difference in requested unit or {@code null} on invalid input
+   * @throws IllegalArgumentException
+   *           if the difference overflows a signed long (22003)
    */
   public static Long timestampDiff(List<Object> args) {
     if (args == null || args.size() < 3) {
@@ -284,14 +303,18 @@ public final class DateTimeFunctions {
     if (start == null || end == null) {
       return null;
     }
-    if (quarter) {
-      long months = ChronoUnit.MONTHS.between(start, end);
-      return months / 3;
+    try {
+      if (quarter) {
+        long months = ChronoUnit.MONTHS.between(start, end);
+        return months / 3;
+      }
+      if (unit == null) {
+        return null;
+      }
+      return unit.between(start, end);
+    } catch (ArithmeticException exception) {
+      throw timestampOverflow("TIMESTAMPDIFF", "22003", "numeric value out of range", exception);
     }
-    if (unit == null) {
-      return null;
-    }
-    return unit.between(start, end);
   }
 
   /**
@@ -501,7 +524,46 @@ public final class DateTimeFunctions {
     return null;
   }
 
-  private static Object applyAdd(Object target, int amount, ChronoUnit unit) {
+  /**
+   * Creates a classified failure for timestamp interval or datetime field
+   * overflow.
+   *
+   * @param function
+   *          timestamp function name
+   * @param state
+   *          SQLState identifying numeric or datetime field overflow
+   * @param description
+   *          diagnostic description
+   * @param cause
+   *          original overflow failure
+   * @return exception carrying the specified SQLState and original cause
+   */
+  private static IllegalArgumentException timestampOverflow(String function, String state, String description,
+      RuntimeException cause) {
+    String message = function + ": " + description;
+    return new IllegalArgumentException(message, new SQLDataException(message, state, cause));
+  }
+
+  /**
+   * Adds a signed interval without narrowing its amount, rejecting JDBC storage
+   * overflow while preserving calendar and time-zone normalization. Normalization
+   * may cross New Year, so a one-year difference is allowed; millisecond wrapping
+   * shifts the result by hundreds of millions of years. JDBC date and timestamp
+   * results before year 1 are rejected because their era cannot round-trip.
+   *
+   * @param target
+   *          temporal input
+   * @param amount
+   *          interval count
+   * @param unit
+   *          interval unit
+   * @return adjusted temporal, or null for an unsupported input type
+   * @throws ArithmeticException
+   *           if interval arithmetic overflows
+   * @throws DateTimeException
+   *           if the result exceeds the temporal range or the unit is unsupported
+   */
+  private static Object applyAdd(Object target, long amount, ChronoUnit unit) {
     if (target instanceof OffsetDateTime odt) {
       return odt.plus(amount, unit);
     }
@@ -510,11 +572,19 @@ public final class DateTimeFunctions {
     }
     if (target instanceof Timestamp ts) {
       LocalDateTime adjusted = ts.toLocalDateTime().plus(amount, unit);
-      return Timestamp.valueOf(adjusted);
+      Timestamp result = Timestamp.valueOf(adjusted);
+      if (adjusted.getYear() < 1 || Math.abs((long) result.toLocalDateTime().getYear() - adjusted.getYear()) > 1) {
+        throw new DateTimeException("TIMESTAMP out of range: " + adjusted);
+      }
+      return result;
     }
     if (target instanceof Date d) {
       LocalDate adjusted = d.toLocalDate().plus(amount, unit);
-      return Date.valueOf(adjusted);
+      Date result = Date.valueOf(adjusted);
+      if (adjusted.getYear() < 1 || Math.abs((long) result.toLocalDate().getYear() - adjusted.getYear()) > 1) {
+        throw new DateTimeException("DATE out of range: " + adjusted);
+      }
+      return result;
     }
     if (target instanceof LocalDate ld) {
       return ld.plus(amount, unit);
@@ -535,7 +605,8 @@ public final class DateTimeFunctions {
   private static ChronoUnit toChronoUnit(String token) {
     String normalized = token.replace("'", "").trim().toUpperCase(Locale.ROOT);
     return switch (normalized) {
-      case "SQL_TSI_FRAC_SECOND", "SQL_TSI_SECOND", "SECOND" -> ChronoUnit.SECONDS;
+      case "SQL_TSI_FRAC_SECOND" -> ChronoUnit.NANOS;
+      case "SQL_TSI_SECOND", "SECOND" -> ChronoUnit.SECONDS;
       case "SQL_TSI_MINUTE", "MINUTE" -> ChronoUnit.MINUTES;
       case "SQL_TSI_HOUR", "HOUR" -> ChronoUnit.HOURS;
       case "SQL_TSI_DAY", "DAYOFMONTH", "DAYOFYEAR", "DAY" -> ChronoUnit.DAYS;

@@ -619,6 +619,9 @@ The following SQL statements are supported:
 - `DISTINCT` support
 - Functions support
   - Date functions
+    - `TIMESTAMPADD` and `TIMESTAMPDIFF` accept all nine JDBC `SQL_TSI_*` interval constants,
+      including native calls and `{fn ...}` escapes, with or without `FROM`.
+      `SQL_TSI_FRAC_SECOND` counts nanoseconds; other units range from seconds through years.
   - Aggregate functions (count, sum, avg, max, min)
   - CAST support
   - CONVERT support (for both character set conversion with USING and data type conversion without USING, as per SQL standard and common extensions)
