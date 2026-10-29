@@ -2,7 +2,7 @@
 
 ### 1.4.0
 
-- Reject unsupported window function names in SELECT lists during planning with `SQLSyntaxErrorException`, SQLState `42000`, and a message naming the function instead of an internal precomputed-state error (#248). Unsupported `WITHIN GROUP` aggregates report the unsupported clause rather than calling the function a window function. Validation outside SELECT lists remains tracked in #350.
+- Reject unsupported window function names in SELECT lists during planning with `SQLSyntaxErrorException`, SQLState `42000`, and a message naming the function instead of an internal precomputed-state error (#248). Reject `WITHIN GROUP` clauses for all function names, with or without `OVER`, instead of treating supported names as windows; diagnostics name the unsupported clause. Validation outside SELECT lists remains tracked in #350.
 
 - Confirm scalar functions over grouping expressions in SELECT and HAVING, including queries without aggregates, NULL keys, and grouping sets (#247). Add regression coverage with predicate and projection pushdown enabled and disabled, verify unknown functions raise `SQLSyntaxErrorException` with SQLState `42000`, and remove the resolved limitation from the documentation. The shared grouped scalar evaluator introduced for #231 already supplies this behavior.
 

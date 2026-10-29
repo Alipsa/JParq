@@ -740,6 +740,7 @@ The following SQL statements are supported:
   - Unsupported function names used with `OVER` in SELECT lists raise `SQLSyntaxErrorException` with
     SQLState `42000`, naming the unsupported window function. Validation outside SELECT lists is tracked in
     [#350](https://github.com/Alipsa/JParq/issues/350).
+  - `WITHIN GROUP` clauses in SELECT lists are unsupported, with or without `OVER`, and raise SQLState `42000`.
 - Advanced GROUP BY constructs i.e:
   - `GROUPING SETS`
   - `ROLLUP`

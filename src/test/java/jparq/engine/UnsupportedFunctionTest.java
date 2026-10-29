@@ -21,7 +21,7 @@ import org.junit.jupiter.params.provider.ValueSource;
  */
 class UnsupportedFunctionTest {
   /**
-   * Identifies unsupported ordered-set aggregates without calling them windows.
+   * Rejects WITHIN GROUP clauses for supported and unsupported function names.
    *
    * @param predicatePushdown
    *          whether predicate pushdown is enabled
@@ -40,7 +40,10 @@ class UnsupportedFunctionTest {
         + projectionPushdown;
     try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
       for (String expression : List.of("LISTAGG(model, ',') WITHIN GROUP (ORDER BY model)",
-          "STRING_AGG(model, ',') WITHIN GROUP (ORDER BY model)", "PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY mpg)")) {
+          "STRING_AGG(model, ',') WITHIN GROUP (ORDER BY model)", "PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY mpg)",
+          "COUNT(model) WITHIN GROUP (ORDER BY model)", "SUM(cyl) WITHIN GROUP (ORDER BY mpg)",
+          "ROW_NUMBER() WITHIN GROUP (ORDER BY mpg)", "SUM(cyl) WITHIN GROUP (ORDER BY mpg) OVER (PARTITION BY cyl)",
+          "LISTAGG(model, ',') WITHIN GROUP (ORDER BY model) OVER (PARTITION BY cyl)")) {
         String name = expression.substring(0, expression.indexOf('('));
         for (String suffix : List.of("", " WHERE 1 = 0")) {
           String sql = "SELECT " + expression + " FROM mtcars" + suffix;

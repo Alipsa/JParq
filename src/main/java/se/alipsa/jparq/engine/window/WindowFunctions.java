@@ -65,7 +65,7 @@ public final class WindowFunctions {
    *         {@code null} when none are present
    * @throws IllegalArgumentException
    *           if an analytic function is unsupported or invalid; unsupported
-   *           names carry SQLState 42000 in the cause
+   *           names and WITHIN GROUP clauses carry SQLState 42000 in the cause
    */
   public static WindowPlan plan(List<Expression> expressions) {
     if (expressions == null || expressions.isEmpty()) {
@@ -108,10 +108,11 @@ public final class WindowFunctions {
       return;
     }
     String upper = name.toUpperCase(Locale.ROOT);
+    AnalyticType type = analytic.getType();
+    if (type == AnalyticType.WITHIN_GROUP || type == AnalyticType.WITHIN_GROUP_OVER) {
+      throw SqlExceptions.syntaxFailure("WITHIN GROUP is not supported: " + name);
+    }
     if (!WINDOW_ONLY_FUNCTION_NAMES.contains(upper) && !AGGREGATE_WINDOW_FUNCTION_NAMES.contains(upper)) {
-      if (analytic.getType() == AnalyticType.WITHIN_GROUP) {
-        throw SqlExceptions.syntaxFailure("WITHIN GROUP is not supported: " + name);
-      }
       throw SqlExceptions.syntaxFailure("Unsupported window function: " + name);
     }
     if ((analytic.isDistinct() || analytic.isUnique()) && !"COUNT".equalsIgnoreCase(name)) {
