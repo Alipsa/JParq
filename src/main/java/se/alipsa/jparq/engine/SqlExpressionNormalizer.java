@@ -11,6 +11,7 @@ import net.sf.jsqlparser.expression.AnyType;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
+import net.sf.jsqlparser.expression.DateUnitExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.Function;
@@ -84,12 +85,20 @@ public final class SqlExpressionNormalizer {
       return;
     }
     var parameters = function.getParameters();
-    if (parameters != null && !parameters.isEmpty() && parameters.getFirst() instanceof Column column
-        && column.getTable() == null
-        && JDBC_TIMESTAMP_UNITS.contains(column.getColumnName().toUpperCase(Locale.ROOT))) {
+    if (parameters == null || parameters.isEmpty()) {
+      return;
+    }
+    Expression first = parameters.getFirst();
+    String unit = null;
+    if (first instanceof Column column && column.getTable() == null) {
+      unit = column.getColumnName();
+    } else if (first instanceof DateUnitExpression dateUnit) {
+      unit = dateUnit.toString();
+    }
+    if (unit != null && JDBC_TIMESTAMP_UNITS.contains(unit.toUpperCase(Locale.ROOT))) {
       ExpressionList<Expression> normalized = new ExpressionList<>();
       normalized.addAll(parameters);
-      normalized.set(0, new StringValue(column.getColumnName()));
+      normalized.set(0, new StringValue(unit));
       function.setParameters(normalized);
     }
   }

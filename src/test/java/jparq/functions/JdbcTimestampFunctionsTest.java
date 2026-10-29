@@ -2,15 +2,21 @@ package jparq.functions;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Paths;
 import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Locale;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
 /** JDBC regression tests for timestamp interval constants. */
 class JdbcTimestampFunctionsTest {
@@ -35,19 +41,24 @@ class JdbcTimestampFunctionsTest {
       "SQL_TSI_MINUTE, 2, 2024-01-01 00:02:00", "SQL_TSI_HOUR, 2, 2024-01-01 02:00:00",
       "SQL_TSI_DAY, 2, 2024-01-03 00:00:00", "SQL_TSI_WEEK, 2, 2024-01-15 00:00:00",
       "SQL_TSI_MONTH, 2, 2024-03-01 00:00:00", "SQL_TSI_QUARTER, 2, 2024-07-01 00:00:00",
-      "SQL_TSI_YEAR, 2, 2026-01-01 00:00:00"
+      "SQL_TSI_YEAR, 2, 2026-01-01 00:00:00", "SQL_TSI_FRAC_SECOND, 3000000000, 2024-01-01 00:00:03",
+      "SQL_TSI_FRAC_SECOND, -3000000000, 2023-12-31 23:59:57"
   })
-  void timestampIntervalsExecute(String unit, int amount, String expected) throws Exception {
+  void timestampIntervalsExecute(String unit, long amount, String expected) throws Exception {
     var directory = Paths.get(getClass().getResource("/mtcars.parquet").toURI()).getParent();
-    for (int mode = 0; mode < 16; mode++) {
+    for (int mode = 0; mode < 64; mode++) {
       boolean predicate = (mode & 1) != 0;
       boolean projection = (mode & 2) != 0;
       boolean from = (mode & 4) != 0;
       boolean escape = (mode & 8) != 0;
       String url = "jdbc:jparq:" + directory + "?predicatePushdown=" + predicate + "&projectionPushdown=" + projection;
-      String token = escape ? unit : unit.toLowerCase(Locale.ROOT);
-      String add = "TIMESTAMPADD(" + token + ", " + amount + ", TIMESTAMP '2024-01-01 00:00:00')";
-      String diff = "TIMESTAMPDIFF(" + token + ", TIMESTAMP '2024-01-01 00:00:00', TIMESTAMP '" + expected + "')";
+      boolean lowerCase = (mode & 16) != 0;
+      boolean literalEscape = (mode & 32) != 0;
+      String token = lowerCase ? unit.toLowerCase(Locale.ROOT) : unit;
+      String start = literalEscape ? "{ts '2024-01-01 00:00:00'}" : "TIMESTAMP '2024-01-01 00:00:00'";
+      String end = literalEscape ? "{ts '" + expected + "'}" : "TIMESTAMP '" + expected + "'";
+      String add = "TIMESTAMPADD(" + token + ", " + amount + ", " + start + ")";
+      String diff = "TIMESTAMPDIFF(" + token + ", " + start + ", " + end + ")";
       String query = "SELECT " + (escape ? "{fn " + add + "}, {fn " + diff + "}" : add + ", " + diff)
           + (from ? " FROM mtcars WHERE cyl = 6 LIMIT 1" : "");
       try (var connection = DriverManager.getConnection(url);
@@ -58,6 +69,70 @@ class JdbcTimestampFunctionsTest {
         assertEquals(amount, result.getLong(2), query);
         assertFalse(result.next(), query);
       }
+    }
+  }
+
+  /** Uses long arithmetic when converting large quarter counts into months. */
+  @Test
+  void timestampAddLargeQuarterCount() {
+    LocalDateTime start = LocalDateTime.of(2024, 1, 1, 0, 0);
+    assertEquals(LocalDateTime.of(250002024, 1, 1, 0, 0),
+        DateTimeFunctions.timestampAdd(List.of("SQL_TSI_QUARTER", 1000000000L, start)));
+    assertEquals(LocalDateTime.of(-249997976, 1, 1, 0, 0),
+        DateTimeFunctions.timestampAdd(List.of("SQL_TSI_QUARTER", -1000000000L, start)));
+  }
+
+  /**
+   * Rejects numeric overflow through the JDBC boundary.
+   *
+   * @param expression
+   *          overflowing timestamp expression
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "TIMESTAMPADD(SQL_TSI_QUARTER, 9223372036854775807, TIMESTAMP '2024-01-01 00:00:00')",
+      "TIMESTAMPADD(SQL_TSI_QUARTER, -9223372036854775807, TIMESTAMP '2024-01-01 00:00:00')",
+      "TIMESTAMPADD(SQL_TSI_SECOND, 9223372036854775808, TIMESTAMP '2024-01-01 00:00:00')",
+      "TIMESTAMPDIFF(SQL_TSI_FRAC_SECOND, TIMESTAMP '1700-01-01 00:00:00', TIMESTAMP '2024-01-01 00:00:00')",
+      "TIMESTAMPDIFF(SQL_TSI_FRAC_SECOND, TIMESTAMP '2024-01-01 00:00:00', TIMESTAMP '1700-01-01 00:00:00')"
+  })
+  void timestampOverflowIsClassified(String expression) throws Exception {
+    var directory = Paths.get(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      SQLException failure = assertThrows(SQLException.class, () -> {
+        try (var statement = connection.prepareStatement("SELECT " + expression);
+            var result = statement.executeQuery()) {
+          assertTrue(result.next());
+          result.getObject(1);
+        }
+      });
+      assertEquals("22003", failure.getSQLState());
+    }
+  }
+
+  /**
+   * Supports date literal escapes nested inside JDBC function escapes.
+   *
+   * @param unit
+   *          calendar interval constant
+   * @throws Exception
+   *           if JDBC execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SQL_TSI_DAY", "SQL_TSI_WEEK", "SQL_TSI_MONTH", "SQL_TSI_QUARTER", "SQL_TSI_YEAR"
+  })
+  void timestampIntervalsWithDateEscapes(String unit) throws Exception {
+    var directory = Paths.get(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    String query = "SELECT {fn TIMESTAMPDIFF(" + unit + ", {d '2024-01-01'}, " + "{fn TIMESTAMPADD(" + unit
+        + ", 2, {d '2024-01-01'})})}";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.prepareStatement(query);
+        var result = statement.executeQuery()) {
+      assertTrue(result.next());
+      assertEquals(2, result.getLong(1));
     }
   }
 

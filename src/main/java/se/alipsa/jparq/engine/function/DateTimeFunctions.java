@@ -238,6 +238,8 @@ public final class DateTimeFunctions {
    * @param args
    *          arguments: interval unit, interval value, timestamp
    * @return adjusted temporal or {@code null} on invalid input
+   * @throws IllegalArgumentException
+   *           if the amount is invalid or numeric arithmetic overflows (22003)
    */
   public static Object timestampAdd(List<Object> args) {
     if (args == null || args.size() < 3) {
@@ -249,18 +251,22 @@ public final class DateTimeFunctions {
     }
     ChronoUnit unit = toChronoUnit(unitToken);
     boolean quarter = isQuarter(unitToken);
-    Integer amount = NumericFunctions.toInteger(args.get(1));
+    Number amount = NumericCasts.convert(args.get(1), NumericCastTarget.BIGINT, "BIGINT");
     if (amount == null) {
       return null;
     }
     Object target = args.get(2);
-    if (quarter) {
-      return applyAdd(target, amount * 3, ChronoUnit.MONTHS);
+    try {
+      if (quarter) {
+        return applyAdd(target, Math.multiplyExact(amount.longValue(), 3L), ChronoUnit.MONTHS);
+      }
+      if (unit == null) {
+        return null;
+      }
+      return applyAdd(target, amount.longValue(), unit);
+    } catch (ArithmeticException exception) {
+      throw timestampOverflow("TIMESTAMPADD", exception);
     }
-    if (unit == null) {
-      return null;
-    }
-    return applyAdd(target, amount, unit);
   }
 
   /**
@@ -270,6 +276,8 @@ public final class DateTimeFunctions {
    * @param args
    *          arguments: interval unit, start timestamp, end timestamp
    * @return difference in requested unit or {@code null} on invalid input
+   * @throws IllegalArgumentException
+   *           if the difference overflows a signed long (22003)
    */
   public static Long timestampDiff(List<Object> args) {
     if (args == null || args.size() < 3) {
@@ -286,14 +294,18 @@ public final class DateTimeFunctions {
     if (start == null || end == null) {
       return null;
     }
-    if (quarter) {
-      long months = ChronoUnit.MONTHS.between(start, end);
-      return months / 3;
+    try {
+      if (quarter) {
+        long months = ChronoUnit.MONTHS.between(start, end);
+        return months / 3;
+      }
+      if (unit == null) {
+        return null;
+      }
+      return unit.between(start, end);
+    } catch (ArithmeticException exception) {
+      throw timestampOverflow("TIMESTAMPDIFF", exception);
     }
-    if (unit == null) {
-      return null;
-    }
-    return unit.between(start, end);
   }
 
   /**
@@ -503,7 +515,36 @@ public final class DateTimeFunctions {
     return null;
   }
 
-  private static Object applyAdd(Object target, int amount, ChronoUnit unit) {
+  /**
+   * Creates a classified failure for timestamp interval arithmetic overflow.
+   *
+   * @param function
+   *          timestamp function name
+   * @param cause
+   *          arithmetic overflow
+   * @return exception carrying SQLState 22003
+   */
+  private static IllegalArgumentException timestampOverflow(String function, ArithmeticException cause) {
+    String message = function + ": numeric value out of range";
+    return new IllegalArgumentException(message, new SQLDataException(message, "22003", cause));
+  }
+
+  /**
+   * Adds a signed interval without narrowing its amount.
+   *
+   * @param target
+   *          temporal input
+   * @param amount
+   *          interval count
+   * @param unit
+   *          interval unit
+   * @return adjusted temporal, or null for an unsupported input type
+   * @throws ArithmeticException
+   *           if interval arithmetic overflows
+   * @throws DateTimeException
+   *           if the result exceeds the temporal range or the unit is unsupported
+   */
+  private static Object applyAdd(Object target, long amount, ChronoUnit unit) {
     if (target instanceof OffsetDateTime odt) {
       return odt.plus(amount, unit);
     }
