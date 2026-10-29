@@ -29,6 +29,7 @@ import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.AnalyticExpression;
+import net.sf.jsqlparser.expression.AnalyticType;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.BinaryExpression;
@@ -604,13 +605,14 @@ public final class AggregateFunctions {
   }
 
   /**
-   * Rejects windows in the current aggregate query while preserving nested query
-   * scopes.
+   * Rejects windows and WITHIN GROUP clauses in the current aggregate query while
+   * preserving nested query scopes.
    *
    * @param expression
    *          expression to inspect, or null
    * @throws IllegalArgumentException
-   *           if a window expression is present
+   *           if a window expression or WITHIN GROUP clause is present; the cause
+   *           carries SQLState 42000
    */
   private static void rejectGroupedWindows(Expression expression) {
     if (expression == null) {
@@ -619,6 +621,10 @@ public final class AggregateFunctions {
     expression.accept(new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(AnalyticExpression analytic, S context) {
+        AnalyticType type = analytic.getType();
+        if (type == AnalyticType.WITHIN_GROUP || type == AnalyticType.WITHIN_GROUP_OVER) {
+          throw syntaxFailure("WITHIN GROUP is not supported: " + analytic.getName());
+        }
         throw syntaxFailure(
             "Window functions are not supported in grouped queries: " + SqlExceptions.describe(analytic));
       }
