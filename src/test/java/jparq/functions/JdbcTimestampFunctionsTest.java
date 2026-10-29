@@ -14,6 +14,7 @@ import java.time.LocalDateTime;
 import java.time.temporal.UnsupportedTemporalTypeException;
 import java.util.List;
 import java.util.Locale;
+import java.util.TimeZone;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -102,6 +103,48 @@ class JdbcTimestampFunctionsTest {
       assertEquals(LocalDateTime.of(280002024, 1, 1, 0, 0, 0, 123456789), result.getTimestamp(1).toLocalDateTime());
       assertEquals(LocalDate.of(280002024, 1, 1), result.getDate(2).toLocalDate());
       assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Preserves JDBC normalization of DST gaps and the Gregorian calendar cutover.
+   *
+   * @param zone
+   *          JVM default time zone for the query
+   * @param expression
+   *          timestamp addition crossing a gap
+   * @param expected
+   *          normalized JDBC value
+   * @throws Exception
+   *           if JDBC execution fails
+   */
+  @ParameterizedTest
+  @CsvSource(value = {
+      "Europe/Stockholm | TIMESTAMPADD(SQL_TSI_HOUR, 2, TIMESTAMP '2024-03-31 00:30:00') | 2024-03-31 03:30:00.0",
+      "Europe/Stockholm | TIMESTAMPADD(SQL_TSI_DAY, 1, TIMESTAMP '2024-03-30 02:30:00') | 2024-03-31 03:30:00.0",
+      "America/New_York | TIMESTAMPADD(SQL_TSI_HOUR, 2, TIMESTAMP '2024-03-10 00:30:00') | 2024-03-10 03:30:00.0",
+      "UTC | TIMESTAMPADD(SQL_TSI_HOUR, 2, TIMESTAMP '2024-03-31 00:30:00') | 2024-03-31 02:30:00.0",
+      "Pacific/Kiritimati | TIMESTAMPADD(SQL_TSI_DAY, 1, TIMESTAMP '1994-12-30 12:00:00') | 1995-01-01 12:00:00.0",
+      "Pacific/Kiritimati | TIMESTAMPADD(SQL_TSI_DAY, 1, DATE '1994-12-30') | 1995-01-01",
+      "UTC | TIMESTAMPADD(SQL_TSI_DAY, 1, DATE '1582-10-04') | 1582-10-15",
+      "Europe/Stockholm | TIMESTAMPADD(SQL_TSI_DAY, 1, DATE '1582-10-04') | 1582-10-15",
+      "UTC | TIMESTAMPADD(SQL_TSI_DAY, 1, TIMESTAMP '1582-10-04 12:00:00') | 1582-10-15 12:00:00.0",
+      "Europe/Stockholm | TIMESTAMPADD(SQL_TSI_DAY, 1, TIMESTAMP '1582-10-04 12:00:00') | 1582-10-15 12:00:00.0"
+  }, delimiter = '|')
+  void timestampAddPreservesCalendarNormalization(String zone, String expression, String expected) throws Exception {
+    TimeZone original = TimeZone.getDefault();
+    try {
+      TimeZone.setDefault(TimeZone.getTimeZone(zone));
+      var directory = Paths.get(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+      try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+          var statement = connection.prepareStatement("SELECT " + expression);
+          var result = statement.executeQuery()) {
+        assertTrue(result.next());
+        assertEquals(expected, result.getString(1));
+        assertFalse(result.next());
+      }
+    } finally {
+      TimeZone.setDefault(original);
     }
   }
 
