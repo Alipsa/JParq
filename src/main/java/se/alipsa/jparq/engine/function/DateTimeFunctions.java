@@ -21,6 +21,7 @@ import java.time.format.ResolverStyle;
 import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAccessor;
+import java.time.temporal.UnsupportedTemporalTypeException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -239,7 +240,10 @@ public final class DateTimeFunctions {
    *          arguments: interval unit, interval value, timestamp
    * @return adjusted temporal or {@code null} on invalid input
    * @throws IllegalArgumentException
-   *           if the amount is invalid or numeric arithmetic overflows (22003)
+   *           if the amount is invalid (22018), numeric arithmetic overflows
+   *           (22003), or the resulting datetime exceeds its range (22008)
+   * @throws UnsupportedTemporalTypeException
+   *           if the interval unit is unsupported by the target temporal type
    */
   public static Object timestampAdd(List<Object> args) {
     if (args == null || args.size() < 3) {
@@ -266,6 +270,12 @@ public final class DateTimeFunctions {
       return applyAdd(target, amount.longValue(), unit);
     } catch (ArithmeticException exception) {
       throw timestampOverflow("TIMESTAMPADD", exception);
+    } catch (UnsupportedTemporalTypeException exception) {
+      // Unsupported units are distinct from datetime range overflow (issue #345).
+      throw exception;
+    } catch (DateTimeException exception) {
+      String message = "TIMESTAMPADD: datetime field overflow";
+      throw new IllegalArgumentException(message, new SQLDataException(message, "22008", exception));
     }
   }
 

@@ -9,7 +9,9 @@ import java.nio.file.Paths;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.temporal.UnsupportedTemporalTypeException;
 import java.util.List;
 import java.util.Locale;
 import org.junit.jupiter.api.Test;
@@ -83,22 +85,41 @@ class JdbcTimestampFunctionsTest {
   }
 
   /**
-   * Rejects numeric overflow through the JDBC boundary.
+   * Keeps unsupported units distinct from datetime field overflow (issue #345).
+   */
+  @Test
+  void unsupportedTimestampUnitIsNotRangeOverflow() {
+    assertThrows(UnsupportedTemporalTypeException.class,
+        () -> DateTimeFunctions.timestampAdd(List.of("SQL_TSI_HOUR", 1L, LocalDate.of(2024, 1, 1))));
+  }
+
+  /**
+   * Classifies numeric and datetime field overflow through the JDBC boundary.
    *
    * @param expression
    *          overflowing timestamp expression
+   * @param expectedState
+   *          expected JDBC SQLState
    * @throws Exception
    *           if JDBC setup fails
    */
   @ParameterizedTest
-  @ValueSource(strings = {
-      "TIMESTAMPADD(SQL_TSI_QUARTER, 9223372036854775807, TIMESTAMP '2024-01-01 00:00:00')",
-      "TIMESTAMPADD(SQL_TSI_QUARTER, -9223372036854775807, TIMESTAMP '2024-01-01 00:00:00')",
-      "TIMESTAMPADD(SQL_TSI_SECOND, 9223372036854775808, TIMESTAMP '2024-01-01 00:00:00')",
-      "TIMESTAMPDIFF(SQL_TSI_FRAC_SECOND, TIMESTAMP '1700-01-01 00:00:00', TIMESTAMP '2024-01-01 00:00:00')",
-      "TIMESTAMPDIFF(SQL_TSI_FRAC_SECOND, TIMESTAMP '2024-01-01 00:00:00', TIMESTAMP '1700-01-01 00:00:00')"
-  })
-  void timestampOverflowIsClassified(String expression) throws Exception {
+  @CsvSource(value = {
+      "TIMESTAMPADD(SQL_TSI_QUARTER, 9223372036854775807, TIMESTAMP '2024-01-01 00:00:00') | 22003",
+      "TIMESTAMPADD(SQL_TSI_QUARTER, -9223372036854775807, TIMESTAMP '2024-01-01 00:00:00') | 22003",
+      "TIMESTAMPADD(SQL_TSI_SECOND, 9223372036854775808, TIMESTAMP '2024-01-01 00:00:00') | 22003",
+      "TIMESTAMPDIFF(SQL_TSI_FRAC_SECOND, TIMESTAMP '1700-01-01 00:00:00', TIMESTAMP '2024-01-01 00:00:00') | 22003",
+      "TIMESTAMPDIFF(SQL_TSI_FRAC_SECOND, TIMESTAMP '2024-01-01 00:00:00', TIMESTAMP '1700-01-01 00:00:00') | 22003",
+      "TIMESTAMPADD(SQL_TSI_DAY, 9000000000000000, TIMESTAMP '2024-01-01 00:00:00') | 22008",
+      "TIMESTAMPADD(SQL_TSI_MONTH, 9223372036854775807, TIMESTAMP '2024-01-01 00:00:00') | 22008",
+      "TIMESTAMPADD(SQL_TSI_SECOND, 9223372036854775807, TIMESTAMP '2024-01-01 00:00:00') | 22008",
+      "TIMESTAMPADD(SQL_TSI_YEAR, 2000000000, TIMESTAMP '2024-01-01 00:00:00') | 22008",
+      "TIMESTAMPADD(SQL_TSI_DAY, -9000000000000000, TIMESTAMP '2024-01-01 00:00:00') | 22008",
+      "TIMESTAMPADD(SQL_TSI_MONTH, -9223372036854775807, TIMESTAMP '2024-01-01 00:00:00') | 22008",
+      "TIMESTAMPADD(SQL_TSI_SECOND, -9223372036854775807, TIMESTAMP '2024-01-01 00:00:00') | 22008",
+      "TIMESTAMPADD(SQL_TSI_YEAR, -2000000000, TIMESTAMP '2024-01-01 00:00:00') | 22008"
+  }, delimiter = '|')
+  void timestampOverflowIsClassified(String expression, String expectedState) throws Exception {
     var directory = Paths.get(getClass().getResource("/mtcars.parquet").toURI()).getParent();
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
       SQLException failure = assertThrows(SQLException.class, () -> {
@@ -108,7 +129,7 @@ class JdbcTimestampFunctionsTest {
           result.getObject(1);
         }
       });
-      assertEquals("22003", failure.getSQLState());
+      assertEquals(expectedState, failure.getSQLState());
     }
   }
 
