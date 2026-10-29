@@ -21,6 +21,45 @@ import org.junit.jupiter.params.provider.ValueSource;
  */
 class UnsupportedFunctionTest {
   /**
+   * Identifies unsupported ordered-set aggregates without calling them windows.
+   *
+   * @param predicatePushdown
+   *          whether predicate pushdown is enabled
+   * @param projectionPushdown
+   *          whether projection pushdown is enabled
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void rejectsUnsupportedWithinGroup(boolean predicatePushdown, boolean projectionPushdown) throws Exception {
+    Path directory = Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    String url = "jdbc:jparq:" + directory + "?predicatePushdown=" + predicatePushdown + "&projectionPushdown="
+        + projectionPushdown;
+    try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+      for (String expression : List.of("LISTAGG(model, ',') WITHIN GROUP (ORDER BY model)",
+          "STRING_AGG(model, ',') WITHIN GROUP (ORDER BY model)", "PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY mpg)")) {
+        String name = expression.substring(0, expression.indexOf('('));
+        for (String suffix : List.of("", " WHERE 1 = 0")) {
+          String sql = "SELECT " + expression + " FROM mtcars" + suffix;
+          var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
+            try (var result = statement.executeQuery(sql)) {
+              while (result.next()) {
+                result.getObject(1);
+              }
+            }
+          }, sql);
+          assertEquals("42000", failure.getSQLState(), sql);
+          assertTrue(failure.getMessage().contains("WITHIN GROUP is not supported: " + name), failure::getMessage);
+          assertFalse(failure.getMessage().contains("Unsupported window function"), failure::getMessage);
+        }
+      }
+    }
+  }
+
+  /**
    * Rejects unsupported window functions with their names and SQL syntax state.
    *
    * @param predicatePushdown

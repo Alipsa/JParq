@@ -15,6 +15,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import net.sf.jsqlparser.expression.AnalyticExpression;
+import net.sf.jsqlparser.expression.AnalyticType;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.WindowElement;
@@ -47,6 +48,8 @@ public final class WindowFunctions {
   public static final Set<String> WINDOW_ONLY_FUNCTION_NAMES = Set.of("ROW_NUMBER", "RANK", "DENSE_RANK",
       "PERCENT_RANK", "CUME_DIST", "NTILE", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE");
 
+  private static final Set<String> AGGREGATE_WINDOW_FUNCTION_NAMES = Set.of("COUNT", "SUM", "AVG", "MIN", "MAX");
+
   private static final Logger log = LoggerFactory.getLogger(WindowFunctions.class);
 
   private WindowFunctions() {
@@ -61,8 +64,8 @@ public final class WindowFunctions {
    * @return a window plan capturing supported analytic expressions or
    *         {@code null} when none are present
    * @throws IllegalArgumentException
-   *           if a window function is unsupported or invalid; unsupported names
-   *           carry SQLState 42000 in the cause
+   *           if an analytic function is unsupported or invalid; unsupported
+   *           names carry SQLState 42000 in the cause
    */
   public static WindowPlan plan(List<Expression> expressions) {
     if (expressions == null || expressions.isEmpty()) {
@@ -104,8 +107,11 @@ public final class WindowFunctions {
     if (name == null) {
       return;
     }
-    if (!WINDOW_ONLY_FUNCTION_NAMES.contains(name.toUpperCase(Locale.ROOT))
-        && !Set.of("COUNT", "SUM", "AVG", "MIN", "MAX").contains(name.toUpperCase(Locale.ROOT))) {
+    String upper = name.toUpperCase(Locale.ROOT);
+    if (!WINDOW_ONLY_FUNCTION_NAMES.contains(upper) && !AGGREGATE_WINDOW_FUNCTION_NAMES.contains(upper)) {
+      if (analytic.getType() == AnalyticType.WITHIN_GROUP) {
+        throw SqlExceptions.syntaxFailure("WITHIN GROUP is not supported: " + name);
+      }
       throw SqlExceptions.syntaxFailure("Unsupported window function: " + name);
     }
     if ((analytic.isDistinct() || analytic.isUnique()) && !"COUNT".equalsIgnoreCase(name)) {
