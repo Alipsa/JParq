@@ -269,13 +269,12 @@ public final class DateTimeFunctions {
       }
       return applyAdd(target, amount.longValue(), unit);
     } catch (ArithmeticException exception) {
-      throw timestampOverflow("TIMESTAMPADD", exception);
+      throw timestampOverflow("TIMESTAMPADD", "22003", "numeric value out of range", exception);
     } catch (UnsupportedTemporalTypeException exception) {
       // Unsupported units are distinct from datetime range overflow (issue #345).
       throw exception;
     } catch (DateTimeException exception) {
-      String message = "TIMESTAMPADD: datetime field overflow";
-      throw new IllegalArgumentException(message, new SQLDataException(message, "22008", exception));
+      throw timestampOverflow("TIMESTAMPADD", "22008", "datetime field overflow", exception);
     }
   }
 
@@ -314,7 +313,7 @@ public final class DateTimeFunctions {
       }
       return unit.between(start, end);
     } catch (ArithmeticException exception) {
-      throw timestampOverflow("TIMESTAMPDIFF", exception);
+      throw timestampOverflow("TIMESTAMPDIFF", "22003", "numeric value out of range", exception);
     }
   }
 
@@ -526,21 +525,28 @@ public final class DateTimeFunctions {
   }
 
   /**
-   * Creates a classified failure for timestamp interval arithmetic overflow.
+   * Creates a classified failure for timestamp interval or datetime field
+   * overflow.
    *
    * @param function
    *          timestamp function name
+   * @param state
+   *          SQLState identifying numeric or datetime field overflow
+   * @param description
+   *          diagnostic description
    * @param cause
-   *          arithmetic overflow
-   * @return exception carrying SQLState 22003
+   *          original overflow failure
+   * @return exception carrying the specified SQLState and original cause
    */
-  private static IllegalArgumentException timestampOverflow(String function, ArithmeticException cause) {
-    String message = function + ": numeric value out of range";
-    return new IllegalArgumentException(message, new SQLDataException(message, "22003", cause));
+  private static IllegalArgumentException timestampOverflow(String function, String state, String description,
+      RuntimeException cause) {
+    String message = function + ": " + description;
+    return new IllegalArgumentException(message, new SQLDataException(message, state, cause));
   }
 
   /**
-   * Adds a signed interval without narrowing its amount.
+   * Adds a signed interval without narrowing its amount, rejecting lossy JDBC
+   * temporal conversions.
    *
    * @param target
    *          temporal input
@@ -563,11 +569,19 @@ public final class DateTimeFunctions {
     }
     if (target instanceof Timestamp ts) {
       LocalDateTime adjusted = ts.toLocalDateTime().plus(amount, unit);
-      return Timestamp.valueOf(adjusted);
+      Timestamp result = Timestamp.valueOf(adjusted);
+      if (!result.toLocalDateTime().equals(adjusted)) {
+        throw new DateTimeException("TIMESTAMP out of range: " + adjusted);
+      }
+      return result;
     }
     if (target instanceof Date d) {
       LocalDate adjusted = d.toLocalDate().plus(amount, unit);
-      return Date.valueOf(adjusted);
+      Date result = Date.valueOf(adjusted);
+      if (!result.toLocalDate().equals(adjusted)) {
+        throw new DateTimeException("DATE out of range: " + adjusted);
+      }
+      return result;
     }
     if (target instanceof LocalDate ld) {
       return ld.plus(amount, unit);

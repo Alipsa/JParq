@@ -85,6 +85,27 @@ class JdbcTimestampFunctionsTest {
   }
 
   /**
+   * Preserves large JDBC date and timestamp results within the storage range.
+   *
+   * @throws Exception
+   *           if JDBC execution fails
+   */
+  @Test
+  void largeJdbcTemporalResultsRemainExact() throws Exception {
+    var directory = Paths.get(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    String query = "SELECT TIMESTAMPADD(SQL_TSI_YEAR, 280000000, TIMESTAMP '2024-01-01 00:00:00.123456789'), "
+        + "TIMESTAMPADD(SQL_TSI_YEAR, 280000000, CAST(TIMESTAMP '2024-01-01 00:00:00' AS DATE))";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.prepareStatement(query);
+        var result = statement.executeQuery()) {
+      assertTrue(result.next());
+      assertEquals(LocalDateTime.of(280002024, 1, 1, 0, 0, 0, 123456789), result.getTimestamp(1).toLocalDateTime());
+      assertEquals(LocalDate.of(280002024, 1, 1), result.getDate(2).toLocalDate());
+      assertFalse(result.next());
+    }
+  }
+
+  /**
    * Keeps unsupported units distinct from datetime field overflow (issue #345).
    */
   @Test
@@ -117,7 +138,15 @@ class JdbcTimestampFunctionsTest {
       "TIMESTAMPADD(SQL_TSI_DAY, -9000000000000000, TIMESTAMP '2024-01-01 00:00:00') | 22008",
       "TIMESTAMPADD(SQL_TSI_MONTH, -9223372036854775807, TIMESTAMP '2024-01-01 00:00:00') | 22008",
       "TIMESTAMPADD(SQL_TSI_SECOND, -9223372036854775807, TIMESTAMP '2024-01-01 00:00:00') | 22008",
-      "TIMESTAMPADD(SQL_TSI_YEAR, -2000000000, TIMESTAMP '2024-01-01 00:00:00') | 22008"
+      "TIMESTAMPADD(SQL_TSI_YEAR, -2000000000, TIMESTAMP '2024-01-01 00:00:00') | 22008",
+      "TIMESTAMPADD(SQL_TSI_YEAR, 293000000, TIMESTAMP '2024-01-01 00:00:00') | 22008",
+      "TIMESTAMPADD(SQL_TSI_YEAR, -293000000, TIMESTAMP '2024-01-01 00:00:00') | 22008",
+      "TIMESTAMPADD(SQL_TSI_DAY, 365000000000, TIMESTAMP '2024-01-01 00:00:00') | 22008",
+      "TIMESTAMPADD(SQL_TSI_DAY, -365000000000, TIMESTAMP '2024-01-01 00:00:00') | 22008",
+      "TIMESTAMPADD(SQL_TSI_YEAR, 999997975, CAST(TIMESTAMP '2024-01-01 00:00:00' AS DATE)) | 22008",
+      "TIMESTAMPADD(SQL_TSI_YEAR, -293000000, CAST(TIMESTAMP '2024-01-01 00:00:00' AS DATE)) | 22008",
+      "TIMESTAMPDIFF(SQL_TSI_YEAR, TIMESTAMP '2024-01-01 00:00:00', "
+          + "TIMESTAMPADD(SQL_TSI_YEAR, 999997975, TIMESTAMP '2024-01-01 00:00:00')) | 22008"
   }, delimiter = '|')
   void timestampOverflowIsClassified(String expression, String expectedState) throws Exception {
     var directory = Paths.get(getClass().getResource("/mtcars.parquet").toURI()).getParent();
