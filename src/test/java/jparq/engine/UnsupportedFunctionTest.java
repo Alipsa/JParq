@@ -17,9 +17,48 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * Verifies unknown scalar functions fail instead of returning their SQL text.
+ * Verifies unsupported scalar and window functions report syntax errors.
  */
 class UnsupportedFunctionTest {
+  /**
+   * Rejects unsupported window functions with their names and SQL syntax state.
+   *
+   * @param predicatePushdown
+   *          whether predicate pushdown is enabled
+   * @param projectionPushdown
+   *          whether projection pushdown is enabled
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void rejectsUnsupportedWindowFunctions(boolean predicatePushdown, boolean projectionPushdown) throws Exception {
+    Path directory = Path.of(getClass().getResource("/mtcars.parquet").toURI()).getParent();
+    String url = "jdbc:jparq:" + directory + "?predicatePushdown=" + predicatePushdown + "&projectionPushdown="
+        + projectionPushdown;
+    try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+      for (String name : List.of("NO_SUCH", "no_such", "ABS")) {
+        String expression = name + "(cyl) OVER ()";
+        String body = "SELECT " + expression + " AS x FROM mtcars";
+        for (String sql : List.of(body, body + " WHERE 1 = 0", "SELECT ABS(" + expression + ") FROM mtcars",
+            "SELECT ROW_NUMBER() OVER (), " + expression + " FROM mtcars", "SELECT x FROM (" + body + ") d",
+            "WITH c AS (" + body + ") SELECT x FROM c", "SELECT (" + body + " LIMIT 1) AS x")) {
+          var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
+            try (var result = statement.executeQuery(sql)) {
+              while (result.next()) {
+                result.getObject(1);
+              }
+            }
+          }, sql);
+          assertEquals("42000", failure.getSQLState(), sql);
+          assertTrue(failure.getMessage().contains("Unsupported window function: " + name), failure::getMessage);
+        }
+      }
+    }
+  }
+
   /**
    * Preserves the function name and syntax classification across JDBC boundaries.
    *

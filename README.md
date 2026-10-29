@@ -731,6 +731,8 @@ The following SQL statements are supported:
   - nesting of set operations
 - CTE (Common Table Expressions) support
 - Windowing
+  - Unsupported function names used with `OVER` raise `SQLSyntaxErrorException` with SQLState `42000`,
+    naming the unsupported window function.
   - Ranking functions
     - `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `PERCENT_RANK`, `CUME_DIST`, `NTILE`
   -  Aggregate window functions

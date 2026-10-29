@@ -31,6 +31,7 @@ import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlComparisons;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.helper.LiteralConverter;
@@ -59,6 +60,9 @@ public final class WindowFunctions {
    *          expressions present in the SELECT list
    * @return a window plan capturing supported analytic expressions or
    *         {@code null} when none are present
+   * @throws IllegalArgumentException
+   *           if a window function is unsupported or invalid; unsupported names
+   *           carry SQLState 42000 in the cause
    */
   public static WindowPlan plan(List<Expression> expressions) {
     if (expressions == null || expressions.isEmpty()) {
@@ -102,7 +106,7 @@ public final class WindowFunctions {
     }
     if (!WINDOW_ONLY_FUNCTION_NAMES.contains(name.toUpperCase(Locale.ROOT))
         && !Set.of("COUNT", "SUM", "AVG", "MIN", "MAX").contains(name.toUpperCase(Locale.ROOT))) {
-      return;
+      throw SqlExceptions.syntaxFailure("Unsupported window function: " + name);
     }
     if ((analytic.isDistinct() || analytic.isUnique()) && !"COUNT".equalsIgnoreCase(name)) {
       throw new IllegalArgumentException(name + " does not support DISTINCT or UNIQUE modifiers: " + analytic);
