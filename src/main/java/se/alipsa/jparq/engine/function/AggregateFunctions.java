@@ -29,7 +29,6 @@ import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import net.sf.jsqlparser.expression.AnalyticExpression;
-import net.sf.jsqlparser.expression.AnalyticType;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.BinaryExpression;
@@ -92,6 +91,7 @@ import se.alipsa.jparq.engine.SqlParser.OrderKey;
 import se.alipsa.jparq.engine.SqlTruth;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
+import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
@@ -621,10 +621,7 @@ public final class AggregateFunctions {
     expression.accept(new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(AnalyticExpression analytic, S context) {
-        AnalyticType type = analytic.getType();
-        if (type == AnalyticType.WITHIN_GROUP || type == AnalyticType.WITHIN_GROUP_OVER) {
-          throw syntaxFailure("WITHIN GROUP is not supported: " + analytic.getName());
-        }
+        WindowFunctions.rejectWithinGroup(analytic);
         throw syntaxFailure(
             "Window functions are not supported in grouped queries: " + SqlExceptions.describe(analytic));
       }

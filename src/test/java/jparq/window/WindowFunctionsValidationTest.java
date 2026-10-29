@@ -1,6 +1,8 @@
 package jparq.window;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -14,6 +16,7 @@ import static se.alipsa.jparq.engine.window.WindowFunctions.safeLongToInt;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.sql.Date;
+import java.sql.SQLSyntaxErrorException;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Period;
@@ -36,6 +39,25 @@ public class WindowFunctionsValidationTest {
   @BeforeAll
   static void setUpReflection() throws NoSuchMethodException, JSQLParserException {
     analyticExpression = (AnalyticExpression) CCJSqlParserUtil.parseExpression("SUM(value) OVER ()");
+  }
+
+  /**
+   * Rejects both ordered-set forms while allowing an ordinary window.
+   *
+   * @throws JSQLParserException
+   *           if a test expression cannot be parsed
+   */
+  @Test
+  void rejectWithinGroupValidation() throws JSQLParserException {
+    for (String sql : List.of("SUM(value) WITHIN GROUP (ORDER BY value)",
+        "SUM(value) WITHIN GROUP (ORDER BY value) OVER (PARTITION BY category)")) {
+      AnalyticExpression expression = (AnalyticExpression) CCJSqlParserUtil.parseExpression(sql);
+      var failure = assertThrows(IllegalArgumentException.class, () -> WindowFunctions.rejectWithinGroup(expression));
+      assertEquals("WITHIN GROUP is not supported: SUM", failure.getMessage());
+      var syntax = assertInstanceOf(SQLSyntaxErrorException.class, failure.getCause());
+      assertEquals("42000", syntax.getSQLState());
+    }
+    assertDoesNotThrow(() -> WindowFunctions.rejectWithinGroup(analyticExpression));
   }
 
   /**

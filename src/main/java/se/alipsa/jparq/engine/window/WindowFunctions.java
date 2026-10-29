@@ -91,6 +91,22 @@ public final class WindowFunctions {
   }
 
   /**
+   * Rejects WITHIN GROUP clauses, which are not supported.
+   *
+   * @param analytic
+   *          analytic expression to inspect
+   * @throws IllegalArgumentException
+   *           if the expression uses WITHIN GROUP; the cause carries SQLState
+   *           42000
+   */
+  public static void rejectWithinGroup(AnalyticExpression analytic) {
+    AnalyticType type = analytic.getType();
+    if (type == AnalyticType.WITHIN_GROUP || type == AnalyticType.WITHIN_GROUP_OVER) {
+      throw SqlExceptions.syntaxFailure("WITHIN GROUP is not supported: " + analytic.getName());
+    }
+  }
+
+  /**
    * Register analytic expressions discovered during planning into the provided
    * collector.
    *
@@ -108,10 +124,7 @@ public final class WindowFunctions {
       return;
     }
     String upper = name.toUpperCase(Locale.ROOT);
-    AnalyticType type = analytic.getType();
-    if (type == AnalyticType.WITHIN_GROUP || type == AnalyticType.WITHIN_GROUP_OVER) {
-      throw SqlExceptions.syntaxFailure("WITHIN GROUP is not supported: " + name);
-    }
+    rejectWithinGroup(analytic);
     if (!WINDOW_ONLY_FUNCTION_NAMES.contains(upper) && !AGGREGATE_WINDOW_FUNCTION_NAMES.contains(upper)) {
       throw SqlExceptions.syntaxFailure("Unsupported window function: " + name);
     }
