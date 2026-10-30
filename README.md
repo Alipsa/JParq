@@ -259,8 +259,9 @@ Invalid interval text raises `SQLDataException` with SQLState `22007`; numeric v
 cannot be represented use `22003`.
 Unsupported qualifiers, such as YEAR TO MONTH and WEEK, and expression operands, such as
 `INTERVAL (1+1) DAY`, raise `SQLFeatureNotSupportedException` with SQLState `0A000`.
-WEEK also uses `0A000` in the single-string form (`INTERVAL '1 week'`); unknown unit
-words in that form, such as `lightyear`, are invalid text (`22007`).
+WEEK, QUARTER, MILLISECOND, and MICROSECOND, including their plurals, use `0A000`
+in both literal forms (`INTERVAL '1' QUARTER` and `INTERVAL '1 quarter'`). Unknown unit
+words in the single-string form, such as `lightyear`, are invalid text (`22007`).
 
 Numeric casts reject non-finite inputs such as `'Infinity'`, `'-Infinity'`, and `'NaN'`, as well as invalid numeric
 text, with `SQLDataException` and SQLState `22018`. Projection evaluation failures are reported as

@@ -13,6 +13,7 @@ import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 
@@ -30,6 +31,8 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
 
   private static final ZoneId UTC = ZoneId.of("UTC");
   private static final Map<String, Function<String, TemporalInterval>> UNIT_PARSERS = createUnitParsers();
+  private static final Set<String> UNSUPPORTED_UNITS = Set.of("week", "weeks", "quarter", "quarters", "millisecond",
+      "milliseconds", "microsecond", "microseconds");
   private static final Pattern DAY_FIELD = Pattern.compile("[0-9]+");
 
   private final Period period;
@@ -145,7 +148,7 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
     if (parser != null) {
       return parser.apply(amt);
     }
-    if ("week".equals(unit) || "weeks".equals(unit)) {
+    if (UNSUPPORTED_UNITS.contains(unit)) {
       throw new UnsupportedOperationException("Unsupported interval unit: " + unitRaw);
     }
     throw new IllegalArgumentException("Unknown interval unit: " + unitRaw);

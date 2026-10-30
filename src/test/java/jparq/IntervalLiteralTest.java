@@ -143,6 +143,30 @@ class IntervalLiteralTest {
   }
 
   /**
+   * Classifies known unsupported units consistently in both literal forms.
+   *
+   * @param unit
+   *          the unsupported unit or plural alias
+   * @throws Exception
+   *           if the assertion cannot execute
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "week", "weeks", "quarter", "quarters", "millisecond", "milliseconds", "microsecond", "microseconds"
+  })
+  void unsupportedUnitsInBothForms(String unit) throws Exception {
+    for (String expression : new String[]{
+        "INTERVAL '1' " + unit, "INTERVAL '1 " + unit + "'"
+    }) {
+      SQLFeatureNotSupportedException failure = assertThrows(SQLFeatureNotSupportedException.class,
+          () -> query(expression));
+      assertEquals("0A000", failure.getSQLState());
+      assertTrue(failure.getMessage().contains("Unsupported interval unit: " + unit));
+      assertNotNull(failure.getCause());
+    }
+  }
+
+  /**
    * Rejects malformed compound day fields as format errors rather than ranges.
    *
    * @param days
