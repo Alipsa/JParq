@@ -9,9 +9,12 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.Period;
 import java.time.ZoneId;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
+import java.util.function.Function;
+import java.util.regex.Pattern;
 
 /**
  * Represents a SQL style interval with separate {@link Period} and
@@ -26,8 +29,8 @@ import java.util.Set;
 public final class TemporalInterval implements Comparable<TemporalInterval> {
 
   private static final ZoneId UTC = ZoneId.of("UTC");
-  private static final Set<String> SUPPORTED_UNITS = Set.of("year", "years", "month", "months", "day", "days", "hour",
-      "hours", "minute", "minutes", "second", "seconds", "day to second");
+  private static final Map<String, Function<String, TemporalInterval>> UNIT_PARSERS = createUnitParsers();
+  private static final Pattern DAY_FIELD = Pattern.compile("[0-9]+");
 
   private final Period period;
   private final Duration duration;
@@ -58,7 +61,7 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    * @return true if the unit is supported, ignoring case
    */
   public static boolean supportsUnit(String unit) {
-    return unit != null && SUPPORTED_UNITS.contains(unit.toLowerCase(Locale.ROOT));
+    return unit != null && UNIT_PARSERS.containsKey(unit.toLowerCase(Locale.ROOT));
   }
 
   /**
@@ -76,6 +79,8 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    *           if an amount cannot be represented
    * @throws java.time.DateTimeException
    *           if a compound time component is invalid
+   * @throws UnsupportedOperationException
+   *           if a known unit such as WEEK is not implemented
    */
   public static TemporalInterval parse(String literal, String explicitUnit) {
     if ((literal == null || literal.isBlank()) && (explicitUnit == null || explicitUnit.isBlank())) {
@@ -109,6 +114,23 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
     return result;
   }
 
+  /**
+   * Dispatches a value to the registered parser for its unit or plural alias.
+   *
+   * @param unitRaw
+   *          the unit name
+   * @param amountLiteral
+   *          the possibly quoted amount
+   * @return the parsed interval
+   * @throws IllegalArgumentException
+   *           if the amount is malformed or the unit is unknown
+   * @throws ArithmeticException
+   *           if the amount cannot be represented
+   * @throws java.time.DateTimeException
+   *           if a clock component is invalid
+   * @throws UnsupportedOperationException
+   *           if the unit is known but not implemented
+   */
   private static TemporalInterval fromUnit(String unitRaw, String amountLiteral) {
     String unit = unitRaw.toLowerCase(Locale.ROOT);
     String amt = amountLiteral.trim();
@@ -119,53 +141,84 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
       throw new IllegalArgumentException("Empty interval value for unit " + unitRaw);
     }
 
-    switch (unit) {
-      case "year", "years": {
-        long years = new BigDecimal(amt).longValueExact();
-        return of(Period.ofYears(Math.toIntExact(years)), Duration.ZERO);
-      }
-      case "month", "months": {
-        long months = new BigDecimal(amt).longValueExact();
-        return of(Period.ofMonths(Math.toIntExact(months)), Duration.ZERO);
-      }
-      case "day", "days": {
-        long days = new BigDecimal(amt).longValueExact();
-        return of(Period.ofDays(Math.toIntExact(days)), Duration.ZERO);
-      }
-      case "hour", "hours": {
-        long hours = new BigDecimal(amt).longValueExact();
-        return of(Period.ZERO, Duration.ofHours(hours));
-      }
-      case "minute", "minutes": {
-        long minutes = new BigDecimal(amt).longValueExact();
-        return of(Period.ZERO, Duration.ofMinutes(minutes));
-      }
-      case "second", "seconds": {
-        BigDecimal bd = new BigDecimal(amt);
-        long nanosTotal = bd.movePointRight(9).setScale(0, RoundingMode.UNNECESSARY).longValueExact();
-        long seconds = Math.floorDiv(nanosTotal, 1_000_000_000L);
-        long nanos = Math.floorMod(nanosTotal, 1_000_000_000L);
-        return of(Period.ZERO, Duration.ofSeconds(seconds, nanos));
-      }
-      case "day to second": {
-        boolean negative = amt.startsWith("-");
-        String magnitude = negative || amt.startsWith("+") ? amt.substring(1) : amt;
-        String[] parts = magnitude.split("\\s+");
-        if (parts.length != 2) {
-          throw new IllegalArgumentException("Invalid DAY TO SECOND interval literal: " + amountLiteral);
-        }
-        long days = new BigDecimal(parts[0]).longValueExact();
-        if (days < 0) {
-          throw new IllegalArgumentException("Invalid DAY TO SECOND interval literal: " + amountLiteral);
-        }
-        LocalTime timePart = LocalTime.parse(parts[1]);
-        Duration duration = Duration.ofDays(days).plusHours(timePart.getHour()).plusMinutes(timePart.getMinute())
-            .plusSeconds(timePart.getSecond()).plusNanos(timePart.getNano());
-        return of(Period.ZERO, negative ? duration.negated() : duration);
-      }
-      default:
-        throw new IllegalArgumentException("Unsupported interval unit: " + unitRaw);
+    Function<String, TemporalInterval> parser = UNIT_PARSERS.get(unit);
+    if (parser != null) {
+      return parser.apply(amt);
     }
+    if ("week".equals(unit) || "weeks".equals(unit)) {
+      throw new UnsupportedOperationException("Unsupported interval unit: " + unitRaw);
+    }
+    throw new IllegalArgumentException("Unknown interval unit: " + unitRaw);
+  }
+
+  /**
+   * Builds the shared unit registry, including plural aliases for single fields.
+   *
+   * @return immutable unit-to-parser mappings
+   */
+  private static Map<String, Function<String, TemporalInterval>> createUnitParsers() {
+    Map<String, Function<String, TemporalInterval>> parsers = new HashMap<>();
+    parsers.put("year", amount -> of(Period.ofYears(new BigDecimal(amount).intValueExact()), Duration.ZERO));
+    parsers.put("month", amount -> of(Period.ofMonths(new BigDecimal(amount).intValueExact()), Duration.ZERO));
+    parsers.put("day", amount -> of(Period.ofDays(new BigDecimal(amount).intValueExact()), Duration.ZERO));
+    parsers.put("hour", amount -> of(Period.ZERO, Duration.ofHours(new BigDecimal(amount).longValueExact())));
+    parsers.put("minute", amount -> of(Period.ZERO, Duration.ofMinutes(new BigDecimal(amount).longValueExact())));
+    parsers.put("second", TemporalInterval::parseSeconds);
+    Map.copyOf(parsers).forEach((unit, parser) -> parsers.put(unit + "s", parser));
+    parsers.put("day to second", TemporalInterval::parseDayToSecond);
+    return Map.copyOf(parsers);
+  }
+
+  /**
+   * Parses a seconds amount with nanosecond precision.
+   *
+   * @param amount
+   *          the numeric amount
+   * @return the time interval
+   * @throws IllegalArgumentException
+   *           if the amount is malformed
+   * @throws ArithmeticException
+   *           if the amount cannot be represented
+   */
+  private static TemporalInterval parseSeconds(String amount) {
+    long nanosTotal = new BigDecimal(amount).movePointRight(9).setScale(0, RoundingMode.UNNECESSARY).longValueExact();
+    long seconds = Math.floorDiv(nanosTotal, 1_000_000_000L);
+    long nanos = Math.floorMod(nanosTotal, 1_000_000_000L);
+    return of(Period.ZERO, Duration.ofSeconds(seconds, nanos));
+  }
+
+  /**
+   * Parses an optional sign, digit-only day field, and clock component.
+   *
+   * @param amount
+   *          the compound amount
+   * @return the signed duration interval
+   * @throws IllegalArgumentException
+   *           if the day field or format is invalid
+   * @throws ArithmeticException
+   *           if the duration cannot be represented
+   * @throws java.time.DateTimeException
+   *           if the clock component is invalid
+   */
+  private static TemporalInterval parseDayToSecond(String amount) {
+    boolean negative = amount.startsWith("-");
+    String magnitude = negative || amount.startsWith("+") ? amount.substring(1) : amount;
+    String[] parts = magnitude.split("\\s+");
+    if (parts.length != 2 || !DAY_FIELD.matcher(parts[0]).matches()) {
+      throw new IllegalArgumentException("Invalid DAY TO SECOND interval literal: " + amount);
+    }
+    long days;
+    try {
+      days = Long.parseLong(parts[0]);
+    } catch (NumberFormatException failure) {
+      ArithmeticException overflow = new ArithmeticException("DAY TO SECOND day value out of range");
+      overflow.initCause(failure);
+      throw overflow;
+    }
+    LocalTime timePart = LocalTime.parse(parts[1]);
+    Duration duration = Duration.ofDays(days).plusHours(timePart.getHour()).plusMinutes(timePart.getMinute())
+        .plusSeconds(timePart.getSecond()).plusNanos(timePart.getNano());
+    return of(Period.ZERO, negative ? duration.negated() : duration);
   }
 
   /**

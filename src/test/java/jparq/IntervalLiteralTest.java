@@ -1,6 +1,7 @@
 package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -14,10 +15,13 @@ import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Period;
+import net.sf.jsqlparser.expression.IntervalExpression;
+import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /** JDBC regressions for qualified interval literals and their data errors. */
@@ -127,15 +131,72 @@ class IntervalLiteralTest {
   @ParameterizedTest
   @ValueSource(strings = {
       "INTERVAL '1-2' YEAR TO MONTH", "INTERVAL '1' WEEK", "INTERVAL (1+1) DAY", "(SELECT INTERVAL '1' WEEK)",
-      "DATE '2024-01-01' + INTERVAL '1' WEEK"
+      "DATE '2024-01-01' + INTERVAL '1' WEEK", "INTERVAL '1 week'", "INTERVAL '1 weeks'", "(SELECT INTERVAL '1 week')"
   })
   void unsupportedIntervalFeatures(String expression) throws Exception {
     SQLFeatureNotSupportedException failure = assertThrows(SQLFeatureNotSupportedException.class,
         () -> query(expression));
     assertEquals("0A000", failure.getSQLState());
     assertTrue(failure.getMessage().contains("Unsupported interval"));
-    assertTrue(!failure.getMessage().contains("value: null"));
+    assertFalse(failure.getMessage().contains("value: null"));
     assertNotNull(failure.getCause());
+  }
+
+  /**
+   * Rejects malformed compound day fields as format errors rather than ranges.
+   *
+   * @param days
+   *          the malformed day field
+   * @throws Exception
+   *           if the assertion cannot execute
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "-+1", "+-1", "--1", "++1", "1e1", "1E1", "1.0", "1.5", ".5", "-1.0"
+  })
+  void invalidCompoundDayField(String days) throws Exception {
+    SQLDataException failure = assertThrows(SQLDataException.class,
+        () -> query("INTERVAL '" + days + " 02:03:04' DAY TO SECOND"));
+    assertEquals("22007", failure.getSQLState());
+    assertTrue(failure.getMessage().contains("Invalid DAY TO SECOND interval literal"));
+  }
+
+  /**
+   * Classifies digit-only compound day overflow as a range error.
+   *
+   * @param days
+   *          the overflowing day field
+   * @throws Exception
+   *           if the assertion cannot execute
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "9223372036854775808", "-9223372036854775808", "9999999999999999999999999999999999", "9223372036854775807"
+  })
+  void compoundDayOverflow(String days) throws Exception {
+    SQLDataException failure = assertThrows(SQLDataException.class,
+        () -> query("INTERVAL '" + days + " 02:03:04' DAY TO SECOND"));
+    assertEquals("22003", failure.getSQLState());
+    assertNotNull(failure.getCause());
+  }
+
+  /**
+   * Includes the complete parsed interval expression in operand diagnostics.
+   *
+   * @param expression
+   *          the unsupported operand form
+   * @throws Exception
+   *           if the assertion cannot execute
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "INTERVAL (1+1) DAY", "INTERVAL c DAY"
+  })
+  void expressionOperandDiagnostics(String expression) throws Exception {
+    var parsed = CCJSqlParserUtil.parseExpression(expression);
+    var failure = assertThrows(IllegalArgumentException.class,
+        () -> DateTimeFunctions.toInterval((IntervalExpression) parsed));
+    assertEquals("Unsupported interval expression operand: " + parsed, failure.getMessage());
   }
 
   /**

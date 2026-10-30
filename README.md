@@ -251,12 +251,16 @@ HOUR, MINUTE, and SECOND, as well as the single-string form `INTERVAL '1 day'`.
 Values may have an embedded sign or a unary sign (`-INTERVAL '1' DAY`), and SECOND accepts
 fractional values. `INTERVAL '1 02:03:04' DAY TO SECOND` is also supported.
 DAY TO SECOND preserves fractional seconds and applies a leading sign to the entire interval.
+Its day field must contain digits after the optional leading sign; decimals, exponents,
+and repeated signs raise `22007`. Digit-only day values outside the supported range raise `22003`.
 Qualifier precision decorations such as `DAY(3)` and `SECOND(2,3)` are accepted;
 declared precision limits are currently not enforced.
 Invalid interval text raises `SQLDataException` with SQLState `22007`; numeric values that
 cannot be represented use `22003`.
 Unsupported qualifiers, such as YEAR TO MONTH and WEEK, and expression operands, such as
 `INTERVAL (1+1) DAY`, raise `SQLFeatureNotSupportedException` with SQLState `0A000`.
+WEEK also uses `0A000` in the single-string form (`INTERVAL '1 week'`); unknown unit
+words in that form, such as `lightyear`, are invalid text (`22007`).
 
 Numeric casts reject non-finite inputs such as `'Infinity'`, `'-Infinity'`, and `'NaN'`, as well as invalid numeric
 text, with `SQLDataException` and SQLState `22018`. Projection evaluation failures are reported as

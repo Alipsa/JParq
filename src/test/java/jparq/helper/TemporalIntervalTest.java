@@ -9,10 +9,36 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.Period;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /** Tests for {@link TemporalInterval}. */
 class TemporalIntervalTest {
+
+  /**
+   * Exercises registered parsers and aliases with independent expectations.
+   *
+   * @param unit
+   *          the unit or alias
+   * @param amount
+   *          the interval amount
+   * @param period
+   *          the expected ISO period
+   * @param duration
+   *          the expected ISO duration
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "year,1,P1Y,PT0S", "years,1,P1Y,PT0S", "month,1,P1M,PT0S", "months,1,P1M,PT0S", "day,1,P1D,PT0S",
+      "days,1,P1D,PT0S", "hour,1,P0D,PT1H", "hours,1,P0D,PT1H", "minute,1,P0D,PT1M", "minutes,1,P0D,PT1M",
+      "second,1,P0D,PT1S", "seconds,1,P0D,PT1S", "day to second,1 00:00:00,P0D,PT24H"
+  })
+  void registeredUnitParsers(String unit, String amount, String period, String duration) {
+    assertTrue(TemporalInterval.supportsUnit(unit));
+    assertEquals(TemporalInterval.of(Period.parse(period), Duration.parse(duration)),
+        TemporalInterval.parse(amount, unit));
+  }
 
   @Test
   void parsesIntervalLiterals() {

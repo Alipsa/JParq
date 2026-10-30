@@ -344,7 +344,7 @@ public final class DateTimeFunctions {
             ? qualifier.getLeadingField()
             : qualifier.getLeadingField() + " TO " + qualifier.getTrailingField();
     if (expr.getExpression() != null) {
-      String message = "Unsupported interval expression operand: " + SqlExceptions.describe(expr.getExpression());
+      String message = "Unsupported interval expression operand: " + SqlExceptions.describe(expr);
       throw new IllegalArgumentException(message, new SQLFeatureNotSupportedException(message, "0A000"));
     }
     if (unit != null && !TemporalInterval.supportsUnit(unit)) {
@@ -353,6 +353,9 @@ public final class DateTimeFunctions {
     }
     try {
       return TemporalInterval.parse(expr.getParameter(), unit);
+    } catch (UnsupportedOperationException failure) {
+      String message = failure.getMessage();
+      throw new IllegalArgumentException(message, new SQLFeatureNotSupportedException(message, "0A000", failure));
     } catch (ArithmeticException | DateTimeException | IllegalArgumentException failure) {
       String state = failure instanceof ArithmeticException ? "22003" : "22007";
       String message = "Invalid INTERVAL value: " + SqlExceptions.diagnosticValue(expr.getParameter()) + ": "
