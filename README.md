@@ -237,6 +237,8 @@ keys compare equally across these Java representations. JDBC precision is 10 for
 for BIGINT; literal-specific digit bounds are retained internally for decimal arithmetic.
 Decimal literals such as `1.5` are exact.
 Decimal casts without declared bounds can report unknown precision until materialization infers it.
+Unary signs and binary arithmetic accept numeric text and trim surrounding whitespace, as numeric CAST does.
+Invalid or non-finite numeric text raises `SQLDataException` with SQLState `22018`.
 
 `DATE - DATE` returns the signed calendar-day difference as a Java `Long` (JDBC `BIGINT`),
 including through derived tables and CTEs. For example, `DATE '2024-03-01' - DATE '2024-02-28'`

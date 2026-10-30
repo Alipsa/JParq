@@ -55,7 +55,8 @@ public class LiteralConverter {
    * Applies a unary sign using the numeric conversion rules of arithmetic.
    *
    * @param value
-   *          evaluated operand, including numeric text, an interval, or NULL
+   *          evaluated operand, including numeric text (surrounding whitespace is
+   *          trimmed), an interval, or NULL
    * @param expression
    *          the signed expression; diagnostics omit internal correlated bindings
    * @return the signed value or NULL
@@ -90,7 +91,7 @@ public class LiteralConverter {
                 new SQLDataException("BIGINT unary sign overflow", "22003", failure));
           }
         }
-        BigDecimal number = toBigDecimal(value);
+        BigDecimal number = toBigDecimal(value instanceof String text ? text.trim() : value);
         return sign == '-' ? number.negate() : number;
       } catch (NumberFormatException failure) {
         String message = "Cannot convert unary sign operand to a numeric value: " + describe(expression);
