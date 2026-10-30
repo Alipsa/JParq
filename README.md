@@ -258,7 +258,10 @@ This also applies when the outer query would compare or extract from the materia
 comparison or extraction in the inner query instead. NULL operands still produce NULL.
 Text conversion of differences is also unsupported (`0A000`), including character casts,
 `||`, string functions such as `CONCAT`, `UPPER`, and `LENGTH`, and JSON construction.
-These operations reject the difference before its internal diagnostic text can be used.
+Comparisons between a difference and text also raise `0A000`, including `=`, `<`, and `>`
+in either operand order and comparisons of array elements. Comparisons with INTERVAL values
+remain supported.
+Text conversions and comparisons with text reject the difference before its internal diagnostic text can be used.
 EXISTS checks for rows without reading unused projected differences, including correlated
 subqueries and HAVING predicates.
 

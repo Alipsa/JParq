@@ -43,7 +43,8 @@ public final class SqlComparisons {
    *           if either value is null
    * @throws IllegalArgumentException
    *           if a number is compared with an interval; the cause carries
-   *           SQLState 42000
+   *           SQLState 42000; fallback text conversion of an internal temporal
+   *           difference carries SQLState 0A000
    */
   public static int typedCompare(Object l, Object r) {
     if (l instanceof Number ln && r instanceof Number rn) {
@@ -80,7 +81,7 @@ public final class SqlComparisons {
     if (isArrayValue(l) && isArrayValue(r)) {
       return compareArrays(l, r);
     }
-    return l.toString().compareTo(r.toString());
+    return SqlText.valueOf(l).compareTo(SqlText.valueOf(r));
   }
 
   /**

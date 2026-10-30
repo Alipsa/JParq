@@ -230,6 +230,70 @@ class DateArithmeticTest {
   }
 
   /**
+   * Rejects comparisons that would coerce a difference to diagnostic text,
+   * including reversed operands and comparisons inside predicates and HAVING.
+   *
+   * @param operator
+   *          comparison operator to exercise
+   * @throws Exception
+   *           if opening the connection fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "=", "<>", "!=", "<", ">", "<=", ">="
+  })
+  void temporalDifferencesCannotBeComparedWithText(String operator) throws Exception {
+    String difference = "(TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00')";
+    String text = "'TemporalInterval[period=P0D, duration=PT24H]'";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String comparison : List.of(difference + " " + operator + " " + text,
+          text + " " + operator + " " + difference, "ARRAY[" + difference + "] " + operator + " ARRAY[" + text + "]")) {
+        String projection = "SELECT " + comparison + " AS x FROM small";
+        for (String sql : List.of(projection, "SELECT * FROM (" + projection + ") t",
+            "WITH t AS (" + projection + ") SELECT * FROM t", "SELECT id FROM small WHERE " + comparison,
+            "SELECT id FROM small GROUP BY id HAVING " + comparison)) {
+          var failure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
+            try (var result = statement.executeQuery(sql)) {
+              while (result.next()) {
+                result.getObject(1);
+              }
+            }
+          }, sql);
+          assertEquals("0A000", failure.getSQLState(), sql);
+          assertTrue(failure.getMessage().contains("Unsupported temporal difference"), failure::getMessage);
+        }
+      }
+    }
+  }
+
+  /**
+   * Applies the same text-conversion restriction to window ordering over mixed
+   * temporal-difference and text values.
+   *
+   * @throws Exception
+   *           if opening the connection fails
+   */
+  @Test
+  void windowOrderingCannotCompareTemporalDifferenceText() throws Exception {
+    String difference = "TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00'";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String expression : List.of("CASE WHEN id = 0 THEN " + difference + " ELSE 'A' END",
+          "CASE WHEN id = 0 THEN 'A' ELSE " + difference + " END")) {
+        String sql = "SELECT ROW_NUMBER() OVER (ORDER BY " + expression + ") FROM small";
+        var failure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
+          try (var result = statement.executeQuery(sql)) {
+            result.next();
+            result.getObject(1);
+          }
+        }, sql);
+        assertEquals("0A000", failure.getSQLState(), sql);
+      }
+    }
+  }
+
+  /**
    * Checks row existence without reading unused temporal difference projections,
    * including correlated predicates and HAVING.
    *
