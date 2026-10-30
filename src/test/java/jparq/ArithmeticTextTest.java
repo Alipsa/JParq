@@ -39,12 +39,20 @@ class ArithmeticTextTest {
         for (String operator : List.of("+", "-", "*", "/", "%")) {
           for (String number : List.of("1", "CAST(1 AS DOUBLE)")) {
             for (String expression : List.of(text + operator + number, number + operator + text)) {
-              assertInvalid(statement, expression);
+              assertInvalid(statement, expression, "22018");
             }
           }
         }
         for (String expression : List.of("-" + text, "+" + text)) {
-          assertInvalid(statement, expression);
+          assertInvalid(statement, expression, "22018");
+        }
+      }
+      for (String text : List.of("'1e400'", "'-1e400'")) {
+        for (String operator : List.of("+", "-", "*", "/", "%")) {
+          String number = "CAST(1 AS DOUBLE)";
+          for (String expression : List.of(text + operator + number, number + operator + text)) {
+            assertInvalid(statement, expression, "22003");
+          }
         }
       }
     }
@@ -101,9 +109,11 @@ class ArithmeticTextTest {
    * @param statement
    *          the JDBC statement
    * @param expression
-   *          arithmetic containing invalid numeric text
+   *          arithmetic containing invalid or out-of-range numeric text
+   * @param sqlState
+   *          expected conversion failure state
    */
-  private void assertInvalid(Statement statement, String expression) {
+  private void assertInvalid(Statement statement, String expression, String sqlState) {
     String body = "SELECT " + expression + " AS x FROM mtcars LIMIT 1";
     for (String sql : List.of(body, "SELECT x FROM (" + body + ") d", "WITH c AS (" + body + ") SELECT x FROM c",
         "SELECT cyl FROM mtcars WHERE " + expression + " > 0 LIMIT 1",
@@ -114,10 +124,12 @@ class ArithmeticTextTest {
           result.getObject(1);
         }
       }, sql);
-      assertEquals("22018", failure.getSQLState(), sql);
+      assertEquals(sqlState, failure.getSQLState(), sql);
       boolean hasParseCause = false;
       for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
-        hasParseCause |= cause instanceof NumberFormatException;
+        hasParseCause |= "22018".equals(sqlState)
+            ? cause instanceof NumberFormatException
+            : cause instanceof ArithmeticException;
       }
       assertTrue(hasParseCause, sql);
     }
@@ -129,7 +141,7 @@ class ArithmeticTextTest {
           result.getObject(1);
         }
       }, sql);
-      assertEquals("22018", failure.getSQLState(), sql);
+      assertEquals(sqlState, failure.getSQLState(), sql);
     }
   }
 }

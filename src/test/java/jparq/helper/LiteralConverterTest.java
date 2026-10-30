@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.math.BigDecimal;
 import java.sql.Date;
+import java.sql.SQLDataException;
 import java.sql.SQLSyntaxErrorException;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.BooleanValue;
@@ -30,6 +31,22 @@ import se.alipsa.jparq.helper.TemporalInterval;
  * {@link LiteralConverter#toLiteral(net.sf.jsqlparser.expression.Expression)}.
  */
 class LiteralConverterTest {
+
+  /** Checks shared text parsing and unary diagnostics for CharSequence inputs. */
+  @Test
+  void signsCharacterSequences() {
+    var expression = new SignedExpression();
+    expression.setSign('-');
+    expression.setExpression(new StringValue("operand"));
+    assertEquals(new BigDecimal("-5"), LiteralConverter.applySign(new StringBuilder(" \t5\n"), expression));
+    var failure = assertThrows(IllegalArgumentException.class,
+        () -> LiteralConverter.applySign(new StringBuilder("private-value"), expression));
+    var classified = assertInstanceOf(SQLDataException.class, failure.getCause());
+    assertEquals("22018", classified.getSQLState());
+    assertTrue(failure.getMessage().contains("Cannot convert unary sign operand"));
+    assertFalse(failure.getMessage().contains("private-value"));
+    assertInstanceOf(NumberFormatException.class, classified.getCause());
+  }
 
   /**
    * Decodes both hex forms without numeric overflow or loss of leading zeroes.

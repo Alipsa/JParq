@@ -239,6 +239,7 @@ Decimal literals such as `1.5` are exact.
 Decimal casts without declared bounds can report unknown precision until materialization infers it.
 Unary signs and binary arithmetic accept numeric text and trim surrounding whitespace, as numeric CAST does.
 Invalid or non-finite numeric text raises `SQLDataException` with SQLState `22018`.
+Text operands outside the DOUBLE range raise SQLState `22003` when converted for floating-point arithmetic.
 
 `DATE - DATE` returns the signed calendar-day difference as a Java `Long` (JDBC `BIGINT`),
 including through derived tables and CTEs. For example, `DATE '2024-03-01' - DATE '2024-02-28'`
