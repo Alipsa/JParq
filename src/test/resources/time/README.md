@@ -13,6 +13,7 @@ covers issue #251, including JDBC metadata/getters, casts, predicates, NULLs,
 and ordering with each combination of predicate and projection pushdown settings.
 TIME literal comparisons currently remain in the residual filter; a planning test
 records this behavior and checks that eligible integer conjuncts are still pushed down.
+Update that planning test when [#359](https://github.com/Alipsa/JParq/issues/359) implements TIME pushdown.
 
 Regenerate from the repository root using Java 21 and the project's dependencies:
 

@@ -75,7 +75,9 @@ class ParquetTimeTest {
 
   /**
    * Records that TIME literal comparisons currently require residual evaluation,
-   * while eligible integer conjuncts can still be pushed down.
+   * while eligible integer conjuncts can still be pushed down. Update or remove
+   * when TIME pushdown is implemented
+   * (<a href="https://github.com/Alipsa/JParq/issues/359">issue 359</a>).
    *
    * @throws Exception
    *           if reading the fixture schema or parsing a predicate fails
