@@ -86,6 +86,31 @@ public final class SqlExceptions {
   }
 
   /**
+   * Creates an engine failure carrying the JDBC unsupported-feature
+   * classification.
+   *
+   * @param message
+   *          the diagnostic message
+   * @return an engine exception carrying SQLState 0A000
+   */
+  public static IllegalArgumentException unsupportedFeature(String message) {
+    return unsupportedFeature(message, null);
+  }
+
+  /**
+   * Creates an unsupported-feature failure retaining its original cause.
+   *
+   * @param message
+   *          the diagnostic message
+   * @param cause
+   *          the original failure, or null
+   * @return an engine exception carrying SQLState 0A000
+   */
+  public static IllegalArgumentException unsupportedFeature(String message, Throwable cause) {
+    return new IllegalArgumentException(message, new SQLFeatureNotSupportedException(message, "0A000", cause));
+  }
+
+  /**
    * Creates an engine failure for an ambiguous SQL column reference.
    *
    * @param column

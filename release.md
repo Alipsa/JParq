@@ -2,10 +2,13 @@
 
 ### 1.4.0
 
-- **Behavior change:** reject non-DATE temporal differences (TIMESTAMP, TIME, and mixed DATE/TIMESTAMP subtraction)
-  with `SQLFeatureNotSupportedException`, SQLState `0A000`, when evaluated (#254). Previously JDBC callers received
-  an internal `TemporalInterval`, or its `toString()` text through derived tables and CTEs. DATE day counts,
-  explicit INTERVAL offsets, and NULL propagation remain supported.
+- **Behavior change:** reject non-DATE temporal difference output (TIMESTAMP, TIME, and mixed DATE/TIMESTAMP
+  subtraction) with `SQLFeatureNotSupportedException`, SQLState `0A000`, when read by a JDBC getter or materialized
+  for a derived table/CTE or VALUES input (#254). Previously callers received an internal `TemporalInterval` or its
+  `toString()` text. Comparisons, predicates, sorting, and `EXTRACT` over differences remain supported within the same query
+  block; perform these operations before materialization instead of projecting a raw difference for an outer
+  query to consume. DATE day counts, explicit INTERVAL offsets, interval literals, and NULL propagation remain
+  supported.
 
 - **Behavior change:** decode hex literals (`X'..'` and `0x..`) and JDBC binary parameters to `byte[]` instead of SQL text (#250). Preserve leading zeroes and empty binary values, and reject odd-length or nonhexadecimal contents with SQLState `42000`. Render JDBC and `java.time` time/timestamp parameters as typed literals, retaining JDBC types and timestamp nanoseconds; reject timestamp parameter years before year 1 with SQLState `22008`. Decode stored Avro TIME columns to `java.sql.Time`, preserving milliseconds in literals, parameters, comparisons, sorting, grouping, aggregates, windows, materialization, and set operations (#251). Normalize TIME conversions, including timestamp casts and JDBC getters, to the local date 1970-01-01 so comparisons and hash-based grouping agree; retain milliseconds through interval arithmetic and midnight wraparound. Sub-millisecond digits are truncated, so values differing only below that precision compare equally. Reject stored TIME values outside one day with `SQLDataException`, SQLState `22008`, including direct JDBC getters. Verify both TIME logical types with predicate and projection pushdown enabled and disabled. Binary arguments to string functions and VARCHAR casts still expose Java array identity text (#355).
 

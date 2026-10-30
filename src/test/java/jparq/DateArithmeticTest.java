@@ -100,7 +100,7 @@ class DateArithmeticTest {
    * or their text across JDBC and materialization boundaries.
    *
    * @param expression
-   *          unsupported temporal difference
+   *          temporal difference without a JDBC output representation
    * @throws Exception
    *           if opening the connection fails
    */
@@ -109,16 +109,16 @@ class DateArithmeticTest {
       "CAST('2024-01-02 00:00:00' AS TIMESTAMP) - CAST('2024-01-01 00:00:00' AS TIMESTAMP)",
       "TIME '12:00:00' - TIME '10:00:00'", "DATE '2024-01-02' - TIMESTAMP '2024-01-01 12:00:00'",
       "TIMESTAMP '2024-01-02 12:00:00' - DATE '2024-01-01'", "CURRENT_TIMESTAMP - CURRENT_TIMESTAMP",
-      "CURRENT_TIME - CURRENT_TIME"
+      "CURRENT_TIME - CURRENT_TIME", "-(TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00')",
+      "INTERVAL '1' HOUR + (TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00')",
+      "ARRAY[TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00']"
   })
-  void nonDateTemporalDifferencesAreUnsupported(String expression) throws Exception {
+  void nonDateTemporalDifferenceOutputIsUnsupported(String expression) throws Exception {
     String projection = "SELECT " + expression + " AS x FROM small WHERE id = 0";
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement()) {
       for (String sql : List.of("SELECT " + expression, projection, "SELECT * FROM (" + projection + ") t",
-          "WITH t AS (" + projection + ") SELECT * FROM t",
-          "SELECT id FROM small WHERE id = 0 AND " + expression + " IS NOT NULL",
-          "SELECT MAX(" + expression + ") FROM small WHERE id = 0", "SELECT id FROM small ORDER BY " + expression)) {
+          "WITH t AS (" + projection + ") SELECT * FROM t", "SELECT * FROM (VALUES (" + expression + ")) t(x)")) {
         var failure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
           try (var result = statement.executeQuery(sql)) {
             while (result.next()) {
@@ -128,6 +128,69 @@ class DateArithmeticTest {
         }, sql);
         assertEquals("0A000", failure.getSQLState(), sql);
         assertTrue(failure.getMessage().contains("Unsupported temporal difference"), failure::getMessage);
+      }
+    }
+  }
+
+  /**
+   * Preserves comparisons, filtering, extraction, and sorting of internal
+   * differences while exposing only ordinary JDBC values.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void temporalDifferencesRemainUsableInsideEngine() throws Exception {
+    String difference = "(TIMESTAMP '2024-01-03 00:00:00' - TIMESTAMP '2024-01-01 00:00:00')";
+    String projection = "SELECT " + difference + " > INTERVAL '1' HOUR AS longer, " + "EXTRACT(DAY FROM " + difference
+        + ") AS days, " + "EXTRACT(HOUR FROM TIME '12:00:00' - TIME '10:00:00') AS hours " + "FROM small WHERE "
+        + difference + " > INTERVAL '1' HOUR ORDER BY " + difference;
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String sql : List.of(projection, "SELECT * FROM (" + projection + ") t",
+          "WITH t AS (" + projection + ") SELECT * FROM t")) {
+        try (var result = statement.executeQuery(sql)) {
+          for (int row = 0; row < 2; row++) {
+            assertTrue(result.next(), sql);
+            assertEquals(true, result.getObject(1), sql);
+            assertEquals(2L, result.getObject(2), sql);
+            assertEquals(2L, result.getObject(3), sql);
+          }
+          assertFalse(result.next(), sql);
+        }
+      }
+    }
+  }
+
+  /**
+   * Rejects projected differences through all getters and materialization, even
+   * when the outer query would consume the interval internally.
+   *
+   * @throws Exception
+   *           if opening the connection fails
+   */
+  @Test
+  void temporalDifferenceOutputCannotBeStringifiedOrMaterialized() throws Exception {
+    String difference = "TIMESTAMP '2024-01-03 00:00:00' - TIMESTAMP '2024-01-01 00:00:00'";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      var stringFailure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
+        try (var result = statement.executeQuery("SELECT " + difference)) {
+          assertTrue(result.next());
+          result.getString(1);
+        }
+      });
+      assertEquals("0A000", stringFailure.getSQLState());
+      for (String sql : List.of("SELECT MAX(" + difference + ") FROM small",
+          "SELECT EXTRACT(DAY FROM x) FROM (SELECT " + difference + " AS x) t",
+          "WITH t AS (SELECT " + difference + " AS x) SELECT x > INTERVAL '1' HOUR FROM t")) {
+        var failure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
+          try (var result = statement.executeQuery(sql)) {
+            result.next();
+            result.getObject(1);
+          }
+        }, sql);
+        assertEquals("0A000", failure.getSQLState(), sql);
       }
     }
   }

@@ -3,7 +3,6 @@ package se.alipsa.jparq.engine.function;
 import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.SQLDataException;
-import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.DateTimeException;
@@ -345,17 +344,17 @@ public final class DateTimeFunctions {
             : qualifier.getLeadingField() + " TO " + qualifier.getTrailingField();
     if (expr.getExpression() != null) {
       String message = "Unsupported interval expression operand: " + SqlExceptions.describe(expr);
-      throw new IllegalArgumentException(message, new SQLFeatureNotSupportedException(message, "0A000"));
+      throw SqlExceptions.unsupportedFeature(message);
     }
     if (unit != null && !TemporalInterval.supportsUnit(unit)) {
       String message = "Unsupported interval unit: " + unit;
-      throw new IllegalArgumentException(message, new SQLFeatureNotSupportedException(message, "0A000"));
+      throw SqlExceptions.unsupportedFeature(message);
     }
     try {
       return TemporalInterval.parse(expr.getParameter(), unit);
     } catch (UnsupportedOperationException failure) {
       String message = failure.getMessage();
-      throw new IllegalArgumentException(message, new SQLFeatureNotSupportedException(message, "0A000", failure));
+      throw SqlExceptions.unsupportedFeature(message, failure);
     } catch (ArithmeticException | DateTimeException | IllegalArgumentException failure) {
       String state = failure instanceof ArithmeticException ? "22003" : "22007";
       String message = "Invalid INTERVAL value: " + SqlExceptions.diagnosticValue(expr.getParameter()) + ": "
@@ -461,12 +460,11 @@ public final class DateTimeFunctions {
    *          the left operand
    * @param right
    *          the right operand
-   * @return the signed day count as a {@link Long} for two DATE values, the
-   *         result of interval subtraction, or {@code null} if not a temporal
-   *         subtraction
-   * @throws IllegalArgumentException
-   *           if two temporal operands are not both DATE values; the cause is a
-   *           {@link SQLFeatureNotSupportedException} with SQLState 0A000
+   * @return the signed day count as a {@link Long} for two DATE values, an
+   *         internal interval for other temporal differences, the result of an
+   *         interval offset, or {@code null} if not a temporal subtraction;
+   *         internal differences support comparison and extraction but cannot be
+   *         returned as JDBC column values
    */
   public static Object minus(Object left, Object right) {
     if (left instanceof TemporalInterval li && right instanceof TemporalInterval ri) {
@@ -481,8 +479,9 @@ public final class DateTimeFunctions {
       if (start instanceof LocalDate startDate && end instanceof LocalDate endDate) {
         return ChronoUnit.DAYS.between(startDate, endDate);
       }
-      String message = "Unsupported temporal difference: only DATE - DATE has a supported JDBC representation";
-      throw new IllegalArgumentException(message, new SQLFeatureNotSupportedException(message, "0A000"));
+      if (start != null && end != null) {
+        return TemporalInterval.between(start, end);
+      }
     }
     return null;
   }

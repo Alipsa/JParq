@@ -37,10 +37,23 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
 
   private final Period period;
   private final Duration duration;
+  private final boolean temporalDifference;
 
-  private TemporalInterval(Period period, Duration duration) {
+  /**
+   * Creates an interval, retaining whether temporal subtraction contributed to
+   * it.
+   *
+   * @param period
+   *          the calendar component
+   * @param duration
+   *          the time component
+   * @param temporalDifference
+   *          whether this value contains a temporal difference
+   */
+  private TemporalInterval(Period period, Duration duration, boolean temporalDifference) {
     this.period = Objects.requireNonNull(period, "period").normalized();
     this.duration = Objects.requireNonNull(duration, "duration");
+    this.temporalDifference = temporalDifference;
   }
 
   /**
@@ -53,7 +66,18 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    * @return the new interval instance
    */
   public static TemporalInterval of(Period period, Duration duration) {
-    return new TemporalInterval(period, duration);
+    return new TemporalInterval(period, duration, false);
+  }
+
+  /**
+   * Reports whether temporal subtraction contributed to this interval. Such
+   * values remain internal to the engine and have no JDBC output representation.
+   * This provenance does not affect interval equality or ordering.
+   *
+   * @return true for differences and interval arithmetic involving differences
+   */
+  public boolean isTemporalDifference() {
+    return temporalDifference;
   }
 
   /**
@@ -232,7 +256,8 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    * @return the combined interval
    */
   public TemporalInterval plus(TemporalInterval other) {
-    return of(period.plus(other.period), duration.plus(other.duration));
+    return new TemporalInterval(period.plus(other.period), duration.plus(other.duration),
+        temporalDifference || other.temporalDifference);
   }
 
   /**
@@ -243,7 +268,8 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    * @return the resulting interval
    */
   public TemporalInterval minus(TemporalInterval other) {
-    return of(period.minus(other.period), duration.minus(other.duration));
+    return new TemporalInterval(period.minus(other.period), duration.minus(other.duration),
+        temporalDifference || other.temporalDifference);
   }
 
   /**
@@ -252,7 +278,7 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    * @return the negated interval
    */
   public TemporalInterval negate() {
-    return of(period.negated(), duration.negated());
+    return new TemporalInterval(period.negated(), duration.negated(), temporalDifference);
   }
 
   /**
@@ -309,7 +335,7 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    *          the starting temporal value
    * @param end
    *          the ending temporal value
-   * @return the resulting interval
+   * @return the resulting interval, marked as an internal temporal difference
    */
   public static TemporalInterval between(java.time.temporal.TemporalAccessor start,
       java.time.temporal.TemporalAccessor end) {
@@ -318,19 +344,19 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
 
     if (start instanceof LocalDate sDate && end instanceof LocalDate eDate) {
       Period diff = Period.between(sDate, eDate);
-      return of(diff, Duration.ZERO);
+      return new TemporalInterval(diff, Duration.ZERO, true);
     }
 
     if (start instanceof LocalTime sTime && end instanceof LocalTime eTime) {
       Duration diff = Duration.between(sTime, eTime);
-      return of(Period.ZERO, diff);
+      return new TemporalInterval(Period.ZERO, diff, true);
     }
 
     LocalDateTime startDt = toDateTime(start);
     LocalDateTime endDt = toDateTime(end);
     if (startDt != null && endDt != null) {
       Duration diff = Duration.between(startDt, endDt);
-      return of(Period.ZERO, diff);
+      return new TemporalInterval(Period.ZERO, diff, true);
     }
 
     throw new IllegalArgumentException("Unsupported temporal types: " + start.getClass() + " and " + end.getClass());

@@ -248,10 +248,14 @@ returns `2`. NULL operands produce NULL. Day counts cannot be compared with or a
 for example `d - DATE '2024-02-01' > 7`. Date/time offsets require an explicit `INTERVAL`:
 `DATE '2024-01-01' + INTERVAL '1 day'` is supported; `DATE '2024-01-01' + 1` and other
 unsupported temporal arithmetic raise `SQLException` with SQLState `42000` when evaluated.
-Subtracting two TIMESTAMP or two TIME values, or mixing DATE and TIMESTAMP operands, is
-currently unsupported and raises `SQLFeatureNotSupportedException` with SQLState `0A000`
-when evaluated, including through derived tables and CTEs. These differences have no supported
-JDBC interval representation. NULL operands still produce NULL.
+Differences between TIMESTAMP values, between TIME values, or between mixed DATE/TIMESTAMP
+operands support comparisons with INTERVAL values and `EXTRACT` within the same query block.
+For example, `end_ts - start_ts > INTERVAL '1' HOUR` and
+`EXTRACT(DAY FROM end_ts - start_ts)` remain supported. Returning the difference itself has no
+supported JDBC interval representation and raises `SQLFeatureNotSupportedException` with SQLState
+`0A000` when a result getter reads it or a derived table/CTE or VALUES input materializes it.
+This also applies when the outer query would compare or extract from the materialized difference: perform the
+comparison or extraction in the inner query instead. NULL operands still produce NULL.
 
 Interval literals accept a separate unit, such as `INTERVAL '1' DAY`, for YEAR, MONTH, DAY,
 HOUR, MINUTE, and SECOND, as well as the single-string form `INTERVAL '1 day'`.

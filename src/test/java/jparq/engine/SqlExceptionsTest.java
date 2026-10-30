@@ -38,6 +38,22 @@ class SqlExceptionsTest {
   @TempDir
   Path directory;
 
+  /** Preserves unsupported-feature classification and the original cause. */
+  @Test
+  void unsupportedFeatureFactoryPreservesCause() {
+    var plain = SqlExceptions.unsupportedFeature("Unsupported feature");
+    var classified = assertInstanceOf(SQLFeatureNotSupportedException.class, plain.getCause());
+    assertEquals("0A000", classified.getSQLState());
+    assertEquals("Unsupported feature", classified.getMessage());
+    assertNull(classified.getCause());
+
+    var original = new UnsupportedOperationException("Original failure");
+    var wrapped = SqlExceptions.unsupportedFeature("Unsupported feature", original);
+    var failure = assertInstanceOf(SQLFeatureNotSupportedException.class, wrapped.getCause());
+    assertEquals("0A000", failure.getSQLState());
+    assertSame(original, failure.getCause());
+  }
+
   /**
    * Redacts every binding inside nested SQL while retaining ordinary expression
    * text.

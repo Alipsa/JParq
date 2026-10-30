@@ -2652,7 +2652,18 @@ public class JParqPreparedStatement implements PreparedStatement {
     return informationSchemaColumnsResult;
   }
 
+  /**
+   * Normalizes VALUES cells without exposing internal temporal differences.
+   *
+   * @param value
+   *          the evaluated cell value
+   * @return the value accepted by VALUES materialization
+   * @throws IllegalArgumentException
+   *           if a temporal difference would be materialized, carrying SQLState
+   *           0A000
+   */
   private Object normalizeLiteralValue(Object value) {
+    JParqResultSet.validateTemporalDifferenceOutput(value);
     if (value instanceof TemporalInterval interval) {
       return interval.toString();
     }
