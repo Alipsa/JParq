@@ -461,9 +461,12 @@ public final class DateTimeFunctions {
    *          the left operand
    * @param right
    *          the right operand
-   * @return the signed day count as a {@link Long} for two DATE values, an
-   *         interval for other temporal differences, or {@code null} if not a
-   *         temporal subtraction
+   * @return the signed day count as a {@link Long} for two DATE values, the
+   *         result of interval subtraction, or {@code null} if not a temporal
+   *         subtraction
+   * @throws IllegalArgumentException
+   *           if two temporal operands are not both DATE values; the cause is a
+   *           {@link SQLFeatureNotSupportedException} with SQLState 0A000
    */
   public static Object minus(Object left, Object right) {
     if (left instanceof TemporalInterval li && right instanceof TemporalInterval ri) {
@@ -478,9 +481,8 @@ public final class DateTimeFunctions {
       if (start instanceof LocalDate startDate && end instanceof LocalDate endDate) {
         return ChronoUnit.DAYS.between(startDate, endDate);
       }
-      if (start != null && end != null) {
-        return TemporalInterval.between(start, end);
-      }
+      String message = "Unsupported temporal difference: only DATE - DATE has a supported JDBC representation";
+      throw new IllegalArgumentException(message, new SQLFeatureNotSupportedException(message, "0A000"));
     }
     return null;
   }

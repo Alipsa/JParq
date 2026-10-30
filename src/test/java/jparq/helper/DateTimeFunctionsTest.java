@@ -248,10 +248,9 @@ public class DateTimeFunctionsTest {
   void testMinusTemporalMinusTemporalTimestamp() {
     Timestamp ts1 = Timestamp.valueOf("2023-01-02 10:00:00");
     Timestamp ts2 = Timestamp.valueOf("2023-01-01 09:00:00");
-    TemporalInterval result = (TemporalInterval) DateTimeFunctions.minus(ts1, ts2);
-    assertNotNull(result);
-    assertEquals(Period.ZERO, result.period());
-    assertEquals(Duration.ofDays(1).plusHours(1), result.duration());
+    var failure = assertThrows(IllegalArgumentException.class, () -> DateTimeFunctions.minus(ts1, ts2));
+    assertInstanceOf(java.sql.SQLFeatureNotSupportedException.class, failure.getCause());
+    assertEquals("0A000", SqlExceptions.findSqlStateFailure(failure).getSQLState());
   }
 
   @Test
@@ -757,9 +756,8 @@ public class DateTimeFunctionsTest {
   void testMinusBetweenTemporalValues() {
     Timestamp later = Timestamp.valueOf("2023-01-02 00:00:00");
     Timestamp earlier = Timestamp.valueOf("2023-01-01 12:00:00");
-    TemporalInterval interval = (TemporalInterval) DateTimeFunctions.minus(later, earlier);
-    assertEquals(Duration.ofHours(12), interval.duration());
-    assertEquals(Period.ZERO, interval.period());
+    var failure = assertThrows(IllegalArgumentException.class, () -> DateTimeFunctions.minus(later, earlier));
+    assertEquals("0A000", SqlExceptions.findSqlStateFailure(failure).getSQLState());
   }
 
   @Test

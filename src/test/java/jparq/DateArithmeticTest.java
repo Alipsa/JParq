@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.sql.Date;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Types;
 import java.time.LocalDate;
 import java.util.List;
@@ -90,6 +91,69 @@ class DateArithmeticTest {
         }, sql);
         assertEquals("42000", failure.getSQLState(), sql);
         assertTrue(failure.getMessage().contains("Unsupported temporal arithmetic"), failure::getMessage);
+      }
+    }
+  }
+
+  /**
+   * Prevents non-DATE temporal differences from leaking internal interval values
+   * or their text across JDBC and materialization boundaries.
+   *
+   * @param expression
+   *          unsupported temporal difference
+   * @throws Exception
+   *           if opening the connection fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "CAST('2024-01-02 00:00:00' AS TIMESTAMP) - CAST('2024-01-01 00:00:00' AS TIMESTAMP)",
+      "TIME '12:00:00' - TIME '10:00:00'", "DATE '2024-01-02' - TIMESTAMP '2024-01-01 12:00:00'",
+      "TIMESTAMP '2024-01-02 12:00:00' - DATE '2024-01-01'", "CURRENT_TIMESTAMP - CURRENT_TIMESTAMP",
+      "CURRENT_TIME - CURRENT_TIME"
+  })
+  void nonDateTemporalDifferencesAreUnsupported(String expression) throws Exception {
+    String projection = "SELECT " + expression + " AS x FROM small WHERE id = 0";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String sql : List.of("SELECT " + expression, projection, "SELECT * FROM (" + projection + ") t",
+          "WITH t AS (" + projection + ") SELECT * FROM t",
+          "SELECT id FROM small WHERE id = 0 AND " + expression + " IS NOT NULL",
+          "SELECT MAX(" + expression + ") FROM small WHERE id = 0", "SELECT id FROM small ORDER BY " + expression)) {
+        var failure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
+          try (var result = statement.executeQuery(sql)) {
+            while (result.next()) {
+              result.getObject(1);
+            }
+          }
+        }, sql);
+        assertEquals("0A000", failure.getSQLState(), sql);
+        assertTrue(failure.getMessage().contains("Unsupported temporal difference"), failure::getMessage);
+      }
+    }
+  }
+
+  /**
+   * Retains NULL propagation for non-DATE temporal subtraction.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void nullTemporalDifferencesRemainNull() throws Exception {
+    String projection = "SELECT CAST(NULL AS TIMESTAMP) - TIMESTAMP '2024-01-01 00:00:00' AS a, "
+        + "TIME '12:00:00' - CAST(NULL AS TIME) AS b";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String sql : List.of(projection, "SELECT * FROM (" + projection + ") t",
+          "WITH t AS (" + projection + ") SELECT * FROM t")) {
+        try (var result = statement.executeQuery(sql)) {
+          assertTrue(result.next());
+          assertNull(result.getObject(1));
+          assertTrue(result.wasNull());
+          assertNull(result.getObject(2));
+          assertTrue(result.wasNull());
+          assertFalse(result.next());
+        }
       }
     }
   }
