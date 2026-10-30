@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.sql.Date;
 import java.sql.DriverManager;
 import java.sql.SQLDataException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Period;
@@ -44,10 +45,17 @@ class IntervalLiteralTest {
       for (String sign : new String[]{
           "", "+", "-"
       }) {
-        TemporalInterval expected = TemporalInterval.parse(amount, unit);
-        if ("-".equals(sign)) {
-          expected = expected.negate();
-        }
+        int value = amount.startsWith("-") ? -2 : 2;
+        value = "-".equals(sign) ? -value : value;
+        TemporalInterval expected = switch (unit) {
+          case "YEAR" -> TemporalInterval.of(Period.ofYears(value), Duration.ZERO);
+          case "MONTH" -> TemporalInterval.of(Period.ofMonths(value), Duration.ZERO);
+          case "DAY" -> TemporalInterval.of(Period.ofDays(value), Duration.ZERO);
+          case "HOUR" -> TemporalInterval.of(Period.ZERO, Duration.ofHours(value));
+          case "MINUTE" -> TemporalInterval.of(Period.ZERO, Duration.ofMinutes(value));
+          case "SECOND" -> TemporalInterval.of(Period.ZERO, Duration.ofSeconds(value));
+          default -> throw new AssertionError("Unexpected unit: " + unit);
+        };
         assertEquals(expected, query(sign + "INTERVAL '" + amount + "' " + unit));
         assertEquals(expected, query(sign + "INTERVAL '" + amount + " " + unit + "'"));
       }
@@ -55,7 +63,7 @@ class IntervalLiteralTest {
   }
 
   /**
-   * Verifies fractional seconds and the existing compound qualifier.
+   * Verifies fractional seconds and compound qualifier support.
    *
    * @throws Exception
    *           if query execution fails
@@ -65,7 +73,69 @@ class IntervalLiteralTest {
     assertEquals(TemporalInterval.of(Period.ZERO, Duration.ofMillis(1250)), query("INTERVAL '1.25' SECOND"));
     assertEquals(TemporalInterval.of(Period.ZERO, Duration.ofDays(1).plusHours(2).plusMinutes(3).plusSeconds(4)),
         query("INTERVAL '1 02:03:04' DAY TO SECOND"));
-    assertEquals(TemporalInterval.parse("1 day 2 hours", null), query("INTERVAL '1 day 2 hours'"));
+    assertEquals(TemporalInterval.of(Period.ofDays(1), Duration.ofHours(2)), query("INTERVAL '1 day 2 hours'"));
+  }
+
+  /**
+   * Checks that qualifier precision does not become part of the unit name.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void qualifiedPrecision() throws Exception {
+    assertEquals(TemporalInterval.of(Period.ofDays(1), Duration.ZERO), query("INTERVAL '1' DAY(3)"));
+    assertEquals(TemporalInterval.of(Period.ZERO, Duration.ofMillis(1500)), query("INTERVAL '1.5' SECOND(2,3)"));
+    assertEquals(TemporalInterval.of(Period.ZERO, Duration.ofSeconds(93784)),
+        query("INTERVAL '1 02:03:04' DAY TO SECOND(3)"));
+  }
+
+  /**
+   * Preserves the whole compound interval's sign and fractional seconds.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void signedFractionalCompoundIntervals() throws Exception {
+    for (String qualifier : new String[]{
+        "DAY TO SECOND", "DAY(3) TO SECOND(3)"
+    }) {
+      assertEquals(TemporalInterval.of(Period.ZERO, Duration.ofSeconds(-93784)),
+          query("INTERVAL '-1 02:03:04' " + qualifier));
+      assertEquals(TemporalInterval.of(Period.ZERO, Duration.ofMillis(93784500)),
+          query("INTERVAL '1 02:03:04.5' " + qualifier));
+      assertEquals(TemporalInterval.of(Period.ZERO, Duration.ofMillis(-93784500)),
+          query("INTERVAL '-1 02:03:04.5' " + qualifier));
+      assertEquals(TemporalInterval.of(Period.ZERO, Duration.ofMillis(93784500)),
+          query("INTERVAL '+1 02:03:04.5' " + qualifier));
+      assertEquals(TemporalInterval.of(Period.ZERO, Duration.ofMillis(-500)),
+          query("INTERVAL '-0 00:00:00.5' " + qualifier));
+    }
+    assertEquals(Timestamp.valueOf("2023-12-31 20:56:55.5"),
+        query("TIMESTAMP '2024-01-01 23:00:00' + INTERVAL '-1 02:03:04.5' DAY TO SECOND"));
+  }
+
+  /**
+   * Distinguishes unsupported SQL interval features from invalid literal data.
+   *
+   * @param expression
+   *          the unsupported interval expression
+   * @throws Exception
+   *           if the assertion cannot execute
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "INTERVAL '1-2' YEAR TO MONTH", "INTERVAL '1' WEEK", "INTERVAL (1+1) DAY", "(SELECT INTERVAL '1' WEEK)",
+      "DATE '2024-01-01' + INTERVAL '1' WEEK"
+  })
+  void unsupportedIntervalFeatures(String expression) throws Exception {
+    SQLFeatureNotSupportedException failure = assertThrows(SQLFeatureNotSupportedException.class,
+        () -> query(expression));
+    assertEquals("0A000", failure.getSQLState());
+    assertTrue(failure.getMessage().contains("Unsupported interval"));
+    assertTrue(!failure.getMessage().contains("value: null"));
+    assertNotNull(failure.getCause());
   }
 
   /**

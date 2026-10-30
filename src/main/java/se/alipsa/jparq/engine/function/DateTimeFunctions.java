@@ -3,6 +3,7 @@ package se.alipsa.jparq.engine.function;
 import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.SQLDataException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.DateTimeException;
@@ -29,6 +30,7 @@ import java.util.Locale;
 import java.util.Objects;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.IntervalExpression;
+import net.sf.jsqlparser.expression.IntervalQualifier;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.statement.create.table.ColDataType;
 import se.alipsa.jparq.engine.DecimalCasts;
@@ -327,19 +329,34 @@ public final class DateTimeFunctions {
    * @return the parsed interval
    * @throws IllegalArgumentException
    *           if parsing fails, carrying SQLState 22007 for invalid interval text
-   *           or 22003 for numeric values that cannot be represented
+   *           or 22003 for numeric values that cannot be represented; unsupported
+   *           qualifiers and expression operands carry SQLState 0A000
    */
   @SuppressWarnings("deprecation") // Preserve legacy non-standard interval units.
   public static TemporalInterval toInterval(IntervalExpression expr) {
     if (expr == null) {
       return TemporalInterval.of(Period.ZERO, Duration.ZERO);
     }
-    String unit = expr.getIntervalQualifier() == null ? expr.getIntervalType() : expr.getIntervalQualifier().toString();
+    IntervalQualifier qualifier = expr.getIntervalQualifier();
+    String unit = qualifier == null
+        ? expr.getIntervalType()
+        : qualifier.getTrailingField() == null
+            ? qualifier.getLeadingField()
+            : qualifier.getLeadingField() + " TO " + qualifier.getTrailingField();
+    if (expr.getExpression() != null) {
+      String message = "Unsupported interval expression operand: " + SqlExceptions.describe(expr.getExpression());
+      throw new IllegalArgumentException(message, new SQLFeatureNotSupportedException(message, "0A000"));
+    }
+    if (unit != null && !TemporalInterval.supportsUnit(unit)) {
+      String message = "Unsupported interval unit: " + unit;
+      throw new IllegalArgumentException(message, new SQLFeatureNotSupportedException(message, "0A000"));
+    }
     try {
       return TemporalInterval.parse(expr.getParameter(), unit);
     } catch (ArithmeticException | DateTimeException | IllegalArgumentException failure) {
       String state = failure instanceof ArithmeticException ? "22003" : "22007";
-      String message = "Invalid INTERVAL value: " + SqlExceptions.diagnosticValue(expr.getParameter());
+      String message = "Invalid INTERVAL value: " + SqlExceptions.diagnosticValue(expr.getParameter()) + ": "
+          + failure.getMessage();
       throw new IllegalArgumentException(message, new SQLDataException(message, state, failure));
     }
   }

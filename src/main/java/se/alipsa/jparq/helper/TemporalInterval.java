@@ -11,6 +11,7 @@ import java.time.Period;
 import java.time.ZoneId;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Represents a SQL style interval with separate {@link Period} and
@@ -25,6 +26,8 @@ import java.util.Objects;
 public final class TemporalInterval implements Comparable<TemporalInterval> {
 
   private static final ZoneId UTC = ZoneId.of("UTC");
+  private static final Set<String> SUPPORTED_UNITS = Set.of("year", "years", "month", "months", "day", "days", "hour",
+      "hours", "minute", "minutes", "second", "seconds", "day to second");
 
   private final Period period;
   private final Duration duration;
@@ -48,13 +51,31 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
   }
 
   /**
-   * Parse an interval literal.
+   * Reports whether a unit or compound qualifier is supported by the parser.
+   *
+   * @param unit
+   *          the unit name without precision decorations, or null
+   * @return true if the unit is supported, ignoring case
+   */
+  public static boolean supportsUnit(String unit) {
+    return unit != null && SUPPORTED_UNITS.contains(unit.toLowerCase(Locale.ROOT));
+  }
+
+  /**
+   * Parses an interval literal. A leading sign on a DAY TO SECOND value applies
+   * to the entire duration, including fractional seconds.
    *
    * @param literal
    *          the literal text (possibly quoted), may be {@code null}
    * @param explicitUnit
    *          optional explicit unit (e.g. {@code DAY}) or {@code null}
    * @return the parsed interval (never {@code null})
+   * @throws IllegalArgumentException
+   *           if the text or unit is invalid
+   * @throws ArithmeticException
+   *           if an amount cannot be represented
+   * @throws java.time.DateTimeException
+   *           if a compound time component is invalid
    */
   public static TemporalInterval parse(String literal, String explicitUnit) {
     if ((literal == null || literal.isBlank()) && (explicitUnit == null || explicitUnit.isBlank())) {
@@ -127,15 +148,20 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
         return of(Period.ZERO, Duration.ofSeconds(seconds, nanos));
       }
       case "day to second": {
-        String[] parts = amt.split(" ");
+        boolean negative = amt.startsWith("-");
+        String magnitude = negative || amt.startsWith("+") ? amt.substring(1) : amt;
+        String[] parts = magnitude.split("\\s+");
         if (parts.length != 2) {
           throw new IllegalArgumentException("Invalid DAY TO SECOND interval literal: " + amountLiteral);
         }
         long days = new BigDecimal(parts[0]).longValueExact();
+        if (days < 0) {
+          throw new IllegalArgumentException("Invalid DAY TO SECOND interval literal: " + amountLiteral);
+        }
         LocalTime timePart = LocalTime.parse(parts[1]);
         Duration duration = Duration.ofDays(days).plusHours(timePart.getHour()).plusMinutes(timePart.getMinute())
-            .plusSeconds(timePart.getSecond());
-        return of(Period.ZERO, duration);
+            .plusSeconds(timePart.getSecond()).plusNanos(timePart.getNano());
+        return of(Period.ZERO, negative ? duration.negated() : duration);
       }
       default:
         throw new IllegalArgumentException("Unsupported interval unit: " + unitRaw);

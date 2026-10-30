@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine;
 
 import java.sql.SQLDataException;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.Objects;
 import java.util.Set;
@@ -18,7 +19,8 @@ public final class SqlExceptions {
   /** Diagnostic marker replacing private correlated value bindings. */
   public static final String OUTER_VALUE = "<outer value>";
   private static final int DIAGNOSTIC_VALUE_LIMIT = 64;
-  private static final Set<String> CLASSIFIED_STATES = Set.of("42000", "42702", "22003", "22007", "22008", "22018");
+  private static final Set<String> CLASSIFIED_STATES = Set.of("42000", "42702", "22003", "22007", "22008", "22018",
+      "0A000");
   private static final Pattern CORRELATED_BINDING = Pattern
       .compile("__JPARQ_CORRELATED_VALUE\\s*\\(\\s*'[^']*'\\s*,\\s*\\d+\\s*\\)", Pattern.CASE_INSENSITIVE);
 
@@ -108,13 +110,13 @@ public final class SqlExceptions {
   }
 
   /**
-   * Finds classified syntax, numeric, or temporal data errors inside engine
-   * wrappers.
+   * Finds classified syntax, numeric, temporal data, or unsupported feature
+   * errors inside engine wrappers.
    *
    * @param failure
    *          the exception or wrapper to inspect
-   * @return the SQLState 42000, 42702, 22003, 22007, 22008, or 22018 exception,
-   *         or null without a recognized state
+   * @return the SQLState 42000, 42702, 22003, 22007, 22008, 22018, or 0A000
+   *         exception, or null without a recognized state
    */
   public static SQLException findSqlStateFailure(Throwable failure) {
     Throwable current = failure;
@@ -158,6 +160,10 @@ public final class SqlExceptions {
     if ("42000".equals(classified.getSQLState()) || "42702".equals(classified.getSQLState())) {
       return new SQLSyntaxErrorException(message.toString(), classified.getSQLState(), classified.getErrorCode(),
           failure);
+    }
+    if ("0A000".equals(classified.getSQLState())) {
+      return new SQLFeatureNotSupportedException(message.toString(), classified.getSQLState(),
+          classified.getErrorCode(), failure);
     }
     return new SQLDataException(message.toString(), classified.getSQLState(), classified.getErrorCode(), failure);
   }

@@ -36,6 +36,28 @@ class TemporalIntervalTest {
     assertThrows(IllegalArgumentException.class, () -> TemporalInterval.parse("5", "LIGHTYEAR"));
   }
 
+  /**
+   * Checks compound signs and fractional seconds independently of SQL parsing.
+   */
+  @Test
+  void compoundSignsAndFractionalSeconds() {
+    assertEquals(Duration.ofMillis(-93784500), TemporalInterval.parse("-1 02:03:04.5", "DAY TO SECOND").duration());
+    assertEquals(Duration.ofMillis(93784500), TemporalInterval.parse("+1 02:03:04.5", "DAY TO SECOND").duration());
+    assertEquals(Duration.ofMillis(-500), TemporalInterval.parse("-0 00:00:00.5", "DAY TO SECOND").duration());
+    assertEquals(Duration.ofNanos(1), TemporalInterval.parse("0 00:00:00.000000001", "DAY TO SECOND").duration());
+  }
+
+  /** Checks supported units without parsing a literal amount. */
+  @Test
+  void supportedUnitNames() {
+    assertTrue(TemporalInterval.supportsUnit("DaY"));
+    assertTrue(TemporalInterval.supportsUnit("seconds"));
+    assertTrue(TemporalInterval.supportsUnit("DAY TO SECOND"));
+    assertFalse(TemporalInterval.supportsUnit("WEEK"));
+    assertFalse(TemporalInterval.supportsUnit("YEAR TO MONTH"));
+    assertFalse(TemporalInterval.supportsUnit(null));
+  }
+
   @Test
   void supportsArithmeticAndComparison() {
     TemporalInterval left = TemporalInterval.parse("1", "DAY");
