@@ -9,6 +9,7 @@ import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DoubleValue;
+import net.sf.jsqlparser.expression.HexValue;
 import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.LongValue;
 import net.sf.jsqlparser.expression.SignedExpression;
@@ -29,6 +30,46 @@ import se.alipsa.jparq.helper.TemporalInterval;
  * {@link LiteralConverter#toLiteral(net.sf.jsqlparser.expression.Expression)}.
  */
 class LiteralConverterTest {
+
+  /**
+   * Decodes both hex forms without numeric overflow or loss of leading zeroes.
+   *
+   * @param literal
+   *          the binary literal
+   * @throws Exception
+   *           if parsing fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "X'00417f80fF010203040506070809'", "x'00417F80ff010203040506070809'", "0x00417f80FF010203040506070809",
+      "0X00417F80ff010203040506070809"
+  })
+  void convertsHexLiterals(String literal) throws Exception {
+    var expression = CCJSqlParserUtil.parseExpression(literal);
+    byte[] expected = {
+        0, 65, 127, (byte) 128, (byte) 255, 1, 2, 3, 4, 5, 6, 7, 8, 9
+    };
+    assertTrue(LiteralConverter.isLiteral(expression));
+    assertArrayEquals(expected, assertInstanceOf(byte[].class, LiteralConverter.toLiteral(expression)));
+    assertEquals(literal, expression.toString());
+  }
+
+  /**
+   * Rejects incomplete bytes and nonhexadecimal digits with SQLState 42000.
+   *
+   * @param literal
+   *          the malformed binary literal
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "X'0'", "0x123", "X'GG'", "X' 41'"
+  })
+  void rejectsMalformedHexLiterals(String literal) {
+    var failure = assertThrows(IllegalArgumentException.class, () -> LiteralConverter.toLiteral(new HexValue(literal)));
+    var cause = assertInstanceOf(SQLSyntaxErrorException.class, failure.getCause());
+    assertEquals("42000", cause.getSQLState());
+    assertTrue(cause.getMessage().contains(literal));
+  }
 
   /**
    * Redacts internal binding identity for unsupported unary operand types.

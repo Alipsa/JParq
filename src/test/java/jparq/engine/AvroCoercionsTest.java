@@ -24,6 +24,22 @@ import se.alipsa.jparq.engine.Identifier;
 class AvroCoercionsTest {
 
   /**
+   * Converts stored TIME logical values to JDBC Time with second precision.
+   */
+  @Test
+  void unwrapsTimeLogicalTypes() {
+    Schema millis = LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
+    Schema micros = LogicalTypes.timeMicros().addToSchema(Schema.create(Schema.Type.LONG));
+    var expected = java.sql.Time.valueOf("23:59:59");
+    assertEquals(expected, AvroCoercions.unwrap(86_399_999, millis));
+    assertEquals(expected, AvroCoercions.unwrap(86_399_999_999L, micros));
+    assertSame(expected, AvroCoercions.unwrap(expected, millis));
+    assertSame(expected, AvroCoercions.unwrap(expected, micros));
+    assertEquals(java.sql.Time.valueOf("00:00:00"), AvroCoercions.unwrap(0, millis));
+    assertNull(AvroCoercions.unwrap(null, micros));
+  }
+
+  /**
    * Ensures negative epochs use floor division and local timestamps retain their
    * wall clock.
    */

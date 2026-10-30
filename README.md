@@ -308,8 +308,12 @@ Direct correlated scalar subqueries used as aggregate arguments still have a sep
 Unary signs convert numeric text and report invalid numeric text as `SQLDataException` with SQLState `22018`;
 unsupported operand types raise SQLState `42000`. Expression diagnostics preserve the SQL structure while replacing internal correlated bindings with
 `<outer value>`, including bindings inside nested subqueries.
-Hex literals (`X'41'`, `0x41`), including JDBC byte parameters, still return their SQL text rather than
-binary values; this legacy behavior is tracked in [#250](https://github.com/Alipsa/JParq/issues/250).
+Hex literals (`X'41'`, `0x41`) and JDBC `setBytes`/`setObject(ByteBuffer)` parameters return `byte[]`.
+Hex digits must occur in pairs; `X''` represents an empty byte array. ByteBuffer parameters use the
+remaining bytes without changing the buffer's position or limit.
+JDBC date, time, and timestamp parameters, including their `java.time` equivalents, retain their
+JDBC types through typed SQL literals. Timestamps preserve nanoseconds; TIME values use second precision.
+Stored Avro `time-millis` and `time-micros` columns also return `java.sql.Time` with second precision.
 Expressions skipped by filtering or CASE branch selection are not evaluated.
 
 SQL syntax rejected by JSqlParser raises `SQLSyntaxErrorException` with SQLState `42000`. Syntax and numeric

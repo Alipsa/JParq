@@ -7,10 +7,12 @@ import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.sql.Date;
+import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.Collection;
@@ -224,7 +226,8 @@ public final class AvroCoercions {
   /**
    * Unwraps an Avro value to a corresponding Java type. Record values retain
    * their Avro schema and raw field values as GenericRecord objects rather than
-   * JSON text; record fields are not recursively unwrapped.
+   * JSON text; record fields are not recursively unwrapped. TIME logical types
+   * become JDBC Time values with second precision, matching typed TIME literals.
    *
    * @param v
    *          The Avro value to unwrap.
@@ -253,6 +256,9 @@ public final class AvroCoercions {
         }
         return v.toString();
       case INT:
+        if (effective.getLogicalType() instanceof LogicalTypes.TimeMillis) {
+          return v instanceof Time ? v : Time.valueOf(LocalTime.ofNanoOfDay(((Number) v).longValue() * 1_000_000));
+        }
         if (LogicalTypes.date().equals(effective.getLogicalType())) {
           if (v instanceof Date) {
             return v;
@@ -262,6 +268,9 @@ public final class AvroCoercions {
         }
         return ((Number) v).intValue();
       case LONG:
+        if (effective.getLogicalType() instanceof LogicalTypes.TimeMicros) {
+          return v instanceof Time ? v : Time.valueOf(LocalTime.ofNanoOfDay(((Number) v).longValue() * 1000));
+        }
         if (isTimestamp(effective)) {
           if (v instanceof Timestamp) {
             return v;

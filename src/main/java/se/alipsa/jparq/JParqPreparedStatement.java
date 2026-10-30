@@ -5094,7 +5094,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       case Timestamp ts -> {
         LocalDateTime ldt = ts.toLocalDateTime();
-        return "'" + TIMESTAMP_FORMAT.format(ldt) + "'";
+        return "TIMESTAMP '" + TIMESTAMP_FORMAT.format(ldt) + "'";
       }
       case Date date -> {
         LocalDate localDate = date.toLocalDate();
@@ -5102,16 +5102,16 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       case Time time -> {
         LocalTime lt = time.toLocalTime();
-        return "'" + TIME_FORMAT.format(lt) + "'";
+        return "TIME '" + TIME_FORMAT.format(lt) + "'";
       }
       case LocalDate ld -> {
         return "DATE '" + DATE_FORMAT.format(ld) + "'";
       }
       case LocalTime lt -> {
-        return "'" + TIME_FORMAT.format(lt) + "'";
+        return "TIME '" + TIME_FORMAT.format(lt) + "'";
       }
       case LocalDateTime ldt -> {
-        return "'" + TIMESTAMP_FORMAT.format(ldt) + "'";
+        return "TIMESTAMP '" + TIMESTAMP_FORMAT.format(ldt) + "'";
       }
       case ByteBuffer buffer -> {
         ByteBuffer dup = buffer.duplicate();
