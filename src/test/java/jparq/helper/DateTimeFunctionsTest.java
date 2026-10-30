@@ -406,13 +406,17 @@ public class DateTimeFunctionsTest {
    *          SQL time text
    * @param expected
    *          normalized time at JDBC TIME precision
+   * @param millis
+   *          expected fractional milliseconds
    */
   @ParameterizedTest
   @CsvSource({
-      "9:05:00,09:05:00", "9:5:0,09:05:00", "10:00,10:00:00", "10:00:00.5,10:00:00", "23:59:59.123456789,23:59:59"
+      "9:05:00,09:05:00,0", "9:5:0,09:05:00,0", "10:00,10:00:00,0", "10:00:00.5,10:00:00,500",
+      "23:59:59.123456789,23:59:59,123"
   })
-  void unpaddedTimesRemainAvailable(String text, String expected) {
+  void unpaddedTimesRemainAvailable(String text, String expected, int millis) {
     Time time = Time.valueOf(expected);
+    time.setTime(time.getTime() + millis);
     assertEquals(time, DateTimeFunctions.toTime(text));
     assertEquals(time, DateTimeFunctions.castLiteral(createCastExpression("TIME"), text));
   }
@@ -469,9 +473,27 @@ public class DateTimeFunctionsTest {
     assertEquals(leapDay, DateTimeFunctions.toDate("2024-02-29"));
     assertEquals(leapDay, DateTimeFunctions.toDate("2024-02-29T10:30:15"));
     assertEquals(leapDay, DateTimeFunctions.toDate("2024-02-29 10:30:15"));
+    time.setTime(time.getTime() + 123);
     assertEquals(time, DateTimeFunctions.toTime("10:30:15.123456789"));
+    time.setTime(time.getTime() + 377);
     assertEquals(time, DateTimeFunctions.toTime("2024-02-29T10:30:15.5"));
     assertEquals(time, DateTimeFunctions.toTime("2024-02-29 10:30:15.5"));
+  }
+
+  /** Retains milliseconds from LocalTime, SQL text, and ISO date-time inputs. */
+  @Test
+  void retainsTimeMilliseconds() {
+    for (int nanos : new int[]{
+        0, 123_456_789, 500_000_000, 999_999_999
+    }) {
+      LocalTime local = LocalTime.of(23, 59, 59, nanos);
+      Time expected = Time.valueOf("23:59:59");
+      expected.setTime(expected.getTime() + nanos / 1_000_000);
+      assertEquals(expected, DateTimeFunctions.toTime(local));
+      assertEquals(expected, DateTimeFunctions.toTime(local.toString()));
+      assertEquals(expected, DateTimeFunctions.castLiteral(createCastExpression("TIME"), local.toString()));
+      assertEquals(local.withNano(nanos / 1_000_000 * 1_000_000), DateTimeFunctions.toLocalTime(expected));
+    }
   }
 
   // Additional tests for applyInterval

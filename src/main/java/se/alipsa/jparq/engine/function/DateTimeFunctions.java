@@ -996,6 +996,7 @@ public final class DateTimeFunctions {
   /**
    * Converts a value to a time, accepting unpadded SQL fields, fractional
    * seconds, and ISO date-time strings while rejecting out-of-range clock fields.
+   * Fractions retain milliseconds; sub-millisecond digits are truncated.
    *
    * @param value
    *          the temporal, numeric, or string value
@@ -1012,22 +1013,35 @@ public final class DateTimeFunctions {
       return new Time(ts.getTime());
     }
     if (value instanceof LocalTime lt) {
-      return Time.valueOf(lt);
+      Time time = Time.valueOf(lt);
+      time.setTime(time.getTime() + lt.getNano() / 1_000_000);
+      return time;
     }
     if (value instanceof Number n) {
       return new Time(n.longValue());
     }
     String text = value.toString().trim();
     try {
-      return Time.valueOf(LocalTime.parse(text, SQL_TIME));
+      return toTime(LocalTime.parse(text, SQL_TIME));
     } catch (DateTimeParseException ex) {
       try {
         LocalTime parsed = LocalTime.parse(text.replace(' ', 'T'), DateTimeFormatter.ISO_DATE_TIME);
-        return Time.valueOf(parsed);
+        return toTime(parsed);
       } catch (DateTimeParseException invalid) {
         throw temporalFailure("TIME", text, ex, invalid);
       }
     }
+  }
+
+  /**
+   * Reads a JDBC time's local clock fields including its stored milliseconds.
+   *
+   * @param time
+   *          the JDBC time
+   * @return the local time with millisecond precision
+   */
+  public static LocalTime toLocalTime(Time time) {
+    return time.toLocalTime().withNano((int) Math.floorMod(time.getTime(), 1000L) * 1_000_000);
   }
 
   /**

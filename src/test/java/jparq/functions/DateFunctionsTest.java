@@ -60,7 +60,9 @@ public class DateFunctionsTest {
         assertTrue(rs.next());
         assertEquals(Timestamp.valueOf("2024-06-30 00:00:00"), rs.getTimestamp("midnight"));
         assertEquals(Timestamp.valueOf("2024-06-30 10:00:00"), rs.getTimestamp("morning"));
-        assertEquals(Time.valueOf("10:00:00"), rs.getTime("clock"));
+        Time expected = Time.valueOf("10:00:00");
+        expected.setTime(expected.getTime() + 500);
+        assertEquals(expected, rs.getTime("clock"));
         assertFalse(rs.next());
       } catch (SQLException e) {
         fail(e);

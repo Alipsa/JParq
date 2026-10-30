@@ -647,7 +647,34 @@ public class JParqResultSet extends ResultSetAdapter {
     }
   }
 
+  /**
+   * Reads a value while preserving classified data errors at the JDBC boundary.
+   *
+   * @param idx
+   *          one-based column index
+   * @return the projected value
+   * @throws SQLException
+   *           if reading or decoding fails
+   */
   private Object value(int idx) throws SQLException {
+    try {
+      return readValue(idx);
+    } catch (RuntimeException exception) {
+      throw SqlExceptions.wrap("Failed to read column " + idx, exception);
+    }
+  }
+
+  /**
+   * Reads a projected value; the caller translates runtime conversion failures
+   * into classified JDBC exceptions.
+   *
+   * @param idx
+   *          one-based column index
+   * @return the projected value
+   * @throws SQLException
+   *           if the column cannot be read
+   */
+  private Object readValue(int idx) throws SQLException {
     if (aggregateQuery) {
       if (!aggregateOnRow || aggregateRowIndex < 0) {
         throw new SQLException("Call next() before getting values");

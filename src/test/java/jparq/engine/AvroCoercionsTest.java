@@ -24,13 +24,14 @@ import se.alipsa.jparq.engine.Identifier;
 class AvroCoercionsTest {
 
   /**
-   * Converts stored TIME logical values to JDBC Time with second precision.
+   * Converts stored TIME logical values to JDBC Time retaining milliseconds.
    */
   @Test
   void unwrapsTimeLogicalTypes() {
     Schema millis = LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
     Schema micros = LogicalTypes.timeMicros().addToSchema(Schema.create(Schema.Type.LONG));
     var expected = java.sql.Time.valueOf("23:59:59");
+    expected.setTime(expected.getTime() + 999);
     assertEquals(expected, AvroCoercions.unwrap(86_399_999, millis));
     assertEquals(expected, AvroCoercions.unwrap(86_399_999_999L, micros));
     assertSame(expected, AvroCoercions.unwrap(expected, millis));

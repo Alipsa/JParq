@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.math.MathContext;
 import java.nio.ByteBuffer;
 import java.sql.Date;
+import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -2581,6 +2582,9 @@ public final class WindowFunctions {
     }
     if (left instanceof Timestamp && right instanceof Timestamp) {
       return Long.compare(((Timestamp) left).getTime(), ((Timestamp) right).getTime());
+    }
+    if (left instanceof Time leftTime && right instanceof Time rightTime) {
+      return leftTime.compareTo(rightTime);
     }
     if (left instanceof Date && right instanceof Date) {
       return Long.compare(((Date) left).getTime(), ((Date) right).getTime());

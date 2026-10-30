@@ -4,6 +4,7 @@ import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 
 import java.math.BigDecimal;
 import java.sql.Date;
+import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.Arrays;
 import java.util.Set;
@@ -63,6 +64,9 @@ public final class SqlComparisons {
     }
     if (l instanceof Timestamp && r instanceof Timestamp) {
       return ((Timestamp) l).compareTo((Timestamp) r);
+    }
+    if (l instanceof Time left && r instanceof Time right) {
+      return left.compareTo(right);
     }
     if (l instanceof Date && r instanceof Date) {
       return Long.compare(((Date) l).getTime(), ((Date) r).getTime());

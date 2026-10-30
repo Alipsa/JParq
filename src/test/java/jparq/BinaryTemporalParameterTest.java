@@ -20,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.JParqConnection;
 
 /** Verifies binary literals and typed JDBC parameters against stored values. */
@@ -33,6 +34,31 @@ class BinaryTemporalParameterTest {
   private static final byte[] BYTES = {
       0, 65, (byte) 255
   };
+
+  /**
+   * Rejects timestamp parameter years whose JDBC era would be lost.
+   *
+   * @param year
+   *          unrepresentable signed year
+   * @throws Exception
+   *           if opening the connection fails
+   */
+  @ParameterizedTest
+  @ValueSource(ints = {
+      -5, 0
+  })
+  void rejectsTimestampEraLoss(int year) throws Exception {
+    try (var connection = connection(true, true); var statement = connection.prepareStatement("SELECT ?")) {
+      statement.setObject(1, java.time.LocalDate.of(year, 1, 1).atStartOfDay());
+      var failure = assertThrows(java.sql.SQLDataException.class, statement::executeQuery);
+      assertEquals("22008", failure.getSQLState());
+      statement.setObject(1, java.time.LocalDateTime.of(1, 1, 1, 0, 0));
+      try (var result = statement.executeQuery()) {
+        assertTrue(result.next());
+        assertEquals(java.time.LocalDateTime.of(1, 1, 1, 0, 0), result.getTimestamp(1).toLocalDateTime());
+      }
+    }
+  }
 
   /**
    * Writes distinct binary and temporal rows plus a NULL row.

@@ -134,8 +134,9 @@ class LiteralConverterTest {
         LiteralConverter.toLiteral(CCJSqlParserUtil.parseExpression("TIMESTAMP '2024-06-30'")));
     assertEquals(java.sql.Timestamp.valueOf("2024-06-30 10:00:00"),
         LiteralConverter.toLiteral(CCJSqlParserUtil.parseExpression("TIMESTAMP '2024-06-30T10:00:00'")));
-    assertEquals(java.sql.Time.valueOf("10:00:00"),
-        LiteralConverter.toLiteral(CCJSqlParserUtil.parseExpression("TIME '10:00:00.5'")));
+    var fractionalTime = java.sql.Time.valueOf("10:00:00");
+    fractionalTime.setTime(fractionalTime.getTime() + 500);
+    assertEquals(fractionalTime, LiteralConverter.toLiteral(CCJSqlParserUtil.parseExpression("TIME '10:00:00.5'")));
     var zoned = CCJSqlParserUtil.parseExpression("TIMESTAMPTZ '2024-06-30 10:00:00+01'");
     var failure = assertThrows(IllegalArgumentException.class, () -> LiteralConverter.toLiteral(zoned));
     assertTrue(failure.getMessage().contains("Unsupported temporal literal type"));
