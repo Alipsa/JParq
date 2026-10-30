@@ -256,6 +256,11 @@ supported JDBC interval representation and raises `SQLFeatureNotSupportedExcepti
 `0A000` when a result getter reads it or a derived table/CTE or VALUES input materializes it.
 This also applies when the outer query would compare or extract from the materialized difference: perform the
 comparison or extraction in the inner query instead. NULL operands still produce NULL.
+Text conversion of differences is also unsupported (`0A000`), including character casts,
+`||`, string functions such as `CONCAT`, `UPPER`, and `LENGTH`, and JSON construction.
+These operations reject the difference before its internal diagnostic text can be used.
+EXISTS checks for rows without reading unused projected differences, including correlated
+subqueries and HAVING predicates.
 
 Interval literals accept a separate unit, such as `INTERVAL '1' DAY`, for YEAR, MONTH, DAY,
 HOUR, MINUTE, and SECOND, as well as the single-string form `INTERVAL '1 day'`.

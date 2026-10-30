@@ -5,7 +5,12 @@ import static org.mockito.Mockito.*;
 
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import net.sf.jsqlparser.statement.select.Select;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqPreparedStatement;
@@ -15,6 +20,36 @@ import se.alipsa.jparq.engine.SubqueryExecutor;
  * Counts nested preparations and verifies cached-statement resource ownership.
  */
 class SubqueryExecutorLifecycleTest {
+  /**
+   * Keeps row-existence probes separate from scalar result caching and closes
+   * their results without accessing metadata or column getters.
+   *
+   * @throws Exception
+   *           if parsing or mocked JDBC setup fails
+   */
+  @Test
+  void existenceProbeDoesNotReadOrCacheScalarValues() throws Exception {
+    var nested = mock(JParqPreparedStatement.class);
+    when(nested.isReusableSubqueryShape()).thenReturn(true);
+    var probe = result(11);
+    var scalar = result(22);
+    when(nested.executeQuery()).thenReturn(probe, scalar);
+    Select select = (Select) CCJSqlParserUtil.parse("SELECT 1 AS x");
+    try (var executor = new SubqueryExecutor(mock(JParqConnection.class), sql -> nested)) {
+      assertTrue(executor.existsCorrelated(select, List.of(), Set.of(), Map.of(), (qualifier, column) -> null));
+      assertTrue(executor.existsCorrelated(select, List.of(), Set.of(), Map.of(), (qualifier, column) -> null));
+      var values = executor.executeCorrelated(select, List.of(), Set.of(), Map.of(), (qualifier, column) -> null);
+      assertEquals(List.of(List.of(22)), values.rows());
+      verify(probe, times(1)).next();
+      verify(probe, never()).getMetaData();
+      verify(probe, never()).getObject(anyInt());
+      verify(probe).close();
+      verify(scalar).close();
+      verify(nested, times(2)).executeQuery();
+    }
+    verify(nested).close();
+  }
+
   /**
    * Reuses a safe prepared shape while consuming and closing fresh results.
    *

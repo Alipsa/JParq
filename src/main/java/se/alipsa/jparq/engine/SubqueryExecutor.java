@@ -38,6 +38,7 @@ public final class SubqueryExecutor implements AutoCloseable {
   private final ExecutionPlans executionPlans;
   private final JParqConnection connection;
   private final Map<String, SubqueryResult> cache = new ConcurrentHashMap<>();
+  private final Map<String, SubqueryResult> existenceCache = new ConcurrentHashMap<>();
   private final StatementFactory statementFactory;
   private final Function<Table, Set<String>> tableColumns;
   private final Map<PlainSelect, Optional<Set<String>>> scopeColumns = new IdentityHashMap<>();
@@ -130,6 +131,27 @@ public final class SubqueryExecutor implements AutoCloseable {
   }
 
   /**
+   * Checks whether a correlated or uncorrelated subquery returns any rows,
+   * without reading its unused projected values.
+   *
+   * @param select
+   *          subquery node
+   * @param qualifiers
+   *          outer qualifiers
+   * @param columns
+   *          candidate unqualified outer columns
+   * @param context
+   *          outer qualifier mappings
+   * @param values
+   *          current outer value resolver
+   * @return whether at least one row exists
+   */
+  public boolean existsCorrelated(Select select, Collection<String> qualifiers, Set<String> columns,
+      Map<String, Map<String, String>> context, BiFunction<String, String, Object> values) {
+    return !executeCorrelated(select, qualifiers, columns, context, values, true).rows().isEmpty();
+  }
+
+  /**
    * Executes a subquery using one analyzed shape and the current typed bindings.
    * Uncorrelated results retain their separate result cache. Each Select node
    * belongs to one lexical outer scope within this execution: qualifiers,
@@ -150,6 +172,29 @@ public final class SubqueryExecutor implements AutoCloseable {
    */
   public SubqueryResult executeCorrelated(Select select, Collection<String> qualifiers, Set<String> columns,
       Map<String, Map<String, String>> context, BiFunction<String, String, Object> values) {
+    return executeCorrelated(select, qualifiers, columns, context, values, false);
+  }
+
+  /**
+   * Executes a bound shape in value or row-existence mode, keeping their caches
+   * separate so an existence probe cannot replace a later scalar result.
+   *
+   * @param select
+   *          subquery node
+   * @param qualifiers
+   *          outer qualifiers
+   * @param columns
+   *          candidate outer columns
+   * @param context
+   *          outer qualifier mappings
+   * @param values
+   *          current outer value resolver
+   * @param existenceOnly
+   *          whether to stop after the first row without reading columns
+   * @return materialized values or a zero-column row-existence result
+   */
+  private SubqueryResult executeCorrelated(Select select, Collection<String> qualifiers, Set<String> columns,
+      Map<String, Map<String, String>> context, BiFunction<String, String, Object> values, boolean existenceOnly) {
     BoundQuery query = executionPlans.correlations.get(select);
     if (query == null) {
       String key = UUID.randomUUID().toString();
@@ -163,6 +208,10 @@ public final class SubqueryExecutor implements AutoCloseable {
       executionPlans.correlations.put(select, query);
     }
     if (query.references().isEmpty()) {
+      if (existenceOnly) {
+        String sql = normalize(select.toString());
+        return existenceCache.computeIfAbsent(sql, key -> runQuery(key, () -> key, true));
+      }
       return execute(select);
     }
     List<Object> bindings = new ArrayList<>(query.references().size());
@@ -182,7 +231,7 @@ public final class SubqueryExecutor implements AutoCloseable {
           namedBindings.add(qualifier + reference.column() + "=" + bindings.get(index));
         }
         return select + " [outer bindings: " + namedBindings + "]";
-      });
+      }, existenceOnly);
     }
   }
 
@@ -401,7 +450,7 @@ public final class SubqueryExecutor implements AutoCloseable {
   }
 
   private SubqueryResult runQuery(String sql) {
-    return runQuery(sql, () -> sql);
+    return runQuery(sql, () -> sql, false);
   }
 
   /**
@@ -411,9 +460,11 @@ public final class SubqueryExecutor implements AutoCloseable {
    *          executable SQL shape
    * @param description
    *          diagnostic text computed only on failure
+   * @param existenceOnly
+   *          whether to check for a row without accessing projected values
    * @return materialized subquery result
    */
-  private SubqueryResult runQuery(String sql, java.util.function.Supplier<String> description) {
+  private SubqueryResult runQuery(String sql, java.util.function.Supplier<String> description, boolean existenceOnly) {
     try {
       PreparedStatement prepared = preparedStatements.get(sql);
       if (prepared == null) {
@@ -425,6 +476,9 @@ public final class SubqueryExecutor implements AutoCloseable {
       // Cached statements are closed by this executor; all results are per-call.
       PreparedStatement perCall = preparedStatements.containsKey(sql) ? null : prepared;
       try (perCall; ResultSet rs = prepared.executeQuery()) {
+        if (existenceOnly) {
+          return new SubqueryResult(List.of(), rs.next() ? List.of(List.of()) : List.of());
+        }
         return consume(rs);
       }
     } catch (SQLException | RuntimeException e) {
@@ -486,6 +540,7 @@ public final class SubqueryExecutor implements AutoCloseable {
     }
     preparedStatements.clear();
     cache.clear();
+    existenceCache.clear();
     if (failure != null) {
       throw failure;
     }

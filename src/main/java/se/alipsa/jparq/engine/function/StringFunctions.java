@@ -11,7 +11,13 @@ import java.util.Map;
 import java.util.regex.Pattern;
 import net.sf.jsqlparser.expression.Expression;
 
-/** Utility methods implementing SQL string functions. */
+import se.alipsa.jparq.engine.SqlText;
+
+/**
+ * Utility methods implementing SQL string functions. Text conversion of
+ * internal temporal differences raises IllegalArgumentException carrying
+ * SQLState 0A000.
+ */
 public final class StringFunctions {
 
   /** Enumeration describing which sides should be trimmed. */
@@ -80,7 +86,7 @@ public final class StringFunctions {
     if (value == null) {
       return null;
     }
-    String str = value.toString();
+    String str = SqlText.valueOf(value);
     return str.codePointCount(0, str.length());
   }
 
@@ -95,7 +101,7 @@ public final class StringFunctions {
     if (value == null) {
       return null;
     }
-    return value.toString().getBytes(StandardCharsets.UTF_8).length;
+    return SqlText.valueOf(value).getBytes(StandardCharsets.UTF_8).length;
   }
 
   /**
@@ -110,7 +116,7 @@ public final class StringFunctions {
     if (value == null) {
       return null;
     }
-    String str = value.toString();
+    String str = SqlText.valueOf(value);
     if (str.isEmpty()) {
       return null;
     }
@@ -133,9 +139,9 @@ public final class StringFunctions {
     }
     String javaCharset = normalizeCharset(charsetName);
     if (StandardCharsets.UTF_8.name().equalsIgnoreCase(javaCharset)) {
-      return value.toString();
+      return SqlText.valueOf(value);
     }
-    String text = value.toString();
+    String text = SqlText.valueOf(value);
     try {
       return new String(text.getBytes(StandardCharsets.UTF_8), Charset.forName(javaCharset));
     } catch (Exception e) {
@@ -174,8 +180,8 @@ public final class StringFunctions {
     if (substring == null || input == null) {
       return null;
     }
-    String needle = substring.toString();
-    String haystack = input.toString();
+    String needle = SqlText.valueOf(substring);
+    String haystack = SqlText.valueOf(input);
     int from = start == null ? 0 : Math.max(0, start.intValue() - 1);
     if (from >= haystack.length()) {
       return 0;
@@ -203,8 +209,8 @@ public final class StringFunctions {
     if (substring == null || input == null) {
       return null;
     }
-    String needle = substring.toString();
-    String haystack = input.toString();
+    String needle = SqlText.valueOf(substring);
+    String haystack = SqlText.valueOf(input);
     if (needle.isEmpty()) {
       return 1;
     }
@@ -374,7 +380,7 @@ public final class StringFunctions {
       if (value == null) {
         continue;
       }
-      sb.append(value);
+      sb.append(SqlText.valueOf(value));
       any = true;
     }
     return any ? sb.toString() : null;
@@ -388,7 +394,7 @@ public final class StringFunctions {
    * @return upper-case representation or {@code null}
    */
   public static String upper(Object value) {
-    return value == null ? null : value.toString().toUpperCase(Locale.ROOT);
+    return value == null ? null : SqlText.valueOf(value).toUpperCase(Locale.ROOT);
   }
 
   /**
@@ -399,7 +405,7 @@ public final class StringFunctions {
    * @return lower-case representation or {@code null}
    */
   public static String lower(Object value) {
-    return value == null ? null : value.toString().toLowerCase(Locale.ROOT);
+    return value == null ? null : SqlText.valueOf(value).toLowerCase(Locale.ROOT);
   }
 
   /**
@@ -589,7 +595,7 @@ public final class StringFunctions {
     if (value == null) {
       return null;
     }
-    String text = value.toString().trim().toUpperCase(Locale.ROOT);
+    String text = SqlText.valueOf(value).trim().toUpperCase(Locale.ROOT);
     if (text.isEmpty()) {
       return null;
     }
@@ -886,7 +892,7 @@ public final class StringFunctions {
     if (value == null) {
       return null;
     }
-    String str = value.toString();
+    String str = SqlText.valueOf(value);
     if (str.isEmpty()) {
       return 0;
     }
@@ -907,10 +913,10 @@ public final class StringFunctions {
     if (value == null) {
       return null;
     }
-    String str = value.toString();
+    String str = SqlText.valueOf(value);
     Form form = Form.NFC;
     if (formName != null) {
-      form = switch (formName.toString().toUpperCase(Locale.ROOT)) {
+      form = switch (SqlText.valueOf(formName).toUpperCase(Locale.ROOT)) {
         case "NFD" -> Form.NFD;
         case "NFKC" -> Form.NFKC;
         case "NFKD" -> Form.NFKD;

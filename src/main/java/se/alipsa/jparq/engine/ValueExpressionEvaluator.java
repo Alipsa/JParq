@@ -542,7 +542,7 @@ public final class ValueExpressionEvaluator {
         } else if (keyObj instanceof String keyText) {
           key = LiteralConverter.decodeStringLiteral(new StringValue(keyText));
         } else if (keyObj != null) {
-          key = keyObj.toString();
+          key = SqlText.valueOf(keyObj);
         }
         if (key == null) {
           continue;
@@ -570,7 +570,7 @@ public final class ValueExpressionEvaluator {
   }
 
   private String toStringValue(Object value) {
-    return value == null ? null : value.toString();
+    return value == null ? null : SqlText.valueOf(value);
   }
 
   /**

@@ -36,6 +36,7 @@ import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.NumericCastTarget;
 import se.alipsa.jparq.engine.NumericCasts;
 import se.alipsa.jparq.engine.SqlExceptions;
+import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
@@ -541,6 +542,17 @@ public final class DateTimeFunctions {
     return null;
   }
 
+  /**
+   * Reads a JDBC time's local clock fields including its stored milliseconds.
+   *
+   * @param time
+   *          the JDBC time
+   * @return the local time with millisecond precision
+   */
+  public static LocalTime toLocalTime(Time time) {
+    return time.toLocalTime().withNano((int) Math.floorMod(time.getTime(), 1000L) * 1_000_000);
+  }
+
   private static LocalTime toLocalTime(Object value) {
     TemporalAccessor ta = toTemporalAccessor(value);
     if (ta instanceof LocalTime lt) {
@@ -727,7 +739,8 @@ public final class DateTimeFunctions {
    *           exceeds the target's range or precision (SQLState 22003), or
    *           numeric input is invalid or non-finite (SQLState 22018), or
    *           temporal input has invalid format (22007) or out-of-range fields
-   *           (22008), carried by the cause
+   *           (22008), or an internal temporal difference is converted to text
+   *           (0A000), carried by the cause
    */
   public static Object castLiteral(CastExpression cast, Object value) {
     if (cast != null && cast.getColDataType() != null
@@ -760,13 +773,13 @@ public final class DateTimeFunctions {
       case "boolean", "bool" -> toBoolean(value);
       case "char", "character", "nchar", "varchar", "charactervarying", "nvarchar", "string" ->
         castToString(cast, value);
-      case "text", "clob" -> value.toString();
+      case "text", "clob" -> SqlText.valueOf(value);
       default -> value;
     };
   }
 
   private static String castToString(CastExpression cast, Object value) {
-    String text = value == null ? null : value.toString();
+    String text = value == null ? null : SqlText.valueOf(value);
     if (text == null) {
       return null;
     }
@@ -819,7 +832,7 @@ public final class DateTimeFunctions {
       }
       return num.doubleValue() != 0d;
     }
-    String text = value.toString().trim();
+    String text = SqlText.valueOf(value).trim();
     if (text.isEmpty()) {
       return Boolean.FALSE;
     }
@@ -932,7 +945,7 @@ public final class DateTimeFunctions {
     if (value instanceof LocalDate ld) {
       return Timestamp.valueOf(((LocalDate) value).atStartOfDay());
     }
-    String text = value.toString().trim();
+    String text = SqlText.valueOf(value).trim();
     String normalized = text.replace('T', ' ');
     try {
       return Timestamp.valueOf(LocalDateTime.parse(normalized, SQL_TIMESTAMP));
@@ -981,7 +994,7 @@ public final class DateTimeFunctions {
     if (value instanceof Number n) {
       return new Date(n.longValue());
     }
-    String text = value.toString().trim();
+    String text = SqlText.valueOf(value).trim();
     try {
       return Date.valueOf(LocalDate.parse(text, SQL_DATE));
     } catch (DateTimeParseException ex) {
@@ -1024,7 +1037,7 @@ public final class DateTimeFunctions {
     if (value instanceof Number n) {
       return toTime(new Time(n.longValue()));
     }
-    String text = value.toString().trim();
+    String text = SqlText.valueOf(value).trim();
     try {
       return toTime(LocalTime.parse(text, SQL_TIME));
     } catch (DateTimeParseException ex) {
@@ -1035,17 +1048,6 @@ public final class DateTimeFunctions {
         throw temporalFailure("TIME", text, ex, invalid);
       }
     }
-  }
-
-  /**
-   * Reads a JDBC time's local clock fields including its stored milliseconds.
-   *
-   * @param time
-   *          the JDBC time
-   * @return the local time with millisecond precision
-   */
-  public static LocalTime toLocalTime(Time time) {
-    return time.toLocalTime().withNano((int) Math.floorMod(time.getTime(), 1000L) * 1_000_000);
   }
 
   /**

@@ -196,6 +196,71 @@ class DateArithmeticTest {
   }
 
   /**
+   * Rejects text conversion before a difference can become an ordinary string or
+   * a derived numeric value such as its text length.
+   *
+   * @param template
+   *          text-consuming SQL expression with one difference placeholder
+   * @throws Exception
+   *           if opening the connection fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "CAST(%s AS VARCHAR)", "CAST(%s AS VARCHAR(5))", "CAST(%s AS CHAR)", "CAST(%s AS CLOB)", "%s || ''", "'' || %s",
+      "CONCAT('x', %s)", "UPPER(%s)", "LOWER(%s)", "LENGTH(%s)", "OCTET_LENGTH(%s)", "ASCII(%s)",
+      "JSON_OBJECT('a' VALUE %s)", "JSON_ARRAY(ARRAY[%s])", "STRING_AGG(%s, ',')", "%s LIKE 'Temporal%%'"
+  })
+  void temporalDifferencesCannotBeConvertedToText(String template) throws Exception {
+    String difference = "(TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00')";
+    String projection = "SELECT " + template.formatted(difference) + " AS x FROM small";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String sql : List.of(projection, "SELECT * FROM (" + projection + ") t",
+          "WITH t AS (" + projection + ") SELECT * FROM t")) {
+        var failure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
+          try (var result = statement.executeQuery(sql)) {
+            result.next();
+            result.getObject(1);
+          }
+        }, sql);
+        assertEquals("0A000", failure.getSQLState(), sql);
+        assertTrue(failure.getMessage().contains("Unsupported temporal difference"), failure::getMessage);
+      }
+    }
+  }
+
+  /**
+   * Checks row existence without reading unused temporal difference projections,
+   * including correlated predicates and HAVING.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void existsDoesNotReadTemporalDifferenceOutput() throws Exception {
+    String difference = "TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00'";
+    String subquery = "SELECT " + difference + " FROM small t";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String sql : List.of("SELECT id FROM small WHERE EXISTS (" + subquery + ") ORDER BY id",
+          "SELECT id FROM small s WHERE EXISTS (" + subquery + " WHERE t.id = s.id) ORDER BY id",
+          "SELECT id FROM small WHERE NOT EXISTS (" + subquery + " WHERE id = 99) ORDER BY id",
+          "SELECT id FROM small GROUP BY id HAVING EXISTS (" + subquery + ") ORDER BY id")) {
+        try (var result = statement.executeQuery(sql)) {
+          assertTrue(result.next(), sql);
+          assertEquals(0, result.getInt(1), sql);
+          assertTrue(result.next(), sql);
+          assertEquals(1, result.getInt(1), sql);
+          assertFalse(result.next(), sql);
+        }
+      }
+      try (var result = statement.executeQuery("SELECT id FROM small WHERE EXISTS (" + subquery + " WHERE id = 99)")) {
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
    * Retains NULL propagation for non-DATE temporal subtraction.
    *
    * @throws Exception

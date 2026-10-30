@@ -48,6 +48,7 @@ import se.alipsa.jparq.engine.QueryProcessor;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
+import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
@@ -57,7 +58,6 @@ import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
-import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.model.ResultSetAdapter;
 
 /** An implementation of the java.sql.ResultSet interface. */
@@ -661,37 +661,10 @@ public class JParqResultSet extends ResultSetAdapter {
   private Object value(int idx) throws SQLException {
     try {
       Object value = readValue(idx);
-      validateTemporalDifferenceOutput(value);
+      SqlText.validateOutput(value);
       return value;
     } catch (RuntimeException exception) {
       throw SqlExceptions.wrap("Failed to read column " + idx, exception);
-    }
-  }
-
-  /**
-   * Rejects internal temporal differences when a projection is read by JDBC or
-   * materialized for a derived table, CTE, or VALUES input. Evaluation inside
-   * predicates and scalar functions remains unrestricted, as do existing interval
-   * literals.
-   *
-   * @param value
-   *          the projected value, including nested SQL arrays
-   * @throws IllegalArgumentException
-   *           if a temporal difference would escape, carrying SQLState 0A000
-   */
-  static void validateTemporalDifferenceOutput(Object value) {
-    if (value instanceof TemporalInterval interval && interval.isTemporalDifference()) {
-      throw SqlExceptions
-          .unsupportedFeature("Unsupported temporal difference output: no supported JDBC interval representation");
-    }
-    if (value instanceof Object[] array) {
-      for (Object element : array) {
-        validateTemporalDifferenceOutput(element);
-      }
-    } else if (value instanceof List<?> list) {
-      for (Object element : list) {
-        validateTemporalDifferenceOutput(element);
-      }
     }
   }
 

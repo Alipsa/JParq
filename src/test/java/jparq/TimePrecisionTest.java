@@ -77,8 +77,9 @@ class TimePrecisionTest {
       assertEquals(List.of(1, 2, 3),
           ids(connection, "SELECT id FROM dated WHERE CAST(ts AS TIME) = TIME '10:00:00.5' ORDER BY id"));
       try (var statement = connection.createStatement();
-          var result = statement.executeQuery(
-              "SELECT ts, CAST(ts AS TIME), DENSE_RANK() OVER (ORDER BY CAST(ts AS TIME)) AS r FROM dated ORDER BY id")) {
+          var result = statement
+              .executeQuery("SELECT ts, CAST(ts AS TIME), DENSE_RANK() OVER (ORDER BY CAST(ts AS TIME)) AS r "
+                  + "FROM dated ORDER BY id")) {
         for (int id = 1; id <= 3; id++) {
           assertTrue(result.next());
           assertEquals(time(500), result.getTime(1));

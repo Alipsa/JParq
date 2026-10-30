@@ -16,6 +16,7 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericArray;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.AvroCoercions;
+import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 
 /** Minimal implementations of SQL JSON_* functions using Jackson. */
@@ -142,7 +143,7 @@ public final class JsonFunctions {
       if (key == null) {
         continue;
       }
-      obj.set(key.toString(), toNode(value));
+      obj.set(SqlText.valueOf(key), toNode(value));
     }
     return obj.toString();
   }
@@ -177,12 +178,12 @@ public final class JsonFunctions {
       node = existing;
     } else {
       try {
-        node = MAPPER.readTree(document.toString());
+        node = MAPPER.readTree(SqlText.valueOf(document));
       } catch (JsonProcessingException e) {
         throw new IllegalArgumentException("Invalid JSON document", e);
       }
     }
-    String pathExpr = path.toString();
+    String pathExpr = SqlText.valueOf(path);
     if (!pathExpr.startsWith("$")) {
       throw new IllegalArgumentException("JSON path must start with $");
     }
@@ -372,7 +373,7 @@ public final class JsonFunctions {
     if (value instanceof Boolean bool) {
       return MAPPER.getNodeFactory().booleanNode(bool);
     }
-    return MAPPER.getNodeFactory().textNode(value.toString());
+    return MAPPER.getNodeFactory().textNode(SqlText.valueOf(value));
   }
 
   /**
@@ -397,7 +398,7 @@ public final class JsonFunctions {
       case ARRAY -> arrayNode(value instanceof Object[] array ? Arrays.asList(array) : (Iterable<?>) value,
           effective.getElementType());
       case MAP -> mapNode((Map<?, ?>) value, effective.getValueType());
-      case STRING, ENUM -> MAPPER.getNodeFactory().textNode(value.toString());
+      case STRING, ENUM -> MAPPER.getNodeFactory().textNode(SqlText.valueOf(value));
       case BYTES -> toNode(effective.getLogicalType() == null ? value : AvroCoercions.unwrap(value, effective));
       default -> toNode(AvroCoercions.unwrap(value, effective));
     };
@@ -432,7 +433,7 @@ public final class JsonFunctions {
   private static ObjectNode mapNode(Map<?, ?> values, Schema valueSchema) {
     ObjectNode object = MAPPER.createObjectNode();
     for (var entry : values.entrySet()) {
-      object.set(entry.getKey().toString(), toNode(entry.getValue(), valueSchema));
+      object.set(SqlText.valueOf(entry.getKey()), toNode(entry.getValue(), valueSchema));
     }
     return object;
   }

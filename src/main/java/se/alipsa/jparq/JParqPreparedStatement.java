@@ -100,6 +100,7 @@ import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.QualifiedExpansionColumn;
 import se.alipsa.jparq.engine.SqlParser.ValueTableDefinition;
+import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.UnnestTableBuilder;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
@@ -2663,7 +2664,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           0A000
    */
   private Object normalizeLiteralValue(Object value) {
-    JParqResultSet.validateTemporalDifferenceOutput(value);
+    SqlText.validateOutput(value);
     if (value instanceof TemporalInterval interval) {
       return interval.toString();
     }

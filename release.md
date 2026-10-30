@@ -9,6 +9,11 @@
   block; perform these operations before materialization instead of projecting a raw difference for an outer
   query to consume. DATE day counts, explicit INTERVAL offsets, interval literals, and NULL propagation remain
   supported.
+- Reject text conversion of temporal differences with SQLState `0A000` before character casts,
+  concatenation, string functions, STRING_AGG, or JSON construction can expose or consume their internal
+  diagnostic text (#254). Plain interval literal text conversion remains tracked in #364. Preserve EXISTS
+  and NOT EXISTS over unused difference projections by probing for rows without reading projected values,
+  including correlated subqueries and HAVING; keep existence results separate from scalar result caching.
 
 - **Behavior change:** decode hex literals (`X'..'` and `0x..`) and JDBC binary parameters to `byte[]` instead of SQL text (#250). Preserve leading zeroes and empty binary values, and reject odd-length or nonhexadecimal contents with SQLState `42000`. Render JDBC and `java.time` time/timestamp parameters as typed literals, retaining JDBC types and timestamp nanoseconds; reject timestamp parameter years before year 1 with SQLState `22008`. Decode stored Avro TIME columns to `java.sql.Time`, preserving milliseconds in literals, parameters, comparisons, sorting, grouping, aggregates, windows, materialization, and set operations (#251). Normalize TIME conversions, including timestamp casts and JDBC getters, to the local date 1970-01-01 so comparisons and hash-based grouping agree; retain milliseconds through interval arithmetic and midnight wraparound. Sub-millisecond digits are truncated, so values differing only below that precision compare equally. Reject stored TIME values outside one day with `SQLDataException`, SQLState `22008`, including direct JDBC getters. Verify both TIME logical types with predicate and projection pushdown enabled and disabled. Binary arguments to string functions and VARCHAR casts still expose Java array identity text (#355).
 
