@@ -318,17 +318,30 @@ public final class DateTimeFunctions {
   }
 
   /**
-   * Parse a {@link IntervalExpression}.
+   * Parses an interval using its structured SQL qualifier, or the legacy unit
+   * field when no qualifier is present. Unqualified literals contain value/unit
+   * pairs in a single string.
    *
    * @param expr
    *          the interval expression
    * @return the parsed interval
+   * @throws IllegalArgumentException
+   *           if parsing fails, carrying SQLState 22007 for invalid interval text
+   *           or 22003 for numeric values that cannot be represented
    */
+  @SuppressWarnings("deprecation") // Preserve legacy non-standard interval units.
   public static TemporalInterval toInterval(IntervalExpression expr) {
     if (expr == null) {
       return TemporalInterval.of(Period.ZERO, Duration.ZERO);
     }
-    return TemporalInterval.parse(expr.getParameter(), expr.getIntervalType());
+    String unit = expr.getIntervalQualifier() == null ? expr.getIntervalType() : expr.getIntervalQualifier().toString();
+    try {
+      return TemporalInterval.parse(expr.getParameter(), unit);
+    } catch (ArithmeticException | DateTimeException | IllegalArgumentException failure) {
+      String state = failure instanceof ArithmeticException ? "22003" : "22007";
+      String message = "Invalid INTERVAL value: " + SqlExceptions.diagnosticValue(expr.getParameter());
+      throw new IllegalArgumentException(message, new SQLDataException(message, state, failure));
+    }
   }
 
   /**
