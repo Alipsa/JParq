@@ -37,7 +37,7 @@ class DateArithmeticTest {
   Path directory;
 
   /**
-   * Writes a physical DATE column, including a NULL value.
+   * Writes physical DATE, decimal, and VARCHAR columns, including a NULL date.
    *
    * @throws Exception
    *           if the fixture cannot be written
@@ -47,7 +47,7 @@ class DateArithmeticTest {
     Schema date = LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
     Schema decimal = LogicalTypes.decimal(10, 2).addToSchema(Schema.create(Schema.Type.BYTES));
     Schema schema = SchemaBuilder.record("dates").fields().requiredInt("id").name("d").type().unionOf().nullType().and()
-        .type(date).endUnion().nullDefault().name("amt").type(decimal).noDefault().endRecord();
+        .type(date).endUnion().nullDefault().name("amt").type(decimal).noDefault().requiredString("s").endRecord();
     Configuration configuration = new Configuration(false);
     var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve("small.parquet").toUri()),
         configuration);
@@ -58,6 +58,7 @@ class DateArithmeticTest {
         record.put("id", id);
         record.put("amt", ByteBuffer.wrap(new BigDecimal("123.45").unscaledValue().toByteArray()));
         record.put("d", id == 0 ? (int) LocalDate.of(2024, 3, 1).toEpochDay() : null);
+        record.put("s", id == 0 ? "TemporalInterval[period=P0D, duration=PT24H]" : "A");
         writer.write(record);
       }
     }
@@ -258,6 +259,40 @@ class DateArithmeticTest {
               while (result.next()) {
                 result.getObject(1);
               }
+            }
+          }, sql);
+          assertEquals("0A000", failure.getSQLState(), sql);
+          assertTrue(failure.getMessage().contains("Unsupported temporal difference"), failure::getMessage);
+        }
+      }
+    }
+  }
+
+  /**
+   * Rejects schema-driven coercion of a difference to a VARCHAR column before
+   * predicate and join comparisons can consume its internal text.
+   *
+   * @param operator
+   *          comparison operator to exercise
+   * @throws Exception
+   *           if opening the connection fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "=", "<>", "!=", "<", ">", "<=", ">="
+  })
+  void temporalDifferencesCannotBeComparedWithVarcharColumns(String operator) throws Exception {
+    String difference = "(TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00')";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String comparison : List.of(difference + " " + operator + " b.s", "b.s " + operator + " " + difference)) {
+        for (String sql : List.of("SELECT COUNT(*) FROM small b WHERE " + comparison,
+            "SELECT COUNT(*) FROM small a JOIN (SELECT s FROM small WHERE id = 0) b ON " + comparison,
+            "SELECT COUNT(*) FROM small a, (SELECT s FROM small WHERE id = 0) b WHERE " + comparison)) {
+          var failure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
+            try (var result = statement.executeQuery(sql)) {
+              result.next();
+              result.getObject(1);
             }
           }, sql);
           assertEquals("0A000", failure.getSQLState(), sql);

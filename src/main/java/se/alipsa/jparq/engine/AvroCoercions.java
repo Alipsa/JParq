@@ -109,6 +109,9 @@ public final class AvroCoercions {
    * @param s
    *          the target schema
    * @return coerced value
+   * @throws IllegalArgumentException
+   *           if an internal temporal difference would be converted to text,
+   *           including a temporal parsing fallback, carrying SQLState 0A000
    */
   @SuppressWarnings("PMD.EmptyCatchBlock")
   public static Object coerceLiteral(Object lit, Schema s) {
@@ -125,7 +128,7 @@ public final class AvroCoercions {
     }
     switch (effective.getType()) {
       case STRING, ENUM:
-        return lit.toString();
+        return SqlText.valueOf(lit);
 
       case INT: {
         if (LogicalTypes.date().equals(effective.getLogicalType())) {
@@ -140,7 +143,7 @@ public final class AvroCoercions {
             return Integer.parseInt(lit.toString());
           } catch (Exception ignore) {
           }
-          return lit.toString();
+          return SqlText.valueOf(lit);
         }
         try {
           return Integer.parseInt(lit.toString());
@@ -162,7 +165,7 @@ public final class AvroCoercions {
             return new Timestamp(Long.parseLong(lit.toString()));
           } catch (Exception ignore) {
           }
-          return lit.toString();
+          return SqlText.valueOf(lit);
         }
         try {
           return Long.parseLong(lit.toString());

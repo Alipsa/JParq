@@ -259,8 +259,9 @@ comparison or extraction in the inner query instead. NULL operands still produce
 Text conversion of differences is also unsupported (`0A000`), including character casts,
 `||`, string functions such as `CONCAT`, `UPPER`, and `LENGTH`, and JSON construction.
 Comparisons between a difference and text also raise `0A000`, including `=`, `<`, and `>`
-in either operand order and comparisons of array elements. Comparisons with INTERVAL values
-remain supported.
+in either operand order, against string literals or VARCHAR columns, and in array elements.
+Schema-based coercion to a VARCHAR column follows the same rule in WHERE and JOIN conditions.
+Comparisons with INTERVAL values remain supported.
 Text conversions and comparisons with text reject the difference before its internal diagnostic text can be used.
 EXISTS checks for rows without reading unused projected differences, including correlated
 subqueries and HAVING predicates.

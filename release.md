@@ -11,7 +11,8 @@
   supported.
 - Reject text conversion of temporal differences with SQLState `0A000` before character casts,
   concatenation, string functions, STRING_AGG, JSON construction, or fallback text comparisons can consume their
-  internal diagnostic text (#254). Plain interval literal text conversion remains tracked in #364. Preserve EXISTS
+  internal diagnostic text (#254), including schema-based coercion for comparisons against VARCHAR columns in
+  WHERE and JOIN conditions. Plain interval literal text conversion remains tracked in #364. Preserve EXISTS
   and NOT EXISTS over unused difference projections by probing for rows without reading projected values,
   including correlated subqueries and HAVING; keep existence results separate from scalar result caching.
 
