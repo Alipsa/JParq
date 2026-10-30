@@ -496,6 +496,52 @@ public class DateTimeFunctionsTest {
     }
   }
 
+  /**
+   * Removes dates from JDBC time conversions while keeping local clock fields.
+   *
+   * @param zoneId
+   *          JVM time zone, including differing historical offsets
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "UTC", "America/New_York", "Asia/Kathmandu"
+  })
+  void normalizesTimeDates(String zoneId) {
+    var previous = java.util.TimeZone.getDefault();
+    java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone(zoneId));
+    try {
+      Time expected = Time.valueOf("10:00:00");
+      expected.setTime(expected.getTime() + 500);
+      Timestamp timestamp = Timestamp.valueOf("2024-06-01 10:00:00.500999");
+      Time dated = new Time(timestamp.getTime());
+      for (Object source : List.of(timestamp, dated, timestamp.getTime(), LocalTime.of(10, 0, 0, 500_999_999))) {
+        Time actual = DateTimeFunctions.toTime(source);
+        assertEquals(expected, actual);
+        assertEquals(expected.hashCode(), actual.hashCode());
+      }
+      assertSame(expected, DateTimeFunctions.toTime(expected));
+      assertEquals(timestamp.getTime(), dated.getTime());
+    } finally {
+      java.util.TimeZone.setDefault(previous);
+    }
+  }
+
+  /** Tests the TIMESTAMPADD implementation independently of SQL unit parsing. */
+  @Test
+  void timeIntervalHelpersRetainMilliseconds() {
+    Time source = Time.valueOf("23:59:59");
+    source.setTime(source.getTime() + 750);
+    Time expected = Time.valueOf("00:00:00");
+    expected.setTime(expected.getTime() + 250);
+    assertEquals(expected, DateTimeFunctions.timestampAdd(List.of("SQL_TSI_FRAC_SECOND", 500_000_000L, source)));
+    assertEquals(expected, DateTimeFunctions.plus(source, TemporalInterval.parse("0.5", "SECOND")));
+    Time hourLater = Time.valueOf("00:59:59");
+    hourLater.setTime(hourLater.getTime() + 750);
+    assertEquals(hourLater, DateTimeFunctions.timestampAdd(List.of("SQL_TSI_HOUR", 1L, source)));
+    assertEquals(hourLater, DateTimeFunctions.plus(source, TemporalInterval.parse("1", "HOUR")));
+    assertEquals(source, DateTimeFunctions.minus(hourLater, TemporalInterval.parse("1", "HOUR")));
+  }
+
   // Additional tests for applyInterval
   @Test
   void testApplyIntervalWithLocalDateAndPeriod() {

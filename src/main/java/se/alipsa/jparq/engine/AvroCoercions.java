@@ -425,7 +425,7 @@ public final class AvroCoercions {
    */
   private static Time unwrapTime(Object value, long unitsPerSecond) {
     if (value instanceof Time time) {
-      return time;
+      return DateTimeFunctions.toTime(time);
     }
     long units = ((Number) value).longValue();
     if (units < 0 || units >= 86_400L * unitsPerSecond) {

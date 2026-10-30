@@ -51,6 +51,7 @@ import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.engine.function.SystemFunctions;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
@@ -107,7 +108,7 @@ public class JParqResultSet extends ResultSetAdapter {
    *          materialized row data
    * @return a {@link JParqResultSet} instance representing the supplied rows
    */
-  static JParqResultSet materializedResult(String tableName, List<String> columnLabels, List<Integer> sqlTypes,
+  public static JParqResultSet materializedResult(String tableName, List<String> columnLabels, List<Integer> sqlTypes,
       List<List<Object>> rows) {
     return materializedResult(tableName, null, null, columnLabels, sqlTypes, rows);
   }
@@ -1504,16 +1505,18 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public Time getTime(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    return switch (v) {
-      case null -> null;
-      case Timestamp timestamp -> new Time(timestamp.getTime());
-      case Time time -> time;
-      case LocalTime lt -> Time.valueOf(lt);
-      case String s -> Time.valueOf(s);
-      case Long l -> new Time(l);
-      case Double d -> new Time(d.longValue());
-      default -> throw new SQLException("Unsupported time type: " + v.getClass().getName());
-    };
+    if (v == null) {
+      return null;
+    }
+    if (!(v instanceof Timestamp || v instanceof Time || v instanceof LocalTime || v instanceof String
+        || v instanceof Long || v instanceof Double)) {
+      throw new SQLException("Unsupported time type: " + v.getClass().getName());
+    }
+    try {
+      return DateTimeFunctions.toTime(v);
+    } catch (RuntimeException exception) {
+      throw SqlExceptions.wrap("Failed to convert column " + columnIndex + " to TIME", exception);
+    }
   }
 
   @Override

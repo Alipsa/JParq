@@ -7,6 +7,9 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLDataException;
 import java.sql.Time;
+import java.sql.Timestamp;
+import java.sql.Types;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.avro.LogicalTypes;
@@ -18,9 +21,11 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.avro.AvroParquetWriter;
 import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import se.alipsa.jparq.JParqResultSet;
 
 /** Checks stored TIME precision, relational operations, and data errors. */
 class TimePrecisionTest {
@@ -41,6 +46,135 @@ class TimePrecisionTest {
             .type(LogicalTypes.timeMicros().addToSchema(Schema.create(Schema.Type.LONG))).noDefault().endRecord(),
         List.of(List.of(1, 36_000_000, 36_000_000_999L), List.of(2, 36_000_500, 36_000_500_999L),
             List.of(3, 36_000_250, 36_000_250_999L)));
+    Schema timestamps = SchemaBuilder.record("dated").fields().requiredInt("id").name("ts")
+        .type(LogicalTypes.timestampMicros().addToSchema(Schema.create(Schema.Type.LONG))).noDefault().endRecord();
+    List<List<?>> rows = new ArrayList<>();
+    int id = 1;
+    for (String date : List.of("2024-01-01", "2024-06-01", "2025-01-01")) {
+      Timestamp timestamp = Timestamp.valueOf(date + " 10:00:00.500999");
+      rows.add(List.of(id++, timestamp.toInstant().getEpochSecond() * 1_000_000 + timestamp.getNanos() / 1000));
+    }
+    write("dated", timestamps, rows);
+  }
+
+  /**
+   * Normalizes timestamp casts before comparison, ordering, equality, and
+   * hashing.
+   *
+   * @param predicate
+   *          whether predicate pushdown is enabled
+   * @param projection
+   *          whether projection pushdown is enabled
+   * @throws Exception
+   *           if a query fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void timestampCastsUseOnlyTheClock(boolean predicate, boolean projection) throws Exception {
+    try (var connection = connection(predicate, projection)) {
+      assertEquals(List.of(1, 2, 3),
+          ids(connection, "SELECT id FROM dated WHERE CAST(ts AS TIME) = TIME '10:00:00.5' ORDER BY id"));
+      try (var statement = connection.createStatement();
+          var result = statement.executeQuery(
+              "SELECT ts, CAST(ts AS TIME), DENSE_RANK() OVER (ORDER BY CAST(ts AS TIME)) AS r FROM dated ORDER BY id")) {
+        for (int id = 1; id <= 3; id++) {
+          assertTrue(result.next());
+          assertEquals(time(500), result.getTime(1));
+          assertEquals(time(500), assertInstanceOf(Time.class, result.getObject(2)));
+          assertEquals(1, result.getInt(3));
+        }
+        assertFalse(result.next());
+      }
+      try (var statement = connection.createStatement();
+          var result = statement.executeQuery("SELECT DISTINCT CAST(ts AS TIME) FROM dated")) {
+        assertTrue(result.next());
+        assertEquals(time(500), result.getObject(1));
+        assertFalse(result.next());
+      }
+      try (var statement = connection.createStatement();
+          var result = statement
+              .executeQuery("SELECT CAST(ts AS TIME), COUNT(*) FROM dated GROUP BY CAST(ts AS TIME)")) {
+        assertTrue(result.next());
+        assertEquals(time(500), result.getObject(1));
+        assertEquals(3, result.getInt(2));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Retains milliseconds through interval arithmetic and midnight wraparound.
+   *
+   * @param predicate
+   *          whether predicate pushdown is enabled
+   * @param projection
+   *          whether projection pushdown is enabled
+   * @throws Exception
+   *           if a query fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void intervalsRetainMilliseconds(boolean predicate, boolean projection) throws Exception {
+    try (var connection = connection(predicate, projection)) {
+      for (String column : List.of("t", "u")) {
+        try (var statement = connection.createStatement();
+            var result = statement.executeQuery("SELECT " + column + " + INTERVAL '1' HOUR FROM clocks ORDER BY id")) {
+          for (int fraction : List.of(0, 500, 250)) {
+            assertTrue(result.next());
+            Time expected = Time.valueOf("11:00:00");
+            expected.setTime(expected.getTime() + fraction);
+            assertEquals(expected, assertInstanceOf(Time.class, result.getObject(1)));
+          }
+          assertFalse(result.next());
+        }
+        assertEquals(List.of(2),
+            ids(connection, "SELECT id FROM clocks WHERE " + column + " + INTERVAL '1' HOUR = TIME '11:00:00.5'"));
+        assertEquals(List.of(2),
+            ids(connection, "SELECT id FROM clocks WHERE " + column + " - INTERVAL '1' HOUR = TIME '09:00:00.5'"));
+      }
+      try (var statement = connection.createStatement();
+          var result = statement.executeQuery("SELECT TIME '23:59:59.75' + INTERVAL '0.5' SECOND")) {
+        assertTrue(result.next());
+        Time expected = Time.valueOf("00:00:00");
+        expected.setTime(expected.getTime() + 250);
+        assertEquals(expected, assertInstanceOf(Time.class, result.getObject(1)));
+      }
+    }
+  }
+
+  /**
+   * Exercises getter conversions directly, including LocalTime values currently
+   * difficult to produce through SQL because of issue 274.
+   *
+   * @throws Exception
+   *           if reading the result fails
+   */
+  @Test
+  void gettersNormalizeAllSupportedTimeInputs() throws Exception {
+    Timestamp timestamp = Timestamp.valueOf("2024-06-01 10:00:00.500999");
+    Time dated = new Time(timestamp.getTime());
+    List<List<Object>> rows = new ArrayList<>();
+    for (Object value : List.of(timestamp, dated, LocalTime.of(10, 0, 0, 500_999_999), "10:00:00.500",
+        timestamp.getTime(), (double) timestamp.getTime())) {
+      rows.add(List.of(value));
+    }
+    rows.add(java.util.Collections.singletonList(null));
+    try (var result = JParqResultSet.materializedResult("clock", List.of("t"), List.of(Types.TIME), rows)) {
+      for (int row = 0; row < rows.size() - 1; row++) {
+        assertTrue(result.next());
+        assertEquals(time(500), result.getTime(1));
+        assertEquals(time(500), result.getTime("t"));
+      }
+      assertTrue(result.next());
+      assertNull(result.getTime(1));
+      assertTrue(result.wasNull());
+      assertFalse(result.next());
+    }
+    assertEquals(timestamp.getTime(), dated.getTime(), "Normalization must not mutate an input Time");
   }
 
   /**

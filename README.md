@@ -315,7 +315,10 @@ JDBC date, time, and timestamp parameters, including their `java.time` equivalen
 JDBC types through typed SQL literals. Timestamps preserve nanoseconds. LocalDateTime timestamp parameters
 before year 1 are rejected with SQLState `22008` because their era cannot round-trip through JDBC.
 TIME literals, parameters, and stored Avro `time-millis`/`time-micros` columns retain milliseconds in
-`java.sql.Time`. Digits below one millisecond are truncated, including in comparisons, sorting, grouping,
+`java.sql.Time`. TIME conversions, including `CAST(timestamp AS TIME)` and JDBC `getTime()`, use the
+local date 1970-01-01, so equality, hashing, and ordering depend on clock time alone. Interval addition
+and subtraction preserve milliseconds and wrap at midnight.
+Digits below one millisecond are truncated, including in comparisons, sorting, grouping,
 DISTINCT, aggregates, and set operations; values differing only below that precision compare equally.
 JDBC Time's string representation displays whole seconds even when the value retains milliseconds.
 Stored TIME values outside the half-open range 00:00:00 to 24:00:00 raise `SQLDataException`, SQLState `22008`.
