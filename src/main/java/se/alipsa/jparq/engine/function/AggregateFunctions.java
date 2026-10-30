@@ -79,6 +79,8 @@ import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.LegacyParenthesisSupport;
+import se.alipsa.jparq.engine.NumericCastTarget;
+import se.alipsa.jparq.engine.NumericCasts;
 import se.alipsa.jparq.engine.Operation;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.QuantifiedComparisons;
@@ -2939,7 +2941,8 @@ public final class AggregateFunctions {
    *          the operation to perform (ADD, SUB, MUL etc.)
    * @return the numeric result, or null for NULL operands or a zero divisor
    * @throws IllegalArgumentException
-   *           if BIGINT arithmetic overflows, carrying SQLState 22003
+   *           if text conversion fails (22018), text exceeds the DOUBLE range
+   *           (22003), or BIGINT arithmetic overflows (22003)
    */
   public static Object calculate(Object leftVal, Object rightVal, Operation op) {
     return calculate(leftVal, rightVal, op, null);
@@ -2959,7 +2962,8 @@ public final class AggregateFunctions {
    *          statically resolved result type, or null
    * @return the numeric result, or null for NULL operands or a zero divisor
    * @throws IllegalArgumentException
-   *           if BIGINT arithmetic overflows, carrying SQLState 22003
+   *           if text conversion fails (22018), text exceeds the DOUBLE range
+   *           (22003), or BIGINT arithmetic overflows (22003)
    */
   public static Object calculate(Object leftVal, Object rightVal, Operation op, NumericType resultType) {
     if (leftVal == null || rightVal == null) {
@@ -2969,8 +2973,8 @@ public final class AggregateFunctions {
         ? resultType.jdbcType() == Types.DOUBLE
         : leftVal instanceof Double || leftVal instanceof Float || rightVal instanceof Double
             || rightVal instanceof Float) {
-      double left = leftVal instanceof Number number ? number.doubleValue() : Double.parseDouble(leftVal.toString());
-      double right = rightVal instanceof Number number ? number.doubleValue() : Double.parseDouble(rightVal.toString());
+      double left = arithmeticDouble(leftVal);
+      double right = arithmeticDouble(rightVal);
       return switch (op) {
         case ADD -> left + right;
         case SUB -> left - right;
@@ -2997,8 +3001,8 @@ public final class AggregateFunctions {
             new SQLDataException("BIGINT arithmetic overflow", "22003", failure));
       }
     }
-    BigDecimal leftNum = toBigDecimal(leftVal);
-    BigDecimal rightNum = toBigDecimal(rightVal);
+    BigDecimal leftNum = arithmeticDecimal(leftVal);
+    BigDecimal rightNum = arithmeticDecimal(rightVal);
     return switch (op) {
       case ADD -> leftNum.add(rightNum);
       case SUB -> leftNum.subtract(rightNum);
@@ -3006,6 +3010,39 @@ public final class AggregateFunctions {
       case DIV -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.divide(rightNum, MathContext.DECIMAL64);
       case MOD -> rightNum.compareTo(BigDecimal.ZERO) == 0 ? null : leftNum.remainder(rightNum);
     };
+  }
+
+  /**
+   * Converts text to DOUBLE using CAST's range checks while retaining native
+   * numeric conversion behavior.
+   *
+   * @param value
+   *          non-null arithmetic operand
+   * @return the double operand
+   * @throws IllegalArgumentException
+   *           if text is invalid (22018) or exceeds the DOUBLE range (22003)
+   */
+  private static double arithmeticDouble(Object value) {
+    if (value instanceof Number number) {
+      return number.doubleValue();
+    }
+    return value instanceof CharSequence
+        ? NumericCasts.convert(value, NumericCastTarget.DOUBLE, "DOUBLE").doubleValue()
+        : arithmeticDecimal(value).doubleValue();
+  }
+
+  /**
+   * Converts arithmetic text using CAST's whitespace and error classification
+   * rules while retaining native numeric conversion behavior.
+   *
+   * @param value
+   *          non-null arithmetic operand
+   * @return the decimal operand
+   * @throws IllegalArgumentException
+   *           if text is not numeric, carrying SQLState 22018
+   */
+  private static BigDecimal arithmeticDecimal(Object value) {
+    return value instanceof CharSequence ? NumericCasts.toBigDecimal(value) : toBigDecimal(value);
   }
 
   /**

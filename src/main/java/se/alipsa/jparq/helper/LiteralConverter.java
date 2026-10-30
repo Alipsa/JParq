@@ -6,6 +6,7 @@ import static se.alipsa.jparq.engine.function.NumericFunctions.toBigDecimal;
 
 import java.math.BigDecimal;
 import java.sql.SQLDataException;
+import java.sql.SQLException;
 import java.util.HexFormat;
 import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.CastExpression;
@@ -24,6 +25,8 @@ import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TimeValue;
 import net.sf.jsqlparser.expression.TimestampValue;
 import se.alipsa.jparq.engine.CorrelatedBindings;
+import se.alipsa.jparq.engine.NumericCasts;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
 /** Converts JSqlParser Expression literals to Java Objects. */
@@ -55,7 +58,8 @@ public class LiteralConverter {
    * Applies a unary sign using the numeric conversion rules of arithmetic.
    *
    * @param value
-   *          evaluated operand, including numeric text, an interval, or NULL
+   *          evaluated operand, including numeric text (surrounding whitespace is
+   *          trimmed), an interval, or NULL
    * @param expression
    *          the signed expression; diagnostics omit internal correlated bindings
    * @return the signed value or NULL
@@ -75,7 +79,7 @@ public class LiteralConverter {
         && literal.getBigIntegerValue().negate().bitLength() < 64) {
       return literal.getBigIntegerValue().negate().longValueExact();
     }
-    if (value instanceof Number || value instanceof String) {
+    if (value instanceof Number || value instanceof CharSequence) {
       try {
         if (value instanceof Double || value instanceof Float) {
           double number = ((Number) value).doubleValue();
@@ -90,11 +94,17 @@ public class LiteralConverter {
                 new SQLDataException("BIGINT unary sign overflow", "22003", failure));
           }
         }
-        BigDecimal number = toBigDecimal(value);
+        BigDecimal number = value instanceof CharSequence ? NumericCasts.toBigDecimal(value) : toBigDecimal(value);
         return sign == '-' ? number.negate() : number;
-      } catch (NumberFormatException failure) {
+      } catch (IllegalArgumentException failure) {
+        SQLException classified = SqlExceptions.findSqlStateFailure(failure);
+        if (!(failure instanceof NumberFormatException)
+            && (classified == null || !"22018".equals(classified.getSQLState()))) {
+          throw failure;
+        }
         String message = "Cannot convert unary sign operand to a numeric value: " + describe(expression);
-        throw new IllegalArgumentException(message, new SQLDataException(message, "22018", failure));
+        Throwable cause = classified == null ? failure : classified.getCause();
+        throw new IllegalArgumentException(message, new SQLDataException(message, "22018", cause));
       }
     }
     throw syntaxFailure("Unary sign requires a numeric or interval operand: " + describe(expression));
