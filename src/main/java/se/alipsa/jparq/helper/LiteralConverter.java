@@ -6,6 +6,7 @@ import static se.alipsa.jparq.engine.function.NumericFunctions.toBigDecimal;
 
 import java.math.BigDecimal;
 import java.sql.SQLDataException;
+import java.util.HexFormat;
 import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
@@ -41,7 +42,7 @@ public class LiteralConverter {
    *
    * @param expression
    *          the parsed expression
-   * @return whether the node represents a literal, including legacy hex literals
+   * @return whether the node represents a literal, including binary hex literals
    */
   public static boolean isLiteral(Expression expression) {
     return expression instanceof StringValue || expression instanceof LongValue || expression instanceof DoubleValue
@@ -109,7 +110,8 @@ public class LiteralConverter {
    * @return the corresponding Java Object
    * @throws IllegalArgumentException
    *           if a signed literal has an invalid operand, with SQLState 22018 for
-   *           numeric conversion failures or 42000 for invalid types
+   *           numeric conversion failures or 42000 for invalid types or malformed
+   *           hex literals (which require pairs of hexadecimal digits)
    */
   @SuppressWarnings({
       "PMD.AvoidDecimalLiteralsInBigDecimalConstructor", "PMD.EmptyCatchBlock", "checkstyle:NeedBraces"
@@ -123,6 +125,16 @@ public class LiteralConverter {
     }
     if (e instanceof StringValue sv) {
       return decodeStringLiteral(sv);
+    }
+    if (e instanceof HexValue hex) {
+      try {
+        // The parser can include trailing whitespace in a hex token.
+        String token = hex.getValue().strip();
+        int end = token.endsWith("'") ? token.length() - 1 : token.length();
+        return HexFormat.of().parseHex(token, 2, end);
+      } catch (IllegalArgumentException failure) {
+        throw syntaxFailure("Invalid binary hex literal: " + describe(hex));
+      }
     }
     if (e instanceof LongValue lv) {
       var value = lv.getBigIntegerValue();

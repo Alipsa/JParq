@@ -7,10 +7,13 @@ import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.sql.Date;
+import java.sql.SQLDataException;
+import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.Collection;
@@ -19,6 +22,7 @@ import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
 /**
  * Utility class for coercing Avro values to Java types and vice versa.
@@ -224,13 +228,18 @@ public final class AvroCoercions {
   /**
    * Unwraps an Avro value to a corresponding Java type. Record values retain
    * their Avro schema and raw field values as GenericRecord objects rather than
-   * JSON text; record fields are not recursively unwrapped.
+   * JSON text; record fields are not recursively unwrapped. TIME logical types
+   * become JDBC Time values with millisecond precision, matching typed TIME
+   * literals; sub-millisecond digits are truncated.
    *
    * @param v
    *          The Avro value to unwrap.
    * @param s
    *          The Avro schema for the value.
    * @return The unwrapped Java object.
+   * @throws IllegalArgumentException
+   *           if a stored TIME is outside its clock range, carrying SQLState
+   *           22008
    */
   public static Object unwrap(Object v, Schema s) {
     if (v == null) {
@@ -253,6 +262,9 @@ public final class AvroCoercions {
         }
         return v.toString();
       case INT:
+        if (effective.getLogicalType() instanceof LogicalTypes.TimeMillis) {
+          return unwrapTime(v, 1000L);
+        }
         if (LogicalTypes.date().equals(effective.getLogicalType())) {
           if (v instanceof Date) {
             return v;
@@ -262,6 +274,9 @@ public final class AvroCoercions {
         }
         return ((Number) v).intValue();
       case LONG:
+        if (effective.getLogicalType() instanceof LogicalTypes.TimeMicros) {
+          return unwrapTime(v, 1_000_000L);
+        }
         if (isTimestamp(effective)) {
           if (v instanceof Timestamp) {
             return v;
@@ -395,6 +410,29 @@ public final class AvroCoercions {
     }
     String prop = schema.getProp("jparq.binary");
     return prop != null && Boolean.parseBoolean(prop);
+  }
+
+  /**
+   * Decodes and validates a stored time before scaling its clock units.
+   *
+   * @param value
+   *          stored numeric clock value or a decoded JDBC time
+   * @param unitsPerSecond
+   *          number of stored units per second
+   * @return JDBC time retaining milliseconds
+   * @throws IllegalArgumentException
+   *           if the value is outside one day (22008)
+   */
+  private static Time unwrapTime(Object value, long unitsPerSecond) {
+    if (value instanceof Time time) {
+      return DateTimeFunctions.toTime(time);
+    }
+    long units = ((Number) value).longValue();
+    if (units < 0 || units >= 86_400L * unitsPerSecond) {
+      String message = "Stored TIME value out of range: " + units;
+      throw new IllegalArgumentException(message, new SQLDataException(message, "22008"));
+    }
+    return DateTimeFunctions.toTime(LocalTime.ofNanoOfDay(units * (1_000_000_000L / unitsPerSecond)));
   }
 
   private static boolean isUtf8Text(byte[] bytes) {

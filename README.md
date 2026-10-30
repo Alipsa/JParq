@@ -308,8 +308,23 @@ Direct correlated scalar subqueries used as aggregate arguments still have a sep
 Unary signs convert numeric text and report invalid numeric text as `SQLDataException` with SQLState `22018`;
 unsupported operand types raise SQLState `42000`. Expression diagnostics preserve the SQL structure while replacing internal correlated bindings with
 `<outer value>`, including bindings inside nested subqueries.
-Hex literals (`X'41'`, `0x41`), including JDBC byte parameters, still return their SQL text rather than
-binary values; this legacy behavior is tracked in [#250](https://github.com/Alipsa/JParq/issues/250).
+Hex literals (`X'41'`, `0x41`) and JDBC `setBytes`/`setObject(ByteBuffer)` parameters return `byte[]`.
+Hex digits must occur in pairs; `X''` represents an empty byte array. ByteBuffer parameters use the
+remaining bytes without changing the buffer's position or limit.
+JDBC date, time, and timestamp parameters, including their `java.time` equivalents, retain their
+JDBC types through typed SQL literals. Timestamps preserve nanoseconds. LocalDateTime timestamp parameters
+before year 1 are rejected with SQLState `22008` because their era cannot round-trip through JDBC.
+TIME literals, parameters, and stored Avro `time-millis`/`time-micros` columns retain milliseconds in
+`java.sql.Time`. TIME conversions, including `CAST(timestamp AS TIME)` and JDBC `getTime()`, use the
+local date 1970-01-01, so equality, hashing, and ordering depend on clock time alone. Interval addition
+and subtraction preserve milliseconds and wrap at midnight.
+Digits below one millisecond are truncated, including in comparisons, sorting, grouping,
+DISTINCT, aggregates, and set operations; values differing only below that precision compare equally.
+JDBC Time's string representation displays whole seconds even when the value retains milliseconds.
+Stored TIME values outside the half-open range 00:00:00 to 24:00:00 raise `SQLDataException`, SQLState `22008`.
+Binary arguments to string functions (`LENGTH`, `OCTET_LENGTH`, `UPPER`, `CONCAT`) and `CAST(... AS VARCHAR)`
+currently produce Java array identity text or lengths derived from it; see [#355](https://github.com/Alipsa/JParq/issues/355).
+Binary concatenation with `||` preserves bytes.
 Expressions skipped by filtering or CASE branch selection are not evaluated.
 
 SQL syntax rejected by JSqlParser raises `SQLSyntaxErrorException` with SQLState `42000`. Syntax and numeric

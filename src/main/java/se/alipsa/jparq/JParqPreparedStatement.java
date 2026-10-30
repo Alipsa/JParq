@@ -20,6 +20,7 @@ import java.sql.Ref;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.RowId;
+import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLSyntaxErrorException;
@@ -39,6 +40,7 @@ import java.util.Calendar;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -102,6 +104,7 @@ import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.UnnestTableBuilder;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.engine.function.SystemFunctions;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
@@ -164,8 +167,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   private static final Logger LOG = LoggerFactory.getLogger(JParqPreparedStatement.class);
   private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE;
   private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ISO_LOCAL_TIME;
-  private static final DateTimeFormatter TIMESTAMP_FORMAT = DateTimeFormatter
-      .ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSSSSS");
+  private static final DateTimeFormatter TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss.SSSSSSSSS",
+      Locale.ROOT);
   private final JParqStatement stmt;
   private final String originalSql;
 
@@ -3656,8 +3659,11 @@ public class JParqPreparedStatement implements PreparedStatement {
       return toEpochDays(date);
     }
     if (logical instanceof LogicalTypes.TimeMillis) {
-      Time time = value instanceof Time t ? t : Time.valueOf(value.toString());
+      Time time = DateTimeFunctions.toTime(value);
       return toMillisOfDay(time);
+    }
+    if (logical instanceof LogicalTypes.TimeMicros) {
+      return toMillisOfDay(DateTimeFunctions.toTime(value)) * 1000L;
     }
     if (logical instanceof LogicalTypes.TimestampMillis) {
       Timestamp ts = value instanceof Timestamp t ? t : Timestamp.valueOf(value.toString());
@@ -3807,7 +3813,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   private int toMillisOfDay(Time time) {
-    return (int) (time.toLocalTime().toNanoOfDay() / 1_000_000L);
+    return (int) (DateTimeFunctions.toLocalTime(time).toNanoOfDay() / 1_000_000L);
   }
 
   private long toEpochMillis(Timestamp timestamp) {
@@ -5094,24 +5100,24 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       case Timestamp ts -> {
         LocalDateTime ldt = ts.toLocalDateTime();
-        return "'" + TIMESTAMP_FORMAT.format(ldt) + "'";
+        return renderTimestampLiteral(ldt);
       }
       case Date date -> {
         LocalDate localDate = date.toLocalDate();
         return "DATE '" + DATE_FORMAT.format(localDate) + "'";
       }
       case Time time -> {
-        LocalTime lt = time.toLocalTime();
-        return "'" + TIME_FORMAT.format(lt) + "'";
+        LocalTime lt = DateTimeFunctions.toLocalTime(time);
+        return "TIME '" + TIME_FORMAT.format(lt) + "'";
       }
       case LocalDate ld -> {
         return "DATE '" + DATE_FORMAT.format(ld) + "'";
       }
       case LocalTime lt -> {
-        return "'" + TIME_FORMAT.format(lt) + "'";
+        return "TIME '" + TIME_FORMAT.format(lt) + "'";
       }
       case LocalDateTime ldt -> {
-        return "'" + TIMESTAMP_FORMAT.format(ldt) + "'";
+        return renderTimestampLiteral(ldt);
       }
       case ByteBuffer buffer -> {
         ByteBuffer dup = buffer.duplicate();
@@ -5131,17 +5137,31 @@ public class JParqPreparedStatement implements PreparedStatement {
     throw new SQLException("Unsupported parameter type: " + value.getClass().getName());
   }
 
+  /**
+   * Renders a timestamp whose year is representable by JDBC without era loss.
+   *
+   * @param timestamp
+   *          local timestamp parameter
+   * @return the typed SQL literal
+   * @throws SQLDataException
+   *           if the year precedes year 1 (22008)
+   */
+  private String renderTimestampLiteral(LocalDateTime timestamp) throws SQLDataException {
+    if (timestamp.getYear() < 1) {
+      throw new SQLDataException("TIMESTAMP parameter year out of range: " + timestamp.getYear(), "22008");
+    }
+    return "TIMESTAMP '" + TIMESTAMP_FORMAT.format(timestamp) + "'";
+  }
+
+  /**
+   * Encodes bytes as an uppercase SQL binary literal.
+   *
+   * @param bytes
+   *          binary parameter, possibly null
+   * @return the SQL literal or NULL
+   */
   private String toHexLiteral(byte[] bytes) {
-    if (bytes == null) {
-      return "NULL";
-    }
-    StringBuilder sb = new StringBuilder(2 + bytes.length * 2);
-    sb.append("X'");
-    for (byte b : bytes) {
-      sb.append(String.format("%02X", b));
-    }
-    sb.append('\'');
-    return sb.toString();
+    return bytes == null ? "NULL" : "X'" + HexFormat.of().withUpperCase().formatHex(bytes) + "'";
   }
 
   /**

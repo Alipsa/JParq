@@ -406,13 +406,17 @@ public class DateTimeFunctionsTest {
    *          SQL time text
    * @param expected
    *          normalized time at JDBC TIME precision
+   * @param millis
+   *          expected fractional milliseconds
    */
   @ParameterizedTest
   @CsvSource({
-      "9:05:00,09:05:00", "9:5:0,09:05:00", "10:00,10:00:00", "10:00:00.5,10:00:00", "23:59:59.123456789,23:59:59"
+      "9:05:00,09:05:00,0", "9:5:0,09:05:00,0", "10:00,10:00:00,0", "10:00:00.5,10:00:00,500",
+      "23:59:59.123456789,23:59:59,123"
   })
-  void unpaddedTimesRemainAvailable(String text, String expected) {
+  void unpaddedTimesRemainAvailable(String text, String expected, int millis) {
     Time time = Time.valueOf(expected);
+    time.setTime(time.getTime() + millis);
     assertEquals(time, DateTimeFunctions.toTime(text));
     assertEquals(time, DateTimeFunctions.castLiteral(createCastExpression("TIME"), text));
   }
@@ -469,9 +473,73 @@ public class DateTimeFunctionsTest {
     assertEquals(leapDay, DateTimeFunctions.toDate("2024-02-29"));
     assertEquals(leapDay, DateTimeFunctions.toDate("2024-02-29T10:30:15"));
     assertEquals(leapDay, DateTimeFunctions.toDate("2024-02-29 10:30:15"));
+    time.setTime(time.getTime() + 123);
     assertEquals(time, DateTimeFunctions.toTime("10:30:15.123456789"));
+    time.setTime(time.getTime() + 377);
     assertEquals(time, DateTimeFunctions.toTime("2024-02-29T10:30:15.5"));
     assertEquals(time, DateTimeFunctions.toTime("2024-02-29 10:30:15.5"));
+  }
+
+  /** Retains milliseconds from LocalTime, SQL text, and ISO date-time inputs. */
+  @Test
+  void retainsTimeMilliseconds() {
+    for (int nanos : new int[]{
+        0, 123_456_789, 500_000_000, 999_999_999
+    }) {
+      LocalTime local = LocalTime.of(23, 59, 59, nanos);
+      Time expected = Time.valueOf("23:59:59");
+      expected.setTime(expected.getTime() + nanos / 1_000_000);
+      assertEquals(expected, DateTimeFunctions.toTime(local));
+      assertEquals(expected, DateTimeFunctions.toTime(local.toString()));
+      assertEquals(expected, DateTimeFunctions.castLiteral(createCastExpression("TIME"), local.toString()));
+      assertEquals(local.withNano(nanos / 1_000_000 * 1_000_000), DateTimeFunctions.toLocalTime(expected));
+    }
+  }
+
+  /**
+   * Removes dates from JDBC time conversions while keeping local clock fields.
+   *
+   * @param zoneId
+   *          JVM time zone, including differing historical offsets
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "UTC", "America/New_York", "Asia/Kathmandu"
+  })
+  void normalizesTimeDates(String zoneId) {
+    var previous = java.util.TimeZone.getDefault();
+    java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone(zoneId));
+    try {
+      Time expected = Time.valueOf("10:00:00");
+      expected.setTime(expected.getTime() + 500);
+      Timestamp timestamp = Timestamp.valueOf("2024-06-01 10:00:00.500999");
+      Time dated = new Time(timestamp.getTime());
+      for (Object source : List.of(timestamp, dated, timestamp.getTime(), LocalTime.of(10, 0, 0, 500_999_999))) {
+        Time actual = DateTimeFunctions.toTime(source);
+        assertEquals(expected, actual);
+        assertEquals(expected.hashCode(), actual.hashCode());
+      }
+      assertSame(expected, DateTimeFunctions.toTime(expected));
+      assertEquals(timestamp.getTime(), dated.getTime());
+    } finally {
+      java.util.TimeZone.setDefault(previous);
+    }
+  }
+
+  /** Tests the TIMESTAMPADD implementation independently of SQL unit parsing. */
+  @Test
+  void timeIntervalHelpersRetainMilliseconds() {
+    Time source = Time.valueOf("23:59:59");
+    source.setTime(source.getTime() + 750);
+    Time expected = Time.valueOf("00:00:00");
+    expected.setTime(expected.getTime() + 250);
+    assertEquals(expected, DateTimeFunctions.timestampAdd(List.of("SQL_TSI_FRAC_SECOND", 500_000_000L, source)));
+    assertEquals(expected, DateTimeFunctions.plus(source, TemporalInterval.parse("0.5", "SECOND")));
+    Time hourLater = Time.valueOf("00:59:59");
+    hourLater.setTime(hourLater.getTime() + 750);
+    assertEquals(hourLater, DateTimeFunctions.timestampAdd(List.of("SQL_TSI_HOUR", 1L, source)));
+    assertEquals(hourLater, DateTimeFunctions.plus(source, TemporalInterval.parse("1", "HOUR")));
+    assertEquals(source, DateTimeFunctions.minus(hourLater, TemporalInterval.parse("1", "HOUR")));
   }
 
   // Additional tests for applyInterval

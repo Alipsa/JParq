@@ -385,7 +385,7 @@ public final class DateTimeFunctions {
       return extractFromLocalDateTime(upper, d.toLocalDate().atStartOfDay());
     }
     if (source instanceof Time t) {
-      return extractFromLocalTime(upper, t.toLocalTime());
+      return extractFromLocalTime(upper, toLocalTime(t));
     }
     if (source instanceof LocalDateTime ldt) {
       return extractFromLocalDateTime(upper, ldt);
@@ -506,7 +506,7 @@ public final class DateTimeFunctions {
       return d.toLocalDate();
     }
     if (value instanceof Time t) {
-      return t.toLocalTime();
+      return toLocalTime(t);
     }
     if (value instanceof LocalDateTime ldt) {
       return ldt;
@@ -626,8 +626,8 @@ public final class DateTimeFunctions {
       return lt.plus(amount, unit);
     }
     if (target instanceof Time t) {
-      LocalTime adjusted = t.toLocalTime().plus(amount, unit);
-      return Time.valueOf(adjusted);
+      LocalTime adjusted = toLocalTime(t).plus(amount, unit);
+      return toTime(adjusted);
     }
     if (target instanceof OffsetTime ot) {
       return ot.plus(amount, unit);
@@ -683,9 +683,9 @@ public final class DateTimeFunctions {
       Duration dur = interval.duration();
       long days = dur.toDays();
       Duration remainder = dur.minus(Duration.ofDays(days));
-      LocalTime lt = t.toLocalTime().plus(remainder);
+      LocalTime lt = toLocalTime(t).plus(remainder);
       lt = lt.plusHours(days * 24);
-      return Time.valueOf(lt);
+      return toTime(lt);
     }
     if (temporal instanceof LocalDateTime ldt) {
       return ldt.plus(interval.period()).plus(interval.duration());
@@ -996,6 +996,9 @@ public final class DateTimeFunctions {
   /**
    * Converts a value to a time, accepting unpadded SQL fields, fractional
    * seconds, and ISO date-time strings while rejecting out-of-range clock fields.
+   * Fractions retain milliseconds; sub-millisecond digits are truncated. JDBC
+   * times use the local date 1970-01-01, including conversions from timestamps,
+   * epoch milliseconds, and Time instances carrying a different date.
    *
    * @param value
    *          the temporal, numeric, or string value
@@ -1006,28 +1009,42 @@ public final class DateTimeFunctions {
    */
   public static Time toTime(Object value) {
     if (value instanceof Time t) {
-      return t;
+      Time normalized = toTime(toLocalTime(t));
+      return normalized.equals(t) ? t : normalized;
     }
     if (value instanceof Timestamp ts) {
-      return new Time(ts.getTime());
+      return toTime(ts.toLocalDateTime().toLocalTime());
     }
     if (value instanceof LocalTime lt) {
-      return Time.valueOf(lt);
+      Time time = Time.valueOf(lt);
+      time.setTime(time.getTime() + lt.getNano() / 1_000_000);
+      return time;
     }
     if (value instanceof Number n) {
-      return new Time(n.longValue());
+      return toTime(new Time(n.longValue()));
     }
     String text = value.toString().trim();
     try {
-      return Time.valueOf(LocalTime.parse(text, SQL_TIME));
+      return toTime(LocalTime.parse(text, SQL_TIME));
     } catch (DateTimeParseException ex) {
       try {
         LocalTime parsed = LocalTime.parse(text.replace(' ', 'T'), DateTimeFormatter.ISO_DATE_TIME);
-        return Time.valueOf(parsed);
+        return toTime(parsed);
       } catch (DateTimeParseException invalid) {
         throw temporalFailure("TIME", text, ex, invalid);
       }
     }
+  }
+
+  /**
+   * Reads a JDBC time's local clock fields including its stored milliseconds.
+   *
+   * @param time
+   *          the JDBC time
+   * @return the local time with millisecond precision
+   */
+  public static LocalTime toLocalTime(Time time) {
+    return time.toLocalTime().withNano((int) Math.floorMod(time.getTime(), 1000L) * 1_000_000);
   }
 
   /**
