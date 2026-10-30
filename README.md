@@ -248,6 +248,8 @@ returns `2`. NULL operands produce NULL. Day counts cannot be compared with or a
 for example `d - DATE '2024-02-01' > 7`. Date/time offsets require an explicit `INTERVAL`:
 `DATE '2024-01-01' + INTERVAL '1 day'` is supported; `DATE '2024-01-01' + 1` and other
 unsupported temporal arithmetic raise `SQLException` with SQLState `42000` when evaluated.
+Subtraction between TIME and DATE or TIMESTAMP is unsupported in either operand order and
+raises `SQLSyntaxErrorException` with SQLState `42000`, including within predicates.
 Differences between TIMESTAMP values, between TIME values, or between mixed DATE/TIMESTAMP
 operands support comparisons with INTERVAL values and `EXTRACT` within the same query block.
 For example, `end_ts - start_ts > INTERVAL '1' HOUR` and

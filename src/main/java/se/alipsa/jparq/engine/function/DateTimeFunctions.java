@@ -463,9 +463,10 @@ public final class DateTimeFunctions {
    *          the right operand
    * @return the signed day count as a {@link Long} for two DATE values, an
    *         internal interval for other temporal differences, the result of an
-   *         interval offset, or {@code null} if not a temporal subtraction;
-   *         internal differences support comparison and extraction but cannot be
-   *         returned as JDBC column values
+   *         interval offset, or {@code null} if not a supported temporal
+   *         subtraction, including TIME paired with DATE or TIMESTAMP; internal
+   *         differences support comparison and extraction but cannot be returned
+   *         as JDBC column values
    */
   public static Object minus(Object left, Object right) {
     if (left instanceof TemporalInterval li && right instanceof TemporalInterval ri) {
@@ -477,6 +478,9 @@ public final class DateTimeFunctions {
     if (isTemporal(left) && isTemporal(right)) {
       TemporalAccessor start = toTemporalAccessor(right);
       TemporalAccessor end = toTemporalAccessor(left);
+      if ((start instanceof LocalTime) != (end instanceof LocalTime)) {
+        return null;
+      }
       if (start instanceof LocalDate startDate && end instanceof LocalDate endDate) {
         return ChronoUnit.DAYS.between(startDate, endDate);
       }

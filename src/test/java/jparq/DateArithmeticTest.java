@@ -13,6 +13,7 @@ import java.sql.Date;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.SQLSyntaxErrorException;
 import java.sql.Types;
 import java.time.LocalDate;
 import java.util.List;
@@ -92,6 +93,41 @@ class DateArithmeticTest {
         }, sql);
         assertEquals("42000", failure.getSQLState(), sql);
         assertTrue(failure.getMessage().contains("Unsupported temporal arithmetic"), failure::getMessage);
+      }
+    }
+  }
+
+  /**
+   * Classifies subtraction between TIME and a date-bearing value as unsupported
+   * arithmetic, including predicates evaluated while reading physical rows.
+   *
+   * @param expression
+   *          mixed TIME subtraction to execute
+   * @throws Exception
+   *           if opening the connection fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "DATE '2024-01-02' - TIME '10:00:00'", "TIME '10:00:00' - DATE '2024-01-02'",
+      "TIMESTAMP '2024-01-02 00:00:00' - TIME '10:00:00'", "TIME '10:00:00' - TIMESTAMP '2024-01-02 00:00:00'"
+  })
+  void mixedTimeDifferencesRaiseSyntaxErrors(String expression) throws Exception {
+    String projection = "SELECT " + expression + " AS x FROM small WHERE id = 0";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String sql : List.of("SELECT " + expression, projection, "SELECT * FROM (" + projection + ") t",
+          "WITH t AS (" + projection + ") SELECT * FROM t",
+          "SELECT id FROM small WHERE " + expression + " > INTERVAL '1' HOUR")) {
+        var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
+          try (var result = statement.executeQuery(sql)) {
+            result.next();
+            result.getObject(1);
+          }
+        }, sql);
+        assertEquals("42000", failure.getSQLState(), sql);
+        assertTrue(failure.getMessage().contains("Unsupported temporal arithmetic - between"), failure::getMessage);
+        assertTrue(failure.getMessage().contains("TIME"), failure::getMessage);
+        assertFalse(failure.getMessage().contains("java.time"), failure::getMessage);
       }
     }
   }
