@@ -9,10 +9,36 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.Period;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /** Tests for {@link TemporalInterval}. */
 class TemporalIntervalTest {
+
+  /**
+   * Exercises registered parsers and aliases with independent expectations.
+   *
+   * @param unit
+   *          the unit or alias
+   * @param amount
+   *          the interval amount
+   * @param period
+   *          the expected ISO period
+   * @param duration
+   *          the expected ISO duration
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "year,1,P1Y,PT0S", "years,1,P1Y,PT0S", "month,1,P1M,PT0S", "months,1,P1M,PT0S", "day,1,P1D,PT0S",
+      "days,1,P1D,PT0S", "hour,1,P0D,PT1H", "hours,1,P0D,PT1H", "minute,1,P0D,PT1M", "minutes,1,P0D,PT1M",
+      "second,1,P0D,PT1S", "seconds,1,P0D,PT1S", "day to second,1 00:00:00,P0D,PT24H"
+  })
+  void registeredUnitParsers(String unit, String amount, String period, String duration) {
+    assertTrue(TemporalInterval.supportsUnit(unit));
+    assertEquals(TemporalInterval.of(Period.parse(period), Duration.parse(duration)),
+        TemporalInterval.parse(amount, unit));
+  }
 
   @Test
   void parsesIntervalLiterals() {
@@ -34,6 +60,28 @@ class TemporalIntervalTest {
     assertThrows(IllegalArgumentException.class, () -> TemporalInterval.parse("10 extra", null));
     assertThrows(IllegalArgumentException.class, () -> TemporalInterval.parse("1", "DAY TO SECOND"));
     assertThrows(IllegalArgumentException.class, () -> TemporalInterval.parse("5", "LIGHTYEAR"));
+  }
+
+  /**
+   * Checks compound signs and fractional seconds independently of SQL parsing.
+   */
+  @Test
+  void compoundSignsAndFractionalSeconds() {
+    assertEquals(Duration.ofMillis(-93784500), TemporalInterval.parse("-1 02:03:04.5", "DAY TO SECOND").duration());
+    assertEquals(Duration.ofMillis(93784500), TemporalInterval.parse("+1 02:03:04.5", "DAY TO SECOND").duration());
+    assertEquals(Duration.ofMillis(-500), TemporalInterval.parse("-0 00:00:00.5", "DAY TO SECOND").duration());
+    assertEquals(Duration.ofNanos(1), TemporalInterval.parse("0 00:00:00.000000001", "DAY TO SECOND").duration());
+  }
+
+  /** Checks supported units without parsing a literal amount. */
+  @Test
+  void supportedUnitNames() {
+    assertTrue(TemporalInterval.supportsUnit("DaY"));
+    assertTrue(TemporalInterval.supportsUnit("seconds"));
+    assertTrue(TemporalInterval.supportsUnit("DAY TO SECOND"));
+    assertFalse(TemporalInterval.supportsUnit("WEEK"));
+    assertFalse(TemporalInterval.supportsUnit("YEAR TO MONTH"));
+    assertFalse(TemporalInterval.supportsUnit(null));
   }
 
   @Test

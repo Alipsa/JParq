@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLDataException;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.List;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
@@ -272,6 +273,24 @@ class SqlExceptionsTest {
     var unclassified = new SQLException("Unclassified failure");
     assertNull(SqlExceptions.findSqlStateFailure(unclassified));
     assertNull(SqlExceptions.wrap("Evaluation failed", unclassified).getSQLState());
+  }
+
+  /**
+   * Preserves unsupported features through nested wrappers and repeated wrapping.
+   */
+  @Test
+  void unsupportedFeaturesKeepTheirClassification() {
+    var original = new SQLFeatureNotSupportedException("Unsupported interval unit: WEEK", "0A000", 7);
+    var wrapper = new IllegalArgumentException("Interval evaluation failed", original);
+    assertSame(original, SqlExceptions.findSqlStateFailure(wrapper));
+    var failure = SqlExceptions.wrap("Projection failed", wrapper);
+    assertInstanceOf(SQLFeatureNotSupportedException.class, failure);
+    assertEquals("0A000", failure.getSQLState());
+    assertEquals(7, failure.getErrorCode());
+    assertSame(wrapper, failure.getCause());
+    assertTrue(failure.getMessage().contains("Unsupported interval unit: WEEK"));
+    assertSame(failure, SqlExceptions.wrap(failure.getMessage(), failure));
+    assertInstanceOf(SQLFeatureNotSupportedException.class, SqlExceptions.wrap("Subquery failed", failure));
   }
 
   /**

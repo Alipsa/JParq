@@ -246,6 +246,23 @@ for example `d - DATE '2024-02-01' > 7`. Date/time offsets require an explicit `
 `DATE '2024-01-01' + INTERVAL '1 day'` is supported; `DATE '2024-01-01' + 1` and other
 unsupported temporal arithmetic raise `SQLException` with SQLState `42000` when evaluated.
 
+Interval literals accept a separate unit, such as `INTERVAL '1' DAY`, for YEAR, MONTH, DAY,
+HOUR, MINUTE, and SECOND, as well as the single-string form `INTERVAL '1 day'`.
+Values may have an embedded sign or a unary sign (`-INTERVAL '1' DAY`), and SECOND accepts
+fractional values. `INTERVAL '1 02:03:04' DAY TO SECOND` is also supported.
+DAY TO SECOND preserves fractional seconds and applies a leading sign to the entire interval.
+Its day field must contain digits after the optional leading sign; decimals, exponents,
+and repeated signs raise `22007`. Digit-only day values outside the supported range raise `22003`.
+Qualifier precision decorations such as `DAY(3)` and `SECOND(2,3)` are accepted;
+declared precision limits are currently not enforced.
+Invalid interval text raises `SQLDataException` with SQLState `22007`; numeric values that
+cannot be represented use `22003`.
+Unsupported qualifiers, such as YEAR TO MONTH and WEEK, and expression operands, such as
+`INTERVAL (1+1) DAY`, raise `SQLFeatureNotSupportedException` with SQLState `0A000`.
+WEEK, QUARTER, MILLISECOND, and MICROSECOND, including their plurals, use `0A000`
+in both literal forms (`INTERVAL '1' QUARTER` and `INTERVAL '1 quarter'`). Unknown unit
+words in the single-string form, such as `lightyear`, are invalid text (`22007`).
+
 Numeric casts reject non-finite inputs such as `'Infinity'`, `'-Infinity'`, and `'NaN'`, as well as invalid numeric
 text, with `SQLDataException` and SQLState `22018`. Projection evaluation failures are reported as
 `SQLException` with their original causes, including when retrieving values through result-set getters.
