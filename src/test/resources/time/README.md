@@ -10,7 +10,9 @@ and `time-micros` (LONG) logical types. Its physical row order is:
 The non-null values represent 11:00:00 and 10:00:00 respectively. The reversed
 order verifies sorting independently of file order. `jparq.ParquetTimeTest`
 covers issue #251, including JDBC metadata/getters, casts, predicates, NULLs,
-and ordering with each combination of predicate and projection pushdown.
+and ordering with each combination of predicate and projection pushdown settings.
+TIME literal comparisons currently remain in the residual filter; a planning test
+records this behavior and checks that eligible integer conjuncts are still pushed down.
 
 Regenerate from the repository root using Java 21 and the project's dependencies:
 

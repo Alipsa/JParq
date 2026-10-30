@@ -10,8 +10,13 @@ import java.sql.Time;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
+import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import org.apache.hadoop.conf.Configuration;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import se.alipsa.jparq.engine.ParquetFilterBuilder;
+import se.alipsa.jparq.engine.ParquetSchemas;
 
 /**
  * Regression coverage for nullable Parquet TIME columns reported in issue 251.
@@ -36,10 +41,10 @@ class ParquetTimeTest {
     try (var connection = connection(predicate, projection)) {
       for (String column : List.of("t", "u")) {
         try (var statement = connection.createStatement();
-            var result = statement
-                .executeQuery("SELECT " + column + ", CAST(" + column + " AS VARCHAR) AS text FROM typed")) {
+            var result = statement.executeQuery(
+                "SELECT " + column + ", CAST(" + column + " AS VARCHAR) AS text FROM typed ORDER BY id")) {
           assertTimeMetadata(result);
-          for (String clock : List.of("11:00:00", "10:00:00")) {
+          for (String clock : List.of("10:00:00", "11:00:00")) {
             assertTrue(result.next());
             Time expected = Time.valueOf(clock);
             assertEquals(expected, assertInstanceOf(Time.class, result.getObject(1)));
@@ -64,6 +69,34 @@ class ParquetTimeTest {
           assertTimeMetadata(result);
           assertFalse(result.next());
         }
+      }
+    }
+  }
+
+  /**
+   * Records that TIME literal comparisons currently require residual evaluation,
+   * while eligible integer conjuncts can still be pushed down.
+   *
+   * @throws Exception
+   *           if reading the fixture schema or parsing a predicate fails
+   */
+  @Test
+  void timeLiteralComparisonsRemainResidual() throws Exception {
+    var path = new org.apache.hadoop.fs.Path(ParquetTimeTest.class.getResource("/time/typed.parquet").toURI());
+    var schema = ParquetSchemas.readAvroSchema(path, new Configuration(false));
+    for (String column : List.of("t", "u")) {
+      for (String condition : List.of(" = TIME '10:00:00'", " > TIME '12:00:00'", " < {t '10:30:00'}")) {
+        var expression = CCJSqlParserUtil.parseCondExpression(column + condition);
+        var split = ParquetFilterBuilder.split(schema, expression);
+        assertTrue(split.predicate().isEmpty(), expression::toString);
+        assertNotNull(split.residual());
+        assertEquals(expression.toString(), split.residual().toString());
+        var mixed = ParquetFilterBuilder.split(schema,
+            CCJSqlParserUtil.parseCondExpression("id = 1 AND " + column + condition));
+        assertTrue(mixed.predicate().isPresent());
+        assertEquals("eq(id, 1)", mixed.predicate().orElseThrow().toString());
+        assertNotNull(mixed.residual());
+        assertEquals(expression.toString(), mixed.residual().toString());
       }
     }
   }

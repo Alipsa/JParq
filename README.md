@@ -322,8 +322,9 @@ Digits below one millisecond are truncated, including in comparisons, sorting, g
 DISTINCT, aggregates, and set operations; values differing only below that precision compare equally.
 JDBC Time's string representation displays whole seconds even when the value retains milliseconds.
 Stored TIME columns report JDBC `TIME` metadata and return `java.sql.Time` from `getObject()` and
-`getTime()`. For example, `CAST(t AS VARCHAR)` returns `10:00:00` for a stored 10:00 clock value;
-comparisons with `TIME '10:00:00'` and `{t '10:00:00'}` use the same clock semantics with pushdown enabled or disabled.
+`getTime()`. For example, `CAST(t AS VARCHAR)` returns `10:00:00` for a stored 10:00 clock value.
+Comparisons with TIME literals such as `TIME '10:00:00'` and `{t '10:00:00'}` currently remain in the
+residual filter and are evaluated after reading rows. Results are identical with `predicatePushdown` on or off.
 Stored TIME values outside the half-open range 00:00:00 to 24:00:00 raise `SQLDataException`, SQLState `22008`.
 Binary arguments to string functions (`LENGTH`, `OCTET_LENGTH`, `UPPER`, `CONCAT`) and `CAST(... AS VARCHAR)`
 currently produce Java array identity text or lengths derived from it; see [#355](https://github.com/Alipsa/JParq/issues/355).
