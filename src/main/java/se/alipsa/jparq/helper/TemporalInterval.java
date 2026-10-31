@@ -39,6 +39,8 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
   private final Period period;
   private final Duration duration;
   private final boolean temporalDifference;
+  private final IntervalQualifier qualifier;
+  private final int fractionalPrecision;
 
   /**
    * Creates an interval, retaining whether temporal subtraction contributed to
@@ -52,9 +54,37 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    *          whether this value contains a temporal difference
    */
   TemporalInterval(Period period, Duration duration, boolean temporalDifference) {
+    this(period, duration, temporalDifference,
+        period.toTotalMonths() == 0
+            ? IntervalQualifier.DAY_TO_SECOND
+            : period.getDays() == 0 && duration.isZero() ? IntervalQualifier.YEAR_TO_MONTH : IntervalQualifier.MIXED,
+        Math.max(0, BigDecimal.valueOf(duration.getNano(), 9).stripTrailingZeros().scale()));
+  }
+
+  /**
+   * Restores interval components and declared fields from materialized storage.
+   *
+   * @param period
+   *          calendar component
+   * @param duration
+   *          day/time component
+   * @param temporalDifference
+   *          subtraction provenance
+   * @param qualifier
+   *          retained SQL field range
+   * @param fractionalPrecision
+   *          retained fractional-second digits
+   */
+  TemporalInterval(Period period, Duration duration, boolean temporalDifference, IntervalQualifier qualifier,
+      int fractionalPrecision) {
     this.period = Objects.requireNonNull(period, "period").normalized();
     this.duration = Objects.requireNonNull(duration, "duration");
     this.temporalDifference = temporalDifference;
+    this.qualifier = Objects.requireNonNull(qualifier, "qualifier");
+    if (fractionalPrecision < 0 || fractionalPrecision > 9) {
+      throw new IllegalArgumentException("Interval fractional precision must be between 0 and 9");
+    }
+    this.fractionalPrecision = fractionalPrecision;
   }
 
   /**
@@ -132,11 +162,12 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
       throw new IllegalArgumentException("Interval literal must contain value/unit pairs: " + literal);
     }
 
-    TemporalInterval result = of(Period.ZERO, Duration.ZERO);
+    TemporalInterval result = null;
     for (int i = 0; i < tokens.length; i += 2) {
       String amount = tokens[i];
       String unit = tokens[i + 1];
-      result = result.plus(fromUnit(unit, amount));
+      TemporalInterval next = fromUnit(unit, amount);
+      result = result == null ? next : result.plus(next);
     }
     return result;
   }
@@ -170,7 +201,10 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
 
     Function<String, TemporalInterval> parser = UNIT_PARSERS.get(unit);
     if (parser != null) {
-      return parser.apply(amt);
+      TemporalInterval parsed = parser.apply(amt);
+      int decimal = amt.lastIndexOf('.');
+      int precision = decimal < 0 ? 0 : amt.length() - decimal - 1;
+      return new TemporalInterval(parsed.period, parsed.duration, false, IntervalQualifier.fromUnit(unit), precision);
     }
     if (UNSUPPORTED_UNITS.contains(unit)) {
       throw new UnsupportedOperationException("Unsupported interval unit: " + unitRaw);
@@ -257,7 +291,8 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    */
   public TemporalInterval plus(TemporalInterval other) {
     return new TemporalInterval(period.plus(other.period), duration.plus(other.duration),
-        temporalDifference || other.temporalDifference);
+        temporalDifference || other.temporalDifference, qualifier.common(other.qualifier),
+        Math.max(fractionalPrecision, other.fractionalPrecision));
   }
 
   /**
@@ -269,7 +304,8 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    */
   public TemporalInterval minus(TemporalInterval other) {
     return new TemporalInterval(period.minus(other.period), duration.minus(other.duration),
-        temporalDifference || other.temporalDifference);
+        temporalDifference || other.temporalDifference, qualifier.common(other.qualifier),
+        Math.max(fractionalPrecision, other.fractionalPrecision));
   }
 
   /**
@@ -278,7 +314,8 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    * @return the negated interval
    */
   public TemporalInterval negate() {
-    return new TemporalInterval(period.negated(), duration.negated(), temporalDifference);
+    return new TemporalInterval(period.negated(), duration.negated(), temporalDifference, qualifier,
+        fractionalPrecision);
   }
 
   /**
@@ -398,39 +435,113 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
   }
 
   /**
-   * Returns signed SQL interval text: YEAR TO MONTH or DAY TO SECOND, retaining
-   * nanoseconds without rounding. Legacy mixed-family values include both parts.
+   * Reports the retained SQL interval field range.
    *
-   * @return the interval value without the INTERVAL keyword or qualifier
+   * @return the interval qualifier
+   */
+  public IntervalQualifier qualifier() {
+    return qualifier;
+  }
+
+  /**
+   * Reports fractional-second precision retained across materialization.
+   *
+   * @return the number of fractional-second digits
+   */
+  public int fractionalPrecision() {
+    return fractionalPrecision;
+  }
+
+  /**
+   * Retains an explicitly declared fractional-second precision without rounding.
+   *
+   * @param precision
+   *          fractional digits from zero through nine
+   * @return an interval with the declared precision
+   * @throws IllegalArgumentException
+   *           if precision is invalid
+   * @throws ArithmeticException
+   *           if the precision would discard significant digits
+   */
+  public TemporalInterval withFractionalPrecision(int precision) {
+    BigDecimal.valueOf(duration.getNano(), 9).setScale(precision, RoundingMode.UNNECESSARY);
+    return new TemporalInterval(period, duration, temporalDifference, qualifier, precision);
+  }
+
+  /**
+   * Returns an interval value string using its retained SQL fields. Positive
+   * values omit the optional plus sign; fractional precision is preserved.
+   *
+   * @return value text without the INTERVAL keyword or qualifier
    */
   @Override
   public String toString() {
     long months = period.toTotalMonths();
-    if (months != 0 && period.getDays() == 0 && duration.isZero()) {
+    if (qualifier == IntervalQualifier.YEAR) {
+      return Long.toString(months / 12);
+    }
+    if (qualifier == IntervalQualifier.MONTH) {
+      return Long.toString(months);
+    }
+    if (qualifier == IntervalQualifier.YEAR_TO_MONTH) {
       return yearMonthText(months);
     }
     BigDecimal seconds = BigDecimal.valueOf(period.getDays()).multiply(BigDecimal.valueOf(86400))
         .add(BigDecimal.valueOf(duration.getSeconds())).add(BigDecimal.valueOf(duration.getNano(), 9));
-    String sign = seconds.signum() < 0 ? "-" : "+";
-    BigDecimal magnitude = seconds.abs();
-    BigInteger[] parts = magnitude.toBigInteger().divideAndRemainder(BigInteger.valueOf(86400));
-    long clock = parts[1].longValueExact();
-    String fraction = magnitude.remainder(BigDecimal.ONE).stripTrailingZeros().toPlainString();
-    fraction = "0".equals(fraction) ? "" : fraction.substring(1);
-    String dayTime = String.format(Locale.ROOT, "%s%s %02d:%02d:%02d%s", sign, parts[0], clock / 3600, clock / 60 % 60,
-        clock % 60, fraction);
-    return months == 0 ? dayTime : yearMonthText(months) + " " + dayTime;
+    if (qualifier == IntervalQualifier.MIXED) {
+      return yearMonthText(months) + " " + dayTimeText(seconds, IntervalQualifier.DAY_TO_SECOND);
+    }
+    return dayTimeText(seconds, qualifier);
   }
+
   /**
-   * Formats normalized year/month fields with a single leading sign.
+   * Formats day/time fields without changing the leading unit.
+   *
+   * @param seconds
+   *          total signed seconds
+   * @param fields
+   *          output field range
+   * @return SQL interval value text
+   */
+  private String dayTimeText(BigDecimal seconds, IntervalQualifier fields) {
+    String sign = seconds.signum() < 0 ? "-" : "";
+    BigDecimal magnitude = seconds.abs();
+    long[] divisors = {
+        86400, 3600, 60, 1
+    };
+    StringBuilder text = new StringBuilder(sign);
+    for (int field = fields.leading(); field <= fields.trailing(); field++) {
+      BigDecimal divisor = BigDecimal.valueOf(divisors[field - 2]);
+      if (field == 5) {
+        String second = magnitude.setScale(fractionalPrecision, RoundingMode.UNNECESSARY).toPlainString();
+        if (field != fields.leading() && magnitude.compareTo(BigDecimal.TEN) < 0) {
+          text.append('0');
+        }
+        text.append(second);
+      } else {
+        BigInteger whole = magnitude.divideToIntegralValue(divisor).toBigIntegerExact();
+        if (field != fields.leading() && whole.compareTo(BigInteger.TEN) < 0) {
+          text.append('0');
+        }
+        text.append(whole);
+        magnitude = magnitude.remainder(divisor);
+      }
+      if (field < fields.trailing()) {
+        text.append(field == 2 ? ' ' : ':');
+      }
+    }
+    return text.toString();
+  }
+
+  /**
+   * Formats normalized year/month fields without an optional positive sign.
    *
    * @param months
    *          signed total months
-   * @return YEAR TO MONTH literal text
+   * @return YEAR TO MONTH value text
    */
   private static String yearMonthText(long months) {
     long magnitude = Math.abs(months);
-    return String.format(Locale.ROOT, "%s%d-%02d", months < 0 ? "-" : "+", magnitude / 12, magnitude % 12);
+    return String.format(Locale.ROOT, "%s%d-%02d", months < 0 ? "-" : "", magnitude / 12, magnitude % 12);
   }
-
 }

@@ -1,13 +1,17 @@
 package se.alipsa.jparq.engine;
 
 import java.sql.Types;
+import java.util.List;
 import java.util.Locale;
 import java.util.function.Function;
+import net.sf.jsqlparser.expression.AnalyticExpression;
+import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
 import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.IntervalExpression;
+import net.sf.jsqlparser.expression.NullValue;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TimeValue;
@@ -15,6 +19,10 @@ import net.sf.jsqlparser.expression.TimestampValue;
 import net.sf.jsqlparser.expression.operators.arithmetic.Addition;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
 import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.statement.select.ParenthesedSelect;
+import net.sf.jsqlparser.statement.select.PlainSelect;
+import net.sf.jsqlparser.statement.select.Select;
+import net.sf.jsqlparser.statement.select.SetOperationList;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
@@ -39,7 +47,60 @@ public final class IntervalExpressionTypes {
    * @return whether the expression has interval type
    */
   public static boolean isInterval(Expression expression, Function<Column, Schema> columns) {
+    return isInterval(expression, columns, select -> null);
+  }
+
+  /**
+   * Resolves interval types with an independent schema scope for scalar
+   * subqueries.
+   *
+   * @param expression
+   *          projected expression
+   * @param columns
+   *          input column schema resolver
+   * @param subqueries
+   *          resolver for a scalar subquery's declared output schema
+   * @return whether the result has interval type, independently of returned rows
+   */
+  public static boolean isInterval(Expression expression, Function<Column, Schema> columns,
+      Function<Select, Schema> subqueries) {
     Expression value = ExpressionEvaluator.unwrapParenthesis(expression);
+    if (value instanceof CaseExpression choice) {
+      return commonBranches(ExpressionBranches.caseResults(choice), columns, subqueries);
+    }
+    if (value instanceof AnalyticExpression analytic && analytic.getName() != null) {
+      return switch (analytic.getName().toUpperCase(Locale.ROOT)) {
+        case "MIN", "MAX", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE" ->
+          isInterval(analytic.getExpression(), columns, subqueries);
+        default -> false;
+      };
+    }
+    if (value instanceof Select select) {
+      Schema declared = subqueries.apply(select);
+      if (declared != null) {
+        return IntervalType.matches(declared);
+      }
+      Select inner = select;
+      while (inner instanceof ParenthesedSelect parentheses) {
+        inner = parentheses.getSelect();
+      }
+      if (inner instanceof SetOperationList set && !set.getSelects().isEmpty()) {
+        inner = set.getSelects().getFirst();
+      }
+      return inner instanceof PlainSelect plain && plain.getSelectItems().size() == 1
+          && isInterval(plain.getSelectItems().getFirst().getExpression(),
+              plain.getFromItem() == null ? columns : column -> null, subqueries);
+    }
+    if (value instanceof net.sf.jsqlparser.expression.Function function && function.getName() != null
+        && function.getParameters() != null && !function.getParameters().isEmpty()) {
+      String name = function.getName().toUpperCase(Locale.ROOT);
+      if ("COALESCE".equals(name) || "NULLIF".equals(name)) {
+        return commonBranches(function.getParameters(), columns, subqueries);
+      }
+      if (List.of("MIN", "MAX").contains(name)) {
+        return isInterval(function.getParameters().getFirst(), columns, subqueries);
+      }
+    }
     if (value instanceof IntervalExpression) {
       return true;
     }
@@ -50,7 +111,7 @@ public final class IntervalExpressionTypes {
       return IntervalType.matches(CorrelatedBindings.schema(function));
     }
     if (value instanceof SignedExpression signed) {
-      return isInterval(signed.getExpression(), columns);
+      return isInterval(signed.getExpression(), columns, subqueries);
     }
     if (value instanceof Subtraction subtraction) {
       int left = temporalType(subtraction.getLeftExpression(), columns);
@@ -58,13 +119,40 @@ public final class IntervalExpressionTypes {
       if (left != Types.OTHER && right != Types.OTHER) {
         return !(left == Types.DATE && right == Types.DATE);
       }
-      return isInterval(subtraction.getLeftExpression(), columns)
-          && isInterval(subtraction.getRightExpression(), columns);
+      return isInterval(subtraction.getLeftExpression(), columns, subqueries)
+          && isInterval(subtraction.getRightExpression(), columns, subqueries);
     }
     if (value instanceof Addition addition) {
-      return isInterval(addition.getLeftExpression(), columns) && isInterval(addition.getRightExpression(), columns);
+      return isInterval(addition.getLeftExpression(), columns, subqueries)
+          && isInterval(addition.getRightExpression(), columns, subqueries);
     }
     return false;
+  }
+
+  /**
+   * Resolves CASE and COALESCE results without evaluating branches.
+   *
+   * @param branches
+   *          possible result expressions
+   * @param columns
+   *          input column resolver
+   * @param subqueries
+   *          scalar subquery schema resolver
+   * @return whether every typed branch is an interval and at least one is typed
+   */
+  private static boolean commonBranches(List<? extends Expression> branches, Function<Column, Schema> columns,
+      Function<Select, Schema> subqueries) {
+    boolean interval = false;
+    for (Expression branch : branches) {
+      if (ExpressionEvaluator.unwrapParenthesis(branch) instanceof NullValue) {
+        continue;
+      }
+      if (!isInterval(branch, columns, subqueries)) {
+        return false;
+      }
+      interval = true;
+    }
+    return interval;
   }
 
   /**

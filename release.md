@@ -4,7 +4,10 @@
 
 - Return temporal differences and interval literals as immutable `TemporalInterval` values through JDBC
   `getObject()`, including typed getters. Report JDBC OTHER with type name INTERVAL and the interval Java class.
-  `getString()` and explicit character casts return signed SQL interval text, preserving nanoseconds (#254).
+  `getString()` and explicit character casts retain the source interval fields and fractional-second precision,
+  preserving nanoseconds without an optional positive sign (#254). For example, 90 MINUTE prints as `90`.
+  Retain interval metadata for parentheses, CASE, COALESCE, NULLIF, aggregates, navigation windows, and scalar
+  subqueries, including empty inputs and all-NULL results.
   Preserve interval types through derived tables, CTEs, VALUES, UNNEST, LATERAL inputs, set operations,
   and scalar or predicate subqueries so outer comparisons and EXTRACT continue to work. COUNT(*) and
   ordinality-only UNNEST queries succeed without converting interval elements to text. EXISTS and NOT EXISTS
@@ -13,6 +16,11 @@
 - Reject implicit use of intervals as text with SQLSyntaxErrorException and SQLState `42000`, including
   VARCHAR comparisons in either operand order, concatenation, LIKE, and string functions. Use an explicit
   character cast for interval text. MIN/MAX retain interval values on ties in aggregates and window frames.
+- Support numeric conversions, BigDecimal, and java.time targets in typed JDBC `getObject()` calls,
+  preserving SQL NULL, TIME milliseconds, and TIMESTAMP nanoseconds. Offset conversions from JDBC Time and
+  Timestamp use UTC; existing offset values retain their offsets.
+- Raise SQLDataException with SQLState `22001` when character casts would truncate numeric, datetime,
+  or interval values (#368). Preserve existing character-source truncation.
 - Classify subtraction between TIME and DATE or TIMESTAMP in either operand order as unsupported temporal
   arithmetic with `SQLSyntaxErrorException`, SQLState `42000`, including predicates and nested queries (#254).
   Previously these combinations raised an unclassified exception naming internal Java types.

@@ -36,6 +36,7 @@ import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelationContextBuilder;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.Identifier;
+import se.alipsa.jparq.engine.JdbcConversions;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.MaterializedNames;
@@ -1252,7 +1253,8 @@ public class JParqResultSet extends ResultSetAdapter {
     }
     if (aggregateQuery) {
       coerceAggregateNumericValues(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
-          canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings));
+          canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
+          .withScalarIntervalSchemas(subqueryExecutor::intervalProjectionSchema));
       aggregateMetadata = null;
     }
     if (!aggregateQuery && columnOrder.isEmpty() && selectExpressions.isEmpty() && schema != null) {
@@ -1271,13 +1273,15 @@ public class JParqResultSet extends ResultSetAdapter {
             aggregateRows == null ? List.of() : aggregateRows);
         aggregateMetadata
             .retainNumericExpressions(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
-                canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings));
+                canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
+                .withScalarIntervalSchemas(subqueryExecutor::intervalProjectionSchema));
       }
       return aggregateMetadata;
     }
     var normalized = ParquetSchemas.normalizeStringTypes(metadataSchema);
     return new JParqResultSetMetaData(normalized, columnOrder, physicalColumnOrder, canonicalColumnNames, tableName,
-        tableSchema, tableCatalog, selectExpressions, metadataSourceMappings);
+        tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
+        .withScalarIntervalSchemas(subqueryExecutor::intervalProjectionSchema);
   }
 
   @SuppressWarnings("PMD.EmptyCatchBlock")
@@ -1559,7 +1563,7 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
-   * Returns a value using its documented Java representation or character form.
+   * Converts a value to a requested JDBC or java.time representation.
    *
    * @param columnIndex
    *          one-based output column
@@ -1573,18 +1577,10 @@ public class JParqResultSet extends ResultSetAdapter {
    */
   @Override
   public <T> T getObject(int columnIndex, Class<T> type) throws SQLException {
-    if (type == null) {
-      throw new SQLException("Requested Java type cannot be null", "22005");
-    }
     if (type == String.class) {
       return type.cast(getString(columnIndex));
     }
-    Object value = value(columnIndex);
-    if (value == null || type.isInstance(value)) {
-      return type.cast(value);
-    }
-    throw new java.sql.SQLDataException("Cannot convert " + value.getClass().getName() + " to " + type.getName(),
-        "22005");
+    return JdbcConversions.convert(getObject(columnIndex), type);
   }
 
   /** {@inheritDoc} */

@@ -352,7 +352,9 @@ public final class DateTimeFunctions {
       throw SqlExceptions.unsupportedFeature(message);
     }
     try {
-      return TemporalInterval.parse(expr.getParameter(), unit);
+      TemporalInterval interval = TemporalInterval.parse(expr.getParameter(), unit);
+      Integer precision = qualifier == null ? null : qualifier.getFractionalSecondsPrecision();
+      return precision == null ? interval : interval.withFractionalPrecision(precision);
     } catch (UnsupportedOperationException failure) {
       String message = failure.getMessage();
       throw SqlExceptions.unsupportedFeature(message, failure);
@@ -789,6 +791,11 @@ public final class DateTimeFunctions {
     }
     Integer length = firstIntegerArgument(cast);
     if (length != null && length >= 0 && text.length() > length) {
+      if (value instanceof Number || value instanceof TemporalAccessor || value instanceof java.util.Date
+          || value instanceof TemporalInterval) {
+        throw new IllegalArgumentException("Character cast would truncate a numeric, datetime, or interval value",
+            new SQLDataException("String data, right truncation", "22001"));
+      }
       return text.substring(0, length);
     }
     return text;

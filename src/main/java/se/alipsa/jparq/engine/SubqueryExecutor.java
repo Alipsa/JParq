@@ -34,6 +34,7 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
 public final class SubqueryExecutor implements AutoCloseable {
 
   private final Map<String, PreparedStatement> preparedStatements = new LinkedHashMap<>();
+  private final Map<String, Optional<org.apache.avro.Schema>> intervalSchemas = new LinkedHashMap<>();
 
   private final ExecutionPlans executionPlans;
   private final JParqConnection connection;
@@ -539,11 +540,34 @@ public final class SubqueryExecutor implements AutoCloseable {
       }
     }
     preparedStatements.clear();
+    intervalSchemas.clear();
     cache.clear();
     existenceCache.clear();
     if (failure != null) {
       throw failure;
     }
+  }
+
+  /**
+   * Resolves a scalar interval declaration in the subquery's own input scope.
+   *
+   * @param select
+   *          scalar subquery to inspect
+   * @return its declared interval schema, or null if it cannot be established
+   */
+  public org.apache.avro.Schema intervalProjectionSchema(Select select) {
+    String sql = select.toString();
+    return intervalSchemas.computeIfAbsent(sql, shape -> {
+      try (PreparedStatement prepared = prepareStatement(shape)) {
+        return Optional
+            .ofNullable(prepared instanceof JParqPreparedStatement nested ? nested.declaredIntervalSchema() : null);
+      } catch (SQLException exception) {
+        if (QueryCancellation.findCancellation(exception).isPresent()) {
+          throw new IllegalStateException("Canceled while resolving scalar interval metadata", exception);
+        }
+        return Optional.empty();
+      }
+    }).orElse(null);
   }
 
   private PreparedStatement prepareStatement(String sql) throws SQLException {

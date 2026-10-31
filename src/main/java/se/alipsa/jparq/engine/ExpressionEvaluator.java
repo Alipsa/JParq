@@ -465,7 +465,8 @@ public final class ExpressionEvaluator {
   // -------------------------
 
   /**
-   * Recursively unwrap all {@link Parenthesis} layers from an expression.
+   * Recursively unwrap legacy and single-element list parentheses from an
+   * expression.
    *
    * @param expr
    *          the expression to unwrap; must not be {@code null}
@@ -474,10 +475,15 @@ public final class ExpressionEvaluator {
   @SuppressWarnings("removal")
   public static Expression unwrapParenthesis(Expression expr) {
     Expression unwrapped = expr;
-    while (unwrapped instanceof Parenthesis p) {
-      unwrapped = p.getExpression();
+    while (true) {
+      if (unwrapped instanceof Parenthesis parenthesis) {
+        unwrapped = parenthesis.getExpression();
+      } else if (unwrapped instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
+        unwrapped = list.getFirst();
+      } else {
+        return unwrapped;
+      }
     }
-    return unwrapped;
   }
 
   private record Operand(Object value, Schema schemaOrNull) {

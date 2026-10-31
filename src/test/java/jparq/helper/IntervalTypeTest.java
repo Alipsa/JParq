@@ -33,18 +33,38 @@ class IntervalTypeTest {
     TemporalInterval decoded = IntervalType.decode(IntervalType.encode(difference));
     assertEquals(difference, decoded);
     assertTrue(decoded.isTemporalDifference());
-    assertEquals("+1 00:00:00.123456789", decoded.toString());
+    assertEquals("1 00:00:00.123456789", decoded.toString());
     assertEquals("-1 00:00:00.123456789", decoded.negate().toString());
+  }
+
+  /** Retains declared fields and precision in the interval codec. */
+  @Test
+  void declaredFieldsRoundTrip() {
+    for (String[] source : new String[][]{
+        {
+            "90", "MINUTE"
+        }, {
+            "1.2300", "SECOND"
+        }, {
+            "0", "MONTH"
+        }
+    }) {
+      TemporalInterval interval = TemporalInterval.parse(source[0], source[1]);
+      TemporalInterval decoded = IntervalType.decode(IntervalType.encode(interval));
+      assertEquals(interval.qualifier(), decoded.qualifier());
+      assertEquals(interval.fractionalPrecision(), decoded.fractionalPrecision());
+      assertEquals(interval.toString(), decoded.toString());
+    }
   }
 
   /** Checks normalized signs, day carries, zero, and year/month text. */
   @Test
   void sqlIntervalText() {
-    assertEquals("+0 00:00:00", TemporalInterval.of(Period.ZERO, Duration.ZERO).toString());
+    assertEquals("0 00:00:00", TemporalInterval.of(Period.ZERO, Duration.ZERO).toString());
     assertEquals("-0 00:00:00.000000001", TemporalInterval.of(Period.ZERO, Duration.ofNanos(-1)).toString());
-    assertEquals("+2 02:03:04.5", TemporalInterval
+    assertEquals("2 02:03:04.5", TemporalInterval
         .of(Period.ofDays(1), Duration.ofHours(26).plusMinutes(3).plusSeconds(4).plusMillis(500)).toString());
-    assertEquals("+2-03", TemporalInterval.of(Period.ofMonths(27), Duration.ZERO).toString());
+    assertEquals("2-03", TemporalInterval.of(Period.ofMonths(27), Duration.ZERO).toString());
     assertEquals("-2-03", TemporalInterval.of(Period.ofMonths(-27), Duration.ZERO).toString());
   }
 }

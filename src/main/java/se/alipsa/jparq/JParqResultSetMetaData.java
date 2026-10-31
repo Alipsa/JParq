@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Function;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.CastExpression;
@@ -36,6 +37,7 @@ import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements AvroColumnMetadata {
 
+  private Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarIntervalSchemas = select -> null;
   private final Schema schema; // may be null if empty file
   private final List<String> labels; // projection labels (aliases if present)
   private final List<String> physicalNames; // underlying physical column names (null for computed)
@@ -110,6 +112,19 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     this.expressions = expressions == null ? List.of() : List.copyOf(expressions);
     this.schemaFieldLookup = schema == null ? Map.of() : buildSchemaFieldLookup(schema);
     this.sourceMappings = sourceMappings;
+  }
+
+  /**
+   * Supplies scalar-subquery declaration resolution without executing its rows.
+   *
+   * @param resolver
+   *          independently scoped scalar schema resolver
+   * @return this metadata instance
+   */
+  public JParqResultSetMetaData withScalarIntervalSchemas(
+      Function<net.sf.jsqlparser.statement.select.Select, Schema> resolver) {
+    scalarIntervalSchemas = resolver;
+    return this;
   }
 
   @Override
@@ -212,7 +227,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     return IntervalExpressionTypes.isInterval(expressionAtColumn(column), reference -> {
       Schema.Field field = resolveSourceField(reference);
       return field == null ? null : field.schema();
-    });
+    }, scalarIntervalSchemas);
   }
 
   /**
@@ -560,11 +575,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * @return the enclosed expression, or the original expression
    */
   private static Expression unwrap(Expression expression) {
-    Expression result = expression;
-    while (result instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
-      result = list.getFirst();
-    }
-    return result;
+    return se.alipsa.jparq.engine.ExpressionEvaluator.unwrapParenthesis(expression);
   }
 
   private Expression expressionAtColumn(int column) {

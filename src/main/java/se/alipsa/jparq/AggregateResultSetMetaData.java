@@ -134,7 +134,11 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
           scales[i] = numeric.scale();
         }
       }
-      schemas.add(numeric == null ? columnValueSchema(column) : numeric.schema());
+      Schema declaration = projected.columnValueSchema(column);
+      if (IntervalType.matches(declaration)) {
+        sqlTypes.set(i, Types.OTHER);
+      }
+      schemas.add(numeric != null ? numeric.schema() : declaration != null ? declaration : columnValueSchema(column));
     }
     valueSchemas = schemas;
   }

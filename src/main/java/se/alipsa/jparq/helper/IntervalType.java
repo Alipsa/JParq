@@ -12,7 +12,7 @@ import org.apache.avro.Schema;
 public final class IntervalType {
 
   private static final String PROPERTY = "jparq.logicalType";
-  private static final int BYTE_COUNT = 25;
+  private static final int BYTE_COUNT = 27;
 
   /** Prevents utility class instantiation. */
   private IntervalType() {
@@ -52,7 +52,8 @@ public final class IntervalType {
     ByteBuffer bytes = ByteBuffer.allocate(BYTE_COUNT);
     bytes.putInt(interval.period().getYears()).putInt(interval.period().getMonths()).putInt(interval.period().getDays())
         .putLong(interval.duration().getSeconds()).putInt(interval.duration().getNano())
-        .put((byte) (interval.isTemporalDifference() ? 1 : 0));
+        .put((byte) (interval.isTemporalDifference() ? 1 : 0)).put((byte) interval.qualifier().ordinal())
+        .put((byte) interval.fractionalPrecision());
     return bytes.flip();
   }
 
@@ -75,6 +76,8 @@ public final class IntervalType {
     ByteBuffer bytes = source.duplicate();
     Period period = Period.of(bytes.getInt(), bytes.getInt(), bytes.getInt());
     Duration duration = Duration.ofSeconds(bytes.getLong(), bytes.getInt());
-    return new TemporalInterval(period, duration, bytes.get() != 0);
+    boolean difference = bytes.get() != 0;
+    IntervalQualifier qualifier = IntervalQualifier.values()[Byte.toUnsignedInt(bytes.get())];
+    return new TemporalInterval(period, duration, difference, qualifier, Byte.toUnsignedInt(bytes.get()));
   }
 }

@@ -254,9 +254,13 @@ Differences between TIMESTAMP values, between TIME values, or between mixed DATE
 operands return immutable `se.alipsa.jparq.helper.TemporalInterval` values from `getObject()`;
 `getObject(column, TemporalInterval.class)` returns the same representation. Interval columns use JDBC
 `Types.OTHER`, type name `INTERVAL`, and the `TemporalInterval` Java class in metadata.
-`getString()` and explicit character casts return signed SQL interval text: `+1 02:03:04.123456789`
-for DAY TO SECOND values and `+1-02` for YEAR TO MONTH values. Nanoseconds are preserved.
-Plain interval literals use the same object and text representations.
+`getString()` and explicit character casts retain an interval's field range: for example,
+`INTERVAL '90' MINUTE` produces `90`, while a DAY TO SECOND difference can produce
+`1 02:03:04.123456789`. Positive values omit the optional plus sign. Fractional-second precision
+and nanoseconds are preserved through materialization. The `qualifier()` and `fractionalPrecision()`
+accessors describe the retained fields. Plain interval literals use the same object representation.
+Parentheses, CASE, COALESCE, NULLIF, aggregates, navigation windows, and scalar subqueries retain
+interval metadata even for empty inputs or all-NULL results.
 
 Intervals retain their types through derived tables, CTEs, VALUES, UNNEST, LATERAL inputs,
 set operations, and scalar or predicate subqueries. Comparisons with intervals and `EXTRACT` remain
@@ -267,7 +271,14 @@ subqueries, HAVING predicates, and set operations.
 Implicit interval-to-text coercion is a type error (`SQLSyntaxErrorException`, SQLState `42000`),
 including comparisons with VARCHAR values, concatenation, LIKE, and string functions. Use an explicit
 character cast when text is intended, such as `CAST(end_ts - start_ts AS VARCHAR)`.
+Character casts of numeric, datetime, or interval values raise `SQLDataException` with SQLState `22001`
+when their text does not fit the requested length. Character-source casts retain their truncation behavior.
 NULL operands still produce NULL.
+
+Typed `getObject(column, Class)` supports numeric conversions and BigDecimal, as well as LocalDate,
+LocalTime, LocalDateTime, OffsetTime, and OffsetDateTime. TIME conversions retain milliseconds and
+TIMESTAMP conversions retain nanoseconds. Offset conversions from JDBC Time and Timestamp use UTC;
+an existing offset value retains its offset. SQL NULL returns null and sets `wasNull()`.
 
 Interval literals accept a separate unit, such as `INTERVAL '1' DAY`, for YEAR, MONTH, DAY,
 HOUR, MINUTE, and SECOND, as well as the single-string form `INTERVAL '1 day'`.
@@ -277,7 +288,7 @@ DAY TO SECOND preserves fractional seconds and applies a leading sign to the ent
 Its day field must contain digits after the optional leading sign; decimals, exponents,
 and repeated signs raise `22007`. Digit-only day values outside the supported range raise `22003`.
 Qualifier precision decorations such as `DAY(3)` and `SECOND(2,3)` are accepted;
-declared precision limits are currently not enforced.
+leading-field precision limits are currently not enforced. Fractional-second precision is retained.
 Invalid interval text raises `SQLDataException` with SQLState `22007`; numeric values that
 cannot be represented use `22003`.
 Unsupported qualifiers, such as YEAR TO MONTH and WEEK, and expression operands, such as

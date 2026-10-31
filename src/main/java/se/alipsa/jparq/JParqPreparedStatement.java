@@ -656,6 +656,41 @@ public class JParqPreparedStatement implements PreparedStatement {
         && inheritedCteContext.isEmpty();
   }
 
+  /**
+   * Resolves the first projection's interval declaration without reading rows.
+   *
+   * @return the interval schema, or null when the declaration is not an interval
+   * @throws SQLException
+   *           if an input schema cannot be inspected
+   */
+  public Schema declaredIntervalSchema() throws SQLException {
+    if (parsedSelect == null || parsedSelect.expressions().size() != 1) {
+      return null;
+    }
+    Map<Column, Schema> columns = new HashMap<>();
+    Expression expression = parsedSelect.expressions().getFirst();
+    return se.alipsa.jparq.engine.IntervalExpressionTypes.isInterval(expression, column -> {
+      return columns.computeIfAbsent(column, reference -> {
+        try {
+          Schema source = resolveSchemaForColumn(tableReferences, reference.getTable());
+          if (source == null && !joinQuery) {
+            source = fileAvroSchema;
+          }
+          Schema.Field field = findFieldIgnoreCase(source, reference.getColumnName());
+          return field == null ? null : field.schema();
+        } catch (SQLException exception) {
+          return null;
+        }
+      });
+    }, select -> {
+      try (JParqPreparedStatement nested = prepareSubqueryStatement(select.toString(), cteResults)) {
+        return nested.declaredIntervalSchema();
+      } catch (SQLException exception) {
+        return null;
+      }
+    }) ? IntervalType.schema() : null;
+  }
+
   @Override
   public void close() {
     // Close the bound statement if it exists
