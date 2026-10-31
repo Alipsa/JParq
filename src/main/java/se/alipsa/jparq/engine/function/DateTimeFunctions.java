@@ -766,7 +766,7 @@ public final class DateTimeFunctions {
     String normalized = dataType == null ? "" : normalizeTypeName(dataType);
     if (cast.isTimeStamp() || "timestamp".equals(normalized)) {
       Timestamp timestamp = toTimestamp(value);
-      int nanos = castFractionalNanos(cast, timestamp.getNanos());
+      int nanos = castFractionalNanos(cast, timestamp.getNanos(), 6);
       if (nanos == timestamp.getNanos()) {
         return timestamp;
       }
@@ -780,7 +780,7 @@ public final class DateTimeFunctions {
     if (cast.isTime() || "time".equals(normalized)) {
       Time time = toTime(value);
       LocalTime local = toLocalTime(time);
-      int nanos = castFractionalNanos(cast, local.getNano());
+      int nanos = castFractionalNanos(cast, local.getNano(), 0);
       return nanos == local.getNano() ? time : toTime(local.withNano(nanos));
     }
     if (dataType == null) {
@@ -807,15 +807,17 @@ public final class DateTimeFunctions {
    *          datetime CAST expression
    * @param nanos
    *          source fractional field
+   * @param defaultPrecision
+   *          fractional precision of the resolved target when none is specified
    * @return nanoseconds truncated to the explicit or default precision
    * @throws IllegalArgumentException
    *           if precision is outside the supported range, carrying SQLState
    *           42000
    */
-  private static int castFractionalNanos(CastExpression cast, int nanos) {
+  private static int castFractionalNanos(CastExpression cast, int nanos, int defaultPrecision) {
     Integer precision = firstIntegerArgument(cast);
     if (precision == null) {
-      precision = "timestamp".equals(normalizeTypeName(cast.getColDataType().getDataType())) ? 6 : 0;
+      precision = defaultPrecision;
     }
     if (precision < 0 || precision > 9) {
       throw SqlExceptions.syntaxFailure("Datetime fractional precision must be between 0 and 9");

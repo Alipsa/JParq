@@ -9,7 +9,8 @@
   VALUES, arrays, and set operations combine input declarations before output, including empty branches.
   For example, combining 1 DAY and 36 HOUR prints `1 00` and `1 12`; standalone 90 MINUTE prints as `90`.
   Honor TIME/TIMESTAMP cast precision before interval arithmetic, defaulting to zero and six fractional
-  digits respectively. Truncate excess cast fractions and format interval text without rounding exceptions.
+  digits respectively, including TIMESTAMP WITHOUT TIME ZONE, TIMESTAMP WITH TIME ZONE, and DATETIME.
+  Truncate excess cast fractions and format interval text without rounding exceptions.
   Retain interval metadata for parentheses, CASE, COALESCE, NULLIF, aggregates, navigation windows, and scalar
   subqueries, including empty inputs, empty set operations, and all-NULL results. Keep declared JDBC types
   and Java classes consistent for empty grouped results, including SMALLINT and TINYINT expressions.

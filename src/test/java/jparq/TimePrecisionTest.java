@@ -26,6 +26,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import se.alipsa.jparq.JParqResultSet;
+import se.alipsa.jparq.helper.TemporalInterval;
 
 /** Checks stored TIME precision, relational operations, and data errors. */
 class TimePrecisionTest {
@@ -46,15 +47,65 @@ class TimePrecisionTest {
             .type(LogicalTypes.timeMicros().addToSchema(Schema.create(Schema.Type.LONG))).noDefault().endRecord(),
         List.of(List.of(1, 36_000_000, 36_000_000_999L), List.of(2, 36_000_500, 36_000_500_999L),
             List.of(3, 36_000_250, 36_000_250_999L)));
-    Schema timestamps = SchemaBuilder.record("dated").fields().requiredInt("id").name("ts")
+    Schema timestamps = SchemaBuilder.record("dated").fields().requiredInt("id").requiredString("s").name("ts")
         .type(LogicalTypes.timestampMicros().addToSchema(Schema.create(Schema.Type.LONG))).noDefault().endRecord();
     List<List<?>> rows = new ArrayList<>();
     int id = 1;
     for (String date : List.of("2024-01-01", "2024-06-01", "2025-01-01")) {
       Timestamp timestamp = Timestamp.valueOf(date + " 10:00:00.500999");
-      rows.add(List.of(id++, timestamp.toInstant().getEpochSecond() * 1_000_000 + timestamp.getNanos() / 1000));
+      String text = id == 1 ? "2024-01-02 00:00:00.123456" : "2024-01-02 00:00:00.123456789";
+      rows.add(List.of(id++, text, timestamp.toInstant().getEpochSecond() * 1_000_000 + timestamp.getNanos() / 1000));
     }
     write("dated", timestamps, rows);
+  }
+
+  /**
+   * Applies timestamp precision consistently across supported target spellings.
+   *
+   * @param target
+   *          timestamp cast target
+   * @param precision
+   *          expected fractional-second precision
+   * @throws Exception
+   *           if a query fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "TIMESTAMP,6", "TIMESTAMP WITHOUT TIME ZONE,6", "TIMESTAMP WITH TIME ZONE,6", "DATETIME,6",
+      "TIMESTAMP(0) WITHOUT TIME ZONE,0", "TIMESTAMP(3) WITHOUT TIME ZONE,3", "TIMESTAMP(9) WITHOUT TIME ZONE,9"
+  })
+  void timestampTargetSpellingsKeepFractionalPrecision(String target, int precision) throws Exception {
+    try (var connection = connection(true, true); var statement = connection.createStatement()) {
+      for (int id : List.of(1, 2)) {
+        int sourceNanos = id == 1 ? 123456000 : 123456789;
+        int unit = (int) Math.pow(10, 9 - precision);
+        int expectedNanos = sourceNanos / unit * unit;
+        String query = "SELECT CAST(s AS " + target + ") AS x FROM dated WHERE id = " + id;
+        try (var result = statement.executeQuery(query)) {
+          assertTrue(result.next(), query);
+          assertEquals(expectedNanos, result.getTimestamp(1).getNanos(), query);
+          assertEquals(expectedNanos, assertInstanceOf(Timestamp.class, result.getObject(1)).getNanos(), query);
+          assertFalse(result.next(), query);
+        }
+        String difference = "SELECT CAST(s AS " + target
+            + ") - TIMESTAMP '2024-01-01 00:00:00' AS x FROM dated WHERE id = " + id;
+        for (String sql : List.of(difference, "SELECT x FROM (" + difference + ") q")) {
+          try (var result = statement.executeQuery(sql)) {
+            assertEquals("INTERVAL", result.getMetaData().getColumnTypeName(1), difference);
+            assertTrue(result.next(), difference);
+            TemporalInterval interval = assertInstanceOf(TemporalInterval.class, result.getObject(1));
+            assertEquals(expectedNanos, interval.duration().getNano(), difference);
+            assertEquals(precision, interval.fractionalPrecision(), difference);
+            assertEquals(interval.toString(), result.getString(1), difference);
+          }
+        }
+      }
+      try (var result = statement.executeQuery(
+          "SELECT CAST(s AS " + target + ") - TIMESTAMP '2024-01-01 00:00:00' AS x FROM dated WHERE id > 5")) {
+        assertEquals("INTERVAL", result.getMetaData().getColumnTypeName(1));
+        assertFalse(result.next());
+      }
+    }
   }
 
   /**

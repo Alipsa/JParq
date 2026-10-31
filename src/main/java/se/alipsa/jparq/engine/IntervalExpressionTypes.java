@@ -408,6 +408,15 @@ public final class IntervalExpressionTypes {
     } else if (value instanceof TimeKeyExpression key) {
       type = key.getStringValue();
     } else if (value instanceof CastExpression cast && cast.getColDataType() != null) {
+      if (cast.isTimeStamp()) {
+        return Types.TIMESTAMP;
+      }
+      if (cast.isTime()) {
+        return Types.TIME;
+      }
+      if (cast.isDate()) {
+        return Types.DATE;
+      }
       type = cast.getColDataType().getDataType();
     }
     if (type == null) {
