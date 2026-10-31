@@ -255,7 +255,7 @@ operands support comparisons with INTERVAL values and `EXTRACT` within the same 
 For example, `end_ts - start_ts > INTERVAL '1' HOUR` and
 `EXTRACT(DAY FROM end_ts - start_ts)` remain supported. Returning the difference itself has no
 supported JDBC interval representation and raises `SQLFeatureNotSupportedException` with SQLState
-`0A000` when a result getter reads it or a derived table/CTE or VALUES input materializes it.
+`0A000` when a result getter reads it or a derived table/CTE, VALUES, or UNNEST input materializes it.
 This also applies when the outer query would compare or extract from the materialized difference: perform the
 comparison or extraction in the inner query instead. NULL operands still produce NULL.
 Text conversion of differences is also unsupported (`0A000`), including character casts,
@@ -266,7 +266,8 @@ Schema-based coercion to a VARCHAR column follows the same rule in WHERE and JOI
 Comparisons with INTERVAL values remain supported.
 Text conversions and comparisons with text reject the difference before its internal diagnostic text can be used.
 EXISTS checks for rows without reading unused projected differences, including correlated
-subqueries and HAVING predicates.
+subqueries and HAVING predicates. Set operations still read branch projections while materializing rows,
+so unused differences in UNION, UNION ALL, INTERSECT, and EXCEPT branches raise `0A000` even inside EXISTS.
 
 Interval literals accept a separate unit, such as `INTERVAL '1' DAY`, for YEAR, MONTH, DAY,
 HOUR, MINUTE, and SECOND, as well as the single-string form `INTERVAL '1 day'`.

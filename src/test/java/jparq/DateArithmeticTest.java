@@ -155,7 +155,8 @@ class DateArithmeticTest {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement()) {
       for (String sql : List.of("SELECT " + expression, projection, "SELECT * FROM (" + projection + ") t",
-          "WITH t AS (" + projection + ") SELECT * FROM t", "SELECT * FROM (VALUES (" + expression + ")) t(x)")) {
+          "WITH t AS (" + projection + ") SELECT * FROM t", "SELECT * FROM (VALUES (" + expression + ")) t(x)",
+          "SELECT * FROM UNNEST(ARRAY[" + expression + "]) AS u(x)")) {
         var failure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
           try (var result = statement.executeQuery(sql)) {
             while (result.next()) {
@@ -390,6 +391,80 @@ class DateArithmeticTest {
         }
       }
       try (var result = statement.executeQuery("SELECT id FROM small WHERE EXISTS (" + subquery + " WHERE id = 99)")) {
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Documents the materialization boundary in set-operation EXISTS subqueries.
+   *
+   * @param operation
+   *          set operator joining the branches
+   * @throws Exception
+   *           if opening the connection fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "UNION", "UNION ALL", "INTERSECT", "EXCEPT"
+  })
+  void existsSetOperationsStillReadTemporalDifferenceOutput(String operation) throws Exception {
+    String difference = "TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00'";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String predicate : List.of("", " WHERE t.id = s.id")) {
+        String branch = "SELECT " + difference + " FROM small t" + predicate;
+        String sql = "SELECT id FROM small s WHERE EXISTS (" + branch + " " + operation + " " + branch + ")";
+        var failure = assertThrows(SQLException.class, () -> {
+          try (var result = statement.executeQuery(sql)) {
+            result.next();
+          }
+        }, sql);
+        assertEquals("0A000", failure.getSQLState(), sql);
+      }
+    }
+  }
+
+  /**
+   * Preserves difference provenance when an interval literal ties for MIN/MAX,
+   * regardless of input order, in grouped aggregates and window frames.
+   *
+   * @param function
+   *          aggregate function to evaluate
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "MIN", "MAX"
+  })
+  void temporalDifferenceExtremumTiesRetainProvenance(String function) throws Exception {
+    String difference = "TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00'";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (int differenceId : List.of(0, 1)) {
+        String argument = "CASE WHEN id = " + differenceId + " THEN " + difference + " ELSE INTERVAL '1' DAY END";
+        for (String window : List.of("", " OVER ()",
+            " OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)")) {
+          String expression = function + "(" + argument + ")" + window;
+          String sql = "SELECT " + expression + " FROM small";
+          var failure = assertThrows(SQLException.class, () -> {
+            try (var result = statement.executeQuery(sql)) {
+              assertTrue(result.next(), sql);
+              result.getObject(1);
+            }
+          }, sql);
+          assertEquals("0A000", failure.getSQLState(), sql);
+          try (var result = statement.executeQuery("SELECT EXTRACT(DAY FROM " + expression + ") FROM small")) {
+            assertTrue(result.next());
+            assertEquals(1, result.getInt(1));
+          }
+        }
+      }
+      try (var result = statement
+          .executeQuery("SELECT EXTRACT(DAY FROM " + function + "(INTERVAL '1' DAY)) FROM small")) {
+        assertTrue(result.next());
+        assertEquals(1, result.getInt(1));
         assertFalse(result.next());
       }
     }

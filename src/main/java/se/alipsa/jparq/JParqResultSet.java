@@ -660,9 +660,7 @@ public class JParqResultSet extends ResultSetAdapter {
    */
   private Object value(int idx) throws SQLException {
     try {
-      Object value = readValue(idx);
-      SqlText.validateOutput(value);
-      return value;
+      return readValue(idx);
     } catch (RuntimeException exception) {
       throw SqlExceptions.wrap("Failed to read column " + idx, exception);
     }
@@ -692,6 +690,7 @@ public class JParqResultSet extends ResultSetAdapter {
         throw new SQLException("Unknown column index: " + idx);
       }
       Object v = row.get(idx - 1);
+      SqlText.validateOutput(v);
       lastWasNull = (v == null);
       return v;
     }
@@ -703,6 +702,7 @@ public class JParqResultSet extends ResultSetAdapter {
     if (projectionExpr != null && !(projectionExpr instanceof Column)) {
       ensureProjectionEvaluator(current);
       Object computed = evaluateProjection(projectionExpr);
+      SqlText.validateOutput(computed);
       lastWasNull = (computed == null);
       return computed;
     }
@@ -728,6 +728,7 @@ public class JParqResultSet extends ResultSetAdapter {
       if (projectionExpr instanceof Column columnExpr) {
         ensureProjectionEvaluator(current);
         Object computed = evaluateProjection(columnExpr);
+        SqlText.validateOutput(computed);
         lastWasNull = (computed == null);
         return computed;
       }

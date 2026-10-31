@@ -249,6 +249,7 @@ public class DateTimeFunctionsTest {
     Timestamp ts1 = Timestamp.valueOf("2023-01-02 10:00:00");
     Timestamp ts2 = Timestamp.valueOf("2023-01-01 09:00:00");
     TemporalInterval result = (TemporalInterval) DateTimeFunctions.minus(ts1, ts2);
+    assertEquals(Period.ZERO, result.period());
     assertEquals(Duration.ofDays(1).plusHours(1), result.duration());
     assertTrue(result.isTemporalDifference());
   }

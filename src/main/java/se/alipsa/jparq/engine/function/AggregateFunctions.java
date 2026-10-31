@@ -99,6 +99,7 @@ import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.LiteralConverter;
+import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
  * Utilities for detecting and evaluating aggregate functions in SELECT lists.
@@ -2359,7 +2360,8 @@ public final class AggregateFunctions {
         return;
       }
       int cmp = SqlComparisons.typedCompare(value, extremum);
-      if ((isMax && cmp > 0) || (!isMax && cmp < 0)) {
+      if ((isMax && cmp > 0) || (!isMax && cmp < 0)
+          || (cmp == 0 && value instanceof TemporalInterval interval && interval.isTemporalDifference())) {
         extremum = value;
       }
     }

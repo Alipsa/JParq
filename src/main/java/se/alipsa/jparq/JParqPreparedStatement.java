@@ -2486,7 +2486,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   /**
    * Materialize a standalone {@code UNNEST} table reference into an in-memory
    * representation. Direct correlated column bindings retain declared element
-   * schemas even for null or empty arrays; null arrays produce no rows.
+   * schemas even for null or empty arrays; null arrays produce no rows. Temporal
+   * differences are rejected before materialization can convert them to text.
    *
    * @param baseRef
    *          the table reference describing the {@code UNNEST} invocation
@@ -2503,6 +2504,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     GenericData.Record emptyRecord = new GenericData.Record(literalSchema);
     ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(literalSchema);
     Object evaluated = evaluator.eval(baseRef.unnest().expression(), emptyRecord);
+    SqlText.validateOutput(evaluated);
     Schema arraySchema = baseRef.unnest().expression() instanceof net.sf.jsqlparser.expression.Function function
         && CorrelatedBindings.matches(function)
             ? JdbcTypeMapper.nonNullSchema(CorrelatedBindings.schema(function))

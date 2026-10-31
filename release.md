@@ -4,17 +4,20 @@
 
 - **Behavior change:** reject non-DATE temporal difference output (TIMESTAMP, TIME, and mixed DATE/TIMESTAMP
   subtraction) with `SQLFeatureNotSupportedException`, SQLState `0A000`, when read by a JDBC getter or materialized
-  for a derived table/CTE or VALUES input (#254). Previously callers received an internal `TemporalInterval` or its
-  `toString()` text. Comparisons, predicates, sorting, and `EXTRACT` over differences remain supported within the same query
-  block; perform these operations before materialization instead of projecting a raw difference for an outer
-  query to consume. DATE day counts, explicit INTERVAL offsets, interval literals, and NULL propagation remain
-  supported.
+  for a derived table/CTE, VALUES, or UNNEST input (#254). Previously callers received an internal
+  `TemporalInterval` or its `toString()` text. Comparisons, predicates, sorting, and `EXTRACT` over differences
+  remain supported within the same query block; perform these operations before materialization instead of
+  projecting a raw difference for an outer query to consume. DATE day counts, explicit INTERVAL offsets,
+  interval literals, and NULL propagation remain supported.
 - Reject text conversion of temporal differences with SQLState `0A000` before character casts,
   concatenation, string functions, STRING_AGG, JSON construction, or fallback text comparisons can consume their
   internal diagnostic text (#254), including schema-based coercion for comparisons against VARCHAR columns in
   WHERE and JOIN conditions. Plain interval literal text conversion remains tracked in #364. Preserve EXISTS
   and NOT EXISTS over unused difference projections by probing for rows without reading projected values,
   including correlated subqueries and HAVING; keep existence results separate from scalar result caching.
+  Set operations still materialize branch projections, so unused differences in their branches raise `0A000`
+  even inside EXISTS. Prefer temporal differences over equal interval literals in MIN/MAX ties, including
+  window frames, so output rejection does not depend on input order.
 - Classify subtraction between TIME and DATE or TIMESTAMP in either operand order as unsupported temporal
   arithmetic with `SQLSyntaxErrorException`, SQLState `42000`, including predicates and nested queries (#254).
   Previously these combinations raised an unclassified exception naming internal Java types.
