@@ -47,6 +47,7 @@ import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.QueryProcessor;
 import se.alipsa.jparq.engine.RecordReader;
+import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
@@ -280,7 +281,7 @@ public class JParqResultSet extends ResultSetAdapter {
         AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan,
             effectiveResidual, select.having(), select.orderBy(), subqueryExecutor, queryQualifiers, qualifierMapping,
             enrichedUnqualifiedMapping, correlationContext);
-        this.aggregateRows = new ArrayList<>(result.rows());
+        this.aggregateRows = finishAggregateRows(result.rows(), select);
         this.aggregateSqlTypes = result.sqlTypes();
       } catch (Exception e) {
         throw SqlExceptions.wrap("Failed to compute aggregate query", e);
@@ -486,6 +487,34 @@ public class JParqResultSet extends ResultSetAdapter {
     this.rowNum = 0;
     this.lastWasNull = false;
     this.windowState = WindowState.empty();
+  }
+
+  /**
+   * Applies DISTINCT to projected aggregate tuples, then slices the ordered
+   * result. Aggregate evaluation has already applied HAVING and ORDER BY;
+   * removing equal projected tuples preserves that ordering.
+   *
+   * @param rows
+   *          ordered aggregate output
+   * @param select
+   *          query supplying DISTINCT, OFFSET, and LIMIT
+   * @return a mutable list of the surviving rows
+   */
+  private static List<List<Object>> finishAggregateRows(List<List<Object>> rows, SqlParser.Select select) {
+    List<List<Object>> output = rows;
+    if (select.distinct()) {
+      output = new ArrayList<>();
+      Set<List<Object>> seen = new LinkedHashSet<>();
+      for (List<Object> row : rows) {
+        if (seen.add(RelationalKeys.row(row))) {
+          output.add(row);
+        }
+      }
+    }
+    int start = Math.min(Math.max(0, select.offset()), output.size());
+    int remaining = output.size() - start;
+    int count = select.limit() < 0 ? remaining : Math.min(select.limit(), remaining);
+    return new ArrayList<>(output.subList(start, start + count));
   }
 
   @Override

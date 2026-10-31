@@ -326,6 +326,8 @@ from SELECT. This includes aggregates in the standard `SUBSTRING(... FROM ... FO
 `POSITION(... IN ...)`, and `TRIM(... FROM ...)` forms. Grouped `IS [NOT] DISTINCT FROM` predicates
 bind grouping columns, aggregates, and subqueries with their NULL semantics intact. Grouped arithmetic
 uses the same numeric and temporal rules as row expressions.
+Grouped and global aggregate queries apply `DISTINCT` to their projected result tuples and honor
+`OFFSET`, `LIMIT`, and standard `FETCH` clauses after grouping, HAVING, and ordering.
 Scalar expressions outside aggregates may use grouping expressions and constants.
 For example, `SELECT cyl, ABS(cyl) FROM mtcars GROUP BY cyl` and
 `SELECT cyl FROM mtcars GROUP BY cyl HAVING NULLIF(cyl, 4) IS NOT NULL` evaluate scalar functions
