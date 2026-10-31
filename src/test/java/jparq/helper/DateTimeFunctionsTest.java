@@ -418,7 +418,7 @@ public class DateTimeFunctionsTest {
     Time time = Time.valueOf(expected);
     time.setTime(time.getTime() + millis);
     assertEquals(time, DateTimeFunctions.toTime(text));
-    assertEquals(time, DateTimeFunctions.castLiteral(createCastExpression("TIME"), text));
+    assertEquals(Time.valueOf(expected), DateTimeFunctions.castLiteral(createCastExpression("TIME"), text));
   }
 
   /**
@@ -454,7 +454,8 @@ public class DateTimeFunctionsTest {
   void flexibleTimestampsRemainAvailable(String text, String expected) {
     Timestamp timestamp = Timestamp.valueOf(expected);
     assertEquals(timestamp, DateTimeFunctions.toTimestamp(text));
-    assertEquals(timestamp, DateTimeFunctions.castLiteral(createCastExpression("TIMESTAMP"), text));
+    Timestamp cast = (Timestamp) DateTimeFunctions.castLiteral(createCastExpression("TIMESTAMP"), text);
+    assertEquals(timestamp.toLocalDateTime().withNano(timestamp.getNanos() / 1000 * 1000), cast.toLocalDateTime());
   }
 
   /** Keeps offset timestamp strings tied to their instant and full precision. */
@@ -491,7 +492,8 @@ public class DateTimeFunctionsTest {
       expected.setTime(expected.getTime() + nanos / 1_000_000);
       assertEquals(expected, DateTimeFunctions.toTime(local));
       assertEquals(expected, DateTimeFunctions.toTime(local.toString()));
-      assertEquals(expected, DateTimeFunctions.castLiteral(createCastExpression("TIME"), local.toString()));
+      assertEquals(Time.valueOf("23:59:59"),
+          DateTimeFunctions.castLiteral(createCastExpression("TIME"), local.toString()));
       assertEquals(local.withNano(nanos / 1_000_000 * 1_000_000), DateTimeFunctions.toLocalTime(expected));
     }
   }

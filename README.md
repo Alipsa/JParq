@@ -262,7 +262,10 @@ fractional-second precision before output, including inputs that produce no rows
 are preserved through materialization. The `qualifier()` and `fractionalPrecision()` accessors on JDBC
 interval objects describe the common result declaration. Plain interval literals use the same object representation.
 Parentheses, CASE, COALESCE, NULLIF, aggregates, navigation windows, and scalar subqueries retain
-interval metadata even for empty inputs or all-NULL results.
+interval metadata even for empty inputs or all-NULL results. Datetime operands in those expressions
+also retain their declared type and precision when used in subtraction. CAST defaults to six fractional
+seconds for TIMESTAMP and zero for TIME; an explicit precision overrides the default. Casts truncate
+excess fractional digits before arithmetic.
 
 Intervals retain their types through derived tables, CTEs, VALUES, UNNEST, LATERAL inputs,
 set operations, and scalar or predicate subqueries. Comparisons with intervals and `EXTRACT` remain

@@ -8,10 +8,13 @@
   fractional-second precision, preserving nanoseconds without an optional positive sign (#254). CASE,
   VALUES, arrays, and set operations combine input declarations before output, including empty branches.
   For example, combining 1 DAY and 36 HOUR prints `1 00` and `1 12`; standalone 90 MINUTE prints as `90`.
-  Honor explicit TIME/TIMESTAMP fractional precision before interval arithmetic.
+  Honor TIME/TIMESTAMP cast precision before interval arithmetic, defaulting to zero and six fractional
+  digits respectively. Truncate excess cast fractions and format interval text without rounding exceptions.
   Retain interval metadata for parentheses, CASE, COALESCE, NULLIF, aggregates, navigation windows, and scalar
   subqueries, including empty inputs, empty set operations, and all-NULL results. Keep declared JDBC types
-  and Java classes consistent for empty grouped results.
+  and Java classes consistent for empty grouped results, including SMALLINT and TINYINT expressions.
+  Resolve datetime operands in conditional expressions, aggregates, windows, and scalar subqueries before
+  inferring difference types. Reject fractional non-SECOND interval fields with SQLState `42000`.
   Preserve interval types through derived tables, CTEs, VALUES, UNNEST, LATERAL inputs, set operations,
   and scalar or predicate subqueries so outer comparisons and EXTRACT continue to work. COUNT(*) and
   ordinality-only UNNEST queries succeed without converting interval elements to text. EXISTS and NOT EXISTS

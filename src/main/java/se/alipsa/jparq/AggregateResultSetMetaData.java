@@ -135,7 +135,7 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
         }
       }
       Schema declaration = projected.columnValueSchema(column);
-      if (declaration != null) {
+      if (numeric == null && declaration != null) {
         sqlTypes.set(i, JdbcTypeMapper.mapSchemaToJdbcType(declaration));
       }
       schemas.add(numeric != null ? numeric.schema() : declaration != null ? declaration : columnValueSchema(column));
@@ -223,7 +223,8 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
   @Override
   public String getColumnClassName(int column) {
     Schema schema = columnValueSchema(column);
-    return schema == null
+    int type = getColumnType(column);
+    return schema == null || type == Types.SMALLINT || type == Types.TINYINT
         ? JdbcTypeMapper.mapJdbcTypeToClassName(getColumnType(column))
         : JdbcTypeMapper.mapSchemaToJavaClassName(schema);
   }

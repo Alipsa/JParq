@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.Period;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.helper.IntervalQualifier;
 import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.TemporalInterval;
 
@@ -23,6 +24,17 @@ class IntervalTypeTest {
     assertEquals(0, encoded.position());
     assertEquals(interval, IntervalType.decode(interval));
     assertTrue(IntervalType.matches(IntervalType.schema()));
+  }
+
+  /** Formats a lower declared precision without an unchecked rounding failure. */
+  @Test
+  void formattingTruncatesExcessFractionDigits() {
+    TemporalInterval difference = TemporalInterval.between(LocalDateTime.of(2024, 1, 1, 0, 0),
+        LocalDateTime.of(2024, 1, 2, 0, 0, 0, 123456789));
+    TemporalInterval projected = IntervalType.project(difference,
+        IntervalType.schema(IntervalQualifier.DAY_TO_SECOND, 6));
+    assertEquals("1 00:00:00.123456", projected.toString());
+    assertEquals("-1 00:00:00.123456", projected.negate().toString());
   }
 
   /** Ensures subtraction provenance and nanoseconds survive materialization. */

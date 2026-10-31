@@ -11,10 +11,12 @@ import java.nio.file.Path;
 import java.sql.Date;
 import java.sql.DriverManager;
 import java.sql.SQLDataException;
+import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Period;
+import java.util.List;
 import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.junit.jupiter.api.Test;
@@ -262,6 +264,20 @@ class IntervalLiteralTest {
   }
 
   /**
+   * Rejects fractional fields outside SECOND as invalid literal syntax.
+   *
+   * @throws Exception
+   *           if opening the connection fails
+   */
+  @Test
+  void fractionalNonsecondFieldsAreSyntaxErrors() throws Exception {
+    for (String unit : List.of("YEAR", "MONTH", "DAY", "HOUR", "MINUTE")) {
+      SQLException failure = assertThrows(SQLException.class, () -> query("INTERVAL '0.5' " + unit));
+      assertEquals("42000", failure.getSQLState());
+    }
+  }
+
+  /**
    * Checks that unrepresentable interval amounts retain a range SQLState.
    *
    * @param expression
@@ -271,8 +287,7 @@ class IntervalLiteralTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "INTERVAL '2147483648' DAY", "INTERVAL '9223372036854775807' HOUR", "INTERVAL '9223372036854775807' SECOND",
-      "INTERVAL '0.5' MONTH"
+      "INTERVAL '2147483648' DAY", "INTERVAL '9223372036854775807' HOUR", "INTERVAL '9223372036854775807' SECOND"
   })
   void unrepresentableIntervalAmount(String expression) throws Exception {
     SQLDataException failure = assertThrows(SQLDataException.class, () -> query(expression));

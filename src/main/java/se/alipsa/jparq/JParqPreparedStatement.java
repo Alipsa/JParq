@@ -657,18 +657,22 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Resolves the first projection's interval declaration without reading rows.
+   * Resolves the first projection's interval or datetime declaration without
+   * reading rows.
    *
-   * @return the interval schema, or null when the declaration is not an interval
+   * @return the declared schema, or null when its type cannot be established
    * @throws SQLException
    *           if an input schema cannot be inspected
    */
-  public Schema declaredIntervalSchema() throws SQLException {
+  public Schema declaredProjectionSchema() throws SQLException {
     if (setOperationQuery && parsedSetQuery != null) {
       Schema common = null;
       for (SqlParser.SetComponent component : parsedSetQuery.components()) {
         try (JParqPreparedStatement branch = prepareSubqueryStatement(component.sql(), cteResults)) {
-          common = IntervalType.common(common, branch.declaredIntervalSchema());
+          Schema declaration = branch.declaredProjectionSchema();
+          common = IntervalType.matches(declaration) || IntervalType.matches(common)
+              ? IntervalType.common(common, declaration)
+              : se.alipsa.jparq.engine.IntervalExpressionTypes.commonTemporal(common, declaration);
         }
       }
       return common;
@@ -678,7 +682,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     Map<Column, Schema> columns = new HashMap<>();
     Expression expression = parsedSelect.expressions().getFirst();
-    return se.alipsa.jparq.engine.IntervalExpressionTypes.resolve(expression, column -> {
+    java.util.function.Function<Column, Schema> columnSchemas = column -> {
       return columns.computeIfAbsent(column, reference -> {
         try {
           Schema source = resolveSchemaForColumn(tableReferences, reference.getTable());
@@ -691,13 +695,18 @@ public class JParqPreparedStatement implements PreparedStatement {
           return null;
         }
       });
-    }, select -> {
+    };
+    java.util.function.Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarSchemas = select -> {
       try (JParqPreparedStatement nested = prepareSubqueryStatement(select.toString(), cteResults)) {
-        return nested.declaredIntervalSchema();
+        return nested.declaredProjectionSchema();
       } catch (SQLException exception) {
         return null;
       }
-    });
+    };
+    Schema interval = se.alipsa.jparq.engine.IntervalExpressionTypes.resolve(expression, columnSchemas, scalarSchemas);
+    return interval != null
+        ? interval
+        : se.alipsa.jparq.engine.IntervalExpressionTypes.resolveTemporal(expression, columnSchemas, scalarSchemas);
   }
 
   @Override

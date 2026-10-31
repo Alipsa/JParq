@@ -513,7 +513,7 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
     for (int field = fields.leading(); field <= fields.trailing(); field++) {
       BigDecimal divisor = BigDecimal.valueOf(divisors[field - 2]);
       if (field == 5) {
-        String second = magnitude.setScale(fractionalPrecision, RoundingMode.UNNECESSARY).toPlainString();
+        String second = magnitude.setScale(fractionalPrecision, RoundingMode.DOWN).toPlainString();
         if (field != fields.leading() && magnitude.compareTo(BigDecimal.TEN) < 0) {
           text.append('0');
         }

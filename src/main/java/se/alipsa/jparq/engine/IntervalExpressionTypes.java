@@ -141,14 +141,14 @@ public final class IntervalExpressionTypes {
       return resolve(signed.getExpression(), columns, subqueries);
     }
     if (value instanceof Subtraction subtraction) {
-      int left = temporalType(subtraction.getLeftExpression(), columns);
-      int right = temporalType(subtraction.getRightExpression(), columns);
+      int left = temporalType(subtraction.getLeftExpression(), columns, subqueries);
+      int right = temporalType(subtraction.getRightExpression(), columns, subqueries);
       if (left != Types.OTHER && right != Types.OTHER) {
         return left == Types.DATE && right == Types.DATE
             ? null
             : IntervalType.schema(IntervalQualifier.DAY_TO_SECOND,
-                Math.max(temporalPrecision(subtraction.getLeftExpression(), columns),
-                    temporalPrecision(subtraction.getRightExpression(), columns)));
+                Math.max(temporalPrecision(subtraction.getLeftExpression(), columns, subqueries),
+                    temporalPrecision(subtraction.getRightExpression(), columns, subqueries)));
       }
       return arithmetic(subtraction.getLeftExpression(), subtraction.getRightExpression(), columns, subqueries);
     }
@@ -206,6 +206,111 @@ public final class IntervalExpressionTypes {
   }
 
   /**
+   * Resolves a datetime declaration, including its fractional precision.
+   *
+   * @param expression
+   *          expression to inspect
+   * @param columns
+   *          input column declarations
+   * @param subqueries
+   *          independently scoped scalar declarations
+   * @return datetime schema, or null for an unknown or nondatetime expression
+   */
+  public static Schema resolveTemporal(Expression expression, Function<Column, Schema> columns,
+      Function<Select, Schema> subqueries) {
+    int type = temporalType(expression, columns, subqueries);
+    if (type == Types.OTHER) {
+      return null;
+    }
+    Schema schema = type == Types.DATE
+        ? org.apache.avro.LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT))
+        : type == Types.TIME
+            ? org.apache.avro.LogicalTypes.timeMicros().addToSchema(Schema.create(Schema.Type.LONG))
+            : org.apache.avro.LogicalTypes.timestampNanos().addToSchema(Schema.create(Schema.Type.LONG));
+    schema.addProp("jparq.temporal.precision", Integer.toString(temporalPrecision(expression, columns, subqueries)));
+    return schema;
+  }
+
+  /**
+   * Combines compatible datetime declarations, keeping the larger precision.
+   *
+   * @param first
+   *          first declaration, possibly null
+   * @param second
+   *          second declaration, possibly null
+   * @return common datetime schema, or null for incompatible types
+   */
+  public static Schema commonTemporal(Schema first, Schema second) {
+    if (first == null || second == null) {
+      return first == null ? second : first;
+    }
+    if (JdbcTypeMapper.mapSchemaToJdbcType(first) != JdbcTypeMapper.mapSchemaToJdbcType(second)) {
+      return null;
+    }
+    int left = Integer.parseInt(first.getProp("jparq.temporal.precision"));
+    int right = Integer.parseInt(second.getProp("jparq.temporal.precision"));
+    return left >= right ? first : second;
+  }
+
+  /**
+   * Resolves conditional, aggregate, window, and scalar datetime operands.
+   *
+   * @param value
+   *          unwrapped expression
+   * @param columns
+   *          input declarations
+   * @param subqueries
+   *          scalar declarations
+   * @return common datetime declaration, or null for other expressions
+   */
+  private static Schema compositeTemporal(Expression value, Function<Column, Schema> columns,
+      Function<Select, Schema> subqueries) {
+    if (value instanceof Select select) {
+      return subqueries.apply(select);
+    }
+    if (value instanceof AnalyticExpression analytic && analytic.getName() != null
+        && List.of("MIN", "MAX", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE")
+            .contains(analytic.getName().toUpperCase(Locale.ROOT))) {
+      return resolveTemporal(analytic.getExpression(), columns, subqueries);
+    }
+    List<? extends Expression> branches = null;
+    if (value instanceof CaseExpression choice) {
+      branches = ExpressionBranches.caseResults(choice);
+    } else if (value instanceof net.sf.jsqlparser.expression.Function function && function.getName() != null
+        && function.getParameters() != null && !function.getParameters().isEmpty()) {
+      String name = function.getName().toUpperCase(Locale.ROOT);
+      if (List.of("MIN", "MAX").contains(name)) {
+        return resolveTemporal(function.getParameters().getFirst(), columns, subqueries);
+      }
+      if (List.of("COALESCE", "NULLIF").contains(name)) {
+        branches = function.getParameters();
+      }
+    }
+    if (branches == null) {
+      return null;
+    }
+    Expression widest = null;
+    int type = Types.OTHER;
+    int precision = -1;
+    for (Expression branch : branches) {
+      if (ExpressionEvaluator.unwrapParenthesis(branch) instanceof NullValue) {
+        continue;
+      }
+      int branchType = temporalType(branch, columns, subqueries);
+      if (branchType == Types.OTHER || (type != Types.OTHER && type != branchType)) {
+        return null;
+      }
+      type = branchType;
+      int digits = temporalPrecision(branch, columns, subqueries);
+      if (digits > precision) {
+        widest = branch;
+        precision = digits;
+      }
+    }
+    return widest == null ? null : resolveTemporal(widest, columns, subqueries);
+  }
+
+  /**
    * Resolves fractional-second digits from literal text or declared logical
    * types.
    *
@@ -213,20 +318,31 @@ public final class IntervalExpressionTypes {
    *          temporal operand
    * @param columns
    *          input declarations
+   * @param subqueries
+   *          scalar declarations
    * @return fractional-second precision
    */
-  private static int temporalPrecision(Expression expression, Function<Column, Schema> columns) {
+  private static int temporalPrecision(Expression expression, Function<Column, Schema> columns,
+      Function<Select, Schema> subqueries) {
     Expression value = ExpressionEvaluator.unwrapParenthesis(expression);
-    if (temporalType(value, columns) == Types.DATE) {
+    if (temporalType(value, columns, subqueries) == Types.DATE) {
       return 0;
     }
-    Schema schema = value instanceof Column column
-        ? columns.apply(column)
-        : value instanceof net.sf.jsqlparser.expression.Function function && CorrelatedBindings.matches(function)
-            ? CorrelatedBindings.schema(function)
-            : null;
+    Schema schema = compositeTemporal(value, columns, subqueries);
+    if (schema == null) {
+      schema = value instanceof Column column
+          ? columns.apply(column)
+          : value instanceof net.sf.jsqlparser.expression.Function function && CorrelatedBindings.matches(function)
+              ? CorrelatedBindings.schema(function)
+              : null;
+    }
     if (schema != null) {
-      String logical = JdbcTypeMapper.nonNullSchema(schema).getProp("logicalType");
+      Schema declaration = JdbcTypeMapper.nonNullSchema(schema);
+      String precision = declaration.getProp("jparq.temporal.precision");
+      if (precision != null) {
+        return Integer.parseInt(precision);
+      }
+      String logical = declaration.getProp("logicalType");
       return logical == null
           ? 0
           : logical.endsWith("nanos") ? 9 : logical.endsWith("micros") ? 6 : logical.endsWith("millis") ? 3 : 0;
@@ -240,7 +356,7 @@ public final class IntervalExpressionTypes {
           .matcher(cast.getColDataType().toString());
       return declared.find()
           ? Integer.parseInt(declared.group(1))
-          : temporalPrecision(cast.getLeftExpression(), columns);
+          : temporalType(value, columns, subqueries) == Types.TIMESTAMP ? 6 : 0;
     }
     if (value instanceof TimeKeyExpression || value instanceof net.sf.jsqlparser.expression.Function) {
       return 9;
@@ -257,10 +373,17 @@ public final class IntervalExpressionTypes {
    *          possible temporal operand
    * @param columns
    *          resolver for input column schemas
+   * @param subqueries
+   *          scalar declarations
    * @return DATE, TIME, TIMESTAMP, or OTHER
    */
-  private static int temporalType(Expression expression, Function<Column, Schema> columns) {
+  private static int temporalType(Expression expression, Function<Column, Schema> columns,
+      Function<Select, Schema> subqueries) {
     Expression value = ExpressionEvaluator.unwrapParenthesis(expression);
+    Schema composite = compositeTemporal(value, columns, subqueries);
+    if (composite != null) {
+      return JdbcTypeMapper.mapSchemaToJdbcType(composite);
+    }
     if (value instanceof Column column) {
       int type = JdbcTypeMapper.mapSchemaToJdbcType(columns.apply(column));
       return type == Types.DATE || type == Types.TIME || type == Types.TIMESTAMP ? type : Types.OTHER;

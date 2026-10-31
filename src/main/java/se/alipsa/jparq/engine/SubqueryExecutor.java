@@ -34,7 +34,7 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
 public final class SubqueryExecutor implements AutoCloseable {
 
   private final Map<String, PreparedStatement> preparedStatements = new LinkedHashMap<>();
-  private final Map<String, Optional<org.apache.avro.Schema>> intervalSchemas = new LinkedHashMap<>();
+  private final Map<String, Optional<org.apache.avro.Schema>> projectionSchemas = new LinkedHashMap<>();
 
   private final ExecutionPlans executionPlans;
   private final JParqConnection connection;
@@ -540,7 +540,7 @@ public final class SubqueryExecutor implements AutoCloseable {
       }
     }
     preparedStatements.clear();
-    intervalSchemas.clear();
+    projectionSchemas.clear();
     cache.clear();
     existenceCache.clear();
     if (failure != null) {
@@ -549,21 +549,23 @@ public final class SubqueryExecutor implements AutoCloseable {
   }
 
   /**
-   * Resolves a scalar interval declaration in the subquery's own input scope.
+   * Resolves a scalar interval or datetime declaration in the subquery's own
+   * input scope.
    *
    * @param select
    *          scalar subquery to inspect
-   * @return its declared interval schema, or null if it cannot be established
+   * @return its declared interval or datetime schema, or null if it cannot be
+   *         established
    */
-  public org.apache.avro.Schema intervalProjectionSchema(Select select) {
+  public org.apache.avro.Schema projectionSchema(Select select) {
     String sql = select.toString();
-    return intervalSchemas.computeIfAbsent(sql, shape -> {
+    return projectionSchemas.computeIfAbsent(sql, shape -> {
       try (PreparedStatement prepared = prepareStatement(shape)) {
         return Optional
-            .ofNullable(prepared instanceof JParqPreparedStatement nested ? nested.declaredIntervalSchema() : null);
+            .ofNullable(prepared instanceof JParqPreparedStatement nested ? nested.declaredProjectionSchema() : null);
       } catch (SQLException exception) {
         if (QueryCancellation.findCancellation(exception).isPresent()) {
-          throw new IllegalStateException("Canceled while resolving scalar interval metadata", exception);
+          throw new IllegalStateException("Canceled while resolving scalar projection metadata", exception);
         }
         return Optional.empty();
       }

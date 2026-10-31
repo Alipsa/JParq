@@ -1,5 +1,6 @@
 package se.alipsa.jparq;
 
+import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -28,6 +29,7 @@ import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.IntervalExpressionTypes;
 import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.engine.NumericExpressionTypes;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
@@ -36,7 +38,7 @@ import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements AvroColumnMetadata {
 
-  private Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarIntervalSchemas = select -> null;
+  private Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarProjectionSchemas = select -> null;
   private final Schema schema; // may be null if empty file
   private final List<String> labels; // projection labels (aliases if present)
   private final List<String> physicalNames; // underlying physical column names (null for computed)
@@ -119,10 +121,19 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * @param resolver
    *          independently scoped scalar schema resolver
    * @return this metadata instance
+   * @throws SQLException
+   *           if a projection has an invalid declaration
    */
-  public JParqResultSetMetaData withScalarIntervalSchemas(
-      Function<net.sf.jsqlparser.statement.select.Select, Schema> resolver) {
-    scalarIntervalSchemas = resolver;
+  public JParqResultSetMetaData withScalarProjectionSchemas(
+      Function<net.sf.jsqlparser.statement.select.Select, Schema> resolver) throws SQLException {
+    scalarProjectionSchemas = resolver;
+    try {
+      for (int column = 1; column <= getColumnCount(); column++) {
+        intervalColumnSchema(column);
+      }
+    } catch (RuntimeException failure) {
+      throw SqlExceptions.wrap("Invalid projection declaration", failure);
+    }
     return this;
   }
 
@@ -237,7 +248,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     return IntervalExpressionTypes.resolve(expressionAtColumn(column), reference -> {
       Schema.Field field = resolveSourceField(reference);
       return field == null ? null : field.schema();
-    }, scalarIntervalSchemas);
+    }, scalarProjectionSchemas);
   }
 
   /**

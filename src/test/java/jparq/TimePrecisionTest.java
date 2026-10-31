@@ -74,33 +74,36 @@ class TimePrecisionTest {
   })
   void timestampCastsUseOnlyTheClock(boolean predicate, boolean projection) throws Exception {
     try (var connection = connection(predicate, projection)) {
-      assertEquals(List.of(1, 2, 3),
-          ids(connection, "SELECT id FROM dated WHERE CAST(ts AS TIME) = TIME '10:00:00.5' ORDER BY id"));
-      try (var statement = connection.createStatement();
-          var result = statement
-              .executeQuery("SELECT ts, CAST(ts AS TIME), DENSE_RANK() OVER (ORDER BY CAST(ts AS TIME)) AS r "
-                  + "FROM dated ORDER BY id")) {
-        for (int id = 1; id <= 3; id++) {
-          assertTrue(result.next());
-          assertEquals(time(500), result.getTime(1));
-          assertEquals(time(500), assertInstanceOf(Time.class, result.getObject(2)));
-          assertEquals(1, result.getInt(3));
+      for (String target : List.of("TIME", "TIME(3)")) {
+        String cast = "CAST(ts AS " + target + ")";
+        int millis = "TIME".equals(target) ? 0 : 500;
+        String literal = millis == 0 ? "TIME '10:00:00'" : "TIME '10:00:00.5'";
+        assertEquals(List.of(1, 2, 3),
+            ids(connection, "SELECT id FROM dated WHERE " + cast + " = " + literal + " ORDER BY id"));
+        try (var statement = connection.createStatement();
+            var result = statement.executeQuery(
+                "SELECT ts, " + cast + ", DENSE_RANK() OVER (ORDER BY " + cast + ") AS r FROM dated ORDER BY id")) {
+          for (int id = 1; id <= 3; id++) {
+            assertTrue(result.next());
+            assertEquals(time(500), result.getTime(1));
+            assertEquals(time(millis), assertInstanceOf(Time.class, result.getObject(2)));
+            assertEquals(1, result.getInt(3));
+          }
+          assertFalse(result.next());
         }
-        assertFalse(result.next());
-      }
-      try (var statement = connection.createStatement();
-          var result = statement.executeQuery("SELECT DISTINCT CAST(ts AS TIME) FROM dated")) {
-        assertTrue(result.next());
-        assertEquals(time(500), result.getObject(1));
-        assertFalse(result.next());
-      }
-      try (var statement = connection.createStatement();
-          var result = statement
-              .executeQuery("SELECT CAST(ts AS TIME), COUNT(*) FROM dated GROUP BY CAST(ts AS TIME)")) {
-        assertTrue(result.next());
-        assertEquals(time(500), result.getObject(1));
-        assertEquals(3, result.getInt(2));
-        assertFalse(result.next());
+        try (var statement = connection.createStatement();
+            var result = statement.executeQuery("SELECT DISTINCT " + cast + " FROM dated")) {
+          assertTrue(result.next());
+          assertEquals(time(millis), result.getObject(1));
+          assertFalse(result.next());
+        }
+        try (var statement = connection.createStatement();
+            var result = statement.executeQuery("SELECT " + cast + ", COUNT(*) FROM dated GROUP BY " + cast)) {
+          assertTrue(result.next());
+          assertEquals(time(millis), result.getObject(1));
+          assertEquals(3, result.getInt(2));
+          assertFalse(result.next());
+        }
       }
     }
   }

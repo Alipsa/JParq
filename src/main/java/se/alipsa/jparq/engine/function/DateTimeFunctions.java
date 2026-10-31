@@ -330,7 +330,8 @@ public final class DateTimeFunctions {
    * @throws IllegalArgumentException
    *           if parsing fails, carrying SQLState 22007 for invalid interval text
    *           or 22003 for numeric values that cannot be represented; unsupported
-   *           qualifiers and expression operands carry SQLState 0A000
+   *           qualifiers and expression operands carry SQLState 0A000, and
+   *           fractional non-SECOND fields carry syntax SQLState 42000
    */
   @SuppressWarnings("deprecation") // Preserve legacy non-standard interval units.
   public static TemporalInterval toInterval(IntervalExpression expr) {
@@ -350,6 +351,10 @@ public final class DateTimeFunctions {
     if (unit != null && !TemporalInterval.supportsUnit(unit)) {
       String message = "Unsupported interval unit: " + unit;
       throw SqlExceptions.unsupportedFeature(message);
+    }
+    if (unit != null && List.of("YEAR", "MONTH", "DAY", "HOUR", "MINUTE").contains(unit.toUpperCase(Locale.ROOT))
+        && expr.getParameter() != null && expr.getParameter().replace("'", "").matches("[+-]?\\d*\\.\\d+")) {
+      throw SqlExceptions.syntaxFailure("Fractional fields require SECOND in an INTERVAL literal: " + expr);
     }
     try {
       TemporalInterval interval = TemporalInterval.parse(expr.getParameter(), unit);
@@ -795,14 +800,14 @@ public final class DateTimeFunctions {
   }
 
   /**
-   * Truncates a datetime fractional field to its explicitly declared precision.
+   * Truncates a datetime fractional field to its declared precision, defaulting
+   * to six digits for TIMESTAMP and zero for TIME.
    *
    * @param cast
    *          datetime CAST expression
    * @param nanos
    *          source fractional field
-   * @return truncated nanoseconds, or the original field for an unspecified
-   *         precision
+   * @return nanoseconds truncated to the explicit or default precision
    * @throws IllegalArgumentException
    *           if precision is outside the supported range, carrying SQLState
    *           42000
@@ -810,7 +815,7 @@ public final class DateTimeFunctions {
   private static int castFractionalNanos(CastExpression cast, int nanos) {
     Integer precision = firstIntegerArgument(cast);
     if (precision == null) {
-      return nanos;
+      precision = "timestamp".equals(normalizeTypeName(cast.getColDataType().getDataType())) ? 6 : 0;
     }
     if (precision < 0 || precision > 9) {
       throw SqlExceptions.syntaxFailure("Datetime fractional precision must be between 0 and 9");

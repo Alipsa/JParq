@@ -665,12 +665,13 @@ public class JParqResultSet extends ResultSetAdapter {
     try {
       Object value = readValue(idx);
       if (value instanceof TemporalInterval interval) {
-        Schema declaration = intervalOutputSchemas.computeIfAbsent(idx, column -> {
-          Schema schema = getMetaData() instanceof AvroColumnMetadata metadata
-              ? metadata.columnValueSchema(column)
-              : null;
-          return Optional.ofNullable(schema);
-        }).orElse(null);
+        Optional<Schema> cached = intervalOutputSchemas.get(idx);
+        if (cached == null) {
+          Schema schema = getMetaData() instanceof AvroColumnMetadata metadata ? metadata.columnValueSchema(idx) : null;
+          cached = Optional.ofNullable(schema);
+          intervalOutputSchemas.put(idx, cached);
+        }
+        Schema declaration = cached.orElse(null);
         if (IntervalType.matches(declaration)) {
           return IntervalType.project(interval, declaration);
         }
@@ -1269,7 +1270,7 @@ public class JParqResultSet extends ResultSetAdapter {
     if (aggregateQuery) {
       coerceAggregateNumericValues(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
           canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
-          .withScalarIntervalSchemas(subqueryExecutor::intervalProjectionSchema));
+          .withScalarProjectionSchemas(subqueryExecutor::projectionSchema));
       aggregateMetadata = null;
     }
     if (!aggregateQuery && columnOrder.isEmpty() && selectExpressions.isEmpty() && schema != null) {
@@ -1280,7 +1281,7 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   @Override
-  public ResultSetMetaData getMetaData() {
+  public ResultSetMetaData getMetaData() throws SQLException {
     if (aggregateQuery) {
       if (aggregateMetadata == null) {
         List<Integer> types = aggregateSqlTypes == null ? List.of() : aggregateSqlTypes;
@@ -1289,14 +1290,14 @@ public class JParqResultSet extends ResultSetAdapter {
         aggregateMetadata
             .retainExpressionTypes(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
                 canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
-                .withScalarIntervalSchemas(subqueryExecutor::intervalProjectionSchema));
+                .withScalarProjectionSchemas(subqueryExecutor::projectionSchema));
       }
       return aggregateMetadata;
     }
     var normalized = ParquetSchemas.normalizeStringTypes(metadataSchema);
     return new JParqResultSetMetaData(normalized, columnOrder, physicalColumnOrder, canonicalColumnNames, tableName,
         tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
-        .withScalarIntervalSchemas(subqueryExecutor::intervalProjectionSchema);
+        .withScalarProjectionSchemas(subqueryExecutor::projectionSchema);
   }
 
   @SuppressWarnings("PMD.EmptyCatchBlock")

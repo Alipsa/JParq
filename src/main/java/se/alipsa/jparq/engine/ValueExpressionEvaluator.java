@@ -246,8 +246,7 @@ public final class ValueExpressionEvaluator {
             } catch (IllegalArgumentException unresolved) {
               return null;
             }
-          }, select -> subqueryExecutor == null ? null : subqueryExecutor.intervalProjectionSchema(select))))
-          .orElse(null);
+          }, select -> subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select)))).orElse(null);
       return declaration == null ? interval : se.alipsa.jparq.helper.IntervalType.project(interval, declaration);
     }
     return value;

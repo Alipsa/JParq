@@ -52,8 +52,9 @@ class DateArithmeticTest {
     Schema decimal = LogicalTypes.decimal(10, 2).addToSchema(Schema.create(Schema.Type.BYTES));
     Schema timestamp = LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
     Schema schema = SchemaBuilder.record("dates").fields().requiredInt("id").name("d").type().unionOf().nullType().and()
-        .type(date).endUnion().nullDefault().name("amt").type(decimal).noDefault().requiredString("s").name("ts1")
-        .type(timestamp).noDefault().name("ts2").type(timestamp).noDefault().endRecord();
+        .type(date).endUnion().nullDefault().name("amt").type(decimal).noDefault().requiredString("s")
+        .requiredString("timestamp_text").name("ts1").type(timestamp).noDefault().name("ts2").type(timestamp)
+        .noDefault().endRecord();
     Configuration configuration = new Configuration(false);
     var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve("small.parquet").toUri()),
         configuration);
@@ -64,6 +65,7 @@ class DateArithmeticTest {
         record.put("id", id);
         record.put("ts1", java.sql.Timestamp.valueOf("2024-01-01 00:00:00").getTime());
         record.put("ts2", java.sql.Timestamp.valueOf("2024-01-02 00:00:00").getTime());
+        record.put("timestamp_text", id == 0 ? "2024-01-02 00:00:00.123456" : "2024-01-02 00:00:00.123456789");
         record.put("amt", ByteBuffer.wrap(new BigDecimal("123.45").unscaledValue().toByteArray()));
         record.put("d", id == 0 ? (int) LocalDate.of(2024, 3, 1).toEpochDay() : null);
         record.put("s", id == 0 ? "TemporalInterval[period=P0D, duration=PT24H]" : "A");
@@ -327,6 +329,99 @@ class DateArithmeticTest {
   }
 
   /**
+   * Applies SQL default cast precision before interval output and
+   * materialization.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void characterTimestampCastsUseDefaultPrecision() throws Exception {
+    String expression = "CAST(timestamp_text AS TIMESTAMP) - ts1";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String sql : List.of("SELECT " + expression + " AS x FROM small",
+          "SELECT x FROM (SELECT " + expression + " AS x FROM small) q",
+          "SELECT LAG(" + expression + ") OVER (ORDER BY id) AS x FROM small",
+          "SELECT " + expression + " AS x FROM small UNION ALL SELECT ts2 - ts1 FROM small",
+          "SELECT CAST(timestamp_text AS TIMESTAMP) - TIMESTAMP '2024-01-01 00:00:00' AS x FROM small",
+          "SELECT COALESCE(CAST(timestamp_text AS TIMESTAMP), ts2) - ts1 AS x FROM small",
+          "SELECT (SELECT MAX(CAST(timestamp_text AS TIMESTAMP)) FROM small) - ts1 AS x FROM small")) {
+        try (var result = statement.executeQuery(sql)) {
+          assertEquals("INTERVAL", result.getMetaData().getColumnTypeName(1), sql);
+          while (result.next()) {
+            Object value = result.getObject(1);
+            if (value != null) {
+              TemporalInterval interval = assertInstanceOf(TemporalInterval.class, value, sql);
+              assertTrue(interval.duration().getNano() == 123456000 || interval.duration().getNano() == 0, sql);
+              assertTrue(List.of("1 00:00:00.123456", "1 00:00:00.000000").contains(result.getString(1)), sql);
+            }
+          }
+        }
+      }
+      try (var result = statement
+          .executeQuery("SELECT CAST(timestamp_text AS TIMESTAMP), " + "CAST('12:34:56.789' AS TIME) FROM small")) {
+        assertTrue(result.next());
+        assertEquals(123456000, result.getTimestamp(1).getNanos());
+        assertEquals(0, result.getObject(2, java.time.LocalTime.class).getNano());
+      }
+    }
+  }
+
+  /**
+   * Preserves narrow numeric metadata for grouped expressions, even without rows.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void groupedNarrowNumericTypesKeepTheirDeclaration() throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String type : List.of("SMALLINT", "TINYINT")) {
+        int jdbcType = "SMALLINT".equals(type) ? Types.SMALLINT : Types.TINYINT;
+        Class<?> javaType = "SMALLINT".equals(type) ? Short.class : Byte.class;
+        for (String predicate : List.of("id >= 0", "id > 5")) {
+          String expression = "CAST(id AS " + type + ")";
+          try (var result = statement.executeQuery(
+              "SELECT " + expression + " AS g, COUNT(*) FROM small WHERE " + predicate + " GROUP BY " + expression)) {
+            assertEquals(jdbcType, result.getMetaData().getColumnType(1));
+            assertEquals(type, result.getMetaData().getColumnTypeName(1));
+            assertEquals(javaType.getName(), result.getMetaData().getColumnClassName(1));
+            while (result.next()) {
+              assertInstanceOf(javaType, result.getObject(1));
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Classifies invalid interval literals independently of input cardinality.
+   *
+   * @throws Exception
+   *           if opening the connection fails
+   */
+  @Test
+  void invalidIntervalLiteralHasSyntaxStateOverEmptyInput() throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String predicate : List.of("id > 5", "id >= 0")) {
+        SQLException failure = assertThrows(SQLException.class, () -> {
+          try (var result = statement.executeQuery("SELECT INTERVAL '1.5' DAY AS x FROM small WHERE " + predicate)) {
+            result.getMetaData().getColumnType(1);
+            while (result.next()) {
+              result.getString(1);
+            }
+          }
+        });
+        assertTrue(failure.getSQLState().startsWith("42"), failure.toString());
+      }
+    }
+  }
+
+  /**
    * Preserves interval declarations independently of row values and cardinality.
    *
    * @param expression
@@ -341,7 +436,9 @@ class DateArithmeticTest {
       "MIN(ts2 - ts1) OVER ()", "MAX(ts2 - ts1) OVER ()", "NTH_VALUE(ts2 - ts1, 1) OVER (ORDER BY id)",
       "LAG(ts2 - ts1) OVER (ORDER BY id)", "LEAD(ts2 - ts1) OVER (ORDER BY id)",
       "FIRST_VALUE(ts2 - ts1) OVER (ORDER BY id)", "LAST_VALUE(ts2 - ts1) OVER (ORDER BY id)",
-      "(SELECT MAX(b.ts2 - b.ts1) FROM small b)"
+      "(SELECT MAX(b.ts2 - b.ts1) FROM small b)", "COALESCE(ts2, ts1) - ts1",
+      "CASE WHEN id = 0 THEN ts2 ELSE ts1 END - ts1", "NULLIF(ts2, ts1) - ts1",
+      "(SELECT MAX(b.ts2) FROM small b) - ts1", "LAG(ts2) OVER (ORDER BY id) - ts1"
   })
   void intervalExpressionMetadataDoesNotDependOnRows(String expression) throws Exception {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
@@ -425,7 +522,7 @@ class DateArithmeticTest {
       try (var result = statement.executeQuery("SELECT CAST(b AS TIMESTAMP) - CAST(a AS TIMESTAMP) "
           + "FROM (VALUES (TIMESTAMP '2024-01-01 00:00:00', TIMESTAMP '2024-01-02 00:00:00.5')) q(a, b)")) {
         assertTrue(result.next());
-        assertEquals("1 00:00:00.500", result.getString(1));
+        assertEquals("1 00:00:00.500000", result.getString(1));
       }
       for (String expression : List.of(
           "CAST(TIMESTAMP '2024-01-01 00:00:00.5' AS TIMESTAMP(0)) - TIMESTAMP '2024-01-01 00:00:00'",
