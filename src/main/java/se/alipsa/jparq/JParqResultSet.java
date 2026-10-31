@@ -47,6 +47,7 @@ import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.QueryProcessor;
 import se.alipsa.jparq.engine.RecordReader;
+import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SubqueryExecutor;
@@ -86,7 +87,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private WindowState windowState;
   private final boolean aggregateQuery;
   private final List<List<Object>> aggregateRows;
-  private final List<Integer> aggregateSqlTypes;
+  private final AggregateResultSetMetaData aggregateInferredMetadata;
   private AggregateResultSetMetaData aggregateMetadata;
   private int aggregateRowIndex = -1;
   private boolean aggregateOnRow = false;
@@ -135,7 +136,7 @@ public class JParqResultSet extends ResultSetAdapter {
   static JParqResultSet materializedResult(String tableName, List<String> columnLabels, List<Integer> sqlTypes,
       List<List<Object>> rows, List<Schema> valueSchemas) {
     JParqResultSet result = materializedResult(tableName, columnLabels, sqlTypes, rows);
-    result.aggregateMetadata = new AggregateResultSetMetaData(columnLabels, sqlTypes, tableName, null, null, rows);
+    result.aggregateMetadata = new AggregateResultSetMetaData(result.aggregateInferredMetadata);
     result.aggregateMetadata.retainValueSchemas(valueSchemas);
     return result;
   }
@@ -280,8 +281,10 @@ public class JParqResultSet extends ResultSetAdapter {
         AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan,
             effectiveResidual, select.having(), select.orderBy(), subqueryExecutor, queryQualifiers, qualifierMapping,
             enrichedUnqualifiedMapping, correlationContext);
-        this.aggregateRows = new ArrayList<>(result.rows());
-        this.aggregateSqlTypes = result.sqlTypes();
+        List<List<Object>> distinctRows = distinctAggregateRows(result.rows(), select.distinct());
+        this.aggregateInferredMetadata = new AggregateResultSetMetaData(labels, result.sqlTypes(), tableName,
+            tableSchema, tableCatalog, distinctRows);
+        this.aggregateRows = sliceAggregateRows(distinctRows, select);
       } catch (Exception e) {
         throw SqlExceptions.wrap("Failed to compute aggregate query", e);
       }
@@ -305,7 +308,7 @@ public class JParqResultSet extends ResultSetAdapter {
     this.canonicalColumnNames = canonicalLookup;
     this.aggregateQuery = false;
     this.aggregateRows = null;
-    this.aggregateSqlTypes = null;
+    this.aggregateInferredMetadata = null;
     this.windowState = WindowState.empty();
 
     WindowPlan windowPlan = WindowFunctions.plan(selectExpressions);
@@ -477,7 +480,8 @@ public class JParqResultSet extends ResultSetAdapter {
     this.physicalColumnOrder = null;
     this.aggregateQuery = true;
     this.aggregateRows = rows == null ? new ArrayList<>() : new ArrayList<>(rows);
-    this.aggregateSqlTypes = sqlTypes == null ? List.of() : List.copyOf(sqlTypes);
+    this.aggregateInferredMetadata = new AggregateResultSetMetaData(columnLabels,
+        sqlTypes == null ? List.of() : sqlTypes, tableName, tableSchema, tableCatalog, this.aggregateRows);
     this.aggregateOnRow = false;
     this.qp = null;
     this.current = null;
@@ -486,6 +490,47 @@ public class JParqResultSet extends ResultSetAdapter {
     this.rowNum = 0;
     this.lastWasNull = false;
     this.windowState = WindowState.empty();
+  }
+
+  /**
+   * Applies DISTINCT to projected aggregate tuples while preserving their
+   * ordering. The full output remains available for metadata inference before row
+   * limits are applied.
+   *
+   * @param rows
+   *          ordered aggregate output
+   * @param distinct
+   *          whether to remove duplicate projected tuples
+   * @return the full distinct result, or the original rows without DISTINCT
+   */
+  private static List<List<Object>> distinctAggregateRows(List<List<Object>> rows, boolean distinct) {
+    List<List<Object>> output = rows;
+    if (distinct) {
+      output = new ArrayList<>();
+      Set<List<Object>> seen = new LinkedHashSet<>();
+      for (List<Object> row : rows) {
+        if (seen.add(RelationalKeys.row(row))) {
+          output.add(row);
+        }
+      }
+    }
+    return output;
+  }
+
+  /**
+   * Slices ordered distinct aggregate output using overflow-safe bounds.
+   *
+   * @param rows
+   *          full ordered result after DISTINCT
+   * @param select
+   *          query supplying OFFSET and LIMIT
+   * @return a mutable list of the surviving rows
+   */
+  private static List<List<Object>> sliceAggregateRows(List<List<Object>> rows, SqlParser.Select select) {
+    int start = Math.min(Math.max(0, select.offset()), rows.size());
+    int remaining = rows.size() - start;
+    int count = select.limit() < 0 ? remaining : Math.min(select.limit(), remaining);
+    return new ArrayList<>(rows.subList(start, start + count));
   }
 
   @Override
@@ -1284,9 +1329,7 @@ public class JParqResultSet extends ResultSetAdapter {
   public ResultSetMetaData getMetaData() throws SQLException {
     if (aggregateQuery) {
       if (aggregateMetadata == null) {
-        List<Integer> types = aggregateSqlTypes == null ? List.of() : aggregateSqlTypes;
-        aggregateMetadata = new AggregateResultSetMetaData(columnOrder, types, tableName, tableSchema, tableCatalog,
-            aggregateRows == null ? List.of() : aggregateRows);
+        aggregateMetadata = new AggregateResultSetMetaData(aggregateInferredMetadata);
         aggregateMetadata
             .retainExpressionTypes(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
                 canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)

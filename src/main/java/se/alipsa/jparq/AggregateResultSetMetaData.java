@@ -94,6 +94,25 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
   }
 
   /**
+   * Copies cached column metadata without rereading materialized values. Mutable
+   * metadata containers are copied so declared expression types can be applied
+   * independently to each instance.
+   *
+   * @param metadata
+   *          metadata containing the inferred column bounds and schemas
+   */
+  public AggregateResultSetMetaData(AggregateResultSetMetaData metadata) {
+    this.labels = new ArrayList<>(metadata.labels);
+    this.sqlTypes = new ArrayList<>(metadata.sqlTypes);
+    this.tableName = metadata.tableName;
+    this.tableSchema = metadata.tableSchema;
+    this.tableCatalog = metadata.tableCatalog;
+    this.precisions = metadata.precisions.clone();
+    this.scales = metadata.scales.clone();
+    this.valueSchemas = new ArrayList<>(metadata.valueSchemas);
+  }
+
+  /**
    * Retains source schemas and declared decimal bounds for materialized columns.
    *
    * @param schemas
