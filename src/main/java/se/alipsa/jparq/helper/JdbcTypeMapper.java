@@ -58,6 +58,9 @@ public final class JdbcTypeMapper {
     if (base == null) {
       return Types.OTHER;
     }
+    if (IntervalType.matches(base)) {
+      return Types.OTHER;
+    }
     return switch (base.getType()) {
       case STRING, ENUM -> Types.VARCHAR;
       case INT -> (LogicalTypes.date().equals(base.getLogicalType())
@@ -103,6 +106,9 @@ public final class JdbcTypeMapper {
     Schema base = nonNullSchema(schema);
     if (base == null) {
       return Object.class.getName();
+    }
+    if (IntervalType.matches(base)) {
+      return TemporalInterval.class.getName();
     }
     return switch (base.getType()) {
       case STRING, ENUM -> String.class.getName();

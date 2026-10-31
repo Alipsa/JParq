@@ -20,6 +20,7 @@ import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.CorrelatedBindings;
 import se.alipsa.jparq.engine.SqlComparisons;
+import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 
@@ -467,7 +468,7 @@ public final class FunctionSupport {
     }
     String input = toStringValue(positional.get(0));
     String pattern = toStringValue(positional.get(1));
-    String options = positional.size() > 2 && positional.get(2) != null ? positional.get(2).toString() : null;
+    String options = positional.size() > 2 ? SqlText.valueOf(positional.get(2)) : null;
     return StringFunctions.regexpLike(input, pattern, options);
   }
 
@@ -480,7 +481,7 @@ public final class FunctionSupport {
   }
 
   private String toStringValue(Object value) {
-    return value == null ? null : value.toString();
+    return value == null ? null : SqlText.valueOf(value);
   }
 
   private Object evaluateTimeKeyword(String keyword) {

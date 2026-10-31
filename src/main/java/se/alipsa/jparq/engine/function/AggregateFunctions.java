@@ -90,6 +90,7 @@ import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.OrderKey;
+import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.engine.SqlTruth;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
@@ -98,6 +99,7 @@ import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.LiteralConverter;
+import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
  * Utilities for detecting and evaluating aggregate functions in SELECT lists.
@@ -2358,7 +2360,8 @@ public final class AggregateFunctions {
         return;
       }
       int cmp = SqlComparisons.typedCompare(value, extremum);
-      if ((isMax && cmp > 0) || (!isMax && cmp < 0)) {
+      if ((isMax && cmp > 0) || (!isMax && cmp < 0)
+          || (cmp == 0 && value instanceof TemporalInterval interval && interval.isTemporalDifference())) {
         extremum = value;
       }
     }
@@ -2388,10 +2391,10 @@ public final class AggregateFunctions {
       if (arguments.size() > 1) {
         Object sep = evaluate(eval, record, arguments.get(1));
         if (sep != null) {
-          separator = sep.toString();
+          separator = SqlText.valueOf(sep);
         }
       }
-      parts.add(value.toString());
+      parts.add(SqlText.valueOf(value));
     }
 
     @Override
@@ -2664,9 +2667,8 @@ public final class AggregateFunctions {
       if (!(exists.getRightExpression() instanceof Select subSelect)) {
         throw new IllegalArgumentException("EXISTS requires a subquery");
       }
-      SubqueryExecutor.SubqueryResult result = subqueryExecutor.executeCorrelated(subSelect, correlationQualifiers(),
-          correlationColumns(), correlationContext, (qualifier, column) -> correlatedValue(qualifier, column));
-      boolean hasRows = !result.rows().isEmpty();
+      boolean hasRows = subqueryExecutor.existsCorrelated(subSelect, correlationQualifiers(), correlationColumns(),
+          correlationContext, (qualifier, column) -> correlatedValue(qualifier, column));
       return exists.isNot() != hasRows;
     }
 
@@ -2676,15 +2678,15 @@ public final class AggregateFunctions {
       if (left == null || right == null) {
         return null;
       }
-      String leftText = left.toString();
-      String pattern = right.toString();
+      String leftText = SqlText.valueOf(left);
+      String pattern = SqlText.valueOf(right);
       LikeExpression.KeyWord keyWord = like.getLikeKeyWord();
       LikeExpression.KeyWord effective = keyWord == null ? LikeExpression.KeyWord.LIKE : keyWord;
       Character escapeChar = null;
       if (like.getEscape() != null) {
         Object escapeVal = value(like.getEscape());
         if (escapeVal != null) {
-          String escape = escapeVal.toString();
+          String escape = SqlText.valueOf(escapeVal);
           if (!escape.isEmpty()) {
             if (escape.length() != 1) {
               throw new IllegalArgumentException("LIKE escape clause must be a single character");

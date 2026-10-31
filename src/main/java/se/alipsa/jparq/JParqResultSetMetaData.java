@@ -1,5 +1,6 @@
 package se.alipsa.jparq;
 
+import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -7,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Function;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.CastExpression;
@@ -24,15 +26,19 @@ import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.Identifier;
+import se.alipsa.jparq.engine.IntervalExpressionTypes;
 import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.engine.NumericExpressionTypes;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
+import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 
 /** An implementation of the java.sql.ResultSetMetaData interface. */
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements AvroColumnMetadata {
 
+  private Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarProjectionSchemas = select -> null;
   private final Schema schema; // may be null if empty file
   private final List<String> labels; // projection labels (aliases if present)
   private final List<String> physicalNames; // underlying physical column names (null for computed)
@@ -109,6 +115,28 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     this.sourceMappings = sourceMappings;
   }
 
+  /**
+   * Supplies scalar-subquery declaration resolution without executing its rows.
+   *
+   * @param resolver
+   *          independently scoped scalar schema resolver
+   * @return this metadata instance
+   * @throws SQLException
+   *           if a projection has an invalid declaration
+   */
+  public JParqResultSetMetaData withScalarProjectionSchemas(
+      Function<net.sf.jsqlparser.statement.select.Select, Schema> resolver) throws SQLException {
+    scalarProjectionSchemas = resolver;
+    try {
+      for (int column = 1; column <= getColumnCount(); column++) {
+        intervalColumnSchema(column);
+      }
+    } catch (RuntimeException failure) {
+      throw SqlExceptions.wrap("Invalid projection declaration", failure);
+    }
+    return this;
+  }
+
   @Override
   public int getColumnCount() {
     return labels.size();
@@ -179,6 +207,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
 
   @Override
   public int getColumnType(int column) {
+    if (isIntervalColumn(column)) {
+      return Types.OTHER;
+    }
     NumericType numeric = numericType(column);
     if (numeric != null) {
       return numeric.jdbcType();
@@ -196,6 +227,31 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   }
 
   /**
+   * Resolves interval expressions against input declarations.
+   *
+   * @param column
+   *          one-based output column
+   * @return whether the output has interval type
+   */
+  private boolean isIntervalColumn(int column) {
+    return intervalColumnSchema(column) != null;
+  }
+
+  /**
+   * Resolves the common field range and precision for an output expression.
+   *
+   * @param column
+   *          one-based output position
+   * @return interval column declaration, or null
+   */
+  private Schema intervalColumnSchema(int column) {
+    return IntervalExpressionTypes.resolve(expressionAtColumn(column), reference -> {
+      Schema.Field field = resolveSourceField(reference);
+      return field == null ? null : field.schema();
+    }, scalarProjectionSchemas);
+  }
+
+  /**
    * Retains the source schema of a physical column during materialization.
    *
    * @param column
@@ -204,6 +260,13 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    */
   @Override
   public Schema columnValueSchema(int column) {
+    Schema interval = intervalColumnSchema(column);
+    if (interval != null) {
+      return interval;
+    }
+    if (resolveComputedColumnType(column) == Types.BOOLEAN) {
+      return Schema.create(Schema.Type.BOOLEAN);
+    }
     NumericType numeric = numericType(column);
     if (numeric != null) {
       return numeric.schema();
@@ -214,6 +277,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
 
   @Override
   public String getColumnTypeName(int column) {
+    if (isIntervalColumn(column)) {
+      return "INTERVAL";
+    }
     return java.sql.JDBCType.valueOf(getColumnType(column)).getName();
   }
 
@@ -271,6 +337,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    */
   @Override
   public String getColumnClassName(int column) {
+    if (isIntervalColumn(column)) {
+      return TemporalInterval.class.getName();
+    }
     if (numericType(column) != null || getColumnType(column) == Types.BOOLEAN) {
       return JdbcTypeMapper.mapJdbcTypeToClassName(getColumnType(column));
     }
@@ -531,11 +600,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * @return the enclosed expression, or the original expression
    */
   private static Expression unwrap(Expression expression) {
-    Expression result = expression;
-    while (result instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
-      result = list.getFirst();
-    }
-    return result;
+    return se.alipsa.jparq.engine.ExpressionEvaluator.unwrapParenthesis(expression);
   }
 
   private Expression expressionAtColumn(int column) {

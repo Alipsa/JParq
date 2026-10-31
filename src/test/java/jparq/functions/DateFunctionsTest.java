@@ -17,7 +17,6 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -29,7 +28,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.JParqSql;
-import se.alipsa.jparq.helper.TemporalInterval;
 
 /** Tests for date functions. */
 public class DateFunctionsTest {
@@ -336,21 +334,15 @@ public class DateFunctionsTest {
 
   @Test
   void testDateDiff() {
-    jparqSql.query("SELECT timestamp '2025-02-01 00:00:00' - timestamp '2025-01-01 00:00:00' AS ts_diff, "
-        + "date '2025-01-10' - date '2025-01-01' AS date_diff FROM mtcars LIMIT 1", rs -> {
-          try {
-            assertTrue(rs.next(), "Expected a row");
-            Object tsObj = rs.getObject("ts_diff");
-            assertInstanceOf(TemporalInterval.class, tsObj, "Timestamp subtraction should yield an interval");
-            TemporalInterval tsInterval = (TemporalInterval) tsObj;
-            assertEquals(Duration.ofDays(31), tsInterval.toDuration(), "Expected 31 day interval");
-
-            Object dateObj = rs.getObject("date_diff");
-            assertEquals(9L, dateObj, "Date subtraction should yield a signed day count");
-          } catch (SQLException e) {
-            fail(e);
-          }
-        });
+    jparqSql.query("SELECT date '2025-01-10' - date '2025-01-01' AS date_diff FROM mtcars LIMIT 1", rs -> {
+      try {
+        assertTrue(rs.next(), "Expected a row");
+        Object dateObj = rs.getObject("date_diff");
+        assertEquals(9L, dateObj, "Date subtraction should yield a signed day count");
+      } catch (SQLException e) {
+        fail(e);
+      }
+    });
   }
 
   private void executeSingleInt(String sql, String column, int expected) {

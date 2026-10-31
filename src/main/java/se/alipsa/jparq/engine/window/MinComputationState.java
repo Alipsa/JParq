@@ -1,5 +1,7 @@
 package se.alipsa.jparq.engine.window;
 
+import se.alipsa.jparq.helper.TemporalInterval;
+
 /**
  * Stateful helper used while evaluating MIN window frames.
  */
@@ -23,7 +25,9 @@ final class MinComputationState {
       seenValue = true;
       return;
     }
-    if (WindowFunctions.compareValues(value, minValue) < 0) {
+    int comparison = WindowFunctions.compareValues(value, minValue);
+    if (comparison < 0
+        || (comparison == 0 && value instanceof TemporalInterval interval && interval.isTemporalDifference())) {
       minValue = value;
     }
   }

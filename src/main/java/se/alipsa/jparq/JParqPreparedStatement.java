@@ -109,6 +109,7 @@ import se.alipsa.jparq.engine.function.SystemFunctions;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.engine.window.WindowState;
+import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.LiteralConverter;
@@ -655,6 +656,59 @@ public class JParqPreparedStatement implements PreparedStatement {
         && inheritedCteContext.isEmpty();
   }
 
+  /**
+   * Resolves the first projection's interval or datetime declaration without
+   * reading rows.
+   *
+   * @return the declared schema, or null when its type cannot be established
+   * @throws SQLException
+   *           if an input schema cannot be inspected
+   */
+  public Schema declaredProjectionSchema() throws SQLException {
+    if (setOperationQuery && parsedSetQuery != null) {
+      Schema common = null;
+      for (SqlParser.SetComponent component : parsedSetQuery.components()) {
+        try (JParqPreparedStatement branch = prepareSubqueryStatement(component.sql(), cteResults)) {
+          Schema declaration = branch.declaredProjectionSchema();
+          common = IntervalType.matches(declaration) || IntervalType.matches(common)
+              ? IntervalType.common(common, declaration)
+              : se.alipsa.jparq.engine.IntervalExpressionTypes.commonTemporal(common, declaration);
+        }
+      }
+      return common;
+    }
+    if (parsedSelect == null || parsedSelect.expressions().size() != 1) {
+      return null;
+    }
+    Map<Column, Schema> columns = new HashMap<>();
+    Expression expression = parsedSelect.expressions().getFirst();
+    java.util.function.Function<Column, Schema> columnSchemas = column -> {
+      return columns.computeIfAbsent(column, reference -> {
+        try {
+          Schema source = resolveSchemaForColumn(tableReferences, reference.getTable());
+          if (source == null && !joinQuery) {
+            source = fileAvroSchema;
+          }
+          Schema.Field field = findFieldIgnoreCase(source, reference.getColumnName());
+          return field == null ? null : field.schema();
+        } catch (SQLException exception) {
+          return null;
+        }
+      });
+    };
+    java.util.function.Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarSchemas = select -> {
+      try (JParqPreparedStatement nested = prepareSubqueryStatement(select.toString(), cteResults)) {
+        return nested.declaredProjectionSchema();
+      } catch (SQLException exception) {
+        return null;
+      }
+    };
+    Schema interval = se.alipsa.jparq.engine.IntervalExpressionTypes.resolve(expression, columnSchemas, scalarSchemas);
+    return interval != null
+        ? interval
+        : se.alipsa.jparq.engine.IntervalExpressionTypes.resolveTemporal(expression, columnSchemas, scalarSchemas);
+  }
+
   @Override
   public void close() {
     // Close the bound statement if it exists
@@ -829,7 +883,7 @@ public class JParqPreparedStatement implements PreparedStatement {
               || LiteralConverter.isLiteral(projection);
           Schema projected = type == Types.OTHER ? setExpressionSchema(projection, values, meta) : null;
           int projectedType = projected == null ? Types.NULL : JdbcTypeMapper.mapSchemaToJdbcType(projected);
-          if (type == Types.OTHER || projection instanceof NullValue) {
+          if (!IntervalType.matches(schema) && (type == Types.OTHER || projection instanceof NullValue)) {
             boolean unknown = type == Types.OTHER;
             schema = projected;
             type = projectedType;
@@ -871,7 +925,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     sqlTypes.replaceAll(type -> type == Types.NULL ? Types.OTHER : type);
     coerceSetRows(componentRows, componentTypes, sqlTypes, sourceSchemas);
     List<List<Object>> combined = evaluateSetOperation(components, componentRows, setKeyFunction(sqlTypes));
-    List<List<Object>> ordered = applySetOrdering(combined, labels, sqlTypes, parsedSetQuery.orderBy());
+    List<List<Object>> ordered = applySetOrdering(combined, labels, sqlTypes, sourceSchemas, parsedSetQuery.orderBy());
     List<List<Object>> sliced = applySetLimitOffset(ordered, parsedSetQuery.limit(), parsedSetQuery.offset());
     return JParqResultSet.materializedResult("set_operation_result", labels, sqlTypes, sliced, sourceSchemas);
   }
@@ -949,7 +1003,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     Schema prior = schemas.get(index);
     NumericType previousNumeric = NumericType.of(previous, prior);
-    if (previousNumeric != null && numeric != null) {
+    if (IntervalType.matches(prior) && IntervalType.matches(schema)) {
+      schemas.set(index, IntervalType.common(prior, schema));
+    } else if (previousNumeric != null && numeric != null) {
       NumericType common = previousNumeric.common(numeric);
       types.set(index, common.jdbcType());
       schemas.set(index, common.schema());
@@ -1148,6 +1204,8 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          column labels used for ORDER BY name resolution
    * @param sqlTypes
    *          common output JDBC types
+   * @param valueSchemas
+   *          retained output schemas, including interval types
    * @param orderBy
    *          order specification parsed from the set operation query
    * @return ordered rows (or the original rows when no ordering is requested)
@@ -1155,7 +1213,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           if an ORDER BY column cannot be resolved
    */
   private List<List<Object>> applySetOrdering(List<List<Object>> rows, List<String> labels, List<Integer> sqlTypes,
-      List<SqlParser.SetOrder> orderBy) throws SQLException {
+      List<Schema> valueSchemas, List<SqlParser.SetOrder> orderBy) throws SQLException {
     if (orderBy == null || orderBy.isEmpty() || rows.isEmpty()) {
       return rows;
     }
@@ -1204,7 +1262,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     ValueExpressionEvaluator evaluator = null;
     Schema setOrderSchema = null;
     if (hasExpressions) {
-      setOrderSchema = buildSetOrderSchema(labels, sqlTypes);
+      setOrderSchema = buildSetOrderSchema(labels, sqlTypes, valueSchemas);
       CorrelationMappings mappings = new CorrelationMappings(List.of(), Map.of(), Map.of(), Map.of());
       evaluator = new ValueExpressionEvaluator(setOrderSchema, null, mappings, WindowState.empty());
     }
@@ -1504,7 +1562,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     return SqlComparisons.typedCompare(left, right);
   }
 
-  private Schema buildSetOrderSchema(List<String> labels, List<Integer> sqlTypes) {
+  private Schema buildSetOrderSchema(List<String> labels, List<Integer> sqlTypes, List<Schema> valueSchemas) {
     if (labels == null || labels.isEmpty()) {
       return SchemaBuilder.record("set_order").fields().endRecord();
     }
@@ -1513,7 +1571,8 @@ public class JParqPreparedStatement implements PreparedStatement {
     Set<String> used = new LinkedHashSet<>();
     for (int i = 0; i < labels.size(); i++) {
       String label = labels.get(i);
-      Schema baseType = mapSqlTypeToAvroType(sqlTypes, i);
+      Schema retained = valueSchemas.get(i);
+      Schema baseType = IntervalType.matches(retained) ? retained : mapSqlTypeToAvroType(sqlTypes, i);
       Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), baseType));
       Field field = new Field(MaterializedNames.allocate(label, used), union, null, Field.NULL_DEFAULT_VALUE);
       field.addProp(MaterializedNames.LOOKUP_KEY, Identifier.lookupKey(label));
@@ -1567,6 +1626,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         ? schema.getTypes().stream().filter(s -> s.getType() != Schema.Type.NULL).findFirst()
             .orElse(Schema.create(Schema.Type.STRING))
         : schema;
+    if (IntervalType.matches(base)) {
+      return IntervalType.encode((TemporalInterval) value);
+    }
     return switch (base.getType()) {
       case BOOLEAN -> (value instanceof Boolean) ? value : Boolean.parseBoolean(value.toString());
       case INT -> {
@@ -2485,7 +2547,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   /**
    * Materialize a standalone {@code UNNEST} table reference into an in-memory
    * representation. Direct correlated column bindings retain declared element
-   * schemas even for null or empty arrays; null arrays produce no rows.
+   * schemas even for null or empty arrays; null arrays produce no rows. Interval
+   * elements retain their types through materialization.
    *
    * @param baseRef
    *          the table reference describing the {@code UNNEST} invocation
@@ -2502,6 +2565,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     GenericData.Record emptyRecord = new GenericData.Record(literalSchema);
     ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(literalSchema);
     Object evaluated = evaluator.eval(baseRef.unnest().expression(), emptyRecord);
+
     Schema arraySchema = baseRef.unnest().expression() instanceof net.sf.jsqlparser.expression.Function function
         && CorrelatedBindings.matches(function)
             ? JdbcTypeMapper.nonNullSchema(CorrelatedBindings.schema(function))
@@ -2574,7 +2638,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       List<Object> evaluated = new ArrayList<>(expressions.size());
       for (Expression expression : expressions) {
         Object value = evaluator.eval(expression, emptyRecord);
-        evaluated.add(normalizeLiteralValue(value));
+        evaluated.add(value);
       }
       evaluatedRows.add(evaluated);
     }
@@ -2590,8 +2654,18 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (columnValues.stream().allMatch(Objects::isNull) && isBooleanValueColumn(valueTable, i)) {
         columnType = ValueColumnType.BOOLEAN;
       }
+      Schema intervalDeclaration = null;
+      for (List<Expression> expressions : valueTable.rows()) {
+        Schema declaration = se.alipsa.jparq.engine.IntervalExpressionTypes.resolve(expressions.get(i), column -> null,
+            select -> null);
+        intervalDeclaration = IntervalType.common(intervalDeclaration, declaration);
+      }
+      if (intervalDeclaration != null) {
+        columnType = ValueColumnType.INTERVAL;
+      }
       columnTypes.add(columnType);
-      valueSchemas.add(schemaForColumnType(columnType, columnValues));
+      valueSchemas
+          .add(intervalDeclaration == null ? schemaForColumnType(columnType, columnValues) : intervalDeclaration);
     }
 
     List<Field> fields = new ArrayList<>(columnNames.size());
@@ -2652,13 +2726,6 @@ public class JParqPreparedStatement implements PreparedStatement {
     return informationSchemaColumnsResult;
   }
 
-  private Object normalizeLiteralValue(Object value) {
-    if (value instanceof TemporalInterval interval) {
-      return interval.toString();
-    }
-    return value;
-  }
-
   /**
    * Recognizes explicitly Boolean VALUES columns even when every value is NULL.
    *
@@ -2705,6 +2772,9 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   private ValueColumnType classifyValueType(Object value) {
+    if (value instanceof TemporalInterval) {
+      return ValueColumnType.INTERVAL;
+    }
     if (value instanceof Boolean) {
       return ValueColumnType.BOOLEAN;
     }
@@ -2821,6 +2891,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       case TIME -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
       case TIMESTAMP -> LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
       case BINARY -> Schema.create(Schema.Type.BYTES);
+      case INTERVAL -> IntervalType.infer(values);
       case STRING -> Schema.create(Schema.Type.STRING);
       case ARRAY -> inferredArraySchema(values);
       case STRUCT -> values.stream().filter(GenericRecord.class::isInstance).map(GenericRecord.class::cast).findFirst()
@@ -2874,7 +2945,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         case DOUBLE ->
           value instanceof Number num ? Double.valueOf(num.doubleValue()) : Double.valueOf(value.toString());
         case DECIMAL -> value instanceof BigDecimal bd ? bd : new BigDecimal(value.toString());
-        case DATE, TIME, TIMESTAMP, BINARY, ARRAY, STRUCT -> value;
+        case DATE, TIME, TIMESTAMP, BINARY, ARRAY, STRUCT, INTERVAL -> value;
         case STRING -> value instanceof CharSequence ? value : value.toString();
       };
     } catch (NumberFormatException | NullPointerException e) {
@@ -2931,7 +3002,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   private enum ValueColumnType {
-    ARRAY, STRUCT, BOOLEAN, INT, LONG, FLOAT, DOUBLE, DECIMAL, DATE, TIME, TIMESTAMP, STRING, BINARY
+    ARRAY, STRUCT, BOOLEAN, INT, LONG, FLOAT, DOUBLE, DECIMAL, DATE, TIME, TIMESTAMP, INTERVAL, STRING, BINARY
   }
 
   /**
@@ -3578,7 +3649,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private boolean requiresValueInference(ResultSetMetaData meta, int column) throws SQLException {
     int type = meta.getColumnType(column);
-    return type == Types.OTHER
+    return (type == Types.OTHER && !IntervalType.matches(sourceColumnSchema(meta, column)))
         || ((type == Types.ARRAY || type == Types.STRUCT) && sourceColumnSchema(meta, column) == null)
         || ((type == Types.DECIMAL || type == Types.NUMERIC) && meta.getPrecision(column) == 0);
   }
@@ -3597,7 +3668,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   private Schema columnSchema(ResultSetMetaData meta, int column) throws SQLException {
     int type = meta.getColumnType(column);
     Schema source = sourceColumnSchema(meta, column);
-    if (source != null && (type == Types.ARRAY || type == Types.STRUCT)) {
+    if (source != null && (type == Types.ARRAY || type == Types.STRUCT || IntervalType.matches(source))) {
       return source;
     }
     return switch (type) {
@@ -3653,6 +3724,9 @@ public class JParqPreparedStatement implements PreparedStatement {
       return null;
     }
     Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    if (IntervalType.matches(effective)) {
+      return IntervalType.encode((TemporalInterval) value);
+    }
     LogicalType logical = effective.getLogicalType();
     if (logical instanceof LogicalTypes.Date) {
       Date date = value instanceof Date d ? d : Date.valueOf(value.toString());

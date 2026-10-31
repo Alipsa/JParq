@@ -249,9 +249,9 @@ public class DateTimeFunctionsTest {
     Timestamp ts1 = Timestamp.valueOf("2023-01-02 10:00:00");
     Timestamp ts2 = Timestamp.valueOf("2023-01-01 09:00:00");
     TemporalInterval result = (TemporalInterval) DateTimeFunctions.minus(ts1, ts2);
-    assertNotNull(result);
     assertEquals(Period.ZERO, result.period());
     assertEquals(Duration.ofDays(1).plusHours(1), result.duration());
+    assertTrue(result.isTemporalDifference());
   }
 
   @Test
@@ -418,7 +418,7 @@ public class DateTimeFunctionsTest {
     Time time = Time.valueOf(expected);
     time.setTime(time.getTime() + millis);
     assertEquals(time, DateTimeFunctions.toTime(text));
-    assertEquals(time, DateTimeFunctions.castLiteral(createCastExpression("TIME"), text));
+    assertEquals(Time.valueOf(expected), DateTimeFunctions.castLiteral(createCastExpression("TIME"), text));
   }
 
   /**
@@ -454,7 +454,8 @@ public class DateTimeFunctionsTest {
   void flexibleTimestampsRemainAvailable(String text, String expected) {
     Timestamp timestamp = Timestamp.valueOf(expected);
     assertEquals(timestamp, DateTimeFunctions.toTimestamp(text));
-    assertEquals(timestamp, DateTimeFunctions.castLiteral(createCastExpression("TIMESTAMP"), text));
+    Timestamp cast = (Timestamp) DateTimeFunctions.castLiteral(createCastExpression("TIMESTAMP"), text);
+    assertEquals(timestamp.toLocalDateTime().withNano(timestamp.getNanos() / 1000 * 1000), cast.toLocalDateTime());
   }
 
   /** Keeps offset timestamp strings tied to their instant and full precision. */
@@ -491,7 +492,8 @@ public class DateTimeFunctionsTest {
       expected.setTime(expected.getTime() + nanos / 1_000_000);
       assertEquals(expected, DateTimeFunctions.toTime(local));
       assertEquals(expected, DateTimeFunctions.toTime(local.toString()));
-      assertEquals(expected, DateTimeFunctions.castLiteral(createCastExpression("TIME"), local.toString()));
+      assertEquals(Time.valueOf("23:59:59"),
+          DateTimeFunctions.castLiteral(createCastExpression("TIME"), local.toString()));
       assertEquals(local.withNano(nanos / 1_000_000 * 1_000_000), DateTimeFunctions.toLocalTime(expected));
     }
   }
@@ -740,8 +742,9 @@ public class DateTimeFunctionsTest {
 
   @Test
   void testCastToCharTypes() {
-    assertEquals("test", DateTimeFunctions.castLiteral(createCastExpression("CHAR"), "test"));
-    assertEquals("test", DateTimeFunctions.castLiteral(createCastExpression("NCHAR"), "test"));
+    assertEquals("t", DateTimeFunctions.castLiteral(createCastExpression("CHAR"), "test"));
+    assertEquals("🙂", DateTimeFunctions.castLiteral(createCastExpression("CHAR"), "🙂more"));
+    assertEquals("t", DateTimeFunctions.castLiteral(createCastExpression("NCHAR"), "test"));
     assertEquals("test", DateTimeFunctions.castLiteral(createCastExpression("VARCHAR"), "test"));
     assertEquals("test", DateTimeFunctions.castLiteral(createCastExpression("NVARCHAR"), "test"));
     assertEquals("test", DateTimeFunctions.castLiteral(createCastExpression("CHARACTER VARYING"), "test"));
@@ -754,12 +757,12 @@ public class DateTimeFunctionsTest {
   }
 
   @Test
-  void testMinusBetweenTemporalValues() {
-    Timestamp later = Timestamp.valueOf("2023-01-02 00:00:00");
-    Timestamp earlier = Timestamp.valueOf("2023-01-01 12:00:00");
-    TemporalInterval interval = (TemporalInterval) DateTimeFunctions.minus(later, earlier);
-    assertEquals(Duration.ofHours(12), interval.duration());
-    assertEquals(Period.ZERO, interval.period());
+  void testMinusBetweenTimeValues() {
+    Time later = Time.valueOf("12:00:00");
+    Time earlier = Time.valueOf("10:00:00");
+    TemporalInterval result = (TemporalInterval) DateTimeFunctions.minus(later, earlier);
+    assertEquals(Duration.ofHours(2), result.duration());
+    assertTrue(result.isTemporalDifference());
   }
 
   @Test

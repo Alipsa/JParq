@@ -2,6 +2,39 @@
 
 ### 1.4.0
 
+- Return temporal differences and interval literals as immutable `TemporalInterval` values through JDBC
+  `getObject()`, including typed getters. Report JDBC OTHER with type name INTERVAL and the interval Java class.
+  `getString()` and explicit character casts use the result column's common field range and maximum
+  fractional-second precision, preserving nanoseconds without an optional positive sign (#254). CASE,
+  VALUES, arrays, and set operations combine input declarations before output, including empty branches.
+  For example, combining 1 DAY and 36 HOUR prints `1 00` and `1 12`; standalone 90 MINUTE prints as `90`.
+  Honor TIME/TIMESTAMP cast precision before interval arithmetic, defaulting to zero and six fractional
+  digits respectively, including TIMESTAMP WITHOUT TIME ZONE, TIMESTAMP WITH TIME ZONE, and DATETIME.
+  Truncate excess cast fractions and format interval text without rounding exceptions.
+  Retain interval metadata for parentheses, CASE, COALESCE, NULLIF, aggregates, navigation windows, and scalar
+  subqueries, including empty inputs, empty set operations, and all-NULL results. Keep declared JDBC types
+  and Java classes consistent for empty grouped results, including SMALLINT and TINYINT expressions.
+  Resolve datetime operands in conditional expressions, aggregates, windows, and scalar subqueries before
+  inferring difference types. Reject fractional non-SECOND interval fields with SQLState `42000`.
+  Preserve interval types through derived tables, CTEs, VALUES, UNNEST, LATERAL inputs, set operations,
+  and scalar or predicate subqueries so outer comparisons and EXTRACT continue to work. COUNT(*) and
+  ordinality-only UNNEST queries succeed without converting interval elements to text. EXISTS and NOT EXISTS
+  honor row existence, including correlated subqueries, HAVING, and set operations. Preserve DATE day counts,
+  explicit interval offsets, and NULL propagation.
+- Reject implicit use of intervals as text with SQLSyntaxErrorException and SQLState `42000`, including
+  VARCHAR comparisons in either operand order, concatenation, LIKE, and string functions. Use an explicit
+  character cast for interval text. MIN/MAX retain interval values on ties in aggregates and window frames.
+- Support numeric conversions, BigDecimal, and java.time targets in typed JDBC `getObject()` calls,
+  preserving SQL NULL, TIME milliseconds, and TIMESTAMP nanoseconds. Offset conversions from JDBC Time and
+  Timestamp normalize to UTC after applying the JVM time zone; existing offset values retain their offsets.
+  Datetime getter targets reject numeric and Boolean sources with SQLState `22005`.
+- Raise SQLDataException with SQLState `22001` when character casts would truncate numeric, datetime,
+  or interval values (#368), including CHAR without a length, which defaults to CHAR(1). Preserve existing
+  character-source truncation.
+- Classify subtraction between TIME and DATE or TIMESTAMP in either operand order as unsupported temporal
+  arithmetic with `SQLSyntaxErrorException`, SQLState `42000`, including predicates and nested queries (#254).
+  Previously these combinations raised an unclassified exception naming internal Java types.
+
 - **Behavior change:** decode hex literals (`X'..'` and `0x..`) and JDBC binary parameters to `byte[]` instead of SQL text (#250). Preserve leading zeroes and empty binary values, and reject odd-length or nonhexadecimal contents with SQLState `42000`. Render JDBC and `java.time` time/timestamp parameters as typed literals, retaining JDBC types and timestamp nanoseconds; reject timestamp parameter years before year 1 with SQLState `22008`. Decode stored Avro TIME columns to `java.sql.Time`, preserving milliseconds in literals, parameters, comparisons, sorting, grouping, aggregates, windows, materialization, and set operations (#251). Normalize TIME conversions, including timestamp casts and JDBC getters, to the local date 1970-01-01 so comparisons and hash-based grouping agree; retain milliseconds through interval arithmetic and midnight wraparound. Sub-millisecond digits are truncated, so values differing only below that precision compare equally. Reject stored TIME values outside one day with `SQLDataException`, SQLState `22008`, including direct JDBC getters. Verify both TIME logical types with predicate and projection pushdown enabled and disabled. Binary arguments to string functions and VARCHAR casts still expose Java array identity text (#355).
 
 - Reject unsupported window function names in SELECT lists during planning with `SQLSyntaxErrorException`, SQLState `42000`, and a message naming the function instead of an internal precomputed-state error (#248). Reject `WITHIN GROUP` clauses for all function names, with or without `OVER`, instead of treating supported names as windows; diagnostics name the unsupported clause. Validation outside SELECT lists remains tracked in #350.

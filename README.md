@@ -248,6 +248,45 @@ returns `2`. NULL operands produce NULL. Day counts cannot be compared with or a
 for example `d - DATE '2024-02-01' > 7`. Date/time offsets require an explicit `INTERVAL`:
 `DATE '2024-01-01' + INTERVAL '1 day'` is supported; `DATE '2024-01-01' + 1` and other
 unsupported temporal arithmetic raise `SQLException` with SQLState `42000` when evaluated.
+Subtraction between TIME and DATE or TIMESTAMP is unsupported in either operand order and
+raises `SQLSyntaxErrorException` with SQLState `42000`, including within predicates.
+Differences between TIMESTAMP values, between TIME values, or between mixed DATE/TIMESTAMP
+operands return immutable `se.alipsa.jparq.helper.TemporalInterval` values from `getObject()`;
+`getObject(column, TemporalInterval.class)` returns the same representation. Interval columns use JDBC
+`Types.OTHER`, type name `INTERVAL`, and the `TemporalInterval` Java class in metadata.
+`getString()` and explicit character casts use the result column's common interval declaration.
+CASE, COALESCE, VALUES, arrays, and set operations combine the widest input field range and the largest
+fractional-second precision before output, including inputs that produce no rows. For example, combining
+1 DAY and 36 HOUR prints `1 00` and `1 12`; all rows use the same fractional digits. A standalone
+`INTERVAL '90' MINUTE` still produces `90`. Positive values omit the optional plus sign. Nanoseconds
+are preserved through materialization. The `qualifier()` and `fractionalPrecision()` accessors on JDBC
+interval objects describe the common result declaration. Plain interval literals use the same object representation.
+Parentheses, CASE, COALESCE, NULLIF, aggregates, navigation windows, and scalar subqueries retain
+interval metadata even for empty inputs or all-NULL results. Datetime operands in those expressions
+also retain their declared type and precision when used in subtraction. CAST defaults to six fractional
+seconds for TIMESTAMP and zero for TIME; an explicit precision overrides the default. Casts truncate
+excess fractional digits before arithmetic.
+
+Intervals retain their types through derived tables, CTEs, VALUES, UNNEST, LATERAL inputs,
+set operations, and scalar or predicate subqueries. Comparisons with intervals and `EXTRACT` remain
+available after materialization. COUNT(*) and ordinality-only queries over UNNEST do not require
+converting interval elements to text. EXISTS and NOT EXISTS use row existence, including correlated
+subqueries, HAVING predicates, and set operations.
+
+Implicit interval-to-text coercion is a type error (`SQLSyntaxErrorException`, SQLState `42000`),
+including comparisons with VARCHAR values, concatenation, LIKE, and string functions. Use an explicit
+character cast when text is intended, such as `CAST(end_ts - start_ts AS VARCHAR)`.
+Character casts of numeric, datetime, or interval values raise `SQLDataException` with SQLState `22001`
+when their text does not fit the requested length. CHAR, CHARACTER, and NCHAR without a length mean length 1.
+Character-source casts retain their truncation behavior.
+NULL operands still produce NULL.
+
+Typed `getObject(column, Class)` supports numeric conversions and BigDecimal, as well as LocalDate,
+LocalTime, LocalDateTime, OffsetTime, and OffsetDateTime. TIME conversions retain milliseconds and
+TIMESTAMP conversions retain nanoseconds. Datetime targets accept datetime and character sources; numeric
+and Boolean sources raise `22005`. OffsetTime applies the JVM's current time-zone offset before normalizing
+to UTC; OffsetDateTime converts the timestamp's instant to UTC. Existing offset values retain their offsets.
+SQL NULL returns null and sets `wasNull()`.
 
 Interval literals accept a separate unit, such as `INTERVAL '1' DAY`, for YEAR, MONTH, DAY,
 HOUR, MINUTE, and SECOND, as well as the single-string form `INTERVAL '1 day'`.
@@ -257,7 +296,7 @@ DAY TO SECOND preserves fractional seconds and applies a leading sign to the ent
 Its day field must contain digits after the optional leading sign; decimals, exponents,
 and repeated signs raise `22007`. Digit-only day values outside the supported range raise `22003`.
 Qualifier precision decorations such as `DAY(3)` and `SECOND(2,3)` are accepted;
-declared precision limits are currently not enforced.
+leading-field precision limits are currently not enforced. Fractional-second precision is retained.
 Invalid interval text raises `SQLDataException` with SQLState `22007`; numeric values that
 cannot be represented use `22003`.
 Unsupported qualifiers, such as YEAR TO MONTH and WEEK, and expression operands, such as

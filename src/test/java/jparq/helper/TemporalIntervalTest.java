@@ -16,6 +16,26 @@ import se.alipsa.jparq.helper.TemporalInterval;
 /** Tests for {@link TemporalInterval}. */
 class TemporalIntervalTest {
 
+  /** Keeps difference provenance through arithmetic without changing equality. */
+  @Test
+  void temporalDifferenceProvenanceSurvivesArithmetic() {
+    TemporalInterval literal = TemporalInterval.parse("1", "HOUR");
+    TemporalInterval difference = TemporalInterval.between(LocalTime.of(10, 0), LocalTime.of(11, 0));
+    assertFalse(literal.isTemporalDifference());
+    assertTrue(difference.isTemporalDifference());
+    assertEquals(literal, difference);
+    assertEquals(literal.hashCode(), difference.hashCode());
+    assertEquals(0, literal.compareTo(difference));
+    assertTrue(difference.negate().isTemporalDifference());
+    assertTrue(literal.plus(difference).isTemporalDifference());
+    assertTrue(difference.plus(literal).isTemporalDifference());
+    assertTrue(literal.minus(difference).isTemporalDifference());
+    assertTrue(difference.minus(literal).isTemporalDifference());
+    assertFalse(literal.negate().isTemporalDifference());
+    assertFalse(literal.plus(literal).isTemporalDifference());
+    assertFalse(literal.minus(literal).isTemporalDifference());
+  }
+
   /**
    * Exercises registered parsers and aliases with independent expectations.
    *

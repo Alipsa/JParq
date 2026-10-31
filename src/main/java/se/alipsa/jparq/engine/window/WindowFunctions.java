@@ -34,6 +34,7 @@ import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlExceptions;
+import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.helper.LiteralConverter;
@@ -2562,6 +2563,9 @@ public final class WindowFunctions {
    *          right-hand value (may be {@code null})
    * @return negative when {@code left < right}, zero when equal, otherwise
    *         positive
+   * @throws IllegalArgumentException
+   *           if an interval is implicitly compared as text, carrying SQLState
+   *           42000
    */
   public static int compareValues(Object left, Object right) {
     if (left instanceof Number ln && right instanceof Number rn) {
@@ -2592,7 +2596,7 @@ public final class WindowFunctions {
     if (left instanceof TemporalInterval li && right instanceof TemporalInterval ri) {
       return li.compareTo(ri);
     }
-    return left.toString().compareTo(right.toString());
+    return SqlText.valueOf(left).compareTo(SqlText.valueOf(right));
   }
 
   /**

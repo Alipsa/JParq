@@ -301,8 +301,8 @@ public final class ExpressionEvaluator {
     Operand leftOperand = operand(like.getLeftExpression(), rec);
     Operand rightOperand = operand(like.getRightExpression(), rec);
 
-    String left = (leftOperand.value == null) ? null : leftOperand.value.toString();
-    String pat = (rightOperand.value == null) ? null : rightOperand.value.toString();
+    String left = (leftOperand.value == null) ? null : SqlText.valueOf(leftOperand.value);
+    String pat = (rightOperand.value == null) ? null : SqlText.valueOf(rightOperand.value);
 
     if (left == null || pat == null) {
       return null;
@@ -313,7 +313,7 @@ public final class ExpressionEvaluator {
     Character escapeChar = null;
     if (like.getEscape() != null) {
       Operand escapeOperand = operand(like.getEscape(), rec);
-      String escape = escapeOperand.value == null ? null : escapeOperand.value.toString();
+      String escape = escapeOperand.value == null ? null : SqlText.valueOf(escapeOperand.value);
       if (escape != null && !escape.isEmpty()) {
         if (escape.length() != 1) {
           throw new IllegalArgumentException("LIKE escape clause must be a single character");
@@ -335,8 +335,8 @@ public final class ExpressionEvaluator {
     Operand leftOperand = operand(similar.getLeftExpression(), rec);
     Operand rightOperand = operand(similar.getRightExpression(), rec);
 
-    String left = (leftOperand.value == null) ? null : leftOperand.value.toString();
-    String pattern = (rightOperand.value == null) ? null : rightOperand.value.toString();
+    String left = (leftOperand.value == null) ? null : SqlText.valueOf(leftOperand.value);
+    String pattern = (rightOperand.value == null) ? null : SqlText.valueOf(rightOperand.value);
 
     if (left == null || pattern == null) {
       return null;
@@ -394,8 +394,8 @@ public final class ExpressionEvaluator {
     if (!(exists.getRightExpression() instanceof net.sf.jsqlparser.statement.select.Select subSelect)) {
       throw new IllegalArgumentException("EXISTS requires a subquery");
     }
-    SubqueryExecutor.SubqueryResult result = executeCorrelatedSubquery(subSelect, rec);
-    boolean hasRows = !result.rows().isEmpty();
+    boolean hasRows = subqueryExecutor.existsCorrelated(subSelect, outerQualifiers, correlationColumns(),
+        qualifierColumnMapping, (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
     return exists.isNot() != hasRows;
   }
 
@@ -465,7 +465,8 @@ public final class ExpressionEvaluator {
   // -------------------------
 
   /**
-   * Recursively unwrap all {@link Parenthesis} layers from an expression.
+   * Recursively unwrap legacy and single-element list parentheses from an
+   * expression.
    *
    * @param expr
    *          the expression to unwrap; must not be {@code null}
@@ -474,10 +475,15 @@ public final class ExpressionEvaluator {
   @SuppressWarnings("removal")
   public static Expression unwrapParenthesis(Expression expr) {
     Expression unwrapped = expr;
-    while (unwrapped instanceof Parenthesis p) {
-      unwrapped = p.getExpression();
+    while (true) {
+      if (unwrapped instanceof Parenthesis parenthesis) {
+        unwrapped = parenthesis.getExpression();
+      } else if (unwrapped instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
+        unwrapped = list.getFirst();
+      } else {
+        return unwrapped;
+      }
     }
-    return unwrapped;
   }
 
   private record Operand(Object value, Schema schemaOrNull) {

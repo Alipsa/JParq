@@ -13,6 +13,7 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData.EnumSymbol;
 import org.apache.avro.generic.GenericData.Fixed;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.helper.TemporalInterval;
 
 /** Builds content keys without changing projected JDBC values. */
 public final class RelationalKeys {
@@ -131,6 +132,9 @@ public final class RelationalKeys {
    * @return the original scalar when compatible, or a normalized content key
    */
   public static Object value(Object value, boolean normalizeWholeNumbers) {
+    if (value instanceof TemporalInterval interval) {
+      return List.of(interval.period().toTotalMonths(), interval.duration().plusDays(interval.period().getDays()));
+    }
     if (value instanceof BigDecimal decimal) {
       // An odd unscaled value cannot end in a zero at any scale.
       if (decimal.unscaledValue().testBit(0)) {

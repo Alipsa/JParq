@@ -3,7 +3,6 @@ package se.alipsa.jparq.engine.function;
 import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.SQLDataException;
-import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.DateTimeException;
@@ -37,6 +36,7 @@ import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.NumericCastTarget;
 import se.alipsa.jparq.engine.NumericCasts;
 import se.alipsa.jparq.engine.SqlExceptions;
+import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
@@ -330,7 +330,8 @@ public final class DateTimeFunctions {
    * @throws IllegalArgumentException
    *           if parsing fails, carrying SQLState 22007 for invalid interval text
    *           or 22003 for numeric values that cannot be represented; unsupported
-   *           qualifiers and expression operands carry SQLState 0A000
+   *           qualifiers and expression operands carry SQLState 0A000, and
+   *           fractional non-SECOND fields carry syntax SQLState 42000
    */
   @SuppressWarnings("deprecation") // Preserve legacy non-standard interval units.
   public static TemporalInterval toInterval(IntervalExpression expr) {
@@ -345,17 +346,23 @@ public final class DateTimeFunctions {
             : qualifier.getLeadingField() + " TO " + qualifier.getTrailingField();
     if (expr.getExpression() != null) {
       String message = "Unsupported interval expression operand: " + SqlExceptions.describe(expr);
-      throw new IllegalArgumentException(message, new SQLFeatureNotSupportedException(message, "0A000"));
+      throw SqlExceptions.unsupportedFeature(message);
     }
     if (unit != null && !TemporalInterval.supportsUnit(unit)) {
       String message = "Unsupported interval unit: " + unit;
-      throw new IllegalArgumentException(message, new SQLFeatureNotSupportedException(message, "0A000"));
+      throw SqlExceptions.unsupportedFeature(message);
+    }
+    if (unit != null && List.of("YEAR", "MONTH", "DAY", "HOUR", "MINUTE").contains(unit.toUpperCase(Locale.ROOT))
+        && expr.getParameter() != null && expr.getParameter().replace("'", "").matches("[+-]?\\d*\\.\\d+")) {
+      throw SqlExceptions.syntaxFailure("Fractional fields require SECOND in an INTERVAL literal: " + expr);
     }
     try {
-      return TemporalInterval.parse(expr.getParameter(), unit);
+      TemporalInterval interval = TemporalInterval.parse(expr.getParameter(), unit);
+      Integer precision = qualifier == null ? null : qualifier.getFractionalSecondsPrecision();
+      return precision == null ? interval : interval.withFractionalPrecision(precision);
     } catch (UnsupportedOperationException failure) {
       String message = failure.getMessage();
-      throw new IllegalArgumentException(message, new SQLFeatureNotSupportedException(message, "0A000", failure));
+      throw SqlExceptions.unsupportedFeature(message, failure);
     } catch (ArithmeticException | DateTimeException | IllegalArgumentException failure) {
       String state = failure instanceof ArithmeticException ? "22003" : "22007";
       String message = "Invalid INTERVAL value: " + SqlExceptions.diagnosticValue(expr.getParameter()) + ": "
@@ -462,8 +469,11 @@ public final class DateTimeFunctions {
    * @param right
    *          the right operand
    * @return the signed day count as a {@link Long} for two DATE values, an
-   *         interval for other temporal differences, or {@code null} if not a
-   *         temporal subtraction
+   *         internal interval for other temporal differences, the result of an
+   *         interval offset, or {@code null} if not a supported temporal
+   *         subtraction, including TIME paired with DATE or TIMESTAMP; internal
+   *         differences support comparison and extraction but cannot be returned
+   *         as JDBC column values
    */
   public static Object minus(Object left, Object right) {
     if (left instanceof TemporalInterval li && right instanceof TemporalInterval ri) {
@@ -475,6 +485,9 @@ public final class DateTimeFunctions {
     if (isTemporal(left) && isTemporal(right)) {
       TemporalAccessor start = toTemporalAccessor(right);
       TemporalAccessor end = toTemporalAccessor(left);
+      if ((start instanceof LocalTime) != (end instanceof LocalTime)) {
+        return null;
+      }
       if (start instanceof LocalDate startDate && end instanceof LocalDate endDate) {
         return ChronoUnit.DAYS.between(startDate, endDate);
       }
@@ -538,6 +551,17 @@ public final class DateTimeFunctions {
       return odt.toLocalDate();
     }
     return null;
+  }
+
+  /**
+   * Reads a JDBC time's local clock fields including its stored milliseconds.
+   *
+   * @param time
+   *          the JDBC time
+   * @return the local time with millisecond precision
+   */
+  public static LocalTime toLocalTime(Time time) {
+    return time.toLocalTime().withNano((int) Math.floorMod(time.getTime(), 1000L) * 1_000_000);
   }
 
   private static LocalTime toLocalTime(Object value) {
@@ -726,7 +750,8 @@ public final class DateTimeFunctions {
    *           exceeds the target's range or precision (SQLState 22003), or
    *           numeric input is invalid or non-finite (SQLState 22018), or
    *           temporal input has invalid format (22007) or out-of-range fields
-   *           (22008), carried by the cause
+   *           (22008), or a non-character interval operand is used implicitly as
+   *           text (42000), carried by the cause
    */
   public static Object castLiteral(CastExpression cast, Object value) {
     if (cast != null && cast.getColDataType() != null
@@ -736,21 +761,31 @@ public final class DateTimeFunctions {
     if (cast == null || value == null) {
       return value;
     }
-    if (cast.isTimeStamp()) {
-      return toTimestamp(value);
-    }
-    if (cast.isDate()) {
-      return toDate(value);
-    }
-    if (cast.isTime()) {
-      return toTime(value);
-    }
     ColDataType colType = cast.getColDataType();
     String dataType = colType == null ? null : colType.getDataType();
+    String normalized = dataType == null ? "" : normalizeTypeName(dataType);
+    if (cast.isTimeStamp() || "timestamp".equals(normalized)) {
+      Timestamp timestamp = toTimestamp(value);
+      int nanos = castFractionalNanos(cast, timestamp.getNanos(), 6);
+      if (nanos == timestamp.getNanos()) {
+        return timestamp;
+      }
+      Timestamp converted = Timestamp.from(timestamp.toInstant());
+      converted.setNanos(nanos);
+      return converted;
+    }
+    if (cast.isDate() || "date".equals(normalized)) {
+      return toDate(value);
+    }
+    if (cast.isTime() || "time".equals(normalized)) {
+      Time time = toTime(value);
+      LocalTime local = toLocalTime(time);
+      int nanos = castFractionalNanos(cast, local.getNano(), 0);
+      return nanos == local.getNano() ? time : toTime(local.withNano(nanos));
+    }
     if (dataType == null) {
       return value;
     }
-    String normalized = normalizeTypeName(dataType);
     NumericCastTarget target = NumericCastTarget.fromNormalizedName(normalized);
     if (target != null) {
       return NumericCasts.convert(value, target, colType.toString());
@@ -759,19 +794,55 @@ public final class DateTimeFunctions {
       case "boolean", "bool" -> toBoolean(value);
       case "char", "character", "nchar", "varchar", "charactervarying", "nvarchar", "string" ->
         castToString(cast, value);
-      case "text", "clob" -> value.toString();
+      case "text", "clob" -> SqlText.cast(value);
       default -> value;
     };
   }
 
+  /**
+   * Truncates a datetime fractional field to its declared precision, defaulting
+   * to six digits for TIMESTAMP and zero for TIME.
+   *
+   * @param cast
+   *          datetime CAST expression
+   * @param nanos
+   *          source fractional field
+   * @param defaultPrecision
+   *          fractional precision of the resolved target when none is specified
+   * @return nanoseconds truncated to the explicit or default precision
+   * @throws IllegalArgumentException
+   *           if precision is outside the supported range, carrying SQLState
+   *           42000
+   */
+  private static int castFractionalNanos(CastExpression cast, int nanos, int defaultPrecision) {
+    Integer precision = firstIntegerArgument(cast);
+    if (precision == null) {
+      precision = defaultPrecision;
+    }
+    if (precision < 0 || precision > 9) {
+      throw SqlExceptions.syntaxFailure("Datetime fractional precision must be between 0 and 9");
+    }
+    int unit = (int) Math.pow(10, 9 - precision);
+    return nanos / unit * unit;
+  }
+
   private static String castToString(CastExpression cast, Object value) {
-    String text = value == null ? null : value.toString();
+    String text = SqlText.cast(value);
     if (text == null) {
       return null;
     }
     Integer length = firstIntegerArgument(cast);
-    if (length != null && length >= 0 && text.length() > length) {
-      return text.substring(0, length);
+    String target = normalizeTypeName(cast.getColDataType().getDataType());
+    if (length == null && ("char".equals(target) || "character".equals(target) || "nchar".equals(target))) {
+      length = 1;
+    }
+    if (length != null && length >= 0 && text.codePointCount(0, text.length()) > length) {
+      if (value instanceof Number || value instanceof TemporalAccessor || value instanceof java.util.Date
+          || value instanceof TemporalInterval) {
+        throw new IllegalArgumentException("Character cast would truncate a numeric, datetime, or interval value",
+            new SQLDataException("String data, right truncation", "22001"));
+      }
+      return text.substring(0, text.offsetByCodePoints(0, length));
     }
     return text;
   }
@@ -818,7 +889,7 @@ public final class DateTimeFunctions {
       }
       return num.doubleValue() != 0d;
     }
-    String text = value.toString().trim();
+    String text = SqlText.valueOf(value).trim();
     if (text.isEmpty()) {
       return Boolean.FALSE;
     }
@@ -931,7 +1002,7 @@ public final class DateTimeFunctions {
     if (value instanceof LocalDate ld) {
       return Timestamp.valueOf(((LocalDate) value).atStartOfDay());
     }
-    String text = value.toString().trim();
+    String text = SqlText.valueOf(value).trim();
     String normalized = text.replace('T', ' ');
     try {
       return Timestamp.valueOf(LocalDateTime.parse(normalized, SQL_TIMESTAMP));
@@ -980,7 +1051,7 @@ public final class DateTimeFunctions {
     if (value instanceof Number n) {
       return new Date(n.longValue());
     }
-    String text = value.toString().trim();
+    String text = SqlText.valueOf(value).trim();
     try {
       return Date.valueOf(LocalDate.parse(text, SQL_DATE));
     } catch (DateTimeParseException ex) {
@@ -1023,7 +1094,7 @@ public final class DateTimeFunctions {
     if (value instanceof Number n) {
       return toTime(new Time(n.longValue()));
     }
-    String text = value.toString().trim();
+    String text = SqlText.valueOf(value).trim();
     try {
       return toTime(LocalTime.parse(text, SQL_TIME));
     } catch (DateTimeParseException ex) {
@@ -1034,17 +1105,6 @@ public final class DateTimeFunctions {
         throw temporalFailure("TIME", text, ex, invalid);
       }
     }
-  }
-
-  /**
-   * Reads a JDBC time's local clock fields including its stored milliseconds.
-   *
-   * @param time
-   *          the JDBC time
-   * @return the local time with millisecond precision
-   */
-  public static LocalTime toLocalTime(Time time) {
-    return time.toLocalTime().withNano((int) Math.floorMod(time.getTime(), 1000L) * 1_000_000);
   }
 
   /**

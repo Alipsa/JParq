@@ -36,6 +36,7 @@ import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelationContextBuilder;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.Identifier;
+import se.alipsa.jparq.engine.JdbcConversions;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.MaterializedNames;
@@ -56,7 +57,9 @@ import se.alipsa.jparq.engine.function.SystemFunctions;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.engine.window.WindowState;
+import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JParqUtil;
+import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.model.ResultSetAdapter;
 
 /** An implementation of the java.sql.ResultSet interface. */
@@ -76,6 +79,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private ValueExpressionEvaluator projectionEvaluator;
   private Schema metadataSchema;
   private final Map<Integer, Optional<Schema.Field>> materializedColumnBindings = new HashMap<>();
+  private final Map<Integer, Optional<Schema>> intervalOutputSchemas = new HashMap<>();
   private final CorrelationMappings metadataSourceMappings;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
@@ -659,7 +663,20 @@ public class JParqResultSet extends ResultSetAdapter {
    */
   private Object value(int idx) throws SQLException {
     try {
-      return readValue(idx);
+      Object value = readValue(idx);
+      if (value instanceof TemporalInterval interval) {
+        Optional<Schema> cached = intervalOutputSchemas.get(idx);
+        if (cached == null) {
+          Schema schema = getMetaData() instanceof AvroColumnMetadata metadata ? metadata.columnValueSchema(idx) : null;
+          cached = Optional.ofNullable(schema);
+          intervalOutputSchemas.put(idx, cached);
+        }
+        Schema declaration = cached.orElse(null);
+        if (IntervalType.matches(declaration)) {
+          return IntervalType.project(interval, declaration);
+        }
+      }
+      return value;
     } catch (RuntimeException exception) {
       throw SqlExceptions.wrap("Failed to read column " + idx, exception);
     }
@@ -689,6 +706,7 @@ public class JParqResultSet extends ResultSetAdapter {
         throw new SQLException("Unknown column index: " + idx);
       }
       Object v = row.get(idx - 1);
+
       lastWasNull = (v == null);
       return v;
     }
@@ -700,6 +718,7 @@ public class JParqResultSet extends ResultSetAdapter {
     if (projectionExpr != null && !(projectionExpr instanceof Column)) {
       ensureProjectionEvaluator(current);
       Object computed = evaluateProjection(projectionExpr);
+
       lastWasNull = (computed == null);
       return computed;
     }
@@ -725,6 +744,7 @@ public class JParqResultSet extends ResultSetAdapter {
       if (projectionExpr instanceof Column columnExpr) {
         ensureProjectionEvaluator(current);
         Object computed = evaluateProjection(columnExpr);
+
         lastWasNull = (computed == null);
         return computed;
       }
@@ -1249,7 +1269,8 @@ public class JParqResultSet extends ResultSetAdapter {
     }
     if (aggregateQuery) {
       coerceAggregateNumericValues(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
-          canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings));
+          canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
+          .withScalarProjectionSchemas(subqueryExecutor::projectionSchema));
       aggregateMetadata = null;
     }
     if (!aggregateQuery && columnOrder.isEmpty() && selectExpressions.isEmpty() && schema != null) {
@@ -1260,21 +1281,23 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   @Override
-  public ResultSetMetaData getMetaData() {
+  public ResultSetMetaData getMetaData() throws SQLException {
     if (aggregateQuery) {
       if (aggregateMetadata == null) {
         List<Integer> types = aggregateSqlTypes == null ? List.of() : aggregateSqlTypes;
         aggregateMetadata = new AggregateResultSetMetaData(columnOrder, types, tableName, tableSchema, tableCatalog,
             aggregateRows == null ? List.of() : aggregateRows);
         aggregateMetadata
-            .retainNumericExpressions(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
-                canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings));
+            .retainExpressionTypes(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
+                canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
+                .withScalarProjectionSchemas(subqueryExecutor::projectionSchema));
       }
       return aggregateMetadata;
     }
     var normalized = ParquetSchemas.normalizeStringTypes(metadataSchema);
     return new JParqResultSetMetaData(normalized, columnOrder, physicalColumnOrder, canonicalColumnNames, tableName,
-        tableSchema, tableCatalog, selectExpressions, metadataSourceMappings);
+        tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
+        .withScalarProjectionSchemas(subqueryExecutor::projectionSchema);
   }
 
   @SuppressWarnings("PMD.EmptyCatchBlock")
@@ -1553,6 +1576,33 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public Object getObject(String columnLabel) throws SQLException {
     return getObject(findColumn(columnLabel));
+  }
+
+  /**
+   * Converts a value to a requested JDBC or java.time representation.
+   *
+   * @param columnIndex
+   *          one-based output column
+   * @param type
+   *          requested Java class
+   * @param <T>
+   *          requested value type
+   * @return the typed value or null for SQL NULL
+   * @throws SQLException
+   *           if the value cannot be read or converted to the requested type
+   */
+  @Override
+  public <T> T getObject(int columnIndex, Class<T> type) throws SQLException {
+    if (type == String.class) {
+      return type.cast(getString(columnIndex));
+    }
+    return JdbcConversions.convert(getObject(columnIndex), type);
+  }
+
+  /** {@inheritDoc} */
+  @Override
+  public <T> T getObject(String columnLabel, Class<T> type) throws SQLException {
+    return getObject(findColumn(columnLabel), type);
   }
 
   @Override

@@ -9,10 +9,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import net.sf.jsqlparser.statement.select.Select;
+import org.apache.avro.Schema;
 import org.apache.avro.generic.IndexedRecord;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SubqueryExecutor.SubqueryResult;
+import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
+import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
  * Helpers for ARRAY functions and constructors.
@@ -99,6 +102,10 @@ public final class ArrayFunctions {
         candidate = value.getClass();
       }
       type.family = determineObjectTarget(type.family, candidate);
+      if (value instanceof TemporalInterval interval) {
+        type.interval = IntervalType.common(type.interval,
+            IntervalType.schema(interval.qualifier(), interval.fractionalPrecision()));
+      }
       if (candidate == List.class) {
         if (type.nested == null) {
           type.nested = new ElementType();
@@ -127,6 +134,8 @@ public final class ArrayFunctions {
         coerced.add(null);
       } else if (type.family == String.class) {
         coerced.add(value.toString());
+      } else if (type.interval != null) {
+        coerced.add(IntervalType.project((TemporalInterval) value, type.interval));
       } else if (type.family == List.class) {
         coerced.add(coerceArrayValues(arrayValues(value), type.nested));
       } else {
@@ -240,6 +249,7 @@ public final class ArrayFunctions {
     private Class<?> family;
     private NumericType numeric = NumericType.NONE;
     private ElementType nested;
+    private Schema interval;
   }
 
   private enum NumericType {

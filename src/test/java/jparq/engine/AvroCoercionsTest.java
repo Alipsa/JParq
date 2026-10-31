@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -19,9 +20,33 @@ import org.apache.avro.generic.GenericRecord;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.Identifier;
+import se.alipsa.jparq.engine.SqlExceptions;
+import se.alipsa.jparq.helper.TemporalInterval;
 
 /** Unit tests for {@link AvroCoercions}. */
 class AvroCoercionsTest {
+
+  /**
+   * Rejects text coercion and temporal fallback text without losing provenance.
+   */
+  @Test
+  void coercionCannotStringifyTemporalDifferences() {
+    TemporalInterval difference = TemporalInterval.between(LocalDateTime.of(2024, 1, 1, 0, 0),
+        LocalDateTime.of(2024, 1, 2, 0, 0));
+    Schema text = Schema.create(Schema.Type.STRING);
+    Schema enumeration = Schema.createEnum("text_value", null, null, java.util.List.of("A"));
+    Schema date = LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
+    Schema timestamp = LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
+    for (Schema schema : java.util.List.of(text, enumeration, date, timestamp,
+        Schema.createUnion(Schema.create(Schema.Type.NULL), text))) {
+      var failure = assertThrows(IllegalArgumentException.class, () -> AvroCoercions.coerceLiteral(difference, schema));
+      var classified = SqlExceptions.findSqlStateFailure(failure);
+      assertInstanceOf(java.sql.SQLSyntaxErrorException.class, classified);
+      assertEquals("42000", classified.getSQLState());
+      assertNull(AvroCoercions.coerceLiteral(null, schema));
+    }
+    assertEquals("42", AvroCoercions.coerceLiteral(42, text));
+  }
 
   /**
    * Converts stored TIME logical values to JDBC Time retaining milliseconds.

@@ -7,7 +7,9 @@ import java.util.List;
 import org.apache.avro.LogicalTypes.Decimal;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.MaterializedNames;
+import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
+import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 
 /**
@@ -70,6 +72,13 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
     this.tableCatalog = tableCatalog;
     this.precisions = new int[labels.size()];
     this.scales = new int[labels.size()];
+    this.valueSchemas = new ArrayList<>(java.util.Collections.nCopies(labels.size(), null));
+    for (int column = 0; column < labels.size(); column++) {
+      int index = column;
+      if (rows.stream().anyMatch(row -> row.get(index) instanceof TemporalInterval)) {
+        valueSchemas.set(column, IntervalType.infer(rows.stream().map(row -> row.get(index)).toList()));
+      }
+    }
     for (int i = 0; i < labels.size(); i++) {
       if (getColumnType(i + 1) != Types.DECIMAL && getColumnType(i + 1) != Types.NUMERIC) {
         continue;
@@ -91,7 +100,13 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
    *          schemas in output order, allowing null for unknown schemas
    */
   void retainValueSchemas(List<Schema> schemas) {
-    valueSchemas = new ArrayList<>(schemas);
+    List<Schema> retained = new ArrayList<>(schemas);
+    for (int i = 0; i < retained.size(); i++) {
+      if (retained.get(i) == null && i < valueSchemas.size()) {
+        retained.set(i, valueSchemas.get(i));
+      }
+    }
+    valueSchemas = retained;
     for (int i = 0; i < schemas.size(); i++) {
       Schema schema = schemas.get(i);
       if (schema != null && schema.getLogicalType() instanceof Decimal decimal) {
@@ -102,12 +117,12 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
   }
 
   /**
-   * Applies declared numeric expression types, including for empty groups.
+   * Applies declared output types and numeric bounds, including for empty groups.
    *
    * @param projected
    *          metadata resolved from the source schema and expressions
    */
-  void retainNumericExpressions(JParqResultSetMetaData projected) {
+  void retainExpressionTypes(JParqResultSetMetaData projected) {
     List<Schema> schemas = new ArrayList<>();
     for (int i = 0; i < labels.size(); i++) {
       int column = i + 1;
@@ -119,7 +134,11 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
           scales[i] = numeric.scale();
         }
       }
-      schemas.add(numeric == null ? columnValueSchema(column) : numeric.schema());
+      Schema declaration = projected.columnValueSchema(column);
+      if (numeric == null && declaration != null) {
+        sqlTypes.set(i, JdbcTypeMapper.mapSchemaToJdbcType(declaration));
+      }
+      schemas.add(numeric != null ? numeric.schema() : declaration != null ? declaration : columnValueSchema(column));
     }
     valueSchemas = schemas;
   }
@@ -181,7 +200,9 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
 
   @Override
   public String getColumnTypeName(int column) {
-    return JDBCType.valueOf(getColumnType(column)).getName();
+    return IntervalType.matches(columnValueSchema(column))
+        ? "INTERVAL"
+        : JDBCType.valueOf(getColumnType(column)).getName();
   }
 
   /** {@inheritDoc} */
@@ -201,7 +222,11 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
    */
   @Override
   public String getColumnClassName(int column) {
-    return JdbcTypeMapper.mapJdbcTypeToClassName(getColumnType(column));
+    Schema schema = columnValueSchema(column);
+    int type = getColumnType(column);
+    return schema == null || type == Types.SMALLINT || type == Types.TINYINT
+        ? JdbcTypeMapper.mapJdbcTypeToClassName(getColumnType(column))
+        : JdbcTypeMapper.mapSchemaToJavaClassName(schema);
   }
 
   @Override
