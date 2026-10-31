@@ -5,12 +5,15 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.math.BigDecimal;
 import java.sql.JDBCType;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.AggregateResultSetMetaData;
+import se.alipsa.jparq.helper.IntervalType;
+import se.alipsa.jparq.helper.TemporalInterval;
 
 public class AggregateResultSetMetaDataTest {
 
@@ -138,6 +141,37 @@ public class AggregateResultSetMetaDataTest {
     assertEquals(4, metadata.getScale(2));
     assertEquals(0, metadata.getPrecision(3));
     assertEquals(0, metadata.getScale(3));
+  }
+
+  /**
+   * Copies inferred decimal and interval metadata after the input rows are
+   * discarded, including repeated copies used after metadata invalidation.
+   */
+  @Test
+  void inferredMetadataCanBeCopiedWithoutMaterializedRows() {
+    List<List<Object>> rows = new ArrayList<>();
+    rows.add(List.of(new BigDecimal("1.25"), TemporalInterval.parse("1", "YEAR"), 1L));
+    rows.add(List.of(new BigDecimal("10000.0"), TemporalInterval.parse("0.123", "SECOND"), 2L));
+    var inferred = new AggregateResultSetMetaData(List.of("amount", "elapsed", "count"),
+        List.of(Types.DECIMAL, Types.OTHER, Types.BIGINT), "totals", "PUBLIC", "catalog", rows);
+    rows.clear();
+
+    var copied = new AggregateResultSetMetaData(new AggregateResultSetMetaData(inferred));
+    assertNotSame(inferred, copied);
+    assertEquals(3, copied.getColumnCount());
+    assertEquals("amount", copied.getColumnLabel(1));
+    assertEquals("totals", copied.getTableName(1));
+    assertEquals("PUBLIC", copied.getSchemaName(1));
+    assertEquals("catalog", copied.getCatalogName(1));
+    assertEquals(Types.DECIMAL, copied.getColumnType(1));
+    assertEquals(7, copied.getPrecision(1));
+    assertEquals(2, copied.getScale(1));
+    assertEquals("INTERVAL", copied.getColumnTypeName(2));
+    assertEquals(TemporalInterval.class.getName(), copied.getColumnClassName(2));
+    assertEquals(inferred.columnValueSchema(2), copied.columnValueSchema(2));
+    assertEquals(3, IntervalType.precision(copied.columnValueSchema(2)));
+    assertEquals(19, copied.getPrecision(3));
+    assertEquals(0, copied.getScale(3));
   }
 
 }

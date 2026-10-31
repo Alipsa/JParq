@@ -87,8 +87,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private WindowState windowState;
   private final boolean aggregateQuery;
   private final List<List<Object>> aggregateRows;
-  private final List<List<Object>> aggregateMetadataRows;
-  private final List<Integer> aggregateSqlTypes;
+  private final AggregateResultSetMetaData aggregateInferredMetadata;
   private AggregateResultSetMetaData aggregateMetadata;
   private int aggregateRowIndex = -1;
   private boolean aggregateOnRow = false;
@@ -137,7 +136,7 @@ public class JParqResultSet extends ResultSetAdapter {
   static JParqResultSet materializedResult(String tableName, List<String> columnLabels, List<Integer> sqlTypes,
       List<List<Object>> rows, List<Schema> valueSchemas) {
     JParqResultSet result = materializedResult(tableName, columnLabels, sqlTypes, rows);
-    result.aggregateMetadata = new AggregateResultSetMetaData(columnLabels, sqlTypes, tableName, null, null, rows);
+    result.aggregateMetadata = new AggregateResultSetMetaData(result.aggregateInferredMetadata);
     result.aggregateMetadata.retainValueSchemas(valueSchemas);
     return result;
   }
@@ -282,9 +281,10 @@ public class JParqResultSet extends ResultSetAdapter {
         AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan,
             effectiveResidual, select.having(), select.orderBy(), subqueryExecutor, queryQualifiers, qualifierMapping,
             enrichedUnqualifiedMapping, correlationContext);
-        this.aggregateMetadataRows = distinctAggregateRows(result.rows(), select.distinct());
-        this.aggregateRows = sliceAggregateRows(aggregateMetadataRows, select);
-        this.aggregateSqlTypes = result.sqlTypes();
+        List<List<Object>> distinctRows = distinctAggregateRows(result.rows(), select.distinct());
+        this.aggregateInferredMetadata = new AggregateResultSetMetaData(labels, result.sqlTypes(), tableName,
+            tableSchema, tableCatalog, distinctRows);
+        this.aggregateRows = sliceAggregateRows(distinctRows, select);
       } catch (Exception e) {
         throw SqlExceptions.wrap("Failed to compute aggregate query", e);
       }
@@ -308,8 +308,7 @@ public class JParqResultSet extends ResultSetAdapter {
     this.canonicalColumnNames = canonicalLookup;
     this.aggregateQuery = false;
     this.aggregateRows = null;
-    this.aggregateMetadataRows = List.of();
-    this.aggregateSqlTypes = null;
+    this.aggregateInferredMetadata = null;
     this.windowState = WindowState.empty();
 
     WindowPlan windowPlan = WindowFunctions.plan(selectExpressions);
@@ -481,8 +480,8 @@ public class JParqResultSet extends ResultSetAdapter {
     this.physicalColumnOrder = null;
     this.aggregateQuery = true;
     this.aggregateRows = rows == null ? new ArrayList<>() : new ArrayList<>(rows);
-    this.aggregateMetadataRows = this.aggregateRows;
-    this.aggregateSqlTypes = sqlTypes == null ? List.of() : List.copyOf(sqlTypes);
+    this.aggregateInferredMetadata = new AggregateResultSetMetaData(columnLabels,
+        sqlTypes == null ? List.of() : sqlTypes, tableName, tableSchema, tableCatalog, this.aggregateRows);
     this.aggregateOnRow = false;
     this.qp = null;
     this.current = null;
@@ -1330,9 +1329,7 @@ public class JParqResultSet extends ResultSetAdapter {
   public ResultSetMetaData getMetaData() throws SQLException {
     if (aggregateQuery) {
       if (aggregateMetadata == null) {
-        List<Integer> types = aggregateSqlTypes == null ? List.of() : aggregateSqlTypes;
-        aggregateMetadata = new AggregateResultSetMetaData(columnOrder, types, tableName, tableSchema, tableCatalog,
-            aggregateMetadataRows);
+        aggregateMetadata = new AggregateResultSetMetaData(aggregateInferredMetadata);
         aggregateMetadata
             .retainExpressionTypes(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
                 canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
