@@ -1,6 +1,8 @@
 package jparq.aggregate;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -24,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.AggregateResultSetMetaData;
 
 /** Verifies DISTINCT and row limits on completed aggregate results. */
 class AggregateResultClausesTest {
@@ -180,7 +183,138 @@ class AggregateResultClausesTest {
   }
 
   /**
-   * Executes through either JDBC statement API and checks empty-result metadata.
+   * Checks decimal metadata against the complete result on every page.
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @throws SQLException
+   *           if execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void decimalMetadataDoesNotDependOnRowLimits(boolean prepared) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + base)) {
+      String sql = "SELECT DISTINCT SUM(CAST(n AS DECIMAL(10,1))) / (COUNT(*) + n) s "
+          + "FROM o GROUP BY n ORDER BY s NULLS LAST";
+      List<Object> expected = metadata(connection, sql, prepared);
+      assertEquals(Types.DECIMAL, expected.get(0));
+      assertTrue((Integer) expected.get(1) > 0);
+      assertTrue((Integer) expected.get(2) > 2);
+      for (String bounds : List.of(" LIMIT 1", " OFFSET 1 ROW", " OFFSET 2 ROWS", " LIMIT 0", " OFFSET 100 ROWS",
+          " OFFSET 1 ROW FETCH NEXT 1 ROW ONLY")) {
+        assertEquals(expected, metadata(connection, sql + bounds, prepared), bounds);
+      }
+    }
+  }
+
+  /**
+   * Checks interval declarations even when a page contains no rows.
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @throws SQLException
+   *           if execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void intervalMetadataDoesNotDependOnRowLimits(boolean prepared) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + base)) {
+      String sql = "SELECT DISTINCT CASE WHEN n = 1 THEN INTERVAL '1' YEAR "
+          + "ELSE INTERVAL '0.123' SECOND END s FROM o GROUP BY n";
+      List<Object> expected = metadata(connection, sql, prepared);
+      assertEquals(Types.OTHER, expected.get(0));
+      assertNotNull(expected.get(3));
+      for (String bounds : List.of(" LIMIT 1", " OFFSET 1 ROW", " LIMIT 0", " OFFSET 100 ROWS")) {
+        assertEquals(expected, metadata(connection, sql + bounds, prepared), bounds);
+      }
+    }
+  }
+
+  /**
+   * Reproduces the reported decimal division bounds using the mtcars fixture.
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @throws Exception
+   *           if fixture lookup or execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void reportedDecimalMetadataStaysStable(boolean prepared) throws Exception {
+    var resource = getClass().getResource("/mtcars.parquet");
+    assertNotNull(resource);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + Path.of(resource.toURI()).getParent())) {
+      String sql = "SELECT gear, SUM(CAST(mpg AS DECIMAL(10,1))) / COUNT(*) s "
+          + "FROM mtcars GROUP BY gear ORDER BY gear";
+      for (String bounds : List.of("", " OFFSET 2 ROWS", " LIMIT 0")) {
+        try (var statement = prepared ? connection.prepareStatement(sql + bounds) : connection.createStatement();
+            ResultSet result = prepared
+                ? ((PreparedStatement) statement).executeQuery()
+                : statement.executeQuery(sql + bounds)) {
+          var metadata = result.getMetaData();
+          assertEquals(Types.DECIMAL, metadata.getColumnType(2), bounds);
+          assertEquals(16, metadata.getPrecision(2), bounds);
+          assertEquals(14, metadata.getScale(2), bounds);
+        }
+      }
+    }
+  }
+
+  /**
+   * Checks declared COUNT metadata independently of whether any rows survive.
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @throws SQLException
+   *           if execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void countMetadataIsRetainedForEmptyPages(boolean prepared) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + base)) {
+      String sql = "SELECT COUNT(*) FROM o";
+      List<Object> expected = metadata(connection, sql, prepared);
+      assertEquals(Types.BIGINT, expected.get(0));
+      assertEquals(19, expected.get(1));
+      assertEquals(0, expected.get(2));
+      assertEquals(expected, metadata(connection, sql + " LIMIT 0", prepared));
+      assertEquals(expected, metadata(connection, sql + " OFFSET 1 ROW", prepared));
+    }
+  }
+
+  /**
+   * Snapshots the first column's numeric bounds and value schema before
+   * iteration.
+   *
+   * @param connection
+   *          fixture connection
+   * @param sql
+   *          query to execute
+   * @param prepared
+   *          whether to use a prepared statement
+   * @return JDBC type, precision, scale, and value schema
+   * @throws SQLException
+   *           if execution fails
+   */
+  private static List<Object> metadata(Connection connection, String sql, boolean prepared) throws SQLException {
+    try (var statement = prepared ? connection.prepareStatement(sql) : connection.createStatement();
+        ResultSet result = prepared ? ((PreparedStatement) statement).executeQuery() : statement.executeQuery(sql)) {
+      var metadata = result.getMetaData();
+      return Arrays.asList(metadata.getColumnType(1), metadata.getPrecision(1), metadata.getScale(1),
+          ((AggregateResultSetMetaData) metadata).columnValueSchema(1));
+    }
+  }
+
+  /**
+   * Executes through either JDBC statement API.
    *
    * @param connection
    *          fixture connection
@@ -195,9 +329,6 @@ class AggregateResultClausesTest {
   private static List<List<Object>> rows(Connection connection, String sql, boolean prepared) throws SQLException {
     try (var statement = prepared ? connection.prepareStatement(sql) : connection.createStatement();
         ResultSet result = prepared ? ((PreparedStatement) statement).executeQuery() : statement.executeQuery(sql)) {
-      if (sql.equals("SELECT COUNT(*) FROM o LIMIT 0")) {
-        assertEquals(Types.BIGINT, result.getMetaData().getColumnType(1));
-      }
       List<List<Object>> rows = new ArrayList<>();
       while (result.next()) {
         List<Object> row = new ArrayList<>();
