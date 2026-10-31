@@ -13,6 +13,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
@@ -64,6 +65,7 @@ public final class ValueExpressionEvaluator {
 
   private final Map<String, Schema> fieldSchemas;
   private final Map<Expression, NumericType> numericTypes = new IdentityHashMap<>();
+  private final Map<Expression, Optional<Schema>> intervalTypes = new IdentityHashMap<>();
   private final Map<String, String> caseInsensitiveIndex;
   private final Schema schema;
   private final SubqueryExecutor subqueryExecutor;
@@ -223,7 +225,35 @@ public final class ValueExpressionEvaluator {
     return evalInternal(ExpressionEvaluator.unwrapParenthesis(expression), record);
   }
 
+  /**
+   * Applies the expression's common interval declaration after lazy evaluation.
+   *
+   * @param expression
+   *          expression whose result type is known independently of its branch
+   * @param record
+   *          current input row
+   * @return computed value with the expression's common interval declaration
+   */
   private Object evalInternal(Expression expression, GenericRecord record) {
+    Expression unwrapped = ExpressionEvaluator.unwrapParenthesis(expression);
+    Object value = evalUnconverted(unwrapped, record);
+    if (value instanceof TemporalInterval interval) {
+      Schema declaration = intervalTypes
+          .computeIfAbsent(unwrapped, shape -> Optional.ofNullable(IntervalExpressionTypes.resolve(shape, column -> {
+            try {
+              String name = resolveColumnName(column);
+              return name == null ? null : fieldSchemas.get(name);
+            } catch (IllegalArgumentException unresolved) {
+              return null;
+            }
+          }, select -> subqueryExecutor == null ? null : subqueryExecutor.intervalProjectionSchema(select))))
+          .orElse(null);
+      return declaration == null ? interval : se.alipsa.jparq.helper.IntervalType.project(interval, declaration);
+    }
+    return value;
+  }
+
+  private Object evalUnconverted(Expression expression, GenericRecord record) {
     if (expression instanceof ParenthesedExpressionList<?> pel) {
       int n = pel.size();
       if (n == 0) {

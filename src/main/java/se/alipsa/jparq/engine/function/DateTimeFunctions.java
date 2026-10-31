@@ -756,21 +756,31 @@ public final class DateTimeFunctions {
     if (cast == null || value == null) {
       return value;
     }
-    if (cast.isTimeStamp()) {
-      return toTimestamp(value);
-    }
-    if (cast.isDate()) {
-      return toDate(value);
-    }
-    if (cast.isTime()) {
-      return toTime(value);
-    }
     ColDataType colType = cast.getColDataType();
     String dataType = colType == null ? null : colType.getDataType();
+    String normalized = dataType == null ? "" : normalizeTypeName(dataType);
+    if (cast.isTimeStamp() || "timestamp".equals(normalized)) {
+      Timestamp timestamp = toTimestamp(value);
+      int nanos = castFractionalNanos(cast, timestamp.getNanos());
+      if (nanos == timestamp.getNanos()) {
+        return timestamp;
+      }
+      Timestamp converted = Timestamp.from(timestamp.toInstant());
+      converted.setNanos(nanos);
+      return converted;
+    }
+    if (cast.isDate() || "date".equals(normalized)) {
+      return toDate(value);
+    }
+    if (cast.isTime() || "time".equals(normalized)) {
+      Time time = toTime(value);
+      LocalTime local = toLocalTime(time);
+      int nanos = castFractionalNanos(cast, local.getNano());
+      return nanos == local.getNano() ? time : toTime(local.withNano(nanos));
+    }
     if (dataType == null) {
       return value;
     }
-    String normalized = normalizeTypeName(dataType);
     NumericCastTarget target = NumericCastTarget.fromNormalizedName(normalized);
     if (target != null) {
       return NumericCasts.convert(value, target, colType.toString());
@@ -784,19 +794,48 @@ public final class DateTimeFunctions {
     };
   }
 
+  /**
+   * Truncates a datetime fractional field to its explicitly declared precision.
+   *
+   * @param cast
+   *          datetime CAST expression
+   * @param nanos
+   *          source fractional field
+   * @return truncated nanoseconds, or the original field for an unspecified
+   *         precision
+   * @throws IllegalArgumentException
+   *           if precision is outside the supported range, carrying SQLState
+   *           42000
+   */
+  private static int castFractionalNanos(CastExpression cast, int nanos) {
+    Integer precision = firstIntegerArgument(cast);
+    if (precision == null) {
+      return nanos;
+    }
+    if (precision < 0 || precision > 9) {
+      throw SqlExceptions.syntaxFailure("Datetime fractional precision must be between 0 and 9");
+    }
+    int unit = (int) Math.pow(10, 9 - precision);
+    return nanos / unit * unit;
+  }
+
   private static String castToString(CastExpression cast, Object value) {
     String text = SqlText.cast(value);
     if (text == null) {
       return null;
     }
     Integer length = firstIntegerArgument(cast);
-    if (length != null && length >= 0 && text.length() > length) {
+    String target = normalizeTypeName(cast.getColDataType().getDataType());
+    if (length == null && ("char".equals(target) || "character".equals(target) || "nchar".equals(target))) {
+      length = 1;
+    }
+    if (length != null && length >= 0 && text.codePointCount(0, text.length()) > length) {
       if (value instanceof Number || value instanceof TemporalAccessor || value instanceof java.util.Date
           || value instanceof TemporalInterval) {
         throw new IllegalArgumentException("Character cast would truncate a numeric, datetime, or interval value",
             new SQLDataException("String data, right truncation", "22001"));
       }
-      return text.substring(0, length);
+      return text.substring(0, text.offsetByCodePoints(0, length));
     }
     return text;
   }

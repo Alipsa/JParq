@@ -76,7 +76,7 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
     for (int column = 0; column < labels.size(); column++) {
       int index = column;
       if (rows.stream().anyMatch(row -> row.get(index) instanceof TemporalInterval)) {
-        valueSchemas.set(column, IntervalType.schema());
+        valueSchemas.set(column, IntervalType.infer(rows.stream().map(row -> row.get(index)).toList()));
       }
     }
     for (int i = 0; i < labels.size(); i++) {
@@ -117,12 +117,12 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
   }
 
   /**
-   * Applies declared numeric expression types, including for empty groups.
+   * Applies declared output types and numeric bounds, including for empty groups.
    *
    * @param projected
    *          metadata resolved from the source schema and expressions
    */
-  void retainNumericExpressions(JParqResultSetMetaData projected) {
+  void retainExpressionTypes(JParqResultSetMetaData projected) {
     List<Schema> schemas = new ArrayList<>();
     for (int i = 0; i < labels.size(); i++) {
       int column = i + 1;
@@ -135,8 +135,8 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
         }
       }
       Schema declaration = projected.columnValueSchema(column);
-      if (IntervalType.matches(declaration)) {
-        sqlTypes.set(i, Types.OTHER);
+      if (declaration != null) {
+        sqlTypes.set(i, JdbcTypeMapper.mapSchemaToJdbcType(declaration));
       }
       schemas.add(numeric != null ? numeric.schema() : declaration != null ? declaration : columnValueSchema(column));
     }

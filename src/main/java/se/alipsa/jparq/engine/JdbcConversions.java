@@ -6,13 +6,17 @@ import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.OffsetTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.time.temporal.TemporalAccessor;
 import java.util.Map;
+import java.util.Set;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
 /**
@@ -24,6 +28,9 @@ public final class JdbcConversions {
   private static final Map<Class<?>, NumericCastTarget> NUMBERS = Map.of(Byte.class, NumericCastTarget.TINYINT,
       Short.class, NumericCastTarget.SMALLINT, Integer.class, NumericCastTarget.INTEGER, Long.class,
       NumericCastTarget.BIGINT, Float.class, NumericCastTarget.REAL, Double.class, NumericCastTarget.DOUBLE);
+
+  private static final Set<Class<?>> TEMPORAL_TARGETS = Set.of(Date.class, Time.class, Timestamp.class, LocalDate.class,
+      LocalTime.class, LocalDateTime.class, OffsetTime.class, OffsetDateTime.class);
 
   /** Prevents utility class instantiation. */
   private JdbcConversions() {
@@ -80,6 +87,10 @@ public final class JdbcConversions {
     if (type == BigDecimal.class) {
       return NumericCasts.toBigDecimal(value);
     }
+    if (TEMPORAL_TARGETS.contains(type)
+        && !(value instanceof java.util.Date || value instanceof TemporalAccessor || value instanceof CharSequence)) {
+      throw new SQLDataException("Cannot convert " + value.getClass().getName() + " to " + type.getName(), "22005");
+    }
     if (type == Date.class || type == LocalDate.class) {
       Date date = DateTimeFunctions.toDate(value);
       return type == Date.class ? date : date.toLocalDate();
@@ -87,7 +98,12 @@ public final class JdbcConversions {
     if (type == Time.class || type == LocalTime.class || type == OffsetTime.class) {
       Time time = DateTimeFunctions.toTime(value);
       LocalTime local = DateTimeFunctions.toLocalTime(time);
-      return type == Time.class ? time : type == LocalTime.class ? local : local.atOffset(ZoneOffset.UTC);
+      return type == Time.class
+          ? time
+          : type == LocalTime.class
+              ? local
+              : local.atOffset(ZoneId.systemDefault().getRules().getOffset(Instant.now()))
+                  .withOffsetSameInstant(ZoneOffset.UTC);
     }
     if (type == Timestamp.class || type == LocalDateTime.class || type == OffsetDateTime.class) {
       Timestamp timestamp = DateTimeFunctions.toTimestamp(value);

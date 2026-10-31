@@ -57,7 +57,9 @@ import se.alipsa.jparq.engine.function.SystemFunctions;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.engine.window.WindowState;
+import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JParqUtil;
+import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.model.ResultSetAdapter;
 
 /** An implementation of the java.sql.ResultSet interface. */
@@ -77,6 +79,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private ValueExpressionEvaluator projectionEvaluator;
   private Schema metadataSchema;
   private final Map<Integer, Optional<Schema.Field>> materializedColumnBindings = new HashMap<>();
+  private final Map<Integer, Optional<Schema>> intervalOutputSchemas = new HashMap<>();
   private final CorrelationMappings metadataSourceMappings;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
@@ -660,7 +663,19 @@ public class JParqResultSet extends ResultSetAdapter {
    */
   private Object value(int idx) throws SQLException {
     try {
-      return readValue(idx);
+      Object value = readValue(idx);
+      if (value instanceof TemporalInterval interval) {
+        Schema declaration = intervalOutputSchemas.computeIfAbsent(idx, column -> {
+          Schema schema = getMetaData() instanceof AvroColumnMetadata metadata
+              ? metadata.columnValueSchema(column)
+              : null;
+          return Optional.ofNullable(schema);
+        }).orElse(null);
+        if (IntervalType.matches(declaration)) {
+          return IntervalType.project(interval, declaration);
+        }
+      }
+      return value;
     } catch (RuntimeException exception) {
       throw SqlExceptions.wrap("Failed to read column " + idx, exception);
     }
@@ -1272,7 +1287,7 @@ public class JParqResultSet extends ResultSetAdapter {
         aggregateMetadata = new AggregateResultSetMetaData(columnOrder, types, tableName, tableSchema, tableCatalog,
             aggregateRows == null ? List.of() : aggregateRows);
         aggregateMetadata
-            .retainNumericExpressions(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
+            .retainExpressionTypes(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
                 canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
                 .withScalarIntervalSchemas(subqueryExecutor::intervalProjectionSchema));
       }

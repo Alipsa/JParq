@@ -7,8 +7,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
 import java.nio.file.Path;
+import java.sql.Date;
 import java.sql.DriverManager;
 import java.sql.SQLDataException;
+import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -16,6 +18,8 @@ import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.OffsetTime;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.TimeZone;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -34,6 +38,8 @@ class TypedGetObjectTest {
    */
   @Test
   void temporalConversions() throws Exception {
+    TimeZone previous = TimeZone.getDefault();
+    TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement();
         var result = statement.executeQuery("SELECT DATE '2024-01-02' AS d, TIME '12:34:56.123' AS t, "
@@ -44,8 +50,66 @@ class TypedGetObjectTest {
       assertEquals(LocalTime.of(12, 34, 56, 123000000), result.getObject("t", LocalTime.class));
       assertEquals(OffsetTime.of(12, 34, 56, 123000000, ZoneOffset.UTC), result.getObject("t", OffsetTime.class));
       assertEquals(LocalDateTime.of(2024, 1, 2, 12, 34, 56, 123456789), result.getObject("ts", LocalDateTime.class));
-      OffsetDateTime expected = ((Timestamp) result.getObject("ts")).toInstant().atOffset(ZoneOffset.UTC);
+      OffsetDateTime expected = OffsetDateTime.parse("2024-01-02T12:34:56.123456789Z");
       assertEquals(expected, result.getObject("ts", OffsetDateTime.class));
+    } finally {
+      TimeZone.setDefault(previous);
+    }
+  }
+
+  /**
+   * Applies the JVM zone to times and timestamps without a time zone. Expected
+   * values are independent constants in fixed and daylight-saving zones.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void offsetConversionsUseSessionZone() throws Exception {
+    TimeZone previous = TimeZone.getDefault();
+    try {
+      TimeZone.setDefault(TimeZone.getTimeZone("GMT+01:00"));
+      try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+          var statement = connection.createStatement();
+          var result = statement
+              .executeQuery("SELECT TIME '12:00:00' AS t, " + "TIMESTAMP '2024-01-02 12:00:00' AS ts")) {
+        assertTrue(result.next());
+        assertEquals(OffsetTime.parse("11:00Z"), result.getObject("t", OffsetTime.class));
+        assertEquals(OffsetDateTime.parse("2024-01-02T11:00Z"), result.getObject("ts", OffsetDateTime.class));
+      }
+      TimeZone.setDefault(TimeZone.getTimeZone("Europe/Stockholm"));
+      try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+          var statement = connection.createStatement();
+          var result = statement.executeQuery(
+              "SELECT TIMESTAMP '2024-01-02 12:00:00' AS winter, " + "TIMESTAMP '2024-07-02 12:00:00' AS summer")) {
+        assertTrue(result.next());
+        assertEquals(OffsetDateTime.parse("2024-01-02T11:00Z"), result.getObject("winter", OffsetDateTime.class));
+        assertEquals(OffsetDateTime.parse("2024-07-02T10:00Z"), result.getObject("summer", OffsetDateTime.class));
+      }
+    } finally {
+      TimeZone.setDefault(previous);
+    }
+  }
+
+  /**
+   * Rejects numeric and Boolean sources for JDBC datetime targets with 22005.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void nonDatetimeSourcesCannotBecomeDates() throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT 5 AS i, TRUE AS b")) {
+      assertTrue(result.next());
+      for (String column : List.of("i", "b")) {
+        for (Class<?> target : List.of(Date.class, Time.class, Timestamp.class, LocalDate.class, LocalTime.class,
+            LocalDateTime.class, OffsetTime.class, OffsetDateTime.class)) {
+          var failure = assertThrows(SQLDataException.class, () -> result.getObject(column, target), target.getName());
+          assertEquals("22005", failure.getSQLState());
+        }
+      }
     }
   }
 

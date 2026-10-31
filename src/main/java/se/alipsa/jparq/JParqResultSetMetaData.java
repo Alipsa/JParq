@@ -28,7 +28,6 @@ import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.IntervalExpressionTypes;
 import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.engine.NumericExpressionTypes;
-import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
@@ -224,7 +223,18 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * @return whether the output has interval type
    */
   private boolean isIntervalColumn(int column) {
-    return IntervalExpressionTypes.isInterval(expressionAtColumn(column), reference -> {
+    return intervalColumnSchema(column) != null;
+  }
+
+  /**
+   * Resolves the common field range and precision for an output expression.
+   *
+   * @param column
+   *          one-based output position
+   * @return interval column declaration, or null
+   */
+  private Schema intervalColumnSchema(int column) {
+    return IntervalExpressionTypes.resolve(expressionAtColumn(column), reference -> {
       Schema.Field field = resolveSourceField(reference);
       return field == null ? null : field.schema();
     }, scalarIntervalSchemas);
@@ -239,8 +249,12 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    */
   @Override
   public Schema columnValueSchema(int column) {
-    if (isIntervalColumn(column)) {
-      return IntervalType.schema();
+    Schema interval = intervalColumnSchema(column);
+    if (interval != null) {
+      return interval;
+    }
+    if (resolveComputedColumnType(column) == Types.BOOLEAN) {
+      return Schema.create(Schema.Type.BOOLEAN);
     }
     NumericType numeric = numericType(column);
     if (numeric != null) {

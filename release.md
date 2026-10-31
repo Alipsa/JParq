@@ -4,10 +4,14 @@
 
 - Return temporal differences and interval literals as immutable `TemporalInterval` values through JDBC
   `getObject()`, including typed getters. Report JDBC OTHER with type name INTERVAL and the interval Java class.
-  `getString()` and explicit character casts retain the source interval fields and fractional-second precision,
-  preserving nanoseconds without an optional positive sign (#254). For example, 90 MINUTE prints as `90`.
+  `getString()` and explicit character casts use the result column's common field range and maximum
+  fractional-second precision, preserving nanoseconds without an optional positive sign (#254). CASE,
+  VALUES, arrays, and set operations combine input declarations before output, including empty branches.
+  For example, combining 1 DAY and 36 HOUR prints `1 00` and `1 12`; standalone 90 MINUTE prints as `90`.
+  Honor explicit TIME/TIMESTAMP fractional precision before interval arithmetic.
   Retain interval metadata for parentheses, CASE, COALESCE, NULLIF, aggregates, navigation windows, and scalar
-  subqueries, including empty inputs and all-NULL results.
+  subqueries, including empty inputs, empty set operations, and all-NULL results. Keep declared JDBC types
+  and Java classes consistent for empty grouped results.
   Preserve interval types through derived tables, CTEs, VALUES, UNNEST, LATERAL inputs, set operations,
   and scalar or predicate subqueries so outer comparisons and EXTRACT continue to work. COUNT(*) and
   ordinality-only UNNEST queries succeed without converting interval elements to text. EXISTS and NOT EXISTS
@@ -18,9 +22,11 @@
   character cast for interval text. MIN/MAX retain interval values on ties in aggregates and window frames.
 - Support numeric conversions, BigDecimal, and java.time targets in typed JDBC `getObject()` calls,
   preserving SQL NULL, TIME milliseconds, and TIMESTAMP nanoseconds. Offset conversions from JDBC Time and
-  Timestamp use UTC; existing offset values retain their offsets.
+  Timestamp normalize to UTC after applying the JVM time zone; existing offset values retain their offsets.
+  Datetime getter targets reject numeric and Boolean sources with SQLState `22005`.
 - Raise SQLDataException with SQLState `22001` when character casts would truncate numeric, datetime,
-  or interval values (#368). Preserve existing character-source truncation.
+  or interval values (#368), including CHAR without a length, which defaults to CHAR(1). Preserve existing
+  character-source truncation.
 - Classify subtraction between TIME and DATE or TIMESTAMP in either operand order as unsupported temporal
   arithmetic with `SQLSyntaxErrorException`, SQLState `42000`, including predicates and nested queries (#254).
   Previously these combinations raised an unclassified exception naming internal Java types.

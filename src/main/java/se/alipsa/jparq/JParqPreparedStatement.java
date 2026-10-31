@@ -664,12 +664,21 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           if an input schema cannot be inspected
    */
   public Schema declaredIntervalSchema() throws SQLException {
+    if (setOperationQuery && parsedSetQuery != null) {
+      Schema common = null;
+      for (SqlParser.SetComponent component : parsedSetQuery.components()) {
+        try (JParqPreparedStatement branch = prepareSubqueryStatement(component.sql(), cteResults)) {
+          common = IntervalType.common(common, branch.declaredIntervalSchema());
+        }
+      }
+      return common;
+    }
     if (parsedSelect == null || parsedSelect.expressions().size() != 1) {
       return null;
     }
     Map<Column, Schema> columns = new HashMap<>();
     Expression expression = parsedSelect.expressions().getFirst();
-    return se.alipsa.jparq.engine.IntervalExpressionTypes.isInterval(expression, column -> {
+    return se.alipsa.jparq.engine.IntervalExpressionTypes.resolve(expression, column -> {
       return columns.computeIfAbsent(column, reference -> {
         try {
           Schema source = resolveSchemaForColumn(tableReferences, reference.getTable());
@@ -688,7 +697,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       } catch (SQLException exception) {
         return null;
       }
-    }) ? IntervalType.schema() : null;
+    });
   }
 
   @Override
@@ -865,7 +874,7 @@ public class JParqPreparedStatement implements PreparedStatement {
               || LiteralConverter.isLiteral(projection);
           Schema projected = type == Types.OTHER ? setExpressionSchema(projection, values, meta) : null;
           int projectedType = projected == null ? Types.NULL : JdbcTypeMapper.mapSchemaToJdbcType(projected);
-          if (type == Types.OTHER || projection instanceof NullValue) {
+          if (!IntervalType.matches(schema) && (type == Types.OTHER || projection instanceof NullValue)) {
             boolean unknown = type == Types.OTHER;
             schema = projected;
             type = projectedType;
@@ -985,7 +994,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     Schema prior = schemas.get(index);
     NumericType previousNumeric = NumericType.of(previous, prior);
-    if (previousNumeric != null && numeric != null) {
+    if (IntervalType.matches(prior) && IntervalType.matches(schema)) {
+      schemas.set(index, IntervalType.common(prior, schema));
+    } else if (previousNumeric != null && numeric != null) {
       NumericType common = previousNumeric.common(numeric);
       types.set(index, common.jdbcType());
       schemas.set(index, common.schema());
@@ -2634,8 +2645,18 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (columnValues.stream().allMatch(Objects::isNull) && isBooleanValueColumn(valueTable, i)) {
         columnType = ValueColumnType.BOOLEAN;
       }
+      Schema intervalDeclaration = null;
+      for (List<Expression> expressions : valueTable.rows()) {
+        Schema declaration = se.alipsa.jparq.engine.IntervalExpressionTypes.resolve(expressions.get(i), column -> null,
+            select -> null);
+        intervalDeclaration = IntervalType.common(intervalDeclaration, declaration);
+      }
+      if (intervalDeclaration != null) {
+        columnType = ValueColumnType.INTERVAL;
+      }
       columnTypes.add(columnType);
-      valueSchemas.add(schemaForColumnType(columnType, columnValues));
+      valueSchemas
+          .add(intervalDeclaration == null ? schemaForColumnType(columnType, columnValues) : intervalDeclaration);
     }
 
     List<Field> fields = new ArrayList<>(columnNames.size());
@@ -2861,7 +2882,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       case TIME -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
       case TIMESTAMP -> LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
       case BINARY -> Schema.create(Schema.Type.BYTES);
-      case INTERVAL -> IntervalType.schema();
+      case INTERVAL -> IntervalType.infer(values);
       case STRING -> Schema.create(Schema.Type.STRING);
       case ARRAY -> inferredArraySchema(values);
       case STRUCT -> values.stream().filter(GenericRecord.class::isInstance).map(GenericRecord.class::cast).findFirst()

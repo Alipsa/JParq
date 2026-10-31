@@ -50,7 +50,8 @@ class IntervalTypeTest {
         }
     }) {
       TemporalInterval interval = TemporalInterval.parse(source[0], source[1]);
-      TemporalInterval decoded = IntervalType.decode(IntervalType.encode(interval));
+      TemporalInterval decoded = IntervalType.decode(IntervalType.encode(interval),
+          IntervalType.schema(interval.qualifier(), interval.fractionalPrecision()));
       assertEquals(interval.qualifier(), decoded.qualifier());
       assertEquals(interval.fractionalPrecision(), decoded.fractionalPrecision());
       assertEquals(interval.toString(), decoded.toString());

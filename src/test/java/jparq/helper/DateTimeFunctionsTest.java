@@ -740,8 +740,9 @@ public class DateTimeFunctionsTest {
 
   @Test
   void testCastToCharTypes() {
-    assertEquals("test", DateTimeFunctions.castLiteral(createCastExpression("CHAR"), "test"));
-    assertEquals("test", DateTimeFunctions.castLiteral(createCastExpression("NCHAR"), "test"));
+    assertEquals("t", DateTimeFunctions.castLiteral(createCastExpression("CHAR"), "test"));
+    assertEquals("🙂", DateTimeFunctions.castLiteral(createCastExpression("CHAR"), "🙂more"));
+    assertEquals("t", DateTimeFunctions.castLiteral(createCastExpression("NCHAR"), "test"));
     assertEquals("test", DateTimeFunctions.castLiteral(createCastExpression("VARCHAR"), "test"));
     assertEquals("test", DateTimeFunctions.castLiteral(createCastExpression("NVARCHAR"), "test"));
     assertEquals("test", DateTimeFunctions.castLiteral(createCastExpression("CHARACTER VARYING"), "test"));

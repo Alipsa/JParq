@@ -254,7 +254,7 @@ public final class AvroCoercions {
     }
     Schema effective = effectiveSchema(s);
     if (IntervalType.matches(effective)) {
-      return IntervalType.decode(v);
+      return IntervalType.decode(v, effective);
     }
     switch (effective.getType()) {
       case STRING:
