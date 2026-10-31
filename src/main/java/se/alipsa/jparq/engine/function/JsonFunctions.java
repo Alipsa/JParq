@@ -17,7 +17,9 @@ import org.apache.avro.generic.GenericArray;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.SqlText;
+import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
+import se.alipsa.jparq.helper.TemporalInterval;
 
 /** Minimal implementations of SQL JSON_* functions using Jackson. */
 public final class JsonFunctions {
@@ -325,6 +327,9 @@ public final class JsonFunctions {
     if (value == null) {
       return MAPPER.nullNode();
     }
+    if (value instanceof TemporalInterval interval) {
+      return MAPPER.getNodeFactory().textNode(interval.toString());
+    }
     if (value instanceof JsonNode node) {
       return node;
     }
@@ -394,6 +399,9 @@ public final class JsonFunctions {
       return toNode(value);
     }
     Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    if (IntervalType.matches(effective)) {
+      return toNode(AvroCoercions.unwrap(value, effective));
+    }
     return switch (effective.getType()) {
       case ARRAY -> arrayNode(value instanceof Object[] array ? Arrays.asList(array) : (Iterable<?>) value,
           effective.getElementType());

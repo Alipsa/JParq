@@ -1,6 +1,7 @@
 package se.alipsa.jparq.helper;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
@@ -50,7 +51,7 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
    * @param temporalDifference
    *          whether this value contains a temporal difference
    */
-  private TemporalInterval(Period period, Duration duration, boolean temporalDifference) {
+  TemporalInterval(Period period, Duration duration, boolean temporalDifference) {
     this.period = Objects.requireNonNull(period, "period").normalized();
     this.duration = Objects.requireNonNull(duration, "duration");
     this.temporalDifference = temporalDifference;
@@ -70,9 +71,8 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
   }
 
   /**
-   * Reports whether temporal subtraction contributed to this interval. Such
-   * values remain internal to the engine and have no JDBC output representation.
-   * This provenance does not affect interval equality or ordering.
+   * Reports whether temporal subtraction contributed to this interval. This
+   * provenance does not affect interval equality or ordering.
    *
    * @return true for differences and interval arithmetic involving differences
    */
@@ -397,8 +397,40 @@ public final class TemporalInterval implements Comparable<TemporalInterval> {
     return Objects.hash(period, duration);
   }
 
+  /**
+   * Returns signed SQL interval text: YEAR TO MONTH or DAY TO SECOND, retaining
+   * nanoseconds without rounding. Legacy mixed-family values include both parts.
+   *
+   * @return the interval value without the INTERVAL keyword or qualifier
+   */
   @Override
   public String toString() {
-    return "TemporalInterval[period=" + period + ", duration=" + duration + "]";
+    long months = period.toTotalMonths();
+    if (months != 0 && period.getDays() == 0 && duration.isZero()) {
+      return yearMonthText(months);
+    }
+    BigDecimal seconds = BigDecimal.valueOf(period.getDays()).multiply(BigDecimal.valueOf(86400))
+        .add(BigDecimal.valueOf(duration.getSeconds())).add(BigDecimal.valueOf(duration.getNano(), 9));
+    String sign = seconds.signum() < 0 ? "-" : "+";
+    BigDecimal magnitude = seconds.abs();
+    BigInteger[] parts = magnitude.toBigInteger().divideAndRemainder(BigInteger.valueOf(86400));
+    long clock = parts[1].longValueExact();
+    String fraction = magnitude.remainder(BigDecimal.ONE).stripTrailingZeros().toPlainString();
+    fraction = "0".equals(fraction) ? "" : fraction.substring(1);
+    String dayTime = String.format(Locale.ROOT, "%s%s %02d:%02d:%02d%s", sign, parts[0], clock / 3600, clock / 60 % 60,
+        clock % 60, fraction);
+    return months == 0 ? dayTime : yearMonthText(months) + " " + dayTime;
   }
+  /**
+   * Formats normalized year/month fields with a single leading sign.
+   *
+   * @param months
+   *          signed total months
+   * @return YEAR TO MONTH literal text
+   */
+  private static String yearMonthText(long months) {
+    long magnitude = Math.abs(months);
+    return String.format(Locale.ROOT, "%s%d-%02d", months < 0 ? "-" : "+", magnitude / 12, magnitude % 12);
+  }
+
 }

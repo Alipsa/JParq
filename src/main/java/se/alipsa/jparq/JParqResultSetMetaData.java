@@ -24,9 +24,12 @@ import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.Identifier;
+import se.alipsa.jparq.engine.IntervalExpressionTypes;
 import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.engine.NumericExpressionTypes;
+import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
+import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 
 /** An implementation of the java.sql.ResultSetMetaData interface. */
@@ -179,6 +182,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
 
   @Override
   public int getColumnType(int column) {
+    if (isIntervalColumn(column)) {
+      return Types.OTHER;
+    }
     NumericType numeric = numericType(column);
     if (numeric != null) {
       return numeric.jdbcType();
@@ -196,6 +202,20 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   }
 
   /**
+   * Resolves interval expressions against input declarations.
+   *
+   * @param column
+   *          one-based output column
+   * @return whether the output has interval type
+   */
+  private boolean isIntervalColumn(int column) {
+    return IntervalExpressionTypes.isInterval(expressionAtColumn(column), reference -> {
+      Schema.Field field = resolveSourceField(reference);
+      return field == null ? null : field.schema();
+    });
+  }
+
+  /**
    * Retains the source schema of a physical column during materialization.
    *
    * @param column
@@ -204,6 +224,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    */
   @Override
   public Schema columnValueSchema(int column) {
+    if (isIntervalColumn(column)) {
+      return IntervalType.schema();
+    }
     NumericType numeric = numericType(column);
     if (numeric != null) {
       return numeric.schema();
@@ -214,6 +237,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
 
   @Override
   public String getColumnTypeName(int column) {
+    if (isIntervalColumn(column)) {
+      return "INTERVAL";
+    }
     return java.sql.JDBCType.valueOf(getColumnType(column)).getName();
   }
 
@@ -271,6 +297,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    */
   @Override
   public String getColumnClassName(int column) {
+    if (isIntervalColumn(column)) {
+      return TemporalInterval.class.getName();
+    }
     if (numericType(column) != null || getColumnType(column) == Types.BOOLEAN) {
       return JdbcTypeMapper.mapJdbcTypeToClassName(getColumnType(column));
     }

@@ -2564,8 +2564,8 @@ public final class WindowFunctions {
    * @return negative when {@code left < right}, zero when equal, otherwise
    *         positive
    * @throws IllegalArgumentException
-   *           if fallback text conversion encounters an internal temporal
-   *           difference, carrying SQLState 0A000
+   *           if an interval is implicitly compared as text, carrying SQLState
+   *           42000
    */
   public static int compareValues(Object left, Object right) {
     if (left instanceof Number ln && right instanceof Number rn) {

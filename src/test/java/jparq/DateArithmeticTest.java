@@ -2,6 +2,7 @@ package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -12,9 +13,9 @@ import java.nio.file.Path;
 import java.sql.Date;
 import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLSyntaxErrorException;
 import java.sql.Types;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.util.List;
 import org.apache.avro.LogicalTypes;
@@ -30,6 +31,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.helper.TemporalInterval;
 
 /** JDBC regressions for date arithmetic and materialized day counts. */
 class DateArithmeticTest {
@@ -47,8 +49,10 @@ class DateArithmeticTest {
   void writeDates() throws Exception {
     Schema date = LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
     Schema decimal = LogicalTypes.decimal(10, 2).addToSchema(Schema.create(Schema.Type.BYTES));
+    Schema timestamp = LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
     Schema schema = SchemaBuilder.record("dates").fields().requiredInt("id").name("d").type().unionOf().nullType().and()
-        .type(date).endUnion().nullDefault().name("amt").type(decimal).noDefault().requiredString("s").endRecord();
+        .type(date).endUnion().nullDefault().name("amt").type(decimal).noDefault().requiredString("s").name("ts1")
+        .type(timestamp).noDefault().name("ts2").type(timestamp).noDefault().endRecord();
     Configuration configuration = new Configuration(false);
     var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve("small.parquet").toUri()),
         configuration);
@@ -57,6 +61,8 @@ class DateArithmeticTest {
       for (int id = 0; id < 2; id++) {
         var record = new GenericData.Record(schema);
         record.put("id", id);
+        record.put("ts1", java.sql.Timestamp.valueOf("2024-01-01 00:00:00").getTime());
+        record.put("ts2", java.sql.Timestamp.valueOf("2024-01-02 00:00:00").getTime());
         record.put("amt", ByteBuffer.wrap(new BigDecimal("123.45").unscaledValue().toByteArray()));
         record.put("d", id == 0 ? (int) LocalDate.of(2024, 3, 1).toEpochDay() : null);
         record.put("s", id == 0 ? "TemporalInterval[period=P0D, duration=PT24H]" : "A");
@@ -133,11 +139,11 @@ class DateArithmeticTest {
   }
 
   /**
-   * Prevents non-DATE temporal differences from leaking internal interval values
-   * or their text across JDBC and materialization boundaries.
+   * Preserves non-DATE temporal differences as interval values across JDBC and
+   * materialization boundaries, including nested UNNEST arrays.
    *
    * @param expression
-   *          temporal difference without a JDBC output representation
+   *          temporal difference expression
    * @throws Exception
    *           if opening the connection fails
    */
@@ -148,24 +154,60 @@ class DateArithmeticTest {
       "TIMESTAMP '2024-01-02 12:00:00' - DATE '2024-01-01'", "CURRENT_TIMESTAMP - CURRENT_TIMESTAMP",
       "CURRENT_TIME - CURRENT_TIME", "-(TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00')",
       "INTERVAL '1' HOUR + (TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00')",
-      "ARRAY[TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00']"
+      "ARRAY[TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00']", "INTERVAL '1' DAY",
+      "INTERVAL '1' DAY - INTERVAL '1' HOUR", "INTERVAL '1' DAY + INTERVAL '1' HOUR", "INTERVAL '14' MONTH"
   })
-  void nonDateTemporalDifferenceOutputIsUnsupported(String expression) throws Exception {
+  void intervalOutputRetainsIntervals(String expression) throws Exception {
     String projection = "SELECT " + expression + " AS x FROM small WHERE id = 0";
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement()) {
       for (String sql : List.of("SELECT " + expression, projection, "SELECT * FROM (" + projection + ") t",
           "WITH t AS (" + projection + ") SELECT * FROM t", "SELECT * FROM (VALUES (" + expression + ")) t(x)",
-          "SELECT * FROM UNNEST(ARRAY[" + expression + "]) AS u(x)")) {
-        var failure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
-          try (var result = statement.executeQuery(sql)) {
-            while (result.next()) {
-              result.getObject(1);
-            }
+          "SELECT * FROM UNNEST(ARRAY[" + expression + "]) AS u(x)",
+          "SELECT * FROM UNNEST(ARRAY[ARRAY[" + expression + "]]) AS u(x)")) {
+        try (var result = statement.executeQuery(sql)) {
+          assertTrue(result.next(), sql);
+          Object value = result.getObject(1);
+          while (value instanceof Object[] array) {
+            assertEquals(1, array.length, sql);
+            value = array[0];
           }
-        }, sql);
-        assertEquals("0A000", failure.getSQLState(), sql);
-        assertTrue(failure.getMessage().contains("Unsupported temporal difference"), failure::getMessage);
+          assertInstanceOf(TemporalInterval.class, value, sql);
+          assertFalse(result.getString(1).contains("TemporalInterval["), sql);
+          assertFalse(result.next(), sql);
+        }
+      }
+    }
+  }
+
+  /**
+   * Preserves interval arrays while allowing COUNT and ordinality-only output.
+   *
+   * @throws Exception
+   *           if opening the connection fails
+   */
+  @Test
+  void unnestPreservesMixedDifferencesAndOrdinalityOnlyOutput() throws Exception {
+    String difference = "TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00'";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      try (var result = statement
+          .executeQuery("SELECT * FROM UNNEST(ARRAY[INTERVAL '1' DAY, " + difference + "]) AS u(x)")) {
+        for (int row = 0; row < 2; row++) {
+          assertTrue(result.next());
+          TemporalInterval interval = assertInstanceOf(TemporalInterval.class, result.getObject(1));
+          assertEquals(Duration.ofDays(1), interval.toDuration());
+          assertEquals("+1 00:00:00", result.getString(1));
+        }
+        assertFalse(result.next());
+      }
+      for (String sql : List.of("SELECT COUNT(*) FROM UNNEST(ARRAY[" + difference + "]) AS u(x)",
+          "SELECT n FROM UNNEST(ARRAY[" + difference + "]) WITH ORDINALITY AS u(x, n)")) {
+        try (var result = statement.executeQuery(sql)) {
+          assertTrue(result.next(), sql);
+          assertEquals(1, result.getInt(1), sql);
+          assertFalse(result.next(), sql);
+        }
       }
     }
   }
@@ -201,41 +243,167 @@ class DateArithmeticTest {
   }
 
   /**
-   * Rejects projected differences through all getters and materialization, even
-   * when the outer query would consume the interval internally.
+   * Preserves interval values through getters, materialization, and predicate
+   * subqueries without exposing diagnostic text.
    *
    * @throws Exception
    *           if opening the connection fails
    */
   @Test
-  void temporalDifferenceOutputCannotBeStringifiedOrMaterialized() throws Exception {
+  void temporalDifferenceOutputSurvivesMaterialization() throws Exception {
     String difference = "TIMESTAMP '2024-01-03 00:00:00' - TIMESTAMP '2024-01-01 00:00:00'";
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement()) {
-      var stringFailure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
-        try (var result = statement.executeQuery("SELECT " + difference)) {
-          assertTrue(result.next());
-          result.getString(1);
+      for (String sql : List.of("SELECT " + difference, "SELECT MAX(" + difference + ") FROM small",
+          "SELECT x FROM (SELECT " + difference + " AS x) t",
+          "WITH t AS (SELECT " + difference + " AS x) SELECT x FROM t")) {
+        try (var result = statement.executeQuery(sql)) {
+          assertTrue(result.next(), sql);
+          assertEquals(Duration.ofDays(2), assertInstanceOf(TemporalInterval.class, result.getObject(1)).toDuration());
+          assertEquals("+2 00:00:00", result.getString(1), sql);
         }
-      });
-      assertEquals("0A000", stringFailure.getSQLState());
-      for (String sql : List.of("SELECT MAX(" + difference + ") FROM small",
-          "SELECT EXTRACT(DAY FROM x) FROM (SELECT " + difference + " AS x) t",
-          "WITH t AS (SELECT " + difference + " AS x) SELECT x > INTERVAL '1' HOUR FROM t")) {
-        var failure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
-          try (var result = statement.executeQuery(sql)) {
-            result.next();
-            result.getObject(1);
-          }
-        }, sql);
-        assertEquals("0A000", failure.getSQLState(), sql);
+      }
+      for (String sql : List.of("SELECT EXTRACT(DAY FROM x) FROM (SELECT " + difference + " AS x) t",
+          "WITH t AS (SELECT " + difference + " AS x) SELECT EXTRACT(DAY FROM x) FROM t",
+          "SELECT EXTRACT(DAY FROM x) FROM (VALUES (" + difference + ")) t(x)",
+          "SELECT EXTRACT(DAY FROM x) FROM UNNEST(ARRAY[" + difference + "]) u(x)")) {
+        try (var result = statement.executeQuery(sql)) {
+          assertTrue(result.next(), sql);
+          assertEquals(2, result.getInt(1), sql);
+        }
+      }
+      for (String sql : List.of("WITH t AS (SELECT " + difference + " AS x) SELECT x > INTERVAL '1' HOUR FROM t",
+          "SELECT " + difference + " IN (SELECT " + difference + " FROM small)",
+          "SELECT (SELECT MAX(" + difference + ") FROM small) > INTERVAL '1' HOUR")) {
+        try (var result = statement.executeQuery(sql)) {
+          assertTrue(result.next(), sql);
+          assertTrue(result.getBoolean(1), sql);
+        }
       }
     }
   }
 
   /**
-   * Rejects text conversion before a difference can become an ordinary string or
-   * a derived numeric value such as its text length.
+   * Reports stable interval metadata and typed getters for physical temporal
+   * arithmetic, including empty materialized queries and LATERAL inputs.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void intervalMetadataAndTypedGetters() throws Exception {
+    String projection = "SELECT ts2 - ts1 AS x FROM small WHERE id = 0";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String sql : List.of(projection, "SELECT x FROM (" + projection + ") t",
+          "WITH t AS (" + projection + ") SELECT x FROM t", projection + " UNION ALL " + projection,
+          "SELECT x FROM small s CROSS JOIN LATERAL "
+              + "(SELECT q.ts2 - q.ts1 AS x FROM small q WHERE q.id = s.id) t WHERE s.id = 0")) {
+        try (var result = statement.executeQuery(sql)) {
+          assertEquals(Types.OTHER, result.getMetaData().getColumnType(1), sql);
+          assertEquals("INTERVAL", result.getMetaData().getColumnTypeName(1), sql);
+          assertEquals(TemporalInterval.class.getName(), result.getMetaData().getColumnClassName(1), sql);
+          assertTrue(result.next(), sql);
+          assertEquals(Duration.ofDays(1), result.getObject(1, TemporalInterval.class).toDuration(), sql);
+          assertEquals(result.getObject(1), result.getObject("x", TemporalInterval.class), sql);
+          assertEquals("+1 00:00:00", result.getObject("x", String.class), sql);
+        }
+      }
+      for (String sql : List.of("SELECT ts2 - ts1 AS x FROM small WHERE id = 99",
+          "SELECT x FROM (SELECT ts2 - ts1 AS x FROM small WHERE id = 99) t")) {
+        try (var result = statement.executeQuery(sql)) {
+          assertEquals("INTERVAL", result.getMetaData().getColumnTypeName(1), sql);
+          assertEquals(TemporalInterval.class.getName(), result.getMetaData().getColumnClassName(1), sql);
+          assertFalse(result.next(), sql);
+        }
+      }
+      try (var result = statement.executeQuery("SELECT INTERVAL '14' MONTH AS x")) {
+        assertTrue(result.next());
+        assertEquals("+1-02", result.getString(1));
+        assertEquals(TemporalInterval.class.getName(), result.getMetaData().getColumnClassName(1));
+      }
+    }
+  }
+
+  /**
+   * Uses interval values for set keys and ORDER BY expressions instead of text.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void intervalSetKeysAndOrderingRetainTypes() throws Exception {
+    String difference = "TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00'";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      try (var result = statement
+          .executeQuery("SELECT COUNT(*) FROM (SELECT " + difference + " AS x UNION SELECT INTERVAL '1' DAY AS x) t")) {
+        assertTrue(result.next());
+        assertEquals(1, result.getInt(1));
+      }
+      try (var result = statement.executeQuery(
+          "SELECT INTERVAL '2' DAY AS x UNION ALL SELECT " + difference + " AS x ORDER BY EXTRACT(DAY FROM x)")) {
+        assertTrue(result.next());
+        assertEquals("+1 00:00:00", result.getString(1));
+        assertTrue(result.next());
+        assertEquals("+2 00:00:00", result.getString(1));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Exposes intervals through JDBC text and explicit character casts.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void intervalCharacterCastsUseSqlText() throws Exception {
+    String difference = "TIMESTAMP '2024-01-02 00:00:00.123456789' - TIMESTAMP '2024-01-01 00:00:00'";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String type : List.of("VARCHAR", "CHAR", "CLOB")) {
+        try (var result = statement.executeQuery("SELECT CAST((" + difference + ") AS " + type + ")")) {
+          assertTrue(result.next());
+          assertEquals("+1 00:00:00.123456789", result.getString(1));
+        }
+      }
+      try (var result = statement.executeQuery("SELECT CAST((" + difference + ") AS VARCHAR(5))")) {
+        assertTrue(result.next());
+        assertEquals("+1 00", result.getString(1));
+      }
+    }
+  }
+
+  /**
+   * Uses SQL interval text in JSON values, including nested arrays.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void intervalJsonValuesUseSqlText() throws Exception {
+    String difference = "TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00'";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      try (var result = statement.executeQuery("SELECT JSON_OBJECT('a' VALUE (" + difference + "))")) {
+        assertTrue(result.next());
+        assertEquals("{\"a\":\"+1 00:00:00\"}", result.getString(1));
+      }
+      for (String sql : List.of("SELECT JSON_ARRAY(ARRAY[" + difference + "])",
+          "SELECT JSON_ARRAY(x) FROM (SELECT ARRAY[" + difference + "] AS x) t")) {
+        try (var result = statement.executeQuery(sql)) {
+          assertTrue(result.next());
+          assertEquals("[[\"+1 00:00:00\"]]", result.getString(1));
+        }
+      }
+    }
+  }
+
+  /**
+   * Rejects implicit interval operands in string operations with a SQL type
+   * error.
    *
    * @param template
    *          text-consuming SQL expression with one difference placeholder
@@ -244,9 +412,8 @@ class DateArithmeticTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "CAST(%s AS VARCHAR)", "CAST(%s AS VARCHAR(5))", "CAST(%s AS CHAR)", "CAST(%s AS CLOB)", "%s || ''", "'' || %s",
-      "CONCAT('x', %s)", "UPPER(%s)", "LOWER(%s)", "LENGTH(%s)", "OCTET_LENGTH(%s)", "ASCII(%s)",
-      "JSON_OBJECT('a' VALUE %s)", "JSON_ARRAY(ARRAY[%s])", "STRING_AGG(%s, ',')", "%s LIKE 'Temporal%%'"
+      "%s || ''", "'' || %s", "CONCAT('x', %s)", "UPPER(%s)", "LOWER(%s)", "LENGTH(%s)", "OCTET_LENGTH(%s)",
+      "ASCII(%s)", "STRING_AGG(%s, ',')", "%s LIKE 'Temporal%%'"
   })
   void temporalDifferencesCannotBeConvertedToText(String template) throws Exception {
     String difference = "(TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00')";
@@ -255,14 +422,14 @@ class DateArithmeticTest {
         var statement = connection.createStatement()) {
       for (String sql : List.of(projection, "SELECT * FROM (" + projection + ") t",
           "WITH t AS (" + projection + ") SELECT * FROM t")) {
-        var failure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
+        var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
           try (var result = statement.executeQuery(sql)) {
             result.next();
             result.getObject(1);
           }
         }, sql);
-        assertEquals("0A000", failure.getSQLState(), sql);
-        assertTrue(failure.getMessage().contains("Unsupported temporal difference"), failure::getMessage);
+        assertEquals("42000", failure.getSQLState(), sql);
+        assertTrue(failure.getMessage().contains("INTERVAL requires"), failure::getMessage);
       }
     }
   }
@@ -291,15 +458,15 @@ class DateArithmeticTest {
         for (String sql : List.of(projection, "SELECT * FROM (" + projection + ") t",
             "WITH t AS (" + projection + ") SELECT * FROM t", "SELECT id FROM small WHERE " + comparison,
             "SELECT id FROM small GROUP BY id HAVING " + comparison)) {
-          var failure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
+          var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
             try (var result = statement.executeQuery(sql)) {
               while (result.next()) {
                 result.getObject(1);
               }
             }
           }, sql);
-          assertEquals("0A000", failure.getSQLState(), sql);
-          assertTrue(failure.getMessage().contains("Unsupported temporal difference"), failure::getMessage);
+          assertEquals("42000", failure.getSQLState(), sql);
+          assertTrue(failure.getMessage().contains("INTERVAL requires"), failure::getMessage);
         }
       }
     }
@@ -326,14 +493,14 @@ class DateArithmeticTest {
         for (String sql : List.of("SELECT COUNT(*) FROM small b WHERE " + comparison,
             "SELECT COUNT(*) FROM small a JOIN (SELECT s FROM small WHERE id = 0) b ON " + comparison,
             "SELECT COUNT(*) FROM small a, (SELECT s FROM small WHERE id = 0) b WHERE " + comparison)) {
-          var failure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
+          var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
             try (var result = statement.executeQuery(sql)) {
               result.next();
               result.getObject(1);
             }
           }, sql);
-          assertEquals("0A000", failure.getSQLState(), sql);
-          assertTrue(failure.getMessage().contains("Unsupported temporal difference"), failure::getMessage);
+          assertEquals("42000", failure.getSQLState(), sql);
+          assertTrue(failure.getMessage().contains("INTERVAL requires"), failure::getMessage);
         }
       }
     }
@@ -354,13 +521,13 @@ class DateArithmeticTest {
       for (String expression : List.of("CASE WHEN id = 0 THEN " + difference + " ELSE 'A' END",
           "CASE WHEN id = 0 THEN 'A' ELSE " + difference + " END")) {
         String sql = "SELECT ROW_NUMBER() OVER (ORDER BY " + expression + ") FROM small";
-        var failure = assertThrows(SQLFeatureNotSupportedException.class, () -> {
+        var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
           try (var result = statement.executeQuery(sql)) {
             result.next();
             result.getObject(1);
           }
         }, sql);
-        assertEquals("0A000", failure.getSQLState(), sql);
+        assertEquals("42000", failure.getSQLState(), sql);
       }
     }
   }
@@ -397,7 +564,7 @@ class DateArithmeticTest {
   }
 
   /**
-   * Documents the materialization boundary in set-operation EXISTS subqueries.
+   * Checks SQL row existence for set operations containing interval values.
    *
    * @param operation
    *          set operator joining the branches
@@ -408,25 +575,31 @@ class DateArithmeticTest {
   @ValueSource(strings = {
       "UNION", "UNION ALL", "INTERSECT", "EXCEPT"
   })
-  void existsSetOperationsStillReadTemporalDifferenceOutput(String operation) throws Exception {
+  void existsSetOperationsPreserveTemporalDifferenceOutput(String operation) throws Exception {
     String difference = "TIMESTAMP '2024-01-02 00:00:00' - TIMESTAMP '2024-01-01 00:00:00'";
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement()) {
       for (String predicate : List.of("", " WHERE t.id = s.id")) {
         String branch = "SELECT " + difference + " FROM small t" + predicate;
-        String sql = "SELECT id FROM small s WHERE EXISTS (" + branch + " " + operation + " " + branch + ")";
-        var failure = assertThrows(SQLException.class, () -> {
-          try (var result = statement.executeQuery(sql)) {
-            result.next();
+        String sql = "SELECT id FROM small s WHERE EXISTS (" + branch + " " + operation + " " + branch
+            + ") ORDER BY id";
+        try (var result = statement.executeQuery(sql)) {
+          if ("EXCEPT".equals(operation)) {
+            assertFalse(result.next(), sql);
+          } else {
+            assertTrue(result.next(), sql);
+            assertEquals(0, result.getInt(1), sql);
+            assertTrue(result.next(), sql);
+            assertEquals(1, result.getInt(1), sql);
+            assertFalse(result.next(), sql);
           }
-        }, sql);
-        assertEquals("0A000", failure.getSQLState(), sql);
+        }
       }
     }
   }
 
   /**
-   * Preserves difference provenance when an interval literal ties for MIN/MAX,
+   * Preserves interval output when an interval literal ties for MIN/MAX,
    * regardless of input order, in grouped aggregates and window frames.
    *
    * @param function
@@ -448,13 +621,12 @@ class DateArithmeticTest {
             " OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)")) {
           String expression = function + "(" + argument + ")" + window;
           String sql = "SELECT " + expression + " FROM small";
-          var failure = assertThrows(SQLException.class, () -> {
-            try (var result = statement.executeQuery(sql)) {
-              assertTrue(result.next(), sql);
-              result.getObject(1);
-            }
-          }, sql);
-          assertEquals("0A000", failure.getSQLState(), sql);
+          try (var result = statement.executeQuery(sql)) {
+            assertTrue(result.next(), sql);
+            assertEquals(Duration.ofDays(1),
+                assertInstanceOf(TemporalInterval.class, result.getObject(1)).toDuration());
+            assertEquals("+1 00:00:00", result.getString(1), sql);
+          }
           try (var result = statement.executeQuery("SELECT EXTRACT(DAY FROM " + expression + ") FROM small")) {
             assertTrue(result.next());
             assertEquals(1, result.getInt(1));

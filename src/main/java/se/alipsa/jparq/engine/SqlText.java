@@ -3,7 +3,7 @@ package se.alipsa.jparq.engine;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
- * Converts SQL values to text without exposing internal temporal differences.
+ * Separates explicit SQL text conversion from implicit string operand coercion.
  */
 public final class SqlText {
 
@@ -18,37 +18,43 @@ public final class SqlText {
    *          the SQL value
    * @return its text, or null for SQL NULL
    * @throws IllegalArgumentException
-   *           if the value contains an internal temporal difference, carrying
-   *           SQLState 0A000
+   *           if an interval is used implicitly as text, carrying SQLState 42000
    */
   public static String valueOf(Object value) {
-    validateOutput(value);
+    validateStringOperand(value);
     return value == null ? null : value.toString();
   }
 
   /**
-   * Checks values before text conversion, JDBC access, or materialization.
-   * Existing interval literals retain their behavior; differences and interval
-   * arithmetic involving differences have no supported output representation.
+   * Converts a value for an explicit character CAST, preserving SQL NULL.
+   *
+   * @param value
+   *          SQL value to convert
+   * @return SQL interval text or the value's normal character representation
+   */
+  public static String cast(Object value) {
+    return value == null ? null : value.toString();
+  }
+
+  /**
+   * Rejects interval operands in operations that require character values.
    *
    * @param value
    *          the value, including nested SQL arrays
    * @throws IllegalArgumentException
-   *           if an internal temporal difference would escape, carrying SQLState
-   *           0A000
+   *           if an interval is used implicitly as text, carrying SQLState 42000
    */
-  public static void validateOutput(Object value) {
-    if (value instanceof TemporalInterval interval && interval.isTemporalDifference()) {
-      throw SqlExceptions
-          .unsupportedFeature("Unsupported temporal difference output: no supported JDBC or text representation");
+  private static void validateStringOperand(Object value) {
+    if (value instanceof TemporalInterval) {
+      throw SqlExceptions.syntaxFailure("INTERVAL requires an explicit character cast for text operations");
     }
     if (value instanceof Object[] array) {
       for (Object element : array) {
-        validateOutput(element);
+        validateStringOperand(element);
       }
     } else if (value instanceof Iterable<?> elements) {
       for (Object element : elements) {
-        validateOutput(element);
+        validateStringOperand(element);
       }
     }
   }

@@ -43,8 +43,8 @@ public final class SqlComparisons {
    *           if either value is null
    * @throws IllegalArgumentException
    *           if a number is compared with an interval; the cause carries
-   *           SQLState 42000; fallback text conversion of an internal temporal
-   *           difference carries SQLState 0A000
+   *           SQLState 42000; implicit interval-to-text conversion also carries
+   *           SQLState 42000
    */
   public static int typedCompare(Object l, Object r) {
     if (l instanceof Number ln && r instanceof Number rn) {

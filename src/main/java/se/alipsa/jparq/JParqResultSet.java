@@ -48,7 +48,6 @@ import se.alipsa.jparq.engine.QueryProcessor;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
-import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
@@ -690,7 +689,7 @@ public class JParqResultSet extends ResultSetAdapter {
         throw new SQLException("Unknown column index: " + idx);
       }
       Object v = row.get(idx - 1);
-      SqlText.validateOutput(v);
+
       lastWasNull = (v == null);
       return v;
     }
@@ -702,7 +701,7 @@ public class JParqResultSet extends ResultSetAdapter {
     if (projectionExpr != null && !(projectionExpr instanceof Column)) {
       ensureProjectionEvaluator(current);
       Object computed = evaluateProjection(projectionExpr);
-      SqlText.validateOutput(computed);
+
       lastWasNull = (computed == null);
       return computed;
     }
@@ -728,7 +727,7 @@ public class JParqResultSet extends ResultSetAdapter {
       if (projectionExpr instanceof Column columnExpr) {
         ensureProjectionEvaluator(current);
         Object computed = evaluateProjection(columnExpr);
-        SqlText.validateOutput(computed);
+
         lastWasNull = (computed == null);
         return computed;
       }
@@ -1557,6 +1556,41 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public Object getObject(String columnLabel) throws SQLException {
     return getObject(findColumn(columnLabel));
+  }
+
+  /**
+   * Returns a value using its documented Java representation or character form.
+   *
+   * @param columnIndex
+   *          one-based output column
+   * @param type
+   *          requested Java class
+   * @param <T>
+   *          requested value type
+   * @return the typed value or null for SQL NULL
+   * @throws SQLException
+   *           if the value cannot be read or converted to the requested type
+   */
+  @Override
+  public <T> T getObject(int columnIndex, Class<T> type) throws SQLException {
+    if (type == null) {
+      throw new SQLException("Requested Java type cannot be null", "22005");
+    }
+    if (type == String.class) {
+      return type.cast(getString(columnIndex));
+    }
+    Object value = value(columnIndex);
+    if (value == null || type.isInstance(value)) {
+      return type.cast(value);
+    }
+    throw new java.sql.SQLDataException("Cannot convert " + value.getClass().getName() + " to " + type.getName(),
+        "22005");
+  }
+
+  /** {@inheritDoc} */
+  @Override
+  public <T> T getObject(String columnLabel, Class<T> type) throws SQLException {
+    return getObject(findColumn(columnLabel), type);
   }
 
   @Override

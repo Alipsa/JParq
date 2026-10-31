@@ -2,22 +2,17 @@
 
 ### 1.4.0
 
-- **Behavior change:** reject non-DATE temporal difference output (TIMESTAMP, TIME, and mixed DATE/TIMESTAMP
-  subtraction) with `SQLFeatureNotSupportedException`, SQLState `0A000`, when read by a JDBC getter or materialized
-  for a derived table/CTE, VALUES, or UNNEST input (#254). Previously callers received an internal
-  `TemporalInterval` or its `toString()` text. Comparisons, predicates, sorting, and `EXTRACT` over differences
-  remain supported within the same query block; perform these operations before materialization instead of
-  projecting a raw difference for an outer query to consume. DATE day counts, explicit INTERVAL offsets,
-  interval literals, and NULL propagation remain supported.
-- Reject text conversion of temporal differences with SQLState `0A000` before character casts,
-  concatenation, string functions, STRING_AGG, JSON construction, or fallback text comparisons can consume their
-  internal diagnostic text (#254), including schema-based coercion for comparisons against VARCHAR columns in
-  WHERE and JOIN conditions. Plain interval literal text conversion remains tracked in #364. Preserve EXISTS
-  and NOT EXISTS over unused difference projections by probing for rows without reading projected values,
-  including correlated subqueries and HAVING; keep existence results separate from scalar result caching.
-  Set operations still materialize branch projections, so unused differences in their branches raise `0A000`
-  even inside EXISTS. Prefer temporal differences over equal interval literals in MIN/MAX ties, including
-  window frames, so output rejection does not depend on input order.
+- Return temporal differences and interval literals as immutable `TemporalInterval` values through JDBC
+  `getObject()`, including typed getters. Report JDBC OTHER with type name INTERVAL and the interval Java class.
+  `getString()` and explicit character casts return signed SQL interval text, preserving nanoseconds (#254).
+  Preserve interval types through derived tables, CTEs, VALUES, UNNEST, LATERAL inputs, set operations,
+  and scalar or predicate subqueries so outer comparisons and EXTRACT continue to work. COUNT(*) and
+  ordinality-only UNNEST queries succeed without converting interval elements to text. EXISTS and NOT EXISTS
+  honor row existence, including correlated subqueries, HAVING, and set operations. Preserve DATE day counts,
+  explicit interval offsets, and NULL propagation.
+- Reject implicit use of intervals as text with SQLSyntaxErrorException and SQLState `42000`, including
+  VARCHAR comparisons in either operand order, concatenation, LIKE, and string functions. Use an explicit
+  character cast for interval text. MIN/MAX retain interval values on ties in aggregates and window frames.
 - Classify subtraction between TIME and DATE or TIMESTAMP in either operand order as unsupported temporal
   arithmetic with `SQLSyntaxErrorException`, SQLState `42000`, including predicates and nested queries (#254).
   Previously these combinations raised an unclassified exception naming internal Java types.

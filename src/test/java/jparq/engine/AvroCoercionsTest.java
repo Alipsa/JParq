@@ -41,8 +41,8 @@ class AvroCoercionsTest {
         Schema.createUnion(Schema.create(Schema.Type.NULL), text))) {
       var failure = assertThrows(IllegalArgumentException.class, () -> AvroCoercions.coerceLiteral(difference, schema));
       var classified = SqlExceptions.findSqlStateFailure(failure);
-      assertInstanceOf(java.sql.SQLFeatureNotSupportedException.class, classified);
-      assertEquals("0A000", classified.getSQLState());
+      assertInstanceOf(java.sql.SQLSyntaxErrorException.class, classified);
+      assertEquals("42000", classified.getSQLState());
       assertNull(AvroCoercions.coerceLiteral(null, schema));
     }
     assertEquals("42", AvroCoercions.coerceLiteral(42, text));

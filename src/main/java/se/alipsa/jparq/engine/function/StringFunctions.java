@@ -15,8 +15,8 @@ import se.alipsa.jparq.engine.SqlText;
 
 /**
  * Utility methods implementing SQL string functions. Text conversion of
- * internal temporal differences raises IllegalArgumentException carrying
- * SQLState 0A000.
+ * interval values raises IllegalArgumentException carrying SQLState 42000; use
+ * an explicit character cast first.
  */
 public final class StringFunctions {
 

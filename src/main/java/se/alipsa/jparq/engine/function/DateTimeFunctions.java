@@ -743,8 +743,8 @@ public final class DateTimeFunctions {
    *           exceeds the target's range or precision (SQLState 22003), or
    *           numeric input is invalid or non-finite (SQLState 22018), or
    *           temporal input has invalid format (22007) or out-of-range fields
-   *           (22008), or an internal temporal difference is converted to text
-   *           (0A000), carried by the cause
+   *           (22008), or a non-character interval operand is used implicitly as
+   *           text (42000), carried by the cause
    */
   public static Object castLiteral(CastExpression cast, Object value) {
     if (cast != null && cast.getColDataType() != null
@@ -777,13 +777,13 @@ public final class DateTimeFunctions {
       case "boolean", "bool" -> toBoolean(value);
       case "char", "character", "nchar", "varchar", "charactervarying", "nvarchar", "string" ->
         castToString(cast, value);
-      case "text", "clob" -> SqlText.valueOf(value);
+      case "text", "clob" -> SqlText.cast(value);
       default -> value;
     };
   }
 
   private static String castToString(CastExpression cast, Object value) {
-    String text = value == null ? null : SqlText.valueOf(value);
+    String text = SqlText.cast(value);
     if (text == null) {
       return null;
     }

@@ -251,23 +251,23 @@ unsupported temporal arithmetic raise `SQLException` with SQLState `42000` when 
 Subtraction between TIME and DATE or TIMESTAMP is unsupported in either operand order and
 raises `SQLSyntaxErrorException` with SQLState `42000`, including within predicates.
 Differences between TIMESTAMP values, between TIME values, or between mixed DATE/TIMESTAMP
-operands support comparisons with INTERVAL values and `EXTRACT` within the same query block.
-For example, `end_ts - start_ts > INTERVAL '1' HOUR` and
-`EXTRACT(DAY FROM end_ts - start_ts)` remain supported. Returning the difference itself has no
-supported JDBC interval representation and raises `SQLFeatureNotSupportedException` with SQLState
-`0A000` when a result getter reads it or a derived table/CTE, VALUES, or UNNEST input materializes it.
-This also applies when the outer query would compare or extract from the materialized difference: perform the
-comparison or extraction in the inner query instead. NULL operands still produce NULL.
-Text conversion of differences is also unsupported (`0A000`), including character casts,
-`||`, string functions such as `CONCAT`, `UPPER`, and `LENGTH`, and JSON construction.
-Comparisons between a difference and text also raise `0A000`, including `=`, `<`, and `>`
-in either operand order, against string literals or VARCHAR columns, and in array elements.
-Schema-based coercion to a VARCHAR column follows the same rule in WHERE and JOIN conditions.
-Comparisons with INTERVAL values remain supported.
-Text conversions and comparisons with text reject the difference before its internal diagnostic text can be used.
-EXISTS checks for rows without reading unused projected differences, including correlated
-subqueries and HAVING predicates. Set operations still read branch projections while materializing rows,
-so unused differences in UNION, UNION ALL, INTERSECT, and EXCEPT branches raise `0A000` even inside EXISTS.
+operands return immutable `se.alipsa.jparq.helper.TemporalInterval` values from `getObject()`;
+`getObject(column, TemporalInterval.class)` returns the same representation. Interval columns use JDBC
+`Types.OTHER`, type name `INTERVAL`, and the `TemporalInterval` Java class in metadata.
+`getString()` and explicit character casts return signed SQL interval text: `+1 02:03:04.123456789`
+for DAY TO SECOND values and `+1-02` for YEAR TO MONTH values. Nanoseconds are preserved.
+Plain interval literals use the same object and text representations.
+
+Intervals retain their types through derived tables, CTEs, VALUES, UNNEST, LATERAL inputs,
+set operations, and scalar or predicate subqueries. Comparisons with intervals and `EXTRACT` remain
+available after materialization. COUNT(*) and ordinality-only queries over UNNEST do not require
+converting interval elements to text. EXISTS and NOT EXISTS use row existence, including correlated
+subqueries, HAVING predicates, and set operations.
+
+Implicit interval-to-text coercion is a type error (`SQLSyntaxErrorException`, SQLState `42000`),
+including comparisons with VARCHAR values, concatenation, LIKE, and string functions. Use an explicit
+character cast when text is intended, such as `CAST(end_ts - start_ts AS VARCHAR)`.
+NULL operands still produce NULL.
 
 Interval literals accept a separate unit, such as `INTERVAL '1' DAY`, for YEAR, MONTH, DAY,
 HOUR, MINUTE, and SECOND, as well as the single-string form `INTERVAL '1 day'`.
