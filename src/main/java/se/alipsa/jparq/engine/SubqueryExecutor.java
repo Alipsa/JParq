@@ -730,9 +730,7 @@ public final class SubqueryExecutor implements AutoCloseable {
      *           column and at most one row
      */
     public Object scalarValue() {
-      if (columnLabels.size() != 1 || !rows.isEmpty() && rows.getFirst().size() != 1) {
-        throw SqlExceptions.syntaxFailure("Scalar subquery must return exactly one column");
-      }
+      requireSingleColumn("Scalar subquery");
       if (rows.size() > 1) {
         throw SqlExceptions.syntaxFailure("Scalar subquery returned more than one row");
       }
@@ -740,16 +738,38 @@ public final class SubqueryExecutor implements AutoCloseable {
     }
 
     /**
-     * Convenience accessor returning the first column of each row.
+     * Validates single-column cardinality and returns the value of each row,
+     * including for empty results used by scalar IN and quantified comparisons.
+     * Row-value predicates require degree-aware access to {@link #rows()}; this
+     * scalar accessor does not implement row-value comparisons (issue 388).
      *
-     * @return list of values from the first column
+     * @return list of values from the single column
+     * @throws IllegalArgumentException
+     *           carrying SQLState 42000 if the result does not have exactly one
+     *           column
      */
-    public List<Object> firstColumnValues() {
+    public List<Object> singleColumnValues() {
+      requireSingleColumn("Subquery");
       List<Object> values = new ArrayList<>(rows.size());
       for (List<Object> row : rows) {
-        values.add(row.isEmpty() ? null : row.getFirst());
+        values.add(row.getFirst());
       }
       return values;
+    }
+
+    /**
+     * Checks the declared column count even when no rows were returned.
+     *
+     * @param context
+     *          subquery description for error diagnostics
+     * @throws IllegalArgumentException
+     *           carrying SQLState 42000 if the result does not have exactly one
+     *           column
+     */
+    private void requireSingleColumn(String context) {
+      if (columnLabels.size() != 1 || !rows.isEmpty() && rows.getFirst().size() != 1) {
+        throw SqlExceptions.syntaxFailure(context + " must return exactly one column");
+      }
     }
   }
 

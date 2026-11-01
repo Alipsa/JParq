@@ -123,6 +123,10 @@ Skipped operands are not evaluated, so their errors are suppressed; reordering c
 Scalar subqueries must return exactly one column and at most one row. Violations raise SQLSyntaxErrorException
 with SQLState `42000` consistently in scalar expressions and HAVING, including empty results with multiple
 columns. An empty one-column result evaluates to NULL.
+Single-value IN/NOT IN and ANY/SOME/ALL subqueries also require exactly one column,
+including for empty results. Extra columns raise SQLSyntaxErrorException with SQLState `42000`
+in WHERE and HAVING. Column counts are validated during planning, before predicate pushdown
+or empty grouping can skip evaluation. These predicates allow multiple rows; EXISTS allows multiple columns.
 
 Correlated subqueries reuse parsed query shapes and validated source schemas within one outer execution.
 Outer values are bound with their Java types and NULL values intact, and each evaluation reads fresh results.

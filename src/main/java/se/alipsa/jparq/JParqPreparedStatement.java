@@ -90,6 +90,7 @@ import se.alipsa.jparq.engine.NumericExpressionTypes;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
 import se.alipsa.jparq.engine.ParquetTable;
+import se.alipsa.jparq.engine.PredicateSubqueryValidation;
 import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.RecordReader;
@@ -312,6 +313,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           tmpJoinQuery = false;
         } else {
           tmpSelect = (SqlParser.Select) query;
+          validatePredicateSubqueries(tmpSelect, tmpCteResults);
           tmpSetOperation = false;
           tmpTableRefs = tmpSelect.tableReferences();
           SqlParser.TableReference baseRef = tmpTableRefs.isEmpty() ? null : tmpTableRefs.getFirst();
@@ -4448,6 +4450,22 @@ public class JParqPreparedStatement implements PreparedStatement {
         expression.accept(visitor, null);
       }
     }
+  }
+
+  /**
+   * Validates scalar predicate degrees before pushdown or empty grouping can
+   * prevent runtime evaluation. Row-value IN evaluation is tracked in issue 388
+   * and is deliberately excluded from this scalar validation.
+   *
+   * @param select
+   *          query being planned
+   * @param ctes
+   *          materialized CTE schemas visible to the query
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 for a multi-column scalar predicate
+   */
+  private void validatePredicateSubqueries(SqlParser.Select select, Map<Identifier, CteResult> ctes) {
+    PredicateSubqueryValidation.validate(select, table -> subqueryTableColumns(table, ctes, null));
   }
 
   private record ColumnRequirement(Set<String> required, Set<String> referenced) {

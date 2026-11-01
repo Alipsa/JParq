@@ -381,7 +381,7 @@ public final class ExpressionEvaluator {
       if (subqueryExecutor == null) {
         throw new IllegalStateException("IN subqueries require a subquery executor");
       }
-      List<Object> values = executeCorrelatedSubquery(subSelect, rec).firstColumnValues();
+      List<Object> values = executeCorrelatedSubquery(subSelect, rec).singleColumnValues();
       return SqlTruth.in(left.value, values, value -> coerceLiteralToColumnType(value, left.schemaOrNull), in.isNot());
     }
     return false;
@@ -457,7 +457,7 @@ public final class ExpressionEvaluator {
       return new QuantifiedComparisons.ScalarOperand(scalar.value,
           candidate -> coerceLiteralToColumnType(candidate, scalar.schemaOrNull));
     }, expression -> operand(expression, rec).value,
-        subSelect -> executeCorrelatedSubquery(subSelect, rec).firstColumnValues());
+        subSelect -> executeCorrelatedSubquery(subSelect, rec).singleColumnValues());
   }
 
   // -------------------------
