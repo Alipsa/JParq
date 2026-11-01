@@ -2389,7 +2389,9 @@ public final class SqlParser {
 
   /**
    * Binds ordering labels and positions after the complete output is known.
-   * Repeated labels are usable when they denote the same expression.
+   * Repeated labels are usable when they denote the same expression. Exact
+   * aliases take precedence over quoted lowercase fallback aliases; ambiguity is
+   * checked against the alias that resolves the reference.
    *
    * @param keys
    *          the original ordering references
@@ -2435,6 +2437,12 @@ public final class SqlParser {
           }
         } else {
           String label = Identifier.lookupKey(column);
+          if (!aliases.containsKey(label)) {
+            String alternative = ColumnMappingUtil.alternativeColumnKey(label);
+            if (alternative != null) {
+              label = alternative;
+            }
+          }
           if (ambiguous.contains(label)) {
             throw SqlExceptions.ambiguousColumn(column);
           }
