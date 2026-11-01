@@ -1061,6 +1061,7 @@ public final class SqlParser {
         : parseFromItem(ps.getFromItem(), ctes, cteLookup, allowQualifiedWildcards);
     List<JoinInfo> joinInfos = parseJoins(ps.getJoins(), ctes, cteLookup, allowQualifiedWildcards);
     List<TableReference> tableRefs = buildTableReferences(fromInfo, joinInfos);
+    normalizeScopeQualifiers(ps, tableRefs);
     final Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo, tableRefs,
         allowQualifiedWildcards);
 
@@ -2032,9 +2033,8 @@ public final class SqlParser {
 
     int fallbackIndex = expressions.size();
     for (QualifiedWildcard wildcard : select.qualifiedWildcards()) {
-      String qualifier = wildcard.qualifier();
-      String expressionQualifier = visibleQualifiers(select.tableReferences()).stream()
-          .filter(name -> Objects.equals(Identifier.of(name).text(), qualifier)).findFirst().orElse(qualifier);
+      String expressionQualifier = canonicalQualifier(wildcard.qualifierIdentifier(), select.tableReferences());
+      String qualifier = stripCompositeIdentifierQuotes(expressionQualifier);
       List<QualifiedExpansionColumn> columns = resolveQualifierColumns(qualifier, normalized);
       if (columns == null || columns.isEmpty()) {
         throw new IllegalArgumentException("Qualified wildcard references unknown qualifier: " + qualifier);
@@ -2051,7 +2051,7 @@ public final class SqlParser {
         column.setColumnName(label);
         if (qualifier != null && !qualifier.isBlank()) {
           Table table = new Table();
-          table.setName(expressionQualifier);
+          table.setName(expressionQualifier, false);
           column.setTable(table);
         }
         ordered.add(new OrderedSelectItem(orderIndex, subIndex, label, physicalName, column));
@@ -2562,10 +2562,7 @@ public final class SqlParser {
     if (table.getAlias() != null && table.getAlias().getName() != null && !table.getAlias().getName().isBlank()) {
       return table.getAlias().getName();
     }
-    if (table.getName() != null && !table.getName().isBlank()) {
-      return table.getName();
-    }
-    return null;
+    return table.getFullyQualifiedName();
   }
 
   // === Qualifier Stripping =================================================
@@ -2745,24 +2742,15 @@ public final class SqlParser {
       return;
     }
 
-    Map<Identifier, String> allowed = new HashMap<>();
-    if (allowedQualifiers != null) {
-      allowedQualifiers.forEach(name -> allowed.put(Identifier.of(name), name));
-    }
+    List<String> allowed = allowedQualifiers == null ? List.of() : allowedQualifiers;
 
     expr.accept(new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(Column column, S context) {
-        Table t = column.getTable();
-        if (t != null) {
-          String q = t.getName();
-          Identifier qualifier = Identifier.of(q);
-          if (qualifier != null) {
-            boolean known = qualifier.resolve(allowed) != null;
-            if (known && !retainedColumns.contains(Identifier.lookupKey(column.getColumnName()))) {
-              column.setTable(null);
-            }
-          }
+        String qualifier = RelationQualifiers.qualifier(column);
+        boolean known = allowed.stream().anyMatch(name -> RelationQualifiers.matches(qualifier, name));
+        if (known && !retainedColumns.contains(Identifier.lookupKey(column.getColumnName()))) {
+          column.setTable(null);
         }
         return super.visit(column, context);
       }
@@ -3212,6 +3200,64 @@ public final class SqlParser {
   }
 
   /**
+   * Rebinds valid schema-qualified references to their visible input name while
+   * leaving unknown names intact for validation after correlation binding.
+   *
+   * @param select
+   *          current query scope
+   * @param references
+   *          its FROM inputs
+   */
+  private static void normalizeScopeQualifiers(PlainSelect select, List<TableReference> references) {
+    List<Expression> expressions = new ArrayList<>();
+    select.getSelectItems().forEach(item -> expressions.add(item.getExpression()));
+    expressions.add(select.getWhere());
+    expressions.add(select.getHaving());
+    if (select.getGroupBy() != null && select.getGroupBy().getGroupByExpressionList() != null) {
+      expressions.addAll(select.getGroupBy().getGroupByExpressionList());
+    }
+    if (select.getOrderByElements() != null) {
+      select.getOrderByElements().forEach(order -> expressions.add(order.getExpression()));
+    }
+    if (select.getJoins() != null) {
+      select.getJoins().forEach(join -> expressions.addAll(join.getOnExpressions()));
+    }
+    for (Expression expression : expressions) {
+      for (Column column : ColumnsUsed.referencesInScope(expression)) {
+        String qualifier = RelationQualifiers.qualifier(column);
+        String canonical = canonicalQualifier(qualifier, references);
+        if (canonical != null && !Objects.equals(canonical, qualifier)) {
+          column.setTable(new Table(canonical, false));
+        }
+      }
+    }
+  }
+
+  /**
+   * Finds the visible input name for a full qualifier, preserving unknown names.
+   *
+   * @param qualifier
+   *          optional reference qualifier
+   * @param references
+   *          inputs in the current scope
+   * @return the input alias or table name, or the unresolved qualifier
+   */
+  private static String canonicalQualifier(String qualifier, List<TableReference> references) {
+    for (TableReference reference : references) {
+      if (reference.tableAlias() == null && !reference.joinGroup().isEmpty()) {
+        String nested = canonicalQualifier(qualifier, reference.joinGroup());
+        if (!Objects.equals(nested, qualifier)) {
+          return nested;
+        }
+      } else if (qualifiers(List.of(reference)).stream()
+          .anyMatch(name -> RelationQualifiers.matches(qualifier, name))) {
+        return reference.tableAlias() == null ? reference.tableName() : reference.tableAlias();
+      }
+    }
+    return qualifier;
+  }
+
+  /**
    * Lists SQL qualifiers visible through unaliased join groups.
    *
    * @param references
@@ -3253,6 +3299,9 @@ public final class SqlParser {
         names.add(reference.tableAlias());
       } else if (reference.tableName() != null) {
         names.add(reference.tableName());
+        if (reference.schemaName() != null && !reference.tableName().contains(".")) {
+          names.add(reference.schemaName() + "." + reference.tableName());
+        }
         if (InformationSchemaTables.matchesTableReference(reference.tableName())) {
           names.add("tables");
         } else if (InformationSchemaColumns.matchesTableReference(reference.tableName())) {

@@ -94,6 +94,7 @@ import se.alipsa.jparq.engine.PredicateSubqueryValidation;
 import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.RecordReader;
+import se.alipsa.jparq.engine.RelationQualifiers;
 import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SamplingRecordReader;
 import se.alipsa.jparq.engine.SqlComparisons;
@@ -2325,23 +2326,14 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          table reference
    * @param primaryOnly
    *          whether to return a single qualifier for unqualified lookups
-   * @return ordered list of qualifiers (alias before table name)
+   * @return visible aliases or unaliased table names, including schema prefixes
    */
   private List<String> qualifierList(SqlParser.TableReference ref, boolean primaryOnly) {
     if (ref == null) {
       return List.of();
     }
-    List<String> qualifiers = new ArrayList<>(2);
-    if (ref.tableAlias() != null && !ref.tableAlias().isBlank()) {
-      qualifiers.add(ref.tableAlias());
-      if (primaryOnly) {
-        return List.copyOf(qualifiers);
-      }
-    }
-    if (ref.tableName() != null && !ref.tableName().isBlank()) {
-      qualifiers.add(ref.tableName());
-    }
-    return qualifiers.isEmpty() ? List.of() : List.copyOf(qualifiers);
+    List<String> qualifiers = SqlParser.visibleQualifiers(List.of(ref));
+    return primaryOnly && !qualifiers.isEmpty() ? List.of(qualifiers.getFirst()) : qualifiers;
   }
 
   private List<GenericRecord> applySampleToRows(SqlParser.TableSampleDefinition sample, List<GenericRecord> rows)
@@ -3168,8 +3160,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     for (JoinRecordReader.JoinTable table : tables) {
       if (table.alias() != null && !table.alias().isBlank()) {
         qualifiers.add(table.alias());
-      }
-      if (table.tableName() != null && !table.tableName().isBlank()) {
+      } else if (table.tableName() != null && !table.tableName().isBlank()) {
         qualifiers.add(table.tableName());
       }
       qualifiers.addAll(table.nestedQualifiers().keySet());
@@ -3196,8 +3187,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         String normalized = normalizeColumnKey(MaterializedNames.sqlLabel(field));
         columns.putIfAbsent(normalized, field.name());
       }
-      registerCorrelatedColumns(lookup, table.tableName(), columns);
-      registerCorrelatedColumns(lookup, table.alias(), columns);
+      registerCorrelatedColumns(lookup, table.alias() == null ? table.tableName() : table.alias(), columns);
       for (var nested : table.nestedQualifiers().entrySet()) {
         registerCorrelatedColumns(lookup, nested.getKey(), nested.getValue());
       }
@@ -4347,8 +4337,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           carrying SQLState 42000 for an unknown or hidden qualifier
    */
   private static void validateVisibleQualifiers(SqlParser.Select select) {
-    Map<Identifier, String> visible = new LinkedHashMap<>();
-    SqlParser.visibleQualifiers(select.tableReferences()).forEach(name -> visible.put(Identifier.of(name), name));
+    final List<String> visible = SqlParser.visibleQualifiers(select.tableReferences());
     List<Expression> expressions = new ArrayList<>(select.expressions());
     expressions.add(select.where());
     expressions.add(select.having());
@@ -4361,7 +4350,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     for (Expression expression : expressions) {
       for (Column column : ColumnsUsed.referencesInScope(expression)) {
-        validateVisibleQualifier(visible, column.getTable() == null ? null : column.getTable().getName());
+        validateVisibleQualifier(visible, RelationQualifiers.qualifier(column));
       }
     }
     for (var wildcard : select.qualifiedWildcards()) {
@@ -4379,9 +4368,9 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @throws IllegalArgumentException
    *           carrying SQLState 42000 if the qualifier is not visible
    */
-  private static void validateVisibleQualifier(Map<Identifier, String> visible, String qualifier) {
-    Identifier name = Identifier.of(qualifier);
-    if (name != null && name.resolve(visible) == null) {
+  private static void validateVisibleQualifier(List<String> visible, String qualifier) {
+    if (qualifier != null && !qualifier.isBlank()
+        && visible.stream().noneMatch(name -> RelationQualifiers.matches(qualifier, name))) {
       throw SqlExceptions.syntaxFailure("Unknown table qualifier '" + qualifier + "'");
     }
   }

@@ -4,7 +4,9 @@
 
 - Reject unknown relation qualifiers in SELECT, WHERE, GROUP BY, HAVING, and ORDER BY with
   `SQLSyntaxErrorException` and SQLState `42000`, including single-table queries, joins, and empty inputs.
-  A table or CTE alias now hides the original name consistently across these clauses (#261).
+  A table or CTE alias now hides the original name consistently across these clauses and in correlated subqueries
+  (#261, #293, #295). Preserve quoted aliases containing dots in column references and wildcards. Validate full
+  schema qualifiers, reject schema prefixes on aliases, and support schema-qualified wildcards on unaliased inputs.
 
 - Return temporal differences and interval literals as immutable `TemporalInterval` values through JDBC
   `getObject()`, including typed getters. Report JDBC OTHER with type name INTERVAL and the interval Java class.

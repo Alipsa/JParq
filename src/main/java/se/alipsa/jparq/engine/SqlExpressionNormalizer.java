@@ -68,6 +68,13 @@ public final class SqlExpressionNormalizer {
         normalizeTimestampUnit(function);
         return super.visit(function, context);
       }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(Column column, S context) {
+        RelationQualifiers.restore(column);
+        return super.visit(column, context);
+      }
     });
     new SqlExpressionNormalizer().select(statement);
   }

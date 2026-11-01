@@ -188,6 +188,7 @@ public final class CorrelatedSubqueryRewriter {
     ExpressionDeParser expressionDeParser = new ExpressionDeParser() {
       @Override
       public <S> StringBuilder visit(Column column, S context) {
+        RelationQualifiers.restore(column);
         Table table = column.getTable();
         if (inlineQualifiedFromColumnIdentifier(column)) {
           return getBuilder();
@@ -225,19 +226,15 @@ public final class CorrelatedSubqueryRewriter {
       }
 
       private boolean inlineQualifiedFromTable(Column column, Table table) {
-        String[] candidates = {
-            table.getUnquotedName(), table.getFullyQualifiedName(), table.getName()
-        };
-        for (String candidate : candidates) {
-          String normalizedCandidate = normalizeIdentifier(candidate);
-          if (normalizedCandidate != null && normalized.contains(normalizedCandidate)
-              && localScopes.stream().noneMatch(scope -> scope.contains(normalizedCandidate))) {
-            appendCorrelatedLiteral(normalizedCandidate, column.getColumnName(),
-                valueResolver.apply(normalizedCandidate, column.getColumnName()));
-            return true;
-          }
+        String candidate = table.getFullyQualifiedName();
+        String normalizedCandidate = resolveQualifier(candidate, normalized);
+        if (normalizedCandidate == null
+            || localScopes.stream().anyMatch(scope -> resolveQualifier(candidate, scope) != null)) {
+          return false;
         }
-        return false;
+        appendCorrelatedLiteral(normalizedCandidate, column.getColumnName(),
+            valueResolver.apply(normalizedCandidate, column.getColumnName()));
+        return true;
       }
 
       private boolean inlineUnqualifiedColumn(Column column) {
@@ -382,6 +379,39 @@ public final class CorrelatedSubqueryRewriter {
     if (normalized != null) {
       qualifiers.add(normalized);
     }
+    if (item.getAlias() == null && item instanceof Table table) {
+      String full = normalizeIdentifier(table.getFullyQualifiedName());
+      if (full != null) {
+        qualifiers.add(full);
+      }
+    }
+  }
+
+  /**
+   * Resolves a complete qualifier against normalized scope keys without losing
+   * schema components or quoted identifier boundaries.
+   *
+   * @param candidate
+   *          full SQL qualifier
+   * @param names
+   *          normalized visible qualifier keys
+   * @return the matching scope key, or null
+   */
+  private static String resolveQualifier(String candidate, Set<String> names) {
+    String exact = normalizeIdentifier(candidate);
+    if (names.contains(exact)) {
+      return exact;
+    }
+    for (String name : names) {
+      String raw = name.substring(2);
+      if (name.startsWith("Q:")) {
+        raw = "\"" + raw.replace("\"", "\"\"") + "\"";
+      }
+      if (RelationQualifiers.matches(candidate, raw)) {
+        return name;
+      }
+    }
+    return null;
   }
 
   private record FallbackResult(String sql, boolean correlated, Set<String> columns, Set<QualifiedColumn> references) {

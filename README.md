@@ -174,7 +174,11 @@ wrap these inputs in a derived table or CTE to rename their columns.
 Nonparameterized single-input queries validate during preparation; joins validate when their inputs are
 built during execution. ON conditions can reference only columns from inputs joined so far.
 A table alias hides the original table or CTE name in SELECT, WHERE, GROUP BY, HAVING, ORDER BY,
-and ON conditions: use `e.id` after `FROM employees e`. Unknown or hidden relation qualifiers raise
+and ON conditions, including correlated subqueries: use `e.id` after `FROM employees e`.
+Schema prefixes are checked against unaliased inputs; `acme.employees.id` is valid after
+`FROM acme.employees`, while `nosuch.employees.id` and schema prefixes on aliases are rejected.
+Quoted aliases containing dots remain single identifiers, such as `"a.b".id` after `FROM employees "a.b"`.
+Unknown or hidden relation qualifiers raise
 `SQLSyntaxErrorException` with SQLState `42000`, including when the input is empty or predicates are pushed down.
 
 Recursive CTEs retain the anchor's numeric types and decimal precision and scale. Recursive values that require
