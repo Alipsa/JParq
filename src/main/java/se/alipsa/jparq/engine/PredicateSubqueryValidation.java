@@ -220,7 +220,7 @@ public final class PredicateSubqueryValidation {
       if (expression instanceof AllColumns) {
         String qualifier = expression instanceof AllTableColumns all ? all.getTable().getName() : null;
         Integer width = inputDegree(plain.getFromItem(), plain.getJoins(), qualifier, columns, ctes);
-        if (width == null) {
+        if (width == null || qualifier != null && width == 0) {
           return null;
         }
         count += width;
@@ -244,7 +244,8 @@ public final class PredicateSubqueryValidation {
    *          source schema resolver
    * @param ctes
    *          visible CTE declarations
-   * @return input degree, or null for an unresolved input
+   * @return input degree, zero if the qualifier matches no input, or null for an
+   *         unresolved input or unsupported NATURAL JOIN
    */
   private static Integer inputDegree(FromItem first, List<Join> joins, String qualifier,
       Function<Table, Set<String>> columns, Map<Identifier, WithItem<?>> ctes) {
@@ -254,6 +255,9 @@ public final class PredicateSubqueryValidation {
     }
     if (joins != null) {
       for (Join join : joins) {
+        if (join.isNatural()) {
+          return null;
+        }
         Integer width = sourceDegree(join.getRightItem(), qualifier, columns, ctes);
         if (width == null) {
           return null;
@@ -269,6 +273,7 @@ public final class PredicateSubqueryValidation {
 
   /**
    * Resolves one source without reading its rows or evaluating expressions.
+   * Unaliased parenthesized groups expose their contained input qualifiers.
    *
    * @param input
    *          source input
@@ -284,6 +289,9 @@ public final class PredicateSubqueryValidation {
       Map<Identifier, WithItem<?>> ctes) {
     if (input == null) {
       return 0;
+    }
+    if (input instanceof ParenthesedFromItem group && input.getAlias() == null) {
+      return inputDegree(group.getFromItem(), group.getJoins(), qualifier, columns, ctes);
     }
     String name = input.getAlias() != null
         ? input.getAlias().getName()
