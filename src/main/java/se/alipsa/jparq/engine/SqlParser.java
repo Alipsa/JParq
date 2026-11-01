@@ -2282,8 +2282,9 @@ public final class SqlParser {
    *
    * <p>
    * This method normalizes and resolves ORDER BY expressions to their
-   * corresponding physical column names, ensuring that sorting is performed on
-   * actual data fields rather than aliases or qualified names. For example, in a
+   * corresponding SELECT expressions within the current query scope. Column
+   * aliases resolve to input fields, while derived tables and CTEs expose their
+   * materialized output names, not their inner source names. For example, in a
    * query like:
    * </p>
    *
@@ -2294,10 +2295,15 @@ public final class SqlParser {
    * }</pre>
    *
    * <p>
-   * The ORDER BY expression {@code miles_per_gallon} is resolved to the
-   * underlying physical column {@code mpg}, so that downstream components (such
-   * as {@code QueryProcessor}) can correctly sort records using the actual field
-   * name.
+   * The ORDER BY alias {@code miles_per_gallon} resolves to the selected
+   * expression {@code mpg}, an input column in this query's scope. Downstream
+   * components use that expression to obtain each row's sort value.
+   * </p>
+   *
+   * <p>
+   * For {@code SELECT d.k, COUNT(*) FROM (SELECT n AS k FROM o) d
+   * GROUP BY d.k ORDER BY d.k}, the ordering key remains {@code k}, matching the
+   * outer grouping expression rather than the inner source column {@code n}.
    * </p>
    *
    * <p>
@@ -2383,7 +2389,9 @@ public final class SqlParser {
 
   /**
    * Binds ordering labels and positions after the complete output is known.
-   * Repeated labels are usable when they denote the same expression.
+   * Repeated labels are usable when they denote the same expression. Exact
+   * aliases take precedence over quoted lowercase fallback aliases; ambiguity is
+   * checked against the alias that resolves the reference.
    *
    * @param keys
    *          the original ordering references
@@ -2429,6 +2437,12 @@ public final class SqlParser {
           }
         } else {
           String label = Identifier.lookupKey(column);
+          if (!aliases.containsKey(label)) {
+            String alternative = ColumnMappingUtil.alternativeColumnKey(label);
+            if (alternative != null) {
+              label = alternative;
+            }
+          }
           if (ambiguous.contains(label)) {
             throw SqlExceptions.ambiguousColumn(column);
           }

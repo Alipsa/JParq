@@ -1,7 +1,10 @@
 package jparq.aggregate;
 
+import static jparq.support.QueryTestSupport.rows;
+import static jparq.support.QueryTestSupport.writeIntegerFixture;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
@@ -10,17 +13,11 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLSyntaxErrorException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import org.apache.avro.Schema;
-import org.apache.avro.SchemaBuilder;
-import org.apache.avro.generic.GenericData;
-import org.apache.avro.generic.GenericRecord;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.parquet.avro.AvroParquetWriter;
-import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -28,7 +25,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.AggregateResultSetMetaData;
 
-/** Verifies DISTINCT and row limits on completed aggregate results. */
+/**
+ * Verifies ordering, DISTINCT, and row limits on completed aggregate results.
+ */
 class AggregateResultClausesTest {
 
   @TempDir
@@ -42,17 +41,7 @@ class AggregateResultClausesTest {
    */
   @BeforeEach
   void fixture() throws Exception {
-    Schema schema = SchemaBuilder.record("Row").fields().optionalInt("n").endRecord();
-    var configuration = new Configuration(false);
-    var file = new org.apache.hadoop.fs.Path(base.resolve("o.parquet").toUri());
-    try (var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(file, configuration))
-        .withSchema(schema).withConf(configuration).build()) {
-      for (Integer value : Arrays.asList(1, 1, 2, 3, null)) {
-        var row = new GenericData.Record(schema);
-        row.put("n", value);
-        writer.write(row);
-      }
-    }
+    writeIntegerFixture(base);
   }
 
   /**
@@ -78,6 +67,134 @@ class AggregateResultClausesTest {
       assertEquals(List.of(), rows(connection, sql + " OFFSET 2147483647 ROWS", prepared));
       assertEquals(List.of(List.of(2, 1L), List.of(3, 1L), Arrays.asList(null, 1L)),
           rows(connection, sql + " LIMIT 2147483647 OFFSET 1", prepared));
+    }
+  }
+
+  /**
+   * Checks ordering by renamed derived columns through both JDBC APIs.
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void groupedOrderingUsesDerivedOutputNames(boolean prepared) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + base)) {
+      List<List<Object>> expected = List.of(List.of(1, 2L), List.of(2, 1L), List.of(3, 1L), Arrays.asList(null, 1L));
+      String source = " FROM (SELECT n AS k FROM o) d GROUP BY d.k";
+      for (String ordering : List.of("d.k", "k", "1", "d.\"k\"", "\"k\"")) {
+        String sql = "SELECT d.k, COUNT(*)" + source + " ORDER BY " + ordering + " NULLS LAST";
+        assertEquals(expected, rows(connection, sql, prepared), sql);
+        assertEquals(List.of(),
+            rows(connection,
+                "SELECT d.k, COUNT(*) FROM (SELECT n AS k FROM o WHERE 1 = 0) d GROUP BY d.k ORDER BY " + ordering,
+                prepared));
+      }
+      assertEquals(expected, rows(connection, "SELECT d.k, COUNT(*)" + source + " ORDER BY d.k", prepared));
+      for (String ordering : List.of("renamed", "\"renamed\"")) {
+        assertEquals(expected, rows(connection,
+            "SELECT d.k AS renamed, COUNT(*)" + source + " ORDER BY " + ordering + " NULLS LAST", prepared));
+      }
+      assertEquals(expected,
+          rows(connection, "SELECT d.k, COUNT(*) AS c" + source + " ORDER BY \"c\" DESC, d.k NULLS LAST", prepared));
+      assertEquals(List.of(List.of(2L, 2L), List.of(3L, 1L), List.of(4L, 1L), Arrays.asList(null, 1L)),
+          rows(connection, "SELECT d.k + 1 AS e, COUNT(*)" + source + " ORDER BY \"e\" NULLS LAST", prepared));
+      assertEquals(List.of(List.of(3, 1L), List.of(2, 1L), List.of(1, 2L), Arrays.asList(null, 1L)),
+          rows(connection, "SELECT d.k, COUNT(*)" + source + " ORDER BY d.k DESC NULLS LAST", prepared));
+      for (String ordering : List.of("d.k", "d.\"k\"", "\"k\"")) {
+        assertEquals(List.of(List.of(2L), List.of(1L), List.of(1L), List.of(1L)),
+            rows(connection, "SELECT COUNT(*)" + source + " ORDER BY " + ordering + " NULLS LAST", prepared));
+      }
+    }
+  }
+
+  /**
+   * Checks ambiguous quoted lowercase aliases on grouped results, even without
+   * input rows.
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void quotedGroupedOrderingAliasesRejectAmbiguity(boolean prepared) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + base)) {
+      for (String predicate : List.of("", " WHERE 1 = 0")) {
+        String sql = "SELECT d.k AS repeated, COUNT(*) AS repeated FROM (SELECT n AS k FROM o" + predicate
+            + ") d GROUP BY d.k ORDER BY \"repeated\"";
+        SQLException error = assertThrows(SQLException.class, () -> rows(connection, sql, prepared), sql);
+        assertEquals("42702", error.getSQLState(), sql);
+      }
+    }
+  }
+
+  /**
+   * Checks renamed grouping keys across materialization boundaries.
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void groupedOrderingPreservesMaterializedNames(boolean prepared) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + base)) {
+      List<List<Object>> expected = List.of(List.of(1, 2L), List.of(2, 1L), List.of(3, 1L), Arrays.asList(null, 1L));
+      for (String source : List.of("(SELECT n AS k FROM o) d", "(SELECT n FROM o) d(k)",
+          "(SELECT x.k FROM (SELECT n AS k FROM o) x) d", "(SELECT CAST(n + 0 AS INTEGER) AS k FROM o) d")) {
+        for (String ordering : List.of("d.k", "d.\"k\"", "\"k\"")) {
+          String sql = "SELECT d.k, COUNT(*) FROM " + source + " GROUP BY d.k ORDER BY " + ordering + " NULLS LAST";
+          assertEquals(expected, rows(connection, sql, prepared), sql);
+        }
+      }
+      for (String ordering : List.of("\"n\"", "o.\"n\"")) {
+        assertEquals(expected,
+            rows(connection, "SELECT n, COUNT(*) FROM o GROUP BY n ORDER BY " + ordering + " NULLS LAST", prepared));
+      }
+      assertEquals(expected,
+          rows(connection,
+              "WITH c AS (SELECT n AS k FROM o) SELECT d.k, COUNT(*) FROM c d GROUP BY d.k ORDER BY d.k NULLS LAST",
+              prepared));
+      assertEquals(expected, rows(connection, "SELECT d.\"Key\", COUNT(*) FROM (SELECT n AS \"Key\" FROM o) d "
+          + "GROUP BY d.\"Key\" ORDER BY d.\"Key\" NULLS LAST", prepared));
+    }
+  }
+
+  /**
+   * Checks that invalid grouped ordering retains its JDBC syntax classification.
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @throws SQLException
+   *           if the connection cannot be opened
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void invalidGroupedOrderingHasSqlState(boolean prepared) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + base)) {
+      for (String predicate : List.of("", " WHERE 1 = 0")) {
+        for (String ordering : List.of("d.n", "d.missing")) {
+          String sql = "SELECT d.k, COUNT(*) FROM (SELECT n AS k FROM o" + predicate + ") d GROUP BY d.k ORDER BY "
+              + ordering;
+          SQLException error = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, sql, prepared), sql);
+          assertEquals("42000", error.getSQLState(), sql);
+          assertTrue(error.getMessage().contains("Missing columns for table 'd': " + ordering.substring(2)),
+              error.getMessage());
+        }
+      }
     }
   }
 
@@ -313,31 +430,4 @@ class AggregateResultClausesTest {
     }
   }
 
-  /**
-   * Executes through either JDBC statement API.
-   *
-   * @param connection
-   *          fixture connection
-   * @param sql
-   *          query to execute
-   * @param prepared
-   *          whether to use a prepared statement
-   * @return all projected row values
-   * @throws SQLException
-   *           if execution fails
-   */
-  private static List<List<Object>> rows(Connection connection, String sql, boolean prepared) throws SQLException {
-    try (var statement = prepared ? connection.prepareStatement(sql) : connection.createStatement();
-        ResultSet result = prepared ? ((PreparedStatement) statement).executeQuery() : statement.executeQuery(sql)) {
-      List<List<Object>> rows = new ArrayList<>();
-      while (result.next()) {
-        List<Object> row = new ArrayList<>();
-        for (int column = 1; column <= result.getMetaData().getColumnCount(); column++) {
-          row.add(result.getObject(column));
-        }
-        rows.add(row);
-      }
-      return rows;
-    }
-  }
 }

@@ -1,5 +1,7 @@
 package jparq;
 
+import static jparq.support.QueryTestSupport.rows;
+import static jparq.support.QueryTestSupport.writeIntegerFixture;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -11,9 +13,12 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.sql.DriverManager;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.SQLSyntaxErrorException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -21,6 +26,9 @@ import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.JParqSql;
 
 /** Tests for ORDER BY operations. */
@@ -37,6 +45,48 @@ public class OrderByTest {
     Path dir = mtcarsPath.getParent();
 
     jparqSql = new JParqSql("jdbc:jparq:" + dir.toAbsolutePath());
+  }
+
+  /**
+   * Checks quoted lowercase output aliases, exact-name precedence, and ambiguity.
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @param base
+   *          temporary directory for the Parquet fixture
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void quotedOrderingAliasesRespectExactNamesAndAmbiguity(boolean prepared, @TempDir Path base) throws Exception {
+    writeIntegerFixture(base);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + base)) {
+      for (String source : List.of("o", "o JOIN (VALUES (1)) v(x) ON TRUE")) {
+        assertEquals(List.of(List.of(1), List.of(1), List.of(2), List.of(3), Arrays.asList((Object) null)),
+            rows(connection, "SELECT n AS renamed FROM " + source + " ORDER BY \"renamed\" NULLS LAST", prepared));
+      }
+      assertEquals(
+          List.of(List.of(3, -3L), List.of(2, -2L), List.of(1, -1L), List.of(1, -1L), Arrays.asList(null, null)),
+          rows(connection, "SELECT n AS c, -n AS \"c\" FROM o ORDER BY \"c\" NULLS LAST", prepared));
+      for (String predicate : List.of("", " WHERE 1 = 0")) {
+        String sql = "SELECT n AS repeated, n + 1 AS repeated FROM o" + predicate + " ORDER BY \"repeated\"";
+        SQLException error = assertThrows(SQLException.class, () -> rows(connection, sql, prepared), sql);
+        assertEquals("42702", error.getSQLState(), sql);
+        assertEquals(
+            predicate.isEmpty()
+                ? List.of(List.of(1, 1), List.of(1, 1), List.of(2, 2), List.of(3, 3), Arrays.asList(null, null))
+                : List.of(),
+            rows(connection,
+                "SELECT n AS repeated, n AS repeated FROM o" + predicate + " ORDER BY \"repeated\" NULLS LAST",
+                prepared));
+      }
+      SQLException error = assertThrows(SQLSyntaxErrorException.class,
+          () -> rows(connection, "SELECT n AS renamed FROM o ORDER BY \"Renamed\"", prepared));
+      assertEquals("42000", error.getSQLState());
+    }
   }
 
   @Test
