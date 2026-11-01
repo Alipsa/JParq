@@ -2,6 +2,12 @@
 
 ### 1.4.0
 
+- Reject unknown relation qualifiers in SELECT, WHERE, GROUP BY, HAVING, and ORDER BY with
+  `SQLSyntaxErrorException` and SQLState `42000`, including single-table queries, joins, and empty inputs.
+  A table or CTE alias now hides the original name consistently across these clauses and in correlated subqueries
+  (#261, #293, #295). Preserve quoted aliases containing dots in column references and wildcards. Validate full
+  schema qualifiers, reject schema prefixes on aliases, and support schema-qualified wildcards on unaliased inputs.
+
 - Return temporal differences and interval literals as immutable `TemporalInterval` values through JDBC
   `getObject()`, including typed getters. Report JDBC OTHER with type name INTERVAL and the interval Java class.
   `getString()` and explicit character casts use the result column's common field range and maximum
@@ -64,7 +70,7 @@
 - **Behavior change:** quantified comparisons in WHERE now reject array, map, and struct candidates returned by subqueries instead of silently filtering out rows. ANY/SOME/ALL requires scalar candidate values from both arrays and subqueries; the same validation applies in HAVING (#214).
 - Fix HAVING comparisons using ANY, SOME, and ALL over subqueries and arrays, including correlated grouping values, NULLs, and empty inputs (#214). Share quantified comparison semantics with WHERE and reject invalid array operands explicitly.
 - Add regression coverage for select-list scalar subquery failures retaining SQLState `42000` and the original nested diagnostic during projection access and streaming `ResultSet.next()` (#212). The exception handling was already corrected by the SQL error-context changes; document that evaluation can be deferred until iteration or value access.
-- **Behavior change:** ON conditions now reject original table or CTE names hidden by an alias with SQLState `42000`. For example, after `FROM employees e`, use `ON e.id = ...`; `ON employees.id = ...` previously worked and now fails. Other clauses retain their existing qualifier resolution; consistency remains tracked in #261. Explicitly reject column alias lists on `information_schema.tables` and `information_schema.columns` with `42000`, including joined inputs, instead of ignoring them or reporting a missing renamed column (#209).
+- **Behavior change:** ON conditions now reject original table or CTE names hidden by an alias with SQLState `42000`. For example, after `FROM employees e`, use `ON e.id = ...`; `ON employees.id = ...` previously worked and now fails. Explicitly reject column alias lists on `information_schema.tables` and `information_schema.columns` with `42000`, including joined inputs, instead of ignoring them or reporting a missing renamed column (#209).
 - Preserve alias lists on inherited CTE references inside scalar/EXISTS/IN subqueries, derived tables, LATERAL inputs, and subsequent CTE bodies (#210), including parenthesized references. Reject physical-table column alias lists explicitly with SQLState `42000` pending #263. Check qualified ON references against their own visible input rather than accepting the same column name from an unrelated input (#209).
 - Bind column alias lists on ordinary CTE references (`FROM c AS x(a, b)`) as well as parenthesized references, including wildcard output, grouping, recursion, and joins (#210, #211). Reject invalid alias counts and duplicate aliases; cache renamed rows per materialized CTE result without retaining stale correlated or recursive data. Missing-column diagnostics use visible relation aliases, and ON conditions validate against the inputs joined so far. Join validation still occurs during execution, while nonparameterized single-input queries validate during preparation (#209).
 - **Behavior change:** reject unknown columns in derived tables and CTEs instead of silently returning NULL (#209). Validate visible SQL output names, including renamed columns and empty inputs, independently of pushdown settings. Missing-column diagnostics now retain the column name and SQLState `42000` for physical and materialized inputs.

@@ -433,12 +433,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
     this.fieldMappings = List.copyOf(mappings);
     List<String> qualifiers = new ArrayList<>();
     for (JoinTable table : joinTables) {
-      if (table.tableName() != null) {
-        qualifiers.add(table.tableName());
-      }
-      if (table.alias() != null) {
-        qualifiers.add(table.alias());
-      }
+      qualifiers.addAll(qualifierSet(table));
       qualifiers.addAll(table.nestedQualifiers().keySet());
     }
     this.evaluator = new ExpressionEvaluator(schema, subqueryExecutor, qualifiers, qualifierColumnMapping,
@@ -666,8 +661,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
    */
   private static Set<String> qualifierSet(JoinTable table) {
     Set<String> qualifiers = new LinkedHashSet<>();
-    addQualifierVariant(qualifiers, table.tableName());
-    addQualifierVariant(qualifiers, table.alias());
+    addQualifierVariant(qualifiers, table.alias() == null ? table.tableName() : table.alias());
     return qualifiers;
   }
 

@@ -44,6 +44,16 @@ class ParseQualifiedWildcardTest {
     assertEquals(1, wildcards.size(), "Expected a single qualified wildcard entry");
     assertEquals("My Table", wildcards.getFirst().qualifier(),
         "Quoted identifier should preserve the unquoted qualifier");
+    assertEquals("\"My Table\"", wildcards.getFirst().qualifierIdentifier(),
+        "Qualifier validation must retain identifier quotes");
+  }
+
+  /** Preserves a dot inside a delimited alias as part of one identifier. */
+  @Test
+  void retainsQuotedQualifierContainingDot() {
+    var select = SqlParser
+        .parseSelectAllowQualifiedWildcards("SELECT \"acme.employees\".* FROM employees \"acme.employees\"");
+    assertEquals("\"acme.employees\"", select.qualifiedWildcards().getFirst().qualifierIdentifier());
   }
 
   @Test

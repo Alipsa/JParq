@@ -151,7 +151,10 @@ class ParenthesizedJoinTest {
               + " JOIN (VALUES (1)) p(z) ON TRUE")) {
         SQLException error = assertThrows(SQLException.class, () -> statement.executeQuery(sql), sql);
         assertEquals("42000", error.getSQLState(), sql);
-        assertTrue(error.getMessage().contains("Missing columns in JOIN condition"), error.getMessage());
+        String diagnostic = sql.contains("ON \"M\".x") || sql.contains("ON zz.x")
+            ? "Unknown table qualifier"
+            : "Missing columns in JOIN condition";
+        assertTrue(error.getMessage().contains(diagnostic), error.getMessage());
       }
     }
   }
@@ -179,7 +182,7 @@ class ParenthesizedJoinTest {
   }
 
   /**
-   * Preserves real table names for correlations when an outer table has an alias.
+   * Rejects real table names hidden by aliases in correlated subqueries.
    *
    * @param pushdown
    *          whether both pushdown options are enabled
@@ -190,27 +193,32 @@ class ParenthesizedJoinTest {
   @ValueSource(booleans = {
       true, false
   })
-  void aliasedOuterTablesRetainRealNameCorrelations(boolean pushdown) throws SQLException {
+  void aliasedOuterTablesHideRealNameCorrelations(boolean pushdown) throws SQLException {
     for (String input : List.of("mtcars m", "mtcars m JOIN (SELECT 1 AS a) x ON TRUE")) {
       for (String inner : List.of("mtcars i WHERE i.cyl = mtcars.cyl",
           "(VALUES (4),(6),(6)) v(c) WHERE v.c = mtcars.cyl")) {
         String sql = "SELECT m.model, (SELECT COUNT(*) FROM " + inner + ") AS c FROM " + input + " LIMIT 2";
         try (var connection = DriverManager.getConnection(jdbcUrl(pushdown));
-            var statement = connection.createStatement();
-            var result = statement.executeQuery(sql)) {
-          for (String model : List.of("Mazda RX4", "Mazda RX4 Wag")) {
+            var statement = connection.createStatement()) {
+          SQLException error = assertThrows(SQLException.class, () -> {
+            try (var result = statement.executeQuery(sql)) {
+              result.next();
+              result.getObject(2);
+            }
+          }, sql);
+          assertEquals("42000", error.getSQLState(), sql);
+          assertTrue(error.getMessage().contains("mtcars"), sql);
+          try (var result = statement.executeQuery(sql.replace("mtcars.cyl", "m.cyl"))) {
             assertTrue(result.next(), sql);
-            assertEquals(model, result.getString(1), sql);
             assertEquals(inner.startsWith("mtcars") ? 7 : 2, result.getInt(2), sql);
           }
-          assertFalse(result.next(), sql);
         }
       }
     }
   }
 
   /**
-   * Preserves both the table name and alias for ordinary joined-input wildcards.
+   * Exposes only the alias for ordinary aliased joined-input wildcards.
    *
    * @param pushdown
    *          whether both pushdown options are enabled
@@ -221,12 +229,14 @@ class ParenthesizedJoinTest {
   @ValueSource(booleans = {
       true, false
   })
-  void aliasedJoinTablesRetainRealNameWildcards(boolean pushdown) throws SQLException {
-    for (String qualifier : List.of("mtcars", "m")) {
-      String sql = "SELECT " + qualifier + ".* FROM mtcars m JOIN (SELECT 1 AS a) x ON TRUE LIMIT 2";
-      try (var connection = DriverManager.getConnection(jdbcUrl(pushdown));
-          var statement = connection.createStatement();
-          var result = statement.executeQuery(sql)) {
+  void aliasedJoinTablesHideRealNameWildcards(boolean pushdown) throws SQLException {
+    try (var connection = DriverManager.getConnection(jdbcUrl(pushdown));
+        var statement = connection.createStatement()) {
+      SQLException error = assertThrows(SQLException.class,
+          () -> statement.executeQuery("SELECT mtcars.* FROM mtcars m JOIN (SELECT 1 AS a) x ON TRUE LIMIT 2"));
+      assertEquals("42000", error.getSQLState());
+      String sql = "SELECT m.* FROM mtcars m JOIN (SELECT 1 AS a) x ON TRUE LIMIT 2";
+      try (var result = statement.executeQuery(sql)) {
         assertEquals(12, result.getMetaData().getColumnCount(), sql);
         for (String model : List.of("Mazda RX4", "Mazda RX4 Wag")) {
           assertTrue(result.next(), sql);
