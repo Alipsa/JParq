@@ -151,7 +151,10 @@ class ParenthesizedJoinTest {
               + " JOIN (VALUES (1)) p(z) ON TRUE")) {
         SQLException error = assertThrows(SQLException.class, () -> statement.executeQuery(sql), sql);
         assertEquals("42000", error.getSQLState(), sql);
-        assertTrue(error.getMessage().contains("Missing columns in JOIN condition"), error.getMessage());
+        String diagnostic = sql.contains("ON \"M\".x") || sql.contains("ON zz.x")
+            ? "Unknown table qualifier"
+            : "Missing columns in JOIN condition";
+        assertTrue(error.getMessage().contains(diagnostic), error.getMessage());
       }
     }
   }
@@ -210,7 +213,7 @@ class ParenthesizedJoinTest {
   }
 
   /**
-   * Preserves both the table name and alias for ordinary joined-input wildcards.
+   * Exposes only the alias for ordinary aliased joined-input wildcards.
    *
    * @param pushdown
    *          whether both pushdown options are enabled
@@ -221,12 +224,14 @@ class ParenthesizedJoinTest {
   @ValueSource(booleans = {
       true, false
   })
-  void aliasedJoinTablesRetainRealNameWildcards(boolean pushdown) throws SQLException {
-    for (String qualifier : List.of("mtcars", "m")) {
-      String sql = "SELECT " + qualifier + ".* FROM mtcars m JOIN (SELECT 1 AS a) x ON TRUE LIMIT 2";
-      try (var connection = DriverManager.getConnection(jdbcUrl(pushdown));
-          var statement = connection.createStatement();
-          var result = statement.executeQuery(sql)) {
+  void aliasedJoinTablesHideRealNameWildcards(boolean pushdown) throws SQLException {
+    try (var connection = DriverManager.getConnection(jdbcUrl(pushdown));
+        var statement = connection.createStatement()) {
+      SQLException error = assertThrows(SQLException.class,
+          () -> statement.executeQuery("SELECT mtcars.* FROM mtcars m JOIN (SELECT 1 AS a) x ON TRUE LIMIT 2"));
+      assertEquals("42000", error.getSQLState());
+      String sql = "SELECT m.* FROM mtcars m JOIN (SELECT 1 AS a) x ON TRUE LIMIT 2";
+      try (var result = statement.executeQuery(sql)) {
         assertEquals(12, result.getMetaData().getColumnCount(), sql);
         for (String model : List.of("Mazda RX4", "Mazda RX4 Wag")) {
           assertTrue(result.next(), sql);

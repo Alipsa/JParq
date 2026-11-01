@@ -313,6 +313,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           tmpJoinQuery = false;
         } else {
           tmpSelect = (SqlParser.Select) query;
+          validateVisibleQualifiers(tmpSelect);
           validatePredicateSubqueries(tmpSelect, tmpCteResults);
           tmpSetOperation = false;
           tmpTableRefs = tmpSelect.tableReferences();
@@ -4334,6 +4335,55 @@ public class JParqPreparedStatement implements PreparedStatement {
     validateRequiredColumns(schema, requirement.required(), referenceName(baseRef), select.labels(),
         select.columnNames(), requirement.referenced());
     return requirement.required();
+  }
+
+  /**
+   * Rejects qualifiers outside the current SELECT scope before optimization.
+   * Nested queries are checked after their correlated references are bound.
+   *
+   * @param select
+   *          query whose visible relation names are checked
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 for an unknown or hidden qualifier
+   */
+  private static void validateVisibleQualifiers(SqlParser.Select select) {
+    Map<Identifier, String> visible = new LinkedHashMap<>();
+    SqlParser.visibleQualifiers(select.tableReferences()).forEach(name -> visible.put(Identifier.of(name), name));
+    List<Expression> expressions = new ArrayList<>(select.expressions());
+    expressions.add(select.where());
+    expressions.add(select.having());
+    expressions.addAll(select.groupByExpressions());
+    List<SqlParser.OrderKey> orders = new ArrayList<>(select.orderBy());
+    orders.addAll(select.preOrderBy());
+    for (SqlParser.OrderKey order : orders) {
+      expressions.add(order.expression());
+      validateVisibleQualifier(visible, order.qualifier());
+    }
+    for (Expression expression : expressions) {
+      for (Column column : ColumnsUsed.referencesInScope(expression)) {
+        validateVisibleQualifier(visible, column.getTable() == null ? null : column.getTable().getName());
+      }
+    }
+    for (var wildcard : select.qualifiedWildcards()) {
+      validateVisibleQualifier(visible, wildcard.qualifierIdentifier());
+    }
+  }
+
+  /**
+   * Checks a relation name using SQL identifier quoting rules.
+   *
+   * @param visible
+   *          relation names exported by the FROM clause
+   * @param qualifier
+   *          optional qualifier to resolve
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 if the qualifier is not visible
+   */
+  private static void validateVisibleQualifier(Map<Identifier, String> visible, String qualifier) {
+    Identifier name = Identifier.of(qualifier);
+    if (name != null && name.resolve(visible) == null) {
+      throw SqlExceptions.syntaxFailure("Unknown table qualifier '" + qualifier + "'");
+    }
   }
 
   /**

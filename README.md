@@ -173,9 +173,9 @@ Alias lists on `information_schema.tables` and `information_schema.columns` are 
 wrap these inputs in a derived table or CTE to rename their columns.
 Nonparameterized single-input queries validate during preparation; joins validate when their inputs are
 built during execution. ON conditions can reference only columns from inputs joined so far.
-In ON conditions, a table alias hides the original table or CTE name: use `e.id`, rather than `employees.id`,
-after `FROM employees e`. Other clauses retain their existing qualifier resolution; consistency is tracked
-in [#261](https://github.com/Alipsa/JParq/issues/261).
+A table alias hides the original table or CTE name in SELECT, WHERE, GROUP BY, HAVING, ORDER BY,
+and ON conditions: use `e.id` after `FROM employees e`. Unknown or hidden relation qualifiers raise
+`SQLSyntaxErrorException` with SQLState `42000`, including when the input is empty or predicates are pushed down.
 
 Recursive CTEs retain the anchor's numeric types and decimal precision and scale. Recursive values that require
 fractional truncation or decimal rounding, or exceed integer ranges or decimal precision, fail with `SQLException`
