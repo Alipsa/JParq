@@ -2282,8 +2282,9 @@ public final class SqlParser {
    *
    * <p>
    * This method normalizes and resolves ORDER BY expressions to their
-   * corresponding physical column names, ensuring that sorting is performed on
-   * actual data fields rather than aliases or qualified names. For example, in a
+   * corresponding SELECT expressions within the current query scope. Column
+   * aliases resolve to input fields, while derived tables and CTEs expose their
+   * materialized output names, not their inner source names. For example, in a
    * query like:
    * </p>
    *
@@ -2298,6 +2299,12 @@ public final class SqlParser {
    * underlying physical column {@code mpg}, so that downstream components (such
    * as {@code QueryProcessor}) can correctly sort records using the actual field
    * name.
+   * </p>
+   *
+   * <p>
+   * For {@code SELECT d.k, COUNT(*) FROM (SELECT n AS k FROM o) d
+   * GROUP BY d.k ORDER BY d.k}, the ordering key remains {@code k}, matching the
+   * outer grouping expression rather than the inner source column {@code n}.
    * </p>
    *
    * <p>
