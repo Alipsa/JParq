@@ -1608,6 +1608,8 @@ public final class AggregateFunctions {
 
   /**
    * Evaluates sort keys once per group, then sorts using the cached values.
+   * Identifier accessors prefer exact names, with an unquoted fallback for quoted
+   * lowercase names.
    *
    * @param rows
    *          completed groups to sort
@@ -1623,7 +1625,14 @@ public final class AggregateFunctions {
     Map<String, OrderValueAccessor> accessorByColumn = buildOrderAccessors(plan);
     List<OrderValueAccessor> accessors = new ArrayList<>(orderBy.size());
     for (OrderKey key : orderBy) {
-      OrderValueAccessor accessor = accessorByColumn.get(Identifier.lookupKey(key.column()));
+      String columnKey = Identifier.lookupKey(key.column());
+      OrderValueAccessor accessor = accessorByColumn.get(columnKey);
+      if (accessor == null) {
+        String alternative = ColumnMappingUtil.alternativeColumnKey(columnKey);
+        if (alternative != null) {
+          accessor = accessorByColumn.get(alternative);
+        }
+      }
       if (accessor == null && key.expression() == null) {
         throw syntaxFailure(
             "ORDER BY column '" + key.column() + "' is not present in the SELECT list or grouping expressions");

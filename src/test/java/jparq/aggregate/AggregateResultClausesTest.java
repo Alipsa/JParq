@@ -101,19 +101,23 @@ class AggregateResultClausesTest {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + base)) {
       List<List<Object>> expected = List.of(List.of(1, 2L), List.of(2, 1L), List.of(3, 1L), Arrays.asList(null, 1L));
       String source = " FROM (SELECT n AS k FROM o) d GROUP BY d.k";
-      for (String ordering : List.of("d.k", "k", "1")) {
+      for (String ordering : List.of("d.k", "k", "1", "d.\"k\"", "\"k\"")) {
         String sql = "SELECT d.k, COUNT(*)" + source + " ORDER BY " + ordering + " NULLS LAST";
         assertEquals(expected, rows(connection, sql, prepared), sql);
+        assertEquals(List.of(),
+            rows(connection,
+                "SELECT d.k, COUNT(*) FROM (SELECT n AS k FROM o WHERE 1 = 0) d GROUP BY d.k ORDER BY " + ordering,
+                prepared));
       }
       assertEquals(expected, rows(connection, "SELECT d.k, COUNT(*)" + source + " ORDER BY d.k", prepared));
       assertEquals(expected,
           rows(connection, "SELECT d.k AS renamed, COUNT(*)" + source + " ORDER BY renamed NULLS LAST", prepared));
       assertEquals(List.of(List.of(3, 1L), List.of(2, 1L), List.of(1, 2L), Arrays.asList(null, 1L)),
           rows(connection, "SELECT d.k, COUNT(*)" + source + " ORDER BY d.k DESC NULLS LAST", prepared));
-      assertEquals(List.of(List.of(2L), List.of(1L), List.of(1L), List.of(1L)),
-          rows(connection, "SELECT COUNT(*)" + source + " ORDER BY d.k NULLS LAST", prepared));
-      assertEquals(List.of(), rows(connection,
-          "SELECT d.k, COUNT(*) FROM (SELECT n AS k FROM o WHERE 1 = 0) d GROUP BY d.k ORDER BY d.k", prepared));
+      for (String ordering : List.of("d.k", "d.\"k\"", "\"k\"")) {
+        assertEquals(List.of(List.of(2L), List.of(1L), List.of(1L), List.of(1L)),
+            rows(connection, "SELECT COUNT(*)" + source + " ORDER BY " + ordering + " NULLS LAST", prepared));
+      }
     }
   }
 
@@ -132,10 +136,16 @@ class AggregateResultClausesTest {
   void groupedOrderingPreservesMaterializedNames(boolean prepared) throws SQLException {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + base)) {
       List<List<Object>> expected = List.of(List.of(1, 2L), List.of(2, 1L), List.of(3, 1L), Arrays.asList(null, 1L));
-      for (String source : List.of("(SELECT n FROM o) d(k)", "(SELECT x.k FROM (SELECT n AS k FROM o) x) d",
-          "(SELECT CAST(n + 0 AS INTEGER) AS k FROM o) d")) {
-        String sql = "SELECT d.k, COUNT(*) FROM " + source + " GROUP BY d.k ORDER BY d.k NULLS LAST";
-        assertEquals(expected, rows(connection, sql, prepared), sql);
+      for (String source : List.of("(SELECT n AS k FROM o) d", "(SELECT n FROM o) d(k)",
+          "(SELECT x.k FROM (SELECT n AS k FROM o) x) d", "(SELECT CAST(n + 0 AS INTEGER) AS k FROM o) d")) {
+        for (String ordering : List.of("d.k", "d.\"k\"", "\"k\"")) {
+          String sql = "SELECT d.k, COUNT(*) FROM " + source + " GROUP BY d.k ORDER BY " + ordering + " NULLS LAST";
+          assertEquals(expected, rows(connection, sql, prepared), sql);
+        }
+      }
+      for (String ordering : List.of("\"n\"", "o.\"n\"")) {
+        assertEquals(expected,
+            rows(connection, "SELECT n, COUNT(*) FROM o GROUP BY n ORDER BY " + ordering + " NULLS LAST", prepared));
       }
       assertEquals(expected,
           rows(connection,
@@ -166,7 +176,8 @@ class AggregateResultClausesTest {
               + ordering;
           SQLException error = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, sql, prepared), sql);
           assertEquals("42000", error.getSQLState(), sql);
-          assertTrue(error.getMessage().contains(ordering.substring(2)), error.getMessage());
+          assertTrue(error.getMessage().contains("Missing columns for table 'd': " + ordering.substring(2)),
+              error.getMessage());
         }
       }
     }

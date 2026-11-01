@@ -2295,10 +2295,9 @@ public final class SqlParser {
    * }</pre>
    *
    * <p>
-   * The ORDER BY expression {@code miles_per_gallon} is resolved to the
-   * underlying physical column {@code mpg}, so that downstream components (such
-   * as {@code QueryProcessor}) can correctly sort records using the actual field
-   * name.
+   * The ORDER BY alias {@code miles_per_gallon} resolves to the selected
+   * expression {@code mpg}, an input column in this query's scope. Downstream
+   * components use that expression to obtain each row's sort value.
    * </p>
    *
    * <p>
