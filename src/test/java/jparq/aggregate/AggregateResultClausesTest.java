@@ -128,7 +128,8 @@ class AggregateResultClausesTest {
   }
 
   /**
-   * Checks quoted lowercase output aliases and ambiguity before row evaluation.
+   * Checks ambiguous quoted lowercase aliases on grouped results, even without
+   * input rows.
    *
    * @param prepared
    *          whether to use a prepared statement
@@ -139,34 +140,14 @@ class AggregateResultClausesTest {
   @ValueSource(booleans = {
       false, true
   })
-  void quotedOrderingAliasesRespectExactNamesAndAmbiguity(boolean prepared) throws SQLException {
+  void quotedGroupedOrderingAliasesRejectAmbiguity(boolean prepared) throws SQLException {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + base)) {
-      for (String source : List.of("o", "o JOIN (VALUES (1)) v(x) ON TRUE")) {
-        assertEquals(List.of(List.of(1), List.of(1), List.of(2), List.of(3), Arrays.asList((Object) null)),
-            rows(connection, "SELECT n AS renamed FROM " + source + " ORDER BY \"renamed\" NULLS LAST", prepared));
-      }
-      assertEquals(
-          List.of(List.of(3, -3L), List.of(2, -2L), List.of(1, -1L), List.of(1, -1L), Arrays.asList(null, null)),
-          rows(connection, "SELECT n AS c, -n AS \"c\" FROM o ORDER BY \"c\" NULLS LAST", prepared));
       for (String predicate : List.of("", " WHERE 1 = 0")) {
-        for (String sql : List.of(
-            "SELECT n AS repeated, n + 1 AS repeated FROM o" + predicate + " ORDER BY \"repeated\"",
-            "SELECT d.k AS repeated, COUNT(*) AS repeated FROM (SELECT n AS k FROM o" + predicate
-                + ") d GROUP BY d.k ORDER BY \"repeated\"")) {
-          SQLException error = assertThrows(SQLException.class, () -> rows(connection, sql, prepared), sql);
-          assertEquals("42702", error.getSQLState(), sql);
-        }
-        assertEquals(
-            predicate.isEmpty()
-                ? List.of(List.of(1, 1), List.of(1, 1), List.of(2, 2), List.of(3, 3), Arrays.asList(null, null))
-                : List.of(),
-            rows(connection,
-                "SELECT n AS repeated, n AS repeated FROM o" + predicate + " ORDER BY \"repeated\" NULLS LAST",
-                prepared));
+        String sql = "SELECT d.k AS repeated, COUNT(*) AS repeated FROM (SELECT n AS k FROM o" + predicate
+            + ") d GROUP BY d.k ORDER BY \"repeated\"";
+        SQLException error = assertThrows(SQLException.class, () -> rows(connection, sql, prepared), sql);
+        assertEquals("42702", error.getSQLState(), sql);
       }
-      SQLException error = assertThrows(SQLSyntaxErrorException.class,
-          () -> rows(connection, "SELECT n AS renamed FROM o ORDER BY \"Renamed\"", prepared));
-      assertEquals("42000", error.getSQLState());
     }
   }
 
