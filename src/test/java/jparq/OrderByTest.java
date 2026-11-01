@@ -1,5 +1,7 @@
 package jparq;
 
+import static jparq.support.QueryTestSupport.rows;
+import static jparq.support.QueryTestSupport.writeIntegerFixture;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -11,10 +13,7 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.sql.Connection;
 import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
@@ -25,13 +24,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
-import org.apache.avro.Schema;
-import org.apache.avro.SchemaBuilder;
-import org.apache.avro.generic.GenericData;
-import org.apache.avro.generic.GenericRecord;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.parquet.avro.AvroParquetWriter;
-import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -70,17 +62,7 @@ public class OrderByTest {
       false, true
   })
   void quotedOrderingAliasesRespectExactNamesAndAmbiguity(boolean prepared, @TempDir Path base) throws Exception {
-    Schema schema = SchemaBuilder.record("Row").fields().optionalInt("n").endRecord();
-    var configuration = new Configuration(false);
-    var file = new org.apache.hadoop.fs.Path(base.resolve("o.parquet").toUri());
-    try (var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(file, configuration))
-        .withSchema(schema).withConf(configuration).build()) {
-      for (Integer value : Arrays.asList(1, 1, 2, 3, null)) {
-        var row = new GenericData.Record(schema);
-        row.put("n", value);
-        writer.write(row);
-      }
-    }
+    writeIntegerFixture(base);
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + base)) {
       for (String source : List.of("o", "o JOIN (VALUES (1)) v(x) ON TRUE")) {
         assertEquals(List.of(List.of(1), List.of(1), List.of(2), List.of(3), Arrays.asList((Object) null)),
@@ -104,34 +86,6 @@ public class OrderByTest {
       SQLException error = assertThrows(SQLSyntaxErrorException.class,
           () -> rows(connection, "SELECT n AS renamed FROM o ORDER BY \"Renamed\"", prepared));
       assertEquals("42000", error.getSQLState());
-    }
-  }
-
-  /**
-   * Collects projected values through either JDBC statement API.
-   *
-   * @param connection
-   *          fixture connection
-   * @param sql
-   *          query to execute
-   * @param prepared
-   *          whether to use a prepared statement
-   * @return all projected row values
-   * @throws SQLException
-   *           if query execution fails
-   */
-  private static List<List<Object>> rows(Connection connection, String sql, boolean prepared) throws SQLException {
-    try (var statement = prepared ? connection.prepareStatement(sql) : connection.createStatement();
-        ResultSet result = prepared ? ((PreparedStatement) statement).executeQuery() : statement.executeQuery(sql)) {
-      List<List<Object>> rows = new ArrayList<>();
-      while (result.next()) {
-        List<Object> row = new ArrayList<>();
-        for (int column = 1; column <= result.getMetaData().getColumnCount(); column++) {
-          row.add(result.getObject(column));
-        }
-        rows.add(row);
-      }
-      return rows;
     }
   }
 

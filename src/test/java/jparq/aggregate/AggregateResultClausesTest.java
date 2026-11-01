@@ -1,5 +1,7 @@
 package jparq.aggregate;
 
+import static jparq.support.QueryTestSupport.rows;
+import static jparq.support.QueryTestSupport.writeIntegerFixture;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -16,13 +18,6 @@ import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import org.apache.avro.Schema;
-import org.apache.avro.SchemaBuilder;
-import org.apache.avro.generic.GenericData;
-import org.apache.avro.generic.GenericRecord;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.parquet.avro.AvroParquetWriter;
-import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -46,17 +41,7 @@ class AggregateResultClausesTest {
    */
   @BeforeEach
   void fixture() throws Exception {
-    Schema schema = SchemaBuilder.record("Row").fields().optionalInt("n").endRecord();
-    var configuration = new Configuration(false);
-    var file = new org.apache.hadoop.fs.Path(base.resolve("o.parquet").toUri());
-    try (var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(file, configuration))
-        .withSchema(schema).withConf(configuration).build()) {
-      for (Integer value : Arrays.asList(1, 1, 2, 3, null)) {
-        var row = new GenericData.Record(schema);
-        row.put("n", value);
-        writer.write(row);
-      }
-    }
+    writeIntegerFixture(base);
   }
 
   /**
@@ -445,31 +430,4 @@ class AggregateResultClausesTest {
     }
   }
 
-  /**
-   * Executes through either JDBC statement API.
-   *
-   * @param connection
-   *          fixture connection
-   * @param sql
-   *          query to execute
-   * @param prepared
-   *          whether to use a prepared statement
-   * @return all projected row values
-   * @throws SQLException
-   *           if execution fails
-   */
-  private static List<List<Object>> rows(Connection connection, String sql, boolean prepared) throws SQLException {
-    try (var statement = prepared ? connection.prepareStatement(sql) : connection.createStatement();
-        ResultSet result = prepared ? ((PreparedStatement) statement).executeQuery() : statement.executeQuery(sql)) {
-      List<List<Object>> rows = new ArrayList<>();
-      while (result.next()) {
-        List<Object> row = new ArrayList<>();
-        for (int column = 1; column <= result.getMetaData().getColumnCount(); column++) {
-          row.add(result.getObject(column));
-        }
-        rows.add(row);
-      }
-      return rows;
-    }
-  }
 }
