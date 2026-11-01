@@ -125,7 +125,8 @@ with SQLState `42000` consistently in scalar expressions and HAVING, including e
 columns. An empty one-column result evaluates to NULL.
 Single-value IN/NOT IN and ANY/SOME/ALL subqueries also require exactly one column,
 including for empty results. Extra columns raise SQLSyntaxErrorException with SQLState `42000`
-in WHERE and HAVING. These predicates allow multiple rows; EXISTS allows multiple columns.
+in WHERE and HAVING. Column counts are validated during planning, before predicate pushdown
+or empty grouping can skip evaluation. These predicates allow multiple rows; EXISTS allows multiple columns.
 
 Correlated subqueries reuse parsed query shapes and validated source schemas within one outer execution.
 Outer values are bound with their Java types and NULL values intact, and each evaluation reads fresh results.

@@ -2664,7 +2664,7 @@ public final class AggregateFunctions {
         }
         SubqueryExecutor.SubqueryResult result = subqueryExecutor.executeCorrelated(subSelect, correlationQualifiers(),
             correlationColumns(), correlationContext, (qualifier, column) -> correlatedValue(qualifier, column));
-        return SqlTruth.in(leftVal, result.firstColumnValues(), in.isNot());
+        return SqlTruth.in(leftVal, result.singleColumnValues(), in.isNot());
       }
       throw new IllegalArgumentException("Unsupported IN expression in HAVING clause: " + in);
     }
@@ -2720,7 +2720,7 @@ public final class AggregateFunctions {
       if (JSqlParserSupport.isQuantifiedOperand(leftExpr) || JSqlParserSupport.isQuantifiedOperand(rightExpr)) {
         return QuantifiedComparisons.evaluate(be,
             expression -> new QuantifiedComparisons.ScalarOperand(value(expression), UnaryOperator.identity()),
-            this::value, subSelect -> evaluateSubquery(subSelect).firstColumnValues());
+            this::value, subSelect -> evaluateSubquery(subSelect).singleColumnValues());
       }
       String op = be.getStringExpression();
       Object left = value(be.getLeftExpression());

@@ -739,18 +739,20 @@ public final class SubqueryExecutor implements AutoCloseable {
 
     /**
      * Validates single-column cardinality and returns the value of each row,
-     * including for empty results used by IN and quantified comparisons.
+     * including for empty results used by scalar IN and quantified comparisons.
+     * Row-value predicates require degree-aware access to {@link #rows()}; this
+     * scalar accessor does not implement row-value comparisons (issue 388).
      *
      * @return list of values from the single column
      * @throws IllegalArgumentException
      *           carrying SQLState 42000 if the result does not have exactly one
      *           column
      */
-    public List<Object> firstColumnValues() {
+    public List<Object> singleColumnValues() {
       requireSingleColumn("Subquery");
       List<Object> values = new ArrayList<>(rows.size());
       for (List<Object> row : rows) {
-        values.add(row.isEmpty() ? null : row.getFirst());
+        values.add(row.getFirst());
       }
       return values;
     }

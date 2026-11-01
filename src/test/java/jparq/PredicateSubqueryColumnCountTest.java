@@ -56,6 +56,54 @@ class PredicateSubqueryColumnCountTest {
   }
 
   /**
+   * Rejects invalid degrees during preparation even if no predicate is evaluated.
+   *
+   * @param predicate
+   *          whether predicate pushdown is enabled
+   * @param projection
+   *          whether projection pushdown is enabled
+   * @throws Exception
+   *           if fixture setup or querying fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "true,true", "true,false", "false,true", "false,false"
+  })
+  void rejectsUnevaluatedSubqueries(boolean predicate, boolean projection) throws Exception {
+    writeIntegerFixture(directory);
+    String url = "jdbc:jparq:" + directory + "?predicatePushdown=" + predicate + "&projectionPushdown=" + projection;
+    try (var connection = DriverManager.getConnection(url)) {
+      for (String subquery : List.of("SELECT n, n FROM o", "SELECT i.n, o.n FROM o i WHERE i.n = o.n",
+          "SELECT * FROM (SELECT n, n FROM o) t", "SELECT t.* FROM (SELECT n, n FROM o) t",
+          "WITH t AS (SELECT n, n FROM o) SELECT * FROM t", "SELECT * FROM o a CROSS JOIN o b",
+          "SELECT n, n FROM o UNION ALL SELECT n, n FROM o", "SELECT n FROM o WHERE n IN (SELECT n, n FROM o)",
+          "SELECT n FROM (SELECT n FROM o WHERE n IN (SELECT n, n FROM o)) t", "VALUES (1, 2), (3, 4)",
+          "SELECT * FROM (VALUES (1, 2), (3, 4)) t")) {
+        for (String operator : List.of("IN", "NOT IN", "= ANY", "= SOME", "= ALL")) {
+          String condition = "n " + operator + " (" + subquery + ")";
+          for (String sql : List.of("SELECT n FROM o WHERE n = 99 AND " + condition,
+              "SELECT n FROM o WHERE FALSE AND " + condition, "SELECT n FROM o WHERE TRUE OR " + condition,
+              "SELECT n FROM o WHERE n > 10 GROUP BY n HAVING " + condition,
+              "SELECT n FROM o GROUP BY n HAVING TRUE OR " + condition)) {
+            var error = assertThrows(SQLSyntaxErrorException.class, () -> {
+              try (var ignored = connection.prepareStatement(sql)) {
+                // Degree validation must fail before any statement is executed.
+              }
+            }, sql);
+            assertEquals("42000", error.getSQLState(), sql);
+            assertTrue(error.getMessage().contains("exactly one column"), error.getMessage());
+          }
+        }
+      }
+      assertEquals(List.of(), rows(connection, "SELECT n FROM o WHERE n = 99 AND n IN (SELECT 1 / 0)", false));
+      for (String subquery : List.of("SELECT a.* FROM o a CROSS JOIN o b", "SELECT * FROM o a JOIN o b USING(n)",
+          "WITH t(x) AS (SELECT n FROM o) SELECT * FROM t", "VALUES (1), (2)")) {
+        assertEquals(List.of(), rows(connection, "SELECT n FROM o WHERE n = 99 AND n IN (" + subquery + ")", false));
+      }
+    }
+  }
+
+  /**
    * Keeps one-column multirow, NULL, and empty-input semantics intact.
    *
    * @param predicate

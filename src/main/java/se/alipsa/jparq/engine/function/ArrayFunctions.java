@@ -43,7 +43,7 @@ public final class ArrayFunctions {
     if (result.columnLabels().size() > 1) {
       throw new IllegalArgumentException("ARRAY subquery must return exactly one column: " + subSelect);
     }
-    return homogenizeArrayValues(result.firstColumnValues());
+    return homogenizeArrayValues(result.singleColumnValues());
   }
 
   /**
