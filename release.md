@@ -6,10 +6,13 @@
   expressions, including bitwise NOT, with SQLState `42000`, and counts above `Integer.MAX_VALUE` with
   `22003` instead of truncating them. Negative counts and NULL, fractional, or non-finite numeric parameters
   raise SQLDataException with `2201X` for OFFSET or `2201W` for LIMIT/FETCH. Support bound JDBC row-count
-  parameters, including integral numeric values with fractional zeroes and numeric strings, while retaining
+  parameters, including integral numeric values with fractional zeroes and String/Character values,
+  while retaining
   decimal scales in other bindings. Reject invalid numeric strings with `22018` and other nonnumeric
   bindings with `2201W`/`2201X`. Collect row-count parameters during the existing parse and validation,
-  including parser fallbacks. Preserve zero and default FETCH semantics. Reject MySQL-style `LIMIT offset, count`
+  including parser fallbacks. Reject parameterized queries in the CTE-rewrite fallback with `0A000`
+  so rewritten marker positions cannot be used as original binding indexes. Preserve zero and default FETCH
+  semantics. Reject MySQL-style `LIMIT offset, count`
   with `0A000` instead of silently ignoring the offset (#411).
 
 - Execute derived tables over `information_schema.tables` and `information_schema.columns` in joins,

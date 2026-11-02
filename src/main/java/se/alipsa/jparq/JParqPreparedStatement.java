@@ -5279,14 +5279,14 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           for invalid row counts, invalid numeric text, or integer overflow
    */
   private int normalizeRowCountParameter(Object value, String clause) throws SQLDataException {
-    if (!(value instanceof Number) && !(value instanceof String)) {
+    if (!(value instanceof Number) && !(value instanceof String) && !(value instanceof Character)) {
       throw SqlExceptions.invalidRowCount(clause, value);
     }
     BigDecimal decimal;
     try {
       decimal = new BigDecimal(value.toString().trim()).stripTrailingZeros();
     } catch (NumberFormatException e) {
-      if (value instanceof String) {
+      if (value instanceof String || value instanceof Character) {
         throw new SQLDataException(
             "Invalid numeric text for " + clause + " row count: " + SqlExceptions.diagnosticValue(value), "22018", e);
       }

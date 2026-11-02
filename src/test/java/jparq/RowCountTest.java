@@ -290,6 +290,55 @@ class RowCountTest {
   }
 
   /**
+   * Converts Character values using the same rules as String parameters.
+   *
+   * @param template
+   *          the row-limiting clause
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "LIMIT %s", "OFFSET %s ROWS", "FETCH NEXT %s ROWS ONLY"
+  })
+  void normalizesCharacterParameters(String template) throws SQLException {
+    try (Connection connection = connect()) {
+      for (String sql : queries(template.formatted("?"))) {
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+          statement.setObject(1, '2');
+          try (ResultSet rows = statement.executeQuery()) {
+            assertEquals(template.startsWith("OFFSET") ? (sql.contains("UNION ALL") ? 62 : 30) : 2, count(rows), sql);
+          }
+          statement.setObject(1, 'x');
+          assertEquals("22018", assertThrows(SQLDataException.class, statement::executeQuery, sql).getSQLState());
+        }
+      }
+    }
+  }
+
+  /**
+   * Retains original parameter ordering in directly parsed CTEs with later
+   * select-list markers.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void cteRowCountParametersRetainOriginalPositions() throws SQLException {
+    String sql = "WITH c AS (SELECT model FROM mtcars LIMIT ?) SELECT ? AS tag, model FROM c";
+    try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+      statement.setObject(1, '2');
+      statement.setString(2, "tag");
+      try (ResultSet rows = statement.executeQuery()) {
+        assertTrue(rows.next());
+        assertEquals("tag", rows.getString("tag"));
+        assertTrue(rows.next());
+        assertFalse(rows.next());
+      }
+    }
+  }
+
+  /**
    * Binds independent LIMIT and OFFSET parameters after grouped result
    * processing.
    *

@@ -3,10 +3,13 @@ package jparq.engine;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
+import java.sql.SQLFeatureNotSupportedException;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import net.sf.jsqlparser.expression.CastExpression;
@@ -18,6 +21,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.JoinPredicatePlanner;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.helper.LiteralConverter;
 
@@ -62,6 +66,37 @@ class SqlParserCompatibilityTest {
     assertThrows(IllegalArgumentException.class, () -> SqlParser.rowCountParameters("SELECT 1 LIMIT ~1"));
     assertThrows(IllegalArgumentException.class,
         () -> SqlParser.rowCountParameters("SELECT CAST(? AS DECIMAL(2,5)) LIMIT ?"));
+  }
+
+  /**
+   * Rejects rewritten row-count indexes without modifying the caller's parameter
+   * context.
+   */
+  @Test
+  void cteRewriteRejectsUnsafeRowCountParameterIndexes() {
+    String sql = "WITH c AS (SELECT model FROM mtcars LIMIT ?) SELECT ? AS tag, model FROM c";
+    assertEquals(Map.of(1, "LIMIT"), SqlParser.rowCountParameters(sql));
+    Map<Integer, String> clauses = new LinkedHashMap<>(Map.of(99, "OFFSET"));
+    var error = assertThrows(IllegalArgumentException.class,
+        () -> SqlParser.tryParseWithCteWorkaround(sql, true, clauses));
+    var classified = assertInstanceOf(SQLFeatureNotSupportedException.class, SqlExceptions.findSqlStateFailure(error));
+    assertEquals("0A000", classified.getSQLState());
+    assertTrue(classified.getMessage().contains("reorder parameter indexes"));
+    assertEquals(Map.of(99, "OFFSET"), clauses);
+  }
+
+  /**
+   * Rejects parameterized rewrites even when their markers are not row counts.
+   */
+  @Test
+  void cteRewriteRejectsOrdinaryParameterIndexes() {
+    Map<Integer, String> clauses = new LinkedHashMap<>();
+    String sql = "WITH c AS (SELECT ? AS n) SELECT ? AS tag, n FROM c";
+    var error = assertThrows(IllegalArgumentException.class,
+        () -> SqlParser.tryParseWithCteWorkaround(sql, true, clauses));
+    assertEquals("0A000", SqlExceptions.findSqlStateFailure(error).getSQLState());
+    assertNull(SqlParser.tryParseWithCteWorkaround("SELECT 1", true, clauses));
+    assertTrue(clauses.isEmpty());
   }
 
   /** Limits complex retries without restricting successful simple parses. */

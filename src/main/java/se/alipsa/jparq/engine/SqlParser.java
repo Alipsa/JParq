@@ -778,8 +778,8 @@ public final class SqlParser {
   }
 
   /**
-   * Retries the single-CTE rewrite through the same validation and parameter
-   * collection.
+   * Retries the single-CTE rewrite through the same validation. Parameterized
+   * queries are rejected before rewriting because it can reorder markers.
    *
    * @param normalizedSql
    *          the normalized SQL text
@@ -789,17 +789,23 @@ public final class SqlParser {
    *          the row-count parameter destination, or null when not needed
    * @return the parsed query, or null when the rewrite does not apply
    * @throws IllegalArgumentException
-   *           if rewritten SQL cannot be parsed
+   *           if rewritten SQL cannot be parsed, or with SQLState 0A000 if
+   *           collecting rewritten parameter indexes would be unsafe
    */
-  private static Query tryParseWithCteWorkaround(String normalizedSql, boolean allowQualifiedWildcards,
+  public static Query tryParseWithCteWorkaround(String normalizedSql, boolean allowQualifiedWildcards,
       Map<Integer, String> rowCountParameters) {
+    if (rowCountParameters != null && SINGLE_CTE_PATTERN.matcher(normalizedSql).find()) {
+      throw SqlExceptions
+          .unsupportedFeature("Parameterized queries requiring the CTE-rewrite fallback are not supported; "
+              + "rewriting can reorder parameter indexes");
+    }
     String rewritten = rewriteSingleCteToDerivedTable(normalizedSql);
     if (rewritten == null) {
       return null;
     }
     String compacted = compactWhitespace(rewritten);
     try {
-      return parseWithJsqlParser(compacted, allowQualifiedWildcards, rowCountParameters);
+      return parseWithJsqlParser(compacted, allowQualifiedWildcards, null);
     } catch (Exception ex) {
       throw new IllegalArgumentException("Failed to parse rewritten SQL: " + compacted, ex);
     }
