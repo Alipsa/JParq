@@ -678,6 +678,34 @@ public final class SqlParser {
   }
 
   /**
+   * Identifies parameters used directly as row counts in any nested query scope.
+   *
+   * @param sql the parameterized SQL after named parameters have been rewritten
+   * @return parameter indexes mapped to LIMIT, OFFSET, or FETCH clause names
+   * @throws IllegalArgumentException if the SQL cannot be parsed
+   */
+  public static Map<Integer, String> rowCountParameters(String sql) {
+    try {
+      var statement = (net.sf.jsqlparser.statement.select.Select)
+          JSqlParserSupport.parseStatement(normalizeSql(sql));
+      Map<Integer, String> clauses = new LinkedHashMap<>();
+      JSqlParserSupport.visitExpressions(statement, new JSqlParserSupport.StatementExpressionVisitor() {
+        /** {@inheritDoc} */
+        @Override
+        protected void inspectRowCount(Expression expression, String clause) {
+          if (expression instanceof JdbcParameter parameter) {
+            clauses.put(parameter.getIndex(), clause);
+          }
+        }
+      });
+      return Map.copyOf(clauses);
+    } catch (JSQLParserException e) {
+      String message = "Failed to parse row-count parameters";
+      throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000", e));
+    }
+  }
+
+  /**
    * Parses and normalizes a query using JSqlParser's simple-first strategy.
    * Complex retries use a fresh identifier-aware parser and the default nesting
    * limit, and execution failures are propagated without retrying.
@@ -1414,9 +1442,13 @@ public final class SqlParser {
    *          LIMIT clause (may be {@code null})
    * @return limit value, or {@code -1} when not specified
    * @throws IllegalArgumentException
-   *           carrying SQLState 42000 for invalid row counts or 22003 for overflow
+   *           carrying SQLState 42000 for unsupported expressions, 2201W/2201X for
+   *           negative counts, 22003 for overflow, or 0A000 for comma-form LIMIT
    */
   private static int extractLimit(Limit limit) {
+    if (limit != null && limit.getOffset() != null) {
+      throw SqlExceptions.unsupportedFeature("LIMIT offset, count is not supported; use OFFSET and LIMIT");
+    }
     if (limit == null || limit.getRowCount() == null) {
       return -1;
     }
@@ -1430,7 +1462,8 @@ public final class SqlParser {
    *          FETCH clause (may be {@code null})
    * @return the requested number of rows, {@code -1} when not specified
    * @throws IllegalArgumentException
-   *           carrying SQLState 42000 for invalid row counts or 22003 for overflow
+   *           carrying SQLState 42000 for unsupported expressions, 2201W/2201X for
+   *           negative counts, or 22003 for overflow
    */
   private static int extractFetch(Fetch fetch) {
     if (fetch == null) {
@@ -1470,7 +1503,8 @@ public final class SqlParser {
    *          OFFSET clause (may be {@code null})
    * @return offset value, or {@code 0} when not specified
    * @throws IllegalArgumentException
-   *           carrying SQLState 42000 for invalid row counts or 22003 for overflow
+   *           carrying SQLState 42000 for unsupported expressions, 2201W/2201X for
+   *           negative counts, or 22003 for overflow
    */
   private static int extractOffset(Offset offset) {
     if (offset == null || offset.getOffset() == null) {
@@ -1490,7 +1524,8 @@ public final class SqlParser {
    *          the clause name used in diagnostics
    * @return the row count in the supported integer range
    * @throws IllegalArgumentException
-   *           carrying SQLState 42000 for invalid row counts or 22003 for overflow
+   *           carrying SQLState 42000 for unsupported expressions, 2201W/2201X for
+   *           negative counts, or 22003 for overflow
    */
   private static int extractRowCount(Expression expression, String clause) {
     if (expression instanceof JdbcParameter) {
@@ -1499,6 +1534,10 @@ public final class SqlParser {
     Expression magnitude = expression;
     char sign = '+';
     if (expression instanceof SignedExpression signed) {
+      if (signed.getSign() != '+' && signed.getSign() != '-') {
+        throw SqlExceptions.syntaxFailure(clause + " requires a nonnegative integer literal: "
+            + SqlExceptions.describe(expression));
+      }
       magnitude = signed.getExpression();
       sign = signed.getSign();
     }
@@ -1511,7 +1550,8 @@ public final class SqlParser {
       value = value.negate();
     }
     if (value.signum() < 0) {
-      throw SqlExceptions.syntaxFailure(clause + " row count must not be negative: " + value);
+      SQLDataException failure = SqlExceptions.invalidRowCount(clause, value);
+      throw new IllegalArgumentException(failure.getMessage(), failure);
     }
     try {
       return value.intValueExact();

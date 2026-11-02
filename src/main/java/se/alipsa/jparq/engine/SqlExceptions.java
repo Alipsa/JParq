@@ -20,7 +20,7 @@ public final class SqlExceptions {
   public static final String OUTER_VALUE = "<outer value>";
   private static final int DIAGNOSTIC_VALUE_LIMIT = 64;
   private static final Set<String> CLASSIFIED_STATES = Set.of("42000", "42702", "22001", "22005", "22003", "22007",
-      "22008", "22018", "0A000");
+      "22008", "22018", "2201W", "2201X", "0A000");
   private static final Pattern CORRELATED_BINDING = Pattern
       .compile("__JPARQ_CORRELATED_VALUE\\s*\\(\\s*'[^']*'\\s*,\\s*\\d+\\s*\\)", Pattern.CASE_INSENSITIVE);
 
@@ -72,6 +72,18 @@ public final class SqlExceptions {
       end--;
     }
     return text.substring(0, end) + "…";
+  }
+
+  /**
+   * Classifies a negative, NULL, or fractional bound row count.
+   *
+   * @param clause the LIMIT, OFFSET, or FETCH clause name
+   * @param value the invalid value
+   * @return a data exception with SQLState 2201X for OFFSET or 2201W otherwise
+   */
+  public static SQLDataException invalidRowCount(String clause, Object value) {
+    return new SQLDataException("Invalid " + clause + " row count: " + diagnosticValue(value),
+        "OFFSET".equals(clause) ? "2201X" : "2201W");
   }
 
   /**
@@ -135,13 +147,13 @@ public final class SqlExceptions {
   }
 
   /**
-   * Finds classified syntax, numeric, temporal data, or unsupported feature
+   * Finds classified syntax, numeric, temporal, row-count, or unsupported feature
    * errors inside engine wrappers.
    *
    * @param failure
    *          the exception or wrapper to inspect
    * @return the SQLState 42000, 42702, 22001, 22005, 22003, 22007, 22008, 22018,
-   *         or 0A000 exception, or null without a recognized state
+   *         2201W, 2201X, or 0A000 exception, or null without a recognized state
    */
   public static SQLException findSqlStateFailure(Throwable failure) {
     Throwable current = failure;

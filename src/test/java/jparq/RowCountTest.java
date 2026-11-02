@@ -1,9 +1,11 @@
 package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -12,6 +14,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLDataException;
 import java.sql.SQLSyntaxErrorException;
+import java.sql.SQLFeatureNotSupportedException;
+import java.sql.Types;
 import java.sql.Statement;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -44,7 +48,7 @@ class RowCountTest {
   }
 
   /**
-   * Rejects unsupported expressions and negative counts with classified syntax errors.
+   * Rejects unsupported expressions with classified syntax errors.
    *
    * @param template the clause surrounding the row count
    * @throws SQLException if connection setup fails
@@ -53,12 +57,12 @@ class RowCountTest {
   @ValueSource(strings = {"LIMIT %s", "OFFSET %s ROWS", "FETCH FIRST %s ROWS ONLY"})
   void rejectsInvalidRowCounts(String template) throws SQLException {
     try (Connection connection = connect()) {
-      for (String value : List.of("1 + 1", "(SELECT 2)", "1.5", "'2'", "NULL", "-1")) {
+      for (String value : List.of("1 + 1", "(SELECT 2)", "1.5", "'2'", "NULL", "~1", "~0", "~5")) {
         for (String sql : queries(template.formatted(value))) {
           SQLException error = assertThrows(SQLSyntaxErrorException.class, () -> connection.prepareStatement(sql), sql);
           assertEquals("42000", error.getSQLState(), sql);
           for (Throwable cause = error; cause != null; cause = cause.getCause()) {
-            assertTrue(!(cause instanceof NumberFormatException), sql);
+            assertFalse(cause instanceof NumberFormatException, sql);
           }
         }
       }
@@ -126,18 +130,134 @@ class RowCountTest {
         PreparedStatement statement = connection.prepareStatement(sql)) {
       statement.setInt(1, 2);
       try (ResultSet rows = statement.executeQuery()) {
-        int count = 0;
-        while (rows.next()) {
-          count++;
-        }
-        assertEquals(template.startsWith("OFFSET") ? 30 : 2, count);
+        assertEquals(template.startsWith("OFFSET") ? 30 : 2, count(rows));
       }
       statement.setLong(1, 4294967298L);
       SQLException error = assertThrows(SQLDataException.class, statement::executeQuery);
       assertEquals("22003", error.getSQLState());
       statement.setInt(1, -1);
-      assertEquals("42000", assertThrows(SQLSyntaxErrorException.class, statement::executeQuery).getSQLState());
+      String state = template.startsWith("OFFSET") ? "2201X" : "2201W";
+      assertEquals(state, assertThrows(SQLDataException.class, statement::executeQuery).getSQLState());
+      statement.setNull(1, Types.INTEGER);
+      assertEquals(state, assertThrows(SQLDataException.class, statement::executeQuery).getSQLState());
     }
+  }
+
+  /**
+   * Classifies negative literals in plain and grouped queries and nested scopes.
+   *
+   * @param template the row-limiting clause
+   * @throws SQLException if connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {"LIMIT %s", "OFFSET %s ROWS", "FETCH FIRST %s ROWS ONLY"})
+  void rejectsNegativeCountsAsDataErrors(String template) throws SQLException {
+    String state = template.startsWith("OFFSET") ? "2201X" : "2201W";
+    try (Connection connection = connect()) {
+      for (String sql : queries(template.formatted("-1"))) {
+        assertEquals(state,
+            assertThrows(SQLDataException.class, () -> connection.prepareStatement(sql), sql).getSQLState());
+      }
+      String sql = "SELECT cyl FROM mtcars GROUP BY cyl " + template.formatted("-1");
+      assertEquals(state,
+          assertThrows(SQLDataException.class, () -> connection.prepareStatement(sql)).getSQLState());
+    }
+  }
+
+  /**
+   * Rejects comma-form LIMIT rather than silently ignoring its offset.
+   *
+   * @throws SQLException if connection setup fails
+   */
+  @Test
+  void rejectsCommaLimit() throws SQLException {
+    try (Connection connection = connect()) {
+      for (String clause : List.of("LIMIT 5, 2", "LIMIT -1, 2", "LIMIT ~1, 2", "LIMIT 4294967298, 2")) {
+        for (String sql : queries(clause)) {
+          assertEquals("0A000", assertThrows(SQLFeatureNotSupportedException.class,
+              () -> connection.prepareStatement(sql), sql).getSQLState());
+        }
+      }
+    }
+  }
+
+  /**
+   * Converts integral numeric parameters in row counts while retaining ordinary decimal scales.
+   *
+   * @param template the row-limiting clause
+   * @throws SQLException if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {"LIMIT %s", "OFFSET %s ROWS", "FETCH NEXT %s ROWS ONLY"})
+  void normalizesNumericParametersOnlyInRowCounts(String template) throws SQLException {
+    String state = template.startsWith("OFFSET") ? "2201X" : "2201W";
+    try (Connection connection = connect()) {
+      for (String sql : queries(template.formatted("?"))) {
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+          int expected = template.startsWith("OFFSET") ? (sql.contains("UNION ALL") ? 62 : 30) : 2;
+          for (Number value : List.of(2.0, 2.0f, new BigDecimal("2.00"), new BigDecimal("2E+0"))) {
+            statement.setObject(1, value);
+            try (ResultSet rows = statement.executeQuery()) {
+              assertEquals(expected, count(rows), sql);
+            }
+          }
+          for (Object value : new Object[]{null, -1, new BigDecimal("-1.00"), 1.5, Double.NaN,
+              Double.POSITIVE_INFINITY}) {
+            statement.setObject(1, value);
+            assertEquals(state, assertThrows(SQLDataException.class, statement::executeQuery, sql).getSQLState());
+          }
+          statement.setBigDecimal(1, new BigDecimal("2147483648.00"));
+          assertEquals("22003", assertThrows(SQLDataException.class, statement::executeQuery, sql).getSQLState());
+        }
+      }
+      try (PreparedStatement statement = connection.prepareStatement("SELECT ? AS d FROM mtcars LIMIT ?")) {
+        statement.setBigDecimal(1, new BigDecimal("2.00"));
+        statement.setDouble(2, 2.0);
+        try (ResultSet rows = statement.executeQuery()) {
+          assertTrue(rows.next());
+          assertEquals(new BigDecimal("2.00"), rows.getBigDecimal(1));
+          assertTrue(rows.next());
+          assertFalse(rows.next());
+        }
+      }
+    }
+  }
+
+  /**
+   * Binds independent LIMIT and OFFSET parameters after grouped result processing.
+   *
+   * @throws SQLException if query execution fails
+   */
+  @Test
+  void supportsGroupedLimitAndOffsetParameters() throws SQLException {
+    String sql = "SELECT DISTINCT COUNT(*) c FROM mtcars GROUP BY cyl ORDER BY c LIMIT ? OFFSET ?";
+    try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
+      statement.setBigDecimal(1, new BigDecimal("2.00"));
+      statement.setDouble(2, 1.0);
+      try (ResultSet rows = statement.executeQuery()) {
+        assertEquals(2, count(rows));
+      }
+      statement.setNull(2, Types.INTEGER);
+      assertEquals("2201X", assertThrows(SQLDataException.class, statement::executeQuery).getSQLState());
+      statement.setInt(2, 0);
+      statement.setNull(1, Types.INTEGER);
+      assertEquals("2201W", assertThrows(SQLDataException.class, statement::executeQuery).getSQLState());
+    }
+  }
+
+  /**
+   * Counts rows while leaving result-set ownership with the caller.
+   *
+   * @param rows the result set to consume
+   * @return the number of rows
+   * @throws SQLException if iteration fails
+   */
+  private int count(ResultSet rows) throws SQLException {
+    int count = 0;
+    while (rows.next()) {
+      count++;
+    }
+    return count;
   }
 
   /**
@@ -150,11 +270,7 @@ class RowCountTest {
    */
   private int count(Connection connection, String sql) throws SQLException {
     try (Statement statement = connection.createStatement(); ResultSet rows = statement.executeQuery(sql)) {
-      int count = 0;
-      while (rows.next()) {
-        count++;
-      }
-      return count;
+      return count(rows);
     }
   }
 }
