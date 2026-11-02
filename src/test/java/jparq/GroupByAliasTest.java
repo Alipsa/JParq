@@ -365,8 +365,7 @@ class GroupByAliasTest {
     Map<Integer, Long> counts = new LinkedHashMap<>();
     try (Connection connection = connection();
         Statement stmt = connection.createStatement();
-        ResultSet rs = stmt
-            .executeQuery("SELECT cyl + 1 AS x, (cyl + 1) AS x, COUNT(*) AS n " + "FROM mtcars GROUP BY x")) {
+        ResultSet rs = stmt.executeQuery("SELECT cyl + 1 AS x, (cyl + 1) AS x, COUNT(*) AS n FROM mtcars GROUP BY x")) {
       while (rs.next()) {
         counts.put(rs.getInt("x"), rs.getLong("n"));
       }
