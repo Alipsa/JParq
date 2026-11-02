@@ -1945,7 +1945,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       CteResult cteResult = null;
       if (ref.commonTableExpression() != null) {
         cteResult = resolveCteResult(ref.commonTableExpression(), cteResults);
-      } else if (!ref.isDerivedTable() && ref.tableName() != null) {
+      } else if (ref.tableName() != null) {
         cteResult = resolveCteResultByName(ref.tableName(), cteResults);
       }
       if (cteResult != null) {
