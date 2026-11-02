@@ -1088,6 +1088,27 @@ public final class SqlParser {
     return identifier.resolve(cteLookup);
   }
 
+  /**
+   * Parses a plain SELECT body into its normalized representation, validating
+   * qualifier visibility against the inputs declared in the FROM clause.
+   *
+   * @param ps
+   *          parsed SELECT body produced by JSqlParser
+   * @param ctes
+   *          visible CTE declarations
+   * @param cteLookup
+   *          visible declarations indexed by identifier
+   * @param allowQualifiedWildcards
+   *          whether qualified wildcards may remain unresolved
+   * @param lateralScope
+   *          whether the body belongs to a LATERAL input whose outer correlations
+   *          are bound after rewriting; qualifier visibility is then validated on
+   *          the rewritten query instead
+   * @return the normalized SELECT, including derived-table references and join
+   *         participants
+   * @throws IllegalArgumentException
+   *           if the body is unsupported or references an unknown qualifier
+   */
   private static Select parsePlainSelect(PlainSelect ps, List<CommonTableExpression> ctes,
       Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateralScope) {
     if (ps.getFromItem() == null) {
