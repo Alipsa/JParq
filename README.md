@@ -721,6 +721,9 @@ The following SQL statements are supported:
 - `OFFSET` and `LIMIT` support
   - Also support the PostgreSQL shorthand `LIMIT n OFFSET m` syntax
 - Standard row-limiting syntax (FETCH FIRST / OFFSET … FETCH)
+  - Row counts accept nonnegative integer literals and bound JDBC parameters up to `2147483647`.
+    Larger counts raise SQLState `22003`; negative counts and unsupported row-count expressions
+    (including arithmetic and subqueries) raise SQLState `42000`.
 - `DISTINCT` support
 - Functions support
   - Date functions

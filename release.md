@@ -2,6 +2,10 @@
 
 ### 1.4.0
 
+- Validate LIMIT, OFFSET, and FETCH row counts consistently (#266). Reject unsupported expressions and
+  negative counts with SQLState `42000`, and counts above `Integer.MAX_VALUE` with `22003` instead of
+  truncating them. Support bound JDBC row-count parameters and preserve zero and default FETCH semantics.
+
 - Execute derived tables over `information_schema.tables` and `information_schema.columns` in joins,
   including LATERAL correlation, instead of substituting the raw metadata view. Preserve the subquery's
   projections, aggregates, filters, ordering, row bounds, and output column aliases (#264).

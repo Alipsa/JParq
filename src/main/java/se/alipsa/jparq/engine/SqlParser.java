@@ -1,5 +1,7 @@
 package se.alipsa.jparq.engine;
 
+import java.math.BigInteger;
+import java.sql.SQLDataException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -1411,16 +1413,14 @@ public final class SqlParser {
    * @param limit
    *          LIMIT clause (may be {@code null})
    * @return limit value, or {@code -1} when not specified
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 for invalid row counts or 22003 for overflow
    */
   private static int extractLimit(Limit limit) {
     if (limit == null || limit.getRowCount() == null) {
       return -1;
     }
-    Expression rowCountExpr = limit.getRowCount();
-    if (rowCountExpr instanceof LongValue lv) {
-      return lv.getBigIntegerValue().intValue();
-    }
-    return Integer.parseInt(rowCountExpr.toString());
+    return extractRowCount(limit.getRowCount(), "LIMIT");
   }
 
   /**
@@ -1430,7 +1430,7 @@ public final class SqlParser {
    *          FETCH clause (may be {@code null})
    * @return the requested number of rows, {@code -1} when not specified
    * @throws IllegalArgumentException
-   *           if the FETCH expression cannot be parsed to an integer value
+   *           carrying SQLState 42000 for invalid row counts or 22003 for overflow
    */
   private static int extractFetch(Fetch fetch) {
     if (fetch == null) {
@@ -1440,14 +1440,7 @@ public final class SqlParser {
     if (expression == null) {
       return 1;
     }
-    if (expression instanceof LongValue lv) {
-      return lv.getBigIntegerValue().intValue();
-    }
-    try {
-      return Integer.parseInt(expression.toString());
-    } catch (NumberFormatException e) {
-      throw new IllegalArgumentException("Invalid FETCH value: '" + expression + "'", e);
-    }
+    return extractRowCount(expression, "FETCH");
   }
 
   /**
@@ -1476,19 +1469,55 @@ public final class SqlParser {
    * @param offset
    *          OFFSET clause (may be {@code null})
    * @return offset value, or {@code 0} when not specified
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 for invalid row counts or 22003 for overflow
    */
   private static int extractOffset(Offset offset) {
     if (offset == null || offset.getOffset() == null) {
       return 0;
     }
-    Expression expr = offset.getOffset();
-    if (expr instanceof LongValue lv) {
-      return lv.getBigIntegerValue().intValue();
+    return extractRowCount(offset.getOffset(), "OFFSET");
+  }
+
+  /**
+   * Reads a nonnegative integer row count without narrowing overflow.
+   * JDBC parameters use a temporary zero during syntax validation; execution
+   * reparses the query after binding parameter values.
+   *
+   * @param expression
+   *          the parsed row-count expression
+   * @param clause
+   *          the clause name used in diagnostics
+   * @return the row count in the supported integer range
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 for invalid row counts or 22003 for overflow
+   */
+  private static int extractRowCount(Expression expression, String clause) {
+    if (expression instanceof JdbcParameter) {
+      return 0;
+    }
+    Expression magnitude = expression;
+    char sign = '+';
+    if (expression instanceof SignedExpression signed) {
+      magnitude = signed.getExpression();
+      sign = signed.getSign();
+    }
+    if (!(magnitude instanceof LongValue literal)) {
+      throw SqlExceptions.syntaxFailure(clause + " requires a nonnegative integer literal: "
+          + SqlExceptions.describe(expression));
+    }
+    BigInteger value = literal.getBigIntegerValue();
+    if (sign == '-') {
+      value = value.negate();
+    }
+    if (value.signum() < 0) {
+      throw SqlExceptions.syntaxFailure(clause + " row count must not be negative: " + value);
     }
     try {
-      return Integer.parseInt(expr.toString());
-    } catch (NumberFormatException e) {
-      throw new IllegalArgumentException("Invalid OFFSET value: '" + expr + "'", e);
+      return value.intValueExact();
+    } catch (ArithmeticException e) {
+      String message = clause + " row count exceeds " + Integer.MAX_VALUE + ": " + value;
+      throw new IllegalArgumentException(message, new SQLDataException(message, "22003", e));
     }
   }
 
@@ -2356,19 +2385,7 @@ public final class SqlParser {
   }
 
   private static int computeOffset(PlainSelect ps) {
-    Offset off = ps.getOffset();
-    if (off != null && off.getOffset() != null) {
-      Expression expr = off.getOffset();
-      if (expr instanceof LongValue lv) {
-        return lv.getBigIntegerValue().intValue();
-      }
-      try {
-        return Integer.parseInt(expr.toString());
-      } catch (NumberFormatException e) {
-        throw new IllegalArgumentException("Invalid OFFSET value: '" + expr + "'", e);
-      }
-    }
-    return 0;
+    return extractOffset(ps.getOffset());
   }
 
   /**
