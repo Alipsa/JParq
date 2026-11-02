@@ -3,10 +3,12 @@ package se.alipsa.jparq.engine;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.helper.JParqUtil;
 
 /**
  * {@link RecordReader} decorator that renames every record produced by the
@@ -17,11 +19,13 @@ import org.apache.avro.generic.GenericRecord;
  * renamed field null and are never read because projection only drops columns
  * the query does not reference.
  */
-public final class RenamingRecordReader implements RecordReader {
+public final class RenamingRecordReader implements RecordReader, ColumnMappingProvider {
 
   private final RecordReader delegate;
   private final Schema renamedSchema;
   private final List<String> sourceNames;
+  private final Map<String, Map<String, String>> qualifierColumnMapping;
+  private final Map<String, String> unqualifiedColumnMapping;
 
   /**
    * Creates a reader exposing the delegate's records under the renamed schema.
@@ -35,6 +39,24 @@ public final class RenamingRecordReader implements RecordReader {
    *          schema exposing the same columns in the same order under new names
    */
   public RenamingRecordReader(RecordReader delegate, Schema sourceSchema, Schema renamedSchema) {
+    this(delegate, sourceSchema, renamedSchema, null);
+  }
+
+  /**
+   * Creates a reader exposing the delegate's records under the renamed schema,
+   * with an optional qualifier for correlation mappings.
+   *
+   * @param delegate
+   *          source reader producing records compatible with the source schema
+   * @param sourceSchema
+   *          schema describing the delegate's records by physical field name;
+   *          must have the same field count and order as the renamed schema
+   * @param renamedSchema
+   *          schema exposing the same columns in the same order under new names
+   * @param qualifier
+   *          optional table name or alias scoping the exposed column mapping
+   */
+  public RenamingRecordReader(RecordReader delegate, Schema sourceSchema, Schema renamedSchema, String qualifier) {
     this.delegate = Objects.requireNonNull(delegate, "delegate");
     this.renamedSchema = Objects.requireNonNull(renamedSchema, "renamedSchema");
     Objects.requireNonNull(sourceSchema, "sourceSchema");
@@ -48,6 +70,12 @@ public final class RenamingRecordReader implements RecordReader {
       names.add(field.name());
     }
     this.sourceNames = List.copyOf(names);
+    Map<String, String> columnMap = MaterializedNames.lookupIndex(renamedSchema);
+    unqualifiedColumnMapping = columnMap.isEmpty() ? Map.of() : Map.copyOf(columnMap);
+    String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
+    qualifierColumnMapping = normalizedQualifier != null && !unqualifiedColumnMapping.isEmpty()
+        ? Map.of(normalizedQualifier, unqualifiedColumnMapping)
+        : Map.of();
   }
 
   @Override
@@ -69,6 +97,16 @@ public final class RenamingRecordReader implements RecordReader {
   @Override
   public Schema schema() {
     return renamedSchema;
+  }
+
+  @Override
+  public Map<String, Map<String, String>> qualifierColumnMapping() {
+    return qualifierColumnMapping;
+  }
+
+  @Override
+  public Map<String, String> unqualifiedColumnMapping() {
+    return unqualifiedColumnMapping;
   }
 
   @Override

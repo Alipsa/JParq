@@ -117,13 +117,25 @@ public final class PredicateColumnRenamer {
     @Override
     public <T extends Comparable<T>, U extends UserDefinedPredicate<T>> FilterPredicate visit(
         Operators.UserDefined<T, U> operator) {
-      throw new IllegalArgumentException("User-defined filter predicates cannot be column-renamed");
+      return renameUserDefined(operator);
     }
 
     @Override
     public <T extends Comparable<T>, U extends UserDefinedPredicate<T>> FilterPredicate visit(
         Operators.LogicalNotUserDefined<T, U> operator) {
-      throw new IllegalArgumentException("User-defined filter predicates cannot be column-renamed");
+      return FilterApi.not(renameUserDefined(operator.getUserDefined()));
+    }
+
+    @SuppressWarnings({
+        "unchecked", "rawtypes"
+    })
+    private FilterPredicate renameUserDefined(Operators.UserDefined operator) {
+      Operators.Column column = renameColumn(operator.getColumn());
+      if (operator instanceof Operators.UserDefinedByClass byClass) {
+        return FilterApi.userDefined(column, byClass.getUserDefinedPredicateClass());
+      }
+      return FilterApi.userDefined(column,
+          (UserDefinedPredicate & java.io.Serializable) operator.getUserDefinedPredicate());
     }
 
     private FilterPredicate rename(FilterPredicate predicate) {

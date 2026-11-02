@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -12,6 +14,8 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import org.apache.avro.LogicalTypes;
+import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
@@ -238,6 +242,76 @@ class PhysicalTableColumnAliasTest {
     }
   }
 
+  /**
+   * Applies decimal comparisons to aliased columns, exercising the user-defined
+   * parquet predicates used for BYTES/FIXED decimals, with pushdown enabled and
+   * disabled.
+   *
+   * @param pushdown
+   *          predicate and projection pushdown setting
+   * @param directory
+   *          temporary directory holding the table
+   * @throws Exception
+   *           if writing the fixture or executing the query fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void decimalComparisonsPushDownThroughAliases(boolean pushdown, @TempDir Path directory) throws Exception {
+    writeWideTable(directory);
+    String url = "jdbc:jparq:" + directory + "?predicatePushdown=" + pushdown + "&projectionPushdown=" + pushdown;
+    try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+      for (String sql : List.of("SELECT a FROM t x(a, b, c, d) WHERE c = 2.50",
+          "SELECT a FROM t x(a, b, c, d) WHERE c > 1.00 AND a < 4", "SELECT id FROM t WHERE amount = 2.50")) {
+        try (var result = statement.executeQuery(sql)) {
+          for (int id : List.of(2, 3)) {
+            assertTrue(result.next(), sql);
+            assertEquals(id, result.getInt(1), sql);
+          }
+          assertFalse(result.next(), sql);
+        }
+      }
+    }
+  }
+
+  /**
+   * Resolves quoted aliases, including names containing spaces, in direct
+   * comparisons against both the select list and the WHERE clause.
+   *
+   * @param pushdown
+   *          predicate and projection pushdown setting
+   * @param directory
+   *          temporary directory holding the table
+   * @throws Exception
+   *           if writing the fixture or executing the query fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void quotedAliasesResolveInComparisons(boolean pushdown, @TempDir Path directory) throws Exception {
+    writeWideTable(directory);
+    String url = "jdbc:jparq:" + directory + "?predicatePushdown=" + pushdown + "&projectionPushdown=" + pushdown;
+    try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+      try (var result = statement.executeQuery("SELECT \"a b\" FROM t x(\"a b\", b, c, d) WHERE \"a b\" = 2")) {
+        assertTrue(result.next());
+        assertEquals(2, result.getInt(1));
+        assertFalse(result.next());
+      }
+      try (var result = statement.executeQuery("SELECT b FROM t x(\"a b\", b, c, d) WHERE \"a b\" = 2")) {
+        assertTrue(result.next());
+        assertEquals("n2", result.getString(1));
+        assertFalse(result.next());
+      }
+      try (var result = statement.executeQuery("SELECT \"A\" FROM t x(\"A\", b, c, d) WHERE \"A\" = 2")) {
+        assertTrue(result.next());
+        assertEquals(2, result.getInt(1));
+        assertFalse(result.next());
+      }
+    }
+  }
+
   private static void assertRowCount(java.sql.ResultSet result, int expected) throws SQLException {
     try (result) {
       for (int i = 0; i < expected; i++) {
@@ -258,6 +332,29 @@ class PhysicalTableColumnAliasTest {
         var record = new GenericData.Record(schema);
         record.put("id", i);
         record.put("name", "row " + i);
+        writer.write(record);
+      }
+    }
+  }
+
+  private static void writeWideTable(Path directory) throws Exception {
+    var amountSchema = LogicalTypes.decimal(10, 2).addToSchema(Schema.create(Schema.Type.BYTES));
+    var schema = SchemaBuilder.record("t_record").fields().requiredInt("id").requiredString("name").name("amount")
+        .type(amountSchema).noDefault().requiredBoolean("flag").endRecord();
+    var file = new org.apache.hadoop.fs.Path(directory.resolve("t.parquet").toUri());
+    Files.deleteIfExists(directory.resolve("t.parquet"));
+    var configuration = new Configuration(false);
+    String[] amounts = {
+        "1.00", "2.50", "2.50", "3.75"
+    };
+    try (var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(file, configuration))
+        .withSchema(schema).withConf(configuration).build()) {
+      for (int i = 1; i <= amounts.length; i++) {
+        var record = new GenericData.Record(schema);
+        record.put("id", i);
+        record.put("name", "n" + i);
+        record.put("amount", ByteBuffer.wrap(new BigDecimal(amounts[i - 1]).unscaledValue().toByteArray()));
+        record.put("flag", i % 2 == 0);
         writer.write(record);
       }
     }

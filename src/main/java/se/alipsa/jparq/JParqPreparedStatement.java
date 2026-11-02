@@ -593,7 +593,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           }
           reader = validatedTable(baseTableLocation, conf).open(conf, predicate);
           if (baseRef != null && !baseRef.columnAliases().isEmpty()) {
-            reader = new RenamingRecordReader(reader, renamingSourceSchema, fileAvroSchema);
+            reader = new RenamingRecordReader(reader, renamingSourceSchema, fileAvroSchema, renamingQualifier(baseRef));
           }
           resultTableName = baseTableLocation.tableName();
         }
@@ -2091,6 +2091,22 @@ public class JParqPreparedStatement implements PreparedStatement {
       throw SqlExceptions.syntaxFailure(
           "Column alias lists on information_schema inputs are not supported; " + "use a derived table or CTE instead");
     }
+  }
+
+  /**
+   * Chooses the visible relation name used to scope the renamed column mapping,
+   * matching the in-memory branch's alias-first naming.
+   *
+   * @param baseRef
+   *          base table reference carrying the alias list
+   * @return alias when present, otherwise the referenced table name
+   */
+  private String renamingQualifier(SqlParser.TableReference baseRef) {
+    String qualifier = parsedSelect.tableAlias() != null ? parsedSelect.tableAlias() : parsedSelect.table();
+    if ((qualifier == null || qualifier.isBlank()) && baseRef.tableName() != null && !baseRef.tableName().isBlank()) {
+      qualifier = baseRef.tableName();
+    }
+    return qualifier;
   }
 
   /**
