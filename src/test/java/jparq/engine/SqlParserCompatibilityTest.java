@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.SchemaBuilder;
@@ -46,6 +47,21 @@ class SqlParserCompatibilityTest {
   @Test
   void complexCaseBranchesRemainAvailable() {
     assertNotNull(SqlParser.parseSelect("SELECT CASE WHEN id=1 THEN id=2 ELSE id=3 END FROM input"));
+  }
+
+  /**
+   * Collects row-count bindings while validating through the shared complex
+   * parser retry.
+   */
+  @Test
+  void parameterCollectionUsesSharedValidation() {
+    String sql = "WITH c AS (SELECT ? AS n) "
+        + "SELECT CASE WHEN n = 1 THEN n = 2 ELSE n = 3 END FROM c LIMIT ? OFFSET ? ROWS";
+    assertEquals(Map.of(2, "LIMIT", 3, "OFFSET"), SqlParser.rowCountParameters(sql));
+    assertTrue(SqlParser.rowCountParameters("SELECT ? AS n").isEmpty());
+    assertThrows(IllegalArgumentException.class, () -> SqlParser.rowCountParameters("SELECT 1 LIMIT ~1"));
+    assertThrows(IllegalArgumentException.class,
+        () -> SqlParser.rowCountParameters("SELECT CAST(? AS DECIMAL(2,5)) LIMIT ?"));
   }
 
   /** Limits complex retries without restricting successful simple parses. */

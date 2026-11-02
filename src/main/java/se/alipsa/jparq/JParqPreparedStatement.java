@@ -201,6 +201,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final int parameterCount;
   private final Map<String, List<Integer>> namedParameterIndexes;
   private final boolean hasParameters;
+  private Map<Integer, String> rowCountParameterClauses = Map.of();
   private CteResult informationSchemaTablesResult;
   private CteResult informationSchemaColumnsResult;
   private final Map<Integer, Object> parameterValues = new LinkedHashMap<>();
@@ -288,7 +289,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         // are known.
         // This enables predicate pushdown with bound values while still providing early
         // error detection.
-        SqlParser.parseQuery(originalSql); // Validates syntax and basic structure
+        rowCountParameterClauses = SqlParser.rowCountParameters(originalSql);
         tmpSetOperation = false;
         tmpTableRefs = List.of();
         tmpJoinQuery = false;
@@ -5210,6 +5211,10 @@ public class JParqPreparedStatement implements PreparedStatement {
           } else if (c == '?') {
             foundCount++;
             Object value = parameterValues.get(foundCount);
+            String clause = rowCountParameterClauses.get(foundCount);
+            if (clause != null) {
+              value = normalizeRowCountParameter(value, clause);
+            }
             rendered.append(renderLiteral(value));
             consumed = true;
           }
@@ -5259,6 +5264,42 @@ public class JParqPreparedStatement implements PreparedStatement {
       throw new SQLException("Expected " + parameterCount + " parameters but found " + foundCount);
     }
     return rendered.toString();
+  }
+
+  /**
+   * Normalizes integral numeric row-count parameters without altering other
+   * bindings.
+   *
+   * @param value
+   *          the bound parameter value
+   * @param clause
+   *          the LIMIT, OFFSET, or FETCH clause name
+   * @return an integer row count
+   * @throws SQLDataException
+   *           for invalid row counts, invalid numeric text, or integer overflow
+   */
+  private int normalizeRowCountParameter(Object value, String clause) throws SQLDataException {
+    if (!(value instanceof Number) && !(value instanceof String) && !(value instanceof Character)) {
+      throw SqlExceptions.invalidRowCount(clause, value);
+    }
+    BigDecimal decimal;
+    try {
+      decimal = new BigDecimal(value.toString().trim()).stripTrailingZeros();
+    } catch (NumberFormatException e) {
+      if (value instanceof String || value instanceof Character) {
+        throw new SQLDataException(
+            "Invalid numeric text for " + clause + " row count: " + SqlExceptions.diagnosticValue(value), "22018", e);
+      }
+      throw SqlExceptions.invalidRowCount(clause, value);
+    }
+    if (decimal.signum() < 0 || decimal.scale() > 0) {
+      throw SqlExceptions.invalidRowCount(clause, value);
+    }
+    if (decimal.compareTo(BigDecimal.valueOf(Integer.MAX_VALUE)) > 0) {
+      throw new SQLDataException(
+          clause + " row count exceeds " + Integer.MAX_VALUE + ": " + SqlExceptions.diagnosticValue(value), "22003");
+    }
+    return decimal.intValueExact();
   }
 
   private String renderLiteral(Object value) throws SQLException {

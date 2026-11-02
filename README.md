@@ -721,6 +721,14 @@ The following SQL statements are supported:
 - `OFFSET` and `LIMIT` support
   - Also support the PostgreSQL shorthand `LIMIT n OFFSET m` syntax
 - Standard row-limiting syntax (FETCH FIRST / OFFSET … FETCH)
+  - Row counts accept nonnegative integer literals and bound JDBC parameters up to `2147483647`.
+    Integral numeric parameters such as `2.0` and `BigDecimal("2.00")`, and character values such as `"2"` or `'2'`,
+    are accepted. Invalid numeric strings raise `22018`; other nonnumeric parameters raise `2201W`/`2201X`.
+    Larger counts raise SQLState `22003`. Negative counts and NULL, fractional, or non-finite numeric
+    parameters raise `SQLDataException`: `2201X` for OFFSET, `2201W` for LIMIT/FETCH.
+    Unsupported row-count expressions (including bitwise NOT, arithmetic, subqueries, and literal NULL)
+    raise SQLState `42000`.
+    MySQL-style `LIMIT offset, count` is rejected with `0A000`; use OFFSET and LIMIT.
 - `DISTINCT` support
 - Functions support
   - Date functions

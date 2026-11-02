@@ -127,7 +127,7 @@ class SqlExceptionsTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "42000", "42702", "22003", "22007", "22008", "22018"
+      "42000", "42702", "22003", "22007", "22008", "22018", "2201W", "2201X"
   })
   void wrappingRetainsSubqueryContext(String state) {
     SQLException classified = new SQLException("Inner query failed", state, 7);
@@ -249,7 +249,7 @@ class SqlExceptionsTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "42000", "42702", "22003", "22007", "22008", "22018"
+      "42000", "42702", "22003", "22007", "22008", "22018", "2201W", "2201X"
   })
   void iterationRetainsSubqueryContext(String state) throws Exception {
     var schema = SchemaBuilder.record("Row").fields().requiredInt("id").endRecord();

@@ -95,6 +95,7 @@ public final class JSqlParserSupport {
       /** {@inheritDoc} */
       @Override
       public <S> Void visit(SetOperationList set, S context) {
+        inspectRowCounts(set, expressions);
         visitWithItems(set.getWithItemsList(), context);
         super.visit(set, context);
         expressions.visitOrderBy(set.getOrderByElements(), context);
@@ -110,6 +111,7 @@ public final class JSqlParserSupport {
       /** {@inheritDoc} */
       @Override
       public <S> Void visit(PlainSelect select, S context) {
+        inspectRowCounts(select, expressions);
         super.visit(select, context);
         return expressions.visitLimit(select.getLimit(), context);
       }
@@ -125,6 +127,26 @@ public final class JSqlParserSupport {
     sources.setExpressionVisitor(expressions);
     expressions.setSelectVisitor(selects);
     statement.accept((SelectVisitor<Void>) selects, null);
+  }
+
+  /**
+   * Reports row-count operands without changing expression traversal order.
+   *
+   * @param select
+   *          the query owning the clauses
+   * @param expressions
+   *          the visitor receiving row-count context
+   */
+  private static void inspectRowCounts(Select select, StatementExpressionVisitor expressions) {
+    if (select.getLimit() != null) {
+      expressions.inspectRowCount(select.getLimit().getRowCount(), "LIMIT");
+    }
+    if (select.getOffset() != null) {
+      expressions.inspectRowCount(select.getOffset().getOffset(), "OFFSET");
+    }
+    if (select.getFetch() != null) {
+      expressions.inspectRowCount(select.getFetch().getExpression(), "FETCH");
+    }
   }
 
   /**
@@ -169,6 +191,18 @@ public final class JSqlParserSupport {
   public abstract static class StatementExpressionVisitor extends ExpressionVisitorAdapter<Void> {
     /** Creates a visitor whose SELECT traversal is connected by the helper. */
     protected StatementExpressionVisitor() {
+    }
+
+    /**
+     * Inspects an operand with its row-limiting clause context.
+     *
+     * @param expression
+     *          the row-count operand, possibly null for default FETCH
+     * @param clause
+     *          the LIMIT, OFFSET, or FETCH clause name
+     */
+    protected void inspectRowCount(Expression expression, String clause) {
+      // Subclasses may collect clause context independently of expression traversal.
     }
 
     /** {@inheritDoc} */
