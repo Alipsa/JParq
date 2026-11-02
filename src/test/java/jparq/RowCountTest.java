@@ -121,8 +121,9 @@ class RowCountTest {
   @ParameterizedTest
   @ValueSource(strings = {"LIMIT %s", "OFFSET %s ROWS", "FETCH FIRST %s ROWS ONLY"})
   void checksBoundParameters(String template) throws SQLException {
+    String sql = "SELECT model FROM mtcars " + template.formatted("?");
     try (Connection connection = connect();
-        PreparedStatement statement = connection.prepareStatement("SELECT model FROM mtcars " + template.formatted("?"))) {
+        PreparedStatement statement = connection.prepareStatement(sql)) {
       statement.setInt(1, 2);
       try (ResultSet rows = statement.executeQuery()) {
         int count = 0;
