@@ -253,6 +253,105 @@ class GroupByAliasTest {
     }
   }
 
+  /**
+   * Input columns with quoted SQL names keep their standard meaning in GROUP BY,
+   * even when the internal field name differs: derived tables, CTEs, and CTE
+   * inputs joined with other tables must group by the column rather than by an
+   * aliased expression of the same name.
+   *
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @Test
+  void quotedInputColumnWinsOverAlias() throws Exception {
+    assertCaseAliasGroupsByColumn("SELECT CASE WHEN \"Cyl\" > 4 THEN 'big' ELSE 'small' END AS \"Cyl\", "
+        + "COUNT(*) AS n FROM (SELECT cyl AS \"Cyl\" FROM mtcars) t GROUP BY \"Cyl\"");
+
+    assertCaseAliasGroupsByColumn("WITH t AS (SELECT cyl AS \"Cyl\" FROM mtcars) "
+        + "SELECT CASE WHEN \"Cyl\" > 4 THEN 'big' ELSE 'small' END AS \"Cyl\", COUNT(*) AS n "
+        + "FROM t GROUP BY \"Cyl\"");
+
+    Map<String, Long> byName = new LinkedHashMap<>();
+    try (Connection connection = connection();
+        Statement stmt = connection.createStatement();
+        ResultSet rs = stmt.executeQuery("WITH t AS (SELECT id AS \"Id\" FROM acme.employees) "
+            + "SELECT CASE WHEN t.\"Id\" > 2 THEN 'big' ELSE 'small' END AS \"Id\", COUNT(*) AS n "
+            + "FROM t JOIN acme.employee_department ed ON t.\"Id\" = ed.employee GROUP BY \"Id\"")) {
+      while (rs.next()) {
+        byName.merge(rs.getString("Id"), rs.getLong("n"), Long::sum);
+      }
+    }
+    assertEquals(Map.of("small", 2L, "big", 3L), byName,
+        "join over a quoted CTE column must group by the column, producing one row per employee");
+  }
+
+  private static void assertCaseAliasGroupsByColumn(String sql) throws Exception {
+    List<String> rows = new ArrayList<>();
+    try (Connection connection = connection();
+        Statement stmt = connection.createStatement();
+        ResultSet rs = stmt.executeQuery(sql)) {
+      while (rs.next()) {
+        rows.add(rs.getString(1) + "|" + rs.getLong(2));
+      }
+    }
+    assertEquals(List.of("big|7", "small|11", "big|14"), rows, "column meaning must win for " + sql);
+  }
+
+  /**
+   * A quoted-lowercase GROUP BY name falls back to the unquoted input column of
+   * the same name: the column wins over a select-list alias.
+   *
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @Test
+  void quotedLowercaseColumnWinsOverAlias() throws Exception {
+    assertCaseAliasGroupsByColumn("SELECT CASE WHEN cyl > 4 THEN 'big' ELSE 'small' END AS \"cyl\", "
+        + "COUNT(*) AS n FROM mtcars GROUP BY \"cyl\"");
+    try (Connection connection = connection(); Statement stmt = connection.createStatement()) {
+      SQLSyntaxErrorException failure = assertThrows(SQLSyntaxErrorException.class,
+          () -> stmt.executeQuery("SELECT gear AS \"cyl\", COUNT(*) AS n FROM mtcars GROUP BY \"cyl\""));
+      assertEquals("42000", failure.getSQLState());
+    }
+  }
+
+  /**
+   * Identical expressions labeling the same name are not ambiguous; the name
+   * resolves to the shared expression.
+   *
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @Test
+  void duplicateAliasOfSameExpressionIsAccepted() throws Exception {
+    Map<Integer, Long> counts = new LinkedHashMap<>();
+    try (Connection connection = connection();
+        Statement stmt = connection.createStatement();
+        ResultSet rs = stmt.executeQuery("SELECT cyl AS x, cyl AS X, COUNT(*) AS n FROM mtcars GROUP BY x")) {
+      while (rs.next()) {
+        counts.put(rs.getInt("x"), rs.getLong("n"));
+      }
+    }
+    assertEquals(Map.of(4, 11L, 6, 7L, 8, 14L), counts);
+  }
+
+  /**
+   * An aggregate alias counts toward alias ambiguity: a GROUP BY name shared
+   * between a plain expression and an aggregate alias is rejected with SQLState
+   * 42702 rather than silently grouping by the plain expression.
+   *
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @Test
+  void aggregateAliasContributesToAmbiguity() throws Exception {
+    try (Connection connection = connection(); Statement stmt = connection.createStatement()) {
+      SQLSyntaxErrorException failure = assertThrows(SQLSyntaxErrorException.class,
+          () -> stmt.executeQuery("SELECT cyl AS x, COUNT(*) AS x FROM mtcars GROUP BY x"));
+      assertEquals("42702", failure.getSQLState());
+    }
+  }
+
   private static Connection connection() throws SQLException {
     return DriverManager.getConnection("jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath());
   }

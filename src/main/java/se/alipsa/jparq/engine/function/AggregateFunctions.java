@@ -80,6 +80,7 @@ import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.LegacyParenthesisSupport;
+import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.engine.NumericCastTarget;
 import se.alipsa.jparq.engine.NumericCasts;
 import se.alipsa.jparq.engine.Operation;
@@ -135,30 +136,38 @@ public final class AggregateFunctions {
    *
    * <p>
    * An unqualified GROUP BY or GROUPING() name resolves to a select-list alias
-   * only when it matches no column of the input schema and names exactly one
-   * select expression. Names matching an input column keep their standard
-   * meaning, and names matching several aliases are rejected as ambiguous.
+   * only when the input schema is known, the name matches no input column, and it
+   * names exactly one select expression. Names matching an input column keep
+   * their standard meaning, and names shared by several select expressions with
+   * different content are rejected as ambiguous.
    * </p>
    *
    * @param targets
-   *          lookup from normalized alias to the underlying select expression
+   *          lookup from normalized alias to the underlying select expression;
+   *          only aliases of expressions usable as grouping expressions
    * @param ambiguous
-   *          normalized aliases shared by more than one distinct select
-   *          expression
+   *          normalized aliases shared by more than one structurally distinct
+   *          select expression
    * @param availableColumns
-   *          normalized keys of the columns provided by the input schema
+   *          SQL lookup keys of the columns provided by the input schema
+   * @param schemaKnown
+   *          {@code false} when the input schema was unavailable; alias
+   *          resolution is disabled in that case
    */
-  public record AliasContext(Map<String, Expression> targets, Set<String> ambiguous, Set<String> availableColumns) {
+  public record AliasContext(Map<String, Expression> targets, Set<String> ambiguous, Set<String> availableColumns,
+      boolean schemaKnown) {
     /**
      * Canonical constructor normalising the provided collections.
      *
      * @param targets
      *          lookup from normalized alias to the underlying select expression
      * @param ambiguous
-     *          normalized aliases shared by more than one distinct select
-     *          expression
+     *          normalized aliases shared by more than one structurally distinct
+     *          select expression
      * @param availableColumns
-     *          normalized keys of the columns provided by the input schema
+     *          SQL lookup keys of the columns provided by the input schema
+     * @param schemaKnown
+     *          {@code false} when the input schema was unavailable
      */
     public AliasContext {
       targets = targets == null ? Map.of() : Map.copyOf(targets);
@@ -212,7 +221,7 @@ public final class AggregateFunctions {
       resultColumns = List.copyOf(resultColumns);
       groupExpressions = List.copyOf(groupExpressions);
       groupingSets = List.copyOf(groupingSets);
-      groupByAliases = groupByAliases == null ? new AliasContext(null, null, null) : groupByAliases;
+      groupByAliases = groupByAliases == null ? new AliasContext(null, null, null, false) : groupByAliases;
     }
 
     /**
@@ -1342,9 +1351,13 @@ public final class AggregateFunctions {
    * GROUP BY clause or GROUPING() arguments.
    *
    * <p>
-   * Aliases of expressions containing aggregates or GROUPING() invocations are
-   * excluded since those cannot serve as grouping expressions. An alias shared by
-   * more than one distinct select expression is recorded as ambiguous.
+   * Input column names are collected from the schema's SQL lookup keys so that
+   * quoted and derived-table columns keep their SQL names even when the internal
+   * field name differs. Ambiguity is tracked across all select-list labels: a
+   * name labeling more than one structurally distinct expression is rejected even
+   * when one of the expressions could not serve as a grouping target (for example
+   * an aggregate alias), while identical expressions labeling the same name are
+   * accepted.
    * </p>
    *
    * @param select
@@ -1356,26 +1369,18 @@ public final class AggregateFunctions {
   private static AliasContext aliasContext(SqlParser.Select select, Schema inputSchema) {
     Set<String> availableColumns = new HashSet<>();
     if (inputSchema != null) {
-      for (Schema.Field field : inputSchema.getFields()) {
-        String key = Identifier.lookupKey(field.name());
-        if (key != null) {
-          availableColumns.add(key);
-        }
-      }
+      availableColumns.addAll(MaterializedNames.lookupIndex(inputSchema).keySet());
     }
     List<Expression> expressions = select.expressions();
     List<String> labels = select.labels();
     if (expressions.isEmpty() || labels == null || labels.isEmpty()) {
-      return new AliasContext(null, null, availableColumns);
+      return new AliasContext(null, null, availableColumns, inputSchema != null);
     }
+    Map<String, Expression> labeled = new HashMap<>();
     Map<String, Expression> targets = new HashMap<>();
     Set<String> ambiguous = new LinkedHashSet<>();
     int size = Math.min(expressions.size(), labels.size());
     for (int i = 0; i < size; i++) {
-      Expression expression = expressions.get(i);
-      if (!resolvableAliasTarget(expression)) {
-        continue;
-      }
       String label = labels.get(i);
       if (label == null || label.isBlank()) {
         continue;
@@ -1384,12 +1389,16 @@ public final class AggregateFunctions {
       if (key == null) {
         continue;
       }
-      Expression existing = targets.putIfAbsent(key, expression);
-      if (existing != null && !existing.equals(expression)) {
+      Expression expression = expressions.get(i);
+      Expression existing = labeled.putIfAbsent(key, expression);
+      if (existing != null && !expressionsEquivalent(existing, expression)) {
         ambiguous.add(key);
       }
+      if (resolvableAliasTarget(expression)) {
+        targets.putIfAbsent(key, expression);
+      }
     }
-    return new AliasContext(targets, ambiguous, availableColumns);
+    return new AliasContext(targets, ambiguous, availableColumns, inputSchema != null);
   }
 
   /**
@@ -1435,8 +1444,10 @@ public final class AggregateFunctions {
    * <p>
    * Input columns take precedence over select-list aliases, matching the SQL
    * standard and PostgreSQL: a name that matches a column of the input schema
-   * keeps its column meaning. A name shared by several aliases is rejected as an
-   * ambiguous reference with SQLState 42702.
+   * keeps its column meaning, including the quoted-lowercase fallback the column
+   * resolver already applies. A name shared by several aliases is rejected as an
+   * ambiguous reference with SQLState 42702. When the input schema is unknown,
+   * aliases do not resolve and the name keeps its ordinary column meaning.
    * </p>
    *
    * @param expression
@@ -1444,7 +1455,8 @@ public final class AggregateFunctions {
    * @param aliasContext
    *          resolution context for select-list alias references
    * @return the aliased select expression, or the original expression when it is
-   *         qualified, names an input column, or matches no alias
+   *         qualified, names an input column, matches no alias, or the input
+   *         schema is unknown
    * @throws IllegalArgumentException
    *           wrapping an ambiguous-column SQLException with SQLState 42702 when
    *           the name matches more than one select-list alias
@@ -1454,7 +1466,12 @@ public final class AggregateFunctions {
       return expression;
     }
     String key = Identifier.lookupKey(column.getColumnName());
-    if (key == null || aliasContext.availableColumns().contains(key)) {
+    if (key == null || !aliasContext.schemaKnown()) {
+      return expression;
+    }
+    String alternative = ColumnMappingUtil.alternativeColumnKey(key);
+    if (aliasContext.availableColumns().contains(key)
+        || alternative != null && aliasContext.availableColumns().contains(alternative)) {
       return expression;
     }
     if (aliasContext.ambiguous().contains(key)) {

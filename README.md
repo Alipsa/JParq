@@ -353,9 +353,12 @@ unqualified SELECT aliases: `SELECT d.department AS dep, COUNT(*) FROM employee_
 JOIN departments d ON ed.department = d.id GROUP BY dep` groups by the aliased expression. This
 differs from the HAVING extension above in an important way: GROUP BY names refer to input columns
 in standard SQL, so when a name matches both an input column and a select-list alias, the input
-column wins; the alias only applies when no input column carries that name. Aliases of aggregate
-expressions cannot serve as grouping expressions, and a name shared by more than one select-list
-alias is rejected as ambiguous with SQLState `42702`. Predicate subqueries using IN, EXISTS, ANY, SOME, or ALL retain
+column wins; the alias only applies when no input column carries that name. Column matching honors
+quoted names, including quoted-lowercase fallback to the unquoted column of the same name, so the
+rule also holds for derived tables and CTEs whose internal field names differ from their SQL names.
+Aliases of aggregate expressions cannot serve as grouping expressions, and a name shared by more
+than one select-list alias with a different expression is rejected as ambiguous with SQLState
+`42702`. Predicate subqueries using IN, EXISTS, ANY, SOME, or ALL retain
 set semantics and SQL three-valued logic inside CASE and other scalar expressions in SELECT, HAVING,
 and ORDER BY. Subquery correlations in all three clauses reject ungrouped outer columns with
 SQLState `42000` before reading groups, including when the outer input is empty.
