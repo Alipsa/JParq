@@ -1,37 +1,53 @@
 package se.alipsa.jparq.engine;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 
 /**
- * {@link RecordReader} decorator that renames every record to an equivalent
- * schema by position. Field order and types must match the delegate schema;
- * values are copied positionally so the renamed records expose the target
- * schema's field names (and SQL lookup metadata) while the underlying read
- * stays lazy and closeable through the delegate.
+ * {@link RecordReader} decorator that renames every record produced by the
+ * delegate to a positionally equivalent schema. Each renamed field sources its
+ * value from the delegate field captured by name at construction, so records
+ * whose schema is a reordered or narrowed projection of the source schema are
+ * handled correctly; source fields absent from a projected record leave the
+ * renamed field null and are never read because projection only drops columns
+ * the query does not reference.
  */
 public final class RenamingRecordReader implements RecordReader {
 
   private final RecordReader delegate;
   private final Schema renamedSchema;
-  private final int fieldCount;
+  private final List<String> sourceNames;
 
   /**
    * Creates a reader exposing the delegate's records under the renamed schema.
    *
    * @param delegate
-   *          source reader producing records positionally compatible with the
-   *          renamed schema
+   *          source reader producing records compatible with the source schema
+   * @param sourceSchema
+   *          schema describing the delegate's records by physical field name;
+   *          must have the same field count and order as the renamed schema
    * @param renamedSchema
-   *          schema with the same field order and types as the delegate's records
+   *          schema exposing the same columns in the same order under new names
    */
-  public RenamingRecordReader(RecordReader delegate, Schema renamedSchema) {
+  public RenamingRecordReader(RecordReader delegate, Schema sourceSchema, Schema renamedSchema) {
     this.delegate = Objects.requireNonNull(delegate, "delegate");
     this.renamedSchema = Objects.requireNonNull(renamedSchema, "renamedSchema");
-    this.fieldCount = renamedSchema.getFields().size();
+    Objects.requireNonNull(sourceSchema, "sourceSchema");
+    List<Schema.Field> sourceFields = sourceSchema.getFields();
+    if (sourceFields.size() != renamedSchema.getFields().size()) {
+      throw new IllegalArgumentException("Source schema has " + sourceFields.size() + " fields but renamed schema has "
+          + renamedSchema.getFields().size());
+    }
+    List<String> names = new ArrayList<>(sourceFields.size());
+    for (Schema.Field field : sourceFields) {
+      names.add(field.name());
+    }
+    this.sourceNames = List.copyOf(names);
   }
 
   @Override
@@ -40,9 +56,12 @@ public final class RenamingRecordReader implements RecordReader {
     if (record == null) {
       return null;
     }
+    Schema recordSchema = record.getSchema();
     GenericRecord renamed = new GenericData.Record(renamedSchema);
-    for (int i = 0; i < fieldCount; i++) {
-      renamed.put(i, record.get(i));
+    for (int i = 0; i < sourceNames.size(); i++) {
+      if (recordSchema.getField(sourceNames.get(i)) != null) {
+        renamed.put(i, record.get(sourceNames.get(i)));
+      }
     }
     return renamed;
   }

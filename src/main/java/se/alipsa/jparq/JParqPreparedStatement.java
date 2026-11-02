@@ -90,6 +90,7 @@ import se.alipsa.jparq.engine.NumericExpressionTypes;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
 import se.alipsa.jparq.engine.ParquetTable;
+import se.alipsa.jparq.engine.PredicateColumnRenamer;
 import se.alipsa.jparq.engine.PredicateSubqueryValidation;
 import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.QueryCancellation;
@@ -182,6 +183,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final Optional<FilterPredicate> parquetPredicate;
   private final Expression residualExpression;
   private final Schema fileAvroSchema;
+  private final Schema renamingSourceSchema;
   private final PushdownInfo pushdownInfo;
   private final Map<Integer, FilterPredicate> joinPredicates;
   private final String tableSchema;
@@ -266,6 +268,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     boolean tmpJoinQuery;
     Configuration tmpConf = null;
     Schema tmpFileAvro = null;
+    Schema tmpRenamingSource = null;
     Optional<FilterPredicate> tmpPredicate = Optional.empty();
     Expression tmpResidual = null;
     JParqConnection.TableLocation tmpBaseLocation = null;
@@ -422,18 +425,28 @@ public class JParqPreparedStatement implements PreparedStatement {
               // Positional column aliases rename only the exposed schema at
               // preparation time; records are renamed lazily when the query
               // executes so a reused statement observes current data. Pushdown
-              // is skipped because the alias names do not exist in the parquet
-              // files; the WHERE clause applies as a residual filter instead.
+              // planning resolves alias names against the renamed schema and
+              // maps them back to the physical columns, since the binding is
+              // purely positional.
               tmpFileAvro = applyColumnAliases(new CteResult(avro, List.of()), baseRef).schema();
+              tmpRenamingSource = avro;
+              Schema pushdownSchema = aliasedPushdownSchema(avro, tmpFileAvro);
+              Map<String, String> physicalNames = physicalColumnNames(avro, tmpFileAvro);
               if (!tmpSelect.qualifiedWildcards().isEmpty()) {
                 Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
                     baseRef, tmpFileAvro);
                 tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
               }
               aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
-              validateSelectColumns(tmpSelect, tmpFileAvro, aggregatePlan, tmpCteResults, tmpConf);
-              tmpResidual = tmpSelect.where();
-              tmpPredicate = Optional.empty();
+              configureProjectionPushdown(tmpSelect, pushdownSchema, aggregatePlan, tmpConf, tmpCteResults);
+              if (stmt.getConn().isPredicatePushdown() && baseRef.tableSample() == null && tmpSelect.where() != null) {
+                var split = ParquetFilterBuilder.split(tmpFileAvro, tmpSelect.where());
+                tmpPredicate = split.predicate().map(p -> PredicateColumnRenamer.rename(p, physicalNames));
+                tmpResidual = split.residual();
+              } else {
+                tmpPredicate = Optional.empty();
+                tmpResidual = tmpSelect.where();
+              }
             } else {
               tmpFileAvro = avro;
 
@@ -476,6 +489,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     this.parquetPredicate = tmpPredicate;
     this.residualExpression = tmpResidual;
     this.fileAvroSchema = tmpFileAvro;
+    this.renamingSourceSchema = tmpRenamingSource;
     this.cteResults = tmpCteResults;
     try {
       this.joinPredicates = tmpJoinQuery ? planJoinPredicates() : Map.of();
@@ -579,7 +593,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           }
           reader = validatedTable(baseTableLocation, conf).open(conf, predicate);
           if (baseRef != null && !baseRef.columnAliases().isEmpty()) {
-            reader = new RenamingRecordReader(reader, fileAvroSchema);
+            reader = new RenamingRecordReader(reader, renamingSourceSchema, fileAvroSchema);
           }
           resultTableName = baseTableLocation.tableName();
         }
@@ -4214,6 +4228,56 @@ public class JParqPreparedStatement implements PreparedStatement {
       converted.put(field.name(), toAvroValue(raw, nonNullSchema));
     }
     return converted;
+  }
+
+  /**
+   * Builds a schema with physical field names that resolve SQL references by
+   * their alias, so projection and predicate pushdown map alias names back to the
+   * stored columns.
+   *
+   * @param physical
+   *          original table schema
+   * @param renamed
+   *          schema exposing the same columns positionally under their aliases
+   * @return pushdown schema with physical names and alias lookup keys
+   */
+  private static Schema aliasedPushdownSchema(Schema physical, Schema renamed) {
+    List<Field> physicalFields = physical.getFields();
+    List<Field> renamedFields = renamed.getFields();
+    Schema record = Schema.createRecord(physical.getName(), physical.getDoc(), physical.getNamespace(),
+        physical.isError());
+    physical.getObjectProps().forEach(record::addProp);
+    List<Field> fields = new ArrayList<>(physicalFields.size());
+    for (int i = 0; i < physicalFields.size(); i++) {
+      Field source = physicalFields.get(i);
+      Field renamedField = renamedFields.get(i);
+      Field field = new Field(source.name(), source.schema(), source.doc(), source.defaultVal());
+      source.getObjectProps().forEach(field::addProp);
+      field.addProp(MaterializedNames.SQL_LABEL, renamedField.getProp(MaterializedNames.SQL_LABEL));
+      field.addProp(MaterializedNames.LOOKUP_KEY, renamedField.getProp(MaterializedNames.LOOKUP_KEY));
+      fields.add(field);
+    }
+    record.setFields(fields);
+    return record;
+  }
+
+  /**
+   * Maps renamed column names back to the physical column names by position.
+   *
+   * @param physical
+   *          original table schema
+   * @param renamed
+   *          positionally equivalent schema under alias names
+   * @return renamed field name mapped to physical field name
+   */
+  private static Map<String, String> physicalColumnNames(Schema physical, Schema renamed) {
+    List<Field> physicalFields = physical.getFields();
+    List<Field> renamedFields = renamed.getFields();
+    Map<String, String> names = new LinkedHashMap<>();
+    for (int i = 0; i < physicalFields.size(); i++) {
+      names.put(renamedFields.get(i).name(), physicalFields.get(i).name());
+    }
+    return Map.copyOf(names);
   }
 
   /**
