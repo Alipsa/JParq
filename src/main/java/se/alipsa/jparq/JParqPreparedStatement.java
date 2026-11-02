@@ -95,6 +95,7 @@ import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.RelationalKeys;
+import se.alipsa.jparq.engine.RenamingRecordReader;
 import se.alipsa.jparq.engine.SamplingRecordReader;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlExceptions;
@@ -418,17 +419,19 @@ public class JParqPreparedStatement implements PreparedStatement {
             Schema avro = input.schema();
 
             if (baseRef != null && !baseRef.columnAliases().isEmpty()) {
-              // Positional column aliases rename the exposed schema, so the
-              // table is materialized up front and pushdown is skipped, mirroring
-              // the CTE branch above.
-              tmpBaseCteResult = applyColumnAliases(materializePhysicalTable(input, tmpConf), baseRef);
-              tmpFileAvro = tmpBaseCteResult.schema();
+              // Positional column aliases rename only the exposed schema at
+              // preparation time; records are renamed lazily when the query
+              // executes so a reused statement observes current data. Pushdown
+              // is skipped because the alias names do not exist in the parquet
+              // files; the WHERE clause applies as a residual filter instead.
+              tmpFileAvro = applyColumnAliases(new CteResult(avro, List.of()), baseRef).schema();
               if (!tmpSelect.qualifiedWildcards().isEmpty()) {
                 Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
                     baseRef, tmpFileAvro);
                 tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
               }
               aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
+              validateSelectColumns(tmpSelect, tmpFileAvro, aggregatePlan, tmpCteResults, tmpConf);
               tmpResidual = tmpSelect.where();
               tmpPredicate = Optional.empty();
             } else {
@@ -570,11 +573,14 @@ public class JParqPreparedStatement implements PreparedStatement {
         } else {
           FilterPredicate predicate = parquetPredicate.orElse(null);
           if (reusablePlan != null && stmt.getConn().isPredicatePushdown()
-              && (baseRef == null || baseRef.tableSample() == null)) {
+              && (baseRef == null || (baseRef.tableSample() == null && baseRef.columnAliases().isEmpty()))) {
             predicate = ParquetFilterBuilder.withCorrelatedBindings(
                 () -> ParquetFilterBuilder.split(fileAvroSchema, parsedSelect.where()).predicate().orElse(null));
           }
           reader = validatedTable(baseTableLocation, conf).open(conf, predicate);
+          if (baseRef != null && !baseRef.columnAliases().isEmpty()) {
+            reader = new RenamingRecordReader(reader, fileAvroSchema);
+          }
           resultTableName = baseTableLocation.tableName();
         }
         resultMetadata = reader instanceof JoinRecordReader joinReader ? joinReader.schema() : fileAvroSchema;
@@ -4208,33 +4214,6 @@ public class JParqPreparedStatement implements PreparedStatement {
       converted.put(field.name(), toAvroValue(raw, nonNullSchema));
     }
     return converted;
-  }
-
-  /**
-   * Reads every row of a physical table into memory so that a positional column
-   * alias list can be applied to the exposed schema.
-   *
-   * @param input
-   *          validated parquet table
-   * @param configuration
-   *          Hadoop configuration used to open the table
-   * @return materialized rows with the table schema
-   * @throws SQLException
-   *           if the table cannot be read
-   */
-  private static CteResult materializePhysicalTable(ParquetTable input, Configuration configuration)
-      throws SQLException {
-    List<GenericRecord> rows = new ArrayList<>();
-    try (RecordReader tableReader = input.open(configuration, null)) {
-      GenericRecord record = tableReader.read();
-      while (record != null) {
-        rows.add(record);
-        record = tableReader.read();
-      }
-    } catch (IOException e) {
-      throw new SQLException("Failed to read data for table '" + input.schema().getName() + "'", e);
-    }
-    return new CteResult(input.schema(), rows);
   }
 
   /**

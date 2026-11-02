@@ -5,12 +5,21 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import org.apache.avro.SchemaBuilder;
+import org.apache.avro.generic.GenericData;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.parquet.avro.AvroParquetWriter;
+import org.apache.parquet.hadoop.util.HadoopOutputFile;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -179,6 +188,77 @@ class PhysicalTableColumnAliasTest {
         }
         assertTrue(observed > 0);
         assertFalse(result.next(), sql);
+      }
+    }
+  }
+
+  /**
+   * Re-executing a prepared statement against an aliased table observes the
+   * current file content, just like the unaliased path.
+   *
+   * @param directory
+   *          temporary directory holding the table
+   * @throws Exception
+   *           if writing the fixture or executing the query fails
+   */
+  @Test
+  void preparedStatementReadsCurrentData(@TempDir Path directory) throws Exception {
+    writeTable(directory, 2);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var aliased = connection.prepareStatement("SELECT a, b FROM t x(a, b)");
+        var plain = connection.prepareStatement("SELECT id, name FROM t")) {
+      assertRowCount(aliased.executeQuery(), 2);
+      assertRowCount(plain.executeQuery(), 2);
+
+      writeTable(directory, 5);
+      assertRowCount(aliased.executeQuery(), 5);
+      assertRowCount(plain.executeQuery(), 5);
+    }
+  }
+
+  /**
+   * Reports the physical base table name, not the alias, for renamed columns.
+   *
+   * @param directory
+   *          temporary directory holding the table
+   * @throws Exception
+   *           if writing the fixture or executing the query fails
+   */
+  @Test
+  void metadataReportsBaseTable(@TempDir Path directory) throws Exception {
+    writeTable(directory, 2);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      try (var statement = connection.createStatement();
+          var result = statement.executeQuery("SELECT a FROM t x(a, b)")) {
+        assertEquals("t", result.getMetaData().getTableName(1));
+      }
+      try (var statement = connection.createStatement(); var result = statement.executeQuery("SELECT id FROM t x")) {
+        assertEquals("t", result.getMetaData().getTableName(1));
+      }
+    }
+  }
+
+  private static void assertRowCount(java.sql.ResultSet result, int expected) throws SQLException {
+    try (result) {
+      for (int i = 0; i < expected; i++) {
+        assertTrue(result.next());
+      }
+      assertFalse(result.next());
+    }
+  }
+
+  private static void writeTable(Path directory, int rows) throws Exception {
+    var schema = SchemaBuilder.record("t_record").fields().requiredInt("id").requiredString("name").endRecord();
+    var file = new org.apache.hadoop.fs.Path(directory.resolve("t.parquet").toUri());
+    Files.deleteIfExists(directory.resolve("t.parquet"));
+    var configuration = new Configuration(false);
+    try (var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(file, configuration))
+        .withSchema(schema).withConf(configuration).build()) {
+      for (int i = 1; i <= rows; i++) {
+        var record = new GenericData.Record(schema);
+        record.put("id", i);
+        record.put("name", "row " + i);
+        writer.write(record);
       }
     }
   }
