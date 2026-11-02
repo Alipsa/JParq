@@ -1391,7 +1391,7 @@ public final class AggregateFunctions {
       }
       Expression expression = expressions.get(i);
       Expression existing = labeled.putIfAbsent(key, expression);
-      if (existing != null && !expressionsEquivalent(existing, expression)) {
+      if (existing != null && !expressionsEquivalent(unwrap(existing), unwrap(expression))) {
         ambiguous.add(key);
       }
       if (resolvableAliasTarget(expression)) {

@@ -19,6 +19,7 @@ import se.alipsa.jparq.engine.SqlParser.TableSampleDefinition.SampleValueType;
 public final class SamplingRecordReader implements RecordReader {
 
   private RecordReader delegate;
+  private final Schema sourceSchema;
   private final TableSampleDefinition definition;
   private final SplittableRandom random;
   private final double bernoulliProbability;
@@ -28,15 +29,16 @@ public final class SamplingRecordReader implements RecordReader {
   private final List<GenericRecord> bufferedRows;
   private int bufferedIndex;
 
-  private SamplingRecordReader(RecordReader delegate, TableSampleDefinition definition, SplittableRandom random,
-      double bernoulliProbability, long systemInterval, long systemOffset, List<GenericRecord> bufferedRows)
-      throws IOException {
+  private SamplingRecordReader(RecordReader delegate, Schema sourceSchema, TableSampleDefinition definition,
+      SplittableRandom random, double bernoulliProbability, long systemInterval, long systemOffset,
+      List<GenericRecord> bufferedRows) throws IOException {
     this.definition = Objects.requireNonNull(definition, "definition");
     this.random = Objects.requireNonNull(random, "random");
     this.bernoulliProbability = bernoulliProbability;
     this.systemInterval = systemInterval;
     this.systemOffset = systemOffset;
     this.bufferedRows = bufferedRows;
+    this.sourceSchema = sourceSchema;
     this.delegate = bufferedRows == null ? Objects.requireNonNull(delegate, "delegate") : null;
   }
 
@@ -88,18 +90,24 @@ public final class SamplingRecordReader implements RecordReader {
   private static SamplingRecordReader build(RecordReader reader, TableSampleDefinition definition) throws IOException {
     SplittableRandom random = new SplittableRandom(seed(definition));
     if (definition.valueType() == SampleValueType.ROWS) {
+      // Capture the source schema before sampling: an empty sample has no rows
+      // to derive the schema from, yet planners still need it.
+      Schema sourceSchema = reader.schema();
       List<GenericRecord> buffered = sampleFixedRowCount(reader, definition, random);
-      return new SamplingRecordReader(null, definition, random, 0D, 0L, 0L, buffered);
+      return new SamplingRecordReader(null, sourceSchema, definition, random, 0D, 0L, 0L, buffered);
     }
     double probability = computeProbability(definition.value());
     boolean bernoulli = definition.method() == SampleMethod.BERNOULLI;
     long interval = bernoulli ? 0L : computeSystemInterval(definition.value());
     long offset = (!bernoulli && interval > 1) ? random.nextLong(interval) : 0L;
-    return new SamplingRecordReader(reader, definition, random, probability, interval, offset, null);
+    return new SamplingRecordReader(reader, null, definition, random, probability, interval, offset, null);
   }
 
   @Override
   public Schema schema() {
+    if (sourceSchema != null) {
+      return sourceSchema;
+    }
     if (delegate != null) {
       return delegate.schema();
     }

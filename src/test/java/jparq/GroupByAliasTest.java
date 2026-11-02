@@ -1,6 +1,7 @@
 package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.file.Path;
@@ -350,6 +351,55 @@ class GroupByAliasTest {
           () -> stmt.executeQuery("SELECT cyl AS x, COUNT(*) AS x FROM mtcars GROUP BY x"));
       assertEquals("42702", failure.getSQLState());
     }
+  }
+
+  /**
+   * The same expression with and without outer parentheses is one expression, not
+   * an ambiguous pair.
+   *
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @Test
+  void parenthesizedDuplicateAliasIsAccepted() throws Exception {
+    Map<Integer, Long> counts = new LinkedHashMap<>();
+    try (Connection connection = connection();
+        Statement stmt = connection.createStatement();
+        ResultSet rs = stmt
+            .executeQuery("SELECT cyl + 1 AS x, (cyl + 1) AS x, COUNT(*) AS n " + "FROM mtcars GROUP BY x")) {
+      while (rs.next()) {
+        counts.put(rs.getInt("x"), rs.getLong("n"));
+      }
+    }
+    assertEquals(Map.of(5, 11L, 7, 7L, 9, 14L), counts);
+  }
+
+  /**
+   * A row-count sample that picks no rows still reports the source schema, so
+   * GROUP BY on an alias plans identically to the prepare-time pass and the query
+   * simply returns no rows.
+   *
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @Test
+  void zeroRowSampleWithAliasGroupByReturnsNoRows() throws Exception {
+    try (Connection connection = connection();
+        Statement stmt = connection.createStatement();
+        ResultSet rs = stmt.executeQuery("SELECT department AS dep, COUNT(*) AS n FROM acme.departments "
+            + "TABLESAMPLE SYSTEM (0 ROWS) GROUP BY dep")) {
+      assertFalse(rs.next(), "empty sample must return no rows");
+    }
+    Map<String, Long> counts = new LinkedHashMap<>();
+    try (Connection connection = connection();
+        Statement stmt = connection.createStatement();
+        ResultSet rs = stmt.executeQuery("SELECT department AS dep, COUNT(*) AS n FROM acme.departments "
+            + "TABLESAMPLE SYSTEM (5 ROWS) GROUP BY dep")) {
+      while (rs.next()) {
+        counts.put(rs.getString("dep"), rs.getLong("n"));
+      }
+    }
+    assertEquals(Map.of("IT", 1L, "HR", 1L, "Sales", 1L), counts);
   }
 
   private static Connection connection() throws SQLException {
