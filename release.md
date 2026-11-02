@@ -8,8 +8,7 @@
   raise SQLDataException with `2201X` for OFFSET or `2201W` for LIMIT/FETCH. Support bound JDBC row-count
   parameters, including integral numeric values with fractional zeroes and String/Character values,
   while retaining decimal scales in other bindings. Reject invalid numeric strings with `22018` and
-  other nonnumeric
-  bindings with `2201W`/`2201X`. Collect row-count parameters during the existing parse and validation,
+  other nonnumeric bindings with `2201W`/`2201X`. Collect row-count parameters during the existing parse and validation,
   including parser retries. Remove the obsolete CTE rewrite workaround and its broken capture groups
   (#413), so parser syntax errors cannot be bypassed by rewriting invalid unquoted CTE names.
   Window/CTE/join queries parse directly, including their row-count parameters.

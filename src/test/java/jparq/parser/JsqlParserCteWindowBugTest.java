@@ -103,6 +103,7 @@ class JsqlParserCteWindowBugTest {
     assertNotNull(parsed);
     assertEquals(1, parsed.commonTableExpressions().size());
   }
+
   /**
    * Retains lexical parameter indexes when window CTE queries use row-count
    * parameters.
@@ -113,5 +114,4 @@ class JsqlParserCteWindowBugTest {
     assertEquals(Map.of(2, "LIMIT"), SqlParser.rowCountParameters(sql));
     assertEquals(1, SqlParser.parseQuery(sql).commonTableExpressions().size());
   }
-
 }
