@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import net.sf.jsqlparser.expression.CastExpression;
+import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.SchemaBuilder;
 import org.junit.jupiter.api.Test;
@@ -86,17 +87,45 @@ class SqlParserCompatibilityTest {
   }
 
   /**
-   * Rejects parameterized rewrites even when their markers are not row counts.
+   * Accepts parameterized rewrites whose markers are not row counts.
    */
   @Test
-  void cteRewriteRejectsOrdinaryParameterIndexes() {
+  void cteRewriteAcceptsOrdinaryParameterIndexes() {
     Map<Integer, String> clauses = new LinkedHashMap<>();
     String sql = "WITH c AS (SELECT ? AS n) SELECT ? AS tag, n FROM c";
-    var error = assertThrows(IllegalArgumentException.class,
-        () -> SqlParser.tryParseWithCteWorkaround(sql, true, clauses));
-    assertEquals("0A000", SqlExceptions.findSqlStateFailure(error).getSQLState());
+    assertNotNull(SqlParser.tryParseWithCteWorkaround(sql, true, clauses));
     assertNull(SqlParser.tryParseWithCteWorkaround("SELECT 1", true, clauses));
     assertTrue(clauses.isEmpty());
+  }
+
+  /**
+   * Rewrites quoted and unquoted declarations with implicit or explicit aliases
+   * and literal counts.
+   *
+   * @param name
+   *          the CTE name as written in SQL
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "c", "\"c\"", "\"MyC\""
+  })
+  void cteRewritePreservesNamesAndAliases(String name) {
+    for (String alias : List.of("", " x", " AS x")) {
+      String sql = "WITH " + name + " AS (SELECT ? AS n LIMIT 1) SELECT ? AS tag, n FROM " + name + alias;
+      Map<Integer, String> clauses = new LinkedHashMap<>();
+      assertNotNull(SqlParser.tryParseWithCteWorkaround(sql, true, clauses), sql);
+      assertTrue(clauses.isEmpty(), sql);
+    }
+  }
+
+  /** Keeps replacement-sensitive literal text intact during the rewrite. */
+  @Test
+  void cteRewritePreservesLiteralText() {
+    var query = assertInstanceOf(SqlParser.Select.class, SqlParser
+        .tryParseWithCteWorkaround("WITH c AS (SELECT '$1' AS n) SELECT n FROM c", true, new LinkedHashMap<>()));
+    var literal = assertInstanceOf(StringValue.class,
+        query.tableReferences().getFirst().subquery().expressions().getFirst());
+    assertEquals("$1", literal.getValue());
   }
 
   /** Limits complex retries without restricting successful simple parses. */

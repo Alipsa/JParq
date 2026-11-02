@@ -727,8 +727,9 @@ The following SQL statements are supported:
     Larger counts raise SQLState `22003`. Negative counts and NULL, fractional, or non-finite numeric
     parameters raise `SQLDataException`: `2201X` for OFFSET, `2201W` for LIMIT/FETCH.
     Unsupported row-count expressions (including bitwise NOT, arithmetic, subqueries, and literal NULL)
-    raise SQLState `42000`. Parameterized queries that require the CTE-rewrite parser fallback
-    are rejected with `0A000` because that rewrite can reorder parameter markers.
+    raise SQLState `42000`. Successfully parsed CTE-rewrite fallbacks containing row-count parameters
+    are rejected with `0A000` because the rewrite can reorder their markers. Other parameterized
+    rewrites remain valid, and malformed WITH queries retain `42000`.
     MySQL-style `LIMIT offset, count` is rejected with `0A000`; use OFFSET and LIMIT.
 - `DISTINCT` support
 - Functions support

@@ -778,8 +778,9 @@ public final class SqlParser {
   }
 
   /**
-   * Retries the single-CTE rewrite through the same validation. Parameterized
-   * queries are rejected before rewriting because it can reorder markers.
+   * Retries an applicable single-CTE rewrite through the same validation. Only
+   * successfully parsed rewrites containing row-count parameters are rejected,
+   * because rewriting can reorder their binding indexes.
    *
    * @param normalizedSql
    *          the normalized SQL text
@@ -794,21 +795,27 @@ public final class SqlParser {
    */
   public static Query tryParseWithCteWorkaround(String normalizedSql, boolean allowQualifiedWildcards,
       Map<Integer, String> rowCountParameters) {
-    if (rowCountParameters != null && SINGLE_CTE_PATTERN.matcher(normalizedSql).find()) {
-      throw SqlExceptions
-          .unsupportedFeature("Parameterized queries requiring the CTE-rewrite fallback are not supported; "
-              + "rewriting can reorder parameter indexes");
-    }
     String rewritten = rewriteSingleCteToDerivedTable(normalizedSql);
     if (rewritten == null) {
       return null;
     }
     String compacted = compactWhitespace(rewritten);
+    Map<Integer, String> collected = rowCountParameters == null ? null : new LinkedHashMap<>();
+    Query query;
     try {
-      return parseWithJsqlParser(compacted, allowQualifiedWildcards, null);
+      query = parseWithJsqlParser(compacted, allowQualifiedWildcards, collected);
+    } catch (JSQLParserException ex) {
+      String message = "Failed to parse rewritten SQL: " + compacted;
+      throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000", ex));
     } catch (Exception ex) {
       throw new IllegalArgumentException("Failed to parse rewritten SQL: " + compacted, ex);
     }
+    if (collected != null && !collected.isEmpty()) {
+      throw SqlExceptions
+          .unsupportedFeature("Row-count parameters in queries requiring the CTE-rewrite fallback are not supported; "
+              + "rewriting can reorder parameter indexes");
+    }
+    return query;
   }
 
   private static String normalizeSql(String sql) {
@@ -1002,19 +1009,19 @@ public final class SqlParser {
 
     int cteBodyStart = matcher.end();
     String cteBody = sql.substring(cteBodyStart, closingParenIndex).trim();
-    String cteName = matcher.group(1);
+    String cteName = matcher.group(1) == null ? matcher.group(2) : matcher.group(1);
     Pattern referencePattern = Pattern.compile("(?i)\\b(from|join)\\b\\s+(?:\"" + Pattern.quote(cteName) + "\"|"
         + Pattern.quote(cteName) + ")(\\s+(?:\"[^\"]+\"|[A-Za-z_][\\w]*))?");
     Matcher reference = referencePattern.matcher(trailing);
     if (!reference.find()) {
       return null;
     }
-    String alias = reference.group(3);
+    String alias = reference.group(2);
     if (alias == null || alias.isBlank()) {
-      alias = cteName;
+      alias = matcher.group(1) == null ? cteName : "\"" + cteName + "\"";
     }
     String replacement = reference.group(1) + " (" + cteBody + ") " + alias;
-    return reference.replaceFirst(replacement);
+    return reference.replaceFirst(Matcher.quoteReplacement(replacement));
   }
 
   private static int findMatchingParenthesis(String sql, int openingIndex) {

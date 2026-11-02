@@ -363,6 +363,29 @@ class RowCountTest {
   }
 
   /**
+   * Retains syntax classifications when parameterized WITH queries fail parsing.
+   *
+   * @param sql
+   *          the malformed parameterized WITH query
+   * @throws SQLException
+   *           if connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "WITH t AS (SELECT model FROM mtcars WHERE cyl = ?) SELEC * FROM t",
+      "WITH t AS (SELECT model FROM mtcars WHERE cyl = ? AND) SELECT * FROM t",
+      "WITH t AS (SELECT model FROM mtcars WHERE cyl = ?) SELECT * FROM t WHERE (model = 'x'"
+  })
+  void parameterizedWithSyntaxErrorsRemainSyntaxErrors(String sql) throws SQLException {
+    try (Connection connection = connect()) {
+      for (String query : List.of(sql, sql.replace("?", "4"))) {
+        var error = assertThrows(SQLSyntaxErrorException.class, () -> connection.prepareStatement(query), query);
+        assertEquals("42000", error.getSQLState(), query);
+      }
+    }
+  }
+
+  /**
    * Counts rows while leaving result-set ownership with the caller.
    *
    * @param rows
