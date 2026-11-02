@@ -10,10 +10,9 @@
   while retaining decimal scales in other bindings. Reject invalid numeric strings with `22018` and
   other nonnumeric
   bindings with `2201W`/`2201X`. Collect row-count parameters during the existing parse and validation,
-  including parser fallbacks. Reject only successfully parsed CTE rewrites containing row-count parameters
-  with `0A000`, so rewritten marker positions cannot be used as original binding indexes. Accept ordinary
-  parameters in that fallback and retain `42000` for malformed WITH queries. Correct the rewrite
-  capture groups for quoted/unquoted CTE names and table aliases, preserving replacement literals (#413).
+  including parser retries. Remove the obsolete CTE rewrite workaround and its broken capture groups
+  (#413), so parser syntax errors cannot be bypassed by rewriting invalid unquoted CTE names.
+  Window/CTE/join queries parse directly, including their row-count parameters.
   Preserve zero and default FETCH semantics. Reject MySQL-style `LIMIT offset, count` with `0A000`
   instead of silently ignoring the offset (#411).
 

@@ -43,10 +43,6 @@ public final class SqlParser {
       "LOCALTIME", "LOCALTIMESTAMP");
   private static final Set<String> CONVERT_TYPE_NAMES = Set.of("boolean", "bool", "char", "character", "nchar",
       "varchar", "charactervarying", "nvarchar", "string", "text", "clob");
-  private static final Pattern SINGLE_CTE_PATTERN = Pattern.compile(
-      "^\\s*with\\s+(?:\"([A-Za-z_][\\w]*)\"|([A-Za-z_][\\w]*))\\s+as\\s*\\(",
-      Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
-
   private static final Pattern QUOTED_ORDER_TEXT = Pattern
       .compile("\\$\\$[\\s\\S]*?\\$\\$|'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|`(?:``|[^`])*`");
 
@@ -683,11 +679,7 @@ public final class SqlParser {
       try {
         return parseWithJsqlParser(compactedSql, allowQualifiedWildcards, rowCountParameters);
       } catch (JSQLParserException ignored) {
-        // Fall through to the CTE rewrite below
-      }
-      Query fallback = tryParseWithCteWorkaround(normalizedSql, allowQualifiedWildcards, rowCountParameters);
-      if (fallback != null) {
-        return fallback;
+        // Report the original syntax error after the compacted retry also fails.
       }
       String message = "Failed to parse SQL: " + sql;
       throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000", e));
@@ -775,47 +767,6 @@ public final class SqlParser {
         return super.visit(cast, context);
       }
     });
-  }
-
-  /**
-   * Retries an applicable single-CTE rewrite through the same validation. Only
-   * successfully parsed rewrites containing row-count parameters are rejected,
-   * because rewriting can reorder their binding indexes.
-   *
-   * @param normalizedSql
-   *          the normalized SQL text
-   * @param allowQualifiedWildcards
-   *          whether qualified wildcard projections are accepted
-   * @param rowCountParameters
-   *          the row-count parameter destination, or null when not needed
-   * @return the parsed query, or null when the rewrite does not apply
-   * @throws IllegalArgumentException
-   *           if rewritten SQL cannot be parsed, or with SQLState 0A000 if
-   *           collecting rewritten parameter indexes would be unsafe
-   */
-  public static Query tryParseWithCteWorkaround(String normalizedSql, boolean allowQualifiedWildcards,
-      Map<Integer, String> rowCountParameters) {
-    String rewritten = rewriteSingleCteToDerivedTable(normalizedSql);
-    if (rewritten == null) {
-      return null;
-    }
-    String compacted = compactWhitespace(rewritten);
-    Map<Integer, String> collected = rowCountParameters == null ? null : new LinkedHashMap<>();
-    Query query;
-    try {
-      query = parseWithJsqlParser(compacted, allowQualifiedWildcards, collected);
-    } catch (JSQLParserException ex) {
-      String message = "Failed to parse rewritten SQL: " + compacted;
-      throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000", ex));
-    } catch (Exception ex) {
-      throw new IllegalArgumentException("Failed to parse rewritten SQL: " + compacted, ex);
-    }
-    if (collected != null && !collected.isEmpty()) {
-      throw SqlExceptions
-          .unsupportedFeature("Row-count parameters in queries requiring the CTE-rewrite fallback are not supported; "
-              + "rewriting can reorder parameter indexes");
-    }
-    return query;
   }
 
   private static String normalizeSql(String sql) {
@@ -973,102 +924,6 @@ public final class SqlParser {
       lookup.put(cte.name(), cte);
     }
     return Map.copyOf(lookup);
-  }
-
-  /**
-   * Attempt to inline a single common table expression as a derived table to work
-   * around a JSqlParser bug that rejects window functions in a CTE that is later
-   * joined.
-   *
-   * @param sql
-   *          normalized SQL text with comments stripped
-   * @return rewritten SQL without the WITH clause, or {@code null} if the query
-   *         shape is unsupported
-   */
-  private static String rewriteSingleCteToDerivedTable(String sql) {
-    Matcher matcher = SINGLE_CTE_PATTERN.matcher(sql);
-    if (!matcher.find()) {
-      return null;
-    }
-    int openingParenIndex = matcher.end() - 1;
-    int closingParenIndex = findMatchingParenthesis(sql, openingParenIndex);
-    if (closingParenIndex < 0) {
-      return null;
-    }
-
-    String trailing = sql.substring(closingParenIndex + 1).trim();
-    if (trailing.isEmpty() || trailing.startsWith(",")) {
-      return null;
-    }
-    if (trailing.regionMatches(true, 0, "with", 0, 4)) {
-      return null;
-    }
-    if (!trailing.regionMatches(true, 0, "select", 0, 6)) {
-      return null;
-    }
-
-    int cteBodyStart = matcher.end();
-    String cteBody = sql.substring(cteBodyStart, closingParenIndex).trim();
-    String cteName = matcher.group(1) == null ? matcher.group(2) : matcher.group(1);
-    Pattern referencePattern = Pattern.compile("(?i)\\b(from|join)\\b\\s+(?:\"" + Pattern.quote(cteName) + "\"|"
-        + Pattern.quote(cteName) + ")(\\s+(?:\"[^\"]+\"|[A-Za-z_][\\w]*))?");
-    Matcher reference = referencePattern.matcher(trailing);
-    if (!reference.find()) {
-      return null;
-    }
-    String alias = reference.group(2);
-    if (alias == null || alias.isBlank()) {
-      alias = matcher.group(1) == null ? cteName : "\"" + cteName + "\"";
-    }
-    String replacement = reference.group(1) + " (" + cteBody + ") " + alias;
-    return reference.replaceFirst(Matcher.quoteReplacement(replacement));
-  }
-
-  private static int findMatchingParenthesis(String sql, int openingIndex) {
-    boolean inSingleQuote = false;
-    boolean inDoubleQuote = false;
-    int depth = 0;
-    for (int i = openingIndex; i < sql.length(); i++) {
-      char c = sql.charAt(i);
-      char next = i + 1 < sql.length() ? sql.charAt(i + 1) : '\0';
-
-      if (inSingleQuote) {
-        if (c == '\'' && next == '\'') {
-          i++;
-        } else if (c == '\'') {
-          inSingleQuote = false;
-        }
-        continue;
-      }
-      if (inDoubleQuote) {
-        if (c == '"' && next == '"') {
-          i++;
-        } else if (c == '"') {
-          inDoubleQuote = false;
-        }
-        continue;
-      }
-      if (c == '\'') {
-        inSingleQuote = true;
-        continue;
-      }
-      if (c == '"') {
-        inDoubleQuote = true;
-        continue;
-      }
-      if (c == '(') {
-        depth++;
-      } else if (c == ')') {
-        depth--;
-        if (depth == 0) {
-          return i;
-        }
-        if (depth < 0) {
-          return -1;
-        }
-      }
-    }
-    return -1;
   }
 
   /**
