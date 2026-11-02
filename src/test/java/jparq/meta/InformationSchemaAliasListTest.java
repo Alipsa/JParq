@@ -40,7 +40,9 @@ class InformationSchemaAliasListTest {
           for (String sql : List.of("SELECT a FROM " + source, "SELECT * FROM " + source,
               "SELECT * FROM " + source + " JOIN (VALUES (1)) s(z) ON TRUE",
               "SELECT s.z FROM (VALUES (1)) s(z) JOIN " + source + " ON s.z = 1",
-              "SELECT * FROM (SELECT * FROM " + source + ") d")) {
+              "SELECT * FROM (SELECT * FROM " + source + ") d",
+              "SELECT * FROM (VALUES (1)) s(z) CROSS JOIN (SELECT * FROM " + source + ") d",
+              "SELECT * FROM (VALUES (1)) s(z) CROSS JOIN LATERAL (SELECT * FROM " + source + ") d")) {
             SQLException failure = assertThrows(SQLException.class, () -> {
               try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
                 while (result.next()) {

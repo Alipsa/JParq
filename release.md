@@ -2,6 +2,9 @@
 
 ### 1.4.0
 
+- Execute derived tables over `information_schema.tables` and `information_schema.columns` in joins,
+  including LATERAL correlation, instead of substituting the raw metadata view. Preserve the subquery's
+  projections, aggregates, filters, ordering, row bounds, and output column aliases (#264).
 - Apply column alias lists on physical Parquet table references by position, for example
   `SELECT a, b, c FROM employees e(a, b, c)`, in plain queries and joins, including wildcard output,
   qualified references, and parenthesized references. The renamed columns replace the original names and a

@@ -431,7 +431,7 @@ public class JParqPreparedStatement implements PreparedStatement {
               tmpFileAvro = applyColumnAliases(new CteResult(avro, List.of()), baseRef).schema();
               tmpRenamingSource = avro;
               Schema pushdownSchema = aliasedPushdownSchema(avro, tmpFileAvro);
-              Map<String, String> physicalNames = physicalColumnNames(avro, tmpFileAvro);
+              final Map<String, String> physicalNames = physicalColumnNames(avro, tmpFileAvro);
               if (!tmpSelect.qualifiedWildcards().isEmpty()) {
                 Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
                     baseRef, tmpFileAvro);
@@ -1908,6 +1908,18 @@ public class JParqPreparedStatement implements PreparedStatement {
         registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
         continue;
       }
+      // A derived reference can carry its inner table name; execute the
+      // subquery before dispatching named inputs such as metadata views.
+      if (ref.isDerivedTable()) {
+        String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
+        JoinRecordReader.JoinTable table = ref.lateral()
+            ? materializeLateralSubqueryTable(ref, tableName, tables, qualifierIndex)
+            : materializeSubqueryTable(ref, tableName);
+        validateJoinTableColumns(table.schema(), ref);
+        tables.add(table);
+        registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
+        continue;
+      }
       if (InformationSchemaTables.matchesTableReference(ref.tableName())) {
         rejectTableColumnAliases(ref);
         CteResult infoResult = materializeInformationSchemaTables();
@@ -1943,16 +1955,6 @@ public class JParqPreparedStatement implements PreparedStatement {
         List<GenericRecord> rows = applySampleToRows(ref.tableSample(), cteResult.rows());
         JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(tableName, ref.tableAlias(),
             cteResult.schema(), rows, ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
-        tables.add(table);
-        registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
-        continue;
-      }
-      if (ref.isDerivedTable()) {
-        String tableName = ref.tableAlias() != null ? ref.tableAlias() : ref.tableName();
-        JoinRecordReader.JoinTable table = ref.lateral()
-            ? materializeLateralSubqueryTable(ref, tableName, tables, qualifierIndex)
-            : materializeSubqueryTable(ref, tableName);
-        validateJoinTableColumns(table.schema(), ref);
         tables.add(table);
         registerQualifierIndexes(qualifierIndex, table, tables.size() - 1);
         continue;
