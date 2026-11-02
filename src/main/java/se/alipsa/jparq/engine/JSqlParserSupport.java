@@ -132,8 +132,10 @@ public final class JSqlParserSupport {
   /**
    * Reports row-count operands without changing expression traversal order.
    *
-   * @param select the query owning the clauses
-   * @param expressions the visitor receiving row-count context
+   * @param select
+   *          the query owning the clauses
+   * @param expressions
+   *          the visitor receiving row-count context
    */
   private static void inspectRowCounts(Select select, StatementExpressionVisitor expressions) {
     if (select.getLimit() != null) {
@@ -194,8 +196,10 @@ public final class JSqlParserSupport {
     /**
      * Inspects an operand with its row-limiting clause context.
      *
-     * @param expression the row-count operand, possibly null for default FETCH
-     * @param clause the LIMIT, OFFSET, or FETCH clause name
+     * @param expression
+     *          the row-count operand, possibly null for default FETCH
+     * @param clause
+     *          the LIMIT, OFFSET, or FETCH clause name
      */
     protected void inspectRowCount(Expression expression, String clause) {
       // Subclasses may collect clause context independently of expression traversal.

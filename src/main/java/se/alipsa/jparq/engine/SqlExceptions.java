@@ -75,10 +75,13 @@ public final class SqlExceptions {
   }
 
   /**
-   * Classifies a negative, NULL, or fractional bound row count.
+   * Classifies a negative row count or a NULL, fractional, non-finite, or
+   * nonnumeric bound row count.
    *
-   * @param clause the LIMIT, OFFSET, or FETCH clause name
-   * @param value the invalid value
+   * @param clause
+   *          the LIMIT, OFFSET, or FETCH clause name
+   * @param value
+   *          the invalid value
    * @return a data exception with SQLState 2201X for OFFSET or 2201W otherwise
    */
   public static SQLDataException invalidRowCount(String clause, Object value) {

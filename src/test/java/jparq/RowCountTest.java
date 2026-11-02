@@ -11,12 +11,12 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.sql.SQLDataException;
-import java.sql.SQLSyntaxErrorException;
+import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
-import java.sql.Types;
+import java.sql.SQLSyntaxErrorException;
 import java.sql.Statement;
+import java.sql.Types;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -29,7 +29,8 @@ class RowCountTest {
    * Opens a connection to the shared Parquet fixtures.
    *
    * @return the fixture connection
-   * @throws SQLException if connection setup fails
+   * @throws SQLException
+   *           if connection setup fails
    */
   private Connection connect() throws SQLException {
     return DriverManager.getConnection("jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath());
@@ -38,7 +39,8 @@ class RowCountTest {
   /**
    * Supplies plain, set-operation, derived-table, and CTE query shapes.
    *
-   * @param clause the row-limiting clause
+   * @param clause
+   *          the row-limiting clause
    * @return queries exercising each parser path
    */
   private List<String> queries(String clause) {
@@ -50,11 +52,15 @@ class RowCountTest {
   /**
    * Rejects unsupported expressions with classified syntax errors.
    *
-   * @param template the clause surrounding the row count
-   * @throws SQLException if connection setup fails
+   * @param template
+   *          the clause surrounding the row count
+   * @throws SQLException
+   *           if connection setup fails
    */
   @ParameterizedTest
-  @ValueSource(strings = {"LIMIT %s", "OFFSET %s ROWS", "FETCH FIRST %s ROWS ONLY"})
+  @ValueSource(strings = {
+      "LIMIT %s", "OFFSET %s ROWS", "FETCH FIRST %s ROWS ONLY"
+  })
   void rejectsInvalidRowCounts(String template) throws SQLException {
     try (Connection connection = connect()) {
       for (String value : List.of("1 + 1", "(SELECT 2)", "1.5", "'2'", "NULL", "~1", "~0", "~5")) {
@@ -72,11 +78,15 @@ class RowCountTest {
   /**
    * Rejects large counts instead of wrapping to a smaller or negative integer.
    *
-   * @param template the clause surrounding the row count
-   * @throws SQLException if connection setup fails
+   * @param template
+   *          the clause surrounding the row count
+   * @throws SQLException
+   *           if connection setup fails
    */
   @ParameterizedTest
-  @ValueSource(strings = {"LIMIT %s", "OFFSET %s ROWS", "FETCH NEXT %s ROWS ONLY"})
+  @ValueSource(strings = {
+      "LIMIT %s", "OFFSET %s ROWS", "FETCH NEXT %s ROWS ONLY"
+  })
   void rejectsOverflow(String template) throws SQLException {
     try (Connection connection = connect()) {
       for (String value : List.of("2147483648", "3000000000", "4294967298", "9223372036854775808")) {
@@ -92,7 +102,8 @@ class RowCountTest {
   /**
    * Verifies zero, ordinary, default, and maximum supported row counts.
    *
-   * @throws SQLException if query execution fails
+   * @throws SQLException
+   *           if query execution fails
    */
   @Test
   void preservesLiteralSemantics() throws SQLException {
@@ -119,15 +130,18 @@ class RowCountTest {
   /**
    * Checks valid and overflowing row counts after JDBC parameter binding.
    *
-   * @param template the clause surrounding the parameter
-   * @throws SQLException if query execution fails
+   * @param template
+   *          the clause surrounding the parameter
+   * @throws SQLException
+   *           if query execution fails
    */
   @ParameterizedTest
-  @ValueSource(strings = {"LIMIT %s", "OFFSET %s ROWS", "FETCH FIRST %s ROWS ONLY"})
+  @ValueSource(strings = {
+      "LIMIT %s", "OFFSET %s ROWS", "FETCH FIRST %s ROWS ONLY"
+  })
   void checksBoundParameters(String template) throws SQLException {
     String sql = "SELECT model FROM mtcars " + template.formatted("?");
-    try (Connection connection = connect();
-        PreparedStatement statement = connection.prepareStatement(sql)) {
+    try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement(sql)) {
       statement.setInt(1, 2);
       try (ResultSet rows = statement.executeQuery()) {
         assertEquals(template.startsWith("OFFSET") ? 30 : 2, count(rows));
@@ -146,11 +160,15 @@ class RowCountTest {
   /**
    * Classifies negative literals in plain and grouped queries and nested scopes.
    *
-   * @param template the row-limiting clause
-   * @throws SQLException if connection setup fails
+   * @param template
+   *          the row-limiting clause
+   * @throws SQLException
+   *           if connection setup fails
    */
   @ParameterizedTest
-  @ValueSource(strings = {"LIMIT %s", "OFFSET %s ROWS", "FETCH FIRST %s ROWS ONLY"})
+  @ValueSource(strings = {
+      "LIMIT %s", "OFFSET %s ROWS", "FETCH FIRST %s ROWS ONLY"
+  })
   void rejectsNegativeCountsAsDataErrors(String template) throws SQLException {
     String state = template.startsWith("OFFSET") ? "2201X" : "2201W";
     try (Connection connection = connect()) {
@@ -159,36 +177,42 @@ class RowCountTest {
             assertThrows(SQLDataException.class, () -> connection.prepareStatement(sql), sql).getSQLState());
       }
       String sql = "SELECT cyl FROM mtcars GROUP BY cyl " + template.formatted("-1");
-      assertEquals(state,
-          assertThrows(SQLDataException.class, () -> connection.prepareStatement(sql)).getSQLState());
+      assertEquals(state, assertThrows(SQLDataException.class, () -> connection.prepareStatement(sql)).getSQLState());
     }
   }
 
   /**
    * Rejects comma-form LIMIT rather than silently ignoring its offset.
    *
-   * @throws SQLException if connection setup fails
+   * @throws SQLException
+   *           if connection setup fails
    */
   @Test
   void rejectsCommaLimit() throws SQLException {
     try (Connection connection = connect()) {
       for (String clause : List.of("LIMIT 5, 2", "LIMIT -1, 2", "LIMIT ~1, 2", "LIMIT 4294967298, 2")) {
         for (String sql : queries(clause)) {
-          assertEquals("0A000", assertThrows(SQLFeatureNotSupportedException.class,
-              () -> connection.prepareStatement(sql), sql).getSQLState());
+          assertEquals("0A000",
+              assertThrows(SQLFeatureNotSupportedException.class, () -> connection.prepareStatement(sql), sql)
+                  .getSQLState());
         }
       }
     }
   }
 
   /**
-   * Converts integral numeric parameters in row counts while retaining ordinary decimal scales.
+   * Converts integral numeric parameters in row counts while retaining ordinary
+   * decimal scales.
    *
-   * @param template the row-limiting clause
-   * @throws SQLException if query execution fails
+   * @param template
+   *          the row-limiting clause
+   * @throws SQLException
+   *           if query execution fails
    */
   @ParameterizedTest
-  @ValueSource(strings = {"LIMIT %s", "OFFSET %s ROWS", "FETCH NEXT %s ROWS ONLY"})
+  @ValueSource(strings = {
+      "LIMIT %s", "OFFSET %s ROWS", "FETCH NEXT %s ROWS ONLY"
+  })
   void normalizesNumericParametersOnlyInRowCounts(String template) throws SQLException {
     String state = template.startsWith("OFFSET") ? "2201X" : "2201W";
     try (Connection connection = connect()) {
@@ -201,8 +225,9 @@ class RowCountTest {
               assertEquals(expected, count(rows), sql);
             }
           }
-          for (Object value : new Object[]{null, -1, new BigDecimal("-1.00"), 1.5, Double.NaN,
-              Double.POSITIVE_INFINITY}) {
+          for (Object value : new Object[]{
+              null, -1, new BigDecimal("-1.00"), 1.5, Double.NaN, Double.POSITIVE_INFINITY
+          }) {
             statement.setObject(1, value);
             assertEquals(state, assertThrows(SQLDataException.class, statement::executeQuery, sql).getSQLState());
           }
@@ -224,9 +249,52 @@ class RowCountTest {
   }
 
   /**
-   * Binds independent LIMIT and OFFSET parameters after grouped result processing.
+   * Converts numeric strings and classifies invalid bound values as data errors.
    *
-   * @throws SQLException if query execution fails
+   * @param template
+   *          the row-limiting clause
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "LIMIT %s", "OFFSET %s ROWS", "FETCH NEXT %s ROWS ONLY"
+  })
+  void classifiesNonnumericParametersAsDataErrors(String template) throws SQLException {
+    String state = template.startsWith("OFFSET") ? "2201X" : "2201W";
+    try (Connection connection = connect()) {
+      for (String sql : queries(template.formatted("?"))) {
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+          int expected = template.startsWith("OFFSET") ? (sql.contains("UNION ALL") ? 62 : 30) : 2;
+          for (String value : List.of("2", " 2 ", "2.00", "2e0")) {
+            statement.setString(1, value);
+            try (ResultSet rows = statement.executeQuery()) {
+              assertEquals(expected, count(rows), sql);
+            }
+          }
+          for (String value : List.of("two", "", "NaN", "Infinity", "2' OR TRUE")) {
+            statement.setString(1, value);
+            assertEquals("22018", assertThrows(SQLDataException.class, statement::executeQuery, sql).getSQLState());
+          }
+          for (Object value : List.of(true, false, new byte[]{
+              2
+          }, java.sql.Date.valueOf("2024-01-01"), "-1", "1.5")) {
+            statement.setObject(1, value);
+            assertEquals(state, assertThrows(SQLDataException.class, statement::executeQuery, sql).getSQLState());
+          }
+          statement.setString(1, "2147483648");
+          assertEquals("22003", assertThrows(SQLDataException.class, statement::executeQuery, sql).getSQLState());
+        }
+      }
+    }
+  }
+
+  /**
+   * Binds independent LIMIT and OFFSET parameters after grouped result
+   * processing.
+   *
+   * @throws SQLException
+   *           if query execution fails
    */
   @Test
   void supportsGroupedLimitAndOffsetParameters() throws SQLException {
@@ -248,9 +316,11 @@ class RowCountTest {
   /**
    * Counts rows while leaving result-set ownership with the caller.
    *
-   * @param rows the result set to consume
+   * @param rows
+   *          the result set to consume
    * @return the number of rows
-   * @throws SQLException if iteration fails
+   * @throws SQLException
+   *           if iteration fails
    */
   private int count(ResultSet rows) throws SQLException {
     int count = 0;
@@ -263,10 +333,13 @@ class RowCountTest {
   /**
    * Counts the rows returned by a query.
    *
-   * @param connection the fixture connection
-   * @param sql the query to execute
+   * @param connection
+   *          the fixture connection
+   * @param sql
+   *          the query to execute
    * @return the number of result rows
-   * @throws SQLException if execution fails
+   * @throws SQLException
+   *           if execution fails
    */
   private int count(Connection connection, String sql) throws SQLException {
     try (Statement statement = connection.createStatement(); ResultSet rows = statement.executeQuery(sql)) {
