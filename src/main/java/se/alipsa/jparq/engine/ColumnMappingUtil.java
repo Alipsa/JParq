@@ -6,6 +6,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import org.apache.avro.Schema;
+import se.alipsa.jparq.helper.JParqUtil;
 
 /**
  * Utility methods for handling qualifier-aware column mappings when resolving
@@ -14,6 +16,40 @@ import java.util.Set;
 public final class ColumnMappingUtil {
 
   private ColumnMappingUtil() {
+  }
+
+  /**
+   * Builds the unqualified mapping from SQL lookup keys to field names for a
+   * schema.
+   *
+   * @param schema
+   *          schema exposing SQL labels and lookup keys, or null
+   * @return immutable unqualified column mapping, empty when no schema is
+   *         available
+   */
+  public static Map<String, String> unqualifiedColumnMapping(Schema schema) {
+    Map<String, String> columnMap = MaterializedNames.lookupIndex(schema);
+    return columnMap.isEmpty() ? Map.of() : Map.copyOf(columnMap);
+  }
+
+  /**
+   * Builds the qualifier-scoped column mapping for a schema, falling back to an
+   * empty mapping when no qualifier is present or the schema exposes no columns.
+   *
+   * @param schema
+   *          schema exposing SQL labels and lookup keys, or null
+   * @param qualifier
+   *          optional table name or alias scoping the mapping
+   * @return immutable mapping from the normalized qualifier to the unqualified
+   *         column mapping of the schema
+   */
+  public static Map<String, Map<String, String>> qualifierColumnMapping(Schema schema, String qualifier) {
+    Map<String, String> unqualified = unqualifiedColumnMapping(schema);
+    String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
+    if (normalizedQualifier != null && !unqualified.isEmpty()) {
+      return Map.of(normalizedQualifier, unqualified);
+    }
+    return Map.of();
   }
 
   /**

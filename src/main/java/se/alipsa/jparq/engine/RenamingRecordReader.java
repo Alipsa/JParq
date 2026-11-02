@@ -8,7 +8,6 @@ import java.util.Objects;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
-import se.alipsa.jparq.helper.JParqUtil;
 
 /**
  * {@link RecordReader} decorator that renames every record produced by the
@@ -70,12 +69,8 @@ public final class RenamingRecordReader implements RecordReader, ColumnMappingPr
       names.add(field.name());
     }
     this.sourceNames = List.copyOf(names);
-    Map<String, String> columnMap = MaterializedNames.lookupIndex(renamedSchema);
-    unqualifiedColumnMapping = columnMap.isEmpty() ? Map.of() : Map.copyOf(columnMap);
-    String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
-    qualifierColumnMapping = normalizedQualifier != null && !unqualifiedColumnMapping.isEmpty()
-        ? Map.of(normalizedQualifier, unqualifiedColumnMapping)
-        : Map.of();
+    unqualifiedColumnMapping = ColumnMappingUtil.unqualifiedColumnMapping(renamedSchema);
+    qualifierColumnMapping = ColumnMappingUtil.qualifierColumnMapping(renamedSchema, qualifier);
   }
 
   @Override

@@ -115,4 +115,17 @@ class ColumnMappingUtilTest {
     assertNull(ColumnMappingUtil.canonicalOrderColumn(null, "cars", qualifierMapping, unqualifiedMapping),
         "Null columns should yield null");
   }
+
+  /** Builds reader mappings from a schema's lookup keys and a qualifier. */
+  @Test
+  void buildsUnqualifiedAndQualifierMappingsFromSchema() {
+    var schema = org.apache.avro.SchemaBuilder.record("t").fields().requiredInt("id").requiredString("name")
+        .endRecord();
+    Map<String, String> unqualified = ColumnMappingUtil.unqualifiedColumnMapping(schema);
+    assertEquals(Map.of("U:id", "id", "U:name", "name"), unqualified);
+    assertEquals(Map.of("U:t", unqualified), ColumnMappingUtil.qualifierColumnMapping(schema, "T"));
+    assertEquals(Map.of(), ColumnMappingUtil.qualifierColumnMapping(schema, null));
+    assertEquals(Map.of(), ColumnMappingUtil.unqualifiedColumnMapping(null));
+    assertEquals(Map.of(), ColumnMappingUtil.qualifierColumnMapping(null, "t"));
+  }
 }
