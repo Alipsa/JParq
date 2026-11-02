@@ -117,11 +117,9 @@ class TableQualifierValidationTest {
         assertEquals("42000", error.getSQLState(), invalid);
       }
       String sql = "SELECT nosuch.id FROM optimized x WHERE x.id = ?";
-      try (var statement = connection.prepareStatement(sql)) {
-        statement.setInt(1, 1);
-        SQLSyntaxErrorException error = assertThrows(SQLSyntaxErrorException.class, statement::executeQuery);
-        assertEquals("42000", error.getSQLState());
-      }
+      SQLSyntaxErrorException error = assertThrows(SQLSyntaxErrorException.class,
+          () -> connection.prepareStatement(sql), sql);
+      assertEquals("42000", error.getSQLState(), sql);
     }
   }
   /**

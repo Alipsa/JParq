@@ -707,6 +707,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
    *
    * @return the combined schema
    */
+  @Override
   public Schema schema() {
     return schema;
   }

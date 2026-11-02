@@ -233,7 +233,7 @@ public class JParqResultSet extends ResultSetAdapter {
     final List<String> requestedColumns = canonicalLookup != null ? canonicalLookup : select.columns();
     List<String> physical = physicalColumnOrder == null ? null : List.copyOf(physicalColumnOrder);
 
-    AggregateFunctions.AggregatePlan aggregatePlan = AggregateFunctions.plan(select);
+    AggregateFunctions.AggregatePlan aggregatePlan = AggregateFunctions.plan(select, reader.schema());
     if (aggregatePlan != null) {
       labels = new ArrayList<>(aggregatePlan.labels());
       physical = null;

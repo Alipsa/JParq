@@ -2,12 +2,34 @@
 
 ### 1.4.0
 
-- Reject unknown relation qualifiers in SELECT, WHERE, GROUP BY, HAVING, and ORDER BY with
-  `SQLSyntaxErrorException` and SQLState `42000`, including single-table queries, joins, and empty inputs.
-  A table or CTE alias now hides the original name consistently across these clauses and in correlated subqueries
-  (#261, #293, #295). Preserve quoted aliases containing dots in column references and wildcards. Validate full
-  schema qualifiers, reject schema prefixes on aliases, and support schema-qualified wildcards on unaliased inputs.
-
+- **Behavior change:** qualified wildcards now follow the same visibility rules as other qualified references.
+  Unknown or alias-hidden `alias.*` qualifiers fail with SQLState `42000`, and the shared real table name in a
+  self-join (`SELECT mtcars.* FROM mtcars a JOIN mtcars b ...`) is rejected instead of expanding the first input
+  (#295). Correlated subqueries no longer resolve an outer table name hidden by its alias (`FROM employees e WHERE
+  EXISTS (... employees.id)` now fails; use `e.id`). Quoted identifiers keep their case: `"my x".id` no longer
+  matches alias `"My X"`, and `"X".*` no longer matches alias `x`. Preserve quoted aliases containing dots, such as
+  `"a.b"`, as single identifiers in column references, ordering, grouping, and wildcards. Validate complete schema
+  qualifiers (`nosuch.employees.id` and `acme.e.id` fail) and support `acme.employees.id` and `acme.employees.*`
+  after `FROM acme.employees`.
+- Execute derived tables over `information_schema.tables` and `information_schema.columns` in joins,
+  including LATERAL correlation, instead of substituting the raw metadata view. Preserve the subquery's
+  projections, aggregates, filters, ordering, row bounds, and output column aliases (#264).
+- Apply column alias lists on physical Parquet table references by position, for example
+  `SELECT a, b, c FROM employees e(a, b, c)`, in plain queries and joins, including wildcard output,
+  qualified references, and parenthesized references. The renamed columns replace the original names and a
+  mismatched alias count is rejected with SQLSyntaxErrorException and SQLState `42000`, consistent with
+  derived tables and CTE references (#263).
+- Support GROUP BY on a select-list alias, for example
+  `SELECT d.department AS dep, COUNT(*) FROM employee_department ed JOIN departments d ON ed.department = d.id GROUP BY dep`,
+  including aliases of computed expressions, case-insensitive matching, grouping sets, and alias arguments to
+  GROUPING() (#262). As in standard SQL and PostgreSQL, a GROUP BY name that matches an input column keeps its
+  column meaning; the alias only resolves when no input column carries that name, unlike ORDER BY where output
+  names take precedence. Column matching uses the schema's SQL lookup keys (quoted names included, with
+  quoted-lowercase fallback to the unquoted column), so the rule also holds for derived tables, CTEs, and joins
+  whose internal field names differ from their SQL names. Aliases of aggregate expressions cannot serve as
+  grouping expressions, and a name shared by more than one select-list alias with a different expression is
+  rejected as ambiguous with SQLState `42702`. Both the single-table and join paths already reject ungrouped
+  columns with SQLState `42000`.
 - Return temporal differences and interval literals as immutable `TemporalInterval` values through JDBC
   `getObject()`, including typed getters. Report JDBC OTHER with type name INTERVAL and the interval Java class.
   `getString()` and explicit character casts use the result column's common field range and maximum
@@ -70,7 +92,8 @@
 - **Behavior change:** quantified comparisons in WHERE now reject array, map, and struct candidates returned by subqueries instead of silently filtering out rows. ANY/SOME/ALL requires scalar candidate values from both arrays and subqueries; the same validation applies in HAVING (#214).
 - Fix HAVING comparisons using ANY, SOME, and ALL over subqueries and arrays, including correlated grouping values, NULLs, and empty inputs (#214). Share quantified comparison semantics with WHERE and reject invalid array operands explicitly.
 - Add regression coverage for select-list scalar subquery failures retaining SQLState `42000` and the original nested diagnostic during projection access and streaming `ResultSet.next()` (#212). The exception handling was already corrected by the SQL error-context changes; document that evaluation can be deferred until iteration or value access.
-- **Behavior change:** ON conditions now reject original table or CTE names hidden by an alias with SQLState `42000`. For example, after `FROM employees e`, use `ON e.id = ...`; `ON employees.id = ...` previously worked and now fails. Explicitly reject column alias lists on `information_schema.tables` and `information_schema.columns` with `42000`, including joined inputs, instead of ignoring them or reporting a missing renamed column (#209).
+- **Behavior change:** ON conditions now reject original table or CTE names hidden by an alias with SQLState `42000`. For example, after `FROM employees e`, use `ON e.id = ...`; `ON employees.id = ...` previously worked and now fails; the same rule now applies to the other clauses (see below). Explicitly reject column alias lists on `information_schema.tables` and `information_schema.columns` with `42000`, including joined inputs, instead of ignoring them or reporting a missing renamed column (#209).
+- **Behavior change:** qualified references in SELECT, WHERE, GROUP BY, HAVING, ORDER BY, DISTINCT ON, named WINDOW definitions, and QUALIFY now reject qualifiers that name no visible range variable with SQLState `42000`, instead of silently resolving against the base table or dropping the predicate (#261, #293). A table alias hides the table name in every clause, matching ON-condition behavior: after `FROM employees e`, `SELECT employees.id` and `WHERE employees.id = 1` now fail, and quoted uppercase qualifiers such as `"X".id` no longer match unquoted aliases. Self-joins no longer resolve a shared real table name to the first aliased input (`SELECT mtcars.cyl FROM mtcars a JOIN mtcars b ...` fails). Unknown-qualifier conjuncts in join WHERE clauses are rejected instead of dropped. Correlated references inside EXISTS, scalar, and LATERAL subqueries keep working; unknown qualifiers inside them are rejected when the subquery is evaluated (see #394). A plain derived table that references an earlier FROM item — for example `FROM employees e CROSS JOIN (SELECT ... WHERE ed.employee = e.id) l` — previously worked as if it were LATERAL and now fails, matching the SQL standard; add the `LATERAL` keyword to keep those queries working. Qualified wildcards are covered by the #295 entry above.
 - Preserve alias lists on inherited CTE references inside scalar/EXISTS/IN subqueries, derived tables, LATERAL inputs, and subsequent CTE bodies (#210), including parenthesized references. Reject physical-table column alias lists explicitly with SQLState `42000` pending #263. Check qualified ON references against their own visible input rather than accepting the same column name from an unrelated input (#209).
 - Bind column alias lists on ordinary CTE references (`FROM c AS x(a, b)`) as well as parenthesized references, including wildcard output, grouping, recursion, and joins (#210, #211). Reject invalid alias counts and duplicate aliases; cache renamed rows per materialized CTE result without retaining stale correlated or recursive data. Missing-column diagnostics use visible relation aliases, and ON conditions validate against the inputs joined so far. Join validation still occurs during execution, while nonparameterized single-input queries validate during preparation (#209).
 - **Behavior change:** reject unknown columns in derived tables and CTEs instead of silently returning NULL (#209). Validate visible SQL output names, including renamed columns and empty inputs, independently of pushdown settings. Missing-column diagnostics now retain the column name and SQLState `42000` for physical and materialized inputs.
@@ -113,8 +136,8 @@
 - Reject invalid calendar dates and out-of-range clock fields in DATE, TIME, and TIMESTAMP literals and casts instead of rolling them over; retain unpadded SQL fields, valid leap days, fractional times, and ISO date-time input. This includes rejecting end-of-day `24:00:00`: `TIME '24:00:00'` and `TIMESTAMP '2024-06-30 24:00:00'` now fail instead of rolling over to midnight or the next day.
 - Adapt to JSqlParser 5.4 AST changes for quantified subqueries, temporal literals, JSON functions, and type-named identifiers; preserve qualified-wildcard token positions, the blank-line parsing fallback, and bounded simple-to-complex parsing. Preserve nested ANY/ALL/SOME subquery parentheses and flexible timestamp/time literal formats. Share identifier-aware parsing with LATERAL and pushdown planning. Reject unsupported JSON_VALUE/JSON_QUERY clauses and extra paths explicitly, and reject unsupported temporal literal types such as TIMESTAMPTZ.
 - Account for Parquet 1.18's conservative floating-point range pruning when page indexes lack NaN counts; equality, IN, and eligible predicates on other columns can still prune pages.
-- Upgrade dependencies: avro 1.12.1 → 1.12.2, checkstyle 13.3.0 → 14.3.0, hadoop 3.4.3 → 3.5.0, jackson 2.21.1 → 2.22.4, jsqlparser 5.3 → 5.4, junit 6.0.3 → 6.1.3, parquet 1.17.0 → 1.18.1, slf4j 2.0.17 → 2.0.20, and Mockito 5.23.0 → 5.24.0.
-- Upgrade Maven build plugins: spotless-maven-plugin 3.4.0 → 3.10.4, maven-compiler-plugin 3.15.0 → 3.16.0, maven-enforcer-plugin 3.6.2 → 3.6.3, maven-failsafe-plugin 3.5.5 → 3.6.0, maven-jar-plugin 3.5.0 → 3.5.1, maven-surefire-plugin 3.5.5 → 3.6.0, versions-maven-plugin 2.21.0 → 2.23.0, jacoco-maven-plugin 0.8.14 → 0.8.15, central-publishing-maven-plugin 0.10.0 → 0.12.0.
+- Upgrade dependencies: avro 1.12.1 → 1.12.2, checkstyle 13.3.0 → 14.4.0, hadoop 3.4.3 → 3.5.0, jackson 2.21.1 → 2.22.4, jsqlparser 5.3 → 5.4, junit 6.0.3 → 6.1.3, parquet 1.17.0 → 1.18.1, slf4j 2.0.17 → 2.0.20, and Mockito 5.23.0 → 5.24.0.
+- Upgrade Maven build plugins: spotless-maven-plugin 3.4.0 → 3.10.4, maven-compiler-plugin 3.15.0 → 3.16.0, maven-enforcer-plugin 3.6.2 → 3.7.0, extra-enforcer-rules 1.12.0 → 1.12.1, maven-failsafe-plugin 3.5.5 → 3.6.1, maven-jar-plugin 3.5.0 → 3.5.1, maven-surefire-plugin 3.5.5 → 3.6.1, versions-maven-plugin 2.21.0 → 2.23.0, jacoco-maven-plugin 0.8.14 → 0.8.16, central-publishing-maven-plugin 0.10.0 → 0.12.0.
 - Deprecate the correlation rewrite and isolation overloads that ignore inner-scope columns; use the schema-aware overloads for unqualified column binding.
 - Add opt-in `datasetLayout=hf` multi-file tables for named Hugging Face shards and numeric directory layouts, with strict discovery, lazy schema validation, per-shard pushdown, and aggregated CLI diagnostics; the default `none` layout preserves single-file discovery.
 - Reuse shard validation within each prepared statement and discover the catalog once per column-metadata request; report incompatible shard schemas with the differing field path.

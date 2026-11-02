@@ -42,6 +42,17 @@ public final class ParquetRecordReaderAdapter implements RecordReader {
     this.fileSchema = fileSchema;
   }
 
+  /**
+   * Returns the enriched full file schema when available.
+   *
+   * @return the file schema, or {@code null} when the adapter was created without
+   *         one
+   */
+  @Override
+  public Schema schema() {
+    return fileSchema;
+  }
+
   @Override
   public GenericRecord read() throws IOException {
     GenericRecord raw = delegate.read();

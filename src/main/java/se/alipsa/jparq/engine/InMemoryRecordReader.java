@@ -6,7 +6,6 @@ import java.util.Map;
 import java.util.Objects;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
-import se.alipsa.jparq.helper.JParqUtil;
 
 /**
  * {@link RecordReader} implementation backed by an in-memory list of
@@ -17,6 +16,7 @@ import se.alipsa.jparq.helper.JParqUtil;
 public final class InMemoryRecordReader implements RecordReader, ColumnMappingProvider {
 
   private final List<GenericRecord> records;
+  private final Schema schema;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
   private int index;
@@ -50,15 +50,14 @@ public final class InMemoryRecordReader implements RecordReader, ColumnMappingPr
     if (effectiveSchema == null && !records.isEmpty() && records.get(0) != null) {
       effectiveSchema = records.get(0).getSchema();
     }
-    Map<String, String> columnMap = buildColumnMapping(effectiveSchema);
-    unqualifiedColumnMapping = columnMap.isEmpty() ? Map.of() : Map.copyOf(columnMap);
+    this.schema = effectiveSchema;
+    unqualifiedColumnMapping = ColumnMappingUtil.unqualifiedColumnMapping(effectiveSchema);
+    qualifierColumnMapping = ColumnMappingUtil.qualifierColumnMapping(unqualifiedColumnMapping, qualifier);
+  }
 
-    String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
-    if (normalizedQualifier != null && !unqualifiedColumnMapping.isEmpty()) {
-      qualifierColumnMapping = Map.of(normalizedQualifier, unqualifiedColumnMapping);
-    } else {
-      qualifierColumnMapping = Map.of();
-    }
+  @Override
+  public Schema schema() {
+    return schema;
   }
 
   @Override
@@ -84,9 +83,5 @@ public final class InMemoryRecordReader implements RecordReader, ColumnMappingPr
   @Override
   public Map<String, String> unqualifiedColumnMapping() {
     return unqualifiedColumnMapping;
-  }
-
-  private static Map<String, String> buildColumnMapping(Schema schema) {
-    return MaterializedNames.lookupIndex(schema);
   }
 }

@@ -82,10 +82,7 @@ class UnknownMaterializedColumnTest {
               }
             }
           }, sql);
-          String diagnostic = sql.contains("ON optimized.id") || sql.contains("ON c.id")
-              ? "Unknown table qualifier"
-              : "Missing columns";
-          assertTrue(exception.getMessage().contains(diagnostic), sql + ": " + exception);
+          assertTrue(exception.getMessage().contains("Missing columns"), sql + ": " + exception);
           assertEquals("42000", exception.getSQLState(), sql);
           if (sql.startsWith("SELECT x.id FROM") && sql.contains("x(a)")) {
             assertTrue(exception.getMessage().contains("Missing columns for table 'x': id"), sql + ": " + exception);
