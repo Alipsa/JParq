@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 
 /**
@@ -150,6 +151,11 @@ public final class QueryCancellation {
       if (canceled) {
         throw new IOException(CANCELED_MESSAGE, canceledException());
       }
+    }
+
+    @Override
+    public Schema schema() {
+      return delegate.schema();
     }
 
     @Override
