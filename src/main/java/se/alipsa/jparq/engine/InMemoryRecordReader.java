@@ -6,7 +6,6 @@ import java.util.Map;
 import java.util.Objects;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
-import se.alipsa.jparq.helper.JParqUtil;
 
 /**
  * {@link RecordReader} implementation backed by an in-memory list of
@@ -52,15 +51,8 @@ public final class InMemoryRecordReader implements RecordReader, ColumnMappingPr
       effectiveSchema = records.get(0).getSchema();
     }
     this.schema = effectiveSchema;
-    Map<String, String> columnMap = buildColumnMapping(effectiveSchema);
-    unqualifiedColumnMapping = columnMap.isEmpty() ? Map.of() : Map.copyOf(columnMap);
-
-    String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
-    if (normalizedQualifier != null && !unqualifiedColumnMapping.isEmpty()) {
-      qualifierColumnMapping = Map.of(normalizedQualifier, unqualifiedColumnMapping);
-    } else {
-      qualifierColumnMapping = Map.of();
-    }
+    unqualifiedColumnMapping = ColumnMappingUtil.unqualifiedColumnMapping(effectiveSchema);
+    qualifierColumnMapping = ColumnMappingUtil.qualifierColumnMapping(unqualifiedColumnMapping, qualifier);
   }
 
   @Override
@@ -91,9 +83,5 @@ public final class InMemoryRecordReader implements RecordReader, ColumnMappingPr
   @Override
   public Map<String, String> unqualifiedColumnMapping() {
     return unqualifiedColumnMapping;
-  }
-
-  private static Map<String, String> buildColumnMapping(Schema schema) {
-    return MaterializedNames.lookupIndex(schema);
   }
 }

@@ -2,6 +2,11 @@
 
 ### 1.4.0
 
+- Apply column alias lists on physical Parquet table references by position, for example
+  `SELECT a, b, c FROM employees e(a, b, c)`, in plain queries and joins, including wildcard output,
+  qualified references, and parenthesized references. The renamed columns replace the original names and a
+  mismatched alias count is rejected with SQLSyntaxErrorException and SQLState `42000`, consistent with
+  derived tables and CTE references (#263).
 - Support GROUP BY on a select-list alias, for example
   `SELECT d.department AS dep, COUNT(*) FROM employee_department ed JOIN departments d ON ed.department = d.id GROUP BY dep`,
   including aliases of computed expressions, case-insensitive matching, grouping sets, and alias arguments to

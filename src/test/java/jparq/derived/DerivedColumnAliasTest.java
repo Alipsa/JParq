@@ -232,7 +232,7 @@ class DerivedColumnAliasTest {
             assertEquals("42000", SqlExceptions.findSqlStateFailure(parseError).getSQLState());
             SQLException error = assertThrows(SQLException.class, () -> statement.executeQuery(sql));
             assertEquals("42000", error.getSQLState(), error.getMessage());
-            assertTrue(error.getMessage().contains("Duplicate derived table column alias:"), error.getMessage());
+            assertTrue(error.getMessage().contains("Duplicate column alias in table alias list:"), error.getMessage());
           }
         }
       }

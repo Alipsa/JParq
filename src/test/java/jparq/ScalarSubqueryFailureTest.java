@@ -27,7 +27,7 @@ class ScalarSubqueryFailureTest {
   private static final List<Map.Entry<String, String>> SUBQUERY_FAILURES = List.of(
       Map.entry("SELECT COUNT(*) FROM optimized WHERE zz = 1", "Missing columns for table 'optimized': zz"),
       Map.entry("SELECT COUNT(*) FROM (SELECT id FROM optimized WHERE id <= 2) x(a, a)",
-          "Duplicate derived table column alias: a"));
+          "Duplicate column alias in table alias list: a"));
 
   /**
    * Checks the streaming iteration boundary independently of projection getters.

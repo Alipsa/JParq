@@ -1920,7 +1920,7 @@ public final class SqlParser {
     for (String alias : aliases) {
       Identifier identifier = Identifier.of(alias);
       if (!aliasNames.add(identifier.normalized()) || !fieldAliases.add(identifier.text())) {
-        String message = "Duplicate derived table column alias: " + alias;
+        String message = "Duplicate column alias in table alias list: " + alias;
         throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000"));
       }
     }

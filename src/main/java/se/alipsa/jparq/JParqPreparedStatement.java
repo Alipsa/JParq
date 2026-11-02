@@ -90,11 +90,13 @@ import se.alipsa.jparq.engine.NumericExpressionTypes;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.ParquetFilterBuilder;
 import se.alipsa.jparq.engine.ParquetTable;
+import se.alipsa.jparq.engine.PredicateColumnRenamer;
 import se.alipsa.jparq.engine.PredicateSubqueryValidation;
 import se.alipsa.jparq.engine.ProjectionFields;
 import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.RelationalKeys;
+import se.alipsa.jparq.engine.RenamingRecordReader;
 import se.alipsa.jparq.engine.SamplingRecordReader;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlExceptions;
@@ -181,6 +183,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final Optional<FilterPredicate> parquetPredicate;
   private final Expression residualExpression;
   private final Schema fileAvroSchema;
+  private final Schema renamingSourceSchema;
   private final PushdownInfo pushdownInfo;
   private final Map<Integer, FilterPredicate> joinPredicates;
   private final String tableSchema;
@@ -265,6 +268,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     boolean tmpJoinQuery;
     Configuration tmpConf = null;
     Schema tmpFileAvro = null;
+    Schema tmpRenamingSource = null;
     Optional<FilterPredicate> tmpPredicate = Optional.empty();
     Expression tmpResidual = null;
     JParqConnection.TableLocation tmpBaseLocation = null;
@@ -407,7 +411,6 @@ public class JParqPreparedStatement implements PreparedStatement {
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
           } else {
-            rejectTableColumnAliases(baseRef);
             tmpConf = HadoopConfigurations.create();
             configureParquetFiltering(tmpConf);
 
@@ -415,27 +418,56 @@ public class JParqPreparedStatement implements PreparedStatement {
             String targetSchema = baseRef != null ? baseRef.schemaName() : null;
             tmpBaseLocation = stmt.getConn().resolveTable(targetSchema, targetTable);
             tmpSchemaName = formatSchemaForMetadata(tmpBaseLocation.schemaName());
-            Schema avro = validatedTable(tmpBaseLocation, tmpConf).schema();
+            ParquetTable input = validatedTable(tmpBaseLocation, tmpConf);
+            Schema avro = input.schema();
 
-            tmpFileAvro = avro;
-
-            if (!tmpSelect.qualifiedWildcards().isEmpty()) {
-              Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
-                  baseRef, tmpFileAvro);
-              tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
-            }
-
-            aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
-            configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf, tmpCteResults);
-
-            if (stmt.getConn().isPredicatePushdown() && (baseRef == null || baseRef.tableSample() == null)
-                && tmpSelect.where() != null) {
-              var split = ParquetFilterBuilder.split(tmpFileAvro, tmpSelect.where());
-              tmpPredicate = split.predicate();
-              tmpResidual = split.residual();
+            if (baseRef != null && !baseRef.columnAliases().isEmpty()) {
+              // Positional column aliases rename only the exposed schema at
+              // preparation time; records are renamed lazily when the query
+              // executes so a reused statement observes current data. Pushdown
+              // planning resolves alias names against the renamed schema and
+              // maps them back to the physical columns, since the binding is
+              // purely positional.
+              tmpFileAvro = applyColumnAliases(new CteResult(avro, List.of()), baseRef).schema();
+              tmpRenamingSource = avro;
+              Schema pushdownSchema = aliasedPushdownSchema(avro, tmpFileAvro);
+              Map<String, String> physicalNames = physicalColumnNames(avro, tmpFileAvro);
+              if (!tmpSelect.qualifiedWildcards().isEmpty()) {
+                Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
+                    baseRef, tmpFileAvro);
+                tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
+              }
+              aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
+              configureProjectionPushdown(tmpSelect, pushdownSchema, aggregatePlan, tmpConf, tmpCteResults);
+              if (stmt.getConn().isPredicatePushdown() && baseRef.tableSample() == null && tmpSelect.where() != null) {
+                var split = ParquetFilterBuilder.split(tmpFileAvro, tmpSelect.where());
+                tmpPredicate = split.predicate().map(p -> PredicateColumnRenamer.rename(p, physicalNames));
+                tmpResidual = split.residual();
+              } else {
+                tmpPredicate = Optional.empty();
+                tmpResidual = tmpSelect.where();
+              }
             } else {
-              tmpPredicate = Optional.empty();
-              tmpResidual = tmpSelect.where();
+              tmpFileAvro = avro;
+
+              if (!tmpSelect.qualifiedWildcards().isEmpty()) {
+                Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
+                    baseRef, tmpFileAvro);
+                tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
+              }
+
+              aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
+              configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf, tmpCteResults);
+
+              if (stmt.getConn().isPredicatePushdown() && (baseRef == null || baseRef.tableSample() == null)
+                  && tmpSelect.where() != null) {
+                var split = ParquetFilterBuilder.split(tmpFileAvro, tmpSelect.where());
+                tmpPredicate = split.predicate();
+                tmpResidual = split.residual();
+              } else {
+                tmpPredicate = Optional.empty();
+                tmpResidual = tmpSelect.where();
+              }
             }
 
           }
@@ -457,6 +489,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     this.parquetPredicate = tmpPredicate;
     this.residualExpression = tmpResidual;
     this.fileAvroSchema = tmpFileAvro;
+    this.renamingSourceSchema = tmpRenamingSource;
     this.cteResults = tmpCteResults;
     try {
       this.joinPredicates = tmpJoinQuery ? planJoinPredicates() : Map.of();
@@ -554,11 +587,14 @@ public class JParqPreparedStatement implements PreparedStatement {
         } else {
           FilterPredicate predicate = parquetPredicate.orElse(null);
           if (reusablePlan != null && stmt.getConn().isPredicatePushdown()
-              && (baseRef == null || baseRef.tableSample() == null)) {
+              && (baseRef == null || (baseRef.tableSample() == null && baseRef.columnAliases().isEmpty()))) {
             predicate = ParquetFilterBuilder.withCorrelatedBindings(
                 () -> ParquetFilterBuilder.split(fileAvroSchema, parsedSelect.where()).predicate().orElse(null));
           }
           reader = validatedTable(baseTableLocation, conf).open(conf, predicate);
+          if (baseRef != null && !baseRef.columnAliases().isEmpty()) {
+            reader = new RenamingRecordReader(reader, renamingSourceSchema, fileAvroSchema, renamingQualifier(baseRef));
+          }
           resultTableName = baseTableLocation.tableName();
         }
         resultMetadata = reader instanceof JoinRecordReader joinReader ? joinReader.schema() : fileAvroSchema;
@@ -1781,6 +1817,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       Schema schema = null;
       if (!reference.isDerivedTable() && reference.subquery() == null && reference.commonTableExpression() == null
           && reference.valueTable() == null && reference.unnest() == null && reference.joinGroup().isEmpty()
+          && reference.columnAliases().isEmpty()
           && !InformationSchemaTables.matchesTableReference(reference.tableName())
           && !InformationSchemaColumns.matchesTableReference(reference.tableName())
           && resolveCteResultByName(reference.tableName(), cteResults) == null) {
@@ -1921,7 +1958,6 @@ public class JParqPreparedStatement implements PreparedStatement {
         continue;
       }
       String tableName = ref.tableName();
-      rejectTableColumnAliases(ref);
       if (tableName == null || tableName.isBlank()) {
         throw new SQLException("JOIN requires explicit table names");
       }
@@ -1929,7 +1965,6 @@ public class JParqPreparedStatement implements PreparedStatement {
       Configuration tableConf = HadoopConfigurations.copy(conf);
       ParquetTable input = validatedTable(tableLocation, tableConf);
       Schema tableSchema = input.schema();
-      validateJoinTableColumns(tableSchema, ref);
       List<GenericRecord> rows = new ArrayList<>();
       FilterPredicate predicate = predicates.get(referenceIndex);
       try (RecordReader tableReader = cancellation.track(input.open(tableConf, predicate))) {
@@ -1941,6 +1976,12 @@ public class JParqPreparedStatement implements PreparedStatement {
       } catch (IOException e) {
         throw new SQLException("Failed to read data for table " + tableName, e);
       }
+      if (!ref.columnAliases().isEmpty()) {
+        CteResult aliased = applyColumnAliases(new CteResult(tableSchema, rows), ref);
+        tableSchema = aliased.schema();
+        rows = new ArrayList<>(aliased.rows());
+      }
+      validateJoinTableColumns(tableSchema, ref);
       rows = applySampleToRows(ref.tableSample(), rows);
       JoinRecordReader.JoinTable table = new JoinRecordReader.JoinTable(tableLocation.tableName(), ref.tableAlias(),
           tableSchema, rows, ref.joinType(), ref.joinCondition(), ref.usingColumns(), null);
@@ -2039,20 +2080,33 @@ public class JParqPreparedStatement implements PreparedStatement {
    * Rejects alias lists on table inputs without positional alias binding.
    *
    * @param reference
-   *          resolved physical or information_schema reference, or null
+   *          resolved information_schema reference, or null
    * @throws SQLException
    *           if an unsupported table input declares column aliases
    */
   private static void rejectTableColumnAliases(SqlParser.TableReference reference) throws SQLException {
-    if (reference != null && !reference.columnAliases().isEmpty()) {
-      if (InformationSchemaTables.matchesTableReference(reference.tableName())
-          || InformationSchemaColumns.matchesTableReference(reference.tableName())) {
-        throw SqlExceptions.syntaxFailure("Column alias lists on information_schema inputs are not supported; "
-            + "use a derived table or CTE instead");
-      }
+    if (reference != null && !reference.columnAliases().isEmpty()
+        && (InformationSchemaTables.matchesTableReference(reference.tableName())
+            || InformationSchemaColumns.matchesTableReference(reference.tableName()))) {
       throw SqlExceptions.syntaxFailure(
-          "Column alias lists on physical tables are not supported (#263); " + "use a derived table or CTE instead");
+          "Column alias lists on information_schema inputs are not supported; " + "use a derived table or CTE instead");
     }
+  }
+
+  /**
+   * Chooses the visible relation name used to scope the renamed column mapping,
+   * matching the in-memory branch's alias-first naming.
+   *
+   * @param baseRef
+   *          base table reference carrying the alias list
+   * @return alias when present, otherwise the referenced table name
+   */
+  private String renamingQualifier(SqlParser.TableReference baseRef) {
+    String qualifier = parsedSelect.tableAlias() != null ? parsedSelect.tableAlias() : parsedSelect.table();
+    if ((qualifier == null || qualifier.isBlank()) && baseRef.tableName() != null && !baseRef.tableName().isBlank()) {
+      qualifier = baseRef.tableName();
+    }
+    return qualifier;
   }
 
   /**
@@ -4193,16 +4247,66 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Applies a table-reference column alias list to a materialized CTE by
+   * Builds a schema with physical field names that resolve SQL references by
+   * their alias, so projection and predicate pushdown map alias names back to the
+   * stored columns.
+   *
+   * @param physical
+   *          original table schema
+   * @param renamed
+   *          schema exposing the same columns positionally under their aliases
+   * @return pushdown schema with physical names and alias lookup keys
+   */
+  private static Schema aliasedPushdownSchema(Schema physical, Schema renamed) {
+    List<Field> physicalFields = physical.getFields();
+    List<Field> renamedFields = renamed.getFields();
+    Schema record = Schema.createRecord(physical.getName(), physical.getDoc(), physical.getNamespace(),
+        physical.isError());
+    physical.getObjectProps().forEach(record::addProp);
+    List<Field> fields = new ArrayList<>(physicalFields.size());
+    for (int i = 0; i < physicalFields.size(); i++) {
+      Field source = physicalFields.get(i);
+      Field renamedField = renamedFields.get(i);
+      Field field = new Field(source.name(), source.schema(), source.doc(), source.defaultVal());
+      source.getObjectProps().forEach(field::addProp);
+      field.addProp(MaterializedNames.SQL_LABEL, renamedField.getProp(MaterializedNames.SQL_LABEL));
+      field.addProp(MaterializedNames.LOOKUP_KEY, renamedField.getProp(MaterializedNames.LOOKUP_KEY));
+      fields.add(field);
+    }
+    record.setFields(fields);
+    return record;
+  }
+
+  /**
+   * Maps renamed column names back to the physical column names by position.
+   *
+   * @param physical
+   *          original table schema
+   * @param renamed
+   *          positionally equivalent schema under alias names
+   * @return renamed field name mapped to physical field name
+   */
+  private static Map<String, String> physicalColumnNames(Schema physical, Schema renamed) {
+    List<Field> physicalFields = physical.getFields();
+    List<Field> renamedFields = renamed.getFields();
+    Map<String, String> names = new LinkedHashMap<>();
+    for (int i = 0; i < physicalFields.size(); i++) {
+      names.put(renamedFields.get(i).name(), physicalFields.get(i).name());
+    }
+    return Map.copyOf(names);
+  }
+
+  /**
+   * Applies a table-reference column alias list to a materialized table by
    * position.
    *
    * @param result
-   *          original CTE data
+   *          original table data
    * @param reference
    *          consuming table reference
    * @return data exposing only the renamed SQL columns
    * @throws SQLException
-   *           if the alias count differs from the output column count
+   *           if the alias count differs from the column count
    */
   private CteResult applyColumnAliases(CteResult result, SqlParser.TableReference reference) throws SQLException {
     List<String> aliases = reference.columnAliases();
@@ -4215,7 +4319,8 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     List<Field> originalFields = result.schema().getFields();
     if (aliases.size() != originalFields.size()) {
-      throw SqlExceptions.syntaxFailure("Table alias column count does not match CTE output column count");
+      throw SqlExceptions.syntaxFailure("Table alias declares " + aliases.size() + " columns but table '"
+          + reference.tableName() + "' has " + originalFields.size() + " columns");
     }
     Set<String> used = new LinkedHashSet<>();
     List<Field> fields = new ArrayList<>();

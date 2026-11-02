@@ -167,8 +167,11 @@ inputs. Unknown names and columns replaced by a column alias list raise `SQLSynt
 SQLState `42000`, naming the missing column; generated internal Avro names are not visible SQL columns.
 CTE reference alias lists bind by output position in both `FROM c AS x(a, b)` and `FROM (c) x(a, b)`,
 including wildcard output, grouping, recursive CTEs, joins, and nested queries.
-Column alias lists on physical Parquet tables are currently rejected with SQLState `42000`; use a derived
-table or CTE instead (tracked in [#263](https://github.com/Alipsa/JParq/issues/263)).
+Column alias lists on physical Parquet tables also bind by position, in plain queries and joins:
+`SELECT a FROM employees e(a, b, c)` exposes `id, first_name, last_name` as `a, b, c` and hides the
+original names. The alias count must equal the table column count; mismatches raise
+`SQLSyntaxErrorException` with SQLState `42000` (fixed in
+[#263](https://github.com/Alipsa/JParq/issues/263)).
 Alias lists on `information_schema.tables` and `information_schema.columns` are also explicitly rejected;
 wrap these inputs in a derived table or CTE to rename their columns.
 Nonparameterized single-input queries validate during preparation; joins validate when their inputs are
@@ -754,6 +757,8 @@ The following SQL statements are supported:
   - Derived-table column alias lists rename every output by position, including computed columns and expanded
     wildcards: `SELECT x.a, x.b FROM (SELECT id, id + 1 FROM optimized) x(a, b)`. This also applies to joins and
     LATERAL inputs. The alias count must equal the expanded output column count, including for empty results.
+    Physical Parquet table references accept the same positional alias lists, e.g.
+    `SELECT a, b FROM employees e(a, b, c)`, also in joins.
   - Derived tables can contain `UNION`, `UNION ALL`, `INTERSECT`, and `EXCEPT`, including their `ALL` variants,
     nested set operations, and LATERAL inputs. Inner ordering and row bounds apply before the consuming query.
     Table-free SELECT and set-operation derived tables may omit a table alias in joins; reference their output

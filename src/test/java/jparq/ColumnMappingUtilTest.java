@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.util.Map;
+import org.apache.avro.SchemaBuilder;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 
@@ -114,5 +115,17 @@ class ColumnMappingUtilTest {
 
     assertNull(ColumnMappingUtil.canonicalOrderColumn(null, "cars", qualifierMapping, unqualifiedMapping),
         "Null columns should yield null");
+  }
+
+  /** Builds reader mappings from a schema's lookup keys and a qualifier. */
+  @Test
+  void buildsUnqualifiedAndQualifierMappingsFromSchema() {
+    var schema = SchemaBuilder.record("t").fields().requiredInt("id").requiredString("name").endRecord();
+    Map<String, String> unqualified = ColumnMappingUtil.unqualifiedColumnMapping(schema);
+    assertEquals(Map.of("U:id", "id", "U:name", "name"), unqualified);
+    assertEquals(Map.of("U:t", unqualified), ColumnMappingUtil.qualifierColumnMapping(unqualified, "T"));
+    assertEquals(Map.of(), ColumnMappingUtil.qualifierColumnMapping(unqualified, null));
+    assertEquals(Map.of(), ColumnMappingUtil.unqualifiedColumnMapping(null));
+    assertEquals(Map.of(), ColumnMappingUtil.qualifierColumnMapping(Map.of(), "t"));
   }
 }

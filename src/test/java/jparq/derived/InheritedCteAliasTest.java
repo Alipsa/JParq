@@ -2,12 +2,10 @@ package jparq.derived;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.sql.DriverManager;
-import java.sql.SQLException;
 import java.util.List;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -65,8 +63,8 @@ class InheritedCteAliasTest {
   }
 
   /**
-   * Rejects physical-table alias lists explicitly rather than silently ignoring
-   * them.
+   * Applies physical-table alias lists in plain, join, and nested derived
+   * contexts.
    *
    * @param predicate
    *          predicate pushdown setting
@@ -79,24 +77,21 @@ class InheritedCteAliasTest {
   @CsvSource({
       "true,true", "true,false", "false,true", "false,false"
   })
-  void rejectsUnsupportedPhysicalAliases(boolean predicate, boolean projection) throws Exception {
-    String url = "jdbc:jparq:" + Path.of("src/test/resources/hf").toAbsolutePath() + "?predicatePushdown=" + predicate
+  void physicalAliasesRenameByPosition(boolean predicate, boolean projection) throws Exception {
+    String url = "jdbc:jparq:" + Path.of("src/test/resources/acme").toAbsolutePath() + "?predicatePushdown=" + predicate
         + "&projectionPushdown=" + projection;
     try (var connection = DriverManager.getConnection(url)) {
-      for (String source : List.of("optimized x(a)", "optimized AS x(a)", "(optimized) x(a)")) {
-        for (String sql : List.of("SELECT * FROM " + source,
-            "SELECT * FROM " + source + " JOIN (VALUES (1)) s(z) ON TRUE",
-            "SELECT * FROM (SELECT * FROM " + source + ") d")) {
-          SQLException failure = assertThrows(SQLException.class, () -> {
-            try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
-              while (result.next()) {
-                result.getObject(1);
-              }
+      for (String source : List.of("employees x(a, b, c)", "employees AS x(a, b, c)", "(employees) x(a, b, c)")) {
+        for (String sql : List.of("SELECT a FROM " + source + " WHERE a <= 2 ORDER BY a",
+            "SELECT x.a FROM " + source + " JOIN (VALUES (1)) s(z) ON x.a >= s.z WHERE x.a <= 2 ORDER BY x.a",
+            "SELECT a FROM (SELECT * FROM " + source + ") d WHERE a <= 2 ORDER BY a")) {
+          try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+            for (int id = 1; id <= 2; id++) {
+              assertTrue(result.next(), sql);
+              assertEquals(id, result.getInt(1), sql);
             }
-          }, sql);
-          assertEquals("42000", failure.getSQLState(), sql);
-          assertTrue(failure.getMessage().contains("Column alias lists on physical tables are not supported"),
-              sql + ": " + failure);
+            assertFalse(result.next(), sql);
+          }
         }
       }
     }
