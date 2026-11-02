@@ -70,7 +70,7 @@ public final class RenamingRecordReader implements RecordReader, ColumnMappingPr
     }
     this.sourceNames = List.copyOf(names);
     unqualifiedColumnMapping = ColumnMappingUtil.unqualifiedColumnMapping(renamedSchema);
-    qualifierColumnMapping = ColumnMappingUtil.qualifierColumnMapping(renamedSchema, qualifier);
+    qualifierColumnMapping = ColumnMappingUtil.qualifierColumnMapping(unqualifiedColumnMapping, qualifier);
   }
 
   @Override

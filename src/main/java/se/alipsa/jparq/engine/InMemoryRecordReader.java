@@ -52,7 +52,7 @@ public final class InMemoryRecordReader implements RecordReader, ColumnMappingPr
     }
     this.schema = effectiveSchema;
     unqualifiedColumnMapping = ColumnMappingUtil.unqualifiedColumnMapping(effectiveSchema);
-    qualifierColumnMapping = ColumnMappingUtil.qualifierColumnMapping(effectiveSchema, qualifier);
+    qualifierColumnMapping = ColumnMappingUtil.qualifierColumnMapping(unqualifiedColumnMapping, qualifier);
   }
 
   @Override
