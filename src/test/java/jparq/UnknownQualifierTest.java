@@ -163,6 +163,34 @@ class UnknownQualifierTest {
     }
   }
 
+  /**
+   * Rejects plain derived tables that reference an earlier FROM item: the SQL
+   * standard requires LATERAL for that kind of correlation. The same query with
+   * the LATERAL keyword keeps working.
+   *
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @Test
+  void rejectsImplicitLateralCorrelation() throws Exception {
+    String url = "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath();
+    try (Connection connection = DriverManager.getConnection(url)) {
+      for (String sql : List.of(
+          "SELECT e.id FROM acme.employees e CROSS JOIN "
+              + "(SELECT ed.employee AS c FROM acme.employee_department ed WHERE ed.employee = e.id) l",
+          "SELECT e.id FROM acme.employees e JOIN "
+              + "(SELECT ed.employee AS c FROM acme.employee_department ed WHERE ed.employee = e.id) l ON TRUE",
+          "SELECT q.employee FROM acme.departments d CROSS JOIN "
+              + "(SELECT ed.employee FROM acme.employee_department ed WHERE ed.department = d.id) q")) {
+        SQLException failure = assertThrows(SQLException.class, () -> execute(connection, sql), sql);
+        assertEquals("42000", failure.getSQLState(), sql + ": " + failure);
+        assertTrue(failure.getMessage().contains("Unknown table qualifier"), failure::getMessage);
+      }
+      assertTrue(execute(connection, "SELECT e.id FROM acme.employees e CROSS JOIN LATERAL "
+          + "(SELECT ed.employee AS c FROM acme.employee_department ed WHERE ed.employee = e.id) l") > 0);
+    }
+  }
+
   private static int execute(Connection connection, String sql) throws SQLException {
     try (Statement statement = connection.createStatement(); ResultSet result = statement.executeQuery(sql)) {
       assertNotNull(result, "ResultSet should be created for " + sql);

@@ -1311,6 +1311,12 @@ public final class SqlParser {
    *
    * @param list
    *          parsed set operation list produced by JSqlParser
+   * @param ctes
+   *          visible CTE declarations
+   * @param cteLookup
+   *          visible declarations indexed by identifier
+   * @param allowQualifiedWildcards
+   *          whether qualified wildcards may remain unresolved
    * @param lateralScope
    *          whether the components belong to a LATERAL input whose outer
    *          correlations are bound after rewriting
@@ -1655,6 +1661,9 @@ public final class SqlParser {
    *          whether qualified wildcards may remain unresolved
    * @param lateral
    *          whether the query requires per-row outer binding
+   * @param lenientQualifiers
+   *          whether the enclosing LATERAL body may reference outer qualifiers
+   *          that are bound after correlation rewriting
    * @return the reference used to materialize the query independently
    */
   private static FromInfo parseSubSelect(net.sf.jsqlparser.statement.select.Select body, Alias aliasNode,
