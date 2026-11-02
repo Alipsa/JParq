@@ -56,7 +56,18 @@ class UnknownQualifierTest {
           "SELECT nosuch.cyl FROM mtcars m JOIN (SELECT 1 AS k) j ON TRUE LIMIT 1",
           "SELECT x.a FROM (SELECT 1 AS a) d JOIN (VALUES (2)) j(k) ON TRUE",
           "SELECT a FROM (SELECT 1 AS a) d JOIN (VALUES (2)) j(k) ON TRUE GROUP BY d.a, y.a",
-          "SELECT a FROM (SELECT 1 AS a) d JOIN (VALUES (2)) j(k) ON TRUE ORDER BY y.a")) {
+          "SELECT a FROM (SELECT 1 AS a) d JOIN (VALUES (2)) j(k) ON TRUE ORDER BY y.a",
+          // DISTINCT ON, named WINDOW, and QUALIFY expressions (#261 review)
+          "SELECT DISTINCT ON (y.id) id FROM acme.employees x",
+          "SELECT id, ROW_NUMBER() OVER w FROM acme.employees x WINDOW w AS (ORDER BY y.id)",
+          "SELECT x.id FROM acme.employees x JOIN acme.employee_department ed ON x.id = ed.employee "
+              + "QUALIFY ROW_NUMBER() OVER (ORDER BY y.id) = 1",
+          // join WHERE conjuncts with unknown qualifiers (#293)
+          "SELECT COUNT(*) FROM mtcars m JOIN (SELECT 1 AS a) x ON TRUE WHERE zz.cyl = 4",
+          "SELECT COUNT(*) FROM mtcars m JOIN (SELECT 1 AS a) x ON TRUE WHERE m.cyl = 4 AND zz.cyl = 99",
+          "SELECT COUNT(*) FROM mtcars m JOIN (SELECT 1 AS a) x ON TRUE WHERE \"M\".cyl = 4",
+          // self-join through the real table name, hidden by both aliases (#295)
+          "SELECT mtcars.cyl FROM mtcars a JOIN mtcars b ON a.model = b.model LIMIT 1")) {
         SQLException failure = assertThrows(SQLException.class, () -> execute(connection, sql), sql);
         assertEquals("42000", failure.getSQLState(), sql + ": " + failure);
         assertTrue(failure.getMessage().contains("Unknown table qualifier"), failure::getMessage);
@@ -113,6 +124,40 @@ class UnknownQualifierTest {
       SQLException failure = assertThrows(SQLException.class,
           () -> execute(connection, "SELECT COUNT(*) AS c FROM acme.employees e "
               + "WHERE EXISTS (SELECT 1 FROM acme.employee_department ed WHERE y.employee = e.id)"));
+      assertEquals("42000", failure.getSQLState(), failure::getMessage);
+      assertTrue(failure.getMessage().contains("Unknown table qualifier"), failure::getMessage);
+    }
+  }
+
+  /**
+   * Keeps LATERAL correlation working when an outer column flows through a nested
+   * derived table, CTE, or join inside the LATERAL body. The outer reference is
+   * bound after correlation rewriting, so the eager parse must not reject it.
+   *
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @Test
+  void preservesNestedLateralCorrelation() throws Exception {
+    String url = "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath();
+    try (Connection connection = DriverManager.getConnection(url)) {
+      assertTrue(execute(connection,
+          "SELECT e.id, l.c FROM acme.employees e CROSS JOIN LATERAL "
+              + "(SELECT d.c FROM (SELECT COUNT(*) AS c FROM acme.employee_department ed "
+              + "WHERE ed.employee = e.id) d) l") > 0);
+      assertTrue(execute(connection,
+          "SELECT e.id, l.c FROM acme.employees e CROSS JOIN LATERAL "
+              + "(WITH w AS (SELECT ed.employee AS c FROM acme.employee_department ed "
+              + "WHERE ed.employee = e.id) SELECT w.c FROM w) l") > 0);
+      assertTrue(execute(connection, "SELECT e.id, l.c FROM acme.employees e CROSS JOIN LATERAL "
+          + "(SELECT d.c FROM acme.departments x JOIN "
+          + "(SELECT ed.employee AS c FROM acme.employee_department ed WHERE ed.employee = e.id) d ON TRUE) l") > 0);
+      // Unknown qualifiers inside a LATERAL body are still rejected.
+      SQLException failure = assertThrows(SQLException.class,
+          () -> execute(connection,
+              "SELECT e.id, l.c FROM acme.employees e CROSS JOIN LATERAL "
+                  + "(SELECT d.c FROM (SELECT COUNT(*) AS c FROM acme.employee_department ed "
+                  + "WHERE ed.employee = y.id) d) l"));
       assertEquals("42000", failure.getSQLState(), failure::getMessage);
       assertTrue(failure.getMessage().contains("Unknown table qualifier"), failure::getMessage);
     }

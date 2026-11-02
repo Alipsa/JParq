@@ -782,7 +782,8 @@ public final class SqlParser {
   private static Query parseSelectStatement(net.sf.jsqlparser.statement.select.Select stmt,
       List<CommonTableExpression> ctes, Map<Identifier, CommonTableExpression> cteLookup,
       boolean allowQualifiedWildcards, boolean lateralScope) {
-    List<CommonTableExpression> declared = parseWithItems(stmt.getWithItemsList(), allowQualifiedWildcards);
+    List<CommonTableExpression> declared = parseWithItems(stmt.getWithItemsList(), allowQualifiedWildcards,
+        lateralScope);
     if (declared.isEmpty()) {
       return parseSelectBody(stmt, ctes, cteLookup, allowQualifiedWildcards, lateralScope);
     }
@@ -827,8 +828,20 @@ public final class SqlParser {
     throw new IllegalArgumentException("Unsupported SELECT statement: " + stmt);
   }
 
+  /**
+   * Parses WITH items, keeping correlation scopes open for LATERAL bodies whose
+   * outer references are bound after rewriting.
+   *
+   * @param withItems
+   *          parsed WITH declarations, or null
+   * @param allowQualifiedWildcards
+   *          whether qualified wildcards may remain unresolved
+   * @param lateralScope
+   *          whether the items belong to a LATERAL input awaiting outer binding
+   * @return parsed common table expressions in declaration order
+   */
   private static List<CommonTableExpression> parseWithItems(List<WithItem<?>> withItems,
-      boolean allowQualifiedWildcards) {
+      boolean allowQualifiedWildcards, boolean lateralScope) {
     if (withItems == null || withItems.isEmpty()) {
       return List.of();
     }
@@ -856,7 +869,8 @@ public final class SqlParser {
       List<String> columnAliases = parseCteColumns(item.getWithItemList());
       List<CommonTableExpression> available = List.copyOf(prior);
       Map<Identifier, CommonTableExpression> availableLookup = buildCteLookup(available);
-      Query query = parseSelectStatement(select.getSelect(), available, availableLookup, allowQualifiedWildcards);
+      Query query = parseSelectStatement(select.getSelect(), available, availableLookup, allowQualifiedWildcards,
+          lateralScope);
       String sql = select.toString();
       CommonTableExpression cte = new CommonTableExpression(name, columnAliases, query, sql);
       parsed.add(cte);
@@ -1083,8 +1097,8 @@ public final class SqlParser {
     FromInfo fromInfo = ps.getFromItem() == null
         ? new FromInfo(null, null, null, Map.of(), null, null, null,
             new ValueTableDefinition(List.of(List.of()), List.of()), null, false, null, List.of(), List.of())
-        : parseFromItem(ps.getFromItem(), ctes, cteLookup, allowQualifiedWildcards);
-    List<JoinInfo> joinInfos = parseJoins(ps.getJoins(), ctes, cteLookup, allowQualifiedWildcards);
+        : parseFromItem(ps.getFromItem(), ctes, cteLookup, allowQualifiedWildcards, false, lateralScope);
+    List<JoinInfo> joinInfos = parseJoins(ps.getJoins(), ctes, cteLookup, allowQualifiedWildcards, lateralScope);
     List<TableReference> tableRefs = buildTableReferences(fromInfo, joinInfos);
     final Projection projection = parseProjectionList(ps.getSelectItems(), fromInfo, tableRefs,
         allowQualifiedWildcards);
@@ -1144,8 +1158,19 @@ public final class SqlParser {
     if (!lateralScope) {
       // JOIN conditions are validated separately when the reader is built; only
       // the plain WHERE references belong to this scope check.
-      validateQualifierVisibility(tableRefs, expressionCopy, whereExpr, combinedHaving, groupByInfo.expressions(),
-          orderCopy);
+      List<Expression> scoped = new ArrayList<>(expressionCopy);
+      scoped.add(whereExpr);
+      scoped.add(combinedHaving);
+      scoped.addAll(groupByInfo.expressions());
+      addDistinctOnExpressions(ps, scoped);
+      addWindowExpressions(ps, scoped);
+      scoped.add(ps.getQualify());
+      for (OrderKey order : orderCopy) {
+        if (order.expression() != null) {
+          scoped.add(order.expression());
+        }
+      }
+      validateQualifierVisibility(tableRefs, scoped, orderCopy);
     }
 
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
@@ -1466,7 +1491,7 @@ public final class SqlParser {
    */
   private static FromInfo parseFromItem(FromItem fromItem, List<CommonTableExpression> ctes,
       Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
-    return parseFromItem(fromItem, ctes, cteLookup, allowQualifiedWildcards, false);
+    return parseFromItem(fromItem, ctes, cteLookup, allowQualifiedWildcards, false, false);
   }
 
   /**
@@ -1482,12 +1507,16 @@ public final class SqlParser {
    *          whether qualified wildcards may remain unresolved
    * @param lateralHint
    *          whether the enclosing join requests LATERAL evaluation
+   * @param lenientQualifiers
+   *          whether the enclosing LATERAL body may reference outer qualifiers
+   *          that are bound after correlation rewriting
    * @return parsed input and any nested join participants
    * @throws IllegalArgumentException
    *           if the input is unsupported or invalid
    */
   private static FromInfo parseFromItem(FromItem fromItem, List<CommonTableExpression> ctes,
-      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateralHint) {
+      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateralHint,
+      boolean lenientQualifiers) {
     boolean lateral = lateralHint;
     TableSampleDefinition tableSample = parseTableSample(fromItem);
     if (fromItem instanceof Table t) {
@@ -1529,13 +1558,14 @@ public final class SqlParser {
     if (fromItem instanceof ParenthesedFromItem parenthesed) {
       FromItem inner = parenthesed.getFromItem();
       if (parenthesed.getJoins() != null && !parenthesed.getJoins().isEmpty()) {
-        FromInfo base = parseFromItem(inner, ctes, cteLookup, allowQualifiedWildcards, lateral);
-        List<JoinInfo> joins = parseJoins(parenthesed.getJoins(), ctes, cteLookup, allowQualifiedWildcards);
+        FromInfo base = parseFromItem(inner, ctes, cteLookup, allowQualifiedWildcards, lateral, lenientQualifiers);
+        List<JoinInfo> joins = parseJoins(parenthesed.getJoins(), ctes, cteLookup, allowQualifiedWildcards,
+            lenientQualifiers);
         FromInfo group = new FromInfo(null, null, null, Map.of(), null, null, null, null, null, lateral, tableSample,
             List.of(), buildTableReferences(base, joins));
         return applyAlias(group, parenthesed.getAlias());
       }
-      FromInfo innerInfo = parseFromItem(inner, ctes, cteLookup, allowQualifiedWildcards, lateral);
+      FromInfo innerInfo = parseFromItem(inner, ctes, cteLookup, allowQualifiedWildcards, lateral, lenientQualifiers);
       FromInfo aliased = applyAlias(innerInfo, parenthesed.getAlias());
       return applySample(aliased, tableSample);
     }
@@ -1543,12 +1573,13 @@ public final class SqlParser {
       lateral = true;
       Alias aliasNode = lateralSub.getAlias();
       FromInfo info = parseSubSelect(lateralSub.getSelect(), aliasNode, ctes, cteLookup, allowQualifiedWildcards,
-          lateral);
+          lateral, lenientQualifiers);
       return applySample(info, tableSample);
     }
     if (fromItem instanceof ParenthesedSelect sub) {
       Alias aliasNode = sub.getAlias();
-      FromInfo info = parseSubSelect(sub.getSelect(), aliasNode, ctes, cteLookup, allowQualifiedWildcards, lateral);
+      FromInfo info = parseSubSelect(sub.getSelect(), aliasNode, ctes, cteLookup, allowQualifiedWildcards, lateral,
+          lenientQualifiers);
       return applySample(info, tableSample);
     }
     if (fromItem instanceof TableFunction tableFunction) {
@@ -1628,7 +1659,7 @@ public final class SqlParser {
    */
   private static FromInfo parseSubSelect(net.sf.jsqlparser.statement.select.Select body, Alias aliasNode,
       List<CommonTableExpression> ctes, Map<Identifier, CommonTableExpression> cteLookup,
-      boolean allowQualifiedWildcards, boolean lateral) {
+      boolean allowQualifiedWildcards, boolean lateral, boolean lenientQualifiers) {
     if (body == null) {
       throw new IllegalArgumentException("Derived table requires a query");
     }
@@ -1637,7 +1668,7 @@ public final class SqlParser {
     if (lateral && body instanceof PlainSelect plain && plain.getFromItem() == null) {
       validateTableFreeSelect(plain, true);
     }
-    Query query = parseSelectStatement(body, ctes, cteLookup, allowQualifiedWildcards, lateral);
+    Query query = parseSelectStatement(body, ctes, cteLookup, allowQualifiedWildcards, lateral || lenientQualifiers);
     // Set queries execute through their SQL just like plain derived queries.
     // Keep the optional plain plan only for source-column schema inference.
     Select innerSelect = query instanceof Select select ? select : null;
@@ -3056,8 +3087,27 @@ public final class SqlParser {
   private record JoinInfo(FromInfo table, Expression condition, JoinType joinType, List<String> usingColumns) {
   }
 
+  /**
+   * Parses join participants, propagating any enclosing LATERAL scope so nested
+   * derived tables keep their outer correlations open.
+   *
+   * @param joins
+   *          parsed JOIN clauses, or null
+   * @param ctes
+   *          visible CTE declarations
+   * @param cteLookup
+   *          CTE declarations indexed by identifier
+   * @param allowQualifiedWildcards
+   *          whether qualified wildcards may remain unresolved
+   * @param lenientQualifiers
+   *          whether the enclosing LATERAL body may reference outer qualifiers
+   *          that are bound after correlation rewriting
+   * @return parsed join participants in declaration order
+   * @throws IllegalArgumentException
+   *           if a JOIN clause is unsupported or invalid
+   */
   private static List<JoinInfo> parseJoins(List<Join> joins, List<CommonTableExpression> ctes,
-      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
+      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lenientQualifiers) {
     if (joins == null || joins.isEmpty()) {
       return List.of();
     }
@@ -3093,7 +3143,8 @@ public final class SqlParser {
       if (!joinLateral && rightItem instanceof TableFunction tableFunction) {
         joinLateral = "lateral".equalsIgnoreCase(tableFunction.getPrefix());
       }
-      FromInfo info = parseFromItem(rightItem, ctes, cteLookup, allowQualifiedWildcards, joinLateral);
+      FromInfo info = parseFromItem(rightItem, ctes, cteLookup, allowQualifiedWildcards, joinLateral,
+          lenientQualifiers);
       Expression condition = null;
       if (join.getOnExpressions() != null) {
         for (Expression on : join.getOnExpressions()) {
@@ -3241,21 +3292,17 @@ public final class SqlParser {
    *
    * @param tableRefs
    *          inputs visible in the current query scope
-   * @param expressions
-   *          SELECT list expressions
-   * @param where
-   *          WHERE expression, or null
-   * @param having
-   *          HAVING expression, or null
-   * @param groupBy
-   *          GROUP BY expressions
+   * @param scoped
+   *          expressions evaluated in the current scope, including DISTINCT ON,
+   *          WINDOW, QUALIFY, and ORDER BY expressions
    * @param orderBy
-   *          ORDER BY keys
+   *          ORDER BY keys, whose plain column references carry the qualifier
+   *          outside the expression tree
    * @throws IllegalArgumentException
    *           carrying SQLState 42000 if a qualifier is not visible
    */
-  private static void validateQualifierVisibility(List<TableReference> tableRefs, List<Expression> expressions,
-      Expression where, Expression having, List<Expression> groupBy, List<OrderKey> orderBy) {
+  private static void validateQualifierVisibility(List<TableReference> tableRefs, List<Expression> scoped,
+      List<OrderKey> orderBy) {
     Set<String> visible = new LinkedHashSet<>();
     for (String qualifier : visibleQualifiers(tableRefs)) {
       String key = JParqUtil.normalizeQualifier(qualifier);
@@ -3263,26 +3310,64 @@ public final class SqlParser {
         visible.add(key);
       }
     }
-    List<Expression> scoped = new ArrayList<>(expressions);
-    scoped.add(where);
-    scoped.add(having);
-    scoped.addAll(groupBy);
     for (Expression expression : scoped) {
       for (Column column : ColumnsUsed.referencesInScope(expression)) {
-        requireVisibleQualifier(column.getTable() == null ? null : column.getTable().getName(), column.getColumnName(),
-            visible);
+        requireVisibleQualifier(column, visible);
       }
     }
     for (OrderKey order : orderBy) {
-      if (order.expression() != null) {
-        for (Column column : ColumnsUsed.referencesInScope(order.expression())) {
-          requireVisibleQualifier(column.getTable() == null ? null : column.getTable().getName(),
-              column.getColumnName(), visible);
-        }
-      } else {
+      if (order.expression() == null) {
         requireVisibleQualifier(order.qualifier(), order.column(), visible);
       }
     }
+  }
+
+  /**
+   * Adds DISTINCT ON expressions to the scope being validated.
+   *
+   * @param ps
+   *          parsed SELECT body
+   * @param scoped
+   *          accumulator for expressions evaluated in the current scope
+   */
+  private static void addDistinctOnExpressions(PlainSelect ps, List<Expression> scoped) {
+    if (ps.getDistinct() != null && ps.getDistinct().getOnSelectItems() != null) {
+      for (SelectItem<?> item : ps.getDistinct().getOnSelectItems()) {
+        scoped.add(item.getExpression());
+      }
+    }
+  }
+
+  /**
+   * Adds named window definition expressions to the scope being validated.
+   *
+   * @param ps
+   *          parsed SELECT body
+   * @param scoped
+   *          accumulator for expressions evaluated in the current scope
+   */
+  private static void addWindowExpressions(PlainSelect ps, List<Expression> scoped) {
+    if (ps.getWindowDefinitions() != null) {
+      for (WindowDefinition window : ps.getWindowDefinitions()) {
+        scoped.addAll(window.getAllExpressions());
+      }
+    }
+  }
+
+  /**
+   * Ensures a qualified column reference names a table or alias visible in the
+   * current scope.
+   *
+   * @param column
+   *          column reference to validate
+   * @param visible
+   *          normalized qualifiers visible in the current scope
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 when the qualifier is unknown
+   */
+  private static void requireVisibleQualifier(Column column, Set<String> visible) {
+    requireVisibleQualifier(column.getTable() == null ? null : column.getTable().getName(), column.getColumnName(),
+        visible);
   }
 
   /**
