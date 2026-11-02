@@ -343,7 +343,7 @@ public class JParqPreparedStatement implements PreparedStatement {
                   baseRef, tmpFileAvro);
               tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
             }
-            aggregatePlan = AggregateFunctions.plan(tmpSelect);
+            aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
           } else if (baseIsCte) {
@@ -361,7 +361,7 @@ public class JParqPreparedStatement implements PreparedStatement {
                   baseRef, tmpFileAvro);
               tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
             }
-            aggregatePlan = AggregateFunctions.plan(tmpSelect);
+            aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
           } else if (baseIsDerivedTable) {
@@ -375,7 +375,7 @@ public class JParqPreparedStatement implements PreparedStatement {
               tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect,
                   buildQualifierColumnsForSchema(tmpSelect, baseRef, tmpFileAvro));
             }
-            aggregatePlan = AggregateFunctions.plan(tmpSelect);
+            aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
           } else if (baseRef != null && baseRef.unnest() != null) {
@@ -387,7 +387,7 @@ public class JParqPreparedStatement implements PreparedStatement {
                   baseRef, tmpFileAvro);
               tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
             }
-            aggregatePlan = AggregateFunctions.plan(tmpSelect);
+            aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
           } else if (baseIsInformationSchemaTables || baseIsInformationSchemaColumns) {
@@ -403,7 +403,7 @@ public class JParqPreparedStatement implements PreparedStatement {
               tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
             }
             tmpSchemaName = formatSchemaForMetadata("information_schema");
-            aggregatePlan = AggregateFunctions.plan(tmpSelect);
+            aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
           } else {
@@ -425,7 +425,7 @@ public class JParqPreparedStatement implements PreparedStatement {
               tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
             }
 
-            aggregatePlan = AggregateFunctions.plan(tmpSelect);
+            aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
             configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf, tmpCteResults);
 
             if (stmt.getConn().isPredicatePushdown() && (baseRef == null || baseRef.tableSample() == null)

@@ -1,7 +1,7 @@
 package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -10,7 +10,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
 import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -183,25 +185,71 @@ class GroupByAliasTest {
   @Test
   void groupByAggregateAliasIsRejected() throws Exception {
     try (Connection connection = connection(); Statement stmt = connection.createStatement()) {
-      SQLException failure = assertSqlException(
+      SQLSyntaxErrorException failure = assertThrows(SQLSyntaxErrorException.class,
           () -> stmt.executeQuery("SELECT COUNT(*) AS total FROM mtcars GROUP BY total"));
       assertEquals("42000", failure.getSQLState());
     }
   }
 
-  private interface SqlCall {
-    ResultSet run() throws SQLException;
+  /**
+   * An input column keeps its standard meaning when a select-list alias shares
+   * its name: the query groups by the column, not by the aliased expression.
+   *
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @Test
+  void inputColumnTakesPrecedenceOverAlias() throws Exception {
+    List<String> rows = new ArrayList<>();
+    try (Connection connection = connection();
+        Statement stmt = connection.createStatement();
+        ResultSet rs = stmt.executeQuery("SELECT CASE WHEN cyl > 4 THEN 'big' ELSE 'small' END AS cyl, "
+            + "COUNT(*) AS n FROM mtcars GROUP BY cyl")) {
+      while (rs.next()) {
+        rows.add(rs.getString("cyl") + "|" + rs.getLong("n"));
+      }
+    }
+    assertEquals(List.of("big|7", "small|11", "big|14"), rows);
   }
 
-  private static SQLException assertSqlException(SqlCall call) {
-    try {
-      call.run();
-      fail("Expected an SQLException");
-      return null;
-    } catch (SQLSyntaxErrorException e) {
-      return e;
-    } catch (SQLException e) {
-      return e;
+  /**
+   * A GROUP BY name that matches an input column cannot be satisfied by an alias
+   * of a different column; the query must be rejected because the select
+   * expression is not grouped.
+   *
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @Test
+  void aliasOfOtherColumnCannotSatisfyRealColumnGroupBy() throws Exception {
+    try (Connection connection = connection(); Statement stmt = connection.createStatement()) {
+      for (String sql : List.of("SELECT gear AS cyl, COUNT(*) AS n FROM mtcars GROUP BY cyl",
+          "SELECT cyl AS gear, COUNT(*) AS n FROM mtcars GROUP BY gear")) {
+        SQLSyntaxErrorException failure = assertThrows(SQLSyntaxErrorException.class, () -> stmt.executeQuery(sql));
+        assertEquals("42000", failure.getSQLState(), "SQLState for " + sql);
+      }
+    }
+  }
+
+  /**
+   * A GROUP BY name shared by more than one select-list alias is rejected as an
+   * ambiguous reference with SQLState 42702.
+   *
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @Test
+  void duplicateAliasIsRejectedAsAmbiguous() throws Exception {
+    try (Connection connection = connection(); Statement stmt = connection.createStatement()) {
+      SQLSyntaxErrorException failure = assertThrows(SQLSyntaxErrorException.class,
+          () -> stmt.executeQuery("SELECT cyl AS x, gear AS x, COUNT(*) AS n FROM mtcars GROUP BY x"));
+      assertEquals("42702", failure.getSQLState());
+    }
+    try (Connection connection = connection(); Statement stmt = connection.createStatement()) {
+      SQLSyntaxErrorException failure = assertThrows(SQLSyntaxErrorException.class,
+          () -> stmt.executeQuery("SELECT d.department AS x, ed.department AS x, COUNT(*) AS n "
+              + "FROM acme.employee_department ed JOIN acme.departments d ON ed.department = d.id GROUP BY x"));
+      assertEquals("42702", failure.getSQLState());
     }
   }
 

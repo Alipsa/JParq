@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -130,6 +131,43 @@ public final class AggregateFunctions {
   }
 
   /**
+   * Resolution context for GROUP BY references to select-list aliases.
+   *
+   * <p>
+   * An unqualified GROUP BY or GROUPING() name resolves to a select-list alias
+   * only when it matches no column of the input schema and names exactly one
+   * select expression. Names matching an input column keep their standard
+   * meaning, and names matching several aliases are rejected as ambiguous.
+   * </p>
+   *
+   * @param targets
+   *          lookup from normalized alias to the underlying select expression
+   * @param ambiguous
+   *          normalized aliases shared by more than one distinct select
+   *          expression
+   * @param availableColumns
+   *          normalized keys of the columns provided by the input schema
+   */
+  public record AliasContext(Map<String, Expression> targets, Set<String> ambiguous, Set<String> availableColumns) {
+    /**
+     * Canonical constructor normalising the provided collections.
+     *
+     * @param targets
+     *          lookup from normalized alias to the underlying select expression
+     * @param ambiguous
+     *          normalized aliases shared by more than one distinct select
+     *          expression
+     * @param availableColumns
+     *          normalized keys of the columns provided by the input schema
+     */
+    public AliasContext {
+      targets = targets == null ? Map.of() : Map.copyOf(targets);
+      ambiguous = ambiguous == null ? Set.of() : Set.copyOf(ambiguous);
+      availableColumns = availableColumns == null ? Set.of() : Set.copyOf(availableColumns);
+    }
+  }
+
+  /**
    * Plan describing aggregate and grouping behaviour for a SELECT statement.
    *
    * @param specs
@@ -143,11 +181,11 @@ public final class AggregateFunctions {
    * @param groupingSets
    *          grouping sets derived from the GROUP BY clause
    * @param groupByAliases
-   *          lookup of select-list aliases to the underlying expressions, used to
-   *          resolve GROUP BY and GROUPING() alias references
+   *          resolution context for GROUP BY and GROUPING() references to
+   *          select-list aliases
    */
   public record AggregatePlan(List<AggregateSpec> specs, List<ResultColumn> resultColumns,
-      List<GroupExpression> groupExpressions, List<GroupingSet> groupingSets, Map<String, Expression> groupByAliases) {
+      List<GroupExpression> groupExpressions, List<GroupingSet> groupingSets, AliasContext groupByAliases) {
     /**
      * Canonical constructor validating the provided collections.
      *
@@ -162,7 +200,8 @@ public final class AggregateFunctions {
      * @param groupingSets
      *          grouping sets derived from the GROUP BY clause
      * @param groupByAliases
-     *          lookup of select-list aliases to the underlying expressions
+     *          resolution context for GROUP BY and GROUPING() references to
+     *          select-list aliases
      */
     public AggregatePlan {
       Objects.requireNonNull(specs, "specs");
@@ -173,7 +212,7 @@ public final class AggregateFunctions {
       resultColumns = List.copyOf(resultColumns);
       groupExpressions = List.copyOf(groupExpressions);
       groupingSets = List.copyOf(groupingSets);
-      groupByAliases = groupByAliases == null ? Map.of() : Map.copyOf(groupByAliases);
+      groupByAliases = groupByAliases == null ? new AliasContext(null, null, null) : groupByAliases;
     }
 
     /**
@@ -486,19 +525,24 @@ public final class AggregateFunctions {
    *
    * @param select
    *          parsed SELECT statement
+   * @param inputSchema
+   *          schema of the records the query reads, used to give input columns
+   *          precedence over select-list aliases in GROUP BY; {@code null} when
+   *          the schema is unknown, in which case aliases do not resolve
    * @return aggregate plan for the SELECT list, or {@code null} when the query
    *         should be handled by the non-aggregate execution path. The planner
    *         validates SELECT expressions against the GROUP BY clause using
    *         structural expression comparison so that functionally equivalent
    *         constructs (for example {@code COALESCE} invocations) are accepted
    *         even when they are formatted differently. A GROUP BY item that is an
-   *         unqualified column name matching a select-list alias resolves to the
-   *         aliased expression, mirroring the alias handling provided for ORDER
-   *         BY. Scalar subqueries are evaluated after grouping; their outer
+   *         unqualified column name resolves to a select-list alias only when the
+   *         name matches no input column, mirroring the alias handling provided
+   *         for ORDER BY while keeping the standard column meaning when both
+   *         exist. Scalar subqueries are evaluated after grouping; their outer
    *         references are validated against grouping columns before reading the
    *         aggregate input.
    */
-  public static AggregatePlan plan(SqlParser.Select select) {
+  public static AggregatePlan plan(SqlParser.Select select, Schema inputSchema) {
     List<Expression> expressions = select.expressions();
     if (expressions.isEmpty()) {
       return null;
@@ -507,7 +551,7 @@ public final class AggregateFunctions {
     boolean containsAggregate = expressions.stream().anyMatch(expr -> !aggregateFunctions(expr).isEmpty())
         || !aggregateFunctions(select.having()).isEmpty()
         || select.orderBy().stream().anyMatch(key -> !aggregateFunctions(key.expression()).isEmpty());
-    Map<String, Expression> groupByAliases = aliasLookup(select);
+    AliasContext groupByAliases = aliasContext(select, inputSchema);
     List<GroupExpression> groupExpressions = buildGroupExpressions(resolveGroupByAliases(select, groupByAliases));
     final Map<String, Integer> groupIndexByText = groupIndexLookup(groupExpressions);
     List<GroupingSet> groupingSets = buildGroupingSets(select.groupingSets(), groupExpressions.size(),
@@ -883,11 +927,11 @@ public final class AggregateFunctions {
    *          expressions present in the GROUP BY clause used for structural
    *          matching
    * @param groupByAliases
-   *          lookup of select-list aliases to grouping expressions
+   *          resolution context for select-list alias references
    * @return immutable list of grouping expression indexes
    */
   private static List<Integer> groupingArgumentIndexes(Function func, Map<String, Integer> groupIndexByText,
-      List<GroupExpression> groupExpressions, Map<String, Expression> groupByAliases) {
+      List<GroupExpression> groupExpressions, AliasContext groupByAliases) {
     ExpressionList<?> parameters = func.getParameters();
     if (parameters == null || parameters.isEmpty()) {
       throw new IllegalArgumentException("GROUPING function requires at least one argument");
@@ -953,6 +997,32 @@ public final class AggregateFunctions {
   }
 
   private static List<Function> aggregateFunctions(Expression expression) {
+    return functionsMatching(expression, function -> AggregateType.from(function.getName()) != null);
+  }
+
+  /**
+   * Collects the GROUPING() invocations within an expression without entering
+   * nested query scopes.
+   *
+   * @param expression
+   *          expression to inspect, may be {@code null}
+   * @return immutable list of GROUPING() functions in visitation order
+   */
+  private static List<Function> groupingFunctions(Expression expression) {
+    return functionsMatching(expression, AggregateFunctions::isGroupingFunction);
+  }
+
+  /**
+   * Collects the function invocations matching the supplied predicate without
+   * entering nested query scopes.
+   *
+   * @param expression
+   *          expression to inspect, may be {@code null}
+   * @param match
+   *          predicate selecting the functions to collect
+   * @return immutable list of matching functions in visitation order
+   */
+  private static List<Function> functionsMatching(Expression expression, Predicate<Function> match) {
     if (expression == null) {
       return List.of();
     }
@@ -960,7 +1030,7 @@ public final class AggregateFunctions {
     expression.accept(new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(Function function, S context) {
-        if (AggregateType.from(function.getName()) != null) {
+        if (match.test(function)) {
           functions.add(function);
         }
         return super.visit(function, context);
@@ -968,14 +1038,14 @@ public final class AggregateFunctions {
 
       @Override
       public <S> Void visit(ParenthesedSelect select, S context) {
-        // Aggregates inside subqueries are evaluated independently and should
+        // Functions inside subqueries are evaluated independently and should
         // not be registered in the outer aggregate plan.
         return null;
       }
 
       @Override
       public <S> Void visit(Select select, S context) {
-        // Aggregates inside subqueries are evaluated independently and should
+        // Functions inside subqueries are evaluated independently and should
         // not be registered in the outer aggregate plan.
         return null;
       }
@@ -1268,29 +1338,38 @@ public final class AggregateFunctions {
   }
 
   /**
-   * Builds a lookup of select-list aliases that may be referenced from the GROUP
-   * BY clause.
+   * Builds the resolution context for select-list aliases referenced from the
+   * GROUP BY clause or GROUPING() arguments.
    *
    * <p>
-   * Aliases of aggregate or GROUPING() expressions are excluded since those
-   * cannot serve as grouping expressions. This mirrors the alias handling already
-   * provided for ORDER BY: when a GROUP BY item is an unqualified column name
-   * matching a select-list alias, it resolves to the aliased expression rather
-   * than to a table column of the same name.
+   * Aliases of expressions containing aggregates or GROUPING() invocations are
+   * excluded since those cannot serve as grouping expressions. An alias shared by
+   * more than one distinct select expression is recorded as ambiguous.
    * </p>
    *
    * @param select
    *          parsed SELECT statement providing projection labels and expressions
-   * @return immutable lookup from normalized alias to select expression; empty
-   *         when no resolvable aliases exist
+   * @param inputSchema
+   *          schema of the records the query reads, or {@code null} when unknown
+   * @return immutable resolution context; empty when no resolvable aliases exist
    */
-  private static Map<String, Expression> aliasLookup(SqlParser.Select select) {
+  private static AliasContext aliasContext(SqlParser.Select select, Schema inputSchema) {
+    Set<String> availableColumns = new HashSet<>();
+    if (inputSchema != null) {
+      for (Schema.Field field : inputSchema.getFields()) {
+        String key = Identifier.lookupKey(field.name());
+        if (key != null) {
+          availableColumns.add(key);
+        }
+      }
+    }
     List<Expression> expressions = select.expressions();
     List<String> labels = select.labels();
     if (expressions.isEmpty() || labels == null || labels.isEmpty()) {
-      return Map.of();
+      return new AliasContext(null, null, availableColumns);
     }
-    Map<String, Expression> lookup = new HashMap<>();
+    Map<String, Expression> targets = new HashMap<>();
+    Set<String> ambiguous = new LinkedHashSet<>();
     int size = Math.min(expressions.size(), labels.size());
     for (int i = 0; i < size; i++) {
       Expression expression = expressions.get(i);
@@ -1302,11 +1381,15 @@ public final class AggregateFunctions {
         continue;
       }
       String key = Identifier.lookupKey(label);
-      if (key != null) {
-        lookup.putIfAbsent(key, expression);
+      if (key == null) {
+        continue;
+      }
+      Expression existing = targets.putIfAbsent(key, expression);
+      if (existing != null && !existing.equals(expression)) {
+        ambiguous.add(key);
       }
     }
-    return lookup;
+    return new AliasContext(targets, ambiguous, availableColumns);
   }
 
   /**
@@ -1315,18 +1398,11 @@ public final class AggregateFunctions {
    *
    * @param expression
    *          select expression to inspect
-   * @return {@code true} when the expression contains no aggregate or GROUPING()
-   *         invocation
+   * @return {@code true} when the expression contains no aggregate and no
+   *         GROUPING() invocation
    */
   private static boolean resolvableAliasTarget(Expression expression) {
-    if (expression == null) {
-      return false;
-    }
-    if (expression instanceof Function function) {
-      return !isGroupingFunction(function) && AggregateType.from(function.getName()) == null
-          && aggregateFunctions(expression).isEmpty();
-    }
-    return aggregateFunctions(expression).isEmpty();
+    return expression != null && aggregateFunctions(expression).isEmpty() && groupingFunctions(expression).isEmpty();
   }
 
   /**
@@ -1335,19 +1411,19 @@ public final class AggregateFunctions {
    *
    * @param select
    *          parsed SELECT statement providing the GROUP BY expressions
-   * @param aliasLookup
-   *          lookup of select-list aliases to expressions
+   * @param aliasContext
+   *          resolution context for select-list alias references
    * @return GROUP BY expressions with alias references replaced by their select
    *         expression; the original list when nothing resolves
    */
-  private static List<Expression> resolveGroupByAliases(SqlParser.Select select, Map<String, Expression> aliasLookup) {
+  private static List<Expression> resolveGroupByAliases(SqlParser.Select select, AliasContext aliasContext) {
     List<Expression> groupBy = select.groupByExpressions();
-    if (groupBy == null || groupBy.isEmpty() || aliasLookup.isEmpty()) {
+    if (groupBy == null || groupBy.isEmpty() || aliasContext.targets().isEmpty()) {
       return groupBy == null ? List.of() : groupBy;
     }
     List<Expression> resolved = new ArrayList<>(groupBy.size());
     for (Expression expression : groupBy) {
-      resolved.add(resolveAliasReference(expression, aliasLookup));
+      resolved.add(resolveAliasReference(expression, aliasContext));
     }
     return resolved;
   }
@@ -1356,24 +1432,47 @@ public final class AggregateFunctions {
    * Resolves an unqualified column reference to the select expression carrying
    * the matching alias.
    *
+   * <p>
+   * Input columns take precedence over select-list aliases, matching the SQL
+   * standard and PostgreSQL: a name that matches a column of the input schema
+   * keeps its column meaning. A name shared by several aliases is rejected as an
+   * ambiguous reference with SQLState 42702.
+   * </p>
+   *
    * @param expression
    *          GROUP BY or GROUPING() argument to resolve
-   * @param aliasLookup
-   *          lookup of select-list aliases to expressions
+   * @param aliasContext
+   *          resolution context for select-list alias references
    * @return the aliased select expression, or the original expression when it is
-   *         qualified or matches no alias
+   *         qualified, names an input column, or matches no alias
+   * @throws IllegalArgumentException
+   *           wrapping an ambiguous-column SQLException with SQLState 42702 when
+   *           the name matches more than one select-list alias
    */
-  private static Expression resolveAliasReference(Expression expression, Map<String, Expression> aliasLookup) {
-    if (!(expression instanceof Column column)
-        || column.getTable() != null && column.getTable().getName() != null && !column.getTable().getName().isBlank()) {
+  private static Expression resolveAliasReference(Expression expression, AliasContext aliasContext) {
+    if (!(expression instanceof Column column) || isQualified(column)) {
       return expression;
     }
     String key = Identifier.lookupKey(column.getColumnName());
-    if (key == null) {
+    if (key == null || aliasContext.availableColumns().contains(key)) {
       return expression;
     }
-    Expression target = aliasLookup.get(key);
+    if (aliasContext.ambiguous().contains(key)) {
+      throw SqlExceptions.ambiguousColumn(column.toString());
+    }
+    Expression target = aliasContext.targets().get(key);
     return target == null ? expression : target;
+  }
+
+  /**
+   * Determines whether a column reference carries a table qualifier.
+   *
+   * @param column
+   *          column to inspect
+   * @return {@code true} when the column names a table or alias qualifier
+   */
+  private static boolean isQualified(Column column) {
+    return column.getTable() != null && column.getTable().getName() != null && !column.getTable().getName().isBlank();
   }
 
   private static List<Expression> parameters(Function func) {

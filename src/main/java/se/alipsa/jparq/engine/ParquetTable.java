@@ -244,6 +244,11 @@ public final class ParquetTable {
     }
 
     @Override
+    public Schema schema() {
+      return shards.isEmpty() ? null : shards.getFirst().schema();
+    }
+
+    @Override
     public GenericRecord read() throws IOException {
       readLock.lock();
       try {

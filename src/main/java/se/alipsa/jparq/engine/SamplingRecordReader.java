@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.SplittableRandom;
 import java.util.concurrent.ThreadLocalRandom;
+import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.SqlParser.TableSampleDefinition;
 import se.alipsa.jparq.engine.SqlParser.TableSampleDefinition.SampleMethod;
@@ -95,6 +96,14 @@ public final class SamplingRecordReader implements RecordReader {
     long interval = bernoulli ? 0L : computeSystemInterval(definition.value());
     long offset = (!bernoulli && interval > 1) ? random.nextLong(interval) : 0L;
     return new SamplingRecordReader(reader, definition, random, probability, interval, offset, null);
+  }
+
+  @Override
+  public Schema schema() {
+    if (delegate != null) {
+      return delegate.schema();
+    }
+    return bufferedRows == null || bufferedRows.isEmpty() ? null : bufferedRows.getFirst().getSchema();
   }
 
   @Override

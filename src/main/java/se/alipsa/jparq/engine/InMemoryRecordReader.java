@@ -17,6 +17,7 @@ import se.alipsa.jparq.helper.JParqUtil;
 public final class InMemoryRecordReader implements RecordReader, ColumnMappingProvider {
 
   private final List<GenericRecord> records;
+  private final Schema schema;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
   private int index;
@@ -50,6 +51,7 @@ public final class InMemoryRecordReader implements RecordReader, ColumnMappingPr
     if (effectiveSchema == null && !records.isEmpty() && records.get(0) != null) {
       effectiveSchema = records.get(0).getSchema();
     }
+    this.schema = effectiveSchema;
     Map<String, String> columnMap = buildColumnMapping(effectiveSchema);
     unqualifiedColumnMapping = columnMap.isEmpty() ? Map.of() : Map.copyOf(columnMap);
 
@@ -59,6 +61,11 @@ public final class InMemoryRecordReader implements RecordReader, ColumnMappingPr
     } else {
       qualifierColumnMapping = Map.of();
     }
+  }
+
+  @Override
+  public Schema schema() {
+    return schema;
   }
 
   @Override
