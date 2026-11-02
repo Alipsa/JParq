@@ -760,16 +760,38 @@ public final class SqlParser {
   private static Query parseSelectStatement(net.sf.jsqlparser.statement.select.Select stmt,
       List<CommonTableExpression> ctes, Map<Identifier, CommonTableExpression> cteLookup,
       boolean allowQualifiedWildcards) {
+    return parseSelectStatement(stmt, ctes, cteLookup, allowQualifiedWildcards, false);
+  }
+
+  /**
+   * Enters a SELECT's WITH scope before parsing its body or unwrapping it.
+   *
+   * @param stmt
+   *          parsed SELECT
+   * @param ctes
+   *          inherited CTE declarations
+   * @param cteLookup
+   *          inherited declarations indexed by name
+   * @param allowQualifiedWildcards
+   *          whether qualified wildcards may remain unresolved
+   * @param lateralScope
+   *          whether the body belongs to a LATERAL input whose outer correlations
+   *          are bound after rewriting
+   * @return parsed query with local declarations taking precedence
+   */
+  private static Query parseSelectStatement(net.sf.jsqlparser.statement.select.Select stmt,
+      List<CommonTableExpression> ctes, Map<Identifier, CommonTableExpression> cteLookup,
+      boolean allowQualifiedWildcards, boolean lateralScope) {
     List<CommonTableExpression> declared = parseWithItems(stmt.getWithItemsList(), allowQualifiedWildcards);
     if (declared.isEmpty()) {
-      return parseSelectBody(stmt, ctes, cteLookup, allowQualifiedWildcards);
+      return parseSelectBody(stmt, ctes, cteLookup, allowQualifiedWildcards, lateralScope);
     }
     Map<Identifier, CommonTableExpression> localNames = buildCteLookup(declared);
     List<CommonTableExpression> scoped = new ArrayList<>();
     ctes.stream().filter(cte -> cte.name().resolve(localNames) == null).forEach(scoped::add);
     scoped.addAll(declared);
     List<CommonTableExpression> visible = List.copyOf(scoped);
-    return parseSelectBody(stmt, visible, buildCteLookup(visible), allowQualifiedWildcards);
+    return parseSelectBody(stmt, visible, buildCteLookup(visible), allowQualifiedWildcards, lateralScope);
   }
 
   /**
@@ -783,18 +805,21 @@ public final class SqlParser {
    *          visible declarations indexed by identifier
    * @param allowQualifiedWildcards
    *          whether qualified wildcards may remain in the result
+   * @param lateralScope
+   *          whether the body belongs to a LATERAL input whose outer correlations
+   *          are bound after rewriting
    * @return parsed query plan
    */
   private static Query parseSelectBody(net.sf.jsqlparser.statement.select.Select stmt, List<CommonTableExpression> ctes,
-      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
+      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateralScope) {
     if (stmt instanceof ParenthesedSelect parenthesed) {
-      return parseSelectStatement(parenthesed.getSelect(), ctes, cteLookup, allowQualifiedWildcards);
+      return parseSelectStatement(parenthesed.getSelect(), ctes, cteLookup, allowQualifiedWildcards, lateralScope);
     }
     if (stmt instanceof SetOperationList setList) {
-      return parseSetOperationList(setList, ctes, cteLookup, allowQualifiedWildcards);
+      return parseSetOperationList(setList, ctes, cteLookup, allowQualifiedWildcards, lateralScope);
     }
     if (stmt instanceof PlainSelect plain) {
-      return parsePlainSelect(plain, ctes, cteLookup, allowQualifiedWildcards);
+      return parsePlainSelect(plain, ctes, cteLookup, allowQualifiedWildcards, lateralScope);
     }
     if (stmt instanceof Values values) {
       return parseValuesSelect(values, ctes, cteLookup, allowQualifiedWildcards);
@@ -1050,7 +1075,7 @@ public final class SqlParser {
   }
 
   private static Select parsePlainSelect(PlainSelect ps, List<CommonTableExpression> ctes,
-      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
+      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateralScope) {
     if (ps.getFromItem() == null) {
       validateTableFreeSelect(ps, false);
     }
@@ -1116,6 +1141,12 @@ public final class SqlParser {
     List<QualifiedWildcard> wildcardCopy = List.copyOf(projection.qualifiedWildcards());
 
     GroupByInfo groupByInfo = parseGroupBy(ps.getGroupBy(), tableRefs);
+    if (!lateralScope) {
+      // JOIN conditions are validated separately when the reader is built; only
+      // the plain WHERE references belong to this scope check.
+      validateQualifierVisibility(tableRefs, expressionCopy, whereExpr, combinedHaving, groupByInfo.expressions(),
+          orderCopy);
+    }
 
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
         offset, orderCopy, distinct, false, List.of(), expressionCopy, expressionOrderCopy, wildcardCopy,
@@ -1255,10 +1286,13 @@ public final class SqlParser {
    *
    * @param list
    *          parsed set operation list produced by JSqlParser
+   * @param lateralScope
+   *          whether the components belong to a LATERAL input whose outer
+   *          correlations are bound after rewriting
    * @return a normalized {@link SetQuery} describing the components and modifiers
    */
   private static SetQuery parseSetOperationList(SetOperationList list, List<CommonTableExpression> ctes,
-      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards) {
+      Map<Identifier, CommonTableExpression> cteLookup, boolean allowQualifiedWildcards, boolean lateralScope) {
     List<net.sf.jsqlparser.statement.select.Select> selects = list.getSelects();
     List<SetOperation> operations = list.getOperations();
     if (selects == null || selects.isEmpty()) {
@@ -1267,7 +1301,7 @@ public final class SqlParser {
     List<SetComponent> components = new ArrayList<>();
     for (int i = 0; i < selects.size(); i++) {
       net.sf.jsqlparser.statement.select.Select body = selects.get(i);
-      Query component = parseSelectStatement(body, ctes, cteLookup, allowQualifiedWildcards);
+      Query component = parseSelectStatement(body, ctes, cteLookup, allowQualifiedWildcards, lateralScope);
       SetOperator operator = SetOperator.FIRST;
       if (i > 0) {
         SetOperation op = operations.get(i - 1);
@@ -1603,7 +1637,7 @@ public final class SqlParser {
     if (lateral && body instanceof PlainSelect plain && plain.getFromItem() == null) {
       validateTableFreeSelect(plain, true);
     }
-    Query query = parseSelectStatement(body, ctes, cteLookup, allowQualifiedWildcards);
+    Query query = parseSelectStatement(body, ctes, cteLookup, allowQualifiedWildcards, lateral);
     // Set queries execute through their SQL just like plain derived queries.
     // Keep the optional plain plan only for source-column schema inference.
     Select innerSelect = query instanceof Select select ? select : null;
@@ -3196,17 +3230,105 @@ public final class SqlParser {
     return List.copyOf(names);
   }
 
+  /**
+   * Rejects qualified references whose qualifier does not name a visible range
+   * variable in the current scope. Visibility follows the same rules as JOIN
+   * qualifier validation: an alias hides the table name, while unaliased
+   * parenthesized join groups expose their inputs. Quoted lowercase qualifiers
+   * keep the shared unquoted fallback used by column resolution. Correlated
+   * references are rewritten to binding placeholders before a subquery is parsed,
+   * so only genuinely unknown qualifiers reach this check.
+   *
+   * @param tableRefs
+   *          inputs visible in the current query scope
+   * @param expressions
+   *          SELECT list expressions
+   * @param where
+   *          WHERE expression, or null
+   * @param having
+   *          HAVING expression, or null
+   * @param groupBy
+   *          GROUP BY expressions
+   * @param orderBy
+   *          ORDER BY keys
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 if a qualifier is not visible
+   */
+  private static void validateQualifierVisibility(List<TableReference> tableRefs, List<Expression> expressions,
+      Expression where, Expression having, List<Expression> groupBy, List<OrderKey> orderBy) {
+    Set<String> visible = new LinkedHashSet<>();
+    for (String qualifier : visibleQualifiers(tableRefs)) {
+      String key = JParqUtil.normalizeQualifier(qualifier);
+      if (key != null && !key.isEmpty()) {
+        visible.add(key);
+      }
+    }
+    List<Expression> scoped = new ArrayList<>(expressions);
+    scoped.add(where);
+    scoped.add(having);
+    scoped.addAll(groupBy);
+    for (Expression expression : scoped) {
+      for (Column column : ColumnsUsed.referencesInScope(expression)) {
+        requireVisibleQualifier(column.getTable() == null ? null : column.getTable().getName(), column.getColumnName(),
+            visible);
+      }
+    }
+    for (OrderKey order : orderBy) {
+      if (order.expression() != null) {
+        for (Column column : ColumnsUsed.referencesInScope(order.expression())) {
+          requireVisibleQualifier(column.getTable() == null ? null : column.getTable().getName(),
+              column.getColumnName(), visible);
+        }
+      } else {
+        requireVisibleQualifier(order.qualifier(), order.column(), visible);
+      }
+    }
+  }
+
+  /**
+   * Ensures a qualified reference names a table or alias visible in the current
+   * scope.
+   *
+   * @param qualifier
+   *          optional table qualifier from the SQL statement
+   * @param column
+   *          SQL column identifier
+   * @param visible
+   *          normalized qualifiers visible in the current scope
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 when the qualifier is unknown
+   */
+  private static void requireVisibleQualifier(String qualifier, String column, Set<String> visible) {
+    if (qualifier == null || qualifier.isBlank()) {
+      return;
+    }
+    String key = JParqUtil.normalizeQualifier(qualifier);
+    String alternative = ColumnMappingUtil.alternativeColumnKey(key);
+    if (key != null && (visible.contains(key) || alternative != null && visible.contains(alternative))) {
+      return;
+    }
+    throw SqlExceptions.syntaxFailure("Unknown table qualifier '" + qualifier + "' for column '" + column + "'");
+  }
+
+  /**
+   * Lists the qualifiers visible for single-table qualifier normalization: the
+   * alias when declared, otherwise the table name. An alias hides the table name,
+   * matching the visibility rules used for JOIN qualifiers.
+   *
+   * @param tableRefs
+   *          inputs in the current query scope
+   * @return visible qualifier names in declaration order
+   */
   private static List<String> qualifiers(List<TableReference> tableRefs) {
     if (tableRefs == null || tableRefs.isEmpty()) {
       return List.of();
     }
     List<String> qualifiers = new ArrayList<>();
     for (TableReference ref : tableRefs) {
-      if (ref.tableName() != null && !ref.tableName().isBlank()) {
-        qualifiers.add(ref.tableName());
-      }
       if (ref.tableAlias() != null && !ref.tableAlias().isBlank()) {
         qualifiers.add(ref.tableAlias());
+      } else if (ref.tableName() != null && !ref.tableName().isBlank()) {
+        qualifiers.add(ref.tableName());
       }
     }
     return qualifiers;
