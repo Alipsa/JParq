@@ -142,9 +142,12 @@ public final class AggregateFunctions {
    *          expressions that participate in the GROUP BY clause
    * @param groupingSets
    *          grouping sets derived from the GROUP BY clause
+   * @param groupByAliases
+   *          lookup of select-list aliases to the underlying expressions, used to
+   *          resolve GROUP BY and GROUPING() alias references
    */
   public record AggregatePlan(List<AggregateSpec> specs, List<ResultColumn> resultColumns,
-      List<GroupExpression> groupExpressions, List<GroupingSet> groupingSets) {
+      List<GroupExpression> groupExpressions, List<GroupingSet> groupingSets, Map<String, Expression> groupByAliases) {
     /**
      * Canonical constructor validating the provided collections.
      *
@@ -158,6 +161,8 @@ public final class AggregateFunctions {
      *          expressions that participate in the GROUP BY clause
      * @param groupingSets
      *          grouping sets derived from the GROUP BY clause
+     * @param groupByAliases
+     *          lookup of select-list aliases to the underlying expressions
      */
     public AggregatePlan {
       Objects.requireNonNull(specs, "specs");
@@ -168,6 +173,7 @@ public final class AggregateFunctions {
       resultColumns = List.copyOf(resultColumns);
       groupExpressions = List.copyOf(groupExpressions);
       groupingSets = List.copyOf(groupingSets);
+      groupByAliases = groupByAliases == null ? Map.of() : Map.copyOf(groupByAliases);
     }
 
     /**
@@ -485,9 +491,12 @@ public final class AggregateFunctions {
    *         validates SELECT expressions against the GROUP BY clause using
    *         structural expression comparison so that functionally equivalent
    *         constructs (for example {@code COALESCE} invocations) are accepted
-   *         even when they are formatted differently. Scalar subqueries are
-   *         evaluated after grouping; their outer references are validated
-   *         against grouping columns before reading the aggregate input.
+   *         even when they are formatted differently. A GROUP BY item that is an
+   *         unqualified column name matching a select-list alias resolves to the
+   *         aliased expression, mirroring the alias handling provided for ORDER
+   *         BY. Scalar subqueries are evaluated after grouping; their outer
+   *         references are validated against grouping columns before reading the
+   *         aggregate input.
    */
   public static AggregatePlan plan(SqlParser.Select select) {
     List<Expression> expressions = select.expressions();
@@ -498,7 +507,8 @@ public final class AggregateFunctions {
     boolean containsAggregate = expressions.stream().anyMatch(expr -> !aggregateFunctions(expr).isEmpty())
         || !aggregateFunctions(select.having()).isEmpty()
         || select.orderBy().stream().anyMatch(key -> !aggregateFunctions(key.expression()).isEmpty());
-    List<GroupExpression> groupExpressions = buildGroupExpressions(select.groupByExpressions());
+    Map<String, Expression> groupByAliases = aliasLookup(select);
+    List<GroupExpression> groupExpressions = buildGroupExpressions(resolveGroupByAliases(select, groupByAliases));
     final Map<String, Integer> groupIndexByText = groupIndexLookup(groupExpressions);
     List<GroupingSet> groupingSets = buildGroupingSets(select.groupingSets(), groupExpressions.size(),
         containsAggregate);
@@ -530,7 +540,8 @@ public final class AggregateFunctions {
           continue;
         }
         if (isGroupingFunction(func)) {
-          List<Integer> groupingIndexes = groupingArgumentIndexes(func, groupIndexByText, groupExpressions);
+          List<Integer> groupingIndexes = groupingArgumentIndexes(func, groupIndexByText, groupExpressions,
+              groupByAliases);
           resultColumns
               .add(new ResultColumn(label, ColumnKind.GROUPING, -1, -1, groupingIndexes, func.toString(), null));
           continue;
@@ -573,7 +584,7 @@ public final class AggregateFunctions {
       }
     }
 
-    return new AggregatePlan(specs, resultColumns, groupExpressions, groupingSets);
+    return new AggregatePlan(specs, resultColumns, groupExpressions, groupingSets, groupByAliases);
   }
 
   /**
@@ -871,10 +882,12 @@ public final class AggregateFunctions {
    * @param groupExpressions
    *          expressions present in the GROUP BY clause used for structural
    *          matching
+   * @param groupByAliases
+   *          lookup of select-list aliases to grouping expressions
    * @return immutable list of grouping expression indexes
    */
   private static List<Integer> groupingArgumentIndexes(Function func, Map<String, Integer> groupIndexByText,
-      List<GroupExpression> groupExpressions) {
+      List<GroupExpression> groupExpressions, Map<String, Expression> groupByAliases) {
     ExpressionList<?> parameters = func.getParameters();
     if (parameters == null || parameters.isEmpty()) {
       throw new IllegalArgumentException("GROUPING function requires at least one argument");
@@ -882,6 +895,12 @@ public final class AggregateFunctions {
     List<Integer> indexes = new ArrayList<>(parameters.size());
     for (Expression argument : parameters) {
       Integer match = findGroupIndex(argument, groupIndexByText, groupExpressions);
+      if (match == null) {
+        Expression resolved = resolveAliasReference(argument, groupByAliases);
+        if (resolved != argument) {
+          match = findGroupIndex(resolved, groupIndexByText, groupExpressions);
+        }
+      }
       if (match == null) {
         throw new IllegalArgumentException("GROUPING argument '" + argument + "' must appear in the GROUP BY clause");
       }
@@ -1246,6 +1265,115 @@ public final class AggregateFunctions {
       groups.add(new GroupExpression(expr, label));
     }
     return groups;
+  }
+
+  /**
+   * Builds a lookup of select-list aliases that may be referenced from the GROUP
+   * BY clause.
+   *
+   * <p>
+   * Aliases of aggregate or GROUPING() expressions are excluded since those
+   * cannot serve as grouping expressions. This mirrors the alias handling already
+   * provided for ORDER BY: when a GROUP BY item is an unqualified column name
+   * matching a select-list alias, it resolves to the aliased expression rather
+   * than to a table column of the same name.
+   * </p>
+   *
+   * @param select
+   *          parsed SELECT statement providing projection labels and expressions
+   * @return immutable lookup from normalized alias to select expression; empty
+   *         when no resolvable aliases exist
+   */
+  private static Map<String, Expression> aliasLookup(SqlParser.Select select) {
+    List<Expression> expressions = select.expressions();
+    List<String> labels = select.labels();
+    if (expressions.isEmpty() || labels == null || labels.isEmpty()) {
+      return Map.of();
+    }
+    Map<String, Expression> lookup = new HashMap<>();
+    int size = Math.min(expressions.size(), labels.size());
+    for (int i = 0; i < size; i++) {
+      Expression expression = expressions.get(i);
+      if (!resolvableAliasTarget(expression)) {
+        continue;
+      }
+      String label = labels.get(i);
+      if (label == null || label.isBlank()) {
+        continue;
+      }
+      String key = Identifier.lookupKey(label);
+      if (key != null) {
+        lookup.putIfAbsent(key, expression);
+      }
+    }
+    return lookup;
+  }
+
+  /**
+   * Determines whether a select expression may serve as the target of a GROUP BY
+   * alias reference.
+   *
+   * @param expression
+   *          select expression to inspect
+   * @return {@code true} when the expression contains no aggregate or GROUPING()
+   *         invocation
+   */
+  private static boolean resolvableAliasTarget(Expression expression) {
+    if (expression == null) {
+      return false;
+    }
+    if (expression instanceof Function function) {
+      return !isGroupingFunction(function) && AggregateType.from(function.getName()) == null
+          && aggregateFunctions(expression).isEmpty();
+    }
+    return aggregateFunctions(expression).isEmpty();
+  }
+
+  /**
+   * Resolves GROUP BY items that reference a select-list alias to the aliased
+   * expression.
+   *
+   * @param select
+   *          parsed SELECT statement providing the GROUP BY expressions
+   * @param aliasLookup
+   *          lookup of select-list aliases to expressions
+   * @return GROUP BY expressions with alias references replaced by their select
+   *         expression; the original list when nothing resolves
+   */
+  private static List<Expression> resolveGroupByAliases(SqlParser.Select select, Map<String, Expression> aliasLookup) {
+    List<Expression> groupBy = select.groupByExpressions();
+    if (groupBy == null || groupBy.isEmpty() || aliasLookup.isEmpty()) {
+      return groupBy == null ? List.of() : groupBy;
+    }
+    List<Expression> resolved = new ArrayList<>(groupBy.size());
+    for (Expression expression : groupBy) {
+      resolved.add(resolveAliasReference(expression, aliasLookup));
+    }
+    return resolved;
+  }
+
+  /**
+   * Resolves an unqualified column reference to the select expression carrying
+   * the matching alias.
+   *
+   * @param expression
+   *          GROUP BY or GROUPING() argument to resolve
+   * @param aliasLookup
+   *          lookup of select-list aliases to expressions
+   * @return the aliased select expression, or the original expression when it is
+   *         qualified or matches no alias
+   */
+  private static Expression resolveAliasReference(Expression expression, Map<String, Expression> aliasLookup) {
+    if (!(expression instanceof Column column)
+        || column.getTable() != null && column.getTable().getName() != null && !column.getTable().getName().isBlank()) {
+      return expression;
+    }
+    String key = Identifier.lookupKey(column.getColumnName());
+    if (key == null) {
+      return expression;
+    }
+    Expression target = aliasLookup.get(key);
+    return target == null ? expression : target;
   }
 
   private static List<Expression> parameters(Function func) {
@@ -2872,7 +3000,8 @@ public final class AggregateFunctions {
     }
 
     private Object grouping(Function func) {
-      List<Integer> indexes = groupingArgumentIndexes(func, groupIndexLookup, plan.groupExpressions());
+      List<Integer> indexes = groupingArgumentIndexes(func, groupIndexLookup, plan.groupExpressions(),
+          plan.groupByAliases());
       return groupingValue(plan, groupingSetIndex, indexes);
     }
 

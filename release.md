@@ -2,6 +2,12 @@
 
 ### 1.4.0
 
+- Support GROUP BY on a select-list alias, for example
+  `SELECT d.department AS dep, COUNT(*) FROM employee_department ed JOIN departments d ON ed.department = d.id GROUP BY dep`,
+  including aliases of computed expressions, case-insensitive matching, and alias arguments to GROUPING() (#262).
+  An unqualified GROUP BY name that matches a select-list alias resolves to the aliased expression, consistent
+  with ORDER BY alias handling; aliases of aggregate expressions cannot serve as grouping expressions. Both the
+  single-table and join paths already reject ungrouped columns with SQLState `42000`.
 - Return temporal differences and interval literals as immutable `TemporalInterval` values through JDBC
   `getObject()`, including typed getters. Report JDBC OTHER with type name INTERVAL and the interval Java class.
   `getString()` and explicit character casts use the result column's common field range and maximum
