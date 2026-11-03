@@ -82,7 +82,7 @@ final class RelationQualifierValidation {
     }
     query.getSelectItems().forEach(item -> {
       if (item.getExpression() instanceof AllTableColumns) {
-        SqlParser.requireVisibleQualifier(SqlParser.wildcardQualifierTokens(item), "*", visible);
+        requireVisibleQualifier(SqlParser.wildcardQualifierTokens(item), "*", visible);
       } else {
         visitExpression(item.getExpression(), visible);
       }
@@ -166,7 +166,7 @@ final class RelationQualifierValidation {
       @Override
       public <S> Void visit(Column column, S context) {
         RelationQualifiers.restore(column);
-        SqlParser.requireVisibleQualifier(RelationQualifiers.qualifier(column), column.getColumnName(), visible);
+        requireVisibleQualifier(RelationQualifiers.qualifier(column), column.getColumnName(), visible);
         return null;
       }
 
@@ -190,6 +190,27 @@ final class RelationQualifierValidation {
         return null;
       }
     });
+  }
+  /**
+   * Ensures a qualified reference names a table or alias visible in the current
+   * scope.
+   *
+   * @param qualifier
+   *          optional complete table qualifier from the SQL statement
+   * @param column
+   *          SQL column identifier
+   * @param visible
+   *          relation names visible in the current scope, with identifier quoting
+   *          preserved
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 when the qualifier is unknown
+   */
+  private static void requireVisibleQualifier(String qualifier, String column, List<String> visible) {
+    if (qualifier == null || qualifier.isBlank()
+        || visible.stream().anyMatch(name -> RelationQualifiers.matches(qualifier, name))) {
+      return;
+    }
+    throw SqlExceptions.syntaxFailure("Unknown table qualifier '" + qualifier + "' for column '" + column + "'");
   }
 
 }

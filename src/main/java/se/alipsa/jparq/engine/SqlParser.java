@@ -1112,23 +1112,6 @@ public final class SqlParser {
     List<QualifiedWildcard> wildcardCopy = List.copyOf(projection.qualifiedWildcards());
 
     GroupByInfo groupByInfo = parseGroupBy(ps.getGroupBy(), tableRefs);
-    if (!lateralScope) {
-      // JOIN conditions are validated separately when the reader is built; only
-      // the plain WHERE references belong to this scope check.
-      List<Expression> scoped = new ArrayList<>(expressionCopy);
-      scoped.add(whereExpr);
-      scoped.add(combinedHaving);
-      scoped.addAll(groupByInfo.expressions());
-      addDistinctOnExpressions(ps, scoped);
-      addWindowExpressions(ps, scoped);
-      scoped.add(ps.getQualify());
-      for (OrderKey order : orderCopy) {
-        if (order.expression() != null) {
-          scoped.add(order.expression());
-        }
-      }
-      validateQualifierVisibility(tableRefs, scoped, orderCopy, wildcardCopy);
-    }
 
     return new Select(labelsCopy, physicalCopy, fromInfo.tableName(), fromInfo.tableAlias(), combinedWhere, limit,
         offset, orderCopy, distinct, false, List.of(), expressionCopy, expressionOrderCopy, wildcardCopy,
@@ -1145,8 +1128,7 @@ public final class SqlParser {
    * @param lateral
    *          whether this SELECT is a LATERAL input awaiting outer binding
    * @throws IllegalArgumentException
-   *           if a column or projection wildcard requires an input; unknown
-   *           qualifiers carry SQLState 42000
+   *           if a column or projection wildcard requires an input
    */
   private static void validateTableFreeSelect(PlainSelect select, boolean lateral) {
     final var validator = new ExpressionVisitorAdapter<Void>() {
@@ -1159,7 +1141,6 @@ public final class SqlParser {
           throw new IllegalArgumentException("Column references in LATERAL subqueries without FROM are not supported; "
               + "add an explicit input such as FROM (VALUES (1)) v(z): " + column);
         }
-        requireVisibleQualifier(RelationQualifiers.qualifier(column), column.getColumnName(), List.of());
         throw new IllegalArgumentException("Missing column without FROM: " + column);
       }
 
@@ -3358,102 +3339,6 @@ public final class SqlParser {
       }
     }
     return List.copyOf(names);
-  }
-
-  /**
-   * Rejects qualified references whose qualifier does not name a visible range
-   * variable in the current scope. Visibility follows the same rules as JOIN
-   * qualifier validation: an alias hides the table name, while unaliased
-   * parenthesized join groups expose their inputs. Complete qualifiers are
-   * compared component by component with SQL identifier rules, so schema prefixes
-   * must match and quoted identifiers containing dots remain single components.
-   * Correlated references are rewritten to binding placeholders before a subquery
-   * is parsed, so only genuinely unknown qualifiers reach this check.
-   *
-   * @param tableRefs
-   *          inputs visible in the current query scope
-   * @param scoped
-   *          expressions evaluated in the current scope, including DISTINCT ON,
-   *          WINDOW, QUALIFY, and ORDER BY expressions
-   * @param orderBy
-   *          ORDER BY keys, whose plain column references carry the qualifier
-   *          outside the expression tree
-   * @param wildcards
-   *          qualified wildcards in the select list, with their original
-   *          identifier quoting
-   * @throws IllegalArgumentException
-   *           carrying SQLState 42000 if a qualifier is not visible
-   */
-  private static void validateQualifierVisibility(List<TableReference> tableRefs, List<Expression> scoped,
-      List<OrderKey> orderBy, List<QualifiedWildcard> wildcards) {
-    List<String> visible = visibleQualifiers(tableRefs);
-    for (Expression expression : scoped) {
-      for (Column column : ColumnsUsed.referencesInScope(expression)) {
-        requireVisibleQualifier(RelationQualifiers.qualifier(column), column.getColumnName(), visible);
-      }
-    }
-    for (OrderKey order : orderBy) {
-      if (order.expression() == null) {
-        requireVisibleQualifier(order.qualifier(), order.column(), visible);
-      }
-    }
-    for (QualifiedWildcard wildcard : wildcards) {
-      requireVisibleQualifier(wildcard.qualifierIdentifier(), "*", visible);
-    }
-  }
-
-  /**
-   * Adds DISTINCT ON expressions to the scope being validated.
-   *
-   * @param ps
-   *          parsed SELECT body
-   * @param scoped
-   *          accumulator for expressions evaluated in the current scope
-   */
-  private static void addDistinctOnExpressions(PlainSelect ps, List<Expression> scoped) {
-    if (ps.getDistinct() != null && ps.getDistinct().getOnSelectItems() != null) {
-      for (SelectItem<?> item : ps.getDistinct().getOnSelectItems()) {
-        scoped.add(item.getExpression());
-      }
-    }
-  }
-
-  /**
-   * Adds named window definition expressions to the scope being validated.
-   *
-   * @param ps
-   *          parsed SELECT body
-   * @param scoped
-   *          accumulator for expressions evaluated in the current scope
-   */
-  private static void addWindowExpressions(PlainSelect ps, List<Expression> scoped) {
-    if (ps.getWindowDefinitions() != null) {
-      for (WindowDefinition window : ps.getWindowDefinitions()) {
-        scoped.addAll(window.getAllExpressions());
-      }
-    }
-  }
-
-  /**
-   * Ensures a qualified reference names a table or alias visible in the current
-   * scope.
-   *
-   * @param qualifier
-   *          optional complete table qualifier from the SQL statement
-   * @param column
-   *          SQL column identifier
-   * @param visible
-   *          relation names visible in the current scope, with identifier quoting
-   *          preserved
-   * @throws IllegalArgumentException
-   *           carrying SQLState 42000 when the qualifier is unknown
-   */
-  static void requireVisibleQualifier(String qualifier, String column, List<String> visible) {
-    if (qualifier == null || qualifier.isBlank()
-        || visible.stream().anyMatch(name -> RelationQualifiers.matches(qualifier, name))) {
-      return;
-    }
-    throw SqlExceptions.syntaxFailure("Unknown table qualifier '" + qualifier + "' for column '" + column + "'");
   }
 
   /**
