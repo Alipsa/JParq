@@ -856,6 +856,8 @@ The following SQL statements are supported:
   - `INTERSECT ALL`
   - `EXCEPT ALL`
   - nesting of set operations
+  - Trailing `LIMIT`, `OFFSET`, and `FETCH` apply to the combined set-operation result with or without `ORDER BY`.
+    Parenthesized branches retain their own row bounds.
 - CTE (Common Table Expressions) support
 - Windowing
   - Ranking functions

@@ -1269,6 +1269,7 @@ public final class SqlParser {
     if (selects == null || selects.isEmpty()) {
       throw new IllegalArgumentException("Set operation query must contain at least one SELECT statement");
     }
+    normalizeSetRowBounds(list, selects.getLast());
     List<SetComponent> components = new ArrayList<>();
     for (int i = 0; i < selects.size(); i++) {
       net.sf.jsqlparser.statement.select.Select body = selects.get(i);
@@ -1292,6 +1293,39 @@ public final class SqlParser {
     int limit = resolveLimit(list.getLimit(), list.getFetch());
     int offset = extractOffset(list.getOffset());
     return new SetQuery(List.copyOf(components), orderBy, limit, offset, List.copyOf(ctes));
+  }
+
+  /**
+   * Moves trailing row bounds from an unparenthesized final branch to its set.
+   * JSqlParser can attach LIMIT and OFFSET to the branch when no set ORDER BY is
+   * present, even when FETCH belongs to the set. Normalize before creating
+   * component plans and SQL so branch execution cannot consume these bounds.
+   * Parentheses keep the enclosed query's bounds local to that branch. This
+   * mutates the tree owned by the current parse, after expression and
+   * relation-qualifier validation have finished; callers receive query plans
+   * rather than the original statement tree.
+   *
+   * @param list
+   *          the set operation receiving the trailing clauses
+   * @param last
+   *          the final branch without unwrapping parentheses
+   */
+  private static void normalizeSetRowBounds(SetOperationList list, net.sf.jsqlparser.statement.select.Select last) {
+    if (last instanceof ParenthesedSelect) {
+      return;
+    }
+    if (list.getLimit() == null) {
+      list.setLimit(last.getLimit());
+      last.setLimit(null);
+    }
+    if (list.getOffset() == null) {
+      list.setOffset(last.getOffset());
+      last.setOffset(null);
+    }
+    if (list.getFetch() == null) {
+      list.setFetch(last.getFetch());
+      last.setFetch(null);
+    }
   }
 
   /**
