@@ -9,7 +9,9 @@
   and ambiguity checks. Reject invalid alias counts with `42000` and describe the original UNNEST argument
   instead of generated SQL. Multirow scalar results raise SQLState `21000` (#423); invalid scalar column
   counts retain `42000`. Preserve JDBC exception subclasses in joined UNNEST errors and propagate
-  NULLIF's first-argument type during schema discovery. Broader wrapper typing remains open in #282 and #424.
+  NULLIF's first-argument type during schema discovery. Materialize independent joined arguments once,
+  preserving right-only rows in RIGHT/FULL joins; reject preceding-input correlations in those joins with `42000`.
+  Broader wrapper typing remains open in #282 and #424.
 
 - Resolve unqualified outer columns in LATERAL derived tables, with inner-input precedence and
   SQLState `42702` for ambiguous preceding columns (#286). Bind columns from CTE and derived-table inputs

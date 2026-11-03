@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine;
 
 import java.io.IOException;
 import java.sql.SQLException;
+import java.sql.SQLSyntaxErrorException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -91,7 +92,7 @@ public final class UnnestTableBuilder {
 
     SqlParser.JoinType joinType = reference.joinType();
     if (joinType == SqlParser.JoinType.RIGHT_OUTER || joinType == SqlParser.JoinType.FULL_OUTER) {
-      throw new SQLException("UNNEST does not support " + joinType + " joins");
+      throw new SQLSyntaxErrorException("Correlated UNNEST does not support " + joinType + " joins", "42000");
     }
 
     String tableName = reference.tableAlias() != null ? reference.tableAlias() : "unnest";

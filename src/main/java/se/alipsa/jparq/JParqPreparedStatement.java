@@ -2689,7 +2689,9 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Evaluates a joined UNNEST expression through the existing LATERAL binding and
-   * materialization path. Direct array columns keep their declared-schema path in
+   * materialization path. Independent arguments reuse their discovery rows as
+   * ordinary join inputs; correlated arguments cannot use RIGHT or FULL joins.
+   * Direct array columns keep their declared-schema path in
    * {@link UnnestTableBuilder}.
    *
    * @param reference
@@ -2698,7 +2700,8 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          preceding inputs supplying correlated values
    * @param qualifierIndex
    *          qualifier names mapped to preceding input indexes
-   * @return join input evaluated for the current preceding rows
+   * @return an independent join input or one evaluated for the current preceding
+   *         rows
    * @throws SQLException
    *           if argument binding or evaluation fails
    */
@@ -3142,8 +3145,8 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @param qualifierIndex
    *          mapping from normalized qualifier names to table indexes used during
    *          join evaluation
-   * @return a join table capable of evaluating the lateral subquery per
-   *         assignment
+   * @return a join table evaluated per assignment, or a materialized independent
+   *         UNNEST input
    * @throws SQLException
    *           if the lateral definition cannot be parsed or executed
    */
@@ -3159,13 +3162,17 @@ public class JParqPreparedStatement implements PreparedStatement {
     // Suppliers run after subsequent join inputs have been appended to the plan.
     // Keep correlation bound to the inputs visible at this declaration.
     List<JoinRecordReader.JoinTable> preceding = List.copyOf(priorTables);
-    Map<String, Map<String, String>> columnLookup = buildCorrelatedColumnLookup(preceding);
+    final Map<String, Map<String, String>> columnLookup = buildCorrelatedColumnLookup(preceding);
     Set<String> columns = new LinkedHashSet<>();
     preceding.forEach(table -> columns.addAll(MaterializedNames.lookupIndex(table.schema()).keySet()));
     SubqueryExecutor.LateralQuery query;
     try (var executor = new SubqueryExecutor(stmt.getConn(), sqlText -> prepareSubqueryStatement(sqlText, cteResults),
         this::subqueryTableColumns, executionPlans)) {
       query = executor.lateral(ref, collectQualifiers(preceding), columns);
+    }
+    if (ref.unnest() != null && !query.references().isEmpty()
+        && (ref.joinType() == SqlParser.JoinType.RIGHT_OUTER || ref.joinType() == SqlParser.JoinType.FULL_OUTER)) {
+      throw new SQLSyntaxErrorException("A RIGHT or FULL JOIN UNNEST cannot reference preceding inputs", "42000");
     }
     List<Schema> bindingSchemas = new ArrayList<>();
     for (var reference : query.references()) {
@@ -3186,6 +3193,13 @@ public class JParqPreparedStatement implements PreparedStatement {
       metadata = executeSubquery(query.sql(), ref, null, fieldNames, valueSchemas);
     }
     Schema schema = metadata.schema();
+    if (ref.unnest() != null && query.references().isEmpty()) {
+      // Discovery fully consumes an independent argument. Reuse its rows so
+      // outer joins can preserve right-only rows without a left assignment.
+      return new JoinRecordReader.JoinTable(tableName, ref.tableAlias(), schema,
+          applySampleToRows(ref.tableSample(), metadata.rows()), ref.joinType(), ref.joinCondition(),
+          ref.usingColumns(), null);
+    }
     JoinRecordReader.CorrelatedRowsSupplier supplier = assignments -> {
       List<Object> values = new ArrayList<>();
       for (var reference : query.references()) {

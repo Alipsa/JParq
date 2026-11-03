@@ -222,6 +222,8 @@ Joined UNNEST expressions can reference preceding inputs, including through corr
 with implicit or explicit LATERAL syntax. Subqueries use the enclosing CTEs and current parameter bindings;
 unqualified outer names must resolve uniquely. Multirow scalar results raise SQLState `21000`, while
 invalid scalar column counts and UNNEST alias counts raise `42000`.
+Independent joined UNNEST arguments are evaluated once per execution and support RIGHT and FULL joins.
+A RIGHT or FULL JOIN UNNEST argument cannot reference its preceding join inputs; such correlations raise `42000`.
 
 LATERAL derived tables may still expose numeric values as VARCHAR. In particular, LATERAL decimal
 expressions with unknown precision use VARCHAR to keep one stable schema across correlated executions.
