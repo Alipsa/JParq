@@ -1,12 +1,18 @@
 package jparq.parser;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
+import java.util.Map;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.engine.SqlParser;
 
+/**
+ * Regression coverage for native parsing of CTEs containing window functions
+ * and joins.
+ */
 class JsqlParserCteWindowBugTest {
 
   private static final String WINDOW_CTE_SQL = """
@@ -69,21 +75,43 @@ class JsqlParserCteWindowBugTest {
           ls.rn = 1;
       """;
 
+  /**
+   * Verifies that the library parses the comment-free window/CTE/join shape
+   * directly.
+   */
   @Test
   void jsqlParserParsesStrippedCteWindowJoin() {
     assertDoesNotThrow(() -> CCJSqlParserUtil.parse(WINDOW_CTE_STRIPPED_SQL),
         "JSqlParser should parse the comment-free variant after comment stripping");
   }
 
+  /** Keeps native CTE declarations when parsing window functions and joins. */
   @Test
-  void sqlParserFallsBackToDerivedTableRewriting() {
+  void sqlParserParsesWindowCteDirectly() {
     SqlParser.Query parsed = assertDoesNotThrow(() -> SqlParser.parseQuery(WINDOW_CTE_SQL));
-    assertNotNull(parsed, "Query parsing should succeed after applying the derived-table fallback");
+    assertNotNull(parsed);
+    assertEquals(1, parsed.commonTableExpressions().size());
   }
 
+  /**
+   * Parses the original comment-heavy window/CTE/join shape without rewriting its
+   * WITH clause.
+   */
   @Test
   void sqlParserHandlesCommentHeavyWindowCte() {
     SqlParser.Query parsed = assertDoesNotThrow(() -> SqlParser.parseQuery(WINDOW_CTE_WITH_COMMENT_SQL));
-    assertNotNull(parsed, "Queries that rely on the CTE workaround should parse even when comments are present");
+    assertNotNull(parsed);
+    assertEquals(1, parsed.commonTableExpressions().size());
+  }
+
+  /**
+   * Retains lexical parameter indexes when window CTE queries use row-count
+   * parameters.
+   */
+  @Test
+  void windowCteParametersRetainOriginalPositions() {
+    String sql = WINDOW_CTE_SQL.replace("WHERE l.rn = 1", "WHERE l.rn = ?") + " LIMIT ?";
+    assertEquals(Map.of(2, "LIMIT"), SqlParser.rowCountParameters(sql));
+    assertEquals(1, SqlParser.parseQuery(sql).commonTableExpressions().size());
   }
 }

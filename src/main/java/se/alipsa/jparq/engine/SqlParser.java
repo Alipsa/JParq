@@ -1,5 +1,7 @@
 package se.alipsa.jparq.engine;
 
+import java.math.BigInteger;
+import java.sql.SQLDataException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -41,10 +43,6 @@ public final class SqlParser {
       "LOCALTIME", "LOCALTIMESTAMP");
   private static final Set<String> CONVERT_TYPE_NAMES = Set.of("boolean", "bool", "char", "character", "nchar",
       "varchar", "charactervarying", "nvarchar", "string", "text", "clob");
-  private static final Pattern SINGLE_CTE_PATTERN = Pattern.compile(
-      "^\\s*with\\s+(?:\"([A-Za-z_][\\w]*)\"|([A-Za-z_][\\w]*))\\s+as\\s*\\(",
-      Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
-
   private static final Pattern QUOTED_ORDER_TEXT = Pattern
       .compile("\\$\\$[\\s\\S]*?\\$\\$|'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|`(?:``|[^`])*`");
 
@@ -654,25 +652,56 @@ public final class SqlParser {
   }
 
   private static Query parseQuery(String sql, boolean allowQualifiedWildcards) {
+    return parseQuery(sql, allowQualifiedWildcards, null);
+  }
+
+  /**
+   * Parses a query through the shared fallbacks, optionally collecting parameter
+   * context.
+   *
+   * @param sql
+   *          the SQL text
+   * @param allowQualifiedWildcards
+   *          whether qualified wildcard projections are accepted
+   * @param rowCountParameters
+   *          the row-count parameter destination, or null when not needed
+   * @return the normalized query
+   * @throws IllegalArgumentException
+   *           if parsing or validation fails
+   */
+  private static Query parseQuery(String sql, boolean allowQualifiedWildcards,
+      Map<Integer, String> rowCountParameters) {
     String normalizedSql = normalizeSql(sql);
     try {
-      return parseWithJsqlParser(normalizedSql, allowQualifiedWildcards);
+      return parseWithJsqlParser(normalizedSql, allowQualifiedWildcards, rowCountParameters);
     } catch (JSQLParserException e) {
       String compactedSql = compactWhitespace(normalizedSql);
       try {
-        return parseWithJsqlParser(compactedSql, allowQualifiedWildcards);
+        return parseWithJsqlParser(compactedSql, allowQualifiedWildcards, rowCountParameters);
       } catch (JSQLParserException ignored) {
-        // Fall through to the CTE rewrite below
-      }
-      Query fallback = tryParseWithCteWorkaround(normalizedSql, allowQualifiedWildcards);
-      if (fallback != null) {
-        return fallback;
+        // Report the original syntax error after the compacted retry also fails.
       }
       String message = "Failed to parse SQL: " + sql;
       throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000", e));
     } catch (Exception e) {
       throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
     }
+  }
+
+  /**
+   * Validates a parameterized query and collects direct row-count parameters
+   * during the same parse, including fallback parsing and nested query scopes.
+   *
+   * @param sql
+   *          the parameterized SQL after named parameters have been rewritten
+   * @return parameter indexes mapped to LIMIT, OFFSET, or FETCH clause names
+   * @throws IllegalArgumentException
+   *           if the SQL cannot be parsed
+   */
+  public static Map<Integer, String> rowCountParameters(String sql) {
+    Map<Integer, String> clauses = new LinkedHashMap<>();
+    parseQuery(sql, true, clauses);
+    return Map.copyOf(clauses);
   }
 
   /**
@@ -684,13 +713,16 @@ public final class SqlParser {
    *          statement text
    * @param allowQualifiedWildcards
    *          whether qualified wildcard projections are accepted
+   * @param rowCountParameters
+   *          the row-count parameter destination, or null when not needed
    * @return the normalized query
    * @throws JSQLParserException
    *           if parsing fails
    */
-  private static Query parseWithJsqlParser(String sql, boolean allowQualifiedWildcards) throws JSQLParserException {
+  private static Query parseWithJsqlParser(String sql, boolean allowQualifiedWildcards,
+      Map<Integer, String> rowCountParameters) throws JSQLParserException {
     var stmt = (net.sf.jsqlparser.statement.select.Select) JSqlParserSupport.parseStatement(sql);
-    validateExpressions(stmt);
+    validateExpressions(stmt, rowCountParameters);
     SqlExpressionNormalizer.normalize(stmt);
     RelationQualifierValidation.validate(stmt);
     return parseSelectStatement(stmt, List.of(), Map.of(), allowQualifiedWildcards);
@@ -698,16 +730,27 @@ public final class SqlParser {
 
   /**
    * Validates decimal bounds and rejects aggregate FILTER clauses in one pass
-   * before query planning.
+   * before query planning, optionally collecting row-count parameters.
    *
    * @param statement
    *          parsed SELECT, including nested scopes
+   * @param rowCountParameters
+   *          the row-count parameter destination, or null when not needed
    * @throws IllegalArgumentException
    *           if bounds are invalid or FILTER is present; the cause carries
    *           SQLState 42000
    */
-  private static void validateExpressions(net.sf.jsqlparser.statement.select.Select statement) {
+  private static void validateExpressions(net.sf.jsqlparser.statement.select.Select statement,
+      Map<Integer, String> rowCountParameters) {
     JSqlParserSupport.visitExpressions(statement, new JSqlParserSupport.StatementExpressionVisitor() {
+      /** {@inheritDoc} */
+      @Override
+      protected void inspectRowCount(Expression expression, String clause) {
+        if (rowCountParameters != null && expression instanceof JdbcParameter parameter) {
+          rowCountParameters.put(parameter.getIndex(), clause);
+        }
+      }
+
       /** {@inheritDoc} */
       @Override
       public <S> Void visit(AnalyticExpression analytic, S context) {
@@ -725,19 +768,6 @@ public final class SqlParser {
         return super.visit(cast, context);
       }
     });
-  }
-
-  private static Query tryParseWithCteWorkaround(String normalizedSql, boolean allowQualifiedWildcards) {
-    String rewritten = rewriteSingleCteToDerivedTable(normalizedSql);
-    if (rewritten == null) {
-      return null;
-    }
-    String compacted = compactWhitespace(rewritten);
-    try {
-      return parseWithJsqlParser(compacted, allowQualifiedWildcards);
-    } catch (Exception ex) {
-      throw new IllegalArgumentException("Failed to parse rewritten SQL: " + compacted, ex);
-    }
   }
 
   private static String normalizeSql(String sql) {
@@ -895,102 +925,6 @@ public final class SqlParser {
       lookup.put(cte.name(), cte);
     }
     return Map.copyOf(lookup);
-  }
-
-  /**
-   * Attempt to inline a single common table expression as a derived table to work
-   * around a JSqlParser bug that rejects window functions in a CTE that is later
-   * joined.
-   *
-   * @param sql
-   *          normalized SQL text with comments stripped
-   * @return rewritten SQL without the WITH clause, or {@code null} if the query
-   *         shape is unsupported
-   */
-  private static String rewriteSingleCteToDerivedTable(String sql) {
-    Matcher matcher = SINGLE_CTE_PATTERN.matcher(sql);
-    if (!matcher.find()) {
-      return null;
-    }
-    int openingParenIndex = matcher.end() - 1;
-    int closingParenIndex = findMatchingParenthesis(sql, openingParenIndex);
-    if (closingParenIndex < 0) {
-      return null;
-    }
-
-    String trailing = sql.substring(closingParenIndex + 1).trim();
-    if (trailing.isEmpty() || trailing.startsWith(",")) {
-      return null;
-    }
-    if (trailing.regionMatches(true, 0, "with", 0, 4)) {
-      return null;
-    }
-    if (!trailing.regionMatches(true, 0, "select", 0, 6)) {
-      return null;
-    }
-
-    int cteBodyStart = matcher.end();
-    String cteBody = sql.substring(cteBodyStart, closingParenIndex).trim();
-    String cteName = matcher.group(1);
-    Pattern referencePattern = Pattern.compile("(?i)\\b(from|join)\\b\\s+(?:\"" + Pattern.quote(cteName) + "\"|"
-        + Pattern.quote(cteName) + ")(\\s+(?:\"[^\"]+\"|[A-Za-z_][\\w]*))?");
-    Matcher reference = referencePattern.matcher(trailing);
-    if (!reference.find()) {
-      return null;
-    }
-    String alias = reference.group(3);
-    if (alias == null || alias.isBlank()) {
-      alias = cteName;
-    }
-    String replacement = reference.group(1) + " (" + cteBody + ") " + alias;
-    return reference.replaceFirst(replacement);
-  }
-
-  private static int findMatchingParenthesis(String sql, int openingIndex) {
-    boolean inSingleQuote = false;
-    boolean inDoubleQuote = false;
-    int depth = 0;
-    for (int i = openingIndex; i < sql.length(); i++) {
-      char c = sql.charAt(i);
-      char next = i + 1 < sql.length() ? sql.charAt(i + 1) : '\0';
-
-      if (inSingleQuote) {
-        if (c == '\'' && next == '\'') {
-          i++;
-        } else if (c == '\'') {
-          inSingleQuote = false;
-        }
-        continue;
-      }
-      if (inDoubleQuote) {
-        if (c == '"' && next == '"') {
-          i++;
-        } else if (c == '"') {
-          inDoubleQuote = false;
-        }
-        continue;
-      }
-      if (c == '\'') {
-        inSingleQuote = true;
-        continue;
-      }
-      if (c == '"') {
-        inDoubleQuote = true;
-        continue;
-      }
-      if (c == '(') {
-        depth++;
-      } else if (c == ')') {
-        depth--;
-        if (depth == 0) {
-          return i;
-        }
-        if (depth < 0) {
-          return -1;
-        }
-      }
-    }
-    return -1;
   }
 
   /**
@@ -1415,16 +1349,19 @@ public final class SqlParser {
    * @param limit
    *          LIMIT clause (may be {@code null})
    * @return limit value, or {@code -1} when not specified
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 for unsupported expressions, 2201W/2201X
+   *           for negative counts, 22003 for overflow, or 0A000 for comma-form
+   *           LIMIT
    */
   private static int extractLimit(Limit limit) {
+    if (limit != null && limit.getOffset() != null) {
+      throw SqlExceptions.unsupportedFeature("LIMIT offset, count is not supported; use OFFSET and LIMIT");
+    }
     if (limit == null || limit.getRowCount() == null) {
       return -1;
     }
-    Expression rowCountExpr = limit.getRowCount();
-    if (rowCountExpr instanceof LongValue lv) {
-      return lv.getBigIntegerValue().intValue();
-    }
-    return Integer.parseInt(rowCountExpr.toString());
+    return extractRowCount(limit.getRowCount(), "LIMIT");
   }
 
   /**
@@ -1434,7 +1371,8 @@ public final class SqlParser {
    *          FETCH clause (may be {@code null})
    * @return the requested number of rows, {@code -1} when not specified
    * @throws IllegalArgumentException
-   *           if the FETCH expression cannot be parsed to an integer value
+   *           carrying SQLState 42000 for unsupported expressions, 2201W/2201X
+   *           for negative counts, or 22003 for overflow
    */
   private static int extractFetch(Fetch fetch) {
     if (fetch == null) {
@@ -1444,14 +1382,7 @@ public final class SqlParser {
     if (expression == null) {
       return 1;
     }
-    if (expression instanceof LongValue lv) {
-      return lv.getBigIntegerValue().intValue();
-    }
-    try {
-      return Integer.parseInt(expression.toString());
-    } catch (NumberFormatException e) {
-      throw new IllegalArgumentException("Invalid FETCH value: '" + expression + "'", e);
-    }
+    return extractRowCount(expression, "FETCH");
   }
 
   /**
@@ -1480,19 +1411,62 @@ public final class SqlParser {
    * @param offset
    *          OFFSET clause (may be {@code null})
    * @return offset value, or {@code 0} when not specified
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 for unsupported expressions, 2201W/2201X
+   *           for negative counts, or 22003 for overflow
    */
   private static int extractOffset(Offset offset) {
     if (offset == null || offset.getOffset() == null) {
       return 0;
     }
-    Expression expr = offset.getOffset();
-    if (expr instanceof LongValue lv) {
-      return lv.getBigIntegerValue().intValue();
+    return extractRowCount(offset.getOffset(), "OFFSET");
+  }
+
+  /**
+   * Reads a nonnegative integer row count without narrowing overflow. JDBC
+   * parameters use a temporary zero during syntax validation; execution reparses
+   * the query after binding parameter values.
+   *
+   * @param expression
+   *          the parsed row-count expression
+   * @param clause
+   *          the clause name used in diagnostics
+   * @return the row count in the supported integer range
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 for unsupported expressions, 2201W/2201X
+   *           for negative counts, or 22003 for overflow
+   */
+  private static int extractRowCount(Expression expression, String clause) {
+    if (expression instanceof JdbcParameter) {
+      return 0;
+    }
+    Expression magnitude = expression;
+    char sign = '+';
+    if (expression instanceof SignedExpression signed) {
+      if (signed.getSign() != '+' && signed.getSign() != '-') {
+        throw SqlExceptions
+            .syntaxFailure(clause + " requires a nonnegative integer literal: " + SqlExceptions.describe(expression));
+      }
+      magnitude = signed.getExpression();
+      sign = signed.getSign();
+    }
+    if (!(magnitude instanceof LongValue literal)) {
+      throw SqlExceptions
+          .syntaxFailure(clause + " requires a nonnegative integer literal: " + SqlExceptions.describe(expression));
+    }
+    BigInteger value = literal.getBigIntegerValue();
+    if (sign == '-') {
+      value = value.negate();
+    }
+    if (value.signum() < 0) {
+      SQLDataException failure = SqlExceptions.invalidRowCount(clause, value);
+      throw new IllegalArgumentException(failure.getMessage(), failure);
     }
     try {
-      return Integer.parseInt(expr.toString());
-    } catch (NumberFormatException e) {
-      throw new IllegalArgumentException("Invalid OFFSET value: '" + expr + "'", e);
+      return value.intValueExact();
+    } catch (ArithmeticException e) {
+      String message = clause + " row count exceeds " + Integer.MAX_VALUE + ": " + value;
+      throw new IllegalArgumentException(message, new SQLDataException(message, "22003", e));
     }
   }
 
@@ -2389,19 +2363,7 @@ public final class SqlParser {
   }
 
   private static int computeOffset(PlainSelect ps) {
-    Offset off = ps.getOffset();
-    if (off != null && off.getOffset() != null) {
-      Expression expr = off.getOffset();
-      if (expr instanceof LongValue lv) {
-        return lv.getBigIntegerValue().intValue();
-      }
-      try {
-        return Integer.parseInt(expr.toString());
-      } catch (NumberFormatException e) {
-        throw new IllegalArgumentException("Invalid OFFSET value: '" + expr + "'", e);
-      }
-    }
-    return 0;
+    return extractOffset(ps.getOffset());
   }
 
   /**

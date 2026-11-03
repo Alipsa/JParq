@@ -11,6 +11,19 @@
   `"a.b"`, as single identifiers in column references, ordering, grouping, and wildcards. Validate complete schema
   qualifiers (`nosuch.employees.id` and `acme.e.id` fail) and support `acme.employees.id` and `acme.employees.*`
   after `FROM acme.employees`.
+- Validate LIMIT, OFFSET, and FETCH row counts consistently (#266, #269, #376, #379). Reject unsupported
+  expressions, including bitwise NOT, with SQLState `42000`, and counts above `Integer.MAX_VALUE` with
+  `22003` instead of truncating them. Negative counts and NULL, fractional, or non-finite numeric parameters
+  raise SQLDataException with `2201X` for OFFSET or `2201W` for LIMIT/FETCH. Support bound JDBC row-count
+  parameters, including integral numeric values with fractional zeroes and String/Character values,
+  while retaining decimal scales in other bindings. Reject invalid numeric strings with `22018` and
+  other nonnumeric bindings with `2201W`/`2201X`. Collect row-count parameters during the existing parse and validation,
+  including parser retries. Remove the obsolete CTE rewrite workaround and its broken capture groups
+  (#413), so parser syntax errors cannot be bypassed by rewriting invalid unquoted CTE names.
+  Window/CTE/join queries parse directly, including their row-count parameters.
+  Preserve zero and default FETCH semantics. Reject MySQL-style `LIMIT offset, count` with `0A000`
+  instead of silently ignoring the offset (#411).
+
 - Execute derived tables over `information_schema.tables` and `information_schema.columns` in joins,
   including LATERAL correlation, instead of substituting the raw metadata view. Preserve the subquery's
   projections, aggregates, filters, ordering, row bounds, and output column aliases (#264).
