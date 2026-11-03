@@ -3260,8 +3260,9 @@ public final class SqlParser {
   }
 
   /**
-   * Rebinds valid schema-qualified references to their visible input name while
-   * leaving unknown names intact so qualifier validation can reject them.
+   * Rebinds valid schema-qualified references to their visible input name and
+   * leaves other qualifiers unchanged. Unknown qualifiers have already been
+   * rejected by {@link RelationQualifierValidation} before planning.
    *
    * @param select
    *          current query scope

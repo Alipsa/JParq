@@ -191,6 +191,7 @@ final class RelationQualifierValidation {
       }
     });
   }
+
   /**
    * Ensures a qualified reference names a table or alias visible in the current
    * scope.
