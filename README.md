@@ -842,6 +842,8 @@ The following SQL statements are supported:
     including groups, derived tables, and CTEs. Duplicate labels raise
     SQLState `42000`; assign unique positional column aliases to the input, such as `g(x, y)`, to expand them.
 - `UNION` and `UNION ALL` support
+  - Trailing `LIMIT`, `OFFSET`, and `FETCH` apply to the combined set-operation result with or without `ORDER BY`.
+    Parenthesized branches retain their own row bounds.
 - Complete set-operation coverage.
   Numeric branches use a common output type: INTEGER with BIGINT becomes BIGINT, two REAL inputs
   retain REAL and Float values, other approximate combinations use DOUBLE, and DECIMAL with exact numeric inputs retains the largest

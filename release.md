@@ -2,6 +2,9 @@
 
 ### 1.4.0
 
+- Apply trailing LIMIT, OFFSET, and FETCH clauses to the complete set-operation result even without ORDER BY
+  (#271). Preserve branch-local bounds inside parentheses, including nested set operations.
+
 - Evaluate scalar subqueries in UNNEST arguments using the enclosing CTE and parameter context (#270).
   Support joined UNNEST expressions through the LATERAL binding path, including correlated scalar subqueries
   and ordinality. Preserve declared element types for arrays built from outer columns, so numeric aggregates,
