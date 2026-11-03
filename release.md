@@ -2,6 +2,11 @@
 
 ### 1.4.0
 
+- Evaluate scalar subqueries in UNNEST arguments using the enclosing CTE and parameter context (#270).
+  Support joined UNNEST expressions through the LATERAL binding path, including correlated scalar subqueries
+  and ordinality. Preserve scalar cardinality errors with SQLState `42000` instead of exposing an internal
+  missing-executor error or rejecting every non-column joined argument.
+
 - **Behavior change:** qualified wildcards now follow the same visibility rules as other qualified references.
   Unknown or alias-hidden `alias.*` qualifiers fail with SQLState `42000`, and the shared real table name in a
   self-join (`SELECT mtcars.* FROM mtcars a JOIN mtcars b ...`) is rejected instead of expanding the first input

@@ -215,6 +215,11 @@ Wrapping the argument in an expression such as COALESCE currently loses its decl
 LATERAL output types can then fall back to VARCHAR during schema discovery.
 Null and empty arrays produce no inner rows; a LEFT JOIN LATERAL retains their outer rows with NULL inner columns.
 Standalone `UNNEST(NULL)` also returns no rows and uses VARCHAR metadata because its element type is unknown.
+UNNEST arguments can contain scalar subqueries, such as
+`UNNEST(ARRAY[(SELECT COUNT(*) FROM mtcars WHERE cyl = 4)]) AS t(x)`.
+Joined UNNEST expressions can reference preceding inputs, including through correlated scalar subqueries,
+with implicit or explicit LATERAL syntax. Subqueries use the enclosing CTEs and current parameter bindings;
+scalar cardinality errors retain SQLState `42000`.
 
 LATERAL derived tables may still expose numeric values as VARCHAR. In particular, LATERAL decimal
 expressions with unknown precision use VARCHAR to keep one stable schema across correlated executions.

@@ -384,7 +384,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
           } else if (baseRef != null && baseRef.unnest() != null) {
-            CteResult resolved = materializeUnnestTable(baseRef);
+            CteResult resolved = materializeUnnestTable(baseRef, tmpCteResults);
             tmpBaseCteResult = resolved;
             tmpFileAvro = resolved.schema();
             if (!tmpSelect.qualifiedWildcards().isEmpty()) {
@@ -1889,10 +1889,17 @@ public class JParqPreparedStatement implements PreparedStatement {
         continue;
       }
       if (ref.unnest() != null) {
+        JoinRecordReader.JoinTable unnestTable;
         if (tables.isEmpty()) {
-          throw new SQLException("UNNEST requires a preceding table reference");
+          CteResult result = materializeUnnestTable(ref, cteResults);
+          unnestTable = new JoinRecordReader.JoinTable(ref.tableAlias(), ref.tableAlias(), result.schema(),
+              applySampleToRows(ref.tableSample(), result.rows()), ref.joinType(), ref.joinCondition(),
+              ref.usingColumns(), null);
+        } else if (ref.unnest().expression() instanceof Column) {
+          unnestTable = UnnestTableBuilder.build(ref, tables, qualifierIndex);
+        } else {
+          unnestTable = materializeUnnestExpression(ref, tables, qualifierIndex);
         }
-        JoinRecordReader.JoinTable unnestTable = UnnestTableBuilder.build(ref, tables, qualifierIndex);
         tables.add(unnestTable);
         registerQualifierIndexes(qualifierIndex, unnestTable, tables.size() - 1);
         continue;
@@ -2602,19 +2609,26 @@ public class JParqPreparedStatement implements PreparedStatement {
    *
    * @param baseRef
    *          the table reference describing the {@code UNNEST} invocation
+   * @param cteContext
+   *          CTE values visible to subqueries in the argument
    * @return {@link CteResult} containing the unnested rows and schema
    * @throws SQLException
    *           if the {@code UNNEST} expression cannot be evaluated
    */
-  private CteResult materializeUnnestTable(SqlParser.TableReference baseRef) throws SQLException {
+  private CteResult materializeUnnestTable(SqlParser.TableReference baseRef, Map<Identifier, CteResult> cteContext)
+      throws SQLException {
     if (baseRef == null || baseRef.unnest() == null) {
       throw new SQLException("UNNEST table reference cannot be null");
     }
     Schema literalSchema = Schema.createRecord("unnest_literal", null, null, false);
     literalSchema.setFields(List.of());
     GenericData.Record emptyRecord = new GenericData.Record(literalSchema);
-    ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(literalSchema);
-    Object evaluated = evaluator.eval(baseRef.unnest().expression(), emptyRecord);
+    Object evaluated;
+    try (var executor = new SubqueryExecutor(stmt.getConn(), sql -> prepareSubqueryStatement(sql, cteContext),
+        table -> subqueryTableColumns(table, cteContext, null))) {
+      ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(literalSchema, executor);
+      evaluated = evaluator.eval(baseRef.unnest().expression(), emptyRecord);
+    }
 
     Schema arraySchema = baseRef.unnest().expression() instanceof net.sf.jsqlparser.expression.Function function
         && CorrelatedBindings.matches(function)
@@ -2641,6 +2655,35 @@ public class JParqPreparedStatement implements PreparedStatement {
     Schema unnestSchema = UnnestTableBuilder.buildSchema(baseRef, elementSchema, aliasPlan);
     List<GenericRecord> rows = UnnestTableBuilder.materializeRows(elements, elementSchema, aliasPlan, unnestSchema);
     return new CteResult(unnestSchema, rows);
+  }
+
+  /**
+   * Evaluates a joined UNNEST expression through the existing LATERAL binding and
+   * materialization path. Direct array columns keep their declared-schema path in
+   * {@link UnnestTableBuilder}.
+   *
+   * @param reference
+   *          UNNEST input and its join condition
+   * @param priorTables
+   *          preceding inputs supplying correlated values
+   * @param qualifierIndex
+   *          qualifier names mapped to preceding input indexes
+   * @return join input evaluated for the current preceding rows
+   * @throws SQLException
+   *           if argument binding or evaluation fails
+   */
+  private JoinRecordReader.JoinTable materializeUnnestExpression(SqlParser.TableReference reference,
+      List<JoinRecordReader.JoinTable> priorTables, Map<String, Integer> qualifierIndex) throws SQLException {
+    SqlParser.UnnestDefinition definition = reference.unnest();
+    String sql = "SELECT * FROM UNNEST(" + definition.expression() + ")"
+        + (definition.withOrdinality() ? " WITH ORDINALITY" : "") + " AS " + reference.tableAlias();
+    if (!definition.columnAliases().isEmpty()) {
+      sql += "(" + String.join(", ", definition.columnAliases()) + ")";
+    }
+    var derived = new SqlParser.TableReference(null, null, reference.tableAlias(), reference.joinType(),
+        reference.joinCondition(), null, sql, null, reference.usingColumns(), null, null, true, reference.tableSample(),
+        List.of());
+    return materializeLateralSubqueryTable(derived, reference.tableAlias(), priorTables, qualifierIndex);
   }
 
   /**
