@@ -211,8 +211,9 @@ LATERAL derived tables bind outer values with their Java types intact. For examp
 `FROM arr a CROSS JOIN LATERAL (SELECT u.t FROM UNNEST(a.dates) AS u(t)) x`
 expands the current row's array. When the UNNEST argument is a direct outer column reference,
 declared date and nested-array element types are preserved, including metadata when the outer input is empty.
-Array constructors built from outer columns and COALESCE-wrapped arrays retain their declared element types
-during schema discovery, including when the outer input is empty.
+Declared-type propagation in UNNEST currently covers direct bindings, ARRAY constructors, COALESCE, NULLIF
+(using its first argument's type), CASE, arithmetic, and sign expressions, including empty outer inputs.
+Other function wrappers can still lose their type during NULL-bound discovery (#282, #424); these bugs remain open.
 Null and empty arrays produce no inner rows; a LEFT JOIN LATERAL retains their outer rows with NULL inner columns.
 Standalone `UNNEST(NULL)` also returns no rows and uses VARCHAR metadata because its element type is unknown.
 UNNEST arguments can contain scalar subqueries, such as

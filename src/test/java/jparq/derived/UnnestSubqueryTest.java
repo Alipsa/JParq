@@ -2,13 +2,16 @@ package jparq.derived;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.sql.DriverManager;
+import java.sql.SQLDataException;
 import java.sql.SQLException;
+import java.sql.SQLSyntaxErrorException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
@@ -169,6 +172,10 @@ class UnnestSubqueryTest {
           }
         }, sql);
         assertEquals(source.contains("cyl, mpg") ? "42000" : "21000", error.getSQLState(), sql);
+        Class<? extends SQLException> expected = source.contains("cyl, mpg")
+            ? SQLSyntaxErrorException.class
+            : SQLDataException.class;
+        assertInstanceOf(expected, error);
       }
     }
   }
@@ -266,8 +273,8 @@ class UnnestSubqueryTest {
   })
   void unqualifiedOuterColumnsAreBoundOrRejected(boolean pushdown) throws Exception {
     try (var connection = DriverManager.getConnection(url(pushdown))) {
-      for (String expression : List.of("cyl", "(SELECT cyl)", "COALESCE(cyl, cyl)", "cyl + 0",
-          "(SELECT cyl FROM (VALUES (5)) inner_values(cyl))")) {
+      for (String expression : List.of("cyl", "(SELECT cyl)", "COALESCE(cyl, cyl)", "NULLIF(cyl, 0)",
+          "(SELECT NULLIF(cyl, 0))", "cyl + 0", "(SELECT cyl FROM (VALUES (5)) inner_values(cyl))")) {
         String sql = "SELECT x FROM (VALUES (4)) v(cyl) CROSS JOIN UNNEST(ARRAY[" + expression + "]) t(x)";
         try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
           assertTrue(result.next(), sql);
@@ -317,9 +324,62 @@ class UnnestSubqueryTest {
         }
       });
       assertEquals("42000", error.getSQLState());
+      assertInstanceOf(SQLSyntaxErrorException.class, error);
       assertTrue(error.getMessage().contains("UNNEST(ARRAY[v.cyl])"), error.getMessage());
       assertFalse(error.getMessage().contains("__JPARQ_CORRELATED_VALUE"), error.getMessage());
       assertFalse(error.getMessage().contains("SELECT * FROM"), error.getMessage());
+    }
+  }
+
+  /**
+   * NULLIF retains its first argument's type even when every result is NULL.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void nullifRetainsDeclaredTypeForNullResults(boolean pushdown) throws Exception {
+    try (var connection = DriverManager.getConnection(url(pushdown))) {
+      for (String argument : List.of("NULLIF(v.cyl, 4)", "(SELECT NULLIF(v.cyl, 4))")) {
+        String sql = "SELECT t.x FROM (VALUES (4)) v(cyl) CROSS JOIN UNNEST(ARRAY[" + argument + "]) t(x)";
+        try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
+          assertEquals(Types.INTEGER, result.getMetaData().getColumnType(1), sql);
+          assertTrue(result.next(), sql);
+          assertNull(result.getObject(1), sql);
+          assertFalse(result.next(), sql);
+        }
+      }
+    }
+  }
+
+  /**
+   * Uses ARRAY diagnostics with SQL type names during NULL-bound discovery.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void incompatibleDeclarationsNameArrayElementTypes(boolean pushdown) throws Exception {
+    String sql = "SELECT t.x FROM mtcars m CROSS JOIN UNNEST(ARRAY[m.hp, 'text']) t(x)";
+    try (var connection = DriverManager.getConnection(url(pushdown))) {
+      var error = assertThrows(SQLSyntaxErrorException.class, () -> {
+        try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
+          result.next();
+        }
+      });
+      assertEquals("42000", error.getSQLState());
+      assertTrue(error.getMessage().contains("ARRAY elements must share a common type; found INTEGER and VARCHAR"),
+          error.getMessage());
     }
   }
 

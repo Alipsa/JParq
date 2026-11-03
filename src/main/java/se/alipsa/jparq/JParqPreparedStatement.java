@@ -3274,11 +3274,10 @@ public class JParqPreparedStatement implements PreparedStatement {
       return new SubqueryTableData(schemaToUse, List.copyOf(rows));
     } catch (SQLException e) {
       if (ref != null && ref.unnest() != null) {
-        SQLException classified = SqlExceptions.findSqlStateFailure(e);
         String original = "UNNEST(" + SqlExceptions.describe(ref.unnest().expression()) + ")";
-        String detail = SqlExceptions.describe(e.getMessage().replace(sql, original));
-        throw new SQLException("Failed to evaluate " + original + ": " + detail,
-            classified == null ? e.getSQLState() : classified.getSQLState(), e.getErrorCode(), e);
+        String message = "Failed to evaluate " + original + (e.getMessage() == null ? "" : ": " + e.getMessage());
+        throw SqlExceptions.wrap(message, e,
+            text -> SqlExceptions.describe(text == null ? null : text.replace(sql, original)));
       }
       String context = "Failed to execute derived table '";
       if (e.getMessage() != null && e.getMessage().contains(context)) {

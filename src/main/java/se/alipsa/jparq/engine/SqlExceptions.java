@@ -6,6 +6,7 @@ import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 import java.util.regex.Pattern;
 import net.sf.jsqlparser.expression.Expression;
 
@@ -101,6 +102,20 @@ public final class SqlExceptions {
   }
 
   /**
+   * Describes incompatible ARRAY element types consistently across evaluation and
+   * inference.
+   *
+   * @param first
+   *          the first SQL type name
+   * @param second
+   *          the incompatible SQL type name
+   * @return a failure carrying SQLState 42000
+   */
+  public static IllegalArgumentException incompatibleArrayElements(String first, String second) {
+    return syntaxFailure("ARRAY elements must share a common type; found " + first + " and " + second);
+  }
+
+  /**
    * Creates an engine failure for a scalar subquery returning multiple rows.
    *
    * @return an engine exception carrying SQLState 21000
@@ -192,11 +207,28 @@ public final class SqlExceptions {
    *         known state
    */
   public static SQLException wrap(String context, Throwable failure) {
+    return wrap(context, failure, UnaryOperator.identity());
+  }
+
+  /**
+   * Preserves JDBC classifications while rendering all diagnostic text for the
+   * caller.
+   *
+   * @param context
+   *          the failed operation
+   * @param failure
+   *          the original failure, retained as the cause
+   * @param diagnostics
+   *          renderer for context and nested messages, accepting null text
+   * @return a classified JDBC exception with rendered diagnostics
+   */
+  public static SQLException wrap(String context, Throwable failure, UnaryOperator<String> diagnostics) {
     SQLException classified = findSqlStateFailure(failure);
     if (classified == null) {
-      return new SQLException(context, failure);
+      return new SQLException(diagnostics.apply(context), failure);
     }
-    if (failure == classified && Objects.equals(context, classified.getMessage())) {
+    if (failure == classified && Objects.equals(context, classified.getMessage())
+        && Objects.equals(context, diagnostics.apply(context))) {
       return classified;
     }
     StringBuilder message = new StringBuilder(context == null ? failure.toString() : context);
@@ -208,14 +240,14 @@ public final class SqlExceptions {
     if (classifiedDetail != null && !classifiedDetail.isBlank() && message.indexOf(classifiedDetail) < 0) {
       message.append(": ").append(classifiedDetail);
     }
+    String rendered = diagnostics.apply(message.toString());
     if ("42000".equals(classified.getSQLState()) || "42702".equals(classified.getSQLState())) {
-      return new SQLSyntaxErrorException(message.toString(), classified.getSQLState(), classified.getErrorCode(),
-          failure);
+      return new SQLSyntaxErrorException(rendered, classified.getSQLState(), classified.getErrorCode(), failure);
     }
     if ("0A000".equals(classified.getSQLState())) {
-      return new SQLFeatureNotSupportedException(message.toString(), classified.getSQLState(),
-          classified.getErrorCode(), failure);
+      return new SQLFeatureNotSupportedException(rendered, classified.getSQLState(), classified.getErrorCode(),
+          failure);
     }
-    return new SQLDataException(message.toString(), classified.getSQLState(), classified.getErrorCode(), failure);
+    return new SQLDataException(rendered, classified.getSQLState(), classified.getErrorCode(), failure);
   }
 }

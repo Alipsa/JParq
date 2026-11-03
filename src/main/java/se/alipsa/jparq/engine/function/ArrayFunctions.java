@@ -178,8 +178,7 @@ public final class ArrayFunctions {
       currentName += " (" + current.getName() + ")";
       candidateName += " (" + candidate.getName() + ")";
     }
-    throw SqlExceptions
-        .syntaxFailure("ARRAY elements must share a common type; found " + currentName + " and " + candidateName);
+    throw SqlExceptions.incompatibleArrayElements(currentName, candidateName);
   }
 
   /**

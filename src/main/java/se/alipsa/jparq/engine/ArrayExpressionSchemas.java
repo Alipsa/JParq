@@ -1,5 +1,6 @@
 package se.alipsa.jparq.engine;
 
+import java.sql.JDBCType;
 import java.sql.SQLException;
 import java.util.List;
 import net.sf.jsqlparser.expression.ArrayConstructor;
@@ -52,6 +53,9 @@ public final class ArrayExpressionSchemas {
       if ("ARRAY".equalsIgnoreCase(function.getName())) {
         Schema element = common(function.getParameters());
         return element == null ? null : Schema.createArray(element);
+      }
+      if ("NULLIF".equalsIgnoreCase(function.getName()) && !function.getParameters().isEmpty()) {
+        return resolve(function.getParameters().getFirst());
       }
       if ("COALESCE".equalsIgnoreCase(function.getName())) {
         return common(function.getParameters());
@@ -128,6 +132,7 @@ public final class ArrayExpressionSchemas {
     if (first != null && second != null) {
       return first.common(second).schema();
     }
-    throw new SQLException("UNNEST array elements must have compatible types", "42000");
+    throw SqlExceptions.incompatibleArrayElements(JDBCType.valueOf(JdbcTypeMapper.mapSchemaToJdbcType(left)).getName(),
+        JDBCType.valueOf(JdbcTypeMapper.mapSchemaToJdbcType(right)).getName());
   }
 }
