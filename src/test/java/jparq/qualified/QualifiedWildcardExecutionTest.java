@@ -2,6 +2,7 @@ package jparq.qualified;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -12,6 +13,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.SQLSyntaxErrorException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -207,11 +209,9 @@ public class QualifiedWildcardExecutionTest {
         }));
     Throwable cause = exception.getCause();
     assertNotNull(cause, "Expected a SQLException to be reported");
-    assertEquals(SQLException.class, cause.getClass(), "Expected JDBC layer to surface a SQLException");
-    Throwable rootCause = cause.getCause();
-    assertNotNull(rootCause, "Underlying cause should describe the qualifier resolution failure");
-    assertEquals(IllegalArgumentException.class, rootCause.getClass(),
-        "Qualified wildcard resolution should report an IllegalArgumentException");
+    var syntaxError = assertInstanceOf(SQLSyntaxErrorException.class, cause);
+    assertEquals("42000", syntaxError.getSQLState());
+    assertTrue(syntaxError.getMessage().contains("missing"));
   }
 
   private static ResultSnapshot captureResult(JParqSql sql, String query) {

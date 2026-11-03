@@ -9,6 +9,7 @@ import java.util.Optional;
  */
 public final class QualifiedWildcard implements SelectListItem {
   private final String qualifier;
+  private final String qualifierIdentifier;
   private final SourcePosition sourcePosition;
   private final int selectListIndex;
 
@@ -49,6 +50,23 @@ public final class QualifiedWildcard implements SelectListItem {
    *          appeared. Use {@code -1} when the index is unknown
    */
   public QualifiedWildcard(String qualifier, SourcePosition sourcePosition, int selectListIndex) {
+    this(qualifier, sourcePosition, selectListIndex, qualifier);
+  }
+
+  /**
+   * Creates a wildcard retaining the original qualifier's identifier quotes.
+   *
+   * @param qualifier
+   *          decoded qualifier used for column expansion
+   * @param sourcePosition
+   *          source position, or null
+   * @param selectListIndex
+   *          zero-based projection position, or -1 if unknown
+   * @param qualifierIdentifier
+   *          original qualifier with SQL identifier quotes intact
+   */
+  public QualifiedWildcard(String qualifier, SourcePosition sourcePosition, int selectListIndex,
+      String qualifierIdentifier) {
     if (qualifier == null) {
       throw new IllegalArgumentException("Qualifier must not be null");
     }
@@ -57,6 +75,7 @@ public final class QualifiedWildcard implements SelectListItem {
       throw new IllegalArgumentException("Qualifier must not be blank");
     }
     this.qualifier = trimmed;
+    this.qualifierIdentifier = Objects.requireNonNull(qualifierIdentifier, "qualifierIdentifier").trim();
     this.sourcePosition = sourcePosition;
     this.selectListIndex = selectListIndex;
   }
@@ -68,6 +87,15 @@ public final class QualifiedWildcard implements SelectListItem {
    */
   public String qualifier() {
     return qualifier;
+  }
+
+  /**
+   * Returns the original qualifier for SQL identifier resolution.
+   *
+   * @return qualifier with identifier quoting preserved
+   */
+  public String qualifierIdentifier() {
+    return qualifierIdentifier;
   }
 
   @Override
@@ -87,7 +115,7 @@ public final class QualifiedWildcard implements SelectListItem {
 
   @Override
   public int hashCode() {
-    return Objects.hash(qualifier, sourcePosition, selectListIndex);
+    return Objects.hash(qualifier, qualifierIdentifier, sourcePosition, selectListIndex);
   }
 
   @Override
@@ -96,8 +124,9 @@ public final class QualifiedWildcard implements SelectListItem {
       return true;
     }
     if (obj instanceof QualifiedWildcard other) {
-      return Objects.equals(qualifier, other.qualifier) && Objects.equals(sourcePosition, other.sourcePosition)
-          && selectListIndex == other.selectListIndex;
+      return Objects.equals(qualifier, other.qualifier)
+          && Objects.equals(qualifierIdentifier, other.qualifierIdentifier)
+          && Objects.equals(sourcePosition, other.sourcePosition) && selectListIndex == other.selectListIndex;
     }
     return false;
   }
