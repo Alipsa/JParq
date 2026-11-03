@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.sql.DriverManager;
-import java.sql.SQLSyntaxErrorException;
+import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
@@ -163,13 +163,163 @@ class UnnestSubqueryTest {
           "(VALUES (4)) v(cyl) CROSS JOIN LATERAL "
               + "UNNEST(ARRAY[(SELECT m.cyl FROM mtcars m WHERE m.cyl = v.cyl)]) t(x)")) {
         String sql = "SELECT x FROM " + source;
-        SQLSyntaxErrorException error = assertThrows(SQLSyntaxErrorException.class, () -> {
+        SQLException error = assertThrows(SQLException.class, () -> {
           try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
             result.next();
           }
         }, sql);
-        assertEquals("42000", error.getSQLState(), sql);
+        assertEquals(source.contains("cyl, mpg") ? "42000" : "21000", error.getSQLState(), sql);
       }
+    }
+  }
+
+  /**
+   * Preserves numeric declarations when every array value is an outer column.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void outerOnlyArraysKeepNumericTypes(boolean pushdown) throws Exception {
+    try (var connection = DriverManager.getConnection(url(pushdown))) {
+      String max = "SELECT MAX(t.x) FROM mtcars m CROSS JOIN UNNEST(ARRAY[m.hp]) t(x)";
+      try (var statement = connection.prepareStatement(max); var result = statement.executeQuery()) {
+        assertTrue(result.next());
+        assertTrue(result.getObject(1) instanceof Number);
+        assertEquals(335, result.getInt(1));
+      }
+      String order = "SELECT t.x FROM mtcars m CROSS JOIN UNNEST(ARRAY[m.hp]) t(x) ORDER BY t.x";
+      try (var statement = connection.prepareStatement(order); var result = statement.executeQuery()) {
+        int previous = Integer.MIN_VALUE;
+        int count = 0;
+        while (result.next()) {
+          assertTrue(result.getObject(1) instanceof Number);
+          int current = result.getInt(1);
+          assertTrue(previous <= current, previous + " <= " + current);
+          previous = current;
+          count++;
+        }
+        assertEquals(32, count);
+        assertEquals(335, previous);
+      }
+      for (String join : List.of("JOIN UNNEST(ARRAY[v.cyl]) t(cyl) USING (cyl)",
+          "JOIN UNNEST(ARRAY[v.cyl, 5]) t(cyl) USING (cyl)")) {
+        try (var statement = connection.prepareStatement("SELECT cyl FROM (VALUES (4)) v(cyl) " + join);
+            var result = statement.executeQuery()) {
+          assertEquals(Types.INTEGER, result.getMetaData().getColumnType(1));
+          assertTrue(result.next(), join);
+          assertEquals(4, result.getObject(1), join);
+          assertFalse(result.next(), join);
+        }
+      }
+      String empty = "SELECT t.x FROM (SELECT hp FROM mtcars WHERE FALSE) m " + "CROSS JOIN UNNEST(ARRAY[m.hp]) t(x)";
+      try (var statement = connection.prepareStatement(empty); var result = statement.executeQuery()) {
+        assertEquals(Types.INTEGER, result.getMetaData().getColumnType(1));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Promotes declared outer values together with evaluated scalar results.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void scalarResultsPromoteDeclaredArrayElements(boolean pushdown) throws Exception {
+    String sql = "SELECT t.x FROM (VALUES (4)) v(cyl) CROSS JOIN "
+        + "UNNEST(ARRAY[v.cyl, (SELECT AVG(hp) FROM mtcars)]) WITH ORDINALITY t(x, n) ORDER BY t.n";
+    try (var connection = DriverManager.getConnection(url(pushdown));
+        var statement = connection.prepareStatement(sql);
+        var result = statement.executeQuery()) {
+      assertEquals(Types.DOUBLE, result.getMetaData().getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(4.0, result.getObject(1));
+      assertTrue(result.next());
+      assertEquals(146.6875, result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Resolves unqualified outer columns and diagnoses missing or ambiguous names.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void unqualifiedOuterColumnsAreBoundOrRejected(boolean pushdown) throws Exception {
+    try (var connection = DriverManager.getConnection(url(pushdown))) {
+      for (String expression : List.of("cyl", "(SELECT cyl)", "COALESCE(cyl, cyl)", "cyl + 0",
+          "(SELECT cyl FROM (VALUES (5)) inner_values(cyl))")) {
+        String sql = "SELECT x FROM (VALUES (4)) v(cyl) CROSS JOIN UNNEST(ARRAY[" + expression + "]) t(x)";
+        try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
+          assertTrue(result.next(), sql);
+          assertEquals(expression.contains("inner_values") ? 5 : 4, result.getInt(1), sql);
+          assertTrue(result.getObject(1) instanceof Number, sql);
+          assertFalse(result.next(), sql);
+        }
+      }
+      String sameName = "SELECT t.x FROM (VALUES (4)) v(x) CROSS JOIN UNNEST(ARRAY[x]) t(x)";
+      try (var statement = connection.prepareStatement(sameName); var result = statement.executeQuery()) {
+        assertTrue(result.next());
+        assertEquals(4, result.getObject(1));
+        assertFalse(result.next());
+      }
+      for (String sql : List.of(
+          "SELECT x FROM (VALUES (4)) v(cyl), (VALUES (5)) w(cyl) " + "CROSS JOIN UNNEST(ARRAY[cyl]) t(x)",
+          "SELECT x FROM (VALUES (4)) v(cyl) CROSS JOIN UNNEST(ARRAY[nosuch]) t(x)",
+          "SELECT x FROM UNNEST(ARRAY[nosuch]) t(x)")) {
+        SQLException error = assertThrows(SQLException.class, () -> {
+          try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
+            result.next();
+          }
+        }, sql);
+        assertEquals(sql.contains("w(cyl)") ? "42702" : "42000", error.getSQLState(), sql);
+      }
+    }
+  }
+
+  /**
+   * Keeps invalid alias diagnostics classified and free of generated SQL.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void invalidAliasesDescribeOriginalUnnest(boolean pushdown) throws Exception {
+    try (var connection = DriverManager.getConnection(url(pushdown))) {
+      String sql = "SELECT x FROM (VALUES (4)) v(cyl) CROSS JOIN UNNEST(ARRAY[v.cyl]) t(x, y)";
+      SQLException error = assertThrows(SQLException.class, () -> {
+        try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
+          result.next();
+        }
+      });
+      assertEquals("42000", error.getSQLState());
+      assertTrue(error.getMessage().contains("UNNEST(ARRAY[v.cyl])"), error.getMessage());
+      assertFalse(error.getMessage().contains("__JPARQ_CORRELATED_VALUE"), error.getMessage());
+      assertFalse(error.getMessage().contains("SELECT * FROM"), error.getMessage());
     }
   }
 

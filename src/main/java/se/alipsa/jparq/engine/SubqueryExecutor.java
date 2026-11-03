@@ -572,6 +572,24 @@ public final class SubqueryExecutor implements AutoCloseable {
     }).orElse(null);
   }
 
+  /**
+   * Binds a LATERAL query using preceding columns and each nested input scope.
+   *
+   * @param reference
+   *          the LATERAL table reference
+   * @param qualifiers
+   *          preceding visible qualifiers
+   * @param columns
+   *          candidate unqualified preceding columns
+   * @return stable SQL and binding slots
+   * @throws SQLException
+   *           if parsing fails
+   */
+  public LateralQuery lateral(SqlParser.TableReference reference, Collection<String> qualifiers, Set<String> columns)
+      throws SQLException {
+    return executionPlans.lateral(reference, qualifiers, columns, this::localColumns);
+  }
+
   private PreparedStatement prepareStatement(String sql) throws SQLException {
     if (statementFactory != null) {
       return statementFactory.prepare(sql);
@@ -626,6 +644,26 @@ public final class SubqueryExecutor implements AutoCloseable {
      *           if the LATERAL query cannot be parsed
      */
     public LateralQuery lateral(SqlParser.TableReference reference, Collection<String> qualifiers) throws SQLException {
+      return lateral(reference, qualifiers, Set.of(), plain -> Set.of());
+    }
+
+    /**
+     * Rewrites qualified and unqualified references with lexical input scopes.
+     *
+     * @param reference
+     *          declaring LATERAL input
+     * @param qualifiers
+     *          preceding qualifier names
+     * @param columns
+     *          candidate outer columns
+     * @param localColumns
+     *          nested input column resolver
+     * @return cached query shape and binding slots
+     * @throws SQLException
+     *           if parsing fails
+     */
+    private LateralQuery lateral(SqlParser.TableReference reference, Collection<String> qualifiers, Set<String> columns,
+        Function<PlainSelect, Set<String>> localColumns) throws SQLException {
       LateralQuery cached = laterals.get(reference);
       if (cached != null) {
         return cached;
@@ -638,11 +676,11 @@ public final class SubqueryExecutor implements AutoCloseable {
       }
       String key = UUID.randomUUID().toString();
       var references = new LinkedHashMap<CorrelatedSubqueryRewriter.QualifiedColumn, Integer>();
-      var rewritten = CorrelatedSubqueryRewriter.rewrite(parsed, qualifiers, (qualifier, column) -> {
+      var rewritten = CorrelatedSubqueryRewriter.rewrite(parsed, qualifiers, columns, (qualifier, column) -> {
         var outer = new CorrelatedSubqueryRewriter.QualifiedColumn(qualifier, column);
         int index = references.computeIfAbsent(outer, ignored -> references.size());
         return new CorrelatedBindings.Reference(key, index);
-      });
+      }, scope -> reference.unnest() != null && scope == parsed ? Set.of() : localColumns.apply(scope));
       var result = new LateralQuery(rewritten.sql(), key, List.copyOf(references.keySet()));
       laterals.put(reference, result);
       return result;
@@ -726,13 +764,13 @@ public final class SubqueryExecutor implements AutoCloseable {
      *
      * @return the scalar value, or null for no rows or a SQL NULL value
      * @throws IllegalArgumentException
-     *           carrying SQLState 42000 if the result does not have exactly one
-     *           column and at most one row
+     *           carrying SQLState 42000 for an invalid column count or 21000 for
+     *           more than one row
      */
     public Object scalarValue() {
       requireSingleColumn("Scalar subquery");
       if (rows.size() > 1) {
-        throw SqlExceptions.syntaxFailure("Scalar subquery returned more than one row");
+        throw SqlExceptions.scalarCardinalityFailure();
       }
       return rows.isEmpty() ? null : rows.getFirst().getFirst();
     }

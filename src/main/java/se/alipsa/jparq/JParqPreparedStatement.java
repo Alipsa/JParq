@@ -72,6 +72,7 @@ import org.apache.parquet.filter2.predicate.FilterPredicate;
 import org.apache.parquet.hadoop.ParquetInputFormat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import se.alipsa.jparq.engine.ArrayExpressionSchemas;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.AvroProjections;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
@@ -2624,16 +2625,14 @@ public class JParqPreparedStatement implements PreparedStatement {
     literalSchema.setFields(List.of());
     GenericData.Record emptyRecord = new GenericData.Record(literalSchema);
     Object evaluated;
+    Schema arraySchema;
     try (var executor = new SubqueryExecutor(stmt.getConn(), sql -> prepareSubqueryStatement(sql, cteContext),
         table -> subqueryTableColumns(table, cteContext, null))) {
       ValueExpressionEvaluator evaluator = new ValueExpressionEvaluator(literalSchema, executor);
+      validateUnnestColumns(baseRef.unnest().expression());
       evaluated = evaluator.eval(baseRef.unnest().expression(), emptyRecord);
+      arraySchema = ArrayExpressionSchemas.resolve(baseRef.unnest().expression());
     }
-
-    Schema arraySchema = baseRef.unnest().expression() instanceof net.sf.jsqlparser.expression.Function function
-        && CorrelatedBindings.matches(function)
-            ? JdbcTypeMapper.nonNullSchema(CorrelatedBindings.schema(function))
-            : null;
     Iterable<?> iterable = JParqUtil.toIterable(evaluated);
     if (iterable == null && evaluated != null) {
       throw new SQLException("UNNEST expression must evaluate to an array or iterable value");
@@ -2647,6 +2646,14 @@ public class JParqPreparedStatement implements PreparedStatement {
     Schema elementSchema = arraySchema != null && arraySchema.getType() == Schema.Type.ARRAY
         ? JdbcTypeMapper.nonNullSchema(arraySchema.getElementType())
         : resolveUnnestElementSchema(elements);
+    if (elements.stream().anyMatch(Objects::nonNull)) {
+      Schema actual = resolveUnnestElementSchema(elements);
+      NumericType declaredNumeric = NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(elementSchema), elementSchema);
+      NumericType actualNumeric = NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(actual), actual);
+      if (declaredNumeric != null && actualNumeric != null) {
+        elementSchema = declaredNumeric.common(actualNumeric).schema();
+      }
+    }
     String fallbackAlias = baseRef.tableAlias() != null && !baseRef.tableAlias().isBlank()
         ? baseRef.tableAlias()
         : "unnest";
@@ -2655,6 +2662,29 @@ public class JParqPreparedStatement implements PreparedStatement {
     Schema unnestSchema = UnnestTableBuilder.buildSchema(baseRef, elementSchema, aliasPlan);
     List<GenericRecord> rows = UnnestTableBuilder.materializeRows(elements, elementSchema, aliasPlan, unnestSchema);
     return new CteResult(unnestSchema, rows);
+  }
+
+  /**
+   * Rejects unresolved argument columns outside scalar subqueries. Correlated
+   * references have already been replaced by typed bindings at this point.
+   *
+   * @param expression
+   *          the standalone UNNEST argument
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 for unresolved columns
+   */
+  private static void validateUnnestColumns(Expression expression) {
+    expression.accept(new net.sf.jsqlparser.expression.ExpressionVisitorAdapter<Void>() {
+      @Override
+      public <S> Void visit(Column column, S context) {
+        throw SqlExceptions.syntaxFailure("Column not found in UNNEST argument: " + column);
+      }
+
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.statement.select.Select select, S context) {
+        return null;
+      }
+    }, null);
   }
 
   /**
@@ -2681,8 +2711,8 @@ public class JParqPreparedStatement implements PreparedStatement {
       sql += "(" + String.join(", ", definition.columnAliases()) + ")";
     }
     var derived = new SqlParser.TableReference(null, null, reference.tableAlias(), reference.joinType(),
-        reference.joinCondition(), null, sql, null, reference.usingColumns(), null, null, true, reference.tableSample(),
-        List.of());
+        reference.joinCondition(), null, sql, null, reference.usingColumns(), null, definition, true,
+        reference.tableSample(), List.of());
     return materializeLateralSubqueryTable(derived, reference.tableAlias(), priorTables, qualifierIndex);
   }
 
@@ -3126,13 +3156,26 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (priorTables == null || priorTables.isEmpty()) {
       throw new SQLException("LATERAL derived tables require at least one preceding table");
     }
-    var query = executionPlans.lateral(ref, collectQualifiers(priorTables));
-    Map<String, Map<String, String>> columnLookup = buildCorrelatedColumnLookup(priorTables);
+    // Suppliers run after subsequent join inputs have been appended to the plan.
+    // Keep correlation bound to the inputs visible at this declaration.
+    List<JoinRecordReader.JoinTable> preceding = List.copyOf(priorTables);
+    Map<String, Map<String, String>> columnLookup = buildCorrelatedColumnLookup(preceding);
+    Set<String> columns = new LinkedHashSet<>();
+    preceding.forEach(table -> columns.addAll(MaterializedNames.lookupIndex(table.schema()).keySet()));
+    SubqueryExecutor.LateralQuery query;
+    try (var executor = new SubqueryExecutor(stmt.getConn(), sqlText -> prepareSubqueryStatement(sqlText, cteResults),
+        this::subqueryTableColumns, executionPlans)) {
+      query = executor.lateral(ref, collectQualifiers(preceding), columns);
+    }
     List<Schema> bindingSchemas = new ArrayList<>();
     for (var reference : query.references()) {
-      var resolved = resolveCorrelatedField(reference.qualifier(), reference.column(), priorTables, qualifierIndex,
+      var resolved = resolveCorrelatedField(reference.qualifier(), reference.column(), preceding, qualifierIndex,
           columnLookup);
-      bindingSchemas.add(resolved == null ? null : resolved.field().schema());
+      if (resolved == null) {
+        throw SqlExceptions.syntaxFailure("Column not found in LATERAL input: "
+            + (reference.qualifier() == null ? "" : reference.qualifier() + ".") + reference.column());
+      }
+      bindingSchemas.add(resolved.field().schema());
     }
     List<String> fieldNames = new ArrayList<>();
     List<Schema> valueSchemas = new ArrayList<>();
@@ -3146,7 +3189,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     JoinRecordReader.CorrelatedRowsSupplier supplier = assignments -> {
       List<Object> values = new ArrayList<>();
       for (var reference : query.references()) {
-        values.add(resolveCorrelatedValue(reference.qualifier(), reference.column(), assignments, priorTables,
+        values.add(resolveCorrelatedValue(reference.qualifier(), reference.column(), assignments, preceding,
             qualifierIndex, columnLookup));
       }
       var bindings = new CorrelatedBindings(query.key(), values, bindingSchemas);
@@ -3230,6 +3273,13 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       return new SubqueryTableData(schemaToUse, List.copyOf(rows));
     } catch (SQLException e) {
+      if (ref != null && ref.unnest() != null) {
+        SQLException classified = SqlExceptions.findSqlStateFailure(e);
+        String original = "UNNEST(" + SqlExceptions.describe(ref.unnest().expression()) + ")";
+        String detail = SqlExceptions.describe(e.getMessage().replace(sql, original));
+        throw new SQLException("Failed to evaluate " + original + ": " + detail,
+            classified == null ? e.getSQLState() : classified.getSQLState(), e.getErrorCode(), e);
+      }
       String context = "Failed to execute derived table '";
       if (e.getMessage() != null && e.getMessage().contains(context)) {
         throw e;
@@ -3355,7 +3405,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    * Resolves the same source field for correlation values and their schemas.
    *
    * @param qualifier
-   *          normalized outer qualifier
+   *          normalized outer qualifier, or null for an unqualified reference
    * @param column
    *          outer column identifier
    * @param priorTables
@@ -3365,12 +3415,32 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @param columnLookup
    *          qualifier-to-column mappings
    * @return the resolved field and input position, or null when unavailable
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42702 for ambiguous names
    */
-  private static CorrelatedField resolveCorrelatedField(String qualifier, String column,
+  private CorrelatedField resolveCorrelatedField(String qualifier, String column,
       List<JoinRecordReader.JoinTable> priorTables, Map<String, Integer> qualifierIndex,
       Map<String, Map<String, String>> columnLookup) {
-    if (column == null || qualifier == null || priorTables == null) {
+    if (column == null || priorTables == null) {
       return null;
+    }
+    if (qualifier == null) {
+      CorrelatedField match = null;
+      for (int i = 0; i < priorTables.size(); i++) {
+        Schema source = priorTables.get(i).schema();
+        String name = MaterializedNames.lookupIndex(source).get(normalizeColumnKey(column));
+        if ("".equals(name)) {
+          throw SqlExceptions.ambiguousColumn(column);
+        }
+        Field field = name == null ? null : source.getField(name);
+        if (field != null) {
+          if (match != null) {
+            throw SqlExceptions.ambiguousColumn(column);
+          }
+          match = new CorrelatedField(i, field);
+        }
+      }
+      return match;
     }
     Integer tableIndex = qualifierIndex == null ? null : qualifierIndex.get(qualifier);
     if (tableIndex == null) {

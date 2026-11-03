@@ -4,8 +4,11 @@
 
 - Evaluate scalar subqueries in UNNEST arguments using the enclosing CTE and parameter context (#270).
   Support joined UNNEST expressions through the LATERAL binding path, including correlated scalar subqueries
-  and ordinality. Preserve scalar cardinality errors with SQLState `42000` instead of exposing an internal
-  missing-executor error or rejecting every non-column joined argument.
+  and ordinality. Preserve declared element types for arrays built from outer columns, so numeric aggregates,
+  sorting, and USING joins compare typed values. Resolve unqualified outer columns with inner-scope precedence
+  and ambiguity checks. Reject invalid alias counts with `42000` and describe the original UNNEST argument
+  instead of generated SQL. Multirow scalar results raise SQLState `21000` (#423); invalid scalar column
+  counts retain `42000`.
 
 - **Behavior change:** qualified wildcards now follow the same visibility rules as other qualified references.
   Unknown or alias-hidden `alias.*` qualifiers fail with SQLState `42000`, and the shared real table name in a

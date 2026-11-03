@@ -329,7 +329,7 @@ public final class UnnestTableBuilder {
       if (elementSchema.getType() == Schema.Type.RECORD) {
         List<Schema.Field> fields = elementSchema.getFields();
         if (!aliases.isEmpty() && aliases.size() != fields.size()) {
-          throw new SQLException("UNNEST column alias count does not match record element fields");
+          throw new SQLException("UNNEST column alias count does not match record element fields", "42000");
         }
         for (int i = 0; i < fields.size(); i++) {
           String alias = aliases.isEmpty() ? fields.get(i).name() : aliases.get(i);
@@ -337,7 +337,7 @@ public final class UnnestTableBuilder {
         }
       } else {
         if (!aliases.isEmpty() && aliases.size() > 1) {
-          throw new SQLException("UNNEST element alias list is too long for a single-value array");
+          throw new SQLException("UNNEST element alias list is too long for a single-value array", "42000");
         }
         String alias = aliases.isEmpty() ? fallback : aliases.get(0);
         resolved.add(sanitizeAlias(alias, fallback));
