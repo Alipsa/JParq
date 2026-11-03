@@ -131,6 +131,15 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
     }
 
     /**
+     * Returns the alias when present, otherwise the table name.
+     *
+     * @return SQL-visible name, or null for an anonymous input
+     */
+    public String visibleName() {
+      return alias == null || alias.isBlank() ? tableName : alias;
+    }
+
+    /**
      * Retrieve all rows from the table.
      *
      * @return an immutable list of all rows
@@ -661,7 +670,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
    */
   private static Set<String> qualifierSet(JoinTable table) {
     Set<String> qualifiers = new LinkedHashSet<>();
-    addQualifierVariant(qualifiers, table.alias() == null ? table.tableName() : table.alias());
+    addQualifierVariant(qualifiers, table.visibleName());
     return qualifiers;
   }
 

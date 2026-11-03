@@ -151,7 +151,10 @@ class ParenthesizedJoinTest {
               + " JOIN (VALUES (1)) p(z) ON TRUE")) {
         SQLException error = assertThrows(SQLException.class, () -> statement.executeQuery(sql), sql);
         assertEquals("42000", error.getSQLState(), sql);
-        assertTrue(error.getMessage().contains("Missing columns in JOIN condition"), error.getMessage());
+        String expected = sql.contains("\"m\".missing")
+            ? "Missing columns in JOIN condition"
+            : "Unknown table qualifier";
+        assertTrue(error.getMessage().contains(expected), error.getMessage());
       }
     }
   }

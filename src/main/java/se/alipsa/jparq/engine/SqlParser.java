@@ -692,6 +692,7 @@ public final class SqlParser {
     var stmt = (net.sf.jsqlparser.statement.select.Select) JSqlParserSupport.parseStatement(sql);
     validateExpressions(stmt);
     SqlExpressionNormalizer.normalize(stmt);
+    RelationQualifierValidation.validate(stmt);
     return parseSelectStatement(stmt, List.of(), Map.of(), allowQualifiedWildcards);
   }
 
@@ -1210,7 +1211,8 @@ public final class SqlParser {
    * @param lateral
    *          whether this SELECT is a LATERAL input awaiting outer binding
    * @throws IllegalArgumentException
-   *           if a column or projection wildcard requires an input
+   *           if a column or projection wildcard requires an input; unknown
+   *           qualifiers carry SQLState 42000
    */
   private static void validateTableFreeSelect(PlainSelect select, boolean lateral) {
     final var validator = new ExpressionVisitorAdapter<Void>() {
@@ -1223,6 +1225,7 @@ public final class SqlParser {
           throw new IllegalArgumentException("Column references in LATERAL subqueries without FROM are not supported; "
               + "add an explicit input such as FROM (VALUES (1)) v(z): " + column);
         }
+        requireVisibleQualifier(RelationQualifiers.qualifier(column), column.getColumnName(), List.of());
         throw new IllegalArgumentException("Missing column without FROM: " + column);
       }
 
@@ -2228,7 +2231,7 @@ public final class SqlParser {
    *          wildcard projection with optional parser tokens
    * @return original qualifier, or null when tokens are unavailable
    */
-  private static String wildcardQualifierTokens(SelectItem<?> item) {
+  static String wildcardQualifierTokens(SelectItem<?> item) {
     Node node = item.getASTNode();
     if (node == null) {
       return null;
@@ -2282,6 +2285,13 @@ public final class SqlParser {
     throw new IllegalArgumentException("Qualified wildcard is missing a qualifier: " + originalText);
   }
 
+  /**
+   * Decodes delimited qualifier components, including escaped delimiters.
+   *
+   * @param identifier
+   *          qualifier with optional identifier quotes
+   * @return qualifier text with each component decoded, or null for null input
+   */
   private static String stripCompositeIdentifierQuotes(String identifier) {
     if (identifier == null) {
       return null;
@@ -2329,28 +2339,20 @@ public final class SqlParser {
     return result.toString();
   }
 
+  /**
+   * Appends the decoded text of a nonempty qualifier component.
+   *
+   * @param target
+   *          destination for decoded qualifier text
+   * @param segment
+   *          component with optional identifier quotes
+   */
   private static void appendIdentifierSegment(StringBuilder target, StringBuilder segment) {
     String part = segment.toString().trim();
     if (part.isEmpty()) {
       return;
     }
-    target.append(stripIdentifierQuotes(part));
-  }
-
-  private static String stripIdentifierQuotes(String identifier) {
-    if (identifier == null) {
-      return null;
-    }
-    String trimmed = identifier.trim();
-    if (trimmed.length() >= 2) {
-      if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("`") && trimmed.endsWith("`"))) {
-        return trimmed.substring(1, trimmed.length() - 1);
-      }
-      if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-        return trimmed.substring(1, trimmed.length() - 1);
-      }
-    }
-    return trimmed;
+    target.append(Identifier.of(part).text());
   }
 
   private static SourcePosition extractSourcePosition(SelectItem<?> item) {
@@ -3484,7 +3486,7 @@ public final class SqlParser {
    * @throws IllegalArgumentException
    *           carrying SQLState 42000 when the qualifier is unknown
    */
-  private static void requireVisibleQualifier(String qualifier, String column, List<String> visible) {
+  static void requireVisibleQualifier(String qualifier, String column, List<String> visible) {
     if (qualifier == null || qualifier.isBlank()
         || visible.stream().anyMatch(name -> RelationQualifiers.matches(qualifier, name))) {
       return;

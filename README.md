@@ -184,6 +184,8 @@ Schema prefixes are checked against unaliased inputs; `acme.employees.id` is val
 Quoted aliases containing dots remain single identifiers, such as `"a.b".id` after `FROM employees "a.b"`.
 Unknown or hidden relation qualifiers raise
 `SQLSyntaxErrorException` with SQLState `42000`, including when the input is empty or predicates are pushed down.
+Nested query qualifiers are validated during preparation against local and enclosing inputs, even when the
+outer query returns no rows or a scalar subquery result is never read.
 
 Recursive CTEs retain the anchor's numeric types and decimal precision and scale. Recursive values that require
 fractional truncation or decimal rounding, or exceed integer ranges or decimal precision, fail with `SQLException`

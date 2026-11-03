@@ -103,7 +103,10 @@ class TableQualifierValidationTest {
             () -> connection.prepareStatement(invalid), invalid);
         assertEquals("42000", error.getSQLState(), invalid);
       }
-      for (String invalid : List.of(
+      for (String invalid : List.of("SELECT x.id FROM optimized x WHERE EXISTS (SELECT 1 WHERE optimized.id = x.id)",
+          "SELECT x.id FROM optimized x WHERE EXISTS (SELECT 1 WHERE nosuch.id = x.id)",
+          "SELECT (SELECT optimized.id) FROM optimized x", "SELECT (SELECT nosuch.id) FROM optimized x",
+          "SELECT nosuch.id",
           "SELECT x.id FROM optimized x WHERE EXISTS (SELECT 1 FROM (VALUES (1)) v(k) WHERE v.k = optimized.id)",
           "SELECT id FROM optimized x WHERE EXISTS (SELECT 1 FROM optimized y WHERE optimized.id = y.id)",
           "SELECT x.id FROM optimized x JOIN (VALUES (1)) j(k) ON TRUE WHERE EXISTS "
@@ -157,6 +160,8 @@ class TableQualifierValidationTest {
         }
       }
       for (String sql : List.of("SELECT acme.employees.* FROM acme.employees ORDER BY acme.employees.id",
+          "SELECT \"a\"\"b\".* FROM acme.employees \"a\"\"b\" ORDER BY \"a\"\"b\".id",
+          "SELECT \"a\"\"b\".* FROM acme.employees \"a\"\"b\" JOIN (VALUES (1)) j(k) ON \"a\"\"b\".id = j.k",
           "SELECT acme.employees.id FROM acme.employees JOIN (VALUES (1)) j(k) ON acme.employees.id = j.k",
           "SELECT \"a.b\".id FROM acme.employees \"a.b\" JOIN (VALUES (1)) j(k) ON \"a.b\".id = j.k "
               + "ORDER BY \"a.b\".id")) {
@@ -185,6 +190,68 @@ class TableQualifierValidationTest {
           }
         }, sql);
         assertEquals("42000", error.getSQLState(), sql);
+      }
+    }
+  }
+
+  /**
+   * Rejects invalid nested qualifiers during preparation, even when no outer rows
+   * or client column reads would evaluate the subquery.
+   *
+   * @param pushdown
+   *          whether predicate and projection pushdown are enabled
+   * @throws Exception
+   *           if JDBC setup or a valid query fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "true", "false"
+  })
+  void validatesNestedQualifiersBeforeExecution(boolean pushdown) throws Exception {
+    String url = "jdbc:jparq:" + Path.of("src/test/resources/hf").toAbsolutePath() + "?predicatePushdown=" + pushdown
+        + "&projectionPushdown=" + pushdown;
+    try (var connection = DriverManager.getConnection(url)) {
+      for (String sql : List.of(
+          "SELECT COUNT(*) FROM (SELECT id FROM optimized WHERE id < 0) x "
+              + "WHERE EXISTS (SELECT 1 FROM optimized y WHERE nosuch.id = 1)",
+          "SELECT (SELECT nosuch.id FROM optimized y) FROM optimized x",
+          "SELECT (SELECT optimized.id FROM optimized y) FROM optimized x WHERE x.id < 0",
+          "SELECT x.id FROM optimized x WHERE x.id = ? AND EXISTS (SELECT nosuch.id FROM optimized y)",
+          "SELECT x.id FROM optimized x WHERE x.id IN (SELECT nosuch.id FROM optimized y)",
+          "SELECT x.id FROM optimized x WHERE x.id = ANY (SELECT nosuch.id FROM optimized y)",
+          "SELECT (SELECT nosuch.* FROM optimized y) FROM optimized x",
+          "SELECT x.id FROM optimized x WHERE EXISTS (SELECT 1 FROM optimized y WHERE EXISTS "
+              + "(SELECT 1 WHERE nosuch.id = x.id))",
+          "SELECT x.id FROM optimized x WHERE EXISTS (SELECT y.id FROM optimized y UNION ALL SELECT nosuch.id)",
+          "SELECT x.id FROM optimized x WHERE EXISTS (WITH c AS (SELECT nosuch.id FROM optimized y) SELECT * FROM c)",
+          "SELECT x.id FROM optimized x WHERE EXISTS (SELECT 1 FROM optimized y "
+              + "JOIN (VALUES (1)) z(k) ON nosuch.id = z.k)",
+          "SELECT x.id FROM optimized x WHERE EXISTS (SELECT 1 FROM optimized y ORDER BY nosuch.id)",
+          "SELECT x.id FROM optimized x WHERE EXISTS (SELECT COUNT(*) FROM optimized y "
+              + "GROUP BY GROUPING SETS ((nosuch.id), ()))",
+          "SELECT x.id FROM optimized x WHERE EXISTS (SELECT ROW_NUMBER() OVER w FROM optimized y "
+              + "WINDOW w AS (PARTITION BY nosuch.id))",
+          "SELECT x.id FROM optimized x WHERE EXISTS (SELECT 1 FROM (SELECT nosuch.id FROM optimized y) z)",
+          "SELECT x.id FROM optimized x WHERE EXISTS (SELECT 1 FROM optimized y WHERE nosuch.x.id = 1)",
+          "SELECT x.id FROM optimized x WHERE EXISTS (SELECT 1 FROM optimized y WHERE \"X\".id = 1)",
+          "SELECT (SELECT 1 FROM optimized y) FROM optimized x WHERE EXISTS (SELECT 1 WHERE y.id = 1)")) {
+        SQLSyntaxErrorException error = assertThrows(SQLSyntaxErrorException.class,
+            () -> connection.prepareStatement(sql), sql);
+        assertEquals("42000", error.getSQLState(), sql);
+      }
+      for (String sql : List.of("SELECT (SELECT x.id) FROM (VALUES (1)) x(id)",
+          "SELECT x.id FROM (VALUES (1)) x(id) WHERE EXISTS (SELECT 1 WHERE x.id = 1)",
+          "SELECT x.id FROM (VALUES (1)) x(id) WHERE EXISTS (SELECT 1 FROM (VALUES (2)) x(id) WHERE x.id = 2)",
+          "SELECT x.id FROM (VALUES (1)) x(id) WHERE EXISTS (SELECT 1 FROM (VALUES (2)) y(id) "
+              + "WHERE EXISTS (SELECT 1 WHERE x.id = 1 AND y.id = 2))",
+          "SELECT x.id FROM (VALUES (1)) x(id) WHERE EXISTS (WITH c AS (SELECT x.id) SELECT * FROM c)",
+          "SELECT x.id FROM (VALUES (1)) x(id) WHERE EXISTS (SELECT 1 FROM (VALUES (2)) y(id) "
+              + "WHERE x.id IN (SELECT 1 UNION ALL SELECT y.id))")) {
+        try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
+          assertTrue(result.next(), sql);
+          assertEquals(1, result.getInt(1), sql);
+          assertFalse(result.next(), sql);
+        }
       }
     }
   }

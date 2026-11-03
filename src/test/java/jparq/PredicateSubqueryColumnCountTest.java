@@ -147,15 +147,16 @@ class PredicateSubqueryColumnCountTest {
    * Leaves unresolved wildcard shapes to source and runtime validation.
    *
    * @param subquery
-   *          query with an unknown qualifier or unsupported join shape
+   *          query with unknown source columns or an unsupported join shape
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "SELECT x.* FROM o", "SELECT * FROM o a NATURAL JOIN o b"
+      "SELECT x.* FROM unresolved x", "SELECT * FROM o a NATURAL JOIN o b"
   })
   void defersUnresolvedWildcardDegrees(String subquery) {
     var query = (SqlParser.Select) SqlParser.parseQuery("SELECT n FROM o WHERE n IN (" + subquery + ")");
-    assertDoesNotThrow(() -> PredicateSubqueryValidation.validate(query, table -> Set.of("n")));
+    assertDoesNotThrow(() -> PredicateSubqueryValidation.validate(query,
+        table -> "unresolved".equals(table.getName()) ? null : Set.of("n")));
   }
 
   /**

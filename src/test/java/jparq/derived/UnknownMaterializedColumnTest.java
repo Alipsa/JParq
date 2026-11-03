@@ -82,7 +82,10 @@ class UnknownMaterializedColumnTest {
               }
             }
           }, sql);
-          assertTrue(exception.getMessage().contains("Missing columns"), sql + ": " + exception);
+          String expected = sql.contains("ON optimized.") || sql.contains("ON c.") || sql.contains("ON y.a = z.id")
+              ? "Unknown table qualifier"
+              : "Missing columns";
+          assertTrue(exception.getMessage().contains(expected), sql + ": " + exception);
           assertEquals("42000", exception.getSQLState(), sql);
           if (sql.startsWith("SELECT x.id FROM") && sql.contains("x(a)")) {
             assertTrue(exception.getMessage().contains("Missing columns for table 'x': id"), sql + ": " + exception);

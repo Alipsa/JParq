@@ -38,6 +38,26 @@ class AnonymousJoinInputTest {
   }
 
   /**
+   * Falls back to the table name when an input has a blank alias.
+   *
+   * @throws IOException
+   *           if closing the reader fails
+   */
+  @Test
+  void blankAliasesRetainTableQualifiers() throws IOException {
+    Schema schema = Schema.createRecord("input", null, null, false);
+    schema.setFields(List.of(new Schema.Field("a", Schema.create(Schema.Type.INT))));
+    for (String alias : List.of("", " ", "\t")) {
+      var table = new JoinRecordReader.JoinTable("input", alias, schema, List.of(), JoinType.BASE, null, List.of(),
+          null);
+      assertEquals("input", table.visibleName());
+      try (var reader = new JoinRecordReader(List.of(table))) {
+        assertEquals("a", reader.qualifierColumnMapping().get("U:input").get("U:a"));
+      }
+    }
+  }
+
+  /**
    * Keeps storage prefixes out of qualifier mappings even with duplicate labels.
    *
    * @throws IOException

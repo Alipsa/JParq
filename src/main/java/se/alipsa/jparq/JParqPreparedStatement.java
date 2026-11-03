@@ -2058,7 +2058,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       for (var nested : table.nestedQualifiers().entrySet()) {
         qualified.put(JParqUtil.normalizeQualifier(nested.getKey()), nested.getValue());
       }
-      String qualifier = table.alias() == null ? table.tableName() : table.alias();
+      String qualifier = table.visibleName();
       if (qualifier != null) {
         qualified.put(JParqUtil.normalizeQualifier(qualifier), columns);
       }
@@ -3212,10 +3212,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     List<String> qualifiers = new ArrayList<>();
     for (JoinRecordReader.JoinTable table : tables) {
-      if (table.alias() != null && !table.alias().isBlank()) {
-        qualifiers.add(table.alias());
-      } else if (table.tableName() != null && !table.tableName().isBlank()) {
-        qualifiers.add(table.tableName());
+      String qualifier = table.visibleName();
+      if (qualifier != null && !qualifier.isBlank()) {
+        qualifiers.add(qualifier);
       }
       qualifiers.addAll(table.nestedQualifiers().keySet());
     }
@@ -3241,7 +3240,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         String normalized = normalizeColumnKey(MaterializedNames.sqlLabel(field));
         columns.putIfAbsent(normalized, field.name());
       }
-      registerCorrelatedColumns(lookup, table.alias() == null ? table.tableName() : table.alias(), columns);
+      registerCorrelatedColumns(lookup, table.visibleName(), columns);
       for (var nested : table.nestedQualifiers().entrySet()) {
         registerCorrelatedColumns(lookup, nested.getKey(), nested.getValue());
       }
