@@ -328,6 +328,40 @@ class UnnestSubqueryTest {
       assertTrue(error.getMessage().contains("UNNEST(ARRAY[v.cyl])"), error.getMessage());
       assertFalse(error.getMessage().contains("__JPARQ_CORRELATED_VALUE"), error.getMessage());
       assertFalse(error.getMessage().contains("SELECT * FROM"), error.getMessage());
+      assertFalse(error.getMessage().contains("Failed to prepare query:"), error.getMessage());
+      assertEquals(error.getMessage().indexOf("UNNEST(ARRAY[v.cyl])"),
+          error.getMessage().lastIndexOf("UNNEST(ARRAY[v.cyl])"), error.getMessage());
+    }
+  }
+
+  /**
+   * Describes an unresolved joined argument once, retaining its column
+   * diagnostic.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void joinedUnnestErrorsDescribeArgumentOnce(boolean pushdown) throws Exception {
+    String sql = "SELECT t.x FROM (VALUES (4)) v(cyl) CROSS JOIN UNNEST(ARRAY[nosuch]) t(x)";
+    try (var connection = DriverManager.getConnection(url(pushdown))) {
+      var error = assertThrows(SQLSyntaxErrorException.class, () -> {
+        try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
+          result.next();
+        }
+      });
+      String message = error.getMessage();
+      String argument = "UNNEST(ARRAY[nosuch])";
+      assertEquals("42000", error.getSQLState());
+      assertTrue(message.contains("Failed to evaluate " + argument), message);
+      assertTrue(message.contains("Column not found in UNNEST argument: nosuch"), message);
+      assertFalse(message.contains("Failed to prepare query:"), message);
+      assertEquals(message.indexOf(argument), message.lastIndexOf(argument), message);
     }
   }
 

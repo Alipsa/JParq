@@ -1,7 +1,6 @@
 package se.alipsa.jparq.engine;
 
 import java.sql.JDBCType;
-import java.sql.SQLException;
 import java.util.List;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.BinaryExpression;
@@ -28,10 +27,11 @@ public final class ArrayExpressionSchemas {
    * @param expression
    *          expression whose declaration is needed
    * @return declared schema, or null when unknown
-   * @throws SQLException
-   *           if known array element types are incompatible
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 if known array element types are
+   *           incompatible
    */
-  public static Schema resolve(Expression expression) throws SQLException {
+  public static Schema resolve(Expression expression) {
     if (expression instanceof Function function && CorrelatedBindings.matches(function)) {
       return JdbcTypeMapper.nonNullSchema(CorrelatedBindings.schema(function));
     }
@@ -98,10 +98,11 @@ public final class ArrayExpressionSchemas {
    * @param expressions
    *          candidate values or branches
    * @return common known schema, or null when no declaration is available
-   * @throws SQLException
-   *           if declarations are incompatible
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 if known array element types are
+   *           incompatible
    */
-  private static Schema common(List<? extends Expression> expressions) throws SQLException {
+  private static Schema common(List<? extends Expression> expressions) {
     Schema result = null;
     for (Expression expression : expressions) {
       result = common(result, resolve(expression));
@@ -117,10 +118,11 @@ public final class ArrayExpressionSchemas {
    * @param right
    *          second declaration, possibly null
    * @return the common declaration
-   * @throws SQLException
-   *           if the known declarations are incompatible
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 if known array element types are
+   *           incompatible
    */
-  private static Schema common(Schema left, Schema right) throws SQLException {
+  private static Schema common(Schema left, Schema right) {
     if (left == null || right == null || left.equals(right)) {
       return left == null ? right : left;
     }

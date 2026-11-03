@@ -51,6 +51,25 @@ public final class SqlExceptions {
     return CORRELATED_BINDING.matcher(String.valueOf(text)).replaceAll(OUTER_VALUE);
   }
 
+  /**
+   * Removes generated preparation context while retaining the user's argument and
+   * the underlying error detail.
+   *
+   * @param text
+   *          nested diagnostic text, possibly null
+   * @param sql
+   *          the generated nested query
+   * @param original
+   *          the original user expression
+   * @return redacted diagnostics without the nested preparation prefix
+   */
+  public static String describeSubqueryFailure(String text, String sql, String original) {
+    if (text == null) {
+      return describe((String) null);
+    }
+    return describe(text.replace("Failed to prepare query: " + sql + ": ", "").replace(sql, original));
+  }
+
   /** Prevents utility class instantiation. */
   private SqlExceptions() {
   }

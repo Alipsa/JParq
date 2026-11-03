@@ -3276,8 +3276,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (ref != null && ref.unnest() != null) {
         String original = "UNNEST(" + SqlExceptions.describe(ref.unnest().expression()) + ")";
         String message = "Failed to evaluate " + original + (e.getMessage() == null ? "" : ": " + e.getMessage());
-        throw SqlExceptions.wrap(message, e,
-            text -> SqlExceptions.describe(text == null ? null : text.replace(sql, original)));
+        throw SqlExceptions.wrap(message, e, text -> SqlExceptions.describeSubqueryFailure(text, sql, original));
       }
       String context = "Failed to execute derived table '";
       if (e.getMessage() != null && e.getMessage().contains(context)) {

@@ -178,10 +178,12 @@ class SqlExceptionsTest {
       assertInstanceOf(expected, failure);
       assertEquals("UNNEST argument failed", failure.getMessage());
     }
-    var original = new SQLException("SELECT * FROM UNNEST(__JPARQ_CORRELATED_VALUE('private', 0))", "42000");
-    var failure = SqlExceptions.wrap("UNNEST(a.values)", original,
-        text -> SqlExceptions.describe(text.replace(original.getMessage(), "UNNEST(a.values)")));
-    assertEquals("UNNEST(a.values): UNNEST(a.values)", failure.getMessage());
+    String sql = "SELECT * FROM UNNEST(__JPARQ_CORRELATED_VALUE('private', 0))";
+    var original = new SQLException("Failed to prepare query: " + sql + ": Column not found: missing", "42000");
+    var failure = SqlExceptions.wrap("Failed to evaluate UNNEST(a.values)", original,
+        text -> SqlExceptions.describeSubqueryFailure(text, sql, "UNNEST(a.values)"));
+    assertEquals("Failed to evaluate UNNEST(a.values): Column not found: missing", failure.getMessage());
+    assertEquals("null", SqlExceptions.describeSubqueryFailure(null, sql, "UNNEST(a.values)"));
     assertSame(original, failure.getCause());
   }
 
