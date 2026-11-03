@@ -106,6 +106,26 @@ class SetOperationRowLimitTest {
   }
 
   /**
+   * Preserves set bounds when a correlated predicate subquery is serialized and
+   * reparsed for execution with each outer row's bindings.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void correlatedPredicateSubqueryKeepsSetBounds() throws SQLException {
+    try (Connection connection = connect()) {
+      assertRows(connection, """
+          SELECT x FROM (VALUES (1), (2)) t(x)
+          WHERE x IN (
+            SELECT q FROM (VALUES (2)) z(q) WHERE q = t.x
+            UNION ALL SELECT t.x FROM (VALUES (0)) w(q) OFFSET 1 ROWS
+          )
+          """, List.of(2));
+    }
+  }
+
+  /**
    * Applies fresh JDBC row-count bindings to the complete set on every execution.
    *
    * @param clause

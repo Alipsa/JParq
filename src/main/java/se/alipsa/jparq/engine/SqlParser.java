@@ -1300,7 +1300,10 @@ public final class SqlParser {
    * JSqlParser can attach LIMIT and OFFSET to the branch when no set ORDER BY is
    * present, even when FETCH belongs to the set. Normalize before creating
    * component plans and SQL so branch execution cannot consume these bounds.
-   * Parentheses keep the enclosed query's bounds local to that branch.
+   * Parentheses keep the enclosed query's bounds local to that branch. This
+   * mutates the tree owned by the current parse, after expression and
+   * relation-qualifier validation have finished; callers receive query plans
+   * rather than the original statement tree.
    *
    * @param list
    *          the set operation receiving the trailing clauses
