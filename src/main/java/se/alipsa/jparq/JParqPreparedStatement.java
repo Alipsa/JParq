@@ -3170,19 +3170,22 @@ public class JParqPreparedStatement implements PreparedStatement {
         this::subqueryTableColumns, executionPlans)) {
       query = executor.lateral(ref, collectQualifiers(preceding), columns);
     }
-    if (ref.unnest() != null && !query.references().isEmpty()
-        && (ref.joinType() == SqlParser.JoinType.RIGHT_OUTER || ref.joinType() == SqlParser.JoinType.FULL_OUTER)) {
-      throw new SQLSyntaxErrorException("A RIGHT or FULL JOIN UNNEST cannot reference preceding inputs", "42000");
-    }
     List<Schema> bindingSchemas = new ArrayList<>();
     for (var reference : query.references()) {
       var resolved = resolveCorrelatedField(reference.qualifier(), reference.column(), preceding, qualifierIndex,
           columnLookup);
       if (resolved == null) {
-        throw SqlExceptions.syntaxFailure("Column not found in LATERAL input: "
-            + (reference.qualifier() == null ? "" : reference.qualifier() + ".") + reference.column());
+        String qualifier = reference.qualifier() == null
+            ? ""
+            : collectQualifiers(preceding).stream()
+                .filter(name -> reference.qualifier().equals(JParqUtil.normalizeQualifier(name))).findFirst()
+                .orElse(reference.qualifier()) + ".";
+        throw SqlExceptions.syntaxFailure("Column not found in LATERAL input: " + qualifier + reference.column());
       }
       bindingSchemas.add(resolved.field().schema());
+    }
+    if (ref.unnest() != null && !query.references().isEmpty()) {
+      UnnestTableBuilder.validateCorrelatedJoin(ref.joinType());
     }
     List<String> fieldNames = new ArrayList<>();
     List<Schema> valueSchemas = new ArrayList<>();

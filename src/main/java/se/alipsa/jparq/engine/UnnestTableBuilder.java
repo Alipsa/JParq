@@ -91,13 +91,26 @@ public final class UnnestTableBuilder {
     CorrelatedRowsSupplier effectiveSupplier = applyTableSample(supplier, reference.tableSample());
 
     SqlParser.JoinType joinType = reference.joinType();
-    if (joinType == SqlParser.JoinType.RIGHT_OUTER || joinType == SqlParser.JoinType.FULL_OUTER) {
-      throw new SQLSyntaxErrorException("Correlated UNNEST does not support " + joinType + " joins", "42000");
-    }
+    validateCorrelatedJoin(joinType);
 
     String tableName = reference.tableAlias() != null ? reference.tableAlias() : "unnest";
     return new JoinTable(tableName, reference.tableAlias(), unnestSchema, List.of(), joinType,
         reference.joinCondition(), reference.usingColumns(), effectiveSupplier);
+  }
+
+  /**
+   * Validates the join direction of a bound correlated UNNEST input. Call after
+   * resolving its columns so binding errors retain precedence.
+   *
+   * @param joinType
+   *          the join introducing the correlated input
+   * @throws SQLSyntaxErrorException
+   *           carrying SQLState 42000 for RIGHT or FULL joins
+   */
+  public static void validateCorrelatedJoin(SqlParser.JoinType joinType) throws SQLSyntaxErrorException {
+    if (joinType == SqlParser.JoinType.RIGHT_OUTER || joinType == SqlParser.JoinType.FULL_OUTER) {
+      throw new SQLSyntaxErrorException("A RIGHT or FULL JOIN UNNEST cannot reference preceding inputs", "42000");
+    }
   }
 
   private static CorrelatedRowsSupplier applyTableSample(CorrelatedRowsSupplier supplier,

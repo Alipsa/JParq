@@ -103,6 +103,10 @@ class UnnestOuterJoinTest {
           }
         }, column);
         assertEquals("42000", columnFailure.getSQLState(), column);
+        assertTrue(columnFailure.getMessage().contains("A RIGHT or FULL JOIN UNNEST cannot reference preceding inputs"),
+            columnFailure.getMessage());
+        assertFalse(columnFailure.getMessage().contains("RIGHT_OUTER"), columnFailure.getMessage());
+        assertFalse(columnFailure.getMessage().contains("FULL_OUTER"), columnFailure.getMessage());
         for (String source : List.of("(VALUES (1)) v(k)", "(SELECT 1 AS k WHERE FALSE) v")) {
           for (String argument : List.of("ARRAY[v.k, 2]", "ARRAY[k, 2]", "ARRAY[(SELECT v.k), 2]")) {
             String sql = "SELECT COUNT(*) FROM " + source + " " + join + " JOIN UNNEST(" + argument
@@ -113,6 +117,43 @@ class UnnestOuterJoinTest {
               }
             }, sql);
             assertEquals("42000", failure.getSQLState(), sql);
+            assertTrue(failure.getMessage().contains("A RIGHT or FULL JOIN UNNEST cannot reference preceding inputs"),
+                failure.getMessage());
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Reports missing correlated columns before the join-direction restriction.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void missingOuterColumnsTakePrecedence(boolean pushdown) throws Exception {
+    try (var connection = DriverManager.getConnection(url(pushdown))) {
+      for (String join : List.of("RIGHT", "FULL")) {
+        for (String source : List.of("(VALUES (1)) v(k)", "(SELECT 1 AS k WHERE FALSE) v")) {
+          for (String argument : List.of("ARRAY[v.missing, 2]", "ARRAY[v.k, v.missing]",
+              "ARRAY[(SELECT v.missing), 2]")) {
+            String sql = "SELECT COUNT(*) FROM " + source + " " + join + " JOIN UNNEST(" + argument
+                + ") t(x) ON v.k = t.x";
+            var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
+              try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
+                result.next();
+              }
+            }, sql);
+            assertEquals("42000", failure.getSQLState(), sql);
+            assertTrue(failure.getMessage().contains("Column not found in LATERAL input: v.missing"),
+                failure.getMessage());
+            assertFalse(failure.getMessage().contains("cannot reference preceding inputs"), failure.getMessage());
           }
         }
       }
