@@ -2,6 +2,21 @@
 
 ### 1.4.0
 
+- Evaluate scalar subqueries in UNNEST arguments using the enclosing CTE and parameter context (#270).
+  Support joined UNNEST expressions through the LATERAL binding path, including correlated scalar subqueries
+  and ordinality. Preserve declared element types for arrays built from outer columns, so numeric aggregates,
+  sorting, and USING joins compare typed values. Resolve unqualified outer columns with inner-scope precedence
+  and ambiguity checks. Reject invalid alias counts with `42000` and describe the original UNNEST argument
+  instead of generated SQL. Multirow scalar results raise SQLState `21000` (#423); invalid scalar column
+  counts retain `42000`. Preserve JDBC exception subclasses in joined UNNEST errors and propagate
+  NULLIF's first-argument type during schema discovery. Materialize independent joined arguments once,
+  preserving right-only rows in RIGHT/FULL joins; reject preceding-input correlations in those joins with `42000`.
+  Broader wrapper typing remains open in #282 and #424.
+
+- Resolve unqualified outer columns in LATERAL derived tables, with inner-input precedence and
+  SQLState `42702` for ambiguous preceding columns (#286). Bind columns from CTE and derived-table inputs
+  using their visible output names.
+
 - **Behavior change:** qualified wildcards now follow the same visibility rules as other qualified references.
   Unknown or alias-hidden `alias.*` qualifiers fail with SQLState `42000`, and the shared real table name in a
   self-join (`SELECT mtcars.* FROM mtcars a JOIN mtcars b ...`) is rejected instead of expanding the first input

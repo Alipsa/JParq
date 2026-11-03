@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine;
 
 import java.io.IOException;
 import java.sql.SQLException;
+import java.sql.SQLSyntaxErrorException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -90,13 +91,26 @@ public final class UnnestTableBuilder {
     CorrelatedRowsSupplier effectiveSupplier = applyTableSample(supplier, reference.tableSample());
 
     SqlParser.JoinType joinType = reference.joinType();
-    if (joinType == SqlParser.JoinType.RIGHT_OUTER || joinType == SqlParser.JoinType.FULL_OUTER) {
-      throw new SQLException("UNNEST does not support " + joinType + " joins");
-    }
+    validateCorrelatedJoin(joinType);
 
     String tableName = reference.tableAlias() != null ? reference.tableAlias() : "unnest";
     return new JoinTable(tableName, reference.tableAlias(), unnestSchema, List.of(), joinType,
         reference.joinCondition(), reference.usingColumns(), effectiveSupplier);
+  }
+
+  /**
+   * Validates the join direction of a bound correlated UNNEST input. Call after
+   * resolving its columns so binding errors retain precedence.
+   *
+   * @param joinType
+   *          the join introducing the correlated input
+   * @throws SQLSyntaxErrorException
+   *           carrying SQLState 42000 for RIGHT or FULL joins
+   */
+  public static void validateCorrelatedJoin(SqlParser.JoinType joinType) throws SQLSyntaxErrorException {
+    if (joinType == SqlParser.JoinType.RIGHT_OUTER || joinType == SqlParser.JoinType.FULL_OUTER) {
+      throw new SQLSyntaxErrorException("A RIGHT or FULL JOIN UNNEST cannot reference preceding inputs", "42000");
+    }
   }
 
   private static CorrelatedRowsSupplier applyTableSample(CorrelatedRowsSupplier supplier,
@@ -329,7 +343,7 @@ public final class UnnestTableBuilder {
       if (elementSchema.getType() == Schema.Type.RECORD) {
         List<Schema.Field> fields = elementSchema.getFields();
         if (!aliases.isEmpty() && aliases.size() != fields.size()) {
-          throw new SQLException("UNNEST column alias count does not match record element fields");
+          throw new SQLException("UNNEST column alias count does not match record element fields", "42000");
         }
         for (int i = 0; i < fields.size(); i++) {
           String alias = aliases.isEmpty() ? fields.get(i).name() : aliases.get(i);
@@ -337,7 +351,7 @@ public final class UnnestTableBuilder {
         }
       } else {
         if (!aliases.isEmpty() && aliases.size() > 1) {
-          throw new SQLException("UNNEST element alias list is too long for a single-value array");
+          throw new SQLException("UNNEST element alias list is too long for a single-value array", "42000");
         }
         String alias = aliases.isEmpty() ? fallback : aliases.get(0);
         resolved.add(sanitizeAlias(alias, fallback));

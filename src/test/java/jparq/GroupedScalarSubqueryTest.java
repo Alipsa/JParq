@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
 import java.sql.Types;
@@ -121,8 +122,11 @@ class GroupedScalarSubqueryTest {
           "SELECT (SELECT o.n) FROM o CROSS JOIN o other GROUP BY other.n",
           "SELECT (SELECT v FROM t WHERE v = o.n) FROM o GROUP BY n",
           "SELECT (SELECT v, v FROM t WHERE v = o.n) FROM o GROUP BY n")) {
-        SQLException error = assertThrows(SQLException.class, () -> rows(connection, sql), sql);
-        assertEquals("42000", error.getSQLState(), sql);
+        Class<? extends SQLException> expected = sql.contains("SELECT v FROM t")
+            ? SQLDataException.class
+            : SQLSyntaxErrorException.class;
+        SQLException error = assertThrows(expected, () -> rows(connection, sql), sql);
+        assertEquals(sql.contains("SELECT v FROM t") ? "21000" : "42000", error.getSQLState(), sql);
       }
     }
   }
@@ -137,8 +141,11 @@ class GroupedScalarSubqueryTest {
           "SELECT v, v FROM t WHERE v > 10")) {
         for (String sql : List.of("SELECT (" + scalar + ") FROM o", "SELECT n, (" + scalar + ") FROM o GROUP BY n",
             "SELECT n FROM o WHERE n = (" + scalar + ")", "SELECT n FROM o GROUP BY n HAVING (" + scalar + ") = 2")) {
-          SQLSyntaxErrorException error = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, sql), sql);
-          assertEquals("42000", error.getSQLState(), sql);
+          Class<? extends SQLException> expected = scalar.contains("v, v")
+              ? SQLSyntaxErrorException.class
+              : SQLDataException.class;
+          SQLException error = assertThrows(expected, () -> rows(connection, sql), sql);
+          assertEquals(scalar.contains("v, v") ? "42000" : "21000", error.getSQLState(), sql);
           assertTrue(error.getMessage().contains(scalar.contains("v, v") ? "one column" : "one row"),
               error.getMessage());
         }

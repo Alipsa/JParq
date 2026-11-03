@@ -211,10 +211,19 @@ LATERAL derived tables bind outer values with their Java types intact. For examp
 `FROM arr a CROSS JOIN LATERAL (SELECT u.t FROM UNNEST(a.dates) AS u(t)) x`
 expands the current row's array. When the UNNEST argument is a direct outer column reference,
 declared date and nested-array element types are preserved, including metadata when the outer input is empty.
-Wrapping the argument in an expression such as COALESCE currently loses its declared element schema;
-LATERAL output types can then fall back to VARCHAR during schema discovery.
+Declared-type propagation in UNNEST currently covers direct bindings, ARRAY constructors, COALESCE, NULLIF
+(using its first argument's type), CASE, arithmetic, and sign expressions, including empty outer inputs.
+Other function wrappers can still lose their type during NULL-bound discovery (#282, #424); these bugs remain open.
 Null and empty arrays produce no inner rows; a LEFT JOIN LATERAL retains their outer rows with NULL inner columns.
 Standalone `UNNEST(NULL)` also returns no rows and uses VARCHAR metadata because its element type is unknown.
+UNNEST arguments can contain scalar subqueries, such as
+`UNNEST(ARRAY[(SELECT COUNT(*) FROM mtcars WHERE cyl = 4)]) AS t(x)`.
+Joined UNNEST expressions can reference preceding inputs, including through correlated scalar subqueries,
+with implicit or explicit LATERAL syntax. Subqueries use the enclosing CTEs and current parameter bindings;
+unqualified outer names must resolve uniquely. Multirow scalar results raise SQLState `21000`, while
+invalid scalar column counts and UNNEST alias counts raise `42000`.
+Independent joined UNNEST arguments are evaluated once per execution and support RIGHT and FULL joins.
+A RIGHT or FULL JOIN UNNEST argument cannot reference its preceding join inputs; such correlations raise `42000`.
 
 LATERAL derived tables may still expose numeric values as VARCHAR. In particular, LATERAL decimal
 expressions with unknown precision use VARCHAR to keep one stable schema across correlated executions.

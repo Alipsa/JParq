@@ -6,6 +6,7 @@ import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 import java.util.regex.Pattern;
 import net.sf.jsqlparser.expression.Expression;
 
@@ -19,8 +20,8 @@ public final class SqlExceptions {
   /** Diagnostic marker replacing private correlated value bindings. */
   public static final String OUTER_VALUE = "<outer value>";
   private static final int DIAGNOSTIC_VALUE_LIMIT = 64;
-  private static final Set<String> CLASSIFIED_STATES = Set.of("42000", "42702", "22001", "22005", "22003", "22007",
-      "22008", "22018", "2201W", "2201X", "0A000");
+  private static final Set<String> CLASSIFIED_STATES = Set.of("21000", "42000", "42702", "22001", "22005", "22003",
+      "22007", "22008", "22018", "2201W", "2201X", "0A000");
   private static final Pattern CORRELATED_BINDING = Pattern
       .compile("__JPARQ_CORRELATED_VALUE\\s*\\(\\s*'[^']*'\\s*,\\s*\\d+\\s*\\)", Pattern.CASE_INSENSITIVE);
 
@@ -48,6 +49,25 @@ public final class SqlExceptions {
    */
   public static String describe(String text) {
     return CORRELATED_BINDING.matcher(String.valueOf(text)).replaceAll(OUTER_VALUE);
+  }
+
+  /**
+   * Removes generated preparation context while retaining the user's argument and
+   * the underlying error detail.
+   *
+   * @param text
+   *          nested diagnostic text, possibly null
+   * @param sql
+   *          the generated nested query
+   * @param original
+   *          the original user expression
+   * @return redacted diagnostics without the nested preparation prefix
+   */
+  public static String describeSubqueryFailure(String text, String sql, String original) {
+    if (text == null) {
+      return describe((String) null);
+    }
+    return describe(text.replace("Failed to prepare query: " + sql + ": ", "").replace(sql, original));
   }
 
   /** Prevents utility class instantiation. */
@@ -98,6 +118,30 @@ public final class SqlExceptions {
    */
   public static IllegalArgumentException syntaxFailure(String message) {
     return new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000"));
+  }
+
+  /**
+   * Describes incompatible ARRAY element types consistently across evaluation and
+   * inference.
+   *
+   * @param first
+   *          the first SQL type name
+   * @param second
+   *          the incompatible SQL type name
+   * @return a failure carrying SQLState 42000
+   */
+  public static IllegalArgumentException incompatibleArrayElements(String first, String second) {
+    return syntaxFailure("ARRAY elements must share a common type; found " + first + " and " + second);
+  }
+
+  /**
+   * Creates an engine failure for a scalar subquery returning multiple rows.
+   *
+   * @return an engine exception carrying SQLState 21000
+   */
+  public static IllegalArgumentException scalarCardinalityFailure() {
+    String message = "Scalar subquery returned more than one row";
+    return new IllegalArgumentException(message, new SQLDataException(message, "21000"));
   }
 
   /**
@@ -155,8 +199,9 @@ public final class SqlExceptions {
    *
    * @param failure
    *          the exception or wrapper to inspect
-   * @return the SQLState 42000, 42702, 22001, 22005, 22003, 22007, 22008, 22018,
-   *         2201W, 2201X, or 0A000 exception, or null without a recognized state
+   * @return the SQLState 21000, 42000, 42702, 22001, 22005, 22003, 22007, 22008,
+   *         22018, 2201W, 2201X, or 0A000 exception, or null without a recognized
+   *         state
    */
   public static SQLException findSqlStateFailure(Throwable failure) {
     Throwable current = failure;
@@ -181,11 +226,28 @@ public final class SqlExceptions {
    *         known state
    */
   public static SQLException wrap(String context, Throwable failure) {
+    return wrap(context, failure, UnaryOperator.identity());
+  }
+
+  /**
+   * Preserves JDBC classifications while rendering all diagnostic text for the
+   * caller.
+   *
+   * @param context
+   *          the failed operation
+   * @param failure
+   *          the original failure, retained as the cause
+   * @param diagnostics
+   *          renderer for context and nested messages, accepting null text
+   * @return a classified JDBC exception with rendered diagnostics
+   */
+  public static SQLException wrap(String context, Throwable failure, UnaryOperator<String> diagnostics) {
     SQLException classified = findSqlStateFailure(failure);
     if (classified == null) {
-      return new SQLException(context, failure);
+      return new SQLException(diagnostics.apply(context), failure);
     }
-    if (failure == classified && Objects.equals(context, classified.getMessage())) {
+    if (failure == classified && Objects.equals(context, classified.getMessage())
+        && Objects.equals(context, diagnostics.apply(context))) {
       return classified;
     }
     StringBuilder message = new StringBuilder(context == null ? failure.toString() : context);
@@ -197,14 +259,14 @@ public final class SqlExceptions {
     if (classifiedDetail != null && !classifiedDetail.isBlank() && message.indexOf(classifiedDetail) < 0) {
       message.append(": ").append(classifiedDetail);
     }
+    String rendered = diagnostics.apply(message.toString());
     if ("42000".equals(classified.getSQLState()) || "42702".equals(classified.getSQLState())) {
-      return new SQLSyntaxErrorException(message.toString(), classified.getSQLState(), classified.getErrorCode(),
-          failure);
+      return new SQLSyntaxErrorException(rendered, classified.getSQLState(), classified.getErrorCode(), failure);
     }
     if ("0A000".equals(classified.getSQLState())) {
-      return new SQLFeatureNotSupportedException(message.toString(), classified.getSQLState(),
-          classified.getErrorCode(), failure);
+      return new SQLFeatureNotSupportedException(rendered, classified.getSQLState(), classified.getErrorCode(),
+          failure);
     }
-    return new SQLDataException(message.toString(), classified.getSQLState(), classified.getErrorCode(), failure);
+    return new SQLDataException(rendered, classified.getSQLState(), classified.getErrorCode(), failure);
   }
 }

@@ -128,6 +128,58 @@ class LateralUnnestTest {
   }
 
   /**
+   * COALESCE retains DATE declarations despite NULL schema-discovery bindings.
+   *
+   * @throws SQLException
+   *           if preparing or executing a query fails
+   */
+  @Test
+  void coalescedArraysRetainDateMetadata() throws SQLException {
+    for (String input : List.of("UNNEST(COALESCE(a.dates, a.dates)) u(t)",
+        "LATERAL (SELECT d.t FROM UNNEST(COALESCE(a.dates, a.dates)) d(t)) u")) {
+      try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+          var statement = connection.createStatement();
+          var result = statement
+              .executeQuery("SELECT a.id, u.t FROM arr a CROSS JOIN " + input + " ORDER BY a.id, u.t")) {
+        assertEquals(Types.DATE, result.getMetaData().getColumnType(2));
+        List<String> rows = new ArrayList<>();
+        while (result.next()) {
+          assertInstanceOf(Date.class, result.getObject(2));
+          rows.add(result.getInt(1) + ":" + result.getDate(2).toLocalDate().toEpochDay());
+        }
+        assertEquals(List.of("2:20002", "2:21002", "3:20003", "3:21003"), rows);
+      }
+      try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+          var statement = connection.createStatement();
+          var result = statement.executeQuery("SELECT u.t FROM arr a CROSS JOIN " + input + " WHERE a.id < 0")) {
+        assertEquals(Types.DATE, result.getMetaData().getColumnType(1));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * COALESCE retains nested array declarations and structured element values.
+   *
+   * @throws SQLException
+   *           if preparing or executing the query fails
+   */
+  @Test
+  void coalescedNestedArraysRetainElements() throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT a.id, x.t FROM arr a CROSS JOIN LATERAL "
+            + "(SELECT t FROM UNNEST(COALESCE(a.nested, a.nested)) AS u(t)) x ORDER BY a.id")) {
+      assertEquals(Types.ARRAY, result.getMetaData().getColumnType(2));
+      List<String> rows = new ArrayList<>();
+      while (result.next()) {
+        rows.add(result.getInt(1) + ":" + Arrays.toString((Object[]) result.getObject(2)));
+      }
+      assertEquals(List.of("2:[2, 3]", "2:[4]", "3:[3, 4]", "3:[5]"), rows);
+    }
+  }
+
+  /**
    * Nested LATERAL shapes and validated inputs stay bounded as outer rows grow.
    *
    * @param scalar

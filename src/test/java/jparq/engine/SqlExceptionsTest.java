@@ -161,6 +161,33 @@ class SqlExceptionsTest {
   }
 
   /**
+   * Keeps subclasses, vendor codes, and null messages when diagnostics are
+   * rendered.
+   */
+  @Test
+  void renderedDiagnosticsKeepClassification() {
+    for (String state : List.of("21000", "42000")) {
+      var original = new SQLException(null, state, 42);
+      var failure = SqlExceptions.wrap("UNNEST argument failed", original, SqlExceptions::describe);
+      assertEquals(state, failure.getSQLState());
+      assertEquals(42, failure.getErrorCode());
+      assertSame(original, failure.getCause());
+      Class<? extends SQLException> expected = "21000".equals(state)
+          ? SQLDataException.class
+          : SQLSyntaxErrorException.class;
+      assertInstanceOf(expected, failure);
+      assertEquals("UNNEST argument failed", failure.getMessage());
+    }
+    String sql = "SELECT * FROM UNNEST(__JPARQ_CORRELATED_VALUE('private', 0))";
+    var original = new SQLException("Failed to prepare query: " + sql + ": Column not found: missing", "42000");
+    var failure = SqlExceptions.wrap("Failed to evaluate UNNEST(a.values)", original,
+        text -> SqlExceptions.describeSubqueryFailure(text, sql, "UNNEST(a.values)"));
+    assertEquals("Failed to evaluate UNNEST(a.values): Column not found: missing", failure.getMessage());
+    assertEquals("null", SqlExceptions.describeSubqueryFailure(null, sql, "UNNEST(a.values)"));
+    assertSame(original, failure.getCause());
+  }
+
+  /**
    * Retains unclassified failure details in joined and LATERAL derived tables.
    *
    * @param pushdown
