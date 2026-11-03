@@ -118,8 +118,8 @@ class SetOperationRowLimitTest {
       assertRows(connection, """
           SELECT x FROM (VALUES (1), (2)) t(x)
           WHERE x IN (
-            SELECT q FROM (VALUES (2)) z(q) WHERE q = t.x
-            UNION ALL SELECT t.x FROM (VALUES (0)) w(q) OFFSET 1 ROWS
+            SELECT t.x FROM (VALUES (0)) w(q)
+            UNION ALL SELECT q FROM (VALUES (2)) z(q) WHERE q = t.x OFFSET 1 ROWS
           )
           """, List.of(2));
     }
