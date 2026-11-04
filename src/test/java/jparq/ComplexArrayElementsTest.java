@@ -113,8 +113,7 @@ class ComplexArrayElementsTest {
     assertSame(compatible, result.get(2));
     for (var other : List.of(record("renamed", "y", integer, null), record("retyped", "x", string, null),
         record("nested", "x", Schema.createArray(integer), null),
-        record("nullable", "x", Schema.createUnion(Schema.create(Schema.Type.NULL), integer), null),
-        record("extra", "x", Schema.create(Schema.Type.LONG), null))) {
+        record("nonarray", "x", Schema.create(Schema.Type.BOOLEAN), null))) {
       assertIncompatible(Arrays.asList(null, first, other));
       assertIncompatible(List.of(other, first));
     }

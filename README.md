@@ -788,7 +788,8 @@ The following SQL statements are supported:
       and explicit offsets. Zoned ARRAY elements still become strings through derived tables and CTEs (#277).
     - MAP keys and values are recursively checked for a common type, including numeric and temporal promotion
       across sibling maps. NULL values and empty maps do not constrain inferred types. STRUCT elements must
-      have matching field names, order, and schemas (including logical types); Avro record names are ignored.
+      have matching field names and order, with compatible SQL field types resolved recursively. Numeric fields
+      promote to a common type. Nullability, Avro type names, and storage properties do not distinguish SQL types.
       Incompatible MAP contents or STRUCT schemas raise SQLState `42000`.
 - comments (line --) and block (/* */)
 - Subquery support
