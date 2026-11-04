@@ -278,7 +278,8 @@ public final class ArrayFunctions {
         case Instant instant -> instant.atOffset(offset);
         case LocalDateTime dateTime -> dateTime.atOffset(offset);
         case Timestamp timestamp -> timestamp.toLocalDateTime().atOffset(offset);
-        default -> throw new IllegalArgumentException("Unsupported temporal value: " + value.getClass().getName());
+        default ->
+          throw SqlExceptions.incompatibleArrayElements(sqlTypeName(temporalFamily(value)), sqlTypeName(family));
       };
     }
     if (family == OffsetTime.class && !(value instanceof OffsetTime)) {
