@@ -2,6 +2,9 @@
 
 ### 1.4.0
 
+- Preserve CURRENT_TIMESTAMP, CURRENT_TIME, LOCALTIMESTAMP, and LOCALTIME values through derived tables
+  and CTEs (#277), including their JDBC metadata, nanosecond precision, and UTC offsets.
+
 - Keep datetime value functions stable within a statement (#275), including across rows, nested queries,
   and lazy result reads. Capture fresh datetime values for every prepared-statement execution.
   Defer time-dependent prepared materializations until execution.

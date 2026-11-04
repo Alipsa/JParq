@@ -30,8 +30,10 @@ import se.alipsa.jparq.engine.IntervalExpressionTypes;
 import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.engine.NumericExpressionTypes;
 import se.alipsa.jparq.engine.SqlExceptions;
+import se.alipsa.jparq.engine.SqlExpressionNormalizer;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
+import se.alipsa.jparq.helper.TemporalValueType;
 import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 
 /** An implementation of the java.sql.ResultSetMetaData interface. */
@@ -207,6 +209,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
 
   @Override
   public int getColumnType(int column) {
+    TemporalValueType temporal = temporalType(column);
+    if (temporal != null) {
+      return temporal.jdbcType();
+    }
     if (isIntervalColumn(column)) {
       return Types.OTHER;
     }
@@ -224,6 +230,30 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
       return computedType;
     }
     return JdbcTypeMapper.mapSchemaToJdbcType(field.schema());
+  }
+
+  /**
+   * Resolves datetime value functions without evaluating the statement clock.
+   *
+   * @param column
+   *          one-based output column
+   * @return temporal descriptor, or null for other expressions
+   */
+  private TemporalValueType temporalType(int column) {
+    Expression expression = unwrap(expressionAtColumn(column));
+    if (expression instanceof Column reference) {
+      expression = SqlExpressionNormalizer.timeKeyword(reference);
+    }
+    if (!(expression instanceof TimeKeyExpression time)) {
+      return null;
+    }
+    return switch (time.getStringValue().toUpperCase(Locale.ROOT)) {
+      case "LOCALTIME" -> TemporalValueType.LOCAL_TIME;
+      case "LOCALTIMESTAMP" -> TemporalValueType.LOCAL_TIMESTAMP;
+      case "CURRENT_TIME" -> TemporalValueType.OFFSET_TIME;
+      case "CURRENT_TIMESTAMP" -> TemporalValueType.OFFSET_TIMESTAMP;
+      default -> null;
+    };
   }
 
   /**
@@ -260,6 +290,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    */
   @Override
   public Schema columnValueSchema(int column) {
+    TemporalValueType temporal = temporalType(column);
+    if (temporal != null) {
+      return temporal.schema();
+    }
     Schema interval = intervalColumnSchema(column);
     if (interval != null) {
       return interval;
@@ -337,6 +371,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    */
   @Override
   public String getColumnClassName(int column) {
+    TemporalValueType temporal = temporalType(column);
+    if (temporal != null) {
+      return temporal.className();
+    }
     if (isIntervalColumn(column)) {
       return TemporalInterval.class.getName();
     }

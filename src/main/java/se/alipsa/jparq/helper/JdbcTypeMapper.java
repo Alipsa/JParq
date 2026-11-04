@@ -58,6 +58,10 @@ public final class JdbcTypeMapper {
     if (base == null) {
       return Types.OTHER;
     }
+    TemporalValueType temporal = TemporalValueType.fromSchema(base);
+    if (temporal != null) {
+      return temporal.jdbcType();
+    }
     if (IntervalType.matches(base)) {
       return Types.OTHER;
     }
@@ -106,6 +110,10 @@ public final class JdbcTypeMapper {
     Schema base = nonNullSchema(schema);
     if (base == null) {
       return Object.class.getName();
+    }
+    TemporalValueType temporal = TemporalValueType.fromSchema(base);
+    if (temporal != null) {
+      return temporal.className();
     }
     if (IntervalType.matches(base)) {
       return TemporalInterval.class.getName();
