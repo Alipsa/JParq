@@ -24,6 +24,7 @@ import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.helper.IntervalType;
+import se.alipsa.jparq.helper.TemporalValueType;
 
 /**
  * Utility class for coercing Avro values to Java types and vice versa.
@@ -253,6 +254,10 @@ public final class AvroCoercions {
       return null;
     }
     Schema effective = effectiveSchema(s);
+    TemporalValueType temporal = TemporalValueType.fromSchema(effective);
+    if (temporal != null) {
+      return temporal.decode(v);
+    }
     if (IntervalType.matches(effective)) {
       return IntervalType.decode(v, effective);
     }

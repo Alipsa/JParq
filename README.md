@@ -205,6 +205,12 @@ WITH RECURSIVE r(n) AS (
 SELECT n FROM r ORDER BY n
 ```
 
+Datetime value functions (`CURRENT_TIMESTAMP`, `CURRENT_TIME`, `LOCALTIMESTAMP`, and `LOCALTIME`)
+retain their Java time types, fractional seconds, UTC offsets, and JDBC metadata through derived tables
+and CTEs, including empty results. MIN/MAX over these derived columns retain the temporal metadata.
+Set operations and VALUES promote compatible local and offset times or timestamps to the corresponding
+WITH TIME ZONE type using the session offset. VALUES rejects datetime inputs with incompatible fields.
+
 Computed values with unknown types, including dates and window results, are typed from the returned values
 through CTEs and non-LATERAL derived tables, including when used in joins. Inferred metadata depends on
 which rows survive filtering: empty or all-NULL unknown-type columns use VARCHAR, and mixed types may

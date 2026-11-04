@@ -118,6 +118,7 @@ import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.TemporalInterval;
+import se.alipsa.jparq.helper.TemporalValueType;
 import se.alipsa.jparq.meta.InformationSchemaColumns;
 import se.alipsa.jparq.meta.InformationSchemaTables;
 
@@ -939,9 +940,11 @@ public class JParqPreparedStatement implements PreparedStatement {
             boolean unknown = type == Types.OTHER;
             schema = projected;
             type = projectedType;
-            // Preserve the existing contract for unknown nonnumeric projections.
-            // Only numeric values need new coercion and metadata here.
-            if (unknown && type != Types.NULL && NumericType.of(type, 0, 0) == null) {
+            // Preserve OTHER metadata for unknown nonnumeric projections while
+            // retaining recognized datetime declarations.
+            if (unknown && type != Types.NULL && NumericType.of(type, 0, 0) == null && type != Types.DATE
+                && type != Types.TIME && type != Types.TIMESTAMP && type != Types.TIME_WITH_TIMEZONE
+                && type != Types.TIMESTAMP_WITH_TIMEZONE) {
               type = Types.OTHER;
               schema = sourceColumnSchema(meta, col);
             }
@@ -984,7 +987,8 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Resolves untyped set projections from simple declarations or returned values.
-   * Declared numeric expressions use the shared expression type resolver.
+   * Declared numeric expressions use the shared expression type resolver;
+   * temporal CASTs retain their declarations even when all values are NULL.
    *
    * @param expression
    *          projected expression, when available
@@ -993,8 +997,11 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @param metadata
    *          branch metadata providing source column declarations
    * @return inferred schema, or null for an untyped NULL
+   * @throws SQLException
+   *           if inferred datetime fields are incompatible
    */
-  private Schema setExpressionSchema(Expression expression, Supplier<List<Object>> values, ResultSetMetaData metadata) {
+  private Schema setExpressionSchema(Expression expression, Supplier<List<Object>> values, ResultSetMetaData metadata)
+      throws SQLException {
     Expression projection = ExpressionEvaluator.unwrapParenthesis(expression);
     if (projection instanceof NullValue) {
       return null;
@@ -1011,17 +1018,44 @@ public class JParqPreparedStatement implements PreparedStatement {
       // values use the decimal inference default of precision one, scale zero.
       return decimalSchemaForValues(values.get());
     }
+    if (projection instanceof CastExpression cast && cast.getColDataType() != null) {
+      ValueColumnType temporal = temporalCastType(cast.getColDataType().getDataType());
+      if (temporal != null) {
+        return schemaForColumnType(temporal, List.of());
+      }
+    }
     if (LiteralConverter.isLiteral(projection)) {
       Object literal = LiteralConverter.toLiteral(projection);
       return schemaForColumnType(classifyValueType(literal), List.of(literal));
     }
     List<Object> returned = values.get();
-    // Keep nonnumeric CASTs distinct from untyped NULL; their declared metadata
-    // remains outside numeric promotion and is tracked in #288.
+    // Other nonnumeric CAST declarations remain tracked in #288.
+    // Keep them distinct from an untyped NULL.
     if (!(projection instanceof CastExpression) && returned.stream().allMatch(Objects::isNull)) {
       return null;
     }
     return schemaForColumnType(determineColumnType(returned), returned);
+  }
+
+  /**
+   * Resolves a temporal CAST declaration while retaining its time-zone clause.
+   * Precision is removed before normalization so it cannot hide a trailing WITH
+   * or WITHOUT TIME ZONE clause. Evaluation keeps its existing normalizer.
+   *
+   * @param typeName
+   *          declared CAST type
+   * @return temporal family, or null for other declarations
+   */
+  private ValueColumnType temporalCastType(String typeName) {
+    String normalized = DateTimeFunctions.normalizeTypeName(typeName.replaceAll("\\([^)]*\\)", ""));
+    return switch (normalized) {
+      case "date" -> ValueColumnType.DATE;
+      case "time", "timewithouttimezone" -> ValueColumnType.TIME;
+      case "timestamp", "timestampwithouttimezone", "datetime" -> ValueColumnType.TIMESTAMP;
+      case "timewithtimezone" -> ValueColumnType.OFFSET_TIME;
+      case "timestampwithtimezone" -> ValueColumnType.OFFSET_TIMESTAMP;
+      default -> null;
+    };
   }
 
   /**
@@ -1061,16 +1095,29 @@ public class JParqPreparedStatement implements PreparedStatement {
       NumericType common = previousNumeric.common(numeric);
       types.set(index, common.jdbcType());
       schemas.set(index, common.schema());
+    } else if ((previous == Types.TIME && type == Types.TIME_WITH_TIMEZONE)
+        || (type == Types.TIME && previous == Types.TIME_WITH_TIMEZONE)) {
+      types.set(index, Types.TIME_WITH_TIMEZONE);
+      schemas.set(index, TemporalValueType.OFFSET_TIME.schema());
+    } else if ((previous == Types.TIMESTAMP && type == Types.TIMESTAMP_WITH_TIMEZONE)
+        || (type == Types.TIMESTAMP && previous == Types.TIMESTAMP_WITH_TIMEZONE)) {
+      types.set(index, Types.TIMESTAMP_WITH_TIMEZONE);
+      schemas.set(index, TemporalValueType.OFFSET_TIMESTAMP.schema());
     } else if (previous != type) {
       throw new SQLException("Set operation components must use compatible column types", "42000");
     } else if (!Objects.equals(prior, schema)) {
-      schemas.set(index, null);
+      TemporalValueType temporal = TemporalValueType.fromSchema(prior);
+      if (temporal == null) {
+        temporal = TemporalValueType.fromSchema(schema);
+      }
+      schemas.set(index, temporal != null && temporal.jdbcType() == type ? temporal.schema() : null);
     }
   }
 
   /**
-   * Normalizes changed numeric branches before duplicate counting or ordering.
-   * Already normalized branches and unchanged rows retain their snapshots.
+   * Normalizes numeric and java.time branches before duplicate counting or
+   * ordering. Already normalized numeric branches and unchanged rows retain their
+   * snapshots.
    *
    * @param components
    *          rows of each branch
@@ -1081,18 +1128,21 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @param schemas
    *          resolved source schemas
    * @throws SQLException
-   *           if a numeric conversion loses data
+   *           if a numeric conversion loses data or temporal input is invalid
    */
   private void coerceSetRows(List<List<List<Object>>> components, List<List<NumericType>> componentTypes,
       List<Integer> types, List<Schema> schemas) throws SQLException {
     List<NumericType> numericTypes = new ArrayList<>(types.size());
+    List<TemporalValueType> temporalTypes = new ArrayList<>(types.size());
     for (int col = 0; col < types.size(); col++) {
       numericTypes.add(NumericType.of(types.get(col), schemas.get(col)));
+      temporalTypes.add(TemporalValueType.fromSchema(schemas.get(col)));
     }
     for (int component = 0; component < components.size(); component++) {
       List<Integer> conversions = new ArrayList<>();
       for (int col = 0; col < types.size(); col++) {
-        if (numericTypes.get(col) != null && !numericTypes.get(col).equals(componentTypes.get(component).get(col))) {
+        if (temporalTypes.get(col) != null
+            || numericTypes.get(col) != null && !numericTypes.get(col).equals(componentTypes.get(component).get(col))) {
           conversions.add(col);
         }
       }
@@ -1104,7 +1154,17 @@ public class JParqPreparedStatement implements PreparedStatement {
         List<Object> original = rows.get(rowIndex);
         List<Object> converted = null;
         for (int col : conversions) {
-          Object value = numericTypes.get(col).convert(original.get(col));
+          Object raw = original.get(col);
+          Object value;
+          try {
+            value = raw == null
+                ? null
+                : temporalTypes.get(col) != null
+                    ? temporalTypes.get(col).normalize(raw)
+                    : numericTypes.get(col).convert(raw);
+          } catch (java.time.DateTimeException e) {
+            throw new SQLException("Invalid temporal value in set operation", "22007", e);
+          }
           if (value != original.get(col)) {
             if (converted == null) {
               converted = new ArrayList<>(original);
@@ -1624,7 +1684,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     for (int i = 0; i < labels.size(); i++) {
       String label = labels.get(i);
       Schema retained = valueSchemas.get(i);
-      Schema baseType = IntervalType.matches(retained) ? retained : mapSqlTypeToAvroType(sqlTypes, i);
+      Schema baseType = IntervalType.matches(retained) || TemporalValueType.fromSchema(retained) != null
+          ? retained
+          : mapSqlTypeToAvroType(sqlTypes, i);
       Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), baseType));
       Field field = new Field(MaterializedNames.allocate(label, used), union, null, Field.NULL_DEFAULT_VALUE);
       field.addProp(MaterializedNames.LOOKUP_KEY, Identifier.lookupKey(label));
@@ -2891,7 +2953,16 @@ public class JParqPreparedStatement implements PreparedStatement {
     return booleanCast;
   }
 
-  private ValueColumnType determineColumnType(List<Object> values) {
+  /**
+   * Infers a common SQL value family from non-NULL values.
+   *
+   * @param values
+   *          input values
+   * @return common family, defaulting to STRING for all-NULL inputs
+   * @throws SQLException
+   *           if datetime fields are incompatible
+   */
+  private ValueColumnType determineColumnType(List<Object> values) throws SQLException {
     ValueColumnType type = null;
     if (values != null) {
       for (Object value : values) {
@@ -2910,13 +2981,23 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Classifies materialized values, including java.time TIME leaves of ARRAYs.
+   * Classifies materialized values, preserving java.time temporal
+   * representations.
    *
    * @param value
    *          non-NULL value
    * @return SQL value family used to build its Avro schema
    */
   private ValueColumnType classifyValueType(Object value) {
+    TemporalValueType temporal = TemporalValueType.fromValue(value);
+    if (temporal != null) {
+      return switch (temporal) {
+        case LOCAL_TIME -> ValueColumnType.LOCAL_TIME;
+        case LOCAL_TIMESTAMP -> ValueColumnType.LOCAL_TIMESTAMP;
+        case OFFSET_TIME -> ValueColumnType.OFFSET_TIME;
+        case OFFSET_TIMESTAMP -> ValueColumnType.OFFSET_TIMESTAMP;
+      };
+    }
     if (value instanceof TemporalInterval) {
       return ValueColumnType.INTERVAL;
     }
@@ -2941,7 +3022,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (value instanceof Date) {
       return ValueColumnType.DATE;
     }
-    if (value instanceof Time || value instanceof LocalTime) {
+    if (value instanceof Time) {
       return ValueColumnType.TIME;
     }
     if (value instanceof Timestamp) {
@@ -2959,9 +3040,48 @@ public class JParqPreparedStatement implements PreparedStatement {
     return ValueColumnType.STRING;
   }
 
-  private ValueColumnType widenType(ValueColumnType current, ValueColumnType candidate) {
+  /**
+   * Combines value families, promoting compatible temporal values to offsets.
+   *
+   * @param current
+   *          accumulated family
+   * @param candidate
+   *          next family
+   * @return common family
+   * @throws SQLException
+   *           if datetime fields are incompatible
+   */
+  private ValueColumnType widenType(ValueColumnType current, ValueColumnType candidate) throws SQLException {
     if (current == candidate) {
       return current;
+    }
+    if ((current == ValueColumnType.LOCAL_TIME && candidate == ValueColumnType.TIME)
+        || (candidate == ValueColumnType.LOCAL_TIME && current == ValueColumnType.TIME)) {
+      return ValueColumnType.LOCAL_TIME;
+    }
+    if ((current == ValueColumnType.LOCAL_TIMESTAMP && candidate == ValueColumnType.TIMESTAMP)
+        || (candidate == ValueColumnType.LOCAL_TIMESTAMP && current == ValueColumnType.TIMESTAMP)) {
+      return ValueColumnType.LOCAL_TIMESTAMP;
+    }
+    boolean currentTime = current == ValueColumnType.TIME || current == ValueColumnType.LOCAL_TIME
+        || current == ValueColumnType.OFFSET_TIME;
+    boolean candidateTime = candidate == ValueColumnType.TIME || candidate == ValueColumnType.LOCAL_TIME
+        || candidate == ValueColumnType.OFFSET_TIME;
+    boolean currentTimestamp = current == ValueColumnType.TIMESTAMP || current == ValueColumnType.LOCAL_TIMESTAMP
+        || current == ValueColumnType.OFFSET_TIMESTAMP;
+    boolean candidateTimestamp = candidate == ValueColumnType.TIMESTAMP || candidate == ValueColumnType.LOCAL_TIMESTAMP
+        || candidate == ValueColumnType.OFFSET_TIMESTAMP;
+    if (currentTime && candidateTime) {
+      return ValueColumnType.OFFSET_TIME;
+    }
+    if (currentTimestamp && candidateTimestamp) {
+      return ValueColumnType.OFFSET_TIMESTAMP;
+    }
+    if ((currentTime || currentTimestamp || current == ValueColumnType.DATE)
+        && (candidateTime || candidateTimestamp || candidate == ValueColumnType.DATE)) {
+      throw new SQLException(
+          "Incompatible datetime fields: " + datetimeTypeName(current) + " and " + datetimeTypeName(candidate),
+          "42000");
     }
     if (isNumeric(current) && isNumeric(candidate)) {
       return widenNumericType(current, candidate);
@@ -2969,13 +3089,27 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (current == ValueColumnType.STRING || candidate == ValueColumnType.STRING) {
       return ValueColumnType.STRING;
     }
-    if ((current == ValueColumnType.TIMESTAMP
-        && (candidate == ValueColumnType.DATE || candidate == ValueColumnType.TIME))
-        || (candidate == ValueColumnType.TIMESTAMP
-            && (current == ValueColumnType.DATE || current == ValueColumnType.TIME))) {
-      return ValueColumnType.TIMESTAMP;
-    }
     return ValueColumnType.STRING;
+  }
+
+  /**
+   * Maps materialized datetime families to their SQL type names for diagnostics.
+   *
+   * @param type
+   *          datetime family
+   * @return SQL type name
+   * @throws IllegalArgumentException
+   *           if the family is not temporal
+   */
+  private String datetimeTypeName(ValueColumnType type) {
+    return switch (type) {
+      case DATE -> "DATE";
+      case TIME, LOCAL_TIME -> "TIME";
+      case TIMESTAMP, LOCAL_TIMESTAMP -> "TIMESTAMP";
+      case OFFSET_TIME -> "TIME WITH TIME ZONE";
+      case OFFSET_TIMESTAMP -> "TIMESTAMP WITH TIME ZONE";
+      default -> throw new IllegalArgumentException("Not a datetime family: " + type);
+    };
   }
 
   private boolean isNumeric(ValueColumnType type) {
@@ -3024,7 +3158,18 @@ public class JParqPreparedStatement implements PreparedStatement {
     }, 0, 0);
   }
 
-  private Schema schemaForColumnType(ValueColumnType type, List<Object> values) {
+  /**
+   * Creates a materialization schema for a common value family.
+   *
+   * @param type
+   *          common value family
+   * @param values
+   *          values supplying precision and nested schemas
+   * @return non-null value schema
+   * @throws SQLException
+   *           if nested datetime fields are incompatible
+   */
+  private Schema schemaForColumnType(ValueColumnType type, List<Object> values) throws SQLException {
     return switch (type) {
       case BOOLEAN -> Schema.create(Schema.Type.BOOLEAN);
       case INT -> Schema.create(Schema.Type.INT);
@@ -3037,6 +3182,10 @@ public class JParqPreparedStatement implements PreparedStatement {
       case TIMESTAMP -> LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
       case BINARY -> Schema.create(Schema.Type.BYTES);
       case INTERVAL -> IntervalType.infer(values);
+      case LOCAL_TIME -> TemporalValueType.LOCAL_TIME.schema();
+      case LOCAL_TIMESTAMP -> TemporalValueType.LOCAL_TIMESTAMP.schema();
+      case OFFSET_TIME -> TemporalValueType.OFFSET_TIME.schema();
+      case OFFSET_TIMESTAMP -> TemporalValueType.OFFSET_TIMESTAMP.schema();
       case STRING -> Schema.create(Schema.Type.STRING);
       case ARRAY -> inferredArraySchema(values);
       case STRUCT -> values.stream().filter(GenericRecord.class::isInstance).map(GenericRecord.class::cast).findFirst()
@@ -3050,8 +3199,10 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @param values
    *          arrays whose non-null elements determine the element type
    * @return array schema with nullable elements; unknown elements use STRING
+   * @throws SQLException
+   *           if element datetime fields are incompatible
    */
-  private Schema inferredArraySchema(List<Object> values) {
+  private Schema inferredArraySchema(List<Object> values) throws SQLException {
     List<Object> elements = new ArrayList<>();
     for (Object value : values) {
       if (value instanceof Object[] array) {
@@ -3090,7 +3241,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         case DOUBLE ->
           value instanceof Number num ? Double.valueOf(num.doubleValue()) : Double.valueOf(value.toString());
         case DECIMAL -> value instanceof BigDecimal bd ? bd : new BigDecimal(value.toString());
-        case DATE, TIME, TIMESTAMP, BINARY, ARRAY, STRUCT, INTERVAL -> value;
+        case DATE, TIME, TIMESTAMP, BINARY, ARRAY, STRUCT, INTERVAL, LOCAL_TIME, LOCAL_TIMESTAMP, OFFSET_TIME,
+            OFFSET_TIMESTAMP ->
+          value;
         case STRING -> value instanceof CharSequence ? value : value.toString();
       };
     } catch (NumberFormatException | NullPointerException e) {
@@ -3147,7 +3300,9 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   private enum ValueColumnType {
-    ARRAY, STRUCT, BOOLEAN, INT, LONG, FLOAT, DOUBLE, DECIMAL, DATE, TIME, TIMESTAMP, INTERVAL, STRING, BINARY
+    ARRAY, STRUCT, BOOLEAN, INT, LONG, FLOAT, DOUBLE, DECIMAL, DATE, TIME, TIMESTAMP, INTERVAL, STRING, BINARY,
+    // Keep java.time representations distinct from JDBC date/time values.
+    LOCAL_TIME, LOCAL_TIMESTAMP, OFFSET_TIME, OFFSET_TIMESTAMP
   }
 
   /**
@@ -3862,7 +4017,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   private Schema columnSchema(ResultSetMetaData meta, int column) throws SQLException {
     int type = meta.getColumnType(column);
     Schema source = sourceColumnSchema(meta, column);
-    if (source != null && (type == Types.ARRAY || type == Types.STRUCT || IntervalType.matches(source))) {
+    if (source != null && (type == Types.ARRAY || type == Types.STRUCT || IntervalType.matches(source)
+        || TemporalValueType.fromSchema(source) != null)) {
       return source;
     }
     return switch (type) {
@@ -3920,6 +4076,14 @@ public class JParqPreparedStatement implements PreparedStatement {
     Schema effective = JdbcTypeMapper.nonNullSchema(schema);
     if (IntervalType.matches(effective)) {
       return IntervalType.encode((TemporalInterval) value);
+    }
+    TemporalValueType temporal = TemporalValueType.fromSchema(effective);
+    if (temporal != null) {
+      try {
+        return temporal.normalize(value).toString();
+      } catch (java.time.DateTimeException e) {
+        throw new SQLException("Invalid temporal value during materialization", "22007", e);
+      }
     }
     LogicalType logical = effective.getLogicalType();
     if (logical instanceof LogicalTypes.Date) {

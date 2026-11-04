@@ -918,7 +918,14 @@ public final class DateTimeFunctions {
     throw new IllegalArgumentException("Cannot cast value '" + SqlExceptions.diagnosticValue(value) + "' to BOOLEAN");
   }
 
-  private static String normalizeTypeName(String dataType) {
+  /**
+   * Normalizes a CAST type name by removing precision, spaces, and underscores.
+   *
+   * @param dataType
+   *          declared type name
+   * @return lowercase type name without its precision suffix
+   */
+  public static String normalizeTypeName(String dataType) {
     String normalized = dataType.toLowerCase(Locale.ROOT).trim().replace("_", "");
     int paren = normalized.indexOf('(');
     if (paren >= 0) {
