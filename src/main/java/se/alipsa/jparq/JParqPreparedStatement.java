@@ -1059,7 +1059,9 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Merges a branch column into the common set-operation declaration.
+   * Merges a branch column into the common set-operation declaration. Local
+   * timestamp representations take precedence over UTC timestamp encodings,
+   * independently of branch order.
    *
    * @param types
    *          common JDBC types
@@ -1107,8 +1109,11 @@ public class JParqPreparedStatement implements PreparedStatement {
       throw new SQLException("Set operation components must use compatible column types", "42000");
     } else if (!Objects.equals(prior, schema)) {
       TemporalValueType temporal = TemporalValueType.fromSchema(prior);
+      TemporalValueType branchTemporal = TemporalValueType.fromSchema(schema);
       if (temporal == null) {
-        temporal = TemporalValueType.fromSchema(schema);
+        temporal = branchTemporal;
+      } else if (temporal == TemporalValueType.UTC_TIMESTAMP && branchTemporal == TemporalValueType.LOCAL_TIMESTAMP) {
+        temporal = TemporalValueType.LOCAL_TIMESTAMP;
       }
       schemas.set(index, temporal != null && temporal.jdbcType() == type ? temporal.schema() : null);
     }

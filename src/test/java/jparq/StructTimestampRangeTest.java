@@ -257,6 +257,48 @@ class StructTimestampRangeTest {
   }
 
   /**
+   * Uses local TIMESTAMP representation for mixed UTC/local set branches in
+   * either order.
+   *
+   * @param emptyLocal
+   *          whether the local branch returns no rows
+   * @param directory
+   *          database directory
+   * @throws Exception
+   *           if fixture writing or querying fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void combinesUtcAndLocalSetBranches(boolean emptyLocal, @TempDir Path directory) throws Exception {
+    var instant = Instant.parse("2026-06-01T12:00:00Z");
+    writeTimestamps(directory, instant, LOADED);
+    String utc = "SELECT u.x AS x FROM t CROSS JOIN UNNEST(ARRAY[t.valid_to,t.loaded]) AS u(x)";
+    String local = "SELECT LOCALTIMESTAMP AS x" + (emptyLocal ? " WHERE FALSE" : "");
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      for (String branches : List.of(utc + " UNION ALL " + local, local + " UNION ALL " + utc)) {
+        for (String sql : List.of(branches, "SELECT x FROM (" + branches + ") d",
+            "WITH c AS (" + branches + ") SELECT x FROM c")) {
+          try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+            assertEquals(Types.TIMESTAMP, result.getMetaData().getColumnType(1), sql);
+            assertEquals(LocalDateTime.class.getName(), result.getMetaData().getColumnClassName(1), sql);
+            var values = new ArrayList<LocalDateTime>();
+            while (result.next()) {
+              var value = assertInstanceOf(LocalDateTime.class, result.getObject(1), sql);
+              assertEquals(value, result.getTimestamp(1).toLocalDateTime(), sql);
+              values.add(value);
+            }
+            assertEquals(emptyLocal ? 2 : 3, values.size(), sql);
+            assertTrue(values.contains(Timestamp.from(instant).toLocalDateTime()), sql);
+            assertTrue(values.contains(Timestamp.from(LOADED_INSTANT).toLocalDateTime()), sql);
+          }
+        }
+      }
+    }
+  }
+
+  /**
    * Computes the same Java representation as standalone decoding for the source's
    * timestamp family.
    *
