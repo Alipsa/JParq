@@ -550,8 +550,11 @@ public class JParqPreparedStatement implements PreparedStatement {
   // result.
   @SuppressWarnings("PMD.UseTryWithResources")
   private JParqResultSet executeQuery(QueryCancellation cancellation) throws SQLException {
-    if (hasParameters) {
-      return executeWithBoundParameters();
+    // Prepared materializations must be rebuilt at execution time: their datetime
+    // values cannot be retained from preparation or a previous execution.
+    if (hasParameters
+        || (ownsStatement && (baseCteResult != null || !cteResults.isEmpty() || !valueTableResults.isEmpty()))) {
+      return executeReplannedQuery();
     }
     if (reusablePlan == null) {
       executionPlans = new SubqueryExecutor.ExecutionPlans();
@@ -4925,7 +4928,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Executes the query with bound parameters by re-planning with actual values.
+   * Rebuilds materialized inputs and binds parameters for the current execution.
    *
    * <p>
    * This method performs the second phase of the two-phase prepared statement
@@ -4945,14 +4948,15 @@ public class JParqPreparedStatement implements PreparedStatement {
    * require actual values (not placeholders) to construct efficient column-level
    * filters. This approach ensures that WHERE conditions with parameters like
    * {@code WHERE age > ?} can be pushed down to Parquet's storage layer,
-   * dramatically reducing I/O for filtered queries.
+   * dramatically reducing I/O for filtered queries. Materialized inputs are also
+   * rebuilt so datetime values use the current execution snapshot.
    * </p>
    *
    * @return the result set from executing the query with bound parameters
    * @throws SQLException
    *           if parameter binding fails or query execution fails
    */
-  private JParqResultSet executeWithBoundParameters() throws SQLException {
+  private JParqResultSet executeReplannedQuery() throws SQLException {
     String boundSql = bindParameters();
     JParqResultSet currentResultSet = stmt.getCurrentRs();
     if (currentResultSet != null) {

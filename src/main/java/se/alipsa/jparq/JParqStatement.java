@@ -7,6 +7,7 @@ import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLWarning;
 import java.sql.Statement;
 import se.alipsa.jparq.engine.QueryCancellation;
+import se.alipsa.jparq.engine.function.StatementTime;
 
 /** An implementation of the java.sql.Statement interface. */
 @SuppressWarnings({
@@ -142,9 +143,10 @@ public class JParqStatement implements Statement {
     return new ExecutionScope(activeExecution);
   }
 
-  /** Holds the cancellation state until an execution or nested query returns. */
+  /** Activates shared cancellation and datetime state for one execution scope. */
   final class ExecutionScope implements AutoCloseable {
     private final QueryCancellation cancellation;
+    private final StatementTime.Scope timeScope;
 
     /**
      * Captures the shared execution state.
@@ -154,6 +156,7 @@ public class JParqStatement implements Statement {
      */
     private ExecutionScope(QueryCancellation cancellation) {
       this.cancellation = cancellation;
+      timeScope = cancellation.statementTime().open();
     }
 
     /**
@@ -167,6 +170,7 @@ public class JParqStatement implements Statement {
 
     @Override
     public void close() {
+      timeScope.close();
       synchronized (JParqStatement.this) {
         executionDepth--;
         if (executionDepth == 0) {

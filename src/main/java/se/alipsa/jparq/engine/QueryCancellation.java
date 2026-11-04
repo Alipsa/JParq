@@ -12,10 +12,11 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.engine.function.StatementTime;
 
 /**
  * Shares cancellation across planning, execution, nested queries, and returned
- * results.
+ * results. Also owns the datetime snapshot for that execution.
  */
 public final class QueryCancellation {
   /** SQLState identifying a canceled query. */
@@ -23,6 +24,16 @@ public final class QueryCancellation {
   private static final String CANCELED_MESSAGE = "Statement was canceled";
   private final Set<RecordReader> readers = new HashSet<>();
   private volatile boolean canceled;
+  private final StatementTime statementTime = new StatementTime();
+
+  /**
+   * Returns the datetime snapshot shared by this execution and its nested work.
+   *
+   * @return statement datetime snapshot
+   */
+  public StatementTime statementTime() {
+    return statementTime;
+  }
 
   /**
    * Creates the JDBC exception used at every cancellation boundary.
