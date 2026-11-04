@@ -786,7 +786,10 @@ The following SQL statements are supported:
       Java SQL and java.time representations are always normalized to `java.sql.Date`, `java.sql.Time`
       (millisecond precision), `java.sql.Timestamp`, `OffsetTime` or `OffsetDateTime`, retaining timestamp fractions
       and explicit offsets. Zoned ARRAY elements still become strings through derived tables and CTEs (#277).
-    - MAP key/value types and STRUCT field schemas are not validated.
+    - MAP keys and values are recursively checked for a common type, including numeric and temporal promotion
+      across sibling maps. NULL values and empty maps do not constrain inferred types. STRUCT elements must
+      have matching field names, order, and schemas (including logical types); Avro record names are ignored.
+      Incompatible MAP contents or STRUCT schemas raise SQLState `42000`.
 - comments (line --) and block (/* */)
 - Subquery support
   - In the SELECT Clause : Used to return a single value or a set of values. e.g.

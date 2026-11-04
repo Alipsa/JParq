@@ -16,9 +16,12 @@ import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.IndexedRecord;
@@ -67,9 +70,9 @@ public final class ArrayFunctions {
    * JDBC representation of their family. NULLs and empty arrays do not constrain
    * the inferred leaf type. Nested reference arrays, including stored Parquet
    * array columns, are normalized to unmodifiable lists. Primitive arrays remain
-   * scalar values. Map implementations share the MAP family and retain their
-   * original values. MAP key/value types and STRUCT field schemas are not
-   * inspected.
+   * scalar values. MAP keys and values are recursively validated and normalized
+   * across sibling maps. STRUCT elements must have matching field names, order,
+   * and schemas, including logical types; Avro record names are ignored.
    *
    * @param values
    *          raw values
@@ -97,16 +100,12 @@ public final class ArrayFunctions {
    * @return true when a session time zone displacement is needed
    */
   private static boolean requiresOffset(ElementType type) {
-    for (ElementType depth = type; depth != null; depth = depth.nested) {
-      if (depth.family == OffsetDateTime.class || depth.family == OffsetTime.class) {
-        return true;
-      }
-    }
-    return false;
+    return type != null && (type.family == OffsetDateTime.class || type.family == OffsetTime.class
+        || requiresOffset(type.nested) || requiresOffset(type.mapKey) || requiresOffset(type.mapValue));
   }
 
   /**
-   * Infers a shared type at each depth across all sibling arrays.
+   * Infers shared types across sibling arrays, MAP entries, and STRUCT schemas.
    *
    * @param values
    *          raw array elements
@@ -131,6 +130,8 @@ public final class ArrayFunctions {
         candidate = List.class;
       } else if (value instanceof Map<?, ?>) {
         candidate = Map.class;
+      } else if (value instanceof IndexedRecord) {
+        candidate = IndexedRecord.class;
       } else {
         candidate = temporalFamily(value);
       }
@@ -144,6 +145,19 @@ public final class ArrayFunctions {
           type.nested = new ElementType();
         }
         inferElementType(arrayValues(value), type.nested);
+      } else if (value instanceof Map<?, ?> map) {
+        if (type.mapKey == null) {
+          type.mapKey = new ElementType();
+          type.mapValue = new ElementType();
+        }
+        inferElementType(new ArrayList<>(map.keySet()), type.mapKey);
+        inferElementType(new ArrayList<>(map.values()), type.mapValue);
+      } else if (value instanceof IndexedRecord record) {
+        Schema schema = record.getSchema();
+        if (type.struct != null && !matchingSchemas(type.struct, schema, new HashSet<>())) {
+          throw SqlExceptions.incompatibleArrayElements("STRUCT " + type.struct, "STRUCT " + schema);
+        }
+        type.struct = schema;
       }
     }
   }
@@ -174,11 +188,100 @@ public final class ArrayFunctions {
         coerced.add(IntervalType.project((TemporalInterval) value, type.interval));
       } else if (type.family == List.class) {
         coerced.add(coerceArrayValues(arrayValues(value), type.nested, offset));
+      } else if (type.family == Map.class) {
+        coerced.add(coerceMap((Map<?, ?>) value, type, offset));
       } else {
         coerced.add(coerceTemporal(value, type.family, offset));
       }
     }
     return Collections.unmodifiableList(coerced);
+  }
+
+  /**
+   * Normalizes map entries with the common key and value types. Unchanged maps
+   * retain their identity; converted maps are unmodifiable.
+   *
+   * @param map
+   *          validated map
+   * @param type
+   *          shared map element type
+   * @param offset
+   *          session displacement for temporal promotion
+   * @return map with normalized keys and values
+   * @throws IllegalArgumentException
+   *           if key promotion creates duplicate keys; the cause carries
+   *           SQLState 42000
+   */
+  private static Map<?, ?> coerceMap(Map<?, ?> map, ElementType type, ZoneOffset offset) {
+    List<Object> keys = coerceArrayValues(new ArrayList<>(map.keySet()), type.mapKey, offset);
+    List<Object> values = coerceArrayValues(new ArrayList<>(map.values()), type.mapValue, offset);
+    Map<Object, Object> result = new LinkedHashMap<>();
+    boolean changed = false;
+    int index = 0;
+    for (Map.Entry<?, ?> entry : map.entrySet()) {
+      Object key = keys.get(index);
+      Object value = values.get(index++);
+      if (result.containsKey(key)) {
+        throw SqlExceptions.incompatibleArrayElements("MAP keys", "duplicate keys after type promotion");
+      }
+      result.put(key, value);
+      changed |= key != entry.getKey() || value != entry.getValue();
+    }
+    return changed ? Collections.unmodifiableMap(result) : map;
+  }
+
+  /**
+   * Compares STRUCT field declarations recursively, ignoring Avro record names,
+   * documentation, and defaults, which do not affect SQL field types.
+   *
+   * @param left
+   *          first field schema
+   * @param right
+   *          second field schema
+   * @param visited
+   *          schema pairs already compared, to support recursive records
+   * @return true when the schemas have the same field types
+   */
+  private static boolean matchingSchemas(Schema left, Schema right, Set<List<Schema>> visited) {
+    if (left.equals(right)) {
+      return true;
+    }
+    if (left.getType() != right.getType() || !left.getObjectProps().equals(right.getObjectProps())) {
+      return false;
+    }
+    if (!visited.add(List.of(left, right))) {
+      return true;
+    }
+    return switch (left.getType()) {
+      case RECORD -> {
+        if (left.getFields().size() != right.getFields().size()) {
+          yield false;
+        }
+        boolean matches = true;
+        for (int index = 0; index < left.getFields().size(); index++) {
+          Schema.Field first = left.getFields().get(index);
+          Schema.Field second = right.getFields().get(index);
+          if (!first.name().equals(second.name()) || !matchingSchemas(first.schema(), second.schema(), visited)) {
+            matches = false;
+            break;
+          }
+        }
+        yield matches;
+      }
+      case ARRAY -> matchingSchemas(left.getElementType(), right.getElementType(), visited);
+      case MAP -> matchingSchemas(left.getValueType(), right.getValueType(), visited);
+      case UNION -> {
+        if (left.getTypes().size() != right.getTypes().size()) {
+          yield false;
+        }
+        boolean matches = true;
+        for (int index = 0; index < left.getTypes().size(); index++) {
+          matches &= matchingSchemas(left.getTypes().get(index), right.getTypes().get(index), visited);
+        }
+        yield matches;
+      }
+      default -> left.equals(right);
+    };
   }
 
   /**
@@ -348,12 +451,15 @@ public final class ArrayFunctions {
     return Collections.unmodifiableList(converted);
   }
 
-  /** Common element family and numeric promotion target at one array depth. */
+  /** Common element family and recursive container types at one nesting depth. */
   private static final class ElementType {
     private Class<?> family;
     private NumericType numeric = NumericType.NONE;
     private ElementType nested;
     private Schema interval;
+    private ElementType mapKey;
+    private ElementType mapValue;
+    private Schema struct;
   }
 
   private enum NumericType {
