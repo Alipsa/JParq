@@ -23,6 +23,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.SubqueryExecutor.SubqueryResult;
 import se.alipsa.jparq.engine.function.ArrayFunctions;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
 /**
  * Unit tests for {@link ArrayFunctions}.
@@ -172,7 +173,15 @@ class ArrayFunctionsTest {
             6L
         }), Arguments.of(List.of(4L), "6"), Arguments.of(List.of(4L), List.of("6")),
         Arguments.of(List.of(4L), List.of(List.of(6L))), Arguments.of(List.of(List.of(4L)), List.of(List.of(true))),
-        Arguments.of(4L, java.sql.Date.valueOf("2026-01-01")));
+        Arguments.of(4L, java.sql.Date.valueOf("2026-01-01")),
+        Arguments.of(java.sql.Date.valueOf("2026-01-01"), java.sql.Time.valueOf("12:00:00")),
+        Arguments.of(java.time.LocalDate.now(), java.time.OffsetTime.now()),
+        Arguments.of(java.sql.Date.valueOf("2026-01-01"), java.sql.Timestamp.valueOf("2026-01-01 12:00:00")),
+        Arguments.of(java.time.LocalDate.of(2026, 1, 1), java.time.LocalDateTime.of(2026, 1, 1, 12, 0)),
+        Arguments.of(java.time.LocalDate.of(2026, 1, 1), java.time.OffsetDateTime.parse("2026-01-01T12:00:00Z")),
+        Arguments.of(List.of(java.sql.Date.valueOf("2026-01-01")),
+            List.of(java.sql.Timestamp.valueOf("2026-01-01 12:00:00"))),
+        Arguments.of(java.sql.Timestamp.valueOf("2026-01-01 12:00:00"), java.time.LocalTime.NOON));
   }
 
   /** Preserves NULL values while promoting compatible numeric elements. */
@@ -295,38 +304,82 @@ class ArrayFunctionsTest {
   }
 
   /**
-   * Distinguishes mixed Java representations of the same SQL type.
+   * Normalizes compatible temporal representations in either order and across
+   * sibling arrays, preserving NULLs, fractional seconds, and offsets.
    *
    * @param first
-   *          first representation
+   *          first temporal representation
    * @param second
-   *          second representation
-   * @param type
-   *          shared SQL label
+   *          second temporal representation
+   * @param expectedFirst
+   *          promoted first value
+   * @param expectedSecond
+   *          promoted second value
    */
   @ParameterizedTest
-  @MethodSource("sameSqlTypeRepresentations")
-  void distinguishesSameSqlTypeRepresentations(Object first, Object second, String type) {
+  @MethodSource("compatibleTemporalElements")
+  void promotesTemporalElements(Object first, Object second, Object expectedFirst, Object expectedSecond) {
     var values = new ArrayList<Object>(Arrays.asList(null, first, second, null));
+    var expected = new ArrayList<Object>(Arrays.asList(null, expectedFirst, expectedSecond, null));
     for (int order = 0; order < 2; order++) {
-      var failure = assertThrows(IllegalArgumentException.class, () -> ArrayFunctions.homogenizeArrayValues(values));
-      assertEquals("ARRAY elements must share a common type; found " + type + " (" + values.get(1).getClass().getName()
-          + ") and " + type + " (" + values.get(2).getClass().getName() + ")", failure.getMessage());
-      assertEquals("42000", assertInstanceOf(SQLSyntaxErrorException.class, failure.getCause()).getSQLState());
+      var normalized = ArrayFunctions.homogenizeArrayValues(values);
+      assertEquals(expected, normalized);
+      assertEquals(expectedFirst.getClass(), normalized.get(1).getClass());
+      assertEquals(expectedFirst.getClass(), normalized.get(2).getClass());
+      assertThrows(UnsupportedOperationException.class, () -> normalized.add(first));
+      assertEquals(Arrays.asList(List.of(), Arrays.asList(null, expected.get(1)), List.of(expected.get(2))),
+          ArrayFunctions
+              .homogenizeArrayValues(List.of(List.of(), Arrays.asList(null, values.get(1)), List.of(values.get(2)))));
       Collections.reverse(values);
+      Collections.reverse(expected);
     }
   }
 
   /**
-   * Supplies class pairs whose SQL diagnostic labels would otherwise be
-   * identical.
+   * Supplies SQL and java.time representations and their common temporal values.
+   * Local values promoted to a zoned type receive the session displacement.
    *
-   * @return incompatible representations and their shared label
+   * @return compatible temporal pairs with promoted results
    */
-  private static Stream<Arguments> sameSqlTypeRepresentations() {
-    return Stream.of(Arguments.of(java.time.LocalDateTime.of(2026, 1, 1, 12, 0),
-        java.sql.Timestamp.valueOf("2026-01-01 12:00:00"), "TIMESTAMP"),
-        Arguments.of(java.time.LocalTime.NOON, java.sql.Time.valueOf("12:00:00"), "TIME"));
+  private static Stream<Arguments> compatibleTemporalElements() {
+    var date = java.time.LocalDate.of(2026, 1, 1);
+    var local = date.atTime(12, 0, 0, 123456789);
+    var timestamp = java.sql.Timestamp.valueOf(local);
+    var time = java.time.LocalTime.of(12, 0, 0, 123456789);
+    var sqlTime = java.sql.Time.valueOf("12:00:00");
+    var offset = java.time.ZoneOffset.ofHours(3);
+    var zoned = local.atOffset(offset);
+    var session = DateTimeFunctions.sessionOffset();
+    return Stream.of(
+        Arguments.of(java.sql.Date.valueOf(date), date, java.sql.Date.valueOf(date), java.sql.Date.valueOf(date)),
+        Arguments.of(local, timestamp, timestamp, timestamp),
+        Arguments.of(time, sqlTime, DateTimeFunctions.toTime(time), sqlTime),
+        Arguments.of(timestamp, zoned, local.atOffset(session), zoned),
+        Arguments.of(zoned.toZonedDateTime(), zoned, zoned, zoned),
+        Arguments.of(zoned.toInstant(), zoned, zoned.toInstant().atOffset(session), zoned),
+        Arguments.of(time, time.atOffset(offset), time.atOffset(session), time.atOffset(offset)));
+  }
+
+  /** Converts homogeneous temporal leaves to the same canonical JDBC families. */
+  @Test
+  void normalizesHomogeneousTemporalRepresentations() {
+    var local = java.time.LocalDateTime.parse("2026-01-01T12:00:00.123456789");
+    var time = java.time.LocalTime.of(12, 0, 0, 123456789);
+    var zone = java.time.ZoneId.of("Europe/Stockholm");
+    var zoned = local.atZone(zone);
+    var instant = java.time.Instant.EPOCH;
+    var offset = DateTimeFunctions.sessionOffset();
+    for (List<Object> pair : List.of(List.<Object>of(local.toLocalDate(), java.sql.Date.valueOf(local.toLocalDate())),
+        List.<Object>of(time, DateTimeFunctions.toTime(time)),
+        List.<Object>of(local, java.sql.Timestamp.valueOf(local)), List.<Object>of(zoned, zoned.toOffsetDateTime()),
+        List.<Object>of(instant, instant.atOffset(offset)))) {
+      var expected = Arrays.asList(null, pair.get(1), pair.get(1), null);
+      var normalized = ArrayFunctions.homogenizeArrayValues(Arrays.asList(null, pair.get(0), pair.get(0), null));
+      assertEquals(expected, normalized);
+      assertEquals(pair.get(1).getClass(), normalized.get(1).getClass());
+      assertEquals(List.of(List.of(pair.get(1)), List.of(pair.get(1))),
+          ArrayFunctions.homogenizeArrayValues(List.of(List.of(pair.get(0)), List.of(pair.get(0)))));
+    }
   }
 
   /**
