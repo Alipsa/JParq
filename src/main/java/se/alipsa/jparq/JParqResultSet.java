@@ -1643,7 +1643,10 @@ public class JParqResultSet extends ResultSetAdapter {
     if (type == String.class) {
       return type.cast(getString(columnIndex));
     }
-    return JdbcConversions.convert(getObject(columnIndex), type);
+    StatementTime.Scope timeScope = cancellation == null ? null : cancellation.statementTime().open();
+    try (timeScope) {
+      return JdbcConversions.convert(getObject(columnIndex), type);
+    }
   }
 
   /** {@inheritDoc} */

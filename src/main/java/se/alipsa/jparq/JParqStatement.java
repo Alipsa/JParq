@@ -113,6 +113,7 @@ public class JParqStatement implements Statement {
 
   /**
    * Starts execution before planning or materialization, sharing nested scopes.
+   * The cancellation token also owns the execution's shared datetime snapshot.
    *
    * @return scope owning one nesting level of this statement's execution
    * @throws SQLException

@@ -3,17 +3,25 @@ package jparq.functions;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.OffsetTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.TimeZone;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.function.StatementTime;
 
 /** Verifies datetime snapshots across SQL execution and lazy JDBC reads. */
 class StatementDatetimeTest {
@@ -156,6 +164,7 @@ class StatementDatetimeTest {
         var first = firstStatement.executeQuery("SELECT CURRENT_TIMESTAMP FROM mtcars")) {
       assertTrue(first.next());
       Object firstTime = first.getObject(1);
+      awaitClockAdvance();
       try (var second = secondStatement.executeQuery("SELECT CURRENT_TIMESTAMP FROM mtcars")) {
         assertTrue(second.next());
         Object secondTime = second.getObject(1);
@@ -198,6 +207,7 @@ class StatementDatetimeTest {
       }
       Object previous = null;
       for (int iteration = 0; iteration < 3; iteration++) {
+        awaitClockAdvance();
         try (var result = prepared.executeQuery()) {
           assertTrue(result.next());
           Object current = result.getObject(1);
@@ -207,4 +217,133 @@ class StatementDatetimeTest {
       }
     }
   }
+  /**
+   * Waits for a clock tick before checking that separate executions differ.
+   *
+   * @throws InterruptedException
+   *           if the wait is interrupted
+   */
+  private static void awaitClockAdvance() throws InterruptedException {
+    Instant initial = Instant.now();
+    long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+    while (!Instant.now().isAfter(initial)) {
+      assertTrue(System.nanoTime() < deadline, "Clock did not advance within five seconds");
+      Thread.sleep(1);
+    }
+  }
+
+  /**
+   * Time-independent prepared inputs remain cached across executions.
+   *
+   * @param sql
+   *          query with an observable nondatetime materialization
+   * @throws Exception
+   *           if JDBC operations fail
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "WITH c AS (SELECT RAND() AS v FROM mtcars) SELECT v FROM c", "SELECT v FROM (SELECT RAND() AS v FROM mtcars) t",
+      "SELECT v FROM (VALUES (RAND())) t(v)", "SELECT v FROM UNNEST(ARRAY[RAND()]) t(v)"
+  })
+  void retainsTimeIndependentMaterializations(String sql) throws Exception {
+    try (var connection = DriverManager.getConnection(URL); var prepared = connection.prepareStatement(sql)) {
+      List<Object> expected = null;
+      for (int execution = 0; execution < 3; execution++) {
+        List<Object> actual = new ArrayList<>();
+        try (var result = prepared.executeQuery()) {
+          while (result.next()) {
+            actual.add(result.getObject(1));
+          }
+        }
+        assertFalse(actual.isEmpty());
+        if (expected == null) {
+          expected = actual;
+        } else {
+          assertEquals(expected, actual, sql);
+        }
+      }
+    }
+  }
+
+  /**
+   * Datetime-dependent inputs are not evaluated or retained during preparation.
+   *
+   * @throws Exception
+   *           if setup fails
+   */
+  @Test
+  void defersTimeDependentMaterialization() throws Exception {
+    try (var connection = DriverManager.getConnection(URL);
+        var prepared = connection.prepareStatement(
+            "WITH c AS (SELECT CURRENT_TIMESTAMP AS ts, " + "CAST('bad' AS INTEGER) AS v) SELECT v FROM c")) {
+      assertThrows(SQLException.class, prepared::executeQuery);
+    }
+  }
+
+  /**
+   * Successful and failing lazy reads restore the enclosing thread context.
+   *
+   * @throws Exception
+   *           if setup or successful reads fail
+   */
+  @Test
+  void restoresContextAfterExecutionAndFailedNext() throws Exception {
+    try (var connection = DriverManager.getConnection(URL); var statement = connection.createStatement()) {
+      StatementTime enclosing = new StatementTime();
+      var scope = enclosing.open();
+      try (scope) {
+        OffsetDateTime outer = StatementTime.current();
+        try (var result = statement.executeQuery("SELECT CURRENT_TIMESTAMP FROM mtcars WHERE "
+            + "CASE WHEN model = 'Mazda RX4' THEN 1 ELSE CAST('bad' AS INTEGER) END = 1")) {
+          assertSame(outer, StatementTime.current());
+          assertTrue(result.next());
+          Object snapshot = result.getObject(1);
+          assertNotSame(outer, snapshot);
+          assertSame(outer, StatementTime.current());
+          assertThrows(SQLException.class, result::next);
+          assertSame(outer, StatementTime.current());
+        }
+      }
+      try (var result = statement.executeQuery("SELECT CURRENT_TIMESTAMP")) {
+        assertTrue(result.next());
+        Object snapshot = result.getObject(1);
+        assertNotSame(snapshot, StatementTime.current());
+      }
+    }
+  }
+
+  /**
+   * Typed local-time conversion uses the snapshot's zone even after overrides.
+   *
+   * @throws Exception
+   *           if JDBC operations fail
+   */
+  @Test
+  void convertsOffsetTimeInsideSnapshotScope() throws Exception {
+    TimeZone savedDefault = TimeZone.getDefault();
+    String savedProperty = System.getProperty("user.timezone");
+    try {
+      TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
+      System.setProperty("user.timezone", "Asia/Kolkata");
+      try (var connection = DriverManager.getConnection(URL);
+          var statement = connection.createStatement();
+          var result = statement.executeQuery("SELECT CURRENT_TIMESTAMP, TIME '12:34:56' AS t")) {
+        assertTrue(result.next());
+        OffsetDateTime timestamp = (OffsetDateTime) result.getObject(1);
+        System.setProperty("user.timezone", "America/New_York");
+        OffsetTime expected = java.time.LocalTime.of(12, 34, 56).atOffset(timestamp.getOffset())
+            .withOffsetSameInstant(java.time.ZoneOffset.UTC);
+        assertEquals(expected, result.getObject(2, OffsetTime.class));
+        assertEquals(expected, result.getObject("t", OffsetTime.class));
+      }
+    } finally {
+      TimeZone.setDefault(savedDefault);
+      if (savedProperty == null) {
+        System.clearProperty("user.timezone");
+      } else {
+        System.setProperty("user.timezone", savedProperty);
+      }
+    }
+  }
+
 }

@@ -39,7 +39,9 @@ class TypedGetObjectTest {
   @Test
   void temporalConversions() throws Exception {
     TimeZone previous = TimeZone.getDefault();
+    String previousProperty = System.getProperty("user.timezone");
     TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
+    System.setProperty("user.timezone", "UTC");
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement();
         var result = statement.executeQuery("SELECT DATE '2024-01-02' AS d, TIME '12:34:56.123' AS t, "
@@ -53,13 +55,13 @@ class TypedGetObjectTest {
       OffsetDateTime expected = OffsetDateTime.parse("2024-01-02T12:34:56.123456789Z");
       assertEquals(expected, result.getObject("ts", OffsetDateTime.class));
     } finally {
-      TimeZone.setDefault(previous);
+      restoreTimeZone(previous, previousProperty);
     }
   }
 
   /**
-   * Applies the JVM zone to times and timestamps without a time zone. Expected
-   * values are independent constants in fixed and daylight-saving zones.
+   * Applies the session zone to times and timestamps without a time zone.
+   * Expected values are independent constants in fixed and daylight-saving zones.
    *
    * @throws Exception
    *           if query execution fails
@@ -67,8 +69,10 @@ class TypedGetObjectTest {
   @Test
   void offsetConversionsUseSessionZone() throws Exception {
     TimeZone previous = TimeZone.getDefault();
+    String previousProperty = System.getProperty("user.timezone");
     try {
       TimeZone.setDefault(TimeZone.getTimeZone("GMT+01:00"));
+      System.setProperty("user.timezone", "GMT+01:00");
       try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
           var statement = connection.createStatement();
           var result = statement
@@ -78,6 +82,7 @@ class TypedGetObjectTest {
         assertEquals(OffsetDateTime.parse("2024-01-02T11:00Z"), result.getObject("ts", OffsetDateTime.class));
       }
       TimeZone.setDefault(TimeZone.getTimeZone("Europe/Stockholm"));
+      System.setProperty("user.timezone", "Europe/Stockholm");
       try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
           var statement = connection.createStatement();
           var result = statement.executeQuery(
@@ -87,7 +92,24 @@ class TypedGetObjectTest {
         assertEquals(OffsetDateTime.parse("2024-07-02T10:00Z"), result.getObject("summer", OffsetDateTime.class));
       }
     } finally {
-      TimeZone.setDefault(previous);
+      restoreTimeZone(previous, previousProperty);
+    }
+  }
+
+  /**
+   * Restores both JVM zone configuration sources after a temporal test.
+   *
+   * @param previous
+   *          saved JVM default
+   * @param previousProperty
+   *          saved session timezone property, or null
+   */
+  private static void restoreTimeZone(TimeZone previous, String previousProperty) {
+    TimeZone.setDefault(previous);
+    if (previousProperty == null) {
+      System.clearProperty("user.timezone");
+    } else {
+      System.setProperty("user.timezone", previousProperty);
     }
   }
 
