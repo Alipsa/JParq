@@ -7,7 +7,6 @@ import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
-import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -131,8 +130,8 @@ public final class StructArrayTypes {
 
   /**
    * Retains full datetime range and precision when mixing nanosecond and coarser
-   * storage. UTC-adjusted fields use UTC datetime text; local fields retain their
-   * wall-clock fields.
+   * storage. UTC-adjusted fields retain the JVM-zone view used by standalone
+   * reads; local fields retain their wall-clock fields.
    *
    * @param left
    *          first timestamp declaration
@@ -333,11 +332,6 @@ public final class StructArrayTypes {
     Object decoded = AvroCoercions.unwrap(value, from);
     TemporalValueType temporal = TemporalValueType.fromSchema(to);
     if (temporal != null) {
-      if (temporal == TemporalValueType.LOCAL_TIMESTAMP && decoded instanceof Timestamp timestamp) {
-        return (AvroCoercions.isLocalTimestamp(from)
-            ? timestamp.toLocalDateTime()
-            : LocalDateTime.ofInstant(timestamp.toInstant(), ZoneOffset.UTC)).toString();
-      }
       return temporal.normalize(decoded).toString();
     }
     NumericType numeric = NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(to), to);
