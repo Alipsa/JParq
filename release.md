@@ -2,6 +2,10 @@
 
 ### 1.4.0
 
+- Implement both ResultSet.getArray overloads (#280) for stored and computed arrays, including nested
+  arrays from LATERAL queries. Return detached JDBC arrays with element type metadata, slices, element
+  result sets, and free semantics. Preserve SQL NULL and wasNull; reject non-array values with SQLState 22005.
+
 - Preserve CURRENT_TIMESTAMP, CURRENT_TIME, LOCALTIMESTAMP, and LOCALTIME values through derived tables
   and CTEs (#277), including their JDBC metadata, nanosecond precision, and UTC offsets.
   Preserve temporal CAST declarations in set operations and derived MIN/MAX metadata. Promote compatible

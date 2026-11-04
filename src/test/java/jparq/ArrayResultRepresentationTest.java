@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -29,6 +30,54 @@ import org.junit.jupiter.api.io.TempDir;
  * one result. Regression coverage for issue 234.
  */
 class ArrayResultRepresentationTest {
+
+  /**
+   * Both JDBC array accessors preserve non-null, empty, null, and computed
+   * results.
+   */
+  @Test
+  void jdbcArrayAccess(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      for (String sql : List.of("SELECT ints AS a FROM s WHERE id = 1", "SELECT ARRAY[1,2] AS a",
+          "SELECT a FROM (SELECT ARRAY[1,2] AS a) t", "WITH t AS (SELECT ARRAY[1,2] AS a) SELECT a FROM t",
+          "SELECT ints AS a FROM s WHERE id = 1 UNION ALL SELECT ARRAY[1,2]")) {
+        try (var result = statement.executeQuery(sql)) {
+          while (result.next()) {
+            Object[] expected = (Object[]) result.getObject(1);
+            assertArrayEquals(expected, (Object[]) result.getArray(1).getArray(), sql);
+            assertFalse(result.wasNull());
+            assertArrayEquals(expected, (Object[]) result.getArray("a").getArray(), sql);
+            assertFalse(result.wasNull());
+          }
+        }
+      }
+      try (var result = statement.executeQuery("SELECT ints AS a FROM s ORDER BY id")) {
+        assertTrue(result.next());
+        final var retained = result.getArray(1);
+        assertTrue(result.next());
+        assertNull(result.getArray(1));
+        assertTrue(result.wasNull());
+        assertNull(result.getArray("a"));
+        assertTrue(result.wasNull());
+        result.close();
+        assertArrayEquals(new Object[]{
+            1, 2
+        }, (Object[]) retained.getArray());
+        assertThrows(java.sql.SQLException.class, () -> result.getArray(1));
+        assertThrows(java.sql.SQLException.class, () -> result.getArray("a"));
+      }
+      try (var result = statement.executeQuery("SELECT ARRAY[] AS a, 1 AS scalar")) {
+        assertTrue(result.next());
+        assertArrayEquals(new Object[0], (Object[]) result.getArray("a").getArray());
+        assertFalse(result.wasNull());
+        assertThrows(java.sql.SQLDataException.class, () -> result.getArray("scalar"));
+        assertThrows(java.sql.SQLException.class, () -> result.getArray(0));
+        assertThrows(java.sql.SQLException.class, () -> result.getArray(3));
+        assertThrows(java.sql.SQLException.class, () -> result.getArray("missing"));
+      }
+    }
+  }
 
   @Test
   void computedArrayReturnsObjectArray(@TempDir Path directory) throws Exception {

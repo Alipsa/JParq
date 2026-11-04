@@ -2,6 +2,7 @@ package se.alipsa.jparq;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.sql.Array;
 import java.sql.Date;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
@@ -61,6 +62,7 @@ import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JParqUtil;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.model.ResultSetAdapter;
 
@@ -1653,6 +1655,42 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public <T> T getObject(String columnLabel, Class<T> type) throws SQLException {
     return getObject(findColumn(columnLabel), type);
+  }
+
+  /**
+   * Returns a detached JDBC array containing the decoded column elements.
+   *
+   * @param columnIndex
+   *          one-based output column index
+   * @return the array, or null for SQL NULL
+   * @throws SQLException
+   *           if the result is closed, the column is invalid, or its value is not
+   *           an array
+   */
+  @Override
+  public Array getArray(int columnIndex) throws SQLException {
+    ensureOpen();
+    Object value = getObject(columnIndex);
+    if (value == null) {
+      return null;
+    }
+    if (!(value instanceof Object[] elements)) {
+      throw new java.sql.SQLDataException("Column " + columnIndex + " is not an ARRAY", "22005");
+    }
+    Schema declaration = getMetaData() instanceof AvroColumnMetadata metadata
+        ? JdbcTypeMapper.nonNullSchema(metadata.columnValueSchema(columnIndex))
+        : null;
+    Schema elementSchema = declaration != null && declaration.getType() == Schema.Type.ARRAY
+        ? declaration.getElementType()
+        : null;
+    return new JParqArray(elements, elementSchema);
+  }
+
+  /** {@inheritDoc} */
+  @Override
+  public Array getArray(String columnLabel) throws SQLException {
+    ensureOpen();
+    return getArray(findColumn(columnLabel));
   }
 
   @Override

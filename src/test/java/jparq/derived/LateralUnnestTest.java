@@ -82,6 +82,32 @@ class LateralUnnestTest {
   }
 
   /**
+   * Stored arrays retain declared element types through empty and null values.
+   */
+  @Test
+  void jdbcArraysRetainDateElements() throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT dates FROM arr ORDER BY id")) {
+      assertTrue(result.next());
+      assertEquals(Types.DATE, result.getArray(1).getBaseType());
+      assertEquals("DATE", result.getArray("dates").getBaseTypeName());
+      assertArrayEquals(new Object[0], (Object[]) result.getArray(1).getArray());
+      assertFalse(result.wasNull());
+      assertTrue(result.next());
+      assertNull(result.getArray(1));
+      assertTrue(result.wasNull());
+      assertNull(result.getArray("dates"));
+      assertTrue(result.wasNull());
+      assertTrue(result.next());
+      assertArrayEquals(new Object[]{
+          Date.valueOf(java.time.LocalDate.ofEpochDay(20002)), Date.valueOf(java.time.LocalDate.ofEpochDay(21002))
+      }, (Object[]) result.getArray("dates").getArray());
+      assertEquals(Types.DATE, result.getArray(1).getBaseType());
+    }
+  }
+
+  /**
    * Nested arrays retain ARRAY metadata and structured values.
    */
   @Test
@@ -93,7 +119,12 @@ class LateralUnnestTest {
       assertEquals(Types.ARRAY, result.getMetaData().getColumnType(2));
       List<String> rows = new ArrayList<>();
       while (result.next()) {
-        rows.add(result.getInt(1) + ":" + Arrays.toString((Object[]) result.getObject(2)));
+        Object[] expected = (Object[]) result.getObject(2);
+        assertArrayEquals(expected, (Object[]) result.getArray(2).getArray());
+        assertArrayEquals(expected, (Object[]) result.getArray("t").getArray());
+        assertFalse(result.wasNull());
+        assertEquals(Types.INTEGER, result.getArray(2).getBaseType());
+        rows.add(result.getInt(1) + ":" + Arrays.toString(expected));
       }
       assertEquals(List.of("2:[2, 3]", "2:[4]", "3:[3, 4]", "3:[5]"), rows);
     }
@@ -173,7 +204,12 @@ class LateralUnnestTest {
       assertEquals(Types.ARRAY, result.getMetaData().getColumnType(2));
       List<String> rows = new ArrayList<>();
       while (result.next()) {
-        rows.add(result.getInt(1) + ":" + Arrays.toString((Object[]) result.getObject(2)));
+        Object[] expected = (Object[]) result.getObject(2);
+        assertArrayEquals(expected, (Object[]) result.getArray(2).getArray());
+        assertArrayEquals(expected, (Object[]) result.getArray("t").getArray());
+        assertFalse(result.wasNull());
+        assertEquals(Types.INTEGER, result.getArray(2).getBaseType());
+        rows.add(result.getInt(1) + ":" + Arrays.toString(expected));
       }
       assertEquals(List.of("2:[2, 3]", "2:[4]", "3:[3, 4]", "3:[5]"), rows);
     }

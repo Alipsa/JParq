@@ -839,8 +839,13 @@ The following SQL statements are supported:
   set-branch schemas in non-LATERAL derived tables and CTEs infer element types
   from returned values, recursively; empty or all-NULL elements use a nullable VARCHAR element schema.
   JDBC `getObject()` returns every ARRAY value, whether from a stored column or a computed constructor, as
-  `Object[]` (including mixed set-operation results), and struct columns as Avro `GenericRecord` values. Struct
-  fields retain their raw Avro representations:
+  `Object[]` (including mixed set-operation results), and struct columns as Avro `GenericRecord` values.
+  `getArray(index)` and `getArray(label)` return detached JDBC
+  `Array` objects; SQL NULL returns null and sets `wasNull()`. JDBC arrays expose element type metadata,
+  `Object[]` contents, one-based slices, and INDEX/VALUE element result sets. `free()` releases the
+  array; subsequent reads raise `SQLException`. Unknown computed element types use OTHER metadata.
+  Custom user-defined element mappings raise `SQLFeatureNotSupportedException` when requested.
+  Struct fields retain their raw Avro representations:
   strings can be `Utf8`, dates epoch-day integers, decimals `ByteBuffer`, and timestamps stored longs.
   The record's schema describes those field types; nested struct fields are not recursively decoded.
   Predicates compare ARRAY values by content, element by element, treating stored and computed representations
