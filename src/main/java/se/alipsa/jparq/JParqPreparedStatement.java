@@ -943,7 +943,8 @@ public class JParqPreparedStatement implements PreparedStatement {
             // Preserve OTHER metadata for unknown nonnumeric projections while
             // retaining recognized datetime declarations.
             if (unknown && type != Types.NULL && NumericType.of(type, 0, 0) == null && type != Types.DATE
-                && type != Types.TIME && type != Types.TIMESTAMP) {
+                && type != Types.TIME && type != Types.TIMESTAMP && type != Types.TIME_WITH_TIMEZONE
+                && type != Types.TIMESTAMP_WITH_TIMEZONE) {
               type = Types.OTHER;
               schema = sourceColumnSchema(meta, col);
             }
@@ -1018,10 +1019,12 @@ public class JParqPreparedStatement implements PreparedStatement {
       return decimalSchemaForValues(values.get());
     }
     if (projection instanceof CastExpression cast && cast.getColDataType() != null) {
-      ValueColumnType temporal = switch (cast.getColDataType().getDataType().toUpperCase(Locale.ROOT)) {
-        case "DATE" -> ValueColumnType.DATE;
-        case "TIME" -> ValueColumnType.TIME;
-        case "TIMESTAMP" -> ValueColumnType.TIMESTAMP;
+      ValueColumnType temporal = switch (DateTimeFunctions.normalizeTypeName(cast.getColDataType().getDataType())) {
+        case "date" -> ValueColumnType.DATE;
+        case "time" -> ValueColumnType.TIME;
+        case "timestamp" -> ValueColumnType.TIMESTAMP;
+        case "timewithtimezone" -> ValueColumnType.OFFSET_TIME;
+        case "timestampwithtimezone" -> ValueColumnType.OFFSET_TIMESTAMP;
         default -> null;
       };
       if (temporal != null) {
@@ -3062,7 +3065,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     if ((currentTime || currentTimestamp || current == ValueColumnType.DATE)
         && (candidateTime || candidateTimestamp || candidate == ValueColumnType.DATE)) {
-      throw new SQLException("VALUES requires compatible datetime fields", "42000");
+      throw new SQLException("Incompatible datetime fields: " + current + " and " + candidate, "42000");
     }
     if (isNumeric(current) && isNumeric(candidate)) {
       return widenNumericType(current, candidate);

@@ -3,7 +3,6 @@ package jparq.derived;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -16,6 +15,7 @@ import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.OffsetTime;
 import java.util.List;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
@@ -148,18 +148,30 @@ class DerivedDatetimeTypeTest {
       "SELECT DATE '2020-01-01' UNION ALL SELECT CAST(NULL AS DATE) | 91",
       "SELECT TIME '10:00:00' UNION ALL SELECT CAST(NULL AS TIME) | 92",
       "SELECT LOCALTIMESTAMP UNION ALL SELECT CAST(NULL AS TIMESTAMP) | 93",
-      "SELECT x FROM (SELECT LOCALTIMESTAMP AS x UNION ALL SELECT CAST(NULL AS TIMESTAMP)) s | 93"
+      "SELECT x FROM (SELECT LOCALTIMESTAMP AS x UNION ALL SELECT CAST(NULL AS TIMESTAMP)) s | 93",
+      "SELECT CAST(NULL AS TIMESTAMP WITH TIME ZONE) UNION ALL SELECT CURRENT_TIMESTAMP | 2014",
+      "SELECT CAST(NULL AS TIME WITH TIME ZONE) UNION ALL SELECT CURRENT_TIME | 2013",
+      "SELECT CAST(NULL AS TIMESTAMP(3)) UNION ALL SELECT LOCALTIMESTAMP | 93",
+      "SELECT CAST(NULL AS TIME(3)) UNION ALL SELECT LOCALTIME | 92"
   })
   void temporalNullSetBranches(String body, int jdbcType) throws Exception {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath());
         var statement = connection.createStatement();
         var result = statement.executeQuery(body)) {
       assertEquals(jdbcType, result.getMetaData().getColumnType(1));
-      assertTrue(result.next());
-      assertEquals(result.getObject(1).getClass().getName(), result.getMetaData().getColumnClassName(1));
-      assertTrue(result.next());
-      assertNull(result.getObject(1));
-      assertFalse(result.next());
+      int nullCount = 0;
+      int valueCount = 0;
+      while (result.next()) {
+        Object value = result.getObject(1);
+        if (value == null) {
+          nullCount++;
+        } else {
+          assertEquals(value.getClass().getName(), result.getMetaData().getColumnClassName(1));
+          valueCount++;
+        }
+      }
+      assertEquals(1, nullCount);
+      assertEquals(1, valueCount);
     }
   }
 
@@ -272,6 +284,27 @@ class DerivedDatetimeTypeTest {
           }
         }
       }
+    }
+  }
+
+  /**
+   * Checks inferred datetime errors describe the operand types outside VALUES.
+   *
+   * @throws Exception
+   *           if connection setup fails
+   */
+  @Test
+  void inferredDatetimeErrorsDescribeTypes() throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath());
+        var statement = connection.createStatement()) {
+      SQLException exception = assertThrows(SQLException.class,
+          () -> statement.executeQuery("WITH c AS (SELECT CASE WHEN cyl = 4 THEN DATE '2020-01-01' "
+              + "ELSE TIMESTAMP '2020-01-01 10:00:00' END AS x FROM mtcars) SELECT COUNT(*) FROM c"));
+      assertEquals("42000", exception.getSQLState());
+      assertTrue(exception.getMessage().contains("Incompatible datetime fields:"));
+      assertTrue(exception.getMessage().contains("DATE"));
+      assertTrue(exception.getMessage().contains("TIMESTAMP"));
+      assertFalse(exception.getMessage().contains("VALUES"));
     }
   }
 
