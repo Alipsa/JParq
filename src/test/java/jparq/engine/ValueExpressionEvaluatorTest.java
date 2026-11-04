@@ -2,11 +2,14 @@ package jparq.engine;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.ByteBuffer;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.apache.avro.Schema;
@@ -40,6 +43,34 @@ class ValueExpressionEvaluatorTest {
   private Object eval(String sqlExpression, GenericRecord record) throws Exception {
     Expression expression = CCJSqlParserUtil.parseExpression(sqlExpression);
     return evaluator.eval(expression, record);
+  }
+
+  /**
+   * Supports direct evaluation of raw parser expressions without letting physical
+   * fields override bare datetime keywords.
+   *
+   * @param keyword
+   *          datetime keyword parsed inside a scalar function
+   * @throws Exception
+   *           if parsing or evaluation fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "LOCALTIME", "LOCALTIMESTAMP"
+  })
+  void evaluatesRawDatetimeKeywords(String keyword) throws Exception {
+    Schema keywordSchema = SchemaBuilder.record("KeywordFields").fields().requiredString("localtime")
+        .requiredString("localtimestamp").endRecord();
+    GenericRecord record = new GenericData.Record(keywordSchema);
+    record.put("localtime", "stored time");
+    record.put("localtimestamp", "stored timestamp");
+    Expression expression = CCJSqlParserUtil.parseExpression("COALESCE(" + keyword + ", NULL)");
+    Object value = new ValueExpressionEvaluator(keywordSchema).eval(expression, record);
+    if ("LOCALTIME".equals(keyword)) {
+      assertInstanceOf(LocalTime.class, value);
+    } else {
+      assertInstanceOf(LocalDateTime.class, value);
+    }
   }
 
   /**

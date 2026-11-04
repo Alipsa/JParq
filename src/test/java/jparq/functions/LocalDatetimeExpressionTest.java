@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Locale;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
@@ -66,31 +67,36 @@ class LocalDatetimeExpressionTest {
    * Evaluates datetime keywords in predicate operands and CASE conditions.
    *
    * @param sql
-   *          query returning one when the datetime predicate succeeds
+   *          query counting rows that satisfy the datetime predicate
+   * @param expected
+   *          expected row count
    * @throws Exception
    *           if query execution fails
    */
   @ParameterizedTest
-  @ValueSource(strings = {
-      "SELECT 1 FROM mtcars WHERE LOCALTIMESTAMP IS NOT NULL LIMIT 1",
-      "SELECT 1 FROM mtcars WHERE LOCALTIME IS NOT NULL LIMIT 1",
-      "SELECT 1 FROM mtcars WHERE LOCALTIMESTAMP > TIMESTAMP '2000-01-01 00:00:00' LIMIT 1",
-      "SELECT CASE WHEN LOCALTIMESTAMP IS NULL THEN 0 ELSE 1 END FROM mtcars LIMIT 1",
-      "SELECT CASE WHEN LOCALTIME IS NULL THEN 0 ELSE 1 END FROM mtcars LIMIT 1",
-      "SELECT 1 FROM mtcars WHERE LOCALTIME BETWEEN TIME '00:00:00' AND TIME '23:59:59.999999999' LIMIT 1",
-      "SELECT 1 FROM mtcars GROUP BY cyl HAVING LOCALTIMESTAMP IS NOT NULL LIMIT 1",
-      "SELECT 1 FROM mtcars GROUP BY cyl HAVING LOCALTIME IS NOT NULL LIMIT 1",
-      "SELECT 1 FROM mtcars GROUP BY cyl HAVING EXTRACT(HOUR FROM LOCALTIME) IS NOT NULL LIMIT 1",
-      "SELECT 1 FROM mtcars GROUP BY cyl HAVING TRIM(CAST(LOCALTIME AS VARCHAR(64))) IS NOT NULL LIMIT 1",
-      "SELECT 1 FROM mtcars GROUP BY cyl HAVING "
-          + "(CAST(LOCALTIME AS VARCHAR(64)) COLLATE latin1_general_ci) IS NOT NULL LIMIT 1",
-      "SELECT 1 FROM mtcars GROUP BY cyl HAVING CONVERT(CAST(LOCALTIME AS VARCHAR(64)) USING UTF8) IS NOT NULL LIMIT 1",
-      "SELECT 1 FROM mtcars GROUP BY cyl HAVING POSITION(':' IN CAST(LOCALTIME AS VARCHAR(64))) > 0 LIMIT 1",
-      "SELECT CASE WHEN LOCALTIME IS NULL THEN 0 ELSE 1 END FROM (SELECT 42 AS \"LOCALTIME\") t",
-      "SELECT 1 FROM (SELECT 42 AS \"LOCALTIMESTAMP\") t WHERE LOCALTIMESTAMP > TIMESTAMP '2000-01-01 00:00:00'",
-      "SELECT 1 FROM mtcars t JOIN (VALUES (1)) v(x) ON LOCALTIME IS NOT NULL LIMIT 1"
+  @CsvSource(delimiter = '|', value = {
+      "SELECT COUNT(*) FROM mtcars WHERE LOCALTIMESTAMP IS NOT NULL|32",
+      "SELECT COUNT(*) FROM mtcars WHERE LOCALTIME IS NOT NULL|32",
+      "SELECT COUNT(*) FROM mtcars WHERE NOT (LOCALTIMESTAMP IS NULL)|32",
+      "SELECT COUNT(*) FROM mtcars WHERE NOT (LOCALTIMESTAMP IS NULL) AND mpg > 20|14",
+      "SELECT COUNT(*) FROM mtcars WHERE LOCALTIMESTAMP > TIMESTAMP '2000-01-01 00:00:00'|32",
+      "SELECT SUM(CASE WHEN LOCALTIMESTAMP IS NULL THEN 0 ELSE 1 END) FROM mtcars|32",
+      "SELECT SUM(CASE WHEN LOCALTIME IS NULL THEN 0 ELSE 1 END) FROM mtcars|32",
+      "SELECT COUNT(*) FROM mtcars WHERE LOCALTIME BETWEEN TIME '00:00:00' AND TIME '23:59:59.999999999'|32",
+      "SELECT COUNT(*) FROM mtcars HAVING LOCALTIMESTAMP IS NOT NULL|32",
+      "SELECT COUNT(*) FROM mtcars HAVING LOCALTIME IS NOT NULL|32",
+      "SELECT COUNT(*) FROM mtcars HAVING EXTRACT(HOUR FROM LOCALTIME) IS NOT NULL|32",
+      "SELECT COUNT(*) FROM mtcars HAVING TRIM(CAST(LOCALTIME AS VARCHAR(64))) IS NOT NULL|32",
+      "SELECT COUNT(*) FROM mtcars HAVING "
+          + "(CAST(LOCALTIME AS VARCHAR(64)) COLLATE latin1_general_ci) IS NOT NULL|32",
+      "SELECT COUNT(*) FROM mtcars HAVING CONVERT(CAST(LOCALTIME AS VARCHAR(64)) USING UTF8) IS NOT NULL|32",
+      "SELECT COUNT(*) FROM mtcars HAVING POSITION(':' IN CAST(LOCALTIME AS VARCHAR(64))) > 0|32",
+      "SELECT SUM(CASE WHEN LOCALTIME IS NULL THEN 0 ELSE 1 END) FROM (SELECT 42 AS \"LOCALTIME\") t|1",
+      "SELECT COUNT(*) FROM (SELECT 42 AS \"LOCALTIMESTAMP\") t "
+          + "WHERE LOCALTIMESTAMP > TIMESTAMP '2000-01-01 00:00:00'|1",
+      "SELECT COUNT(*) FROM mtcars t JOIN (VALUES (1)) v(x) ON LOCALTIME IS NOT NULL|32"
   })
-  void evaluatesPredicates(String sql) throws Exception {
+  void evaluatesPredicates(String sql, int expected) throws Exception {
     for (boolean pushdown : List.of(true, false)) {
       String url = "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath() + "?predicatePushdown=" + pushdown
           + "&projectionPushdown=" + pushdown;
@@ -98,8 +104,47 @@ class LocalDatetimeExpressionTest {
           var statement = connection.createStatement();
           var result = statement.executeQuery(sql)) {
         assertTrue(result.next(), sql);
-        assertEquals(1, result.getInt(1), sql);
+        assertEquals(expected, result.getInt(1), sql);
         assertFalse(result.next(), sql);
+      }
+    }
+  }
+
+  /**
+   * Normalizes standalone and lateral UNNEST arguments before column discovery.
+   *
+   * @param sql
+   *          query expanding a local datetime array
+   * @param expected
+   *          expected number of rows
+   * @throws Exception
+   *           if the query fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "SELECT x FROM UNNEST(ARRAY[LOCALTIME]) u(x)|1", "SELECT x FROM UNNEST(ARRAY[LOCALTIMESTAMP]) u(x)|1",
+      "SELECT u.x FROM mtcars m CROSS JOIN LATERAL UNNEST(ARRAY[LOCALTIMESTAMP]) u(x)|32",
+      "SELECT u.x FROM mtcars m CROSS JOIN LATERAL UNNEST(ARRAY[LOCALTIME]) u(x)|32",
+      "SELECT u.x FROM mtcars m CROSS JOIN UNNEST(ARRAY[LOCALTIME]) u(x)|32"
+  })
+  void evaluatesUnnestArguments(String sql, int expected) throws Exception {
+    for (boolean pushdown : List.of(true, false)) {
+      String url = "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath() + "?predicatePushdown=" + pushdown
+          + "&projectionPushdown=" + pushdown;
+      try (var connection = DriverManager.getConnection(url);
+          var statement = connection.createStatement();
+          var result = statement.executeQuery(sql)) {
+        int count = 0;
+        while (result.next()) {
+          Object value = result.getObject(1);
+          if (sql.contains("LOCALTIMESTAMP")) {
+            assertTrue(value instanceof Timestamp || value instanceof LocalDateTime, sql);
+          } else {
+            assertTrue(value instanceof Time || value instanceof LocalTime, sql);
+          }
+          count++;
+        }
+        assertEquals(expected, count, sql);
       }
     }
   }

@@ -253,11 +253,13 @@ public final class JSqlParserSupport {
   }
 
   /**
-   * Parses a complete condition using the shared identifier lookahead.
+   * Parses and normalizes a complete scalar expression or condition using the
+   * shared identifier lookahead. Normalization also applies to expressions
+   * serialized and reparsed during grouping and predicate pushdown.
    *
    * @param sql
    *          condition text
-   * @return the parsed condition
+   * @return the parsed and normalized expression
    * @throws JSQLParserException
    *           if parsing fails or leaves trailing tokens
    */
@@ -279,7 +281,7 @@ public final class JSqlParserSupport {
    *
    * @param parser
    *          a fresh configured parser
-   * @return the parsed condition
+   * @return the parsed and normalized expression
    * @throws JSQLParserException
    *           if parsing fails or leaves trailing tokens
    */
@@ -289,7 +291,7 @@ public final class JSqlParserSupport {
       if (parser.getNextToken().kind != CCJSqlParser.EOF) {
         throw new JSQLParserException("Unexpected trailing tokens after condition: " + expression);
       }
-      return expression;
+      return SqlExpressionNormalizer.normalizeExpression(expression);
     } catch (ParseException | TokenMgrException e) {
       throw new JSQLParserException(e);
     }

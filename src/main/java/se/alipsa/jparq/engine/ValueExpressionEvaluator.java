@@ -11,7 +11,6 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -310,11 +309,10 @@ public final class ValueExpressionEvaluator {
       return arithmetic(mod.getLeftExpression(), mod.getRightExpression(), record, Operation.MOD);
     }
     if (expression instanceof Column col) {
-      // Bare datetime keywords are value functions even when a same-named
-      // field exists. Quoted and qualified names remain column references.
-      if (col.getTable() == null && SqlParser.isTimeKeyword(col.getColumnName())) {
-        TimeKeyExpression tk = new TimeKeyExpression();
-        tk.setStringValue(col.getColumnName().toUpperCase(Locale.ROOT));
+      // Direct evaluator callers can supply raw JSqlParser expressions without
+      // statement normalization. Apply the same keyword conversion for them.
+      TimeKeyExpression tk = SqlExpressionNormalizer.timeKeyword(col);
+      if (tk != null) {
         return DateTimeFunctions.evaluateTimeKey(tk);
       }
       return columnValue(col, record);

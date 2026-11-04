@@ -43,6 +43,7 @@ import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.select.SelectItem;
 import net.sf.jsqlparser.statement.select.SetOperationList;
+import net.sf.jsqlparser.statement.select.TableFunction;
 import net.sf.jsqlparser.statement.select.Values;
 
 /**
@@ -102,6 +103,23 @@ public final class SqlExpressionNormalizer {
    */
   public static Expression normalizeExpression(Expression expression) {
     return new SqlExpressionNormalizer().expression(expression);
+  }
+
+  /**
+   * Converts an unquoted, unqualified datetime keyword parsed as a column to its
+   * value-function node. Quoted and qualified column references are retained.
+   *
+   * @param column
+   *          possible datetime keyword, or null
+   * @return the value-function node, or null when the input is a column reference
+   */
+  public static TimeKeyExpression timeKeyword(Column column) {
+    if (column == null || column.getTable() != null || !SqlParser.isTimeKeyword(column.getColumnName())) {
+      return null;
+    }
+    TimeKeyExpression keyword = new TimeKeyExpression();
+    keyword.setStringValue(column.getColumnName().toUpperCase(Locale.ROOT));
+    return keyword;
   }
 
   /**
@@ -171,7 +189,7 @@ public final class SqlExpressionNormalizer {
   }
 
   /**
-   * Traverses nested FROM scopes.
+   * Traverses nested FROM scopes and normalizes table-function arguments.
    *
    * @param source
    *          FROM item, or null
@@ -182,6 +200,8 @@ public final class SqlExpressionNormalizer {
     } else if (source instanceof ParenthesedFromItem nested) {
       from(nested.getFromItem());
       joins(nested.getJoins());
+    } else if (source instanceof TableFunction function) {
+      expression(function.getFunction());
     }
   }
 
@@ -246,11 +266,11 @@ public final class SqlExpressionNormalizer {
     if (original == null) {
       return null;
     }
-    if (original instanceof Column column && column.getTable() == null
-        && SqlParser.isTimeKeyword(column.getColumnName())) {
-      TimeKeyExpression keyword = new TimeKeyExpression();
-      keyword.setStringValue(column.getColumnName().toUpperCase(Locale.ROOT));
-      return keyword;
+    if (original instanceof Column column) {
+      TimeKeyExpression keyword = timeKeyword(column);
+      if (keyword != null) {
+        return keyword;
+      }
     }
     Expression result = normalizeQuantifier(original);
     if (original instanceof InExpression in && booleanOperator(in.getRightExpression())) {
