@@ -8,7 +8,7 @@
   local and offset temporal values using the session offset.
   **Behavior changes:** VALUES mixing DATE with TIMESTAMP or TIME now fails with SQLState `42000`;
   these inputs previously widened to TIMESTAMP or fell back to VARCHAR. Set operations containing
-  CAST(NULL AS DATE/TIME/TIMESTAMP), including precision and time-zone declarations, now retain the
+  CAST(NULL AS DATE/TIME/TIMESTAMP), including precision with WITH/WITHOUT TIME ZONE clauses, now retain the
   declared temporal JDBC metadata instead of OTHER (partially addresses #288).
 
 - Keep datetime value functions stable within a statement (#275), including across rows, nested queries,

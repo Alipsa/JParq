@@ -3,6 +3,7 @@ package jparq.derived;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -152,7 +153,14 @@ class DerivedDatetimeTypeTest {
       "SELECT CAST(NULL AS TIMESTAMP WITH TIME ZONE) UNION ALL SELECT CURRENT_TIMESTAMP | 2014",
       "SELECT CAST(NULL AS TIME WITH TIME ZONE) UNION ALL SELECT CURRENT_TIME | 2013",
       "SELECT CAST(NULL AS TIMESTAMP(3)) UNION ALL SELECT LOCALTIMESTAMP | 93",
-      "SELECT CAST(NULL AS TIME(3)) UNION ALL SELECT LOCALTIME | 92"
+      "SELECT CAST(NULL AS TIME(3)) UNION ALL SELECT LOCALTIME | 92",
+      "SELECT CAST(NULL AS TIMESTAMP(3) WITH TIME ZONE) UNION ALL SELECT LOCALTIMESTAMP | 2014",
+      "SELECT CAST(NULL AS TIME(3) WITH TIME ZONE) UNION ALL SELECT LOCALTIME | 2013",
+      "SELECT CAST(NULL AS TIMESTAMP WITHOUT TIME ZONE) UNION ALL SELECT LOCALTIMESTAMP | 93",
+      "SELECT CAST(NULL AS TIME WITHOUT TIME ZONE) UNION ALL SELECT LOCALTIME | 92",
+      "SELECT CAST(NULL AS TIMESTAMP(3) WITHOUT TIME ZONE) UNION ALL SELECT LOCALTIMESTAMP | 93",
+      "SELECT CAST(NULL AS TIME(3) WITHOUT TIME ZONE) UNION ALL SELECT LOCALTIME | 92",
+      "SELECT CAST(NULL AS DATETIME) UNION ALL SELECT LOCALTIMESTAMP | 93"
   })
   void temporalNullSetBranches(String body, int jdbcType) throws Exception {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath());
@@ -305,6 +313,75 @@ class DerivedDatetimeTypeTest {
       assertTrue(exception.getMessage().contains("DATE"));
       assertTrue(exception.getMessage().contains("TIMESTAMP"));
       assertFalse(exception.getMessage().contains("VALUES"));
+    }
+  }
+
+  /**
+   * Checks all-NULL sets retain declared datetime types and Java classes.
+   *
+   * @param type
+   *          temporal CAST declaration
+   * @param jdbcType
+   *          expected JDBC type
+   * @param className
+   *          expected Java class name
+   * @throws Exception
+   *           if execution fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "TIMESTAMP(3) WITH TIME ZONE | 2014 | java.time.OffsetDateTime",
+      "TIME(3) WITH TIME ZONE | 2013 | java.time.OffsetTime", "TIMESTAMP WITHOUT TIME ZONE | 93 | java.sql.Timestamp",
+      "TIME WITHOUT TIME ZONE | 92 | java.sql.Time", "TIMESTAMP(3) WITHOUT TIME ZONE | 93 | java.sql.Timestamp",
+      "TIME(3) WITHOUT TIME ZONE | 92 | java.sql.Time", "DATETIME | 93 | java.sql.Timestamp"
+  })
+  void nullOnlyTemporalSetsRetainMetadata(String type, int jdbcType, String className) throws Exception {
+    String branch = "SELECT CAST(NULL AS " + type + ") AS t";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath());
+        var statement = connection.createStatement()) {
+      for (String sql : List.of(branch + " UNION ALL " + branch,
+          "SELECT t FROM (" + branch + " UNION ALL " + branch + ") s")) {
+        try (var result = statement.executeQuery(sql)) {
+          assertEquals(jdbcType, result.getMetaData().getColumnType(1), sql);
+          assertEquals(className, result.getMetaData().getColumnClassName(1), sql);
+          for (int row = 0; row < 2; row++) {
+            assertTrue(result.next());
+            assertNull(result.getObject(1));
+          }
+          assertFalse(result.next());
+        }
+      }
+    }
+  }
+
+  /**
+   * Checks compatibility errors use SQL names for local and offset values.
+   *
+   * @param left
+   *          first datetime expression
+   * @param right
+   *          second datetime expression
+   * @param expected
+   *          expected diagnostic detail
+   * @throws Exception
+   *           if connection setup fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "LOCALTIME | TIMESTAMP '2020-01-01 10:00:00' | TIME and TIMESTAMP",
+      "LOCALTIMESTAMP | TIME '10:00:00' | TIMESTAMP and TIME",
+      "CURRENT_TIMESTAMP | DATE '2020-01-01' | TIMESTAMP WITH TIME ZONE and DATE",
+      "CURRENT_TIME | DATE '2020-01-01' | TIME WITH TIME ZONE and DATE"
+  })
+  void datetimeErrorsUseSqlNames(String left, String right, String expected) throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath());
+        var statement = connection.createStatement()) {
+      SQLException exception = assertThrows(SQLException.class,
+          () -> statement.executeQuery("SELECT t FROM (VALUES (" + left + "), (" + right + ")) s(t)"));
+      assertEquals("42000", exception.getSQLState());
+      assertTrue(exception.getMessage().contains("Incompatible datetime fields: " + expected));
+      assertFalse(exception.getMessage().contains("LOCAL_"));
+      assertFalse(exception.getMessage().contains("OFFSET_"));
     }
   }
 

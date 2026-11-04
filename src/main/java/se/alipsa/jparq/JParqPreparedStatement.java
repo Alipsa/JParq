@@ -1019,14 +1019,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return decimalSchemaForValues(values.get());
     }
     if (projection instanceof CastExpression cast && cast.getColDataType() != null) {
-      ValueColumnType temporal = switch (DateTimeFunctions.normalizeTypeName(cast.getColDataType().getDataType())) {
-        case "date" -> ValueColumnType.DATE;
-        case "time" -> ValueColumnType.TIME;
-        case "timestamp" -> ValueColumnType.TIMESTAMP;
-        case "timewithtimezone" -> ValueColumnType.OFFSET_TIME;
-        case "timestampwithtimezone" -> ValueColumnType.OFFSET_TIMESTAMP;
-        default -> null;
-      };
+      ValueColumnType temporal = temporalCastType(cast.getColDataType().getDataType());
       if (temporal != null) {
         return schemaForColumnType(temporal, List.of());
       }
@@ -1042,6 +1035,27 @@ public class JParqPreparedStatement implements PreparedStatement {
       return null;
     }
     return schemaForColumnType(determineColumnType(returned), returned);
+  }
+
+  /**
+   * Resolves a temporal CAST declaration while retaining its time-zone clause.
+   * Precision is removed before normalization so it cannot hide a trailing WITH
+   * or WITHOUT TIME ZONE clause. Evaluation keeps its existing normalizer.
+   *
+   * @param typeName
+   *          declared CAST type
+   * @return temporal family, or null for other declarations
+   */
+  private ValueColumnType temporalCastType(String typeName) {
+    String normalized = DateTimeFunctions.normalizeTypeName(typeName.replaceAll("\\([^)]*\\)", ""));
+    return switch (normalized) {
+      case "date" -> ValueColumnType.DATE;
+      case "time", "timewithouttimezone" -> ValueColumnType.TIME;
+      case "timestamp", "timestampwithouttimezone", "datetime" -> ValueColumnType.TIMESTAMP;
+      case "timewithtimezone" -> ValueColumnType.OFFSET_TIME;
+      case "timestampwithtimezone" -> ValueColumnType.OFFSET_TIMESTAMP;
+      default -> null;
+    };
   }
 
   /**
@@ -3065,7 +3079,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     if ((currentTime || currentTimestamp || current == ValueColumnType.DATE)
         && (candidateTime || candidateTimestamp || candidate == ValueColumnType.DATE)) {
-      throw new SQLException("Incompatible datetime fields: " + current + " and " + candidate, "42000");
+      throw new SQLException(
+          "Incompatible datetime fields: " + datetimeTypeName(current) + " and " + datetimeTypeName(candidate),
+          "42000");
     }
     if (isNumeric(current) && isNumeric(candidate)) {
       return widenNumericType(current, candidate);
@@ -3074,6 +3090,26 @@ public class JParqPreparedStatement implements PreparedStatement {
       return ValueColumnType.STRING;
     }
     return ValueColumnType.STRING;
+  }
+
+  /**
+   * Maps materialized datetime families to their SQL type names for diagnostics.
+   *
+   * @param type
+   *          datetime family
+   * @return SQL type name
+   * @throws IllegalArgumentException
+   *           if the family is not temporal
+   */
+  private String datetimeTypeName(ValueColumnType type) {
+    return switch (type) {
+      case DATE -> "DATE";
+      case TIME, LOCAL_TIME -> "TIME";
+      case TIMESTAMP, LOCAL_TIMESTAMP -> "TIMESTAMP";
+      case OFFSET_TIME -> "TIME WITH TIME ZONE";
+      case OFFSET_TIMESTAMP -> "TIMESTAMP WITH TIME ZONE";
+      default -> throw new IllegalArgumentException("Not a datetime family: " + type);
+    };
   }
 
   private boolean isNumeric(ValueColumnType type) {
