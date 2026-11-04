@@ -54,6 +54,7 @@ import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
+import se.alipsa.jparq.engine.function.StatementTime;
 import se.alipsa.jparq.engine.function.SystemFunctions;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
@@ -523,6 +524,20 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public boolean next() throws SQLException {
+    StatementTime.Scope timeScope = cancellation == null ? null : cancellation.statementTime().open();
+    try (timeScope) {
+      return nextRow();
+    }
+  }
+
+  /**
+   * Advances under the owning execution's datetime snapshot.
+   *
+   * @return whether a row is available
+   * @throws SQLException
+   *           if reading fails
+   */
+  private boolean nextRow() throws SQLException {
     ensureOpen();
     if (aggregateQuery) {
       if (aggregateRows == null || aggregateRows.isEmpty()) {
@@ -695,7 +710,8 @@ public class JParqResultSet extends ResultSetAdapter {
    *           if reading or decoding fails
    */
   private Object value(int idx) throws SQLException {
-    try {
+    StatementTime.Scope timeScope = cancellation == null ? null : cancellation.statementTime().open();
+    try (timeScope) {
       Object value = readValue(idx);
       if (value instanceof TemporalInterval interval) {
         Optional<Schema> cached = intervalOutputSchemas.get(idx);
@@ -1627,7 +1643,10 @@ public class JParqResultSet extends ResultSetAdapter {
     if (type == String.class) {
       return type.cast(getString(columnIndex));
     }
-    return JdbcConversions.convert(getObject(columnIndex), type);
+    StatementTime.Scope timeScope = cancellation == null ? null : cancellation.statementTime().open();
+    try (timeScope) {
+      return JdbcConversions.convert(getObject(columnIndex), type);
+    }
   }
 
   /** {@inheritDoc} */

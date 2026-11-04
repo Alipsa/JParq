@@ -2,6 +2,11 @@
 
 ### 1.4.0
 
+- Keep datetime value functions stable within a statement (#275), including across rows, nested queries,
+  and lazy result reads. Capture fresh datetime values for every prepared-statement execution.
+  Defer time-dependent prepared materializations until execution.
+  Typed local-time conversions use the same snapshot offset.
+
 - Apply trailing LIMIT, OFFSET, and FETCH clauses to the complete set-operation result even without ORDER BY
   (#271). Preserve branch-local bounds inside parentheses, including nested set operations.
 

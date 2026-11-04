@@ -27,6 +27,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.ParquetTable;
 import se.alipsa.jparq.engine.SqlParser;
 
@@ -352,7 +353,7 @@ class CorrelatedExecutionShapeTest {
   void preparationWorkIsIndependentOfOuterRowCount(int outerRows, boolean prepared) throws Exception {
     String sql = "SELECT b.id FROM big b WHERE b.id < " + outerRows
         + " AND EXISTS (SELECT 1 FROM small s WHERE s.g = b.g)";
-    try (var parser = mockStatic(SqlParser.class, CALLS_REAL_METHODS);
+    try (var parser = mockStatic(JSqlParserSupport.class, CALLS_REAL_METHODS);
         var tables = mockStatic(ParquetTable.class, CALLS_REAL_METHODS);
         var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = prepared ? connection.prepareStatement(sql) : connection.createStatement();
@@ -362,7 +363,7 @@ class CorrelatedExecutionShapeTest {
         count++;
       }
       assertEquals(outerRows * 4 / 5, count);
-      assertAll(() -> parser.verify(() -> SqlParser.parseQuery(anyString()), times(2)),
+      assertAll(() -> parser.verify(() -> JSqlParserSupport.parseStatement(anyString()), times(2)),
           () -> tables.verify(() -> ParquetTable.validate(any(), any()), times(2)));
     }
   }

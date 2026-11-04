@@ -370,15 +370,15 @@ public final class SqlExpressionNormalizer {
    */
   private final class Children extends ExpressionVisitorAdapter<Void> {
     @Override
-    public <S> Void visit(ArrayConstructor array, S context) {
-      list(array.getExpressions());
+    protected <S> Void visitBinaryExpression(BinaryExpression binary, S context) {
+      binary.setLeftExpression(expression(binary.getLeftExpression()));
+      binary.setRightExpression(expression(binary.getRightExpression()));
       return null;
     }
 
     @Override
-    protected <S> Void visitBinaryExpression(BinaryExpression binary, S context) {
-      binary.setLeftExpression(expression(binary.getLeftExpression()));
-      binary.setRightExpression(expression(binary.getRightExpression()));
+    public <S> Void visit(ArrayConstructor array, S context) {
+      list(array.getExpressions());
       return null;
     }
 

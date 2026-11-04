@@ -39,8 +39,10 @@ class TemporalArrayPromotionTest {
   @ParameterizedTest
   @ValueSource(strings = {
       "SELECT ARRAY[NULL, CAST(DATE '2020-01-01' AS TIMESTAMP), TIMESTAMP '2020-02-03 12:34:56.123', NULL]",
-      "SELECT a FROM (SELECT ARRAY[NULL, CAST(DATE '2020-01-01' AS TIMESTAMP), TIMESTAMP '2020-02-03 12:34:56.123', NULL] AS a) t",
-      "WITH c AS (SELECT ARRAY[NULL, CAST(DATE '2020-01-01' AS TIMESTAMP), TIMESTAMP '2020-02-03 12:34:56.123', NULL] AS a) SELECT a FROM c"
+      "SELECT a FROM (SELECT ARRAY[NULL, "
+          + "CAST(DATE '2020-01-01' AS TIMESTAMP), TIMESTAMP '2020-02-03 12:34:56.123', NULL] AS a) t",
+      "WITH c AS (SELECT ARRAY[NULL, "
+          + "CAST(DATE '2020-01-01' AS TIMESTAMP), TIMESTAMP '2020-02-03 12:34:56.123', NULL] AS a) SELECT a FROM c"
   })
   void acceptsExplicitTimestampCasts(String sql, @TempDir Path directory) throws Exception {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);

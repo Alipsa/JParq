@@ -202,6 +202,14 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final int parameterCount;
   private final Map<String, List<Integer>> namedParameterIndexes;
   private final boolean hasParameters;
+  /**
+   * Defers full planning for datetime-dependent statements until execution.
+   * Preparation validates syntax only; table and column validation and detailed
+   * pushdown information are deferred, as for parameterized statements. Issue
+   * #407 tracks separating schema validation from materialization so preparation
+   * can validate inputs without reading their rows.
+   */
+  private final boolean deferredTimePlanning;
   private Map<Integer, String> rowCountParameterClauses = Map.of();
   private CteResult informationSchemaTablesResult;
   private CteResult informationSchemaColumnsResult;
@@ -261,6 +269,13 @@ public class JParqPreparedStatement implements PreparedStatement {
     this.parameterCount = parseResult.parameterCount();
     this.namedParameterIndexes = parseResult.namedParameterIndexes();
     this.hasParameters = parameterCount > 0;
+    SqlParser.PreparedQuery preparation;
+    try {
+      preparation = ownsStatement || hasParameters ? SqlParser.prepareQuery(originalSql) : null;
+    } catch (RuntimeException exception) {
+      throw SqlExceptions.wrap("Failed to prepare query: " + sql, exception);
+    }
+    this.deferredTimePlanning = ownsStatement && preparation.timeDependent();
     this.inheritedCteContext = inheritedCtes == null ? Map.of() : Map.copyOf(inheritedCtes);
 
     SqlParser.Select tmpSelect = null;
@@ -281,24 +296,19 @@ public class JParqPreparedStatement implements PreparedStatement {
 
     // --- QUERY PLANNING PHASE (Expensive CPU Work) ---
     try {
-      if (hasParameters) {
-        // For parameterized queries, perform lightweight syntax validation at
-        // preparation time
-        // to catch errors early (fail-fast), but defer full query planning (including
-        // schema
-        // resolution and optimization) to execution time when actual parameter values
-        // are known.
-        // This enables predicate pushdown with bound values while still providing early
-        // error detection.
-        rowCountParameterClauses = SqlParser.rowCountParameters(originalSql);
+      if (hasParameters || deferredTimePlanning) {
+        // Validate syntax now, but defer full planning until execution supplies
+        // parameter values and the datetime snapshot. Preparation must not build
+        // materialized inputs whose datetime values would immediately be stale.
+        rowCountParameterClauses = preparation.rowCountParameters();
         tmpSetOperation = false;
         tmpTableRefs = List.of();
         tmpJoinQuery = false;
         tmpCteResults = this.inheritedCteContext;
       } else {
-        SqlParser.Query query = reusablePlan == null
-            ? SqlParser.parseQuery(originalSql)
-            : reusablePlan.query(originalSql);
+        SqlParser.Query query = preparation != null
+            ? preparation.query()
+            : reusablePlan == null ? SqlParser.parseQuery(originalSql) : reusablePlan.query(originalSql);
 
         Map<Identifier, CteResult> mutableCtes = new LinkedHashMap<>();
         if (inheritedCtes != null && !inheritedCtes.isEmpty()) {
@@ -498,8 +508,8 @@ public class JParqPreparedStatement implements PreparedStatement {
     } catch (RuntimeException exception) {
       throw SqlExceptions.wrap("Failed to prepare query: " + sql, exception);
     }
-    PushdownInfo plannedPushdown = determinePushdownInfo(hasParameters, tmpSetOperation, tmpJoinQuery, tmpBaseCteResult,
-        tmpConf, tmpSelect, tmpPredicate, tmpResidual);
+    PushdownInfo plannedPushdown = determinePushdownInfo(hasParameters || deferredTimePlanning, tmpSetOperation,
+        tmpJoinQuery, tmpBaseCteResult, tmpConf, tmpSelect, tmpPredicate, tmpResidual);
     this.pushdownInfo = stmt.getConn().isProjectionPushdown()
         ? plannedPushdown
         : new PushdownInfo(plannedPushdown.parquetPredicateAttached(), plannedPushdown.residualFilterPresent(),
@@ -550,8 +560,10 @@ public class JParqPreparedStatement implements PreparedStatement {
   // result.
   @SuppressWarnings("PMD.UseTryWithResources")
   private JParqResultSet executeQuery(QueryCancellation cancellation) throws SQLException {
-    if (hasParameters) {
-      return executeWithBoundParameters();
+    // Rebuild plans that depend on bound parameters or the execution's datetime.
+    // Moving all materialization out of preparation is tracked in #407.
+    if (hasParameters || deferredTimePlanning) {
+      return executeReplannedQuery();
     }
     if (reusablePlan == null) {
       executionPlans = new SubqueryExecutor.ExecutionPlans();
@@ -4925,7 +4937,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Executes the query with bound parameters by re-planning with actual values.
+   * Rebuilds materialized inputs and binds parameters for the current execution.
    *
    * <p>
    * This method performs the second phase of the two-phase prepared statement
@@ -4945,14 +4957,15 @@ public class JParqPreparedStatement implements PreparedStatement {
    * require actual values (not placeholders) to construct efficient column-level
    * filters. This approach ensures that WHERE conditions with parameters like
    * {@code WHERE age > ?} can be pushed down to Parquet's storage layer,
-   * dramatically reducing I/O for filtered queries.
+   * dramatically reducing I/O for filtered queries. Materialized inputs are also
+   * rebuilt so datetime values use the current execution snapshot.
    * </p>
    *
    * @return the result set from executing the query with bound parameters
    * @throws SQLException
    *           if parameter binding fails or query execution fails
    */
-  private JParqResultSet executeWithBoundParameters() throws SQLException {
+  private JParqResultSet executeReplannedQuery() throws SQLException {
     String boundSql = bindParameters();
     JParqResultSet currentResultSet = stmt.getCurrentRs();
     if (currentResultSet != null) {
@@ -5030,7 +5043,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     if (planningDeferred) {
       return new PushdownInfo(false, false, false, false, false, false,
-          "Pushdown planning is deferred until executeQuery() binds parameter values.", null, null);
+          "Pushdown planning is deferred until executeQuery() supplies execution values.", null, null);
     }
     if (setOperation) {
       return new PushdownInfo(false, false, false, false, false, false,

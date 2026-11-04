@@ -663,21 +663,20 @@ public final class SqlParser {
    *          the SQL text
    * @param allowQualifiedWildcards
    *          whether qualified wildcard projections are accepted
-   * @param rowCountParameters
-   *          the row-count parameter destination, or null when not needed
+   * @param preparation
+   *          optional preparation analysis destination
    * @return the normalized query
    * @throws IllegalArgumentException
    *           if parsing or validation fails
    */
-  private static Query parseQuery(String sql, boolean allowQualifiedWildcards,
-      Map<Integer, String> rowCountParameters) {
+  private static Query parseQuery(String sql, boolean allowQualifiedWildcards, PreparationContext preparation) {
     String normalizedSql = normalizeSql(sql);
     try {
-      return parseWithJsqlParser(normalizedSql, allowQualifiedWildcards, rowCountParameters);
+      return parseWithJsqlParser(normalizedSql, allowQualifiedWildcards, preparation);
     } catch (JSQLParserException e) {
       String compactedSql = compactWhitespace(normalizedSql);
       try {
-        return parseWithJsqlParser(compactedSql, allowQualifiedWildcards, rowCountParameters);
+        return parseWithJsqlParser(compactedSql, allowQualifiedWildcards, preparation);
       } catch (JSQLParserException ignored) {
         // Report the original syntax error after the compacted retry also fails.
       }
@@ -699,9 +698,7 @@ public final class SqlParser {
    *           if the SQL cannot be parsed
    */
   public static Map<Integer, String> rowCountParameters(String sql) {
-    Map<Integer, String> clauses = new LinkedHashMap<>();
-    parseQuery(sql, true, clauses);
-    return Map.copyOf(clauses);
+    return prepareQuery(sql).rowCountParameters();
   }
 
   /**
@@ -713,16 +710,16 @@ public final class SqlParser {
    *          statement text
    * @param allowQualifiedWildcards
    *          whether qualified wildcard projections are accepted
-   * @param rowCountParameters
-   *          the row-count parameter destination, or null when not needed
+   * @param preparation
+   *          optional preparation analysis destination
    * @return the normalized query
    * @throws JSQLParserException
    *           if parsing fails
    */
-  private static Query parseWithJsqlParser(String sql, boolean allowQualifiedWildcards,
-      Map<Integer, String> rowCountParameters) throws JSQLParserException {
+  private static Query parseWithJsqlParser(String sql, boolean allowQualifiedWildcards, PreparationContext preparation)
+      throws JSQLParserException {
     var stmt = (net.sf.jsqlparser.statement.select.Select) JSqlParserSupport.parseStatement(sql);
-    validateExpressions(stmt, rowCountParameters);
+    validateExpressions(stmt, preparation);
     SqlExpressionNormalizer.normalize(stmt);
     RelationQualifierValidation.validate(stmt);
     return parseSelectStatement(stmt, List.of(), Map.of(), allowQualifiedWildcards);
@@ -730,25 +727,53 @@ public final class SqlParser {
 
   /**
    * Validates decimal bounds and rejects aggregate FILTER clauses in one pass
-   * before query planning, optionally collecting row-count parameters.
+   * before query planning, optionally collecting row-count parameters and
+   * datetime dependencies.
    *
    * @param statement
    *          parsed SELECT, including nested scopes
-   * @param rowCountParameters
-   *          the row-count parameter destination, or null when not needed
+   * @param preparation
+   *          optional preparation analysis destination
    * @throws IllegalArgumentException
    *           if bounds are invalid or FILTER is present; the cause carries
    *           SQLState 42000
    */
   private static void validateExpressions(net.sf.jsqlparser.statement.select.Select statement,
-      Map<Integer, String> rowCountParameters) {
+      PreparationContext preparation) {
     JSqlParserSupport.visitExpressions(statement, new JSqlParserSupport.StatementExpressionVisitor() {
       /** {@inheritDoc} */
       @Override
       protected void inspectRowCount(Expression expression, String clause) {
-        if (rowCountParameters != null && expression instanceof JdbcParameter parameter) {
-          rowCountParameters.put(parameter.getIndex(), clause);
+        if (preparation != null && expression instanceof JdbcParameter parameter) {
+          preparation.rowCountParameters.put(parameter.getIndex(), clause);
         }
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(TimeKeyExpression keyword, S context) {
+        if (preparation != null) {
+          preparation.timeDependent = true;
+        }
+        return super.visit(keyword, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(Function function, S context) {
+        if (preparation != null && isTimeKeyword(function.getName())) {
+          preparation.timeDependent = true;
+        }
+        return super.visit(function, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(Column column, S context) {
+        if (preparation != null && SqlExpressionNormalizer.timeKeyword(column) != null) {
+          preparation.timeDependent = true;
+        }
+        return super.visit(column, context);
       }
 
       /** {@inheritDoc} */
@@ -764,10 +789,46 @@ public final class SqlParser {
       /** {@inheritDoc} */
       @Override
       public <S> Void visit(CastExpression cast, S context) {
+        // When #432 makes TIME-to-TIMESTAMP casts depend on CURRENT_DATE,
+        // include that implicit dependency in preparation.timeDependent too.
         DecimalCasts.validateBounds(cast);
         return super.visit(cast, context);
       }
     });
+  }
+
+  /**
+   * Parses and validates SQL while collecting execution-dependent planning needs.
+   *
+   * @param sql
+   *          SQL text after named parameters have been rewritten
+   * @return parsed query, row-count bindings, and datetime dependency
+   * @throws IllegalArgumentException
+   *           if SQL parsing or validation fails
+   */
+  public static PreparedQuery prepareQuery(String sql) {
+    PreparationContext preparation = new PreparationContext();
+    Query query = parseQuery(sql, true, preparation);
+    return new PreparedQuery(query, Map.copyOf(preparation.rowCountParameters), preparation.timeDependent);
+  }
+
+  /**
+   * Preparation facts collected during the normal statement validation walk.
+   *
+   * @param query
+   *          parsed query
+   * @param rowCountParameters
+   *          parameter indexes mapped to row-count clause names
+   * @param timeDependent
+   *          whether any scope contains a datetime value function
+   */
+  public record PreparedQuery(Query query, Map<Integer, String> rowCountParameters, boolean timeDependent) {
+  }
+
+  /** Mutable analysis destination shared by parser retries and nested scopes. */
+  private static final class PreparationContext {
+    private final Map<Integer, String> rowCountParameters = new LinkedHashMap<>();
+    private boolean timeDependent;
   }
 
   private static String normalizeSql(String sql) {

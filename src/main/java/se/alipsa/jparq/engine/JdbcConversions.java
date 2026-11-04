@@ -6,13 +6,11 @@ import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.OffsetTime;
-import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.TemporalAccessor;
 import java.util.Map;
@@ -102,8 +100,7 @@ public final class JdbcConversions {
           ? time
           : type == LocalTime.class
               ? local
-              : local.atOffset(ZoneId.systemDefault().getRules().getOffset(Instant.now()))
-                  .withOffsetSameInstant(ZoneOffset.UTC);
+              : local.atOffset(DateTimeFunctions.sessionOffset()).withOffsetSameInstant(ZoneOffset.UTC);
     }
     if (type == Timestamp.class || type == LocalDateTime.class || type == OffsetDateTime.class) {
       Timestamp timestamp = DateTimeFunctions.toTimestamp(value);

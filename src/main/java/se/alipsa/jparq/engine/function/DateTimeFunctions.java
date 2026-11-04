@@ -7,7 +7,6 @@ import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.DateTimeException;
 import java.time.Duration;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -62,7 +61,7 @@ public final class DateTimeFunctions {
    *
    * @param expr
    *          the time key expression
-   * @return the evaluated value (Date/Time/Timestamp) or the literal string if
+   * @return the statement-stable datetime value or the literal string if
    *         unsupported
    */
   public static Object evaluateTimeKey(TimeKeyExpression expr) {
@@ -73,13 +72,13 @@ public final class DateTimeFunctions {
     if (key == null) {
       return null;
     }
-    ZoneId zone = defaultZone();
+    OffsetDateTime timestamp = StatementTime.current();
     return switch (key.toUpperCase(Locale.ROOT)) {
-      case "CURRENT_DATE", "CURRENT_DATE()" -> Date.valueOf(LocalDate.now(zone));
-      case "CURRENT_TIME" -> OffsetTime.now(zone);
-      case "LOCALTIME" -> LocalTime.now(zone);
-      case "CURRENT_TIMESTAMP" -> OffsetDateTime.now(zone);
-      case "LOCALTIMESTAMP" -> LocalDateTime.now(zone);
+      case "CURRENT_DATE", "CURRENT_DATE()" -> Date.valueOf(timestamp.toLocalDate());
+      case "CURRENT_TIME" -> timestamp.toOffsetTime();
+      case "LOCALTIME" -> timestamp.toLocalTime();
+      case "CURRENT_TIMESTAMP" -> timestamp;
+      case "LOCALTIMESTAMP" -> timestamp.toLocalDateTime();
       default -> key;
     };
   }
@@ -91,7 +90,7 @@ public final class DateTimeFunctions {
    *
    * @return the active {@link ZoneId} to use
    */
-  private static ZoneId defaultZone() {
+  static ZoneId defaultZone() {
     String userZone = System.getProperty("user.timezone");
     if (userZone != null && !userZone.isBlank()) {
       try {
@@ -105,13 +104,14 @@ public final class DateTimeFunctions {
 
   /**
    * Resolve the SQL-session time zone displacement: the current offset of the
-   * active time zone. Local TIME and TIMESTAMP values promoted to their WITH TIME
-   * ZONE counterparts receive this displacement regardless of their own date.
+   * active time zone at statement execution. Local TIME and TIMESTAMP values
+   * promoted to their WITH TIME ZONE counterparts receive this displacement
+   * regardless of their own date.
    *
    * @return the current offset of the active time zone
    */
   public static ZoneOffset sessionOffset() {
-    return defaultZone().getRules().getOffset(Instant.now());
+    return StatementTime.current().getOffset();
   }
 
   /**
