@@ -202,6 +202,13 @@ public class JParqPreparedStatement implements PreparedStatement {
   private final int parameterCount;
   private final Map<String, List<Integer>> namedParameterIndexes;
   private final boolean hasParameters;
+  /**
+   * Defers full planning for datetime-dependent statements until execution.
+   * Preparation validates syntax only; table and column validation and detailed
+   * pushdown information are deferred, as for parameterized statements. Issue
+   * #407 tracks separating schema validation from materialization so preparation
+   * can validate inputs without reading their rows.
+   */
   private final boolean deferredTimePlanning;
   private Map<Integer, String> rowCountParameterClauses = Map.of();
   private CteResult informationSchemaTablesResult;
@@ -553,8 +560,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   // result.
   @SuppressWarnings("PMD.UseTryWithResources")
   private JParqResultSet executeQuery(QueryCancellation cancellation) throws SQLException {
-    // Only execution-dependent plans need rebuilding. Independent materializations
-    // retain the prepared statement's cached inputs.
+    // Rebuild plans that depend on bound parameters or the execution's datetime.
+    // Moving all materialization out of preparation is tracked in #407.
     if (hasParameters || deferredTimePlanning) {
       return executeReplannedQuery();
     }

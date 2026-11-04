@@ -789,6 +789,8 @@ public final class SqlParser {
       /** {@inheritDoc} */
       @Override
       public <S> Void visit(CastExpression cast, S context) {
+        // When #432 makes TIME-to-TIMESTAMP casts depend on CURRENT_DATE,
+        // include that implicit dependency in preparation.timeDependent too.
         DecimalCasts.validateBounds(cast);
         return super.visit(cast, context);
       }

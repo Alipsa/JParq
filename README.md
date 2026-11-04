@@ -104,8 +104,6 @@ tables or inherited CTEs with the same name.
 Datetime value functions (`CURRENT_TIMESTAMP`, `CURRENT_TIME`, `CURRENT_DATE`, `LOCALTIMESTAMP`, and
 `LOCALTIME`) share one datetime snapshot per statement execution, including nested queries and lazy
 result reads. Each execution of a prepared statement captures a fresh snapshot.
-Prepared inputs that depend on datetime value functions are materialized at execution;
-prepared queries without parameters or datetime value functions retain their cached inputs.
 
 Scalar subqueries in grouped SELECT lists can reference outer grouping columns, including grouping columns
 omitted from the output. Each subquery uses the current group's values; NULL grouping keys and keys suppressed
