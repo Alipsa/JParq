@@ -310,7 +310,10 @@ public final class ValueExpressionEvaluator {
       return arithmetic(mod.getLeftExpression(), mod.getRightExpression(), record, Operation.MOD);
     }
     if (expression instanceof Column col) {
-      if (SqlParser.isTimeKeyword(col.getColumnName()) && !hasSchemaField(col)) {
+      // JSqlParser represents bare local datetime keywords as columns in
+      // nested expressions. Probe for a real field without requiring column
+      // binding, which rejects an absent name in a qualified input mapping.
+      if (col.getTable() == null && SqlParser.isTimeKeyword(col.getColumnName()) && !hasSchemaField(col)) {
         TimeKeyExpression tk = new TimeKeyExpression();
         tk.setStringValue(col.getColumnName().toUpperCase(Locale.ROOT));
         return DateTimeFunctions.evaluateTimeKey(tk);
@@ -740,9 +743,19 @@ public final class ValueExpressionEvaluator {
     return resolveColumnValue(qualifier, name, record);
   }
 
+  /**
+   * Checks for a real field before treating a parser column as a time keyword.
+   * Missing names are expected here and must not require successful binding.
+   *
+   * @param column
+   *          possible field reference
+   * @return whether the reference names an available schema field
+   */
   private boolean hasSchemaField(Column column) {
     String qualifier = column.getTable() == null ? null : column.getTable().getName();
-    String canonical = canonicalFieldName(qualifier, column.getColumnName());
+    String fallback = caseInsensitiveIndex.get(Identifier.lookupKey(column.getColumnName()));
+    String canonical = ColumnMappingUtil.canonicalOrderColumn(column.getColumnName(), qualifier,
+        effectiveQualifierMapping, unqualifiedColumnMapping, fallback);
     return canonical != null && fieldSchemas.containsKey(canonical);
   }
 
