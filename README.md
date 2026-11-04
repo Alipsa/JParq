@@ -786,7 +786,17 @@ The following SQL statements are supported:
       Java SQL and java.time representations are always normalized to `java.sql.Date`, `java.sql.Time`
       (millisecond precision), `java.sql.Timestamp`, `OffsetTime` or `OffsetDateTime`, retaining timestamp fractions
       and explicit offsets. Zoned ARRAY elements still become strings through derived tables and CTEs (#277).
-    - MAP key/value types and STRUCT field schemas are not validated.
+    - MAP keys and values are recursively checked for a common type, including numeric and temporal promotion
+      across sibling maps. NULL values and empty maps do not constrain inferred types. STRUCT elements must
+      have matching field names and order, with compatible SQL field types resolved recursively. Numeric fields
+      promote to a common type. Nullability, Avro type names, and storage properties do not distinguish SQL types.
+      STRUCT temporal fields retain the finer precision when units differ. Mixed nanosecond/coarser timestamp
+      fields use lossless internal datetime text to preserve the full date range and nanosecond fractions;
+      UTC-only combinations retain their instants and decode as `Timestamp`, preserving the standalone JVM-zone
+      view even during daylight-saving overlaps. Combinations including local timestamp sources retain wall-clock
+      fields and decode as `LocalDateTime`. Both representations retain JDBC type `TIMESTAMP`.
+      Timestamp promotion overflow in other physical encodings raises SQLState `22008`. Incompatible MAP contents
+      or STRUCT schemas raise SQLState `42000`.
 - comments (line --) and block (/* */)
 - Subquery support
   - In the SELECT Clause : Used to return a single value or a set of values. e.g.

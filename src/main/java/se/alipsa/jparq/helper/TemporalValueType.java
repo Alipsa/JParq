@@ -3,6 +3,7 @@ package se.alipsa.jparq.helper;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
@@ -11,7 +12,7 @@ import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
 /**
- * Lossless internal schemas for java.time values crossing materialization
+ * Lossless internal schemas for temporal values crossing materialization
  * boundaries.
  */
 public enum TemporalValueType {
@@ -19,6 +20,11 @@ public enum TemporalValueType {
   LOCAL_TIME(Types.TIME, LocalTime.class),
   /** Local date and time with nanosecond precision. */
   LOCAL_TIMESTAMP(Types.TIMESTAMP, LocalDateTime.class),
+  /**
+   * UTC-adjusted TIMESTAMP preserving instants and nanoseconds across time-zone
+   * overlaps.
+   */
+  UTC_TIMESTAMP(Types.TIMESTAMP, Timestamp.class),
   /** Time retaining its UTC offset. */
   OFFSET_TIME(Types.TIME_WITH_TIMEZONE, OffsetTime.class),
   /** Timestamp retaining its UTC offset. */
@@ -92,7 +98,8 @@ public enum TemporalValueType {
   }
 
   /**
-   * Classifies a java.time value.
+   * Classifies a java.time value. JDBC timestamps retain their existing
+   * value-based inference; UTC_TIMESTAMP is selected from declared schemas.
    *
    * @param value
    *          value to classify
@@ -100,7 +107,7 @@ public enum TemporalValueType {
    */
   public static TemporalValueType fromValue(Object value) {
     for (TemporalValueType type : values()) {
-      if (type.javaClass.isInstance(value)) {
+      if (type != UTC_TIMESTAMP && type.javaClass.isInstance(value)) {
         return type;
       }
     }
@@ -121,6 +128,14 @@ public enum TemporalValueType {
     if (value == null || javaClass.isInstance(value)) {
       return value;
     }
+    if (this == UTC_TIMESTAMP) {
+      return switch (value) {
+        case Instant instant -> Timestamp.from(instant);
+        case OffsetDateTime timestamp -> Timestamp.from(timestamp.toInstant());
+        case LocalDateTime timestamp -> Timestamp.valueOf(timestamp);
+        default -> decode(value);
+      };
+    }
     Object local = switch (value) {
       case Time time -> DateTimeFunctions.toLocalTime(time);
       case Timestamp timestamp -> timestamp.toLocalDateTime();
@@ -140,6 +155,23 @@ public enum TemporalValueType {
   }
 
   /**
+   * Encodes a value without losing the instant of a UTC-adjusted JDBC timestamp.
+   *
+   * @param value
+   *          temporal value or ISO representation, possibly null
+   * @return lossless ISO text, or null for a null value
+   * @throws java.time.DateTimeException
+   *           if the input representation is invalid
+   */
+  public String encode(Object value) {
+    Object normalized = normalize(value);
+    if (normalized == null) {
+      return null;
+    }
+    return this == UTC_TIMESTAMP ? ((Timestamp) normalized).toInstant().toString() : normalized.toString();
+  }
+
+  /**
    * Decodes the lossless ISO representation stored in an internal record.
    *
    * @param value
@@ -153,6 +185,7 @@ public enum TemporalValueType {
     return switch (this) {
       case LOCAL_TIME -> LocalTime.parse(text);
       case LOCAL_TIMESTAMP -> LocalDateTime.parse(text);
+      case UTC_TIMESTAMP -> value instanceof Timestamp ? value : Timestamp.from(Instant.parse(text));
       case OFFSET_TIME -> OffsetTime.parse(text);
       case OFFSET_TIMESTAMP -> OffsetDateTime.parse(text);
     };

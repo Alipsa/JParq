@@ -1059,7 +1059,9 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Merges a branch column into the common set-operation declaration.
+   * Merges a branch column into the common set-operation declaration. Local
+   * timestamp representations take precedence over UTC timestamp encodings,
+   * independently of branch order.
    *
    * @param types
    *          common JDBC types
@@ -1107,8 +1109,11 @@ public class JParqPreparedStatement implements PreparedStatement {
       throw new SQLException("Set operation components must use compatible column types", "42000");
     } else if (!Objects.equals(prior, schema)) {
       TemporalValueType temporal = TemporalValueType.fromSchema(prior);
+      TemporalValueType branchTemporal = TemporalValueType.fromSchema(schema);
       if (temporal == null) {
-        temporal = TemporalValueType.fromSchema(schema);
+        temporal = branchTemporal;
+      } else if (temporal == TemporalValueType.UTC_TIMESTAMP && branchTemporal == TemporalValueType.LOCAL_TIMESTAMP) {
+        temporal = TemporalValueType.LOCAL_TIMESTAMP;
       }
       schemas.set(index, temporal != null && temporal.jdbcType() == type ? temporal.schema() : null);
     }
@@ -2994,6 +2999,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return switch (temporal) {
         case LOCAL_TIME -> ValueColumnType.LOCAL_TIME;
         case LOCAL_TIMESTAMP -> ValueColumnType.LOCAL_TIMESTAMP;
+        case UTC_TIMESTAMP -> ValueColumnType.TIMESTAMP;
         case OFFSET_TIME -> ValueColumnType.OFFSET_TIME;
         case OFFSET_TIMESTAMP -> ValueColumnType.OFFSET_TIMESTAMP;
       };
@@ -4080,7 +4086,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     TemporalValueType temporal = TemporalValueType.fromSchema(effective);
     if (temporal != null) {
       try {
-        return temporal.normalize(value).toString();
+        return temporal.encode(value);
       } catch (java.time.DateTimeException e) {
         throw new SQLException("Invalid temporal value during materialization", "22007", e);
       }

@@ -12,6 +12,7 @@ import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.NumericType;
+import se.alipsa.jparq.engine.function.StructArrayTypes;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 
 /** Resolves array declarations without using the current outer row's values. */
@@ -111,7 +112,8 @@ public final class ArrayExpressionSchemas {
   }
 
   /**
-   * Promotes numeric elements and recursively combines array declarations.
+   * Promotes numeric elements and recursively combines ARRAY and STRUCT
+   * declarations.
    *
    * @param left
    *          first declaration, possibly null
@@ -125,6 +127,9 @@ public final class ArrayExpressionSchemas {
   private static Schema common(Schema left, Schema right) {
     if (left == null || right == null || left.equals(right)) {
       return left == null ? right : left;
+    }
+    if (left.getType() == Schema.Type.RECORD && right.getType() == Schema.Type.RECORD) {
+      return StructArrayTypes.common(left, right);
     }
     if (left.getType() == Schema.Type.ARRAY && right.getType() == Schema.Type.ARRAY) {
       return Schema.createArray(common(left.getElementType(), right.getElementType()));

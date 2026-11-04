@@ -16,9 +16,12 @@ import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Function;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.IndexedRecord;
@@ -67,9 +70,10 @@ public final class ArrayFunctions {
    * JDBC representation of their family. NULLs and empty arrays do not constrain
    * the inferred leaf type. Nested reference arrays, including stored Parquet
    * array columns, are normalized to unmodifiable lists. Primitive arrays remain
-   * scalar values. Map implementations share the MAP family and retain their
-   * original values. MAP key/value types and STRUCT field schemas are not
-   * inspected.
+   * scalar values. MAP keys and values are recursively validated and normalized
+   * across sibling maps. STRUCT elements must have matching field names, order,
+   * and compatible SQL field types, resolved recursively with numeric promotion.
+   * Nullability, Avro names, and storage properties do not distinguish SQL types.
    *
    * @param values
    *          raw values
@@ -97,16 +101,12 @@ public final class ArrayFunctions {
    * @return true when a session time zone displacement is needed
    */
   private static boolean requiresOffset(ElementType type) {
-    for (ElementType depth = type; depth != null; depth = depth.nested) {
-      if (depth.family == OffsetDateTime.class || depth.family == OffsetTime.class) {
-        return true;
-      }
-    }
-    return false;
+    return type != null && (type.family == OffsetDateTime.class || type.family == OffsetTime.class
+        || requiresOffset(type.nested) || requiresOffset(type.mapKey) || requiresOffset(type.mapValue));
   }
 
   /**
-   * Infers a shared type at each depth across all sibling arrays.
+   * Infers shared types across sibling arrays, MAP entries, and STRUCT schemas.
    *
    * @param values
    *          raw array elements
@@ -118,32 +118,66 @@ public final class ArrayFunctions {
    */
   private static void inferElementType(List<?> values, ElementType type) {
     for (Object value : values) {
-      if (value == null) {
-        continue;
+      inferValue(value, type);
+    }
+  }
+
+  /**
+   * Accumulates one value without allocating singleton collections.
+   *
+   * @param value
+   *          raw element or map entry component
+   * @param type
+   *          accumulated common type
+   * @throws IllegalArgumentException
+   *           if the value has an incompatible type
+   */
+  private static void inferValue(Object value, ElementType type) {
+    if (value == null) {
+      return;
+    }
+    Class<?> candidate;
+    if (value instanceof Number number) {
+      candidate = Number.class;
+      type.numeric = NumericType.promote(type.numeric, NumericType.of(number));
+    } else if (value instanceof CharSequence) {
+      candidate = String.class;
+    } else if (value instanceof List<?> || value instanceof Object[]) {
+      candidate = List.class;
+    } else if (value instanceof Map<?, ?>) {
+      candidate = Map.class;
+    } else if (value instanceof IndexedRecord) {
+      candidate = IndexedRecord.class;
+    } else {
+      candidate = temporalFamily(value);
+    }
+    type.family = determineObjectTarget(type.family, candidate);
+    if (value instanceof TemporalInterval interval) {
+      type.interval = IntervalType.common(type.interval,
+          IntervalType.schema(interval.qualifier(), interval.fractionalPrecision()));
+    }
+    if (candidate == List.class) {
+      if (type.nested == null) {
+        type.nested = new ElementType();
       }
-      Class<?> candidate;
-      if (value instanceof Number number) {
-        candidate = Number.class;
-        type.numeric = NumericType.promote(type.numeric, NumericType.of(number));
-      } else if (value instanceof CharSequence) {
-        candidate = String.class;
-      } else if (value instanceof List<?> || value instanceof Object[]) {
-        candidate = List.class;
-      } else if (value instanceof Map<?, ?>) {
-        candidate = Map.class;
-      } else {
-        candidate = temporalFamily(value);
+      inferElementType(arrayValues(value), type.nested);
+    } else if (value instanceof Map<?, ?> map) {
+      if (type.mapKey == null) {
+        type.mapKey = new ElementType();
+        type.mapValue = new ElementType();
       }
-      type.family = determineObjectTarget(type.family, candidate);
-      if (value instanceof TemporalInterval interval) {
-        type.interval = IntervalType.common(type.interval,
-            IntervalType.schema(interval.qualifier(), interval.fractionalPrecision()));
+      for (Map.Entry<?, ?> entry : map.entrySet()) {
+        inferValue(entry.getKey(), type.mapKey);
+        inferValue(entry.getValue(), type.mapValue);
       }
-      if (candidate == List.class) {
-        if (type.nested == null) {
-          type.nested = new ElementType();
-        }
-        inferElementType(arrayValues(value), type.nested);
+    } else if (value instanceof IndexedRecord record) {
+      if (type.structSchemas == null) {
+        type.structSchemas = new IdentityHashMap<>();
+        type.structConversions = new IdentityHashMap<>();
+      }
+      Schema schema = record.getSchema();
+      if (type.structSchemas.put(schema, Boolean.TRUE) == null) {
+        type.struct = type.struct == null ? schema : StructArrayTypes.common(type.struct, schema);
       }
     }
   }
@@ -161,24 +195,92 @@ public final class ArrayFunctions {
    * @return recursively normalized, unmodifiable array
    */
   private static List<Object> coerceArrayValues(List<?> values, ElementType type, ZoneOffset offset) {
-    if (type.numeric != NumericType.NONE) {
-      return convertNumericValues(values, type.numeric);
-    }
     List<Object> coerced = new ArrayList<>(values.size());
     for (Object value : values) {
-      if (value == null) {
-        coerced.add(null);
-      } else if (type.family == String.class) {
-        coerced.add(value.toString());
-      } else if (type.interval != null) {
-        coerced.add(IntervalType.project((TemporalInterval) value, type.interval));
-      } else if (type.family == List.class) {
-        coerced.add(coerceArrayValues(arrayValues(value), type.nested, offset));
-      } else {
-        coerced.add(coerceTemporal(value, type.family, offset));
-      }
+      coerced.add(coerceValue(value, type, offset));
     }
     return Collections.unmodifiableList(coerced);
+  }
+
+  /**
+   * Converts one value to its inferred common type.
+   *
+   * @param value
+   *          validated value
+   * @param type
+   *          common type
+   * @param offset
+   *          session displacement for temporal promotion
+   * @return normalized value, retaining unchanged scalar instances
+   * @throws IllegalArgumentException
+   *           if conversion fails
+   */
+  private static Object coerceValue(Object value, ElementType type, ZoneOffset offset) {
+    if (value == null) {
+      return null;
+    }
+    if (type.numeric != NumericType.NONE) {
+      return convertNumericValue((Number) value, type.numeric);
+    }
+    if (type.family == String.class) {
+      return value.toString();
+    }
+    if (type.interval != null) {
+      return IntervalType.project((TemporalInterval) value, type.interval);
+    }
+    if (type.family == List.class) {
+      return coerceArrayValues(arrayValues(value), type.nested, offset);
+    }
+    if (type.family == Map.class) {
+      return coerceMap((Map<?, ?>) value, type, offset);
+    }
+    if (value instanceof IndexedRecord record) {
+      return type.structConversions
+          .computeIfAbsent(record.getSchema(), source -> StructArrayTypes.converter(source, type.struct)).apply(record);
+    }
+    return coerceTemporal(value, type.family, offset);
+  }
+
+  /**
+   * Normalizes map entries with the common key and value types. Unchanged maps
+   * retain their identity; converted maps are unmodifiable.
+   *
+   * @param map
+   *          validated map
+   * @param type
+   *          shared map element type
+   * @param offset
+   *          session displacement for temporal promotion
+   * @return map with normalized keys and values
+   * @throws IllegalArgumentException
+   *           if key promotion creates duplicate keys; the cause carries SQLState
+   *           42000
+   */
+  private static Map<?, ?> coerceMap(Map<?, ?> map, ElementType type, ZoneOffset offset) {
+    Map<Object, Object> result = null;
+    int index = 0;
+    for (Map.Entry<?, ?> entry : map.entrySet()) {
+      Object key = coerceValue(entry.getKey(), type.mapKey, offset);
+      Object value = coerceValue(entry.getValue(), type.mapValue, offset);
+      if (result == null && (key != entry.getKey() || value != entry.getValue())) {
+        result = new LinkedHashMap<>();
+        int previous = 0;
+        for (Map.Entry<?, ?> original : map.entrySet()) {
+          if (previous++ == index) {
+            break;
+          }
+          result.put(original.getKey(), original.getValue());
+        }
+      }
+      if (result != null) {
+        if (result.containsKey(key)) {
+          throw SqlExceptions.incompatibleArrayElements("MAP keys", "duplicate keys after type promotion");
+        }
+        result.put(key, value);
+      }
+      index++;
+    }
+    return result == null ? map : Collections.unmodifiableMap(result);
   }
 
   /**
@@ -318,46 +420,64 @@ public final class ArrayFunctions {
   }
 
   /**
-   * Promotes previously validated numeric elements to their common type.
+   * Promotes a numeric value, retaining its instance when the type already
+   * matches.
    *
-   * @param values
-   *          numeric values, optionally including NULLs
+   * @param number
+   *          validated numeric value
    * @param target
    *          common numeric type
-   * @return unmodifiable list of promoted values
+   * @return promoted value
    */
-  private static List<Object> convertNumericValues(List<?> values, NumericType target) {
-    List<Object> converted = new ArrayList<>(values.size());
-    for (Object value : values) {
-      if (value == null) {
-        converted.add(null);
-        continue;
-      }
-      Number number = (Number) value;
-      converted.add(switch (target) {
-        case BIG_DECIMAL -> NumericFunctions.toBigDecimal(number);
-        case DOUBLE -> number.doubleValue();
-        case FLOAT -> number.floatValue();
-        case LONG -> number.longValue();
-        case INTEGER -> number.intValue();
-        case SHORT -> number.shortValue();
-        case BYTE -> number.byteValue();
-        case NONE -> number;
-      });
+  private static Number convertNumericValue(Number number, NumericType target) {
+    if (number.getClass() == target.javaClass()) {
+      return number;
     }
-    return Collections.unmodifiableList(converted);
+    return switch (target) {
+      case BIG_DECIMAL -> NumericFunctions.toBigDecimal(number);
+      case DOUBLE -> number.doubleValue();
+      case FLOAT -> number.floatValue();
+      case LONG -> number.longValue();
+      case INTEGER -> number.intValue();
+      case SHORT -> number.shortValue();
+      case BYTE -> number.byteValue();
+      case NONE -> number;
+    };
   }
 
-  /** Common element family and numeric promotion target at one array depth. */
+  /** Common element family and recursive container types at one nesting depth. */
   private static final class ElementType {
     private Class<?> family;
     private NumericType numeric = NumericType.NONE;
     private ElementType nested;
     private Schema interval;
+    private ElementType mapKey;
+    private ElementType mapValue;
+    private Schema struct;
+    private Map<Schema, Boolean> structSchemas;
+    private Map<Schema, Function<Object, Object>> structConversions;
   }
 
   private enum NumericType {
     NONE, BYTE, SHORT, INTEGER, LONG, FLOAT, DOUBLE, BIG_DECIMAL;
+
+    /**
+     * Returns the canonical Java representation for this numeric family.
+     *
+     * @return numeric wrapper class, or Number for the unknown family
+     */
+    Class<?> javaClass() {
+      return switch (this) {
+        case BYTE -> Byte.class;
+        case SHORT -> Short.class;
+        case INTEGER -> Integer.class;
+        case LONG -> Long.class;
+        case FLOAT -> Float.class;
+        case DOUBLE -> Double.class;
+        case BIG_DECIMAL -> BigDecimal.class;
+        case NONE -> Number.class;
+      };
+    }
 
     static NumericType of(Number value) {
       if (value instanceof BigDecimal || value instanceof java.math.BigInteger) {

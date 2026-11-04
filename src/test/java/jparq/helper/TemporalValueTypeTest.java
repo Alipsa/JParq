@@ -33,11 +33,36 @@ class TemporalValueTypeTest {
       assertSame(value, type.normalize(value));
       var schema = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), type.schema()));
       assertEquals(type, TemporalValueType.fromSchema(schema));
-      assertEquals(value, AvroCoercions.unwrap(new Utf8(value.toString()), schema));
+      assertEquals(value, AvroCoercions.unwrap(new Utf8(type.encode(value)), schema));
       assertEquals(value.getClass().getName(), JdbcTypeMapper.mapSchemaToJavaClassName(schema));
       assertEquals(type.jdbcType(), JdbcTypeMapper.mapSchemaToJdbcType(schema));
       assertNull(AvroCoercions.unwrap(null, schema));
     }
+  }
+
+  /**
+   * Keeps UTC-adjusted timestamps lossless while leaving ordinary JDBC value
+   * inference unchanged.
+   */
+  @Test
+  void roundTripsUtcTimestampInstants() {
+    var type = TemporalValueType.UTC_TIMESTAMP;
+    var schema = Schema.createUnion(Schema.create(Schema.Type.NULL), type.schema());
+    for (String text : List.of("0001-01-01T00:00:00Z", "9999-12-31T00:00:00.123456789Z", "2026-10-25T00:30:00Z",
+        "2026-10-25T01:30:00Z")) {
+      var instant = java.time.Instant.parse(text);
+      var value = java.sql.Timestamp.from(instant);
+      assertNull(TemporalValueType.fromValue(value));
+      assertSame(value, type.normalize(value));
+      assertSame(value, type.decode(value));
+      assertEquals(value, type.normalize(instant));
+      assertEquals(value, type.normalize(instant.atOffset(java.time.ZoneOffset.UTC)));
+      assertEquals(instant.toString(), type.encode(value));
+      assertEquals(value, AvroCoercions.unwrap(new Utf8(type.encode(value)), schema));
+      assertEquals(java.sql.Timestamp.class.getName(), JdbcTypeMapper.mapSchemaToJavaClassName(schema));
+      assertEquals(java.sql.Types.TIMESTAMP, JdbcTypeMapper.mapSchemaToJdbcType(schema));
+    }
+    assertNull(type.encode(null));
   }
 
   /** Ordinary strings and NULL values do not acquire temporal descriptors. */
