@@ -792,8 +792,9 @@ The following SQL statements are supported:
       promote to a common type. Nullability, Avro type names, and storage properties do not distinguish SQL types.
       STRUCT temporal fields retain the finer precision when units differ. Mixed nanosecond/coarser timestamp
       fields use lossless internal datetime text to preserve the full date range and nanosecond fractions;
-      UTC-adjusted sources retain the JVM-zone view used by standalone reads, and local sources retain wall-clock
-      fields. Lossless internal timestamp fields decode as `LocalDateTime`, with JDBC type `TIMESTAMP`.
+      UTC-only combinations retain their instants and decode as `Timestamp`, preserving the standalone JVM-zone
+      view even during daylight-saving overlaps. Combinations including local timestamp sources retain wall-clock
+      fields and decode as `LocalDateTime`. Both representations retain JDBC type `TIMESTAMP`.
       Timestamp promotion overflow in other physical encodings raises SQLState `22008`. Incompatible MAP contents
       or STRUCT schemas raise SQLState `42000`.
 - comments (line --) and block (/* */)

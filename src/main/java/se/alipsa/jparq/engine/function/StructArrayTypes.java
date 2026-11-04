@@ -144,15 +144,35 @@ public final class StructArrayTypes {
         || TemporalValueType.fromSchema(right) == TemporalValueType.LOCAL_TIMESTAMP) {
       return TemporalValueType.LOCAL_TIMESTAMP.schema();
     }
+    if (TemporalValueType.fromSchema(left) == TemporalValueType.UTC_TIMESTAMP
+        || TemporalValueType.fromSchema(right) == TemporalValueType.UTC_TIMESTAMP) {
+      return utcTimestamp(left) && utcTimestamp(right)
+          ? TemporalValueType.UTC_TIMESTAMP.schema()
+          : TemporalValueType.LOCAL_TIMESTAMP.schema();
+    }
     if (!AvroCoercions.isTimestamp(left) || !AvroCoercions.isTimestamp(right)) {
       return left;
     }
     long first = AvroCoercions.timestampUnits(left);
     long second = AvroCoercions.timestampUnits(right);
     if (first != second && Math.max(first, second) == 1_000_000_000L) {
-      return TemporalValueType.LOCAL_TIMESTAMP.schema();
+      return utcTimestamp(left) && utcTimestamp(right)
+          ? TemporalValueType.UTC_TIMESTAMP.schema()
+          : TemporalValueType.LOCAL_TIMESTAMP.schema();
     }
     return first >= second ? left : right;
+  }
+
+  /**
+   * Identifies physical or internally encoded UTC-adjusted timestamps.
+   *
+   * @param schema
+   *          non-null timestamp declaration
+   * @return whether the declaration retains an instant rather than local fields
+   */
+  private static boolean utcTimestamp(Schema schema) {
+    return TemporalValueType.fromSchema(schema) == TemporalValueType.UTC_TIMESTAMP
+        || AvroCoercions.isTimestamp(schema) && !AvroCoercions.isLocalTimestamp(schema);
   }
 
   /**
@@ -332,7 +352,7 @@ public final class StructArrayTypes {
     Object decoded = AvroCoercions.unwrap(value, from);
     TemporalValueType temporal = TemporalValueType.fromSchema(to);
     if (temporal != null) {
-      return temporal.normalize(decoded).toString();
+      return temporal.encode(decoded);
     }
     NumericType numeric = NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(to), to);
     if (numeric != null) {

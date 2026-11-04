@@ -188,18 +188,14 @@ class StructTimestampRangeTest {
       }
       for (String array : List.of("ARRAY[t.valid_to,t.valid_to]", "ARRAY[t.loaded,t.loaded]",
           "ARRAY[t.valid_to,t.loaded]", "ARRAY[t.loaded,t.valid_to]")) {
-        boolean mixed = array.contains("valid_to") && array.contains("loaded");
         try (var statement = connection.createStatement();
             var result = statement.executeQuery("SELECT u.x FROM t CROSS JOIN UNNEST(" + array + ") AS u(x)")) {
           assertEquals(Types.TIMESTAMP, result.getMetaData().getColumnType(1), array);
           for (int row = 0; row < 2; row++) {
             assertTrue(result.next(), array);
             Object value = result.getObject(1);
-            if (mixed) {
-              assertEquals(expected, assertInstanceOf(LocalDateTime.class, value), array);
-            } else {
-              assertEquals(expected, assertInstanceOf(Timestamp.class, value).toLocalDateTime(), array);
-            }
+            assertEquals(Timestamp.class.getName(), result.getMetaData().getColumnClassName(1), array);
+            assertEquals(expected, assertInstanceOf(Timestamp.class, value).toLocalDateTime(), array);
             assertEquals(expected, result.getTimestamp(1).toLocalDateTime(), array);
             assertEquals(instant, result.getTimestamp(1).toInstant(), array);
           }
@@ -209,17 +205,69 @@ class StructTimestampRangeTest {
   }
 
   /**
-   * Computes the same wall-clock view as standalone decoding for the source's
+   * Retains both instants in the repeated fall-back hour through materialization
+   * and SQL comparisons.
+   *
+   * @param directory
+   *          database directory
+   * @throws Exception
+   *           if fixture writing or querying fails
+   */
+  @Test
+  void preservesInstantsInFallBackOverlap(@TempDir Path directory) throws Exception {
+    var first = Instant.parse("2026-10-25T00:30:00Z");
+    var second = Instant.parse("2026-10-25T01:30:00Z");
+    var sibling = Instant.parse("2026-10-25T02:30:00.123456789Z");
+    writeTimestamps(directory, List.of(first, second),
+        List.of(sibling.getEpochSecond() * 1_000_000_000L + sibling.getNano(),
+            sibling.getEpochSecond() * 1_000_000_000L + sibling.getNano()));
+    assertEquals(Timestamp.from(first).toLocalDateTime(), Timestamp.from(second).toLocalDateTime());
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      for (String array : List.of("ARRAY[t.valid_to,t.loaded]", "ARRAY[t.loaded,t.valid_to]")) {
+        String input = "SELECT t.id,u.x FROM t CROSS JOIN UNNEST(" + array + ") AS u(x)";
+        for (String sql : List.of(input + " ORDER BY t.id,u.x", "SELECT id,x FROM (" + input + ") d ORDER BY id,x",
+            "WITH c AS (" + input + ") SELECT id,x FROM c ORDER BY id,x")) {
+          try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+            assertEquals(Types.TIMESTAMP, result.getMetaData().getColumnType(2), sql);
+            assertEquals(Timestamp.class.getName(), result.getMetaData().getColumnClassName(2), sql);
+            for (Instant expected : List.of(first, sibling, second, sibling)) {
+              assertTrue(result.next(), sql);
+              assertEquals(expected, assertInstanceOf(Timestamp.class, result.getObject(2)).toInstant(), sql);
+              assertEquals(expected, result.getTimestamp(2).toInstant(), sql);
+            }
+            org.junit.jupiter.api.Assertions.assertFalse(result.next(), sql);
+          }
+        }
+        try (var statement = connection.createStatement();
+            var result = statement.executeQuery("SELECT DISTINCT x FROM (" + input + ") d ORDER BY x")) {
+          for (Instant expected : List.of(first, second, sibling)) {
+            assertTrue(result.next(), array);
+            assertEquals(expected, result.getTimestamp(1).toInstant(), array);
+          }
+          org.junit.jupiter.api.Assertions.assertFalse(result.next(), array);
+        }
+        try (var statement = connection.createStatement();
+            var result = statement.executeQuery(
+                "WITH c AS (" + input + ") " + "SELECT COUNT(*) FROM c a JOIN c b ON a.x = b.x WHERE a.id <> b.id")) {
+          assertTrue(result.next());
+          assertEquals(2, result.getInt(1), array);
+        }
+      }
+    }
+  }
+
+  /**
+   * Computes the same Java representation as standalone decoding for the source's
    * timestamp family.
    *
    * @param instant
    *          stored epoch value
    * @param local
    *          whether the stored fields are local rather than UTC-adjusted
-   * @return expected visible datetime fields
+   * @return expected timestamp or local datetime
    */
-  private static LocalDateTime visibleValue(Instant instant, boolean local) {
-    return local ? LocalDateTime.ofInstant(instant, ZoneOffset.UTC) : Timestamp.from(instant).toLocalDateTime();
+  private static Object visibleValue(Instant instant, boolean local) {
+    return local ? LocalDateTime.ofInstant(instant, ZoneOffset.UTC) : Timestamp.from(instant);
   }
 
   /**
@@ -235,19 +283,40 @@ class StructTimestampRangeTest {
    *           if writing the fixture fails
    */
   private static void writeTimestamps(Path directory, Instant instant, long nanos) throws Exception {
+    writeTimestamps(directory, List.of(instant), List.of(nanos));
+  }
+
+  /**
+   * Writes multiple rows with real Parquet timestamp annotations.
+   *
+   * @param directory
+   *          database directory
+   * @param instants
+   *          coarser timestamp values
+   * @param nanos
+   *          corresponding nanosecond timestamp values
+   * @throws Exception
+   *           if writing the fixture fails
+   */
+  private static void writeTimestamps(Path directory, List<Instant> instants, List<Long> nanos) throws Exception {
     var schema = MessageTypeParser.parseMessageType("""
         message timestamps {
+          required int32 id;
           required group valid_to { required int64 x (TIMESTAMP(MICROS,true)); }
           required group loaded { required int64 x (TIMESTAMP(NANOS,true)); }
         }
         """);
-    var row = new SimpleGroupFactory(schema).newGroup();
-    row.addGroup("valid_to").add("x", instant.getEpochSecond() * 1_000_000L);
-    row.addGroup("loaded").add("x", nanos);
     var config = new org.apache.hadoop.conf.Configuration();
     var file = new org.apache.hadoop.fs.Path(directory.resolve("t.parquet").toUri());
     try (var writer = ExampleParquetWriter.builder(file).withConf(config).withType(schema).build()) {
-      writer.write(row);
+      for (int index = 0; index < instants.size(); index++) {
+        var row = new SimpleGroupFactory(schema).newGroup();
+        row.add("id", index);
+        Instant instant = instants.get(index);
+        row.addGroup("valid_to").add("x", instant.getEpochSecond() * 1_000_000L + instant.getNano() / 1000L);
+        row.addGroup("loaded").add("x", nanos.get(index));
+        writer.write(row);
+      }
     }
   }
 

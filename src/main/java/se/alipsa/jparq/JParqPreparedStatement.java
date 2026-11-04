@@ -2994,6 +2994,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return switch (temporal) {
         case LOCAL_TIME -> ValueColumnType.LOCAL_TIME;
         case LOCAL_TIMESTAMP -> ValueColumnType.LOCAL_TIMESTAMP;
+        case UTC_TIMESTAMP -> ValueColumnType.TIMESTAMP;
         case OFFSET_TIME -> ValueColumnType.OFFSET_TIME;
         case OFFSET_TIMESTAMP -> ValueColumnType.OFFSET_TIMESTAMP;
       };
@@ -4080,7 +4081,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     TemporalValueType temporal = TemporalValueType.fromSchema(effective);
     if (temporal != null) {
       try {
-        return temporal.normalize(value).toString();
+        return temporal.encode(value);
       } catch (java.time.DateTimeException e) {
         throw new SQLException("Invalid temporal value during materialization", "22007", e);
       }
