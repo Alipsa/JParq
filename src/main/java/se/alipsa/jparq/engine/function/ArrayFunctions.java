@@ -11,7 +11,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.OffsetTime;
-import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -61,11 +61,13 @@ public final class ArrayFunctions {
    * Normalize ARRAY element types so that a single SQL ARRAY has a consistent
    * element type and nesting depth. Numeric leaves are promoted across sibling
    * arrays; DATE and TIMESTAMP leaves promote to TIMESTAMP, and zoned temporal
-   * leaves promote compatible local values using the active JVM time zone. SQL
-   * and java.time representations share a family. TIME leaves use LocalTime to
-   * retain nanoseconds. NULLs and empty arrays do not constrain the inferred leaf
-   * type. Nested reference arrays, including stored Parquet array columns, are
-   * normalized to unmodifiable lists. Primitive arrays remain scalar values. Map
+   * leaves promote compatible local values using the SQL-session time zone
+   * displacement (the active time zone's current offset). SQL and java.time
+   * representations share a family; temporal leaves are converted to the JDBC
+   * representation of their family only when the Java classes at a depth differ.
+   * NULLs and empty arrays do not constrain the inferred leaf type. Nested
+   * reference arrays, including stored Parquet array columns, are normalized to
+   * unmodifiable lists. Primitive arrays remain scalar values. Map
    * implementations share the MAP family and retain their original values. MAP
    * key/value types and STRUCT field schemas are not inspected.
    *
@@ -83,7 +85,24 @@ public final class ArrayFunctions {
     }
     ElementType type = new ElementType();
     inferElementType(values, type);
-    return coerceArrayValues(values, type);
+    ZoneOffset offset = requiresOffset(type) ? DateTimeFunctions.sessionOffset() : null;
+    return coerceArrayValues(values, type, offset);
+  }
+
+  /**
+   * Determines whether any depth promotes local temporal values to a zoned type.
+   *
+   * @param type
+   *          inferred type of the outermost depth
+   * @return true when a session time zone displacement is needed
+   */
+  private static boolean requiresOffset(ElementType type) {
+    for (ElementType depth = type; depth != null; depth = depth.nested) {
+      if (depth.mixed && (depth.family == OffsetDateTime.class || depth.family == OffsetTime.class)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -114,6 +133,7 @@ public final class ArrayFunctions {
         candidate = Map.class;
       } else {
         candidate = temporalFamily(value);
+        type.recordRepresentation(value.getClass());
       }
       type.family = determineObjectTarget(type.family, candidate);
       if (value instanceof TemporalInterval interval) {
@@ -136,9 +156,12 @@ public final class ArrayFunctions {
    *          validated array elements
    * @param type
    *          common type for this depth
+   * @param offset
+   *          SQL-session time zone displacement for zoned promotion, or null when
+   *          no depth requires it
    * @return recursively normalized, unmodifiable array
    */
-  private static List<Object> coerceArrayValues(List<?> values, ElementType type) {
+  private static List<Object> coerceArrayValues(List<?> values, ElementType type, ZoneOffset offset) {
     if (type.numeric != NumericType.NONE) {
       return convertNumericValues(values, type.numeric);
     }
@@ -151,9 +174,9 @@ public final class ArrayFunctions {
       } else if (type.interval != null) {
         coerced.add(IntervalType.project((TemporalInterval) value, type.interval));
       } else if (type.family == List.class) {
-        coerced.add(coerceArrayValues(arrayValues(value), type.nested));
+        coerced.add(coerceArrayValues(arrayValues(value), type.nested, offset));
       } else {
-        coerced.add(coerceTemporal(value, type.family));
+        coerced.add(type.mixed ? coerceTemporal(value, type.family, offset) : value);
       }
     }
     return Collections.unmodifiableList(coerced);
@@ -192,8 +215,8 @@ public final class ArrayFunctions {
           ? OffsetDateTime.class
           : Timestamp.class;
     }
-    if ((current == LocalTime.class || current == OffsetTime.class)
-        && (candidate == LocalTime.class || candidate == OffsetTime.class)) {
+    if ((current == Time.class || current == OffsetTime.class)
+        && (candidate == Time.class || candidate == OffsetTime.class)) {
       return OffsetTime.class;
     }
     String currentName = sqlTypeName(current);
@@ -216,8 +239,8 @@ public final class ArrayFunctions {
     return switch (value) {
       case Date ignored -> Date.class;
       case LocalDate ignored -> Date.class;
-      case Time ignored -> LocalTime.class;
-      case LocalTime ignored -> LocalTime.class;
+      case Time ignored -> Time.class;
+      case LocalTime ignored -> Time.class;
       case Timestamp ignored -> Timestamp.class;
       case LocalDateTime ignored -> Timestamp.class;
       case OffsetDateTime ignored -> OffsetDateTime.class;
@@ -228,17 +251,20 @@ public final class ArrayFunctions {
   }
 
   /**
-   * Converts a temporal leaf to the inferred family without losing fractional
-   * seconds or explicit offsets. Local values promoted to zoned timestamps use
-   * the zone's rules on their own date; local times use today's date.
+   * Converts a temporal leaf of a mixed-representation depth to the JDBC
+   * representation of the inferred family. Explicit offsets are preserved; local
+   * values promoted to a zoned type receive the SQL-session time zone
+   * displacement. TIME values retain millisecond precision.
    *
    * @param value
    *          non-NULL, compatible leaf
    * @param family
    *          inferred canonical family
+   * @param offset
+   *          SQL-session time zone displacement used for zoned promotion
    * @return promoted temporal value, or the original non-temporal value
    */
-  private static Object coerceTemporal(Object value, Class<?> family) {
+  private static Object coerceTemporal(Object value, Class<?> family, ZoneOffset offset) {
     if (family == Date.class) {
       return DateTimeFunctions.toDate(value);
     }
@@ -247,24 +273,22 @@ public final class ArrayFunctions {
           ? Timestamp.valueOf(date.toLocalDate().atStartOfDay())
           : DateTimeFunctions.toTimestamp(value);
     }
-    if (family == LocalTime.class) {
-      return value instanceof Time time ? DateTimeFunctions.toLocalTime(time) : value;
+    if (family == Time.class) {
+      return DateTimeFunctions.toTime(value);
     }
     if (family == OffsetDateTime.class) {
       return switch (value) {
         case OffsetDateTime dateTime -> dateTime;
         case ZonedDateTime dateTime -> dateTime.toOffsetDateTime();
-        case Instant instant -> instant.atZone(DateTimeFunctions.defaultZone()).toOffsetDateTime();
-        case Date date -> date.toLocalDate().atStartOfDay(DateTimeFunctions.defaultZone()).toOffsetDateTime();
-        case LocalDate date -> date.atStartOfDay(DateTimeFunctions.defaultZone()).toOffsetDateTime();
-        default -> DateTimeFunctions.toTimestamp(value).toLocalDateTime().atZone(DateTimeFunctions.defaultZone())
-            .toOffsetDateTime();
+        case Instant instant -> instant.atOffset(offset);
+        case Date date -> date.toLocalDate().atStartOfDay().atOffset(offset);
+        case LocalDate date -> date.atStartOfDay().atOffset(offset);
+        default -> DateTimeFunctions.toTimestamp(value).toLocalDateTime().atOffset(offset);
       };
     }
     if (family == OffsetTime.class && !(value instanceof OffsetTime)) {
       LocalTime time = value instanceof Time sqlTime ? DateTimeFunctions.toLocalTime(sqlTime) : (LocalTime) value;
-      ZoneId zone = DateTimeFunctions.defaultZone();
-      return time.atDate(LocalDate.now(zone)).atZone(zone).toOffsetDateTime().toOffsetTime();
+      return time.atOffset(offset);
     }
     return value;
   }
@@ -337,6 +361,23 @@ public final class ArrayFunctions {
     private NumericType numeric = NumericType.NONE;
     private ElementType nested;
     private Schema interval;
+    private Class<?> representation;
+    private boolean mixed;
+
+    /**
+     * Records the Java class of a scalar leaf so that conversion is only applied
+     * when representations at this depth differ.
+     *
+     * @param leafClass
+     *          class of a non-NULL scalar leaf
+     */
+    private void recordRepresentation(Class<?> leafClass) {
+      if (representation == null) {
+        representation = leafClass;
+      } else if (representation != leafClass) {
+        mixed = true;
+      }
+    }
   }
 
   private enum NumericType {

@@ -769,9 +769,12 @@ The following SQL statements are supported:
       constructors can be combined; nested reference arrays are normalized to lists, including in ARRAY subqueries.
     - Temporal elements use a common SQL type, including across sibling nested arrays. DATE and TIMESTAMP
       promote to TIMESTAMP; compatible local/zoned timestamp or time values promote to the zoned type.
-      Local values use the active JVM time zone when promoted (with the value's date for timestamps and today's
-      date for times). Java SQL and java.time representations are normalized together, retaining fractional seconds
-      and explicit offsets. DATE/TIME and TIMESTAMP/TIME combinations remain incompatible.
+      Promoted local values receive the SQL-session time zone displacement (the active JVM time zone's current
+      offset), regardless of their own date. When an array mixes java.sql and java.time representations, elements
+      are converted to `java.sql.Date`, `java.sql.Time` (millisecond precision), `java.sql.Timestamp`,
+      `OffsetTime` or `OffsetDateTime`, retaining timestamp fractions and explicit offsets; arrays whose elements
+      already share one representation are returned unchanged. DATE/TIME and TIMESTAMP/TIME combinations remain
+      incompatible. Zoned ARRAY elements still become strings through derived tables and CTEs (#277).
     - MAP key/value types and STRUCT field schemas are not validated.
 - comments (line --) and block (/* */)
 - Subquery support

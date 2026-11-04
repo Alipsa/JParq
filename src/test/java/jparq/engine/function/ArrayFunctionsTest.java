@@ -23,6 +23,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.SubqueryExecutor.SubqueryResult;
 import se.alipsa.jparq.engine.function.ArrayFunctions;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
 /**
  * Unit tests for {@link ArrayFunctions}.
@@ -331,6 +332,7 @@ class ArrayFunctionsTest {
 
   /**
    * Supplies SQL and java.time representations and their common temporal values.
+   * Local values promoted to a zoned type receive the session displacement.
    *
    * @return compatible temporal pairs with promoted results
    */
@@ -343,37 +345,64 @@ class ArrayFunctionsTest {
     var sqlTime = java.sql.Time.valueOf("12:00:00");
     var offset = java.time.ZoneOffset.ofHours(3);
     var zoned = local.atOffset(offset);
-    var zone = java.time.ZoneId.systemDefault();
+    var session = DateTimeFunctions.sessionOffset();
     return Stream.of(Arguments.of(java.sql.Date.valueOf(date), timestamp, midnight, timestamp),
         Arguments.of(date, local, midnight, timestamp),
         Arguments.of(java.sql.Date.valueOf(date), date, java.sql.Date.valueOf(date), java.sql.Date.valueOf(date)),
         Arguments.of(local, timestamp, timestamp, timestamp),
-        Arguments.of(time, sqlTime, time, java.time.LocalTime.NOON),
-        Arguments.of(date, zoned, date.atStartOfDay(zone).toOffsetDateTime(), zoned),
-        Arguments.of(timestamp, zoned, local.atZone(zone).toOffsetDateTime(), zoned),
+        Arguments.of(time, sqlTime, DateTimeFunctions.toTime(time), sqlTime),
+        Arguments.of(date, zoned, date.atStartOfDay().atOffset(session), zoned),
+        Arguments.of(timestamp, zoned, local.atOffset(session), zoned),
         Arguments.of(zoned.toZonedDateTime(), zoned, zoned, zoned),
-        Arguments.of(zoned.toInstant(), zoned, zoned.toInstant().atZone(zone).toOffsetDateTime(), zoned),
-        Arguments.of(time, time.atOffset(offset),
-            time.atDate(java.time.LocalDate.now(zone)).atZone(zone).toOffsetDateTime().toOffsetTime(),
-            time.atOffset(offset)));
+        Arguments.of(zoned.toInstant(), zoned, zoned.toInstant().atOffset(session), zoned),
+        Arguments.of(time, time.atOffset(offset), time.atOffset(session), time.atOffset(offset)));
   }
 
-  /** Uses each timestamp's date for daylight-saving rules during promotion. */
+  /**
+   * Retains the original values when every non-NULL leaf at a depth already uses
+   * the same Java representation.
+   */
   @Test
-  void promotesLocalTemporalsUsingActiveZone() {
+  void preservesHomogeneousTemporalRepresentations() {
+    var zone = java.time.ZoneId.of("Europe/Stockholm");
+    List<Object> zoned = List.of(java.time.ZonedDateTime.of(2026, 1, 1, 12, 0, 0, 0, zone),
+        java.time.ZonedDateTime.of(2026, 7, 1, 12, 0, 0, 0, zone));
+    List<Object> instants = List.of(java.time.Instant.EPOCH, java.time.Instant.ofEpochSecond(86_400));
+    List<Object> localDates = List.of(java.time.LocalDate.of(2026, 1, 1));
+    List<Object> localTimes = List.of(java.time.LocalTime.of(12, 0, 0, 123456789));
+    var sqlTimes = Arrays.<Object>asList(null, java.sql.Time.valueOf("10:00:00"), java.sql.Time.valueOf("12:00:00"));
+    for (List<Object> values : List.of(zoned, instants, localDates, localTimes, sqlTimes)) {
+      var normalized = ArrayFunctions.homogenizeArrayValues(values);
+      assertEquals(values, normalized);
+      for (int i = 0; i < values.size(); i++) {
+        assertSame(values.get(i), normalized.get(i));
+      }
+    }
+  }
+
+  /**
+   * Promotes local timestamps using the session's current displacement rather
+   * than each value's own daylight-saving offset.
+   */
+  @Test
+  void promotesLocalTemporalsUsingSessionOffset() {
     String previous = System.getProperty("user.timezone");
     try {
       System.setProperty("user.timezone", "America/New_York");
+      var session = java.time.ZoneId.of("America/New_York").getRules().getOffset(java.time.Instant.now());
+      assertEquals(session, DateTimeFunctions.sessionOffset());
       var winter = java.time.LocalDateTime.parse("2026-01-01T12:00:00.123456789");
       var summer = java.time.LocalDateTime.parse("2026-07-01T12:00:00.987654321");
       var explicit = java.time.OffsetDateTime.parse("2026-01-01T12:00:00+03:00");
-      assertEquals(
-          List.of(winter.atOffset(java.time.ZoneOffset.ofHours(-5)), summer.atOffset(java.time.ZoneOffset.ofHours(-4)),
-              explicit),
+      assertEquals(List.of(winter.atOffset(session), summer.atOffset(session), explicit),
           ArrayFunctions.homogenizeArrayValues(List.of(java.sql.Timestamp.valueOf(winter), summer, explicit)));
       var date = java.sql.Date.valueOf("2026-07-01");
-      assertEquals(List.of(java.time.OffsetDateTime.parse("2026-07-01T00:00:00-04:00"), explicit),
+      assertEquals(List.of(java.time.LocalDate.of(2026, 7, 1).atStartOfDay().atOffset(session), explicit),
           ArrayFunctions.homogenizeArrayValues(List.of(date, explicit)));
+      var time = java.time.LocalTime.of(10, 0);
+      var zonedTime = java.time.OffsetTime.of(time, java.time.ZoneOffset.ofHours(3));
+      assertEquals(List.of(time.atOffset(session), zonedTime),
+          ArrayFunctions.homogenizeArrayValues(List.of(java.sql.Time.valueOf(time), zonedTime)));
     } finally {
       if (previous == null) {
         System.clearProperty("user.timezone");

@@ -2898,7 +2898,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Classifies materialized values, including canonical ARRAY temporal leaves.
+   * Classifies materialized values, including java.time TIME leaves of ARRAYs.
    *
    * @param value
    *          non-NULL value
