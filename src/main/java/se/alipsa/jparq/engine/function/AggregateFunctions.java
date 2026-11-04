@@ -1934,7 +1934,7 @@ public final class AggregateFunctions {
    */
   private static Expression parseGroupedExpression(String text) {
     try {
-      return JSqlParserSupport.parseCondition(text);
+      return JSqlParserSupport.parseExpression(text);
     } catch (net.sf.jsqlparser.JSQLParserException e) {
       throw new IllegalArgumentException("Invalid grouped expression: " + text, e);
     }

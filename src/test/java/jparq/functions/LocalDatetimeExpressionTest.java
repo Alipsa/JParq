@@ -15,6 +15,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.List;
 import java.util.Locale;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -85,6 +86,8 @@ class LocalDatetimeExpressionTest {
       "SELECT COUNT(*) FROM mtcars WHERE LOCALTIME BETWEEN TIME '00:00:00' AND TIME '23:59:59.999999999'|32",
       "SELECT COUNT(*) FROM mtcars HAVING LOCALTIMESTAMP IS NOT NULL|32",
       "SELECT COUNT(*) FROM mtcars HAVING LOCALTIME IS NOT NULL|32",
+      "SELECT COUNT(*) FROM (SELECT cyl FROM mtcars GROUP BY cyl HAVING LOCALTIME IS NOT NULL) g|3",
+      "SELECT COUNT(*) FROM (SELECT cyl FROM mtcars GROUP BY cyl HAVING LOCALTIMESTAMP IS NOT NULL) g|3",
       "SELECT COUNT(*) FROM mtcars HAVING EXTRACT(HOUR FROM LOCALTIME) IS NOT NULL|32",
       "SELECT COUNT(*) FROM mtcars HAVING TRIM(CAST(LOCALTIME AS VARCHAR(64))) IS NOT NULL|32",
       "SELECT COUNT(*) FROM mtcars HAVING "
@@ -107,6 +110,31 @@ class LocalDatetimeExpressionTest {
         assertEquals(expected, result.getInt(1), sql);
         assertFalse(result.next(), sql);
       }
+    }
+  }
+
+  /**
+   * Preserves deeply nested simple datetime expressions when grouping reparses
+   * scalar SQL through the shared expression parser.
+   *
+   * @throws Exception
+   *           if parsing or query execution fails
+   */
+  @Test
+  void evaluatesDeepGroupedExpression() throws Exception {
+    String expression = "(".repeat(11) + "COALESCE(LOCALTIME, LOCALTIME)" + ")".repeat(11);
+    String sql = "SELECT " + expression + " FROM mtcars GROUP BY cyl";
+    String url = "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath();
+    try (var connection = DriverManager.getConnection(url);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      int count = 0;
+      while (result.next()) {
+        Object value = result.getObject(1);
+        assertTrue(value instanceof Time || value instanceof LocalTime);
+        count++;
+      }
+      assertEquals(3, count);
     }
   }
 

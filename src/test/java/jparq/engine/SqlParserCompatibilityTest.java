@@ -108,11 +108,27 @@ class SqlParserCompatibilityTest {
     var query = SqlParser.parseSelect("SELECT number FROM input i JOIN other o ON i.number = o.id WHERE number > 3");
     assertTrue(
         JoinPredicatePlanner.plan(query.where(), query.tableReferences(), List.of(schema, other), 0).isPresent());
-    var condition = JSqlParserSupport.parseCondition("NOT (number IS NULL)");
+    var condition = JSqlParserSupport.parseExpression("NOT (number IS NULL)");
     assertTrue(ParquetFilterBuilder.build(schema, condition).isPresent());
-    assertEquals("number IS NULL", JSqlParserSupport.parseCondition("number IS NULL").toString());
+    assertEquals("number IS NULL", JSqlParserSupport.parseExpression("number IS NULL").toString());
     assertThrows(net.sf.jsqlparser.JSQLParserException.class,
-        () -> JSqlParserSupport.parseCondition("number > 3 trailing"));
+        () -> JSqlParserSupport.parseExpression("number > 3 trailing"));
+  }
+
+  /**
+   * Keeps deep simple scalar expressions available while bounding complex retries
+   * with the same policy used for complete statements.
+   *
+   * @throws Exception
+   *           if a simple expression cannot be parsed
+   */
+  @Test
+  void expressionRetryHonorsNestingLimit() throws Exception {
+    String opening = "(".repeat(11);
+    String closing = ")".repeat(11);
+    assertNotNull(JSqlParserSupport.parseExpression(opening + "id + 1" + closing));
+    String complex = opening + "CASE WHEN id=1 THEN id=2 ELSE id=3 END" + closing;
+    assertThrows(net.sf.jsqlparser.JSQLParserException.class, () -> JSqlParserSupport.parseExpression(complex));
   }
 
   /** Preserves literal casts with and without precision parameters. */

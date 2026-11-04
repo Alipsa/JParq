@@ -255,29 +255,31 @@ public final class JSqlParserSupport {
   /**
    * Parses and normalizes a complete scalar expression or condition using the
    * shared identifier lookahead. Normalization also applies to expressions
-   * serialized and reparsed during grouping and predicate pushdown.
+   * serialized and reparsed during grouping and predicate pushdown. Complex
+   * retries honor the configured nesting-depth limit; successful simple parses
+   * are not restricted by that retry limit.
    *
    * @param sql
-   *          condition text
+   *          scalar expression or condition text
    * @return the parsed and normalized expression
    * @throws JSQLParserException
    *           if parsing fails or leaves trailing tokens
    */
-  public static Expression parseCondition(String sql) throws JSQLParserException {
+  public static Expression parseExpression(String sql) throws JSQLParserException {
     try {
-      return parseCondition(newParser(sql).withAllowComplexParsing(false));
+      return parseExpression(newParser(sql).withAllowComplexParsing(false));
     } catch (JSQLParserException e) {
       var parser = newParser(sql);
       int allowedDepth = parser.getAsInt(Feature.allowedNestingDepth);
       if (allowedDepth >= 0 && CCJSqlParserUtil.getNestingDepth(sql) > allowedDepth) {
         throw e;
       }
-      return parseCondition(parser.withAllowComplexParsing(true));
+      return parseExpression(parser.withAllowComplexParsing(true));
     }
   }
 
   /**
-   * Parses a condition and verifies that every token was consumed.
+   * Parses an expression and verifies that every token was consumed.
    *
    * @param parser
    *          a fresh configured parser
@@ -285,11 +287,11 @@ public final class JSqlParserSupport {
    * @throws JSQLParserException
    *           if parsing fails or leaves trailing tokens
    */
-  private static Expression parseCondition(CCJSqlParser parser) throws JSQLParserException {
+  private static Expression parseExpression(CCJSqlParser parser) throws JSQLParserException {
     try {
       Expression expression = parser.Expression();
       if (parser.getNextToken().kind != CCJSqlParser.EOF) {
-        throw new JSQLParserException("Unexpected trailing tokens after condition: " + expression);
+        throw new JSQLParserException("Unexpected trailing tokens after expression: " + expression);
       }
       return SqlExpressionNormalizer.normalizeExpression(expression);
     } catch (ParseException | TokenMgrException e) {

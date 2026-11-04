@@ -50,7 +50,7 @@ public final class JoinPredicatePlanner {
     }
     Expression copy;
     try {
-      copy = JSqlParserSupport.parseCondition(expression.toString());
+      copy = JSqlParserSupport.parseExpression(expression.toString());
     } catch (JSQLParserException exception) {
       return Optional.empty();
     }
