@@ -767,6 +767,11 @@ The following SQL statements are supported:
       mixing numbers with nested arrays, strings, or other incompatible types raises `SQLSyntaxErrorException`
       with SQLState `42000` when evaluated. NULL elements are preserved. Stored array columns and ARRAY
       constructors can be combined; nested reference arrays are normalized to lists, including in ARRAY subqueries.
+    - Temporal elements use a common SQL type, including across sibling nested arrays. DATE and TIMESTAMP
+      promote to TIMESTAMP; compatible local/zoned timestamp or time values promote to the zoned type.
+      Local values use the active JVM time zone when promoted (with the value's date for timestamps and today's
+      date for times). Java SQL and java.time representations are normalized together, retaining fractional seconds
+      and explicit offsets. DATE/TIME and TIMESTAMP/TIME combinations remain incompatible.
     - MAP key/value types and STRUCT field schemas are not validated.
 - comments (line --) and block (/* */)
 - Subquery support

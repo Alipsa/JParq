@@ -2897,6 +2897,13 @@ public class JParqPreparedStatement implements PreparedStatement {
     return type == null ? ValueColumnType.STRING : type;
   }
 
+  /**
+   * Classifies materialized values, including canonical ARRAY temporal leaves.
+   *
+   * @param value
+   *          non-NULL value
+   * @return SQL value family used to build its Avro schema
+   */
   private ValueColumnType classifyValueType(Object value) {
     if (value instanceof TemporalInterval) {
       return ValueColumnType.INTERVAL;
@@ -2922,7 +2929,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (value instanceof Date) {
       return ValueColumnType.DATE;
     }
-    if (value instanceof Time) {
+    if (value instanceof Time || value instanceof LocalTime) {
       return ValueColumnType.TIME;
     }
     if (value instanceof Timestamp) {

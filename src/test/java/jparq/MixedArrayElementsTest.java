@@ -47,8 +47,7 @@ class MixedArrayElementsTest {
   @ValueSource(strings = {
       "ARRAY[4,[6]]", "ARRAY[[6],4]", "ARRAY[NULL,4,[6],NULL]", "ARRAY[4,ARRAY[6]]", "ARRAY[4,'6']", "ARRAY['4',6]",
       "ARRAY[4,TRUE]", "ARRAY[[4,[6]]]", "ARRAY[[4],['6']]", "ARRAY[[4],[[6]]]", "ARRAY[[NULL,4],NULL,['6',NULL]]",
-      "ARRAY[[[4]],[[TRUE]]]", "ARRAY[CURRENT_TIMESTAMP,CURRENT_TIME]",
-      "ARRAY[CURRENT_TIMESTAMP,TIMESTAMP '2026-01-01 12:00:00']"
+      "ARRAY[[[4]],[[TRUE]]]", "ARRAY[CURRENT_TIMESTAMP,CURRENT_TIME]", "ARRAY[DATE '2026-01-01',TIME '12:00:00']"
   })
   void rejectsMixedElements(String array) throws Exception {
     for (boolean pushdown : List.of(true, false)) {

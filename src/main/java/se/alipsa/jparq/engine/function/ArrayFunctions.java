@@ -1,7 +1,18 @@
 package se.alipsa.jparq.engine.function;
 
 import java.math.BigDecimal;
+import java.sql.Date;
 import java.sql.JDBCType;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -49,8 +60,11 @@ public final class ArrayFunctions {
   /**
    * Normalize ARRAY element types so that a single SQL ARRAY has a consistent
    * element type and nesting depth. Numeric leaves are promoted across sibling
-   * arrays; NULLs and empty arrays do not constrain the inferred leaf type.
-   * Nested reference arrays, including stored Parquet array columns, are
+   * arrays; DATE and TIMESTAMP leaves promote to TIMESTAMP, and zoned temporal
+   * leaves promote compatible local values using the active JVM time zone. SQL
+   * and java.time representations share a family. TIME leaves use LocalTime to
+   * retain nanoseconds. NULLs and empty arrays do not constrain the inferred leaf
+   * type. Nested reference arrays, including stored Parquet array columns, are
    * normalized to unmodifiable lists. Primitive arrays remain scalar values. Map
    * implementations share the MAP family and retain their original values. MAP
    * key/value types and STRUCT field schemas are not inspected.
@@ -99,7 +113,7 @@ public final class ArrayFunctions {
       } else if (value instanceof Map<?, ?>) {
         candidate = Map.class;
       } else {
-        candidate = value.getClass();
+        candidate = temporalFamily(value);
       }
       type.family = determineObjectTarget(type.family, candidate);
       if (value instanceof TemporalInterval interval) {
@@ -139,7 +153,7 @@ public final class ArrayFunctions {
       } else if (type.family == List.class) {
         coerced.add(coerceArrayValues(arrayValues(value), type.nested));
       } else {
-        coerced.add(value);
+        coerced.add(coerceTemporal(value, type.family));
       }
     }
     return Collections.unmodifiableList(coerced);
@@ -157,7 +171,7 @@ public final class ArrayFunctions {
   }
 
   /**
-   * Resolves a common element family, treating all numeric values as compatible.
+   * Resolves a common element family, promoting compatible temporal types.
    * Diagnostics distinguish Java representations when SQL type labels coincide.
    *
    * @param current
@@ -172,6 +186,16 @@ public final class ArrayFunctions {
     if (current == null || current == candidate) {
       return candidate;
     }
+    if ((current == Date.class || current == Timestamp.class || current == OffsetDateTime.class)
+        && (candidate == Date.class || candidate == Timestamp.class || candidate == OffsetDateTime.class)) {
+      return current == OffsetDateTime.class || candidate == OffsetDateTime.class
+          ? OffsetDateTime.class
+          : Timestamp.class;
+    }
+    if ((current == LocalTime.class || current == OffsetTime.class)
+        && (candidate == LocalTime.class || candidate == OffsetTime.class)) {
+      return OffsetTime.class;
+    }
     String currentName = sqlTypeName(current);
     String candidateName = sqlTypeName(candidate);
     if (currentName.equals(candidateName)) {
@@ -179,6 +203,70 @@ public final class ArrayFunctions {
       candidateName += " (" + candidate.getName() + ")";
     }
     throw SqlExceptions.incompatibleArrayElements(currentName, candidateName);
+  }
+
+  /**
+   * Maps supported Java temporal representations to a common SQL family.
+   *
+   * @param value
+   *          non-NULL scalar element
+   * @return canonical family, or the original class for non-temporal values
+   */
+  private static Class<?> temporalFamily(Object value) {
+    return switch (value) {
+      case Date ignored -> Date.class;
+      case LocalDate ignored -> Date.class;
+      case Time ignored -> LocalTime.class;
+      case LocalTime ignored -> LocalTime.class;
+      case Timestamp ignored -> Timestamp.class;
+      case LocalDateTime ignored -> Timestamp.class;
+      case OffsetDateTime ignored -> OffsetDateTime.class;
+      case ZonedDateTime ignored -> OffsetDateTime.class;
+      case Instant ignored -> OffsetDateTime.class;
+      default -> value.getClass();
+    };
+  }
+
+  /**
+   * Converts a temporal leaf to the inferred family without losing fractional
+   * seconds or explicit offsets. Local values promoted to zoned timestamps use
+   * the zone's rules on their own date; local times use today's date.
+   *
+   * @param value
+   *          non-NULL, compatible leaf
+   * @param family
+   *          inferred canonical family
+   * @return promoted temporal value, or the original non-temporal value
+   */
+  private static Object coerceTemporal(Object value, Class<?> family) {
+    if (family == Date.class) {
+      return DateTimeFunctions.toDate(value);
+    }
+    if (family == Timestamp.class) {
+      return value instanceof Date date
+          ? Timestamp.valueOf(date.toLocalDate().atStartOfDay())
+          : DateTimeFunctions.toTimestamp(value);
+    }
+    if (family == LocalTime.class) {
+      return value instanceof Time time ? DateTimeFunctions.toLocalTime(time) : value;
+    }
+    if (family == OffsetDateTime.class) {
+      return switch (value) {
+        case OffsetDateTime dateTime -> dateTime;
+        case ZonedDateTime dateTime -> dateTime.toOffsetDateTime();
+        case Instant instant -> instant.atZone(DateTimeFunctions.defaultZone()).toOffsetDateTime();
+        case Date date -> date.toLocalDate().atStartOfDay(DateTimeFunctions.defaultZone()).toOffsetDateTime();
+        case LocalDate date -> date.atStartOfDay(DateTimeFunctions.defaultZone()).toOffsetDateTime();
+        default -> DateTimeFunctions.toTimestamp(value).toLocalDateTime().atZone(DateTimeFunctions.defaultZone())
+            .toOffsetDateTime();
+      };
+    }
+    if (family == OffsetTime.class && !(value instanceof OffsetTime)) {
+      LocalTime time = value instanceof Time sqlTime ? DateTimeFunctions.toLocalTime(sqlTime) : (LocalTime) value;
+      ZoneId zone = DateTimeFunctions.defaultZone();
+      return time.atDate(LocalDate.now(zone)).atZone(zone).toOffsetDateTime().toOffsetTime();
+    }
+    return value;
   }
 
   /**

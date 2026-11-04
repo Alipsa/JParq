@@ -83,13 +83,14 @@ public final class DateTimeFunctions {
   }
 
   /**
-   * Resolve the time zone to use for time-key evaluations. Prefers the
-   * {@code user.timezone} system property when present to honor test isolation
-   * and runtime overrides, otherwise falls back to the JVM default zone.
+   * Resolve the time zone to use for time-key evaluations and temporal promotion.
+   * Prefers the {@code user.timezone} system property when present to honor test
+   * isolation and runtime overrides, otherwise falls back to the JVM default
+   * zone.
    *
    * @return the active {@link ZoneId} to use
    */
-  private static ZoneId defaultZone() {
+  static ZoneId defaultZone() {
     String userZone = System.getProperty("user.timezone");
     if (userZone != null && !userZone.isBlank()) {
       try {

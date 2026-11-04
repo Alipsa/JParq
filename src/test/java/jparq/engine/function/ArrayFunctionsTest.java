@@ -172,7 +172,10 @@ class ArrayFunctionsTest {
             6L
         }), Arguments.of(List.of(4L), "6"), Arguments.of(List.of(4L), List.of("6")),
         Arguments.of(List.of(4L), List.of(List.of(6L))), Arguments.of(List.of(List.of(4L)), List.of(List.of(true))),
-        Arguments.of(4L, java.sql.Date.valueOf("2026-01-01")));
+        Arguments.of(4L, java.sql.Date.valueOf("2026-01-01")),
+        Arguments.of(java.sql.Date.valueOf("2026-01-01"), java.sql.Time.valueOf("12:00:00")),
+        Arguments.of(java.time.LocalDate.now(), java.time.OffsetTime.now()),
+        Arguments.of(java.sql.Timestamp.valueOf("2026-01-01 12:00:00"), java.time.LocalTime.NOON));
   }
 
   /** Preserves NULL values while promoting compatible numeric elements. */
@@ -295,38 +298,89 @@ class ArrayFunctionsTest {
   }
 
   /**
-   * Distinguishes mixed Java representations of the same SQL type.
+   * Normalizes compatible temporal representations in either order and across
+   * sibling arrays, preserving NULLs, fractional seconds, and offsets.
    *
    * @param first
-   *          first representation
+   *          first temporal representation
    * @param second
-   *          second representation
-   * @param type
-   *          shared SQL label
+   *          second temporal representation
+   * @param expectedFirst
+   *          promoted first value
+   * @param expectedSecond
+   *          promoted second value
    */
   @ParameterizedTest
-  @MethodSource("sameSqlTypeRepresentations")
-  void distinguishesSameSqlTypeRepresentations(Object first, Object second, String type) {
+  @MethodSource("compatibleTemporalElements")
+  void promotesTemporalElements(Object first, Object second, Object expectedFirst, Object expectedSecond) {
     var values = new ArrayList<Object>(Arrays.asList(null, first, second, null));
+    var expected = new ArrayList<Object>(Arrays.asList(null, expectedFirst, expectedSecond, null));
     for (int order = 0; order < 2; order++) {
-      var failure = assertThrows(IllegalArgumentException.class, () -> ArrayFunctions.homogenizeArrayValues(values));
-      assertEquals("ARRAY elements must share a common type; found " + type + " (" + values.get(1).getClass().getName()
-          + ") and " + type + " (" + values.get(2).getClass().getName() + ")", failure.getMessage());
-      assertEquals("42000", assertInstanceOf(SQLSyntaxErrorException.class, failure.getCause()).getSQLState());
+      var normalized = ArrayFunctions.homogenizeArrayValues(values);
+      assertEquals(expected, normalized);
+      assertEquals(expectedFirst.getClass(), normalized.get(1).getClass());
+      assertEquals(expectedFirst.getClass(), normalized.get(2).getClass());
+      assertThrows(UnsupportedOperationException.class, () -> normalized.add(first));
+      assertEquals(Arrays.asList(List.of(), Arrays.asList(null, expected.get(1)), List.of(expected.get(2))),
+          ArrayFunctions
+              .homogenizeArrayValues(List.of(List.of(), Arrays.asList(null, values.get(1)), List.of(values.get(2)))));
       Collections.reverse(values);
+      Collections.reverse(expected);
     }
   }
 
   /**
-   * Supplies class pairs whose SQL diagnostic labels would otherwise be
-   * identical.
+   * Supplies SQL and java.time representations and their common temporal values.
    *
-   * @return incompatible representations and their shared label
+   * @return compatible temporal pairs with promoted results
    */
-  private static Stream<Arguments> sameSqlTypeRepresentations() {
-    return Stream.of(Arguments.of(java.time.LocalDateTime.of(2026, 1, 1, 12, 0),
-        java.sql.Timestamp.valueOf("2026-01-01 12:00:00"), "TIMESTAMP"),
-        Arguments.of(java.time.LocalTime.NOON, java.sql.Time.valueOf("12:00:00"), "TIME"));
+  private static Stream<Arguments> compatibleTemporalElements() {
+    var date = java.time.LocalDate.of(2026, 1, 1);
+    var local = date.atTime(12, 0, 0, 123456789);
+    var timestamp = java.sql.Timestamp.valueOf(local);
+    var midnight = java.sql.Timestamp.valueOf(date.atStartOfDay());
+    var time = java.time.LocalTime.of(12, 0, 0, 123456789);
+    var sqlTime = java.sql.Time.valueOf("12:00:00");
+    var offset = java.time.ZoneOffset.ofHours(3);
+    var zoned = local.atOffset(offset);
+    var zone = java.time.ZoneId.systemDefault();
+    return Stream.of(Arguments.of(java.sql.Date.valueOf(date), timestamp, midnight, timestamp),
+        Arguments.of(date, local, midnight, timestamp),
+        Arguments.of(java.sql.Date.valueOf(date), date, java.sql.Date.valueOf(date), java.sql.Date.valueOf(date)),
+        Arguments.of(local, timestamp, timestamp, timestamp),
+        Arguments.of(time, sqlTime, time, java.time.LocalTime.NOON),
+        Arguments.of(date, zoned, date.atStartOfDay(zone).toOffsetDateTime(), zoned),
+        Arguments.of(timestamp, zoned, local.atZone(zone).toOffsetDateTime(), zoned),
+        Arguments.of(zoned.toZonedDateTime(), zoned, zoned, zoned),
+        Arguments.of(zoned.toInstant(), zoned, zoned.toInstant().atZone(zone).toOffsetDateTime(), zoned),
+        Arguments.of(time, time.atOffset(offset),
+            time.atDate(java.time.LocalDate.now(zone)).atZone(zone).toOffsetDateTime().toOffsetTime(),
+            time.atOffset(offset)));
+  }
+
+  /** Uses each timestamp's date for daylight-saving rules during promotion. */
+  @Test
+  void promotesLocalTemporalsUsingActiveZone() {
+    String previous = System.getProperty("user.timezone");
+    try {
+      System.setProperty("user.timezone", "America/New_York");
+      var winter = java.time.LocalDateTime.parse("2026-01-01T12:00:00.123456789");
+      var summer = java.time.LocalDateTime.parse("2026-07-01T12:00:00.987654321");
+      var explicit = java.time.OffsetDateTime.parse("2026-01-01T12:00:00+03:00");
+      assertEquals(
+          List.of(winter.atOffset(java.time.ZoneOffset.ofHours(-5)), summer.atOffset(java.time.ZoneOffset.ofHours(-4)),
+              explicit),
+          ArrayFunctions.homogenizeArrayValues(List.of(java.sql.Timestamp.valueOf(winter), summer, explicit)));
+      var date = java.sql.Date.valueOf("2026-07-01");
+      assertEquals(List.of(java.time.OffsetDateTime.parse("2026-07-01T00:00:00-04:00"), explicit),
+          ArrayFunctions.homogenizeArrayValues(List.of(date, explicit)));
+    } finally {
+      if (previous == null) {
+        System.clearProperty("user.timezone");
+      } else {
+        System.setProperty("user.timezone", previous);
+      }
+    }
   }
 
   /**
