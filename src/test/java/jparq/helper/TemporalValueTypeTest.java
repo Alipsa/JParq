@@ -2,6 +2,8 @@ package jparq.helper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -28,6 +30,7 @@ class TemporalValueTypeTest {
         LocalDateTime.parse("1960-02-03T12:34:56.123456789"), OffsetTime.parse("12:34:56.123456789-03:30"),
         OffsetDateTime.parse("1960-02-03T12:34:56.123456789+05:45"))) {
       var type = TemporalValueType.fromValue(value);
+      assertSame(value, type.normalize(value));
       var schema = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), type.schema()));
       assertEquals(type, TemporalValueType.fromSchema(schema));
       assertEquals(value, AvroCoercions.unwrap(new Utf8(value.toString()), schema));
@@ -44,5 +47,21 @@ class TemporalValueTypeTest {
     assertNull(TemporalValueType.fromValue("12:34:56"));
     assertNull(TemporalValueType.fromSchema(null));
     assertNull(TemporalValueType.fromSchema(Schema.create(Schema.Type.STRING)));
+    Schema unknown = Schema.create(Schema.Type.STRING);
+    unknown.addProp("jparq.temporalType", "FUTURE_TIMESTAMP");
+    assertNull(TemporalValueType.fromSchema(unknown));
+    assertEquals(java.sql.Types.VARCHAR, JdbcTypeMapper.mapSchemaToJdbcType(unknown));
   }
+  /** Checks direct JDBC conversions preserve fractional seconds. */
+  @Test
+  void normalizesJdbcValuesDirectly() {
+    LocalDateTime timestamp = LocalDateTime.parse("1960-02-03T12:34:56.123456789");
+    assertEquals(timestamp, TemporalValueType.LOCAL_TIMESTAMP.normalize(java.sql.Timestamp.valueOf(timestamp)));
+    LocalTime time = LocalTime.of(12, 34, 56);
+    assertEquals(time, TemporalValueType.LOCAL_TIME.normalize(java.sql.Time.valueOf(time)));
+    assertNull(TemporalValueType.LOCAL_TIME.normalize(null));
+    assertThrows(java.time.format.DateTimeParseException.class,
+        () -> TemporalValueType.LOCAL_TIMESTAMP.normalize("invalid"));
+  }
+
 }

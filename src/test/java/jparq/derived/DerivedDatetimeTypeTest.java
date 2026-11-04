@@ -3,12 +3,18 @@ package jparq.derived;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.sql.Types;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.OffsetTime;
 import java.util.List;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -105,14 +111,168 @@ class DerivedDatetimeTypeTest {
   void timestampArraysRemainTemporal(String keyword) throws Exception {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath());
         var statement = connection.createStatement();
-        var result = statement.executeQuery("SELECT ARRAY[t, TIMESTAMP '2026-01-01 10:00:00'] FROM (SELECT " + keyword
-            + " AS t FROM mtcars LIMIT 1) s")) {
-      assertEquals(Types.ARRAY, result.getMetaData().getColumnType(1));
+        var result = statement.executeQuery("SELECT t, ARRAY[t, TIMESTAMP '2026-01-01 10:00:00'] FROM (SELECT "
+            + keyword + " AS t FROM mtcars LIMIT 1) s")) {
+      assertEquals(Types.ARRAY, result.getMetaData().getColumnType(2));
       assertTrue(result.next());
-      Object[] values = assertInstanceOf(Object[].class, result.getObject(1));
+      Object[] values = assertInstanceOf(Object[].class, result.getObject(2));
       assertEquals(2, values.length);
-      assertTrue(values[0] instanceof java.sql.Timestamp || values[0] instanceof OffsetDateTime);
+      LocalDateTime literal = LocalDateTime.of(2026, 1, 1, 10, 0);
+      if ("CURRENT_TIMESTAMP".equals(keyword)) {
+        OffsetDateTime expected = result.getObject(1, OffsetDateTime.class);
+        assertEquals(OffsetDateTime.class, values[0].getClass());
+        assertEquals(expected, values[0]);
+        assertEquals(literal.atOffset(expected.getOffset()), values[1]);
+      } else {
+        assertEquals(java.sql.Timestamp.class, values[0].getClass());
+        assertEquals(java.sql.Timestamp.valueOf(result.getObject(1, LocalDateTime.class)), values[0]);
+        assertEquals(java.sql.Timestamp.valueOf(literal), values[1]);
+      }
       assertFalse(result.next());
     }
   }
+
+  /**
+   * Checks temporal declarations when a set branch contains only typed NULLs.
+   *
+   * @param body
+   *          set query
+   * @param jdbcType
+   *          expected JDBC type
+   * @throws Exception
+   *           if execution fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "SELECT TIMESTAMP '2020-01-01 00:00:00' UNION ALL SELECT CAST(NULL AS TIMESTAMP) | 93",
+      "SELECT DATE '2020-01-01' UNION ALL SELECT CAST(NULL AS DATE) | 91",
+      "SELECT TIME '10:00:00' UNION ALL SELECT CAST(NULL AS TIME) | 92",
+      "SELECT LOCALTIMESTAMP UNION ALL SELECT CAST(NULL AS TIMESTAMP) | 93",
+      "SELECT x FROM (SELECT LOCALTIMESTAMP AS x UNION ALL SELECT CAST(NULL AS TIMESTAMP)) s | 93"
+  })
+  void temporalNullSetBranches(String body, int jdbcType) throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath());
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(body)) {
+      assertEquals(jdbcType, result.getMetaData().getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(result.getObject(1).getClass().getName(), result.getMetaData().getColumnClassName(1));
+      assertTrue(result.next());
+      assertNull(result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Checks offset promotion for both operand orders and materialization paths.
+   *
+   * @param local
+   *          local expression
+   * @param offset
+   *          offset expression
+   * @param jdbcType
+   *          expected JDBC type
+   * @throws Exception
+   *           if execution fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "LOCALTIMESTAMP | CURRENT_TIMESTAMP | 2014",
+      "TIMESTAMP '2026-01-01 10:00:00.123456789' | CURRENT_TIMESTAMP | 2014", "LOCALTIME | CURRENT_TIME | 2013",
+      "TIME '10:00:00.123' | CURRENT_TIME | 2013"
+  })
+  void promotesOffsetTypes(String local, String offset, int jdbcType) throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath());
+        var statement = connection.createStatement()) {
+      for (String pair : List.of(local + "), (" + offset, offset + "), (" + local)) {
+        String[] operands = pair.split("\\), \\(");
+        for (String body : List.of("VALUES (" + pair + ")",
+            "SELECT " + operands[0] + " UNION ALL SELECT " + operands[1])) {
+          try (var result = statement.executeQuery(
+              "SELECT t, " + offset + " AS expected, " + local + " AS local_expected FROM (" + body + ") s(t)")) {
+            assertEquals(jdbcType, result.getMetaData().getColumnType(1), body);
+            int count = 0;
+            while (result.next()) {
+              Object actual = result.getObject(1);
+              assertEquals(actual.getClass().getName(), result.getMetaData().getColumnClassName(1), body);
+              boolean localRow = (count == 0) == operands[0].equals(local);
+              Object expected = result.getObject(localRow ? 3 : 2);
+              if (localRow) {
+                if (result.getObject(2) instanceof OffsetDateTime timestamp) {
+                  LocalDateTime localValue = expected instanceof java.sql.Timestamp value
+                      ? value.toLocalDateTime()
+                      : (LocalDateTime) expected;
+                  expected = localValue.atOffset(timestamp.getOffset());
+                } else {
+                  LocalTime localValue = expected instanceof java.sql.Time value
+                      ? se.alipsa.jparq.engine.function.DateTimeFunctions.toLocalTime(value)
+                      : (LocalTime) expected;
+                  expected = localValue.atOffset(((OffsetTime) result.getObject(2)).getOffset());
+                }
+              }
+              assertEquals(expected, actual, body);
+              count++;
+            }
+            assertEquals(2, count, body);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Checks incompatible datetime fields are rejected consistently.
+   *
+   * @param time
+   *          time expression
+   * @param timestamp
+   *          timestamp expression
+   * @throws Exception
+   *           if connection setup fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "LOCALTIME | TIMESTAMP '2026-01-01 10:00:00'", "TIME '10:00:00' | LOCALTIMESTAMP", "LOCALTIME | LOCALTIMESTAMP",
+      "TIME '10:00:00' | TIMESTAMP '2026-01-01 10:00:00'", "CURRENT_TIME | CURRENT_TIMESTAMP"
+  })
+  void rejectsIncompatibleDatetimeFields(String time, String timestamp) throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath());
+        var statement = connection.createStatement()) {
+      for (String body : List.of("VALUES (" + time + "), (" + timestamp + ")",
+          "VALUES (" + timestamp + "), (" + time + ")")) {
+        assertThrows(SQLException.class, () -> statement.executeQuery("SELECT t FROM (" + body + ") s(t)"));
+      }
+    }
+  }
+
+  /**
+   * Checks aggregates retain temporal schemas, including empty derived inputs.
+   *
+   * @param keyword
+   *          datetime function
+   * @throws Exception
+   *           if execution fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "LOCALTIME", "LOCALTIMESTAMP", "CURRENT_TIME", "CURRENT_TIMESTAMP"
+  })
+  void extremaRetainTemporalMetadata(String keyword) throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath());
+        var statement = connection.createStatement()) {
+      for (String aggregate : List.of("MIN", "MAX")) {
+        for (String predicate : List.of("", " WHERE 1 = 0")) {
+          try (var result = statement.executeQuery("SELECT " + aggregate + "(t), " + keyword
+              + " AS expected FROM (SELECT " + keyword + " AS t FROM mtcars" + predicate + ") s")) {
+            assertEquals(result.getMetaData().getColumnType(2), result.getMetaData().getColumnType(1));
+            assertEquals(result.getMetaData().getColumnClassName(2), result.getMetaData().getColumnClassName(1));
+            assertTrue(result.next());
+            assertEquals(predicate.isEmpty() ? result.getObject(2) : null, result.getObject(1));
+            assertFalse(result.next());
+          }
+        }
+      }
+    }
+  }
+
 }

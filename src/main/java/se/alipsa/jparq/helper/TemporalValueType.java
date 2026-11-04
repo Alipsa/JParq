@@ -1,11 +1,14 @@
 package se.alipsa.jparq.helper;
 
+import java.sql.Time;
+import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.OffsetTime;
 import org.apache.avro.Schema;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
 /**
  * Lossless internal schemas for java.time values crossing materialization
@@ -77,7 +80,15 @@ public enum TemporalValueType {
   public static TemporalValueType fromSchema(Schema schema) {
     Schema base = JdbcTypeMapper.nonNullSchema(schema);
     String name = base == null ? null : base.getProp(PROPERTY);
-    return name == null ? null : valueOf(name);
+    if (name == null) {
+      return null;
+    }
+    for (TemporalValueType type : values()) {
+      if (type.name().equals(name)) {
+        return type;
+      }
+    }
+    return null;
   }
 
   /**
@@ -97,11 +108,45 @@ public enum TemporalValueType {
   }
 
   /**
+   * Normalizes compatible temporal values without copying values of this type.
+   * Local values acquire the SQL session offset when an offset is required.
+   *
+   * @param value
+   *          temporal value or ISO representation
+   * @return normalized temporal value
+   * @throws java.time.DateTimeException
+   *           if the representation is invalid
+   */
+  public Object normalize(Object value) {
+    if (value == null || javaClass.isInstance(value)) {
+      return value;
+    }
+    Object local = switch (value) {
+      case Time time -> DateTimeFunctions.toLocalTime(time);
+      case Timestamp timestamp -> timestamp.toLocalDateTime();
+      default -> value;
+    };
+    if ((this == LOCAL_TIME && local instanceof LocalTime)
+        || (this == LOCAL_TIMESTAMP && local instanceof LocalDateTime)) {
+      return local;
+    }
+    if (this == OFFSET_TIME && local instanceof LocalTime time) {
+      return time.atOffset(DateTimeFunctions.sessionOffset());
+    }
+    if (this == OFFSET_TIMESTAMP && local instanceof LocalDateTime timestamp) {
+      return timestamp.atOffset(DateTimeFunctions.sessionOffset());
+    }
+    return decode(local);
+  }
+
+  /**
    * Decodes the lossless ISO representation stored in an internal record.
    *
    * @param value
    *          encoded temporal value
    * @return value with its original precision and offset
+   * @throws java.time.format.DateTimeParseException
+   *           if the encoded representation is invalid
    */
   public Object decode(Object value) {
     String text = value.toString();

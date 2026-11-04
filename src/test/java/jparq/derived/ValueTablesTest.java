@@ -133,21 +133,18 @@ class ValueTablesTest {
     });
   }
 
+  /**
+   * Rejects DATE and TIME inputs because their datetime fields are incompatible.
+   *
+   * @throws SQLException
+   *           if connection setup fails
+   */
   @Test
-  void valuesDateAndTimeColumnFallbacksToString() {
-    String sql = "VALUES (DATE '2023-01-01'), (TIME '12:34:56')";
-    jparqSql.query(sql, rs -> {
-      try {
-        ResultSetMetaData meta = rs.getMetaData();
-        Assertions.assertEquals(String.class.getName(), meta.getColumnClassName(1),
-            "Mismatched DATE and TIME values should be exposed as Strings");
-        Assertions.assertTrue(rs.next());
-        Assertions.assertEquals("2023-01-01", rs.getString(1));
-        Assertions.assertTrue(rs.next());
-        Assertions.assertEquals("12:34:56", rs.getString(1));
-      } catch (SQLException e) {
-        Assertions.fail(e);
-      }
-    });
+  void valuesDateAndTimeColumnsAreIncompatible() throws SQLException {
+    try (var connection = java.sql.DriverManager.getConnection(jdbcUrl); var statement = connection.createStatement()) {
+      SQLException exception = Assertions.assertThrows(SQLException.class,
+          () -> statement.executeQuery("VALUES (DATE '2023-01-01'), (TIME '12:34:56')"));
+      Assertions.assertEquals("42000", exception.getSQLState());
+    }
   }
 }

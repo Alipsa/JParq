@@ -125,7 +125,7 @@ class SetNumericBoundaryTest {
   }
 
   /**
-   * Keeps nonnumeric CAST metadata unchanged while numeric promotion is scoped.
+   * Retains Boolean and temporal CAST declarations, including empty branches.
    *
    * @param empty
    *          whether the branches are empty
@@ -136,16 +136,22 @@ class SetNumericBoundaryTest {
   @ValueSource(booleans = {
       true, false
   })
-  void nonnumericCastsRetainExistingMetadata(boolean empty) throws Exception {
+  void nonnumericCastsRetainDeclaredMetadata(boolean empty) throws Exception {
     String filter = empty ? " WHERE FALSE" : "";
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
       for (String type : List.of("BOOLEAN", "VARCHAR", "CHAR", "DATE", "TIME", "TIMESTAMP")) {
         String body = "SELECT CAST(NULL AS " + type + ") AS x" + filter;
         try (var statement = connection.createStatement();
             var result = statement.executeQuery(body + " UNION ALL " + body)) {
-          // Declared metadata for the remaining CAST families is tracked in #288.
-          assertEquals(type.equals("BOOLEAN") ? Types.BOOLEAN : Types.OTHER, result.getMetaData().getColumnType(1),
-              type);
+          // Character CAST declarations remain tracked in #288.
+          int expected = switch (type) {
+            case "BOOLEAN" -> Types.BOOLEAN;
+            case "DATE" -> Types.DATE;
+            case "TIME" -> Types.TIME;
+            case "TIMESTAMP" -> Types.TIMESTAMP;
+            default -> Types.OTHER;
+          };
+          assertEquals(expected, result.getMetaData().getColumnType(1), type);
           for (int row = 0; row < (empty ? 0 : 2); row++) {
             assertTrue(result.next());
             assertEquals(null, result.getObject(1));

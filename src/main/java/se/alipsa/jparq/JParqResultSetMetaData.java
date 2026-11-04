@@ -233,7 +233,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   }
 
   /**
-   * Resolves datetime value functions without evaluating the statement clock.
+   * Resolves datetime value functions and derived MIN/MAX schemas without
+   * evaluating the statement clock.
    *
    * @param column
    *          one-based output column
@@ -241,6 +242,15 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    */
   private TemporalValueType temporalType(int column) {
     Expression expression = unwrap(expressionAtColumn(column));
+    if (expression instanceof net.sf.jsqlparser.expression.Function function
+        && ("MIN".equalsIgnoreCase(function.getName()) || "MAX".equalsIgnoreCase(function.getName()))
+        && function.getParameters() != null && function.getParameters().size() == 1) {
+      Expression argument = unwrap(function.getParameters().getFirst());
+      if (argument instanceof Column reference) {
+        Schema.Field field = resolveSourceField(reference);
+        return field == null ? null : TemporalValueType.fromSchema(field.schema());
+      }
+    }
     if (expression instanceof Column reference) {
       expression = SqlExpressionNormalizer.timeKeyword(reference);
     }
