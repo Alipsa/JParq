@@ -26,8 +26,8 @@ import se.alipsa.jparq.engine.function.DateTimeFunctions;
 class TemporalArrayPromotionTest {
 
   /**
-   * Preserves promoted dates and timestamp fractions through JDBC projections and
-   * materializations.
+   * Preserves explicitly cast dates and timestamp fractions through JDBC
+   * projections and materializations.
    *
    * @param sql
    *          query producing the promoted array
@@ -38,11 +38,11 @@ class TemporalArrayPromotionTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "SELECT ARRAY[NULL, DATE '2020-01-01', TIMESTAMP '2020-02-03 12:34:56.123', NULL]",
-      "SELECT a FROM (SELECT ARRAY[NULL, DATE '2020-01-01', TIMESTAMP '2020-02-03 12:34:56.123', NULL] AS a) t",
-      "WITH c AS (SELECT ARRAY[NULL, DATE '2020-01-01', TIMESTAMP '2020-02-03 12:34:56.123', NULL] AS a) SELECT a FROM c"
+      "SELECT ARRAY[NULL, CAST(DATE '2020-01-01' AS TIMESTAMP), TIMESTAMP '2020-02-03 12:34:56.123', NULL]",
+      "SELECT a FROM (SELECT ARRAY[NULL, CAST(DATE '2020-01-01' AS TIMESTAMP), TIMESTAMP '2020-02-03 12:34:56.123', NULL] AS a) t",
+      "WITH c AS (SELECT ARRAY[NULL, CAST(DATE '2020-01-01' AS TIMESTAMP), TIMESTAMP '2020-02-03 12:34:56.123', NULL] AS a) SELECT a FROM c"
   })
-  void promotesDatesToTimestamps(String sql, @TempDir Path directory) throws Exception {
+  void acceptsExplicitTimestampCasts(String sql, @TempDir Path directory) throws Exception {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement();
         var result = statement.executeQuery(sql)) {
@@ -68,6 +68,7 @@ class TemporalArrayPromotionTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
+      "SELECT ARRAY[LOCALTIME, LOCALTIME]", "SELECT a FROM (SELECT ARRAY[LOCALTIME, LOCALTIME] a) t",
       "SELECT ARRAY[TIME '10:00:00', TIME '12:00:00']", "SELECT ARRAY[TIME '10:00:00', LOCALTIME]",
       "SELECT a FROM (SELECT ARRAY[TIME '10:00:00', TIME '12:00:00'] AS a) t",
       "SELECT a FROM (SELECT ARRAY[TIME '10:00:00', LOCALTIME] AS a) t",
@@ -79,7 +80,10 @@ class TemporalArrayPromotionTest {
         var result = statement.executeQuery(sql)) {
       assertTrue(result.next());
       Object[] values = (Object[]) result.getObject(1);
-      assertEquals(Time.valueOf("10:00:00"), values[0]);
+      assertInstanceOf(Time.class, values[0]);
+      if (sql.contains("TIME '10:00:00'")) {
+        assertEquals(Time.valueOf("10:00:00"), values[0]);
+      }
       assertInstanceOf(Time.class, values[1]);
       assertFalse(result.next());
     }
@@ -102,8 +106,8 @@ class TemporalArrayPromotionTest {
                    ARRAY[TIME '10:00:00', CURRENT_TIME],
                    ARRAY[LOCALTIMESTAMP, TIMESTAMP '2026-01-01 10:00:00'],
                    ARRAY[LOCALTIME, TIME '10:00:00'],
-                   ARRAY[ARRAY[DATE '2020-01-01'], ARRAY[TIMESTAMP '2020-02-03 12:34:56.123456789']],
-                   ARRAY[TIME '12:00:00.5', LOCALTIME]
+                   ARRAY[ARRAY[CAST(DATE '2020-01-01' AS TIMESTAMP)], ARRAY[TIMESTAMP '2020-02-03 12:34:56.123456789']],
+                   ARRAY[TIME '12:00:00.5', LOCALTIME], ARRAY[LOCALTIMESTAMP, LOCALTIMESTAMP]
             """)) {
       assertTrue(result.next());
       ZoneOffset session = DateTimeFunctions.sessionOffset();
@@ -129,6 +133,9 @@ class TemporalArrayPromotionTest {
       Object[] fractional = (Object[]) result.getObject(6);
       assertEquals(new Time(Time.valueOf("12:00:00").getTime() + 500), fractional[0]);
       assertInstanceOf(Time.class, fractional[1]);
+      for (Object value : (Object[]) result.getObject(7)) {
+        assertInstanceOf(Timestamp.class, value);
+      }
       assertFalse(result.next());
     }
   }

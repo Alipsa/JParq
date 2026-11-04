@@ -205,7 +205,8 @@ class QuantifiedArrayColumnTest {
     writeArrays(directory);
     try (var connection = DriverManager.getConnection(
         "jdbc:jparq:" + directory + "?predicatePushdown=" + pushdown + "&projectionPushdown=" + pushdown)) {
-      for (String expression : List.of("ARRAY[nums,tags]", "ARRAY[tags,nums]", "ARRAY[nums,ARRAY[ARRAY[1]]]")) {
+      for (String expression : List.of("ARRAY[nums,tags]", "ARRAY[tags,nums]", "ARRAY[dates,times]",
+          "ARRAY[nums,ARRAY[ARRAY[1]]]")) {
         try (var statement = connection.createStatement()) {
           var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
             try (var result = statement.executeQuery("SELECT " + expression + " FROM arrays WHERE id = 1")) {
@@ -220,7 +221,7 @@ class QuantifiedArrayColumnTest {
       for (String input : List.of("arrays", "(SELECT * FROM arrays) a")) {
         try (var statement = connection.createStatement();
             var result = statement.executeQuery("SELECT ARRAY[nums,decs], ARRAY[nums,ARRAY[1.5]], "
-                + "ARRAY[tags,ARRAY['x']], ARRAY[dates,times] FROM " + input + " WHERE id = 1")) {
+                + "ARRAY[tags,ARRAY['x']] FROM " + input + " WHERE id = 1")) {
           assertTrue(result.next());
           assertArrayEquals(new Object[]{
               new Object[]{
@@ -243,13 +244,6 @@ class QuantifiedArrayColumnTest {
                   "x"
               }
           }, (Object[]) result.getObject(3));
-          assertArrayEquals(new Object[]{
-              new Object[]{
-                  Timestamp.valueOf("2024-01-01 00:00:00"), Timestamp.valueOf("2024-01-02 00:00:00")
-              }, new Object[]{
-                  Timestamp.valueOf("2024-01-01 12:00:00.123"), Timestamp.valueOf("2024-01-02 12:00:00.123")
-              }
-          }, (Object[]) result.getObject(4));
           assertFalse(result.next());
         }
       }

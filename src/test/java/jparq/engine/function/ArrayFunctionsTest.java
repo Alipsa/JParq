@@ -176,6 +176,11 @@ class ArrayFunctionsTest {
         Arguments.of(4L, java.sql.Date.valueOf("2026-01-01")),
         Arguments.of(java.sql.Date.valueOf("2026-01-01"), java.sql.Time.valueOf("12:00:00")),
         Arguments.of(java.time.LocalDate.now(), java.time.OffsetTime.now()),
+        Arguments.of(java.sql.Date.valueOf("2026-01-01"), java.sql.Timestamp.valueOf("2026-01-01 12:00:00")),
+        Arguments.of(java.time.LocalDate.of(2026, 1, 1), java.time.LocalDateTime.of(2026, 1, 1, 12, 0)),
+        Arguments.of(java.time.LocalDate.of(2026, 1, 1), java.time.OffsetDateTime.parse("2026-01-01T12:00:00Z")),
+        Arguments.of(List.of(java.sql.Date.valueOf("2026-01-01")),
+            List.of(java.sql.Timestamp.valueOf("2026-01-01 12:00:00"))),
         Arguments.of(java.sql.Timestamp.valueOf("2026-01-01 12:00:00"), java.time.LocalTime.NOON));
   }
 
@@ -340,75 +345,40 @@ class ArrayFunctionsTest {
     var date = java.time.LocalDate.of(2026, 1, 1);
     var local = date.atTime(12, 0, 0, 123456789);
     var timestamp = java.sql.Timestamp.valueOf(local);
-    var midnight = java.sql.Timestamp.valueOf(date.atStartOfDay());
     var time = java.time.LocalTime.of(12, 0, 0, 123456789);
     var sqlTime = java.sql.Time.valueOf("12:00:00");
     var offset = java.time.ZoneOffset.ofHours(3);
     var zoned = local.atOffset(offset);
     var session = DateTimeFunctions.sessionOffset();
-    return Stream.of(Arguments.of(java.sql.Date.valueOf(date), timestamp, midnight, timestamp),
-        Arguments.of(date, local, midnight, timestamp),
+    return Stream.of(
         Arguments.of(java.sql.Date.valueOf(date), date, java.sql.Date.valueOf(date), java.sql.Date.valueOf(date)),
         Arguments.of(local, timestamp, timestamp, timestamp),
         Arguments.of(time, sqlTime, DateTimeFunctions.toTime(time), sqlTime),
-        Arguments.of(date, zoned, date.atStartOfDay().atOffset(session), zoned),
         Arguments.of(timestamp, zoned, local.atOffset(session), zoned),
         Arguments.of(zoned.toZonedDateTime(), zoned, zoned, zoned),
         Arguments.of(zoned.toInstant(), zoned, zoned.toInstant().atOffset(session), zoned),
         Arguments.of(time, time.atOffset(offset), time.atOffset(session), time.atOffset(offset)));
   }
 
-  /**
-   * Retains the original values when every non-NULL leaf at a depth already uses
-   * the same Java representation.
-   */
+  /** Converts homogeneous temporal leaves to the same canonical JDBC families. */
   @Test
-  void preservesHomogeneousTemporalRepresentations() {
+  void normalizesHomogeneousTemporalRepresentations() {
+    var local = java.time.LocalDateTime.parse("2026-01-01T12:00:00.123456789");
+    var time = java.time.LocalTime.of(12, 0, 0, 123456789);
     var zone = java.time.ZoneId.of("Europe/Stockholm");
-    List<Object> zoned = List.of(java.time.ZonedDateTime.of(2026, 1, 1, 12, 0, 0, 0, zone),
-        java.time.ZonedDateTime.of(2026, 7, 1, 12, 0, 0, 0, zone));
-    List<Object> instants = List.of(java.time.Instant.EPOCH, java.time.Instant.ofEpochSecond(86_400));
-    List<Object> localDates = List.of(java.time.LocalDate.of(2026, 1, 1));
-    List<Object> localTimes = List.of(java.time.LocalTime.of(12, 0, 0, 123456789));
-    var sqlTimes = Arrays.<Object>asList(null, java.sql.Time.valueOf("10:00:00"), java.sql.Time.valueOf("12:00:00"));
-    for (List<Object> values : List.of(zoned, instants, localDates, localTimes, sqlTimes)) {
-      var normalized = ArrayFunctions.homogenizeArrayValues(values);
-      assertEquals(values, normalized);
-      for (int i = 0; i < values.size(); i++) {
-        assertSame(values.get(i), normalized.get(i));
-      }
-    }
-  }
-
-  /**
-   * Promotes local timestamps using the session's current displacement rather
-   * than each value's own daylight-saving offset.
-   */
-  @Test
-  void promotesLocalTemporalsUsingSessionOffset() {
-    String previous = System.getProperty("user.timezone");
-    try {
-      System.setProperty("user.timezone", "America/New_York");
-      var session = java.time.ZoneId.of("America/New_York").getRules().getOffset(java.time.Instant.now());
-      assertEquals(session, DateTimeFunctions.sessionOffset());
-      var winter = java.time.LocalDateTime.parse("2026-01-01T12:00:00.123456789");
-      var summer = java.time.LocalDateTime.parse("2026-07-01T12:00:00.987654321");
-      var explicit = java.time.OffsetDateTime.parse("2026-01-01T12:00:00+03:00");
-      assertEquals(List.of(winter.atOffset(session), summer.atOffset(session), explicit),
-          ArrayFunctions.homogenizeArrayValues(List.of(java.sql.Timestamp.valueOf(winter), summer, explicit)));
-      var date = java.sql.Date.valueOf("2026-07-01");
-      assertEquals(List.of(java.time.LocalDate.of(2026, 7, 1).atStartOfDay().atOffset(session), explicit),
-          ArrayFunctions.homogenizeArrayValues(List.of(date, explicit)));
-      var time = java.time.LocalTime.of(10, 0);
-      var zonedTime = java.time.OffsetTime.of(time, java.time.ZoneOffset.ofHours(3));
-      assertEquals(List.of(time.atOffset(session), zonedTime),
-          ArrayFunctions.homogenizeArrayValues(List.of(java.sql.Time.valueOf(time), zonedTime)));
-    } finally {
-      if (previous == null) {
-        System.clearProperty("user.timezone");
-      } else {
-        System.setProperty("user.timezone", previous);
-      }
+    var zoned = local.atZone(zone);
+    var instant = java.time.Instant.EPOCH;
+    var offset = DateTimeFunctions.sessionOffset();
+    for (List<Object> pair : List.of(List.<Object>of(local.toLocalDate(), java.sql.Date.valueOf(local.toLocalDate())),
+        List.<Object>of(time, DateTimeFunctions.toTime(time)),
+        List.<Object>of(local, java.sql.Timestamp.valueOf(local)), List.<Object>of(zoned, zoned.toOffsetDateTime()),
+        List.<Object>of(instant, instant.atOffset(offset)))) {
+      var expected = Arrays.asList(null, pair.get(1), pair.get(1), null);
+      var normalized = ArrayFunctions.homogenizeArrayValues(Arrays.asList(null, pair.get(0), pair.get(0), null));
+      assertEquals(expected, normalized);
+      assertEquals(pair.get(1).getClass(), normalized.get(1).getClass());
+      assertEquals(List.of(List.of(pair.get(1)), List.of(pair.get(1))),
+          ArrayFunctions.homogenizeArrayValues(List.of(List.of(pair.get(0)), List.of(pair.get(0)))));
     }
   }
 

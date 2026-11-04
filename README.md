@@ -767,14 +767,15 @@ The following SQL statements are supported:
       mixing numbers with nested arrays, strings, or other incompatible types raises `SQLSyntaxErrorException`
       with SQLState `42000` when evaluated. NULL elements are preserved. Stored array columns and ARRAY
       constructors can be combined; nested reference arrays are normalized to lists, including in ARRAY subqueries.
-    - Temporal elements use a common SQL type, including across sibling nested arrays. DATE and TIMESTAMP
-      promote to TIMESTAMP; compatible local/zoned timestamp or time values promote to the zoned type.
+    - Temporal elements must have the same datetime fields (DATE, TIME, or TIMESTAMP), including across
+      sibling nested arrays. DATE/TIMESTAMP, DATE/TIME, and TIMESTAMP/TIME combinations raise SQLState `42000`.
+      Cast DATE elements explicitly to combine them with timestamps: `ARRAY[CAST(DATE '2020-01-01' AS TIMESTAMP),
+      TIMESTAMP '2020-01-01 12:00:00']`. Compatible local/zoned timestamp or time values promote to the zoned type.
       Promoted local values receive the SQL-session time zone displacement (the active JVM time zone's current
-      offset), regardless of their own date. When an array mixes java.sql and java.time representations, elements
-      are converted to `java.sql.Date`, `java.sql.Time` (millisecond precision), `java.sql.Timestamp`,
-      `OffsetTime` or `OffsetDateTime`, retaining timestamp fractions and explicit offsets; arrays whose elements
-      already share one representation are returned unchanged. DATE/TIME and TIMESTAMP/TIME combinations remain
-      incompatible. Zoned ARRAY elements still become strings through derived tables and CTEs (#277).
+      offset), regardless of their own date, without adjusting local timestamp fields in daylight-saving gaps.
+      Java SQL and java.time representations are always normalized to `java.sql.Date`, `java.sql.Time`
+      (millisecond precision), `java.sql.Timestamp`, `OffsetTime` or `OffsetDateTime`, retaining timestamp fractions
+      and explicit offsets. Zoned ARRAY elements still become strings through derived tables and CTEs (#277).
     - MAP key/value types and STRUCT field schemas are not validated.
 - comments (line --) and block (/* */)
 - Subquery support
