@@ -779,7 +779,7 @@ public final class ParquetFilterBuilder {
     }
     if (exp instanceof IsNullExpression || exp instanceof LikeExpression) {
       try {
-        Expression copy = JSqlParserSupport.parseCondition(exp.toString());
+        Expression copy = JSqlParserSupport.parseExpression(exp.toString());
         if (copy instanceof IsNullExpression isNull) {
           isNull.setNot(!isNull.isNot());
         }

@@ -11,7 +11,6 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -310,9 +309,10 @@ public final class ValueExpressionEvaluator {
       return arithmetic(mod.getLeftExpression(), mod.getRightExpression(), record, Operation.MOD);
     }
     if (expression instanceof Column col) {
-      if (SqlParser.isTimeKeyword(col.getColumnName()) && !hasSchemaField(col)) {
-        TimeKeyExpression tk = new TimeKeyExpression();
-        tk.setStringValue(col.getColumnName().toUpperCase(Locale.ROOT));
+      // Direct evaluator callers can supply raw JSqlParser expressions without
+      // statement normalization. Apply the same keyword conversion for them.
+      TimeKeyExpression tk = SqlExpressionNormalizer.timeKeyword(col);
+      if (tk != null) {
         return DateTimeFunctions.evaluateTimeKey(tk);
       }
       return columnValue(col, record);
@@ -738,12 +738,6 @@ public final class ValueExpressionEvaluator {
     String qualifier = column.getTable() == null ? null : column.getTable().getName();
     String name = column.getColumnName();
     return resolveColumnValue(qualifier, name, record);
-  }
-
-  private boolean hasSchemaField(Column column) {
-    String qualifier = column.getTable() == null ? null : column.getTable().getName();
-    String canonical = canonicalFieldName(qualifier, column.getColumnName());
-    return canonical != null && fieldSchemas.containsKey(canonical);
   }
 
   private Object resolveColumnValue(String qualifier, String columnName, GenericRecord record) {

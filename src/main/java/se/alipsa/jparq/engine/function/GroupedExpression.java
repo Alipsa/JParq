@@ -15,7 +15,6 @@ import net.sf.jsqlparser.expression.operators.relational.ExistsExpression;
 import net.sf.jsqlparser.expression.operators.relational.InExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsDistinctExpression;
 import net.sf.jsqlparser.expression.operators.relational.OldOracleJoinBinaryExpression;
-import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.Select;
@@ -55,7 +54,7 @@ final class GroupedExpression {
     StringBuilder sql = new StringBuilder();
     source.accept(bindingDeparser(sql, bind, bindings), null);
     try {
-      expression = CCJSqlParserUtil.parseExpression(sql.toString());
+      expression = JSqlParserSupport.parseExpression(sql.toString());
       rejectUnboundOperands(expression);
     } catch (net.sf.jsqlparser.JSQLParserException e) {
       throw new IllegalArgumentException("Cannot compile grouped expression: " + source, e);
