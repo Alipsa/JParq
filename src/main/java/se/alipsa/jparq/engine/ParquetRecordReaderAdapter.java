@@ -1,16 +1,23 @@
 package se.alipsa.jparq.engine;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Objects;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
+import org.apache.avro.generic.IndexedRecord;
 import org.apache.parquet.hadoop.ParquetReader;
 
 /**
  * Adapts a {@link ParquetReader} to the {@link RecordReader} abstraction.
- * Records are copied only when their projected field schemas need enrichment.
+ * Records are copied, including nested values, only when their projected field
+ * schemas need enrichment.
  */
 public final class ParquetRecordReaderAdapter implements RecordReader {
 
@@ -75,11 +82,53 @@ public final class ParquetRecordReaderAdapter implements RecordReader {
     if (!copyRequired) {
       return raw;
     }
-    GenericRecord record = new GenericData.Record(projectedSchema);
-    for (var field : projectedSchema.getFields()) {
-      record.put(field.name(), raw.get(field.name()));
+    // Rebind nested records as well as the outer row so consumers see restored
+    // logical annotations.
+    return (GenericRecord) enrich(raw, raw.getSchema(), projectedSchema);
+  }
+
+  /**
+   * Rebinds container schemas while retaining raw scalar representations for JDBC
+   * decoding.
+   *
+   * @param value
+   *          raw field value
+   * @param source
+   *          reader declaration
+   * @param target
+   *          declaration with restored annotations
+   * @return enriched container or the unchanged scalar value
+   */
+  private static Object enrich(Object value, Schema source, Schema target) {
+    if (value == null || source.equals(target)) {
+      return value;
     }
-    return record;
+    Schema from = AvroCoercions.effectiveSchema(source);
+    Schema to = AvroCoercions.effectiveSchema(target);
+    if (value instanceof IndexedRecord record && to.getType() == Schema.Type.RECORD) {
+      var result = new GenericData.Record(to);
+      for (Schema.Field field : to.getFields()) {
+        Schema.Field original = from.getField(field.name());
+        result.put(field.pos(), enrich(record.get(original.pos()), original.schema(), field.schema()));
+      }
+      return result;
+    }
+    if (to.getType() == Schema.Type.ARRAY) {
+      Collection<?> values = value instanceof Object[] array ? Arrays.asList(array) : (Collection<?>) value;
+      var result = new ArrayList<Object>(values.size());
+      for (Object item : values) {
+        result.add(enrich(item, from.getElementType(), to.getElementType()));
+      }
+      return result;
+    }
+    if (to.getType() == Schema.Type.MAP) {
+      var result = new LinkedHashMap<Object, Object>();
+      for (var entry : ((Map<?, ?>) value).entrySet()) {
+        result.put(entry.getKey(), enrich(entry.getValue(), from.getValueType(), to.getValueType()));
+      }
+      return result;
+    }
+    return value;
   }
 
   @Override

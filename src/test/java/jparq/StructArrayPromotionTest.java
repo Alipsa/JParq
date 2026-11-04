@@ -126,6 +126,7 @@ class StructArrayPromotionTest {
             () -> ArrayFunctions.homogenizeArrayValues(new java.util.ArrayList<>(pair)));
         var sql = assertInstanceOf(java.sql.SQLDataException.class, failure.getCause());
         assertEquals("22008", sql.getSQLState());
+        assertTrue(sql.getMessage().endsWith(java.time.Instant.ofEpochMilli(raw).toString()), sql.getMessage());
         assertInstanceOf(ArithmeticException.class, sql.getCause());
       }
     }
@@ -173,7 +174,7 @@ class StructArrayPromotionTest {
     var required = record("repeatedRequired", Schema.create(Schema.Type.INT), 1);
     var optional = record("repeatedOptional",
         Schema.createUnion(Schema.create(Schema.Type.NULL), Schema.create(Schema.Type.INT)), 2);
-    var wide = record("lateWide", Schema.create(Schema.Type.LONG), 3L);
+    final var wide = record("lateWide", Schema.create(Schema.Type.LONG), 3L);
     var input = new java.util.ArrayList<Object>();
     for (int i = 0; i < 1000; i++) {
       input.add(i % 2 == 0 ? required : optional);
@@ -201,10 +202,11 @@ class StructArrayPromotionTest {
         () -> ArrayFunctions.homogenizeArrayValues(List.of(new GenericData.Record(two), one)));
     assertEquals("ARRAY elements must share a common type; found STRUCT with 2 fields and STRUCT with 1 field",
         count.getMessage());
-    Schema union = Schema.createUnion(Schema.create(Schema.Type.INT), Schema.create(Schema.Type.STRING));
+    Schema union = Schema.createUnion(Schema.create(Schema.Type.NULL), Schema.create(Schema.Type.INT),
+        Schema.create(Schema.Type.STRING));
     var types = assertThrows(IllegalArgumentException.class, () -> ArrayFunctions.homogenizeArrayValues(
         List.of(record("unionField", union, 1), record("booleanField", Schema.create(Schema.Type.BOOLEAN), true))));
-    assertTrue(types.getMessage().contains("STRUCT field 'x': UNION(INTEGER, VARCHAR) and BOOLEAN"),
+    assertTrue(types.getMessage().contains("STRUCT field 'x': UNION(NULL, INTEGER, VARCHAR) and BOOLEAN"),
         types.getMessage());
   }
 
@@ -293,13 +295,13 @@ class StructArrayPromotionTest {
     Schema optional = Schema.createUnion(Schema.create(Schema.Type.NULL), integer);
     var required = record("required", integer, 1);
     var nullable = record("optional", optional, null);
-    var wide = record("wideValue", Schema.create(Schema.Type.LONG), 2L);
     Schema rowSchema = SchemaBuilder.record("row").fields().name("sr").type(required.getSchema()).noDefault().name("so")
         .type(nullable.getSchema()).noDefault().endRecord();
     var row = new GenericData.Record(rowSchema);
     row.put("sr", required);
     row.put("so", nullable);
     write(directory, "t", row);
+    var wide = record("wideValue", Schema.create(Schema.Type.LONG), 2L);
     Schema joinSchema = SchemaBuilder.record("joined").fields().name("s").type(wide.getSchema()).noDefault()
         .endRecord();
     var joined = new GenericData.Record(joinSchema);

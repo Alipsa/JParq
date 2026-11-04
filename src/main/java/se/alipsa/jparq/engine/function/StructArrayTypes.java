@@ -7,6 +7,7 @@ import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -24,12 +25,13 @@ import se.alipsa.jparq.NumericType;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
+import se.alipsa.jparq.helper.TemporalValueType;
 
 /**
  * Resolves SQL field types and converts STRUCT array elements without mutating
  * input records.
  */
-final class StructArrayTypes {
+public final class StructArrayTypes {
   /** Prevents utility class construction. */
   private StructArrayTypes() {
   }
@@ -46,7 +48,7 @@ final class StructArrayTypes {
    * @throws IllegalArgumentException
    *           if a field is incompatible, carrying SQLState 42000
    */
-  static Schema common(Schema left, Schema right) {
+  public static Schema common(Schema left, Schema right) {
     return common(left, right, "", new HashMap<>());
   }
 
@@ -113,8 +115,7 @@ final class StructArrayTypes {
             binary.addProp("jparq.binary", true);
             yield binary;
           }
-          case Types.TIMESTAMP -> !AvroCoercions.isTimestamp(left) || !AvroCoercions.isTimestamp(right)
-              || AvroCoercions.timestampUnits(left) >= AvroCoercions.timestampUnits(right) ? left : right;
+          case Types.TIMESTAMP -> timestampSchema(left, right);
           case Types.TIME -> right.getLogicalType() instanceof LogicalTypes.TimeMicros ? right : left;
           default -> left;
         };
@@ -126,6 +127,33 @@ final class StructArrayTypes {
     return JdbcTypeMapper.isNullable(first) || JdbcTypeMapper.isNullable(second)
         ? Schema.createUnion(Schema.create(Schema.Type.NULL), result)
         : result;
+  }
+
+  /**
+   * Retains full datetime range and precision when mixing nanosecond and coarser
+   * storage. UTC-adjusted fields use UTC datetime text; local fields retain their
+   * wall-clock fields.
+   *
+   * @param left
+   *          first timestamp declaration
+   * @param right
+   *          second timestamp declaration
+   * @return lossless internal declaration, or the finer compatible physical unit
+   */
+  private static Schema timestampSchema(Schema left, Schema right) {
+    if (TemporalValueType.fromSchema(left) == TemporalValueType.LOCAL_TIMESTAMP
+        || TemporalValueType.fromSchema(right) == TemporalValueType.LOCAL_TIMESTAMP) {
+      return TemporalValueType.LOCAL_TIMESTAMP.schema();
+    }
+    if (!AvroCoercions.isTimestamp(left) || !AvroCoercions.isTimestamp(right)) {
+      return left;
+    }
+    long first = AvroCoercions.timestampUnits(left);
+    long second = AvroCoercions.timestampUnits(right);
+    if (first != second && Math.max(first, second) == 1_000_000_000L) {
+      return TemporalValueType.LOCAL_TIMESTAMP.schema();
+    }
+    return first >= second ? left : right;
   }
 
   /**
@@ -166,6 +194,9 @@ final class StructArrayTypes {
    * @return SQL type name
    */
   private static String typeName(Schema schema) {
+    if (schema.getType() == Schema.Type.NULL) {
+      return "NULL";
+    }
     if (schema.getType() == Schema.Type.UNION) {
       return "UNION(" + String.join(", ", schema.getTypes().stream().map(StructArrayTypes::typeName).toList()) + ")";
     }
@@ -288,6 +319,8 @@ final class StructArrayTypes {
             || from.getLogicalType() instanceof LogicalTypes.TimeMicros)
         && (to.getLogicalType() instanceof LogicalTypes.TimeMillis
             || to.getLogicalType() instanceof LogicalTypes.TimeMicros)) {
+      // Validate the stored clock range before scaling; keep the raw value to retain
+      // microseconds.
       AvroCoercions.unwrap(value, from);
       long sourceUnits = from.getLogicalType() instanceof LogicalTypes.TimeMicros ? 1_000_000L : 1000L;
       long targetUnits = to.getLogicalType() instanceof LogicalTypes.TimeMicros ? 1_000_000L : 1000L;
@@ -298,6 +331,15 @@ final class StructArrayTypes {
       return converted;
     }
     Object decoded = AvroCoercions.unwrap(value, from);
+    TemporalValueType temporal = TemporalValueType.fromSchema(to);
+    if (temporal != null) {
+      if (temporal == TemporalValueType.LOCAL_TIMESTAMP && decoded instanceof Timestamp timestamp) {
+        return (AvroCoercions.isLocalTimestamp(from)
+            ? timestamp.toLocalDateTime()
+            : LocalDateTime.ofInstant(timestamp.toInstant(), ZoneOffset.UTC)).toString();
+      }
+      return temporal.normalize(decoded).toString();
+    }
     NumericType numeric = NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(to), to);
     if (numeric != null) {
       try {
@@ -329,10 +371,15 @@ final class StructArrayTypes {
           : timestamp.toInstant();
       long units = AvroCoercions.timestampUnits(to);
       try {
-        return Math.addExact(Math.multiplyExact(instant.getEpochSecond(), units),
-            instant.getNano() / (1_000_000_000L / units));
+        long seconds = instant.getEpochSecond();
+        long fraction = instant.getNano() / (1_000_000_000L / units);
+        if (seconds < 0 && fraction > 0) {
+          return Math.addExact(Math.multiplyExact(seconds + 1, units), fraction - units);
+        }
+        return Math.addExact(Math.multiplyExact(seconds, units), fraction);
       } catch (ArithmeticException exception) {
-        String message = "Timestamp cannot be represented by the common type: " + decoded;
+        String message = "Timestamp cannot be represented by the common type: "
+            + (AvroCoercions.isLocalTimestamp(from) ? timestamp.toLocalDateTime() : timestamp.toInstant());
         throw new IllegalArgumentException(message, new SQLDataException(message, "22008", exception));
       }
     }

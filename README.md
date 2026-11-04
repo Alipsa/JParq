@@ -790,8 +790,10 @@ The following SQL statements are supported:
       across sibling maps. NULL values and empty maps do not constrain inferred types. STRUCT elements must
       have matching field names and order, with compatible SQL field types resolved recursively. Numeric fields
       promote to a common type. Nullability, Avro type names, and storage properties do not distinguish SQL types.
-      STRUCT temporal fields retain the finer storage precision when units differ. Timestamp promotion overflow
-      raises SQLState `22008`. Incompatible MAP contents or STRUCT schemas raise SQLState `42000`.
+      STRUCT temporal fields retain the finer precision when units differ. Mixed nanosecond/coarser timestamp
+      fields use lossless internal datetime text to preserve the full date range and nanosecond fractions;
+      UTC-adjusted sources retain UTC fields, and local sources retain wall-clock fields. Timestamp promotion
+      overflow in other physical encodings raises SQLState `22008`. Incompatible MAP contents or STRUCT schemas raise SQLState `42000`.
 - comments (line --) and block (/* */)
 - Subquery support
   - In the SELECT Clause : Used to return a single value or a set of values. e.g.

@@ -98,6 +98,50 @@ class ParquetRecordReaderAdapterTest {
   }
 
   /**
+   * Enriches records inside containers while retaining raw binary scalar values
+   * for later decoding.
+   *
+   * @throws Exception
+   *           if the reader cannot be stubbed or read
+   */
+  @Test
+  void enrichedContainersRetainRawScalars() throws Exception {
+    Schema child = SchemaBuilder.record("child").fields().requiredLong("ts").endRecord();
+    Schema enrichedChild = new Schema.Parser().parse(child.toString());
+    enrichedChild.getField("ts").schema().addProp("logicalType", "timestamp-nanos");
+    Schema source = SchemaBuilder.record("source").fields().name("child").type(child).noDefault().name("array")
+        .type(Schema.createArray(child)).noDefault().name("map").type(Schema.createMap(child)).noDefault()
+        .requiredBytes("text").endRecord();
+    final Schema target = SchemaBuilder.record("target").fields().name("child").type(enrichedChild).noDefault()
+        .name("array").type(Schema.createArray(enrichedChild)).noDefault().name("map")
+        .type(Schema.createMap(enrichedChild)).noDefault().requiredString("text").endRecord();
+    var nested = new GenericData.Record(child);
+    nested.put("ts", 3L);
+    var raw = new GenericData.Record(source);
+    raw.put("child", nested);
+    raw.put("array", List.of(nested));
+    raw.put("map", java.util.Map.of("k", nested));
+    var bytes = java.nio.ByteBuffer.wrap("hello".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    raw.put("text", bytes);
+    try (var reader = new ParquetRecordReaderAdapter(delegate(raw, raw), target)) {
+      for (int index = 0; index < 2; index++) {
+        var enriched = reader.read();
+        assertSame(bytes, enriched.get("text"));
+        assertEquals("hello", se.alipsa.jparq.engine.AvroCoercions.unwrap(enriched.get("text"),
+            enriched.getSchema().getField("text").schema()));
+        for (Object value : List.of(enriched.get("child"), ((List<?>) enriched.get("array")).getFirst(),
+            ((java.util.Map<?, ?>) enriched.get("map")).get("k"))) {
+          var record = (GenericRecord) value;
+          assertNotSame(nested, record);
+          assertEquals("timestamp-nanos", record.getSchema().getField("ts").schema().getProp("logicalType"));
+          assertEquals(3L, record.get("ts"));
+        }
+        assertNull(nested.getSchema().getField("ts").schema().getProp("logicalType"));
+      }
+    }
+  }
+
+  /**
    * Creates a reader returning two raw records followed by end of input.
    *
    * @param first
