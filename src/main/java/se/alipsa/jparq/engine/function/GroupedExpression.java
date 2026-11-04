@@ -25,6 +25,7 @@ import org.apache.avro.generic.GenericData;
 import se.alipsa.jparq.engine.CorrelatedBindings;
 import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.SqlExceptions;
+import se.alipsa.jparq.engine.SqlExpressionNormalizer;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 
 /**
@@ -55,7 +56,7 @@ final class GroupedExpression {
     StringBuilder sql = new StringBuilder();
     source.accept(bindingDeparser(sql, bind, bindings), null);
     try {
-      expression = CCJSqlParserUtil.parseExpression(sql.toString());
+      expression = SqlExpressionNormalizer.normalizeExpression(CCJSqlParserUtil.parseExpression(sql.toString()));
       rejectUnboundOperands(expression);
     } catch (net.sf.jsqlparser.JSQLParserException e) {
       throw new IllegalArgumentException("Cannot compile grouped expression: " + source, e);

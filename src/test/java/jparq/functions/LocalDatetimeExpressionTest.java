@@ -3,14 +3,17 @@ package jparq.functions;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.List;
 import java.util.Locale;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -23,7 +26,7 @@ class LocalDatetimeExpressionTest {
 
   /**
    * Evaluates local datetime keywords inside constructors and scalar functions
-   * while reading a physical table.
+   * over physical tables, same-named derived columns, and grouped inputs.
    *
    * @param expression
    *          expression containing a local datetime keyword
@@ -38,21 +41,133 @@ class LocalDatetimeExpressionTest {
   })
   void evaluatesNestedLocalDatetime(String expression) throws Exception {
     Path directory = Path.of(LocalDatetimeExpressionTest.class.getResource("/mtcars.parquet").toURI()).getParent();
+    for (String source : List.of("mtcars LIMIT 1", "(SELECT 42 AS \"LOCALTIME\", 42 AS \"LOCALTIMESTAMP\") t",
+        "mtcars GROUP BY cyl LIMIT 1")) {
+      try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+          var statement = connection.createStatement();
+          var result = statement.executeQuery("SELECT " + expression + " FROM " + source)) {
+        assertTrue(result.next());
+        Object value = result.getObject(1);
+        if (expression.startsWith("ARRAY[")) {
+          Object[] values = assertInstanceOf(Object[].class, value);
+          value = values[0];
+        }
+        if (expression.toUpperCase(Locale.ROOT).contains("LOCALTIMESTAMP")) {
+          assertTrue(value instanceof Timestamp || value instanceof LocalDateTime);
+        } else {
+          assertTrue(value instanceof Time || value instanceof LocalTime);
+        }
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Evaluates datetime keywords in predicate operands and CASE conditions.
+   *
+   * @param sql
+   *          query returning one when the datetime predicate succeeds
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT 1 FROM mtcars WHERE LOCALTIMESTAMP IS NOT NULL LIMIT 1",
+      "SELECT 1 FROM mtcars WHERE LOCALTIME IS NOT NULL LIMIT 1",
+      "SELECT 1 FROM mtcars WHERE LOCALTIMESTAMP > TIMESTAMP '2000-01-01 00:00:00' LIMIT 1",
+      "SELECT CASE WHEN LOCALTIMESTAMP IS NULL THEN 0 ELSE 1 END FROM mtcars LIMIT 1",
+      "SELECT CASE WHEN LOCALTIME IS NULL THEN 0 ELSE 1 END FROM mtcars LIMIT 1",
+      "SELECT 1 FROM mtcars WHERE LOCALTIME BETWEEN TIME '00:00:00' AND TIME '23:59:59.999999999' LIMIT 1",
+      "SELECT 1 FROM mtcars GROUP BY cyl HAVING LOCALTIMESTAMP IS NOT NULL LIMIT 1",
+      "SELECT 1 FROM mtcars GROUP BY cyl HAVING LOCALTIME IS NOT NULL LIMIT 1",
+      "SELECT 1 FROM mtcars GROUP BY cyl HAVING EXTRACT(HOUR FROM LOCALTIME) IS NOT NULL LIMIT 1",
+      "SELECT 1 FROM mtcars GROUP BY cyl HAVING TRIM(CAST(LOCALTIME AS VARCHAR(64))) IS NOT NULL LIMIT 1",
+      "SELECT 1 FROM mtcars GROUP BY cyl HAVING "
+          + "(CAST(LOCALTIME AS VARCHAR(64)) COLLATE latin1_general_ci) IS NOT NULL LIMIT 1",
+      "SELECT 1 FROM mtcars GROUP BY cyl HAVING CONVERT(CAST(LOCALTIME AS VARCHAR(64)) USING UTF8) IS NOT NULL LIMIT 1",
+      "SELECT 1 FROM mtcars GROUP BY cyl HAVING POSITION(':' IN CAST(LOCALTIME AS VARCHAR(64))) > 0 LIMIT 1",
+      "SELECT CASE WHEN LOCALTIME IS NULL THEN 0 ELSE 1 END FROM (SELECT 42 AS \"LOCALTIME\") t",
+      "SELECT 1 FROM (SELECT 42 AS \"LOCALTIMESTAMP\") t WHERE LOCALTIMESTAMP > TIMESTAMP '2000-01-01 00:00:00'",
+      "SELECT 1 FROM mtcars t JOIN (VALUES (1)) v(x) ON LOCALTIME IS NOT NULL LIMIT 1"
+  })
+  void evaluatesPredicates(String sql) throws Exception {
+    for (boolean pushdown : List.of(true, false)) {
+      String url = "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath() + "?predicatePushdown=" + pushdown
+          + "&projectionPushdown=" + pushdown;
+      try (var connection = DriverManager.getConnection(url);
+          var statement = connection.createStatement();
+          var result = statement.executeQuery(sql)) {
+        assertTrue(result.next(), sql);
+        assertEquals(1, result.getInt(1), sql);
+        assertFalse(result.next(), sql);
+      }
+    }
+  }
+
+  /**
+   * Rejects numeric arithmetic on a bare datetime keyword even when the input
+   * exposes a same-named numeric column.
+   *
+   * @param keyword
+   *          local datetime value function
+   * @param directory
+   *          empty database directory
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "LOCALTIME", "localtime", "LOCALTIMESTAMP", "localtimestamp"
+  })
+  void rejectsNumericDatetimeArithmetic(String keyword, @TempDir Path directory) throws Exception {
+    String sql = "SELECT " + keyword + " + 0 FROM (SELECT 42 AS \"LOCALTIME\", 42 AS \"LOCALTIMESTAMP\") t";
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
-        var statement = connection.createStatement();
-        var result = statement.executeQuery("SELECT " + expression + " FROM mtcars LIMIT 1")) {
-      assertTrue(result.next());
-      Object value = result.getObject(1);
-      if (expression.startsWith("ARRAY[")) {
-        Object[] values = assertInstanceOf(Object[].class, value);
-        value = values[0];
+        var statement = connection.createStatement()) {
+      SQLException failure = assertThrows(SQLException.class, () -> {
+        try (var result = statement.executeQuery(sql)) {
+          if (result.next()) {
+            result.getObject(1);
+          }
+        }
+      });
+      assertEquals("42000", failure.getSQLState());
+    }
+  }
+
+  /**
+   * Rejects reserved keywords used as unquoted qualified identifiers, whether the
+   * field exists or is absent, instead of evaluating them as value functions.
+   *
+   * @param expression
+   *          qualified column reference in a projection or predicate
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT COALESCE(t.LOCALTIME, 0) FROM mtcars t LIMIT 1",
+      "SELECT COALESCE(t.LOCALTIMESTAMP, 0) FROM mtcars t LIMIT 1", "SELECT ARRAY[t.LOCALTIME] FROM mtcars t LIMIT 1",
+      "SELECT t.LOCALTIMESTAMP FROM mtcars t LIMIT 1", "SELECT 1 FROM mtcars t WHERE t.LOCALTIME IS NOT NULL LIMIT 1",
+      "SELECT 1 FROM mtcars t WHERE t.LOCALTIMESTAMP IS NOT NULL LIMIT 1",
+      "SELECT COALESCE(t.LOCALTIME, 0) FROM (SELECT 42 AS \"LOCALTIME\") t",
+      "SELECT COALESCE(t.LOCALTIMESTAMP, 0) FROM (SELECT 42 AS \"LOCALTIMESTAMP\") t",
+      "SELECT COALESCE(t.LOCALTIME, 0) FROM mtcars t JOIN (VALUES (1)) v(x) ON TRUE LIMIT 1"
+  })
+  void rejectsUnquotedQualifiedKeywords(String expression) throws Exception {
+    for (boolean pushdown : List.of(true, false)) {
+      String url = "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath() + "?predicatePushdown=" + pushdown
+          + "&projectionPushdown=" + pushdown;
+      try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+        SQLException failure = assertThrows(SQLException.class, () -> {
+          try (var result = statement.executeQuery(expression)) {
+            if (result.next()) {
+              result.getObject(1);
+            }
+          }
+        }, expression);
+        assertEquals("42000", failure.getSQLState(), expression);
+        assertTrue(failure.getMessage().contains("LOCALTIME"), failure::getMessage);
       }
-      if (expression.toUpperCase(Locale.ROOT).contains("LOCALTIMESTAMP")) {
-        assertTrue(value instanceof Timestamp || value instanceof LocalDateTime);
-      } else {
-        assertTrue(value instanceof Time || value instanceof LocalTime);
-      }
-      assertFalse(result.next());
     }
   }
 

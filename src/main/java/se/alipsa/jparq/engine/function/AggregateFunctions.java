@@ -90,6 +90,7 @@ import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlExceptions;
+import se.alipsa.jparq.engine.SqlExpressionNormalizer;
 import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.OrderKey;
 import se.alipsa.jparq.engine.SqlText;
@@ -1934,7 +1935,8 @@ public final class AggregateFunctions {
    */
   private static Expression parseGroupedExpression(String text) {
     try {
-      return net.sf.jsqlparser.parser.CCJSqlParserUtil.parseExpression(text);
+      return SqlExpressionNormalizer
+          .normalizeExpression(net.sf.jsqlparser.parser.CCJSqlParserUtil.parseExpression(text));
     } catch (net.sf.jsqlparser.JSQLParserException e) {
       throw new IllegalArgumentException("Invalid grouped expression: " + text, e);
     }

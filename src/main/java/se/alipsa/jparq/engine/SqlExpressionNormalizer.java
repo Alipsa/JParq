@@ -8,16 +8,22 @@ import java.util.Set;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.AnyType;
+import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
+import net.sf.jsqlparser.expression.CollateExpression;
 import net.sf.jsqlparser.expression.DateUnitExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
+import net.sf.jsqlparser.expression.ExtractExpression;
 import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.NotExpression;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.StringValue;
+import net.sf.jsqlparser.expression.TimeKeyExpression;
+import net.sf.jsqlparser.expression.TranscodingFunction;
+import net.sf.jsqlparser.expression.TrimFunction;
 import net.sf.jsqlparser.expression.WhenClause;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
@@ -40,8 +46,8 @@ import net.sf.jsqlparser.statement.select.SetOperationList;
 import net.sf.jsqlparser.statement.select.Values;
 
 /**
- * Normalizes parser expression shapes and JDBC timestamp interval constants
- * before any SQL scopes are extracted or serialized.
+ * Normalizes parser expression shapes, datetime keywords, and JDBC interval
+ * constants before any SQL scopes are extracted or serialized.
  */
 public final class SqlExpressionNormalizer {
   private static final Set<String> JDBC_TIMESTAMP_UNITS = Set.of("SQL_TSI_FRAC_SECOND", "SQL_TSI_SECOND",
@@ -59,6 +65,9 @@ public final class SqlExpressionNormalizer {
    *
    * @param statement
    *          parsed SELECT, including CTEs and set operations
+   * @throws IllegalArgumentException
+   *           if a reserved datetime keyword is used as an unquoted qualified
+   *           identifier
    */
   public static void normalize(Select statement) {
     JSqlParserSupport.visitExpressions(statement, new JSqlParserSupport.StatementExpressionVisitor() {
@@ -73,10 +82,26 @@ public final class SqlExpressionNormalizer {
       @Override
       public <S> Void visit(Column column, S context) {
         RelationQualifiers.restore(column);
+        if (column.getTable() != null && SqlParser.isTimeKeyword(column.getColumnName())) {
+          throw SqlExceptions
+              .syntaxFailure("Reserved datetime keyword must be delimited in a column reference: " + column);
+        }
         return super.visit(column, context);
       }
     });
     new SqlExpressionNormalizer().select(statement);
+  }
+
+  /**
+   * Normalizes a reparsed scalar expression, including datetime keywords whose
+   * value-function nodes can be lost when an expression is serialized to SQL.
+   *
+   * @param expression
+   *          scalar expression root, or null
+   * @return normalized root, or null when the input is null
+   */
+  public static Expression normalizeExpression(Expression expression) {
+    return new SqlExpressionNormalizer().expression(expression);
   }
 
   /**
@@ -209,8 +234,9 @@ public final class SqlExpressionNormalizer {
   }
 
   /**
-   * Repairs an absorbed Boolean tail and recursively normalizes expression
-   * children.
+   * Converts bare datetime keywords to value functions, repairs an absorbed
+   * Boolean tail, and recursively normalizes expression children. Datetime
+   * keywords are recognized before scope binding can treat them as columns.
    *
    * @param original
    *          expression root, or null
@@ -219,6 +245,12 @@ public final class SqlExpressionNormalizer {
   private Expression expression(Expression original) {
     if (original == null) {
       return null;
+    }
+    if (original instanceof Column column && column.getTable() == null
+        && SqlParser.isTimeKeyword(column.getColumnName())) {
+      TimeKeyExpression keyword = new TimeKeyExpression();
+      keyword.setStringValue(column.getColumnName().toUpperCase(Locale.ROOT));
+      return keyword;
     }
     Expression result = normalizeQuantifier(original);
     if (original instanceof InExpression in && booleanOperator(in.getRightExpression())) {
@@ -318,6 +350,12 @@ public final class SqlExpressionNormalizer {
    */
   private final class Children extends ExpressionVisitorAdapter<Void> {
     @Override
+    public <S> Void visit(ArrayConstructor array, S context) {
+      list(array.getExpressions());
+      return null;
+    }
+
+    @Override
     protected <S> Void visitBinaryExpression(BinaryExpression binary, S context) {
       binary.setLeftExpression(expression(binary.getLeftExpression()));
       binary.setRightExpression(expression(binary.getRightExpression()));
@@ -340,7 +378,33 @@ public final class SqlExpressionNormalizer {
     @Override
     public <S> Void visit(Function function, S context) {
       list(function.getParameters());
+      list(function.getNamedParameters());
       return super.visit(function, context);
+    }
+
+    @Override
+    public <S> Void visit(ExtractExpression extract, S context) {
+      extract.setExpression(expression(extract.getExpression()));
+      return null;
+    }
+
+    @Override
+    public <S> Void visit(CollateExpression collate, S context) {
+      collate.setLeftExpression(expression(collate.getLeftExpression()));
+      return null;
+    }
+
+    @Override
+    public <S> Void visit(TranscodingFunction convert, S context) {
+      convert.setExpression(expression(convert.getExpression()));
+      return null;
+    }
+
+    @Override
+    public <S> Void visit(TrimFunction trim, S context) {
+      trim.setExpression(expression(trim.getExpression()));
+      trim.setFromExpression(expression(trim.getFromExpression()));
+      return null;
     }
 
     @Override
