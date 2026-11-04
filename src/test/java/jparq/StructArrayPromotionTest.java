@@ -86,6 +86,128 @@ class StructArrayPromotionTest {
         Timestamp.from(java.time.Instant.ofEpochMilli(1234)));
   }
 
+  /**
+   * Selects microsecond TIME storage in either order without discarding stored
+   * fractions.
+   */
+  @Test
+  void preservesTimeStoragePrecision() {
+    Schema millis = LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
+    Schema micros = LogicalTypes.timeMicros().addToSchema(Schema.create(Schema.Type.LONG));
+    var first = record("timeMillis", millis, 1234);
+    var second = record("timeMicros", micros, 2_123_456L);
+    for (var pair : List.of(List.of(first, second), List.of(second, first))) {
+      var values = ArrayFunctions.homogenizeArrayValues(new java.util.ArrayList<>(pair));
+      for (int index = 0; index < pair.size(); index++) {
+        var value = (IndexedRecord) values.get(index);
+        Schema field = value.getSchema().getFields().getFirst().schema();
+        assertEquals("time-micros", field.getLogicalType().getName());
+        assertEquals(pair.get(index) == first ? 1_234_000L : 2_123_456L, value.get(0));
+      }
+    }
+    Schema annotated = LogicalTypes.timeMicros().addToSchema(Schema.create(Schema.Type.LONG));
+    annotated.addProp("storage", "other writer");
+    var result = ArrayFunctions.homogenizeArrayValues(List.of(second, record("annotatedTime", annotated, 3_456_789L)));
+    assertEquals(2_123_456L, ((IndexedRecord) result.getFirst()).get(0));
+  }
+
+  /** Reports timestamp promotion overflow as a datetime data exception. */
+  @Test
+  void reportsTimestampStorageOverflow() {
+    Schema millis = LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
+    Schema micros = LogicalTypes.timestampMicros().addToSchema(Schema.create(Schema.Type.LONG));
+    for (long raw : new long[]{
+        9_300_000_000_000_000L, -9_300_000_000_000_000L
+    }) {
+      var first = record("overflowMillis", millis, raw);
+      var second = record("overflowMicros", micros, 0L);
+      for (var pair : List.of(List.of(first, second), List.of(second, first))) {
+        var failure = assertThrows(IllegalArgumentException.class,
+            () -> ArrayFunctions.homogenizeArrayValues(new java.util.ArrayList<>(pair)));
+        var sql = assertInstanceOf(java.sql.SQLDataException.class, failure.getCause());
+        assertEquals("22008", sql.getSQLState());
+        assertInstanceOf(ArithmeticException.class, sql.getCause());
+      }
+    }
+  }
+
+  /**
+   * Preserves SQLState when timestamp promotion fails through a JDBC getter.
+   *
+   * @param directory
+   *          fixture directory
+   * @throws Exception
+   *           if fixture creation or connection fails
+   */
+  @Test
+  void reportsStoredTimestampOverflow(@TempDir Path directory) throws Exception {
+    var millis = record("storedMillis", LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG)),
+        9_300_000_000_000_000L);
+    var micros = record("storedMicros", LogicalTypes.timestampMicros().addToSchema(Schema.create(Schema.Type.LONG)),
+        0L);
+    Schema schema = SchemaBuilder.record("overflow").fields().name("a").type(millis.getSchema()).noDefault().name("b")
+        .type(micros.getSchema()).noDefault().endRecord();
+    var row = new GenericData.Record(schema);
+    row.put("a", millis);
+    row.put("b", micros);
+    write(directory, "overflow", row);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      var failure = assertThrows(java.sql.SQLDataException.class, () -> {
+        try (var result = statement.executeQuery("SELECT ARRAY[a,b] FROM overflow")) {
+          while (result.next()) {
+            result.getObject(1);
+          }
+        }
+      });
+      assertEquals("22008", failure.getSQLState());
+    }
+  }
+
+  /**
+   * Reuses source schemas while still allowing later widening and independent
+   * executions.
+   */
+  @Test
+  void resolvesRepeatedSchemasAndLatePromotion() {
+    var required = record("repeatedRequired", Schema.create(Schema.Type.INT), 1);
+    var optional = record("repeatedOptional",
+        Schema.createUnion(Schema.create(Schema.Type.NULL), Schema.create(Schema.Type.INT)), 2);
+    var wide = record("lateWide", Schema.create(Schema.Type.LONG), 3L);
+    var input = new java.util.ArrayList<Object>();
+    for (int i = 0; i < 1000; i++) {
+      input.add(i % 2 == 0 ? required : optional);
+    }
+    input.add(wide);
+    var result = ArrayFunctions.homogenizeArrayValues(input);
+    Schema common = ((IndexedRecord) result.getFirst()).getSchema();
+    for (int i = 0; i < result.size(); i++) {
+      var value = (IndexedRecord) result.get(i);
+      assertSame(common, value.getSchema());
+      assertEquals(i == 1000 ? 3L : i % 2 == 0 ? 1L : 2L, field(value));
+    }
+    assertFieldValues(required, optional, 1, 2);
+  }
+
+  /**
+   * Describes differing degrees and union alternatives without empty paths or
+   * redundant labels.
+   */
+  @Test
+  void describesStructDegreeAndUnionMismatch() {
+    Schema two = SchemaBuilder.record("twoFields").fields().requiredInt("x").requiredInt("y").endRecord();
+    var one = record("oneField", Schema.create(Schema.Type.INT), 1);
+    var count = assertThrows(IllegalArgumentException.class,
+        () -> ArrayFunctions.homogenizeArrayValues(List.of(new GenericData.Record(two), one)));
+    assertEquals("ARRAY elements must share a common type; found STRUCT with 2 fields and STRUCT with 1 field",
+        count.getMessage());
+    Schema union = Schema.createUnion(Schema.create(Schema.Type.INT), Schema.create(Schema.Type.STRING));
+    var types = assertThrows(IllegalArgumentException.class, () -> ArrayFunctions.homogenizeArrayValues(
+        List.of(record("unionField", union, 1), record("booleanField", Schema.create(Schema.Type.BOOLEAN), true))));
+    assertTrue(types.getMessage().contains("STRUCT field 'x': UNION(INTEGER, VARCHAR) and BOOLEAN"),
+        types.getMessage());
+  }
+
   /** Combines decimal bounds and scales and retains exact values. */
   @Test
   void promotesDecimalFields() {

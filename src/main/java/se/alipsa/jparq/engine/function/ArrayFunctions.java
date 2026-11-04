@@ -16,10 +16,12 @@ import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Function;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.IndexedRecord;
@@ -169,7 +171,14 @@ public final class ArrayFunctions {
         inferValue(entry.getValue(), type.mapValue);
       }
     } else if (value instanceof IndexedRecord record) {
-      type.struct = type.struct == null ? record.getSchema() : StructArrayTypes.common(type.struct, record.getSchema());
+      if (type.structSchemas == null) {
+        type.structSchemas = new IdentityHashMap<>();
+        type.structConversions = new IdentityHashMap<>();
+      }
+      Schema schema = record.getSchema();
+      if (type.structSchemas.put(schema, Boolean.TRUE) == null) {
+        type.struct = type.struct == null ? schema : StructArrayTypes.common(type.struct, schema);
+      }
     }
   }
 
@@ -226,7 +235,8 @@ public final class ArrayFunctions {
       return coerceMap((Map<?, ?>) value, type, offset);
     }
     if (value instanceof IndexedRecord record) {
-      return StructArrayTypes.convert(record, record.getSchema(), type.struct);
+      return type.structConversions
+          .computeIfAbsent(record.getSchema(), source -> StructArrayTypes.converter(source, type.struct)).apply(record);
     }
     return coerceTemporal(value, type.family, offset);
   }
@@ -444,6 +454,8 @@ public final class ArrayFunctions {
     private ElementType mapKey;
     private ElementType mapValue;
     private Schema struct;
+    private Map<Schema, Boolean> structSchemas;
+    private Map<Schema, Function<Object, Object>> structConversions;
   }
 
   private enum NumericType {

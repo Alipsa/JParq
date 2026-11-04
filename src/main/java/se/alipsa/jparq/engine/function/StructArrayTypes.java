@@ -3,15 +3,18 @@ package se.alipsa.jparq.engine.function;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.sql.JDBCType;
+import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import org.apache.avro.Conversions;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
@@ -72,7 +75,7 @@ final class StructArrayTypes {
     Schema result = visited.get(pair);
     if (result == null) {
       if (left.getType() == Schema.Type.UNION || right.getType() == Schema.Type.UNION) {
-        throw mismatch(path, "UNION", "incompatible UNION");
+        throw mismatch(path, typeName(left), typeName(right));
       }
       int leftType = JdbcTypeMapper.mapSchemaToJdbcType(left);
       int rightType = JdbcTypeMapper.mapSchemaToJdbcType(right);
@@ -84,8 +87,7 @@ final class StructArrayTypes {
         result = Schema.createRecord(left.getName(), null, left.getNamespace(), false);
         visited.put(pair, result);
         if (left.getFields().size() != right.getFields().size()) {
-          throw mismatch(path, "STRUCT with " + left.getFields().size() + " fields",
-              "STRUCT with " + right.getFields().size() + " fields");
+          throw mismatch(path, structName(left), structName(right));
         }
         List<Schema.Field> fields = new ArrayList<>();
         for (int index = 0; index < left.getFields().size(); index++) {
@@ -113,6 +115,7 @@ final class StructArrayTypes {
           }
           case Types.TIMESTAMP -> !AvroCoercions.isTimestamp(left) || !AvroCoercions.isTimestamp(right)
               || AvroCoercions.timestampUnits(left) >= AvroCoercions.timestampUnits(right) ? left : right;
+          case Types.TIME -> right.getLogicalType() instanceof LogicalTypes.TimeMicros ? right : left;
           default -> left;
         };
       } else {
@@ -151,7 +154,8 @@ final class StructArrayTypes {
    * @return exception carrying SQLState 42000
    */
   private static IllegalArgumentException mismatch(String path, String left, String right) {
-    return SqlExceptions.incompatibleArrayElements("STRUCT field '" + path + "': " + left, right);
+    return SqlExceptions.incompatibleArrayElements(path.isEmpty() ? left : "STRUCT field '" + path + "': " + left,
+        right);
   }
 
   /**
@@ -162,63 +166,136 @@ final class StructArrayTypes {
    * @return SQL type name
    */
   private static String typeName(Schema schema) {
+    if (schema.getType() == Schema.Type.UNION) {
+      return "UNION(" + String.join(", ", schema.getTypes().stream().map(StructArrayTypes::typeName).toList()) + ")";
+    }
     return schema.getType() == Schema.Type.MAP
         ? "MAP"
         : JDBCType.valueOf(JdbcTypeMapper.mapSchemaToJdbcType(schema)).getName();
   }
 
   /**
-   * Converts raw Avro field values into the common declaration, retaining
-   * unchanged records.
+   * Describes a STRUCT degree with singular or plural field wording.
    *
-   * @param value
-   *          input field or record value
+   * @param schema
+   *          STRUCT declaration
+   * @return compact degree description
+   */
+  private static String structName(Schema schema) {
+    int count = schema.getFields().size();
+    return "STRUCT with " + count + (count == 1 ? " field" : " fields");
+  }
+
+  /**
+   * Compiles conversions once for each source and common schema pair.
+   *
    * @param source
    *          original declaration
    * @param target
    *          common declaration
-   * @return value encoded for the common declaration
-   * @throws IllegalArgumentException
-   *           if a numeric conversion fails
+   * @return conversion retaining unchanged values
    */
-  static Object convert(Object value, Schema source, Schema target) {
-    if (value == null || source.equals(target)) {
-      return value;
+  static Function<Object, Object> converter(Schema source, Schema target) {
+    return converter(source, target, new IdentityHashMap<>());
+  }
+
+  /**
+   * Compiles recursive containers without comparing schemas during row
+   * conversion.
+   *
+   * @param source
+   *          original declaration
+   * @param target
+   *          common declaration
+   * @param compiled
+   *          conversion plans indexed by source and target identity
+   * @return reusable conversion
+   */
+  private static Function<Object, Object> converter(Schema source, Schema target,
+      Map<Schema, Map<Schema, Function<Object, Object>>> compiled) {
+    var targets = compiled.computeIfAbsent(source, ignored -> new IdentityHashMap<>());
+    Function<Object, Object> cached = targets.get(target);
+    if (cached != null) {
+      return cached;
     }
     Schema from = optionalValue(source);
     Schema to = optionalValue(target);
     if (from.equals(to)) {
-      return value;
+      return Function.identity();
     }
-    if (value instanceof IndexedRecord record && to.getType() == Schema.Type.RECORD) {
+    targets.put(target, value -> targets.get(target).apply(value));
+    Function<Object, Object> conversion;
+    if (to.getType() == Schema.Type.RECORD) {
       boolean unchanged = true;
+      List<Function<Object, Object>> fields = new ArrayList<>();
       for (Schema.Field field : to.getFields()) {
-        unchanged &= field.schema().equals(from.getFields().get(field.pos()).schema());
+        Schema original = from.getFields().get(field.pos()).schema();
+        unchanged &= field.schema().equals(original);
+        fields.add(converter(original, field.schema(), compiled));
       }
-      if (unchanged) {
-        return value;
-      }
-      var result = new GenericData.Record(to);
-      for (Schema.Field field : to.getFields()) {
-        result.put(field.pos(),
-            convert(record.get(field.pos()), from.getFields().get(field.pos()).schema(), field.schema()));
-      }
-      return result;
+      conversion = unchanged ? Function.identity() : value -> {
+        var record = (IndexedRecord) value;
+        var result = new GenericData.Record(to);
+        for (int index = 0; index < fields.size(); index++) {
+          result.put(index, fields.get(index).apply(record.get(index)));
+        }
+        return result;
+      };
+    } else if (to.getType() == Schema.Type.ARRAY) {
+      var element = converter(from.getElementType(), to.getElementType(), compiled);
+      conversion = value -> {
+        List<Object> result = new ArrayList<>();
+        Iterable<?> elements = value instanceof Object[] array ? java.util.Arrays.asList(array) : (Iterable<?>) value;
+        for (Object item : elements) {
+          result.add(element.apply(item));
+        }
+        return result;
+      };
+    } else if (to.getType() == Schema.Type.MAP) {
+      var element = converter(from.getValueType(), to.getValueType(), compiled);
+      conversion = value -> {
+        Map<Object, Object> result = new LinkedHashMap<>();
+        for (var entry : ((Map<?, ?>) value).entrySet()) {
+          result.put(entry.getKey(), element.apply(entry.getValue()));
+        }
+        return result;
+      };
+    } else {
+      conversion = value -> convertScalar(value, from, to);
     }
-    if (to.getType() == Schema.Type.ARRAY) {
-      List<Object> result = new ArrayList<>();
-      Iterable<?> elements = value instanceof Object[] array ? java.util.Arrays.asList(array) : (Iterable<?>) value;
-      for (Object item : elements) {
-        result.add(convert(item, from.getElementType(), to.getElementType()));
+    Function<Object, Object> nullable = value -> value == null ? null : conversion.apply(value);
+    targets.put(target, nullable);
+    return nullable;
+  }
+
+  /**
+   * Converts a scalar Avro field into the common declaration.
+   *
+   * @param value
+   *          input field or record value
+   * @param from
+   *          original declaration
+   * @param to
+   *          common declaration
+   * @return value encoded for the common declaration
+   * @throws IllegalArgumentException
+   *           if a numeric or datetime conversion fails, carrying SQLState 22003
+   *           or 22008 respectively
+   */
+  private static Object convertScalar(Object value, Schema from, Schema to) {
+    if (value instanceof Number number
+        && (from.getLogicalType() instanceof LogicalTypes.TimeMillis
+            || from.getLogicalType() instanceof LogicalTypes.TimeMicros)
+        && (to.getLogicalType() instanceof LogicalTypes.TimeMillis
+            || to.getLogicalType() instanceof LogicalTypes.TimeMicros)) {
+      AvroCoercions.unwrap(value, from);
+      long sourceUnits = from.getLogicalType() instanceof LogicalTypes.TimeMicros ? 1_000_000L : 1000L;
+      long targetUnits = to.getLogicalType() instanceof LogicalTypes.TimeMicros ? 1_000_000L : 1000L;
+      long converted = number.longValue() * targetUnits / sourceUnits;
+      if (to.getType() == Schema.Type.INT) {
+        return Math.toIntExact(converted);
       }
-      return result;
-    }
-    if (to.getType() == Schema.Type.MAP) {
-      Map<Object, Object> result = new LinkedHashMap<>();
-      for (var entry : ((Map<?, ?>) value).entrySet()) {
-        result.put(entry.getKey(), convert(entry.getValue(), from.getValueType(), to.getValueType()));
-      }
-      return result;
+      return converted;
     }
     Object decoded = AvroCoercions.unwrap(value, from);
     NumericType numeric = NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(to), to);
@@ -251,8 +328,13 @@ final class StructArrayTypes {
           ? timestamp.toLocalDateTime().toInstant(ZoneOffset.UTC)
           : timestamp.toInstant();
       long units = AvroCoercions.timestampUnits(to);
-      return Math.addExact(Math.multiplyExact(instant.getEpochSecond(), units),
-          instant.getNano() / (1_000_000_000L / units));
+      try {
+        return Math.addExact(Math.multiplyExact(instant.getEpochSecond(), units),
+            instant.getNano() / (1_000_000_000L / units));
+      } catch (ArithmeticException exception) {
+        String message = "Timestamp cannot be represented by the common type: " + decoded;
+        throw new IllegalArgumentException(message, new SQLDataException(message, "22008", exception));
+      }
     }
     if (to.getType() == Schema.Type.BYTES && decoded instanceof byte[] bytes) {
       return ByteBuffer.wrap(bytes);
