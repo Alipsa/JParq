@@ -30,6 +30,9 @@
     <jparq.it.sqlWorkbenchJar></jparq.it.sqlWorkbenchJar>
     <maven.compiler.release>${java.version}</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- Defaults keep late evaluation valid without extra JVM arguments or coverage. -->
+    <argLine></argLine>
+    <jacocoArgLine></jacocoArgLine>
 
     <avro.version>1.12.2</avro.version>
     <checkstyle.version>14.4.0</checkstyle.version>
@@ -283,6 +286,11 @@
         <version>3.11.0</version>
         <executions>
           <execution>
+            <id>test-agent-properties</id>
+            <phase>initialize</phase>
+            <goals><goal>properties</goal></goals>
+          </execution>
+          <execution>
             <id>packaged-probe-dependencies</id>
             <phase>generate-test-resources</phase>
             <goals><goal>build-classpath</goal></goals>
@@ -371,6 +379,7 @@
         <version>3.6.1</version>
         <configuration>
           <useModulePath>false</useModulePath>
+          <argLine>@{jacocoArgLine} ${argLine} "-javaagent:${org.mockito:mockito-core:jar}"</argLine>
         </configuration>
       </plugin>
       <plugin>
@@ -378,6 +387,7 @@
         <artifactId>maven-failsafe-plugin</artifactId>
         <version>3.6.1</version>
         <configuration>
+          <argLine>@{jacocoArgLine} ${argLine} "-javaagent:${org.mockito:mockito-core:jar}"</argLine>
           <redirectTestOutputToFile>false</redirectTestOutputToFile>
           <useFile>false</useFile>
           <skipTests>false</skipTests>
@@ -434,6 +444,7 @@
               <goal>prepare-agent</goal>
             </goals>
             <configuration>
+              <propertyName>jacocoArgLine</propertyName>
               <excludes>
                 <exclude>net/sf/jsqlparser/parser/*</exclude>
                 <exclude>net/sf/jsqlparser/parser/CCJSqlParserTokenManager*</exclude>
