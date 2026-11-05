@@ -16,7 +16,6 @@ import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
-import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.NumericType;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
@@ -171,21 +170,15 @@ public final class ArrayExpressionSchemas {
   private static Schema nonnumericSchema(String typeName) {
     String normalized = DateTimeFunctions.normalizeTypeName(typeName.replaceAll("\\([^)]*\\)", ""));
     return switch (normalized) {
-      case "date" -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
-      case "time", "timewithouttimezone" -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
-      case "timestamp", "timestampwithouttimezone", "datetime" -> TemporalValueType.UTC_TIMESTAMP.schema();
       case "timewithtimezone" -> TemporalValueType.OFFSET_TIME.schema();
       case "timestampwithtimezone" -> TemporalValueType.OFFSET_TIMESTAMP.schema();
-      case "boolean", "bool" -> Schema.create(Schema.Type.BOOLEAN);
-      case "char", "character" -> JdbcTypeMapper.declaredSchema(JDBCType.CHAR);
-      case "nchar", "nationalcharacter", "nationalchar" -> JdbcTypeMapper.declaredSchema(JDBCType.NCHAR);
-      case "nvarchar", "nationalcharactervarying" -> JdbcTypeMapper.declaredSchema(JDBCType.NVARCHAR);
-      case "varchar", "charactervarying", "string", "text" -> Schema.create(Schema.Type.STRING);
+      case "nationalcharacter", "nationalchar" -> JdbcTypeMapper.declaredSchema(JDBCType.NCHAR);
+      case "nationalcharactervarying" -> JdbcTypeMapper.declaredSchema(JDBCType.NVARCHAR);
       case "binary" -> JdbcTypeMapper.declaredSchema(JDBCType.BINARY);
       case "clob", "blob" -> throw SqlExceptions.unsupportedFeature(
           "ARRAY elements with declared type " + normalized.toUpperCase(java.util.Locale.ROOT) + " are not supported");
       case "varbinary", "binaryvarying" -> JdbcTypeMapper.declaredSchema(JDBCType.VARBINARY);
-      default -> null;
+      default -> ScalarExpressionSchemas.declaredSchema(typeName);
     };
   }
 
@@ -252,7 +245,7 @@ public final class ArrayExpressionSchemas {
     }
     int leftType = JdbcTypeMapper.mapSchemaToJdbcType(left);
     int rightType = JdbcTypeMapper.mapSchemaToJdbcType(right);
-    if (isCharacter(leftType) && isCharacter(rightType)) {
+    if (JdbcTypeMapper.isCharacterType(leftType) && JdbcTypeMapper.isCharacterType(rightType)) {
       boolean national = leftType == Types.NCHAR || leftType == Types.NVARCHAR || rightType == Types.NCHAR
           || rightType == Types.NVARCHAR;
       boolean varying = leftType == Types.VARCHAR || leftType == Types.NVARCHAR || rightType == Types.VARCHAR
@@ -285,14 +278,4 @@ public final class ArrayExpressionSchemas {
         JDBCType.valueOf(JdbcTypeMapper.mapSchemaToJdbcType(right)).getName());
   }
 
-  /**
-   * Identifies character declarations that can share an ARRAY element type.
-   *
-   * @param type
-   *          JDBC type
-   * @return whether it is fixed or varying character data
-   */
-  private static boolean isCharacter(int type) {
-    return type == Types.CHAR || type == Types.VARCHAR || type == Types.NCHAR || type == Types.NVARCHAR;
-  }
 }

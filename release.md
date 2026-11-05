@@ -2,9 +2,13 @@
 
 ### 1.4.0
 
-- Preserve declared string and temporal literal/CAST projection types, including empty and all-NULL results
-  (#288). Accept compatible character set-operation branches and retain untyped NULL columns through
-  nested CTEs and derived tables so enclosing set operations can adopt the other branch's type.
+- Preserve declared string and DATE/TIME/TIMESTAMP literal types and implemented character, DATE, and
+  TIME/TIMESTAMP WITHOUT TIME ZONE CAST types, including empty and all-NULL results (#288).
+  Accept compatible character set-operation branches and retain untyped NULL columns through nested CTEs
+  and derived tables so enclosing set operations can adopt the other branch's type. Untyped NULL projections
+  consistently expose OTHER metadata, including in plain SELECTs and grouped queries. Keep scalar CAST
+  metadata separate from ARRAY element validation so unresolved LOB, binary, and time-zone casts retain
+  OTHER/Object metadata without unchecked exceptions or unsupported value-class claims.
 
 - Implement both ResultSet.getArray overloads (#280) for stored and computed arrays, including nested
   arrays from LATERAL queries. Return detached JDBC arrays with element type metadata, slices, element

@@ -947,8 +947,9 @@ public class JParqPreparedStatement implements PreparedStatement {
             type = projectedType;
             // Preserve OTHER metadata for unknown nonnumeric projections while
             // retaining recognized datetime declarations.
-            if (unknown && type != Types.NULL && NumericType.of(type, 0, 0) == null && type != Types.DATE
-                && type != Types.TIME && type != Types.TIMESTAMP && type != Types.TIME_WITH_TIMEZONE
+            if (unknown && !(projection instanceof CastExpression) && type != Types.NULL
+                && NumericType.of(type, 0, 0) == null && type != Types.DATE && type != Types.TIME
+                && type != Types.TIMESTAMP && type != Types.TIME_WITH_TIMEZONE
                 && type != Types.TIMESTAMP_WITH_TIMEZONE) {
               type = Types.OTHER;
               schema = sourceColumnSchema(meta, col);
@@ -1039,8 +1040,8 @@ public class JParqPreparedStatement implements PreparedStatement {
       return schemaForColumnType(classifyValueType(literal), List.of(literal));
     }
     List<Object> returned = values.get();
-    // Unknown CAST declarations remain distinct from an untyped NULL.
-    if (!(projection instanceof CastExpression) && returned.stream().allMatch(Objects::isNull)) {
+    // Unknown declarations have no type to retain when no values are returned.
+    if (returned.stream().allMatch(Objects::isNull)) {
       return null;
     }
     return schemaForColumnType(determineColumnType(returned), returned);
@@ -1114,10 +1115,11 @@ public class JParqPreparedStatement implements PreparedStatement {
         || (type == Types.TIMESTAMP && previous == Types.TIMESTAMP_WITH_TIMEZONE)) {
       types.set(index, Types.TIMESTAMP_WITH_TIMEZONE);
       schemas.set(index, TemporalValueType.OFFSET_TIMESTAMP.schema());
-    } else if (isCharacterType(previous) && isCharacterType(type) && previous != type) {
-      boolean national = previous == Types.NCHAR || previous == Types.NVARCHAR || previous == Types.LONGNVARCHAR
-          || type == Types.NCHAR || type == Types.NVARCHAR || type == Types.LONGNVARCHAR;
-      boolean varying = previous != Types.CHAR && previous != Types.NCHAR || type != Types.CHAR && type != Types.NCHAR;
+    } else if (JdbcTypeMapper.isCharacterType(previous) && JdbcTypeMapper.isCharacterType(type) && previous != type) {
+      boolean national = previous == Types.NCHAR || previous == Types.NVARCHAR || type == Types.NCHAR
+          || type == Types.NVARCHAR;
+      boolean varying = (previous != Types.CHAR && previous != Types.NCHAR)
+          || (type != Types.CHAR && type != Types.NCHAR);
       JDBCType common = national
           ? varying ? JDBCType.NVARCHAR : JDBCType.NCHAR
           : varying ? JDBCType.VARCHAR : JDBCType.CHAR;
@@ -1135,18 +1137,6 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       schemas.set(index, temporal != null && temporal.jdbcType() == type ? temporal.schema() : null);
     }
-  }
-
-  /**
-   * Identifies compatible SQL character declarations for set operations.
-   *
-   * @param type
-   *          JDBC type
-   * @return whether the type belongs to the character family
-   */
-  private static boolean isCharacterType(int type) {
-    return type == Types.CHAR || type == Types.VARCHAR || type == Types.LONGVARCHAR || type == Types.NCHAR
-        || type == Types.NVARCHAR || type == Types.LONGNVARCHAR;
   }
 
   /**
@@ -4088,7 +4078,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     Schema source = sourceColumnSchema(meta, column);
     return (type == Types.OTHER && !IntervalType.matches(source)
         && (source == null || source.getType() != Schema.Type.NULL))
-        || ((type == Types.ARRAY || type == Types.STRUCT) && sourceColumnSchema(meta, column) == null)
+        || ((type == Types.ARRAY || type == Types.STRUCT) && source == null)
         || ((type == Types.DECIMAL || type == Types.NUMERIC) && meta.getPrecision(column) == 0);
   }
 
@@ -4108,7 +4098,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     Schema source = sourceColumnSchema(meta, column);
     if (source != null && (type == Types.ARRAY || type == Types.STRUCT || IntervalType.matches(source)
         || TemporalValueType.fromSchema(source) != null || source.getType() == Schema.Type.NULL
-        || isCharacterType(type))) {
+        || JdbcTypeMapper.isCharacterType(type))) {
       return source;
     }
     return switch (type) {

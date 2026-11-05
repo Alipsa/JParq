@@ -15,11 +15,7 @@ import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
 import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.Expression;
-import net.sf.jsqlparser.expression.NullValue;
-import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
-import net.sf.jsqlparser.expression.TimeValue;
-import net.sf.jsqlparser.expression.TimestampValue;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
@@ -35,6 +31,7 @@ import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.IntervalExpressionTypes;
 import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.engine.NumericExpressionTypes;
+import se.alipsa.jparq.engine.ScalarExpressionSchemas;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlExpressionNormalizer;
 import se.alipsa.jparq.engine.SqlParser;
@@ -271,18 +268,33 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     }
     Schema declaration = declaredProjectionSchema(column);
     if (declaration != null) {
-      return JdbcTypeMapper.mapSchemaToJdbcType(declaration);
+      return publicColumnType(declaration);
     }
     int computedType = resolveComputedColumnType(column);
     // A computed Boolean alias may have the same name as a source field.
     if (computedType == Types.BOOLEAN) {
       return computedType;
     }
+    if (unwrap(expressionAtColumn(column)) instanceof CastExpression) {
+      return Types.OTHER;
+    }
     Schema.Field field = resolveField(column);
     if (field == null) {
       return computedType;
     }
-    return JdbcTypeMapper.mapSchemaToJdbcType(field.schema());
+    return publicColumnType(field.schema());
+  }
+
+  /**
+   * Keeps untyped NULL schemas internal while exposing JDBC OTHER consistently.
+   *
+   * @param valueSchema
+   *          declared or source value schema
+   * @return public JDBC column type
+   */
+  private static int publicColumnType(Schema valueSchema) {
+    int type = JdbcTypeMapper.mapSchemaToJdbcType(valueSchema);
+    return type == Types.NULL ? Types.OTHER : type;
   }
 
   /**
@@ -372,6 +384,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     if (declaration != null) {
       return declaration;
     }
+    if (unwrap(expressionAtColumn(column)) instanceof CastExpression) {
+      return null;
+    }
     Schema.Field field = resolveField(column);
     if (field != null) {
       return JdbcTypeMapper.nonNullSchema(field.schema());
@@ -393,17 +408,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * @return declared schema, or null for other expressions
    */
   private Schema declaredProjectionSchema(int column) {
-    Expression expression = unwrap(expressionAtColumn(column));
-    return switch (expression) {
-      case NullValue value -> Schema.create(Schema.Type.NULL);
-      case DateValue value -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
-      case TimeValue value -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
-      case TimestampValue value -> TemporalValueType.UTC_TIMESTAMP.schema();
-      case StringValue value -> Schema.create(Schema.Type.STRING);
-      case CastExpression cast -> ArrayExpressionSchemas.resolve(cast);
-      case DateTimeLiteralExpression literal -> ArrayExpressionSchemas.resolve(literal);
-      case null, default -> null;
-    };
+    return ScalarExpressionSchemas.resolve(expressionAtColumn(column));
   }
 
   @Override
@@ -484,6 +489,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     }
     if (getColumnType(column) == Types.BOOLEAN) {
       return JdbcTypeMapper.mapJdbcTypeToClassName(getColumnType(column));
+    }
+    if (unwrap(expressionAtColumn(column)) instanceof CastExpression) {
+      return Object.class.getName();
     }
     Schema.Field field = resolveField(column);
     if (field != null) {

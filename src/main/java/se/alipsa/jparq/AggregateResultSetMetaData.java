@@ -214,7 +214,7 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
       return Types.OTHER;
     }
     Integer type = sqlTypes.get(idx);
-    return type == null ? Types.OTHER : type;
+    return type == null || type == Types.NULL ? Types.OTHER : type;
   }
 
   @Override

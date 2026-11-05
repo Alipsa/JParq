@@ -16,6 +16,21 @@ import se.alipsa.jparq.helper.JdbcTypeMapper;
 /** Unit tests for {@link JdbcTypeMapper}. */
 class JdbcTypeMapperTest {
 
+  /** Checks the shared predicate against supported and unrelated JDBC types. */
+  @Test
+  void identifiesDeclaredCharacterTypes() {
+    for (int type : new int[]{
+        Types.CHAR, Types.VARCHAR, Types.NCHAR, Types.NVARCHAR
+    }) {
+      assertTrue(JdbcTypeMapper.isCharacterType(type));
+    }
+    for (int type : new int[]{
+        Types.LONGVARCHAR, Types.LONGNVARCHAR, Types.CLOB, Types.BINARY, Types.OTHER
+    }) {
+      assertFalse(JdbcTypeMapper.isCharacterType(type));
+    }
+  }
+
   /** Verifies the type and nullability of a materialized untyped NULL column. */
   @Test
   void preservesNullOnlySchema() {

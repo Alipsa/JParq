@@ -21,6 +21,17 @@ public final class JdbcTypeMapper {
   }
 
   /**
+   * Identifies the fixed and varying character types retained by value schemas.
+   *
+   * @param type
+   *          JDBC type
+   * @return whether the type is CHAR, VARCHAR, NCHAR, or NVARCHAR
+   */
+  public static boolean isCharacterType(int type) {
+    return type == Types.CHAR || type == Types.VARCHAR || type == Types.NCHAR || type == Types.NVARCHAR;
+  }
+
+  /**
    * Retains a declared character or binary JDBC type on its Avro storage schema.
    *
    * @param type
