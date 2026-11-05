@@ -238,6 +238,13 @@ public class JParqResultSet extends ResultSetAdapter {
     final List<String> requestedColumns = canonicalLookup != null ? canonicalLookup : select.columns();
     List<String> physical = physicalColumnOrder == null ? null : List.copyOf(physicalColumnOrder);
 
+    try {
+      new JParqResultSetMetaData(reader.schema(), labels, physical, canonicalLookup, tableName, tableSchema,
+          tableCatalog, selectExpressions, metadataSourceMappings).validateArrayDeclarations();
+    } catch (RuntimeException failure) {
+      throw SqlExceptions.wrap("Invalid ARRAY projection declaration", failure);
+    }
+
     AggregateFunctions.AggregatePlan aggregatePlan = AggregateFunctions.plan(select, reader.schema());
     if (aggregatePlan != null) {
       labels = new ArrayList<>(aggregatePlan.labels());
@@ -1681,9 +1688,14 @@ public class JParqResultSet extends ResultSetAdapter {
     }
     Optional<Schema> cached = arrayElementSchemas.get(columnIndex);
     if (cached == null) {
-      Schema declaration = getMetaData() instanceof AvroColumnMetadata metadata
-          ? JdbcTypeMapper.nonNullSchema(metadata.columnValueSchema(columnIndex))
-          : null;
+      Schema declaration;
+      try {
+        declaration = getMetaData() instanceof AvroColumnMetadata metadata
+            ? JdbcTypeMapper.nonNullSchema(metadata.columnValueSchema(columnIndex))
+            : null;
+      } catch (RuntimeException failure) {
+        throw SqlExceptions.wrap("Invalid ARRAY declaration for column " + columnIndex, failure);
+      }
       Schema elementSchema = declaration != null && declaration.getType() == Schema.Type.ARRAY
           ? declaration.getElementType()
           : null;

@@ -24,6 +24,8 @@ import org.apache.parquet.avro.AvroParquetWriter;
 import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import se.alipsa.jparq.JParqResultSet;
+import se.alipsa.jparq.JParqResultSetMetaData;
 
 /**
  * Verifies that every ARRAY value exposed through {@code getObject()} uses the
@@ -63,14 +65,15 @@ class ArrayResultRepresentationTest {
     try (var connection = connect(directory); var statement = connection.createStatement()) {
       var declarations = Map.ofEntries(Map.entry("INTEGER", Types.INTEGER), Map.entry("DATE", Types.DATE),
           Map.entry("VARCHAR", Types.VARCHAR), Map.entry("VARCHAR(12)", Types.VARCHAR),
-          Map.entry("CHARACTER VARYING(12)", Types.VARCHAR), Map.entry("CHAR(4)", Types.VARCHAR),
-          Map.entry("BOOLEAN", Types.BOOLEAN), Map.entry("BOOL", Types.BOOLEAN),
-          Map.entry("TIMESTAMP", Types.TIMESTAMP), Map.entry("TIMESTAMP(9)", Types.TIMESTAMP),
-          Map.entry("TIME", Types.TIME), Map.entry("TIME WITHOUT TIME ZONE", Types.TIME),
-          Map.entry("TIMESTAMP WITHOUT TIME ZONE", Types.TIMESTAMP),
+          Map.entry("CHARACTER VARYING(12)", Types.VARCHAR), Map.entry("CHAR(4)", Types.CHAR),
+          Map.entry("CHARACTER(4)", Types.CHAR), Map.entry("NCHAR(4)", Types.NCHAR),
+          Map.entry("NVARCHAR(4)", Types.NVARCHAR), Map.entry("BOOLEAN", Types.BOOLEAN),
+          Map.entry("BOOL", Types.BOOLEAN), Map.entry("TIMESTAMP", Types.TIMESTAMP),
+          Map.entry("TIMESTAMP(9)", Types.TIMESTAMP), Map.entry("TIME", Types.TIME),
+          Map.entry("TIME WITHOUT TIME ZONE", Types.TIME), Map.entry("TIMESTAMP WITHOUT TIME ZONE", Types.TIMESTAMP),
           Map.entry("TIME WITH TIME ZONE", Types.TIME_WITH_TIMEZONE),
           Map.entry("TIMESTAMP(6) WITH TIME ZONE", Types.TIMESTAMP_WITH_TIMEZONE), Map.entry("BINARY(4)", Types.BINARY),
-          Map.entry("VARBINARY(4)", Types.BINARY));
+          Map.entry("VARBINARY(4)", Types.VARBINARY));
       for (var declaration : declarations.entrySet()) {
         String array = "ARRAY[CAST(NULL AS " + declaration.getKey() + ")]";
         for (String query : List.of("SELECT " + array + " AS a", "SELECT a FROM (SELECT " + array + " AS a) t",
@@ -98,11 +101,70 @@ class ArrayResultRepresentationTest {
     }
   }
 
+  /**
+   * Incompatible typed elements fail at the JDBC planning boundary, including
+   * empty inputs.
+   */
+  @Test
+  void incompatibleTypedArrayElementsFailDuringPlanning(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      for (String expression : List.of("ARRAY[CAST(NULL AS VARCHAR), 1]", "ARRAY[CAST(NULL AS BOOLEAN), 1]",
+          "ARRAY[CAST(NULL AS DATE), CURRENT_TIMESTAMP]", "ARRAY[CAST(NULL AS VARCHAR), id]")) {
+        for (String query : List.of("SELECT " + expression + " AS v FROM s",
+            "SELECT " + expression + " AS v FROM s WHERE 1 = 0",
+            "SELECT v FROM (SELECT " + expression + " AS v FROM s) t",
+            "WITH t AS (SELECT " + expression + " AS v FROM s) SELECT v FROM t",
+            "SELECT CASE WHEN TRUE THEN " + expression + " ELSE NULL END FROM s",
+            "SELECT CASE WHEN TRUE THEN 7 ELSE " + expression + " END FROM s")) {
+          var error = assertThrows(java.sql.SQLSyntaxErrorException.class, () -> statement.executeQuery(query), query);
+          assertEquals("42000", error.getSQLState(), query);
+          assertTrue(error.getMessage().contains("ARRAY elements must share a common type"), query);
+        }
+      }
+      for (String query : List.of("SELECT ARRAY[CAST(NULL AS VARCHAR), a.id] FROM s a",
+          "SELECT ARRAY[CAST(NULL AS VARCHAR), a.id] FROM s a CROSS JOIN s b",
+          "SELECT ARRAY[CAST(NULL AS VARCHAR), a.id] FROM s a CROSS JOIN s b WHERE 1 = 0")) {
+        var error = assertThrows(java.sql.SQLSyntaxErrorException.class, () -> statement.executeQuery(query), query);
+        assertEquals("42000", error.getSQLState(), query);
+        assertTrue(error.getMessage().contains("ARRAY elements must share a common type"), query);
+      }
+      for (String expression : List.of("ARRAY[CAST(NULL AS VARCHAR), 1]", "ARRAY[CAST(NULL AS BOOLEAN), 1]")) {
+        var error = assertThrows(java.sql.SQLSyntaxErrorException.class,
+            () -> connection.prepareStatement("SELECT " + expression + " AS v"));
+        assertEquals("42000", error.getSQLState());
+      }
+    }
+  }
+
+  /**
+   * Defensive array getters translate declaration failures to classified JDBC
+   * exceptions.
+   */
+  @Test
+  void arrayGetterClassifiesDeclarationFailures() throws Exception {
+    var expression = net.sf.jsqlparser.parser.CCJSqlParserUtil.parseExpression("ARRAY[CAST(NULL AS VARCHAR), 1]");
+    var metadata = new JParqResultSetMetaData(null, List.of("v"), null, null, null, null, null, List.of(expression));
+    try (var original = JParqResultSet.materializedResult("array", List.of("v"), List.of(Types.ARRAY),
+        List.of(List.of((Object) new Object[]{
+            1
+        }))); var result = org.mockito.Mockito.spy(original)) {
+      org.mockito.Mockito.doReturn(metadata).when(result).getMetaData();
+      assertTrue(result.next());
+      var error = assertThrows(java.sql.SQLSyntaxErrorException.class, () -> result.getArray(1));
+      assertEquals("42000", error.getSQLState());
+      assertEquals("42000",
+          assertThrows(java.sql.SQLSyntaxErrorException.class, () -> result.getArray("v")).getSQLState());
+    }
+  }
+
   /** Known cast declarations preserve sibling values and temporal promotion. */
   @Test
   void castArrayElementsRetainCommonTypes(@TempDir Path directory) throws Exception {
     var expressions = Map.of("ARRAY[CAST(NULL AS DATE), DATE '2026-01-02']", Types.DATE,
-        "ARRAY[CAST(NULL AS VARCHAR(12)), 'value']", Types.VARCHAR, "ARRAY[CAST(NULL AS BOOLEAN), TRUE]", Types.BOOLEAN,
+        "ARRAY[CAST(NULL AS VARCHAR(12)), 'value']", Types.VARCHAR, "ARRAY[CAST(NULL AS CHAR(4)), 'value']",
+        Types.VARCHAR, "ARRAY[CAST(NULL AS BINARY(4)), CAST(NULL AS VARBINARY(4))]", Types.VARBINARY,
+        "ARRAY[CAST(NULL AS BOOLEAN), TRUE]", Types.BOOLEAN,
         "ARRAY[CAST(NULL AS TIMESTAMP(9)), TIMESTAMP '2026-01-02 03:04:05.123456789']", Types.TIMESTAMP,
         "ARRAY[CAST(NULL AS TIME), CURRENT_TIME]", Types.TIME_WITH_TIMEZONE,
         "ARRAY[CAST(NULL AS TIMESTAMP), CURRENT_TIMESTAMP]", Types.TIMESTAMP_WITH_TIMEZONE);
@@ -117,7 +179,11 @@ class ArrayResultRepresentationTest {
             assertEquals(expression.getValue(), array.getBaseType(), query);
             Object[] elements = (Object[]) array.getArray();
             assertNull(elements[0], query);
-            assertTrue(elements[1] != null, query);
+            if (expression.getValue() == Types.VARBINARY) {
+              assertNull(elements[1], query);
+            } else {
+              assertTrue(elements[1] != null, query);
+            }
             if (expression.getValue() == Types.TIMESTAMP) {
               assertEquals(java.sql.Timestamp.valueOf("2026-01-02 03:04:05.123456789"), elements[1], query);
             }

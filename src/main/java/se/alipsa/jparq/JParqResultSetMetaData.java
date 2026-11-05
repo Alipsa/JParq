@@ -140,6 +140,21 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     return this;
   }
 
+  /**
+   * Validates known ARRAY element declarations before projected rows are read.
+   *
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 for incompatible declarations
+   */
+  void validateArrayDeclarations() {
+    for (Expression expression : expressions) {
+      ArrayExpressionSchemas.validate(expression, reference -> {
+        Schema.Field field = resolveSourceField(reference);
+        return field == null ? null : field.schema();
+      });
+    }
+  }
+
   @Override
   public int getColumnCount() {
     return labels.size();

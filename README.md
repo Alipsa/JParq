@@ -844,7 +844,8 @@ The following SQL statements are supported:
   `Array` objects; SQL NULL returns null and sets `wasNull()`. JDBC arrays expose element type metadata,
   `Object[]` contents, one-based slices, and INDEX/VALUE element result sets. `free()` releases the
   array; subsequent reads raise `SQLException`. Computed arrays retain declared element types
-  even when every element is NULL.
+  even when every element is NULL, including fixed-length character and varying binary declarations.
+  Incompatible declared element types are rejected during planning with SQLState `42000`, including NULL elements.
   Custom user-defined element mappings raise `SQLFeatureNotSupportedException` when requested.
   Struct fields retain their raw Avro representations:
   strings can be `Utf8`, dates epoch-day integers, decimals `ByteBuffer`, and timestamps stored longs.

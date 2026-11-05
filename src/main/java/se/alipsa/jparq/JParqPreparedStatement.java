@@ -484,6 +484,8 @@ public class JParqPreparedStatement implements PreparedStatement {
             }
 
           }
+          new JParqResultSetMetaData(tmpFileAvro, tmpSelect.labels(), tmpSelect.columnNames(), null, null,
+              tmpSchemaName, null, tmpSelect.expressions()).validateArrayDeclarations();
           if (tmpBaseCteResult != null) {
             validateSelectColumns(tmpSelect, tmpFileAvro, aggregatePlan, tmpCteResults, tmpConf);
           }

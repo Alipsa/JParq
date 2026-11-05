@@ -113,7 +113,7 @@ class MixedArrayElementsTest {
         var statement = connection.createStatement();
         var result = statement.executeQuery("""
             SELECT ARRAY[NULL,4,6.5,NULL] AS a, ARRAY[[4],[6]] AS b,
-                   CASE WHEN TRUE THEN 7 ELSE ARRAY[4,[6]] END AS c, ARRAY[[1],[2.5]] AS d,
+                   CASE WHEN TRUE THEN 7 ELSE CAST('invalid' AS INTEGER) END AS c, ARRAY[[1],[2.5]] AS d,
                    ARRAY[[[1]],[[2.5]]] AS e
             """)) {
       assertTrue(result.next());

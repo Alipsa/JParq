@@ -9,6 +9,7 @@ import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.StringValue;
@@ -27,6 +28,45 @@ import se.alipsa.jparq.helper.TemporalValueType;
 public final class ArrayExpressionSchemas {
   /** Prevents utility class construction. */
   private ArrayExpressionSchemas() {
+  }
+
+  /**
+   * Validates ARRAY declarations in a projection without evaluating its values.
+   * Nested query scopes validate their own projections during planning.
+   *
+   * @param expression
+   *          projected expression
+   * @param columns
+   *          source column schema resolver
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 for incompatible element declarations
+   */
+  public static void validate(Expression expression, java.util.function.Function<Column, Schema> columns) {
+    expression.accept(new ExpressionVisitorAdapter<Void>() {
+      @Override
+      public <S> Void visit(ArrayConstructor array, S context) {
+        resolve(array, columns);
+        return super.visit(array, context);
+      }
+
+      @Override
+      public <S> Void visit(Function function, S context) {
+        if ("ARRAY".equalsIgnoreCase(function.getName())) {
+          resolve(function, columns);
+        }
+        return super.visit(function, context);
+      }
+
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.statement.select.Select select, S context) {
+        return null;
+      }
+
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.statement.select.ParenthesedSelect select, S context) {
+        return null;
+      }
+    }, null);
   }
 
   /**
@@ -144,10 +184,12 @@ public final class ArrayExpressionSchemas {
       case "timewithtimezone" -> TemporalValueType.OFFSET_TIME.schema();
       case "timestampwithtimezone" -> TemporalValueType.OFFSET_TIMESTAMP.schema();
       case "boolean", "bool" -> Schema.create(Schema.Type.BOOLEAN);
-      case "char", "character", "nchar", "varchar", "charactervarying", "nvarchar", "string", "text", "clob",
-          "nationalcharacter", "nationalcharactervarying", "nationalchar" ->
-        Schema.create(Schema.Type.STRING);
-      case "binary", "varbinary", "binaryvarying", "blob" -> Schema.create(Schema.Type.BYTES);
+      case "char", "character" -> JdbcTypeMapper.declaredSchema(JDBCType.CHAR);
+      case "nchar", "nationalcharacter", "nationalchar" -> JdbcTypeMapper.declaredSchema(JDBCType.NCHAR);
+      case "nvarchar", "nationalcharactervarying" -> JdbcTypeMapper.declaredSchema(JDBCType.NVARCHAR);
+      case "varchar", "charactervarying", "string", "text", "clob" -> Schema.create(Schema.Type.STRING);
+      case "binary", "blob" -> JdbcTypeMapper.declaredSchema(JDBCType.BINARY);
+      case "varbinary", "binaryvarying" -> JdbcTypeMapper.declaredSchema(JDBCType.VARBINARY);
       default -> null;
     };
   }
@@ -185,6 +227,17 @@ public final class ArrayExpressionSchemas {
   }
 
   /**
+   * Identifies character declarations that can share an ARRAY element type.
+   *
+   * @param type
+   *          JDBC type
+   * @return whether it is fixed or varying character data
+   */
+  private static boolean isCharacter(int type) {
+    return type == Types.CHAR || type == Types.VARCHAR || type == Types.NCHAR || type == Types.NVARCHAR;
+  }
+
+  /**
    * Promotes numeric elements and recursively combines ARRAY and STRUCT
    * declarations.
    *
@@ -207,8 +260,24 @@ public final class ArrayExpressionSchemas {
     if (left.getType() == Schema.Type.ARRAY && right.getType() == Schema.Type.ARRAY) {
       return Schema.createArray(common(left.getElementType(), right.getElementType()));
     }
+    if (left.getType() == Schema.Type.MAP && right.getType() == Schema.Type.MAP) {
+      return Schema.createMap(common(left.getValueType(), right.getValueType()));
+    }
     int leftType = JdbcTypeMapper.mapSchemaToJdbcType(left);
     int rightType = JdbcTypeMapper.mapSchemaToJdbcType(right);
+    if (isCharacter(leftType) && isCharacter(rightType)) {
+      boolean national = leftType == Types.NCHAR || leftType == Types.NVARCHAR || rightType == Types.NCHAR
+          || rightType == Types.NVARCHAR;
+      boolean varying = leftType == Types.VARCHAR || leftType == Types.NVARCHAR || rightType == Types.VARCHAR
+          || rightType == Types.NVARCHAR;
+      return JdbcTypeMapper.declaredSchema(
+          national ? varying ? JDBCType.NVARCHAR : JDBCType.NCHAR : varying ? JDBCType.VARCHAR : JDBCType.CHAR);
+    }
+    if ((leftType == Types.BINARY || leftType == Types.VARBINARY)
+        && (rightType == Types.BINARY || rightType == Types.VARBINARY)) {
+      return JdbcTypeMapper.declaredSchema(
+          leftType == Types.VARBINARY || rightType == Types.VARBINARY ? JDBCType.VARBINARY : JDBCType.BINARY);
+    }
     if ((leftType == Types.TIME || leftType == Types.TIME_WITH_TIMEZONE)
         && (rightType == Types.TIME || rightType == Types.TIME_WITH_TIMEZONE) && leftType != rightType) {
       return TemporalValueType.OFFSET_TIME.schema();
