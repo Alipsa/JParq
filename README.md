@@ -640,7 +640,8 @@ packaged-driver tests, install it separately from the
 [official download](https://sql-workbench.eu/downloads.html), build JParq, then run:
 
 ```sh
-mvn -Dit.test=JParqPackagedDriverIT -Djparq.it.sqlWorkbenchJar=/path/to/sqlworkbench.jar failsafe:integration-test failsafe:verify
+mvn initialize -Djacoco.skip=true -Dit.test=JParqPackagedDriverIT \
+  -Djparq.it.sqlWorkbenchJar=/path/to/sqlworkbench.jar failsafe:integration-test failsafe:verify
 ```
 
 The optional test lists schemas/tables, describes columns, queries all fixture codecs, opens a second batch
@@ -1006,6 +1007,11 @@ mvn verify
 
 This project uses Checkstyle, PMD, and Spotless. The checks run automatically as part of the Maven build. Use the
 `spotless:apply` goal before committing if you need to fix formatting issues.
+
+Surefire and Failsafe load Mockito as a startup Java agent, alongside JaCoCo, so inline mocking does not
+require dynamic agent loading. To verify this explicitly, run `mvn -DargLine=-XX:-EnableDynamicAgentLoading verify`.
+When invoking Surefire or Failsafe goals directly, run `initialize` first to resolve the agent path.
+Phase-based commands such as `mvn test-compile surefire:test` already include this step.
 
 ### Release notes
 
