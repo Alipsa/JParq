@@ -225,17 +225,6 @@ public final class ArrayExpressionSchemas {
   }
 
   /**
-   * Identifies character declarations that can share an ARRAY element type.
-   *
-   * @param type
-   *          JDBC type
-   * @return whether it is fixed or varying character data
-   */
-  private static boolean isCharacter(int type) {
-    return type == Types.CHAR || type == Types.VARCHAR || type == Types.NCHAR || type == Types.NVARCHAR;
-  }
-
-  /**
    * Promotes numeric elements and recursively combines ARRAY and STRUCT
    * declarations.
    *
@@ -294,5 +283,16 @@ public final class ArrayExpressionSchemas {
     }
     throw SqlExceptions.incompatibleArrayElements(JDBCType.valueOf(JdbcTypeMapper.mapSchemaToJdbcType(left)).getName(),
         JDBCType.valueOf(JdbcTypeMapper.mapSchemaToJdbcType(right)).getName());
+  }
+
+  /**
+   * Identifies character declarations that can share an ARRAY element type.
+   *
+   * @param type
+   *          JDBC type
+   * @return whether it is fixed or varying character data
+   */
+  private static boolean isCharacter(int type) {
+    return type == Types.CHAR || type == Types.VARCHAR || type == Types.NCHAR || type == Types.NVARCHAR;
   }
 }

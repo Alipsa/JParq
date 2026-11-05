@@ -13,6 +13,7 @@ import java.sql.Blob;
 import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.Date;
+import java.sql.JDBCType;
 import java.sql.NClob;
 import java.sql.ParameterMetaData;
 import java.sql.PreparedStatement;
@@ -935,6 +936,9 @@ public class JParqPreparedStatement implements PreparedStatement {
           Expression projection = ExpressionEvaluator.unwrapParenthesis(expression);
           boolean simpleDeclaration = projection instanceof CastExpression || projection instanceof SignedExpression
               || LiteralConverter.isLiteral(projection);
+          if (schema != null && schema.getType() == Schema.Type.NULL) {
+            type = Types.NULL;
+          }
           Schema projected = type == Types.OTHER ? setExpressionSchema(projection, values, meta) : null;
           int projectedType = projected == null ? Types.NULL : JdbcTypeMapper.mapSchemaToJdbcType(projected);
           if (!IntervalType.matches(schema) && (type == Types.OTHER || projection instanceof NullValue)) {
@@ -978,7 +982,12 @@ public class JParqPreparedStatement implements PreparedStatement {
       componentRows.add(componentData);
       componentTypes.add(normalizedTypes);
     }
-    sqlTypes.replaceAll(type -> type == Types.NULL ? Types.OTHER : type);
+    for (int index = 0; index < sqlTypes.size(); index++) {
+      if (sqlTypes.get(index) == Types.NULL) {
+        sourceSchemas.set(index, Schema.create(Schema.Type.NULL));
+        sqlTypes.set(index, Types.OTHER);
+      }
+    }
     coerceSetRows(componentRows, componentTypes, sqlTypes, sourceSchemas);
     List<List<Object>> combined = evaluateSetOperation(components, componentRows, setKeyFunction(sqlTypes));
     List<List<Object>> ordered = applySetOrdering(combined, labels, sqlTypes, sourceSchemas, parsedSetQuery.orderBy());
@@ -1030,8 +1039,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return schemaForColumnType(classifyValueType(literal), List.of(literal));
     }
     List<Object> returned = values.get();
-    // Other nonnumeric CAST declarations remain tracked in #288.
-    // Keep them distinct from an untyped NULL.
+    // Unknown CAST declarations remain distinct from an untyped NULL.
     if (!(projection instanceof CastExpression) && returned.stream().allMatch(Objects::isNull)) {
       return null;
     }
@@ -1106,6 +1114,15 @@ public class JParqPreparedStatement implements PreparedStatement {
         || (type == Types.TIMESTAMP && previous == Types.TIMESTAMP_WITH_TIMEZONE)) {
       types.set(index, Types.TIMESTAMP_WITH_TIMEZONE);
       schemas.set(index, TemporalValueType.OFFSET_TIMESTAMP.schema());
+    } else if (isCharacterType(previous) && isCharacterType(type) && previous != type) {
+      boolean national = previous == Types.NCHAR || previous == Types.NVARCHAR || previous == Types.LONGNVARCHAR
+          || type == Types.NCHAR || type == Types.NVARCHAR || type == Types.LONGNVARCHAR;
+      boolean varying = previous != Types.CHAR && previous != Types.NCHAR || type != Types.CHAR && type != Types.NCHAR;
+      JDBCType common = national
+          ? varying ? JDBCType.NVARCHAR : JDBCType.NCHAR
+          : varying ? JDBCType.VARCHAR : JDBCType.CHAR;
+      types.set(index, common.getVendorTypeNumber());
+      schemas.set(index, JdbcTypeMapper.declaredSchema(common));
     } else if (previous != type) {
       throw new SQLException("Set operation components must use compatible column types", "42000");
     } else if (!Objects.equals(prior, schema)) {
@@ -1118,6 +1135,18 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       schemas.set(index, temporal != null && temporal.jdbcType() == type ? temporal.schema() : null);
     }
+  }
+
+  /**
+   * Identifies compatible SQL character declarations for set operations.
+   *
+   * @param type
+   *          JDBC type
+   * @return whether the type belongs to the character family
+   */
+  private static boolean isCharacterType(int type) {
+    return type == Types.CHAR || type == Types.VARCHAR || type == Types.LONGVARCHAR || type == Types.NCHAR
+        || type == Types.NVARCHAR || type == Types.LONGNVARCHAR;
   }
 
   /**
@@ -3742,7 +3771,9 @@ public class JParqPreparedStatement implements PreparedStatement {
           valueSchema = inferred;
         }
       }
-      Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
+      Schema union = valueSchema.getType() == Schema.Type.NULL
+          ? valueSchema
+          : Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
       Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
       field.addProp(MaterializedNames.LOOKUP_KEY, Identifier.lookupKey(sqlLabel));
       field.addProp(MaterializedNames.SQL_LABEL, sqlLabel);
@@ -4020,7 +4051,9 @@ public class JParqPreparedStatement implements PreparedStatement {
       } else {
         valueSchema = columnSchema(meta, i);
       }
-      Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
+      Schema union = valueSchema.getType() == Schema.Type.NULL
+          ? valueSchema
+          : Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
       String sqlLabel = columnName;
       columnName = MaterializedNames.allocate(sqlLabel, usedNames);
       Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
@@ -4052,7 +4085,9 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private boolean requiresValueInference(ResultSetMetaData meta, int column) throws SQLException {
     int type = meta.getColumnType(column);
-    return (type == Types.OTHER && !IntervalType.matches(sourceColumnSchema(meta, column)))
+    Schema source = sourceColumnSchema(meta, column);
+    return (type == Types.OTHER && !IntervalType.matches(source)
+        && (source == null || source.getType() != Schema.Type.NULL))
         || ((type == Types.ARRAY || type == Types.STRUCT) && sourceColumnSchema(meta, column) == null)
         || ((type == Types.DECIMAL || type == Types.NUMERIC) && meta.getPrecision(column) == 0);
   }
@@ -4072,10 +4107,12 @@ public class JParqPreparedStatement implements PreparedStatement {
     int type = meta.getColumnType(column);
     Schema source = sourceColumnSchema(meta, column);
     if (source != null && (type == Types.ARRAY || type == Types.STRUCT || IntervalType.matches(source)
-        || TemporalValueType.fromSchema(source) != null)) {
+        || TemporalValueType.fromSchema(source) != null || source.getType() == Schema.Type.NULL
+        || isCharacterType(type))) {
       return source;
     }
     return switch (type) {
+      case Types.NULL -> Schema.create(Schema.Type.NULL);
       case Types.BOOLEAN, Types.BIT -> Schema.create(Schema.Type.BOOLEAN);
       case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> Schema.create(Schema.Type.INT);
       case Types.BIGINT -> Schema.create(Schema.Type.LONG);

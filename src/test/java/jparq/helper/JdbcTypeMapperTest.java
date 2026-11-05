@@ -16,6 +16,16 @@ import se.alipsa.jparq.helper.JdbcTypeMapper;
 /** Unit tests for {@link JdbcTypeMapper}. */
 class JdbcTypeMapperTest {
 
+  /** Verifies the type and nullability of a materialized untyped NULL column. */
+  @Test
+  void preservesNullOnlySchema() {
+    Schema schema = Schema.create(Schema.Type.NULL);
+    assertEquals(Types.NULL, JdbcTypeMapper.mapSchemaToJdbcType(schema));
+    assertEquals(Object.class.getName(), JdbcTypeMapper.mapSchemaToJavaClassName(schema));
+    assertTrue(JdbcTypeMapper.isNullable(schema));
+    assertEquals(schema, JdbcTypeMapper.nonNullSchema(schema));
+  }
+
   @Test
   void resolvesNullableAndNonNullSchemas() {
     Schema stringSchema = Schema.create(Schema.Type.STRING);

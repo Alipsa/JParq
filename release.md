@@ -2,6 +2,10 @@
 
 ### 1.4.0
 
+- Preserve declared string and temporal literal/CAST projection types, including empty and all-NULL results
+  (#288). Accept compatible character set-operation branches and retain untyped NULL columns through
+  nested CTEs and derived tables so enclosing set operations can adopt the other branch's type.
+
 - Implement both ResultSet.getArray overloads (#280) for stored and computed arrays, including nested
   arrays from LATERAL queries. Return detached JDBC arrays with element type metadata, slices, element
   result sets, and free semantics. Preserve SQL NULL and wasNull; reject non-array values with SQLState 22005.
@@ -13,7 +17,7 @@
   **Behavior changes:** VALUES mixing DATE with TIMESTAMP or TIME now fails with SQLState `42000`;
   these inputs previously widened to TIMESTAMP or fell back to VARCHAR. Set operations containing
   CAST(NULL AS DATE/TIME/TIMESTAMP), including precision with WITH/WITHOUT TIME ZONE clauses, now retain the
-  declared temporal JDBC metadata instead of OTHER (partially addresses #288).
+  declared temporal JDBC metadata instead of OTHER.
 
 - Keep datetime value functions stable within a statement (#275), including across rows, nested queries,
   and lazy result reads. Capture fresh datetime values for every prepared-statement execution.

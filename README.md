@@ -887,8 +887,11 @@ The following SQL statements are supported:
   retain REAL and Float values, other approximate combinations use DOUBLE, and DECIMAL with exact numeric inputs retains the largest
   integer-digit count and scale. Values are converted before set comparison, and metadata preserves
   the common type and decimal bounds, including empty results. At the top level, untyped NULL adopts
-  the other branch's type, and wholly untyped NULL results retain OTHER metadata. NULL typing across
-  CTE and derived-table boundaries is tracked in [#288](https://github.com/Alipsa/JParq/issues/288).
+  the other branch's type, and wholly untyped NULL set results retain OTHER metadata. Untyped NULL columns
+  remain untyped through CTEs and derived tables, including empty results, so an enclosing set operation
+  can adopt a numeric or nonnumeric branch's type. String and temporal literals and CAST projections
+  report their declared JDBC types even for empty or all-NULL results. Compatible CHAR and VARCHAR
+  set branches produce VARCHAR output.
   Numeric and nonnumeric branches remain incompatible. Integer literals currently use BIGINT;
   general expression typing is tracked in [#232](https://github.com/Alipsa/JParq/issues/232).
   - `EXCEPT`

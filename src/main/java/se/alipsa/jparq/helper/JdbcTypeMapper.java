@@ -90,8 +90,8 @@ public final class JdbcTypeMapper {
    *         {@code false}
    */
   public static boolean isNullable(Schema schema) {
-    return schema != null && schema.getType() == Schema.Type.UNION
-        && schema.getTypes().stream().anyMatch(s -> s.getType() == Schema.Type.NULL);
+    return schema != null && (schema.getType() == Schema.Type.NULL || schema.getType() == Schema.Type.UNION
+        && schema.getTypes().stream().anyMatch(s -> s.getType() == Schema.Type.NULL));
   }
 
   /**
@@ -139,6 +139,7 @@ public final class JdbcTypeMapper {
         }
         yield isUtf8String(base) ? Types.VARCHAR : declaredJdbcType(base, Types.BINARY);
       }
+      case NULL -> Types.NULL;
       case RECORD -> Types.STRUCT;
       case ARRAY -> Types.ARRAY;
       case MAP -> Types.STRUCT;

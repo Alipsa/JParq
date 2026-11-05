@@ -63,7 +63,9 @@ class SetUnknownNumericKeyTest {
   })
   void otherColumnsRetainNumericKeyEquality(boolean pushdown) throws Exception {
     String left = "SELECT 200000 AS stable, CASE WHEN id = 0 THEN 'a' WHEN id = 1 THEN 5 ELSE l END AS x FROM o";
-    String text = "SELECT 200000, 'b' FROM o WHERE id = 0";
+    // Use an unresolved CASE declaration so this test continues to exercise
+    // OTHER columns now that string literals report VARCHAR.
+    String text = "SELECT 200000, CASE WHEN id = 0 THEN 'b' ELSE l END FROM o WHERE id = 0";
     String numbers = "SELECT 200000, CASE WHEN id = 0 THEN 'b' ELSE l END FROM o WHERE id IN (0, 2)";
     String mixed = "SELECT 200000, CASE WHEN id = 0 THEN 'a' ELSE l END FROM o";
     try (
@@ -94,7 +96,7 @@ class SetUnknownNumericKeyTest {
         }
       }
       for (String sql : List.of(left + " UNION " + text + " UNION " + numbers,
-          left + " EXCEPT SELECT 200000, 'b' FROM o WHERE id = 99")) {
+          left + " EXCEPT SELECT 200000, CASE WHEN id = 0 THEN 'b' ELSE l END FROM o WHERE id = 99")) {
         try (var result = statement.executeQuery(sql)) {
           List<String> actual = new ArrayList<>();
           while (result.next()) {

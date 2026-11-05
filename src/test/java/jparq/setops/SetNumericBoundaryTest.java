@@ -125,7 +125,8 @@ class SetNumericBoundaryTest {
   }
 
   /**
-   * Retains Boolean and temporal CAST declarations, including empty branches.
+   * Retains Boolean, character, and temporal CAST declarations, including empty
+   * branches.
    *
    * @param empty
    *          whether the branches are empty
@@ -143,9 +144,10 @@ class SetNumericBoundaryTest {
         String body = "SELECT CAST(NULL AS " + type + ") AS x" + filter;
         try (var statement = connection.createStatement();
             var result = statement.executeQuery(body + " UNION ALL " + body)) {
-          // Character CAST declarations remain tracked in #288.
           int expected = switch (type) {
             case "BOOLEAN" -> Types.BOOLEAN;
+            case "VARCHAR" -> Types.VARCHAR;
+            case "CHAR" -> Types.CHAR;
             case "DATE" -> Types.DATE;
             case "TIME" -> Types.TIME;
             case "TIMESTAMP" -> Types.TIMESTAMP;

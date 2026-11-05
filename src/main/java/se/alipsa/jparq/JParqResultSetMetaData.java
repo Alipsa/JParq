@@ -15,7 +15,11 @@ import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
 import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.NullValue;
+import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
+import net.sf.jsqlparser.expression.TimeValue;
+import net.sf.jsqlparser.expression.TimestampValue;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
@@ -265,6 +269,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     if (numeric != null) {
       return numeric.jdbcType();
     }
+    Schema declaration = declaredProjectionSchema(column);
+    if (declaration != null) {
+      return JdbcTypeMapper.mapSchemaToJdbcType(declaration);
+    }
     int computedType = resolveComputedColumnType(column);
     // A computed Boolean alias may have the same name as a source field.
     if (computedType == Types.BOOLEAN) {
@@ -360,6 +368,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     if (numeric != null) {
       return numeric.schema();
     }
+    Schema declaration = declaredProjectionSchema(column);
+    if (declaration != null) {
+      return declaration;
+    }
     Schema.Field field = resolveField(column);
     if (field != null) {
       return JdbcTypeMapper.nonNullSchema(field.schema());
@@ -371,6 +383,27 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
       Schema.Field source = resolveSourceField(reference);
       return source == null ? null : source.schema();
     });
+  }
+
+  /**
+   * Resolves literal and CAST declarations independently of returned rows.
+   *
+   * @param column
+   *          one-based output column
+   * @return declared schema, or null for other expressions
+   */
+  private Schema declaredProjectionSchema(int column) {
+    Expression expression = unwrap(expressionAtColumn(column));
+    return switch (expression) {
+      case NullValue value -> Schema.create(Schema.Type.NULL);
+      case DateValue value -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
+      case TimeValue value -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
+      case TimestampValue value -> TemporalValueType.UTC_TIMESTAMP.schema();
+      case StringValue value -> Schema.create(Schema.Type.STRING);
+      case CastExpression cast -> ArrayExpressionSchemas.resolve(cast);
+      case DateTimeLiteralExpression literal -> ArrayExpressionSchemas.resolve(literal);
+      case null, default -> null;
+    };
   }
 
   @Override
@@ -442,7 +475,14 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     if (isIntervalColumn(column)) {
       return TemporalInterval.class.getName();
     }
-    if (numericType(column) != null || getColumnType(column) == Types.BOOLEAN) {
+    if (numericType(column) != null) {
+      return JdbcTypeMapper.mapJdbcTypeToClassName(getColumnType(column));
+    }
+    Schema declaration = declaredProjectionSchema(column);
+    if (declaration != null) {
+      return JdbcTypeMapper.mapSchemaToJavaClassName(declaration);
+    }
+    if (getColumnType(column) == Types.BOOLEAN) {
       return JdbcTypeMapper.mapJdbcTypeToClassName(getColumnType(column));
     }
     Schema.Field field = resolveField(column);
