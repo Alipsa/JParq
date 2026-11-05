@@ -33,9 +33,7 @@
     <!-- Defaults keep late evaluation valid without extra JVM arguments or coverage. -->
     <argLine></argLine>
     <jacocoArgLine></jacocoArgLine>
-    <!-- Direct test goals must resolve the agent without executing initialize. -->
-    <mockitoAgentPath>${settings.localRepository}/org/mockito/mockito-core/${mockito.version}/mockito-core-${mockito.version}.jar</mockitoAgentPath>
-    <testJvmArgLine>@{jacocoArgLine} ${argLine} "-javaagent:${mockitoAgentPath}"</testJvmArgLine>
+    <testJvmArgLine>@{jacocoArgLine} ${argLine} "-javaagent:${org.mockito:mockito-core:jar}"</testJvmArgLine>
 
     <avro.version>1.12.2</avro.version>
     <checkstyle.version>14.4.0</checkstyle.version>
@@ -289,6 +287,11 @@
         <artifactId>maven-dependency-plugin</artifactId>
         <version>3.11.0</version>
         <executions>
+          <execution>
+            <id>test-agent-properties</id>
+            <phase>initialize</phase>
+            <goals><goal>properties</goal></goals>
+          </execution>
           <execution>
             <id>packaged-probe-dependencies</id>
             <phase>generate-test-resources</phase>

@@ -30,7 +30,11 @@ class MockitoAgentTest {
     assumeTrue(System.getProperty("surefire.test.class.path") != null,
         "Startup-agent check only applies to Maven-forked test JVMs");
     var mockitoJar = Path.of(Mockito.class.getProtectionDomain().getCodeSource().getLocation().toURI());
-    assertTrue(ManagementFactory.getRuntimeMXBean().getInputArguments().contains("-javaagent:" + mockitoJar),
+    var agentPaths = ManagementFactory.getRuntimeMXBean().getInputArguments().stream()
+        .filter(arg -> arg.startsWith("-javaagent:"))
+        .map(arg -> Path.of(arg.substring("-javaagent:".length()).split("=", 2)[0]).toAbsolutePath().normalize())
+        .toList();
+    assertTrue(agentPaths.contains(mockitoJar.toAbsolutePath().normalize()),
         "The test JVM must load Mockito with -javaagent");
   }
 
