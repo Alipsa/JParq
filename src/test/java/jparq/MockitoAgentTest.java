@@ -2,6 +2,7 @@ package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.Mockito.mockStatic;
 
 import java.lang.management.ManagementFactory;
@@ -12,7 +13,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 /**
- * Verifies startup agent configuration and inline mocking in the Surefire JVM.
+ * Verifies startup agent configuration and inline mocking in the forked test
+ * JVM.
  */
 class MockitoAgentTest {
 
@@ -25,6 +27,8 @@ class MockitoAgentTest {
    */
   @Test
   void mockitoIsConfiguredAsStartupAgent() throws URISyntaxException {
+    assumeTrue(System.getProperty("surefire.test.class.path") != null,
+        "Startup-agent check only applies to Maven-forked test JVMs");
     var mockitoJar = Path.of(Mockito.class.getProtectionDomain().getCodeSource().getLocation().toURI());
     assertTrue(ManagementFactory.getRuntimeMXBean().getInputArguments().contains("-javaagent:" + mockitoJar),
         "The test JVM must load Mockito with -javaagent");

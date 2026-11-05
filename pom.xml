@@ -33,6 +33,9 @@
     <!-- Defaults keep late evaluation valid without extra JVM arguments or coverage. -->
     <argLine></argLine>
     <jacocoArgLine></jacocoArgLine>
+    <!-- Direct test goals must resolve the agent without executing initialize. -->
+    <mockitoAgentPath>${settings.localRepository}/org/mockito/mockito-core/${mockito.version}/mockito-core-${mockito.version}.jar</mockitoAgentPath>
+    <testJvmArgLine>@{jacocoArgLine} ${argLine} "-javaagent:${mockitoAgentPath}"</testJvmArgLine>
 
     <avro.version>1.12.2</avro.version>
     <checkstyle.version>14.4.0</checkstyle.version>
@@ -43,6 +46,7 @@
     <jline.version>3.25.1</jline.version>
     <junit.version>6.1.3</junit.version>
     <maven-assembly-plugin.version>3.8.0</maven-assembly-plugin.version>
+    <mockito.version>5.24.0</mockito.version>
     <parquet.version>1.18.1</parquet.version>
     <pmd.plugin.version>3.28.0</pmd.plugin.version>
     <slf4j.version>2.0.20</slf4j.version>
@@ -248,7 +252,7 @@
     <dependency>
       <groupId>org.mockito</groupId>
       <artifactId>mockito-core</artifactId>
-      <version>5.24.0</version>
+      <version>${mockito.version}</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
@@ -285,11 +289,6 @@
         <artifactId>maven-dependency-plugin</artifactId>
         <version>3.11.0</version>
         <executions>
-          <execution>
-            <id>test-agent-properties</id>
-            <phase>initialize</phase>
-            <goals><goal>properties</goal></goals>
-          </execution>
           <execution>
             <id>packaged-probe-dependencies</id>
             <phase>generate-test-resources</phase>
@@ -379,7 +378,7 @@
         <version>3.6.1</version>
         <configuration>
           <useModulePath>false</useModulePath>
-          <argLine>@{jacocoArgLine} ${argLine} "-javaagent:${org.mockito:mockito-core:jar}"</argLine>
+          <argLine>${testJvmArgLine}</argLine>
         </configuration>
       </plugin>
       <plugin>
@@ -387,7 +386,7 @@
         <artifactId>maven-failsafe-plugin</artifactId>
         <version>3.6.1</version>
         <configuration>
-          <argLine>@{jacocoArgLine} ${argLine} "-javaagent:${org.mockito:mockito-core:jar}"</argLine>
+          <argLine>${testJvmArgLine}</argLine>
           <redirectTestOutputToFile>false</redirectTestOutputToFile>
           <useFile>false</useFile>
           <skipTests>false</skipTests>
