@@ -11,9 +11,11 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.JDBCType;
 import java.sql.ResultSetMetaData;
 import java.sql.Types;
 import java.util.List;
+import java.util.Map;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
@@ -59,18 +61,30 @@ class ArrayResultRepresentationTest {
   @Test
   void typedNullArrayElements(@TempDir Path directory) throws Exception {
     try (var connection = connect(directory); var statement = connection.createStatement()) {
-      for (String query : List.of("SELECT ARRAY[CAST(NULL AS INTEGER)] AS a",
-          "SELECT a FROM (SELECT ARRAY[CAST(NULL AS INTEGER)] AS a) t",
-          "WITH t AS (SELECT ARRAY[CAST(NULL AS INTEGER)] AS a) SELECT a FROM t",
-          "SELECT (SELECT ARRAY[CAST(NULL AS INTEGER)]) AS a")) {
-        try (var result = statement.executeQuery(query)) {
-          assertTrue(result.next(), query);
-          assertEquals(Types.ARRAY, result.getMetaData().getColumnType(1), query);
-          assertEquals(Types.INTEGER, result.getArray(1).getBaseType(), query);
-          assertEquals("INTEGER", result.getArray("a").getBaseTypeName(), query);
-          assertArrayEquals(new Object[]{
-              null
-          }, (Object[]) result.getArray(1).getArray(), query);
+      var declarations = Map.ofEntries(Map.entry("INTEGER", Types.INTEGER), Map.entry("DATE", Types.DATE),
+          Map.entry("VARCHAR", Types.VARCHAR), Map.entry("VARCHAR(12)", Types.VARCHAR),
+          Map.entry("CHARACTER VARYING(12)", Types.VARCHAR), Map.entry("CHAR(4)", Types.VARCHAR),
+          Map.entry("BOOLEAN", Types.BOOLEAN), Map.entry("BOOL", Types.BOOLEAN),
+          Map.entry("TIMESTAMP", Types.TIMESTAMP), Map.entry("TIMESTAMP(9)", Types.TIMESTAMP),
+          Map.entry("TIME", Types.TIME), Map.entry("TIME WITHOUT TIME ZONE", Types.TIME),
+          Map.entry("TIMESTAMP WITHOUT TIME ZONE", Types.TIMESTAMP),
+          Map.entry("TIME WITH TIME ZONE", Types.TIME_WITH_TIMEZONE),
+          Map.entry("TIMESTAMP(6) WITH TIME ZONE", Types.TIMESTAMP_WITH_TIMEZONE), Map.entry("BINARY(4)", Types.BINARY),
+          Map.entry("VARBINARY(4)", Types.BINARY));
+      for (var declaration : declarations.entrySet()) {
+        String array = "ARRAY[CAST(NULL AS " + declaration.getKey() + ")]";
+        for (String query : List.of("SELECT " + array + " AS a", "SELECT a FROM (SELECT " + array + " AS a) t",
+            "WITH t AS (SELECT " + array + " AS a) SELECT a FROM t", "SELECT (SELECT " + array + ") AS a")) {
+          try (var result = statement.executeQuery(query)) {
+            assertTrue(result.next(), query);
+            assertEquals(Types.ARRAY, result.getMetaData().getColumnType(1), query);
+            assertEquals(declaration.getValue(), result.getArray(1).getBaseType(), query);
+            assertEquals(JDBCType.valueOf(declaration.getValue()).getName(), result.getArray("a").getBaseTypeName(),
+                query);
+            assertArrayEquals(new Object[]{
+                null
+            }, (Object[]) result.getArray(1).getArray(), query);
+          }
         }
       }
       try (var result = statement.executeQuery("SELECT ARRAY[1,2.5], ARRAY[ARRAY[CAST(NULL AS INTEGER)]]")) {
@@ -79,6 +93,35 @@ class ArrayResultRepresentationTest {
         try (var elements = result.getArray(2).getResultSet()) {
           assertTrue(elements.next());
           assertEquals(Types.INTEGER, elements.getArray(2).getBaseType());
+        }
+      }
+    }
+  }
+
+  /** Known cast declarations preserve sibling values and temporal promotion. */
+  @Test
+  void castArrayElementsRetainCommonTypes(@TempDir Path directory) throws Exception {
+    var expressions = Map.of("ARRAY[CAST(NULL AS DATE), DATE '2026-01-02']", Types.DATE,
+        "ARRAY[CAST(NULL AS VARCHAR(12)), 'value']", Types.VARCHAR, "ARRAY[CAST(NULL AS BOOLEAN), TRUE]", Types.BOOLEAN,
+        "ARRAY[CAST(NULL AS TIMESTAMP(9)), TIMESTAMP '2026-01-02 03:04:05.123456789']", Types.TIMESTAMP,
+        "ARRAY[CAST(NULL AS TIME), CURRENT_TIME]", Types.TIME_WITH_TIMEZONE,
+        "ARRAY[CAST(NULL AS TIMESTAMP), CURRENT_TIMESTAMP]", Types.TIMESTAMP_WITH_TIMEZONE);
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      for (var expression : expressions.entrySet()) {
+        for (String query : List.of("SELECT " + expression.getKey() + " AS a",
+            "SELECT a FROM (SELECT " + expression.getKey() + " AS a) t",
+            "WITH t AS (SELECT " + expression.getKey() + " AS a) SELECT a FROM t")) {
+          try (var result = statement.executeQuery(query)) {
+            assertTrue(result.next(), query);
+            var array = result.getArray(1);
+            assertEquals(expression.getValue(), array.getBaseType(), query);
+            Object[] elements = (Object[]) array.getArray();
+            assertNull(elements[0], query);
+            assertTrue(elements[1] != null, query);
+            if (expression.getValue() == Types.TIMESTAMP) {
+              assertEquals(java.sql.Timestamp.valueOf("2026-01-02 03:04:05.123456789"), elements[1], query);
+            }
+          }
         }
       }
     }

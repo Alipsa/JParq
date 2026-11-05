@@ -1,20 +1,27 @@
 package se.alipsa.jparq.engine;
 
 import java.sql.JDBCType;
+import java.sql.Types;
 import java.util.List;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.CaseExpression;
+import net.sf.jsqlparser.expression.CastExpression;
+import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.StringValue;
+import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
+import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.NumericType;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.engine.function.StructArrayTypes;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
+import se.alipsa.jparq.helper.TemporalValueType;
 
 /** Resolves array declarations without using the current outer row's values. */
 public final class ArrayExpressionSchemas {
@@ -95,11 +102,54 @@ public final class ArrayExpressionSchemas {
     if (expression instanceof SignedExpression signed) {
       return resolve(signed.getExpression(), columns);
     }
+    if (expression instanceof CastExpression cast && cast.getColDataType() != null) {
+      Schema declared = nonnumericSchema(cast.getColDataType().getDataType());
+      if (declared != null) {
+        return declared;
+      }
+    }
+    if (expression instanceof DateTimeLiteralExpression literal) {
+      return nonnumericSchema(literal.getType().name());
+    }
+    if (expression instanceof TimeKeyExpression time) {
+      return switch (time.getStringValue().toUpperCase(java.util.Locale.ROOT)) {
+        case "CURRENT_DATE" -> nonnumericSchema("DATE");
+        case "LOCALTIME" -> nonnumericSchema("TIME");
+        case "LOCALTIMESTAMP" -> nonnumericSchema("TIMESTAMP");
+        case "CURRENT_TIME" -> TemporalValueType.OFFSET_TIME.schema();
+        case "CURRENT_TIMESTAMP" -> TemporalValueType.OFFSET_TIMESTAMP.schema();
+        default -> null;
+      };
+    }
     NumericType numeric = NumericExpressionTypes.resolve(expression, column -> numeric(columns.apply(column)));
     if (numeric != null) {
       return numeric.schema();
     }
     return expression instanceof StringValue ? Schema.create(Schema.Type.STRING) : null;
+  }
+
+  /**
+   * Maps nonnumeric SQL declarations to their decoded value schemas.
+   *
+   * @param typeName
+   *          SQL type name, including optional precision and time-zone clauses
+   * @return declared schema, or null for numeric or unrecognized declarations
+   */
+  private static Schema nonnumericSchema(String typeName) {
+    String normalized = DateTimeFunctions.normalizeTypeName(typeName.replaceAll("\\([^)]*\\)", ""));
+    return switch (normalized) {
+      case "date" -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
+      case "time", "timewithouttimezone" -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
+      case "timestamp", "timestampwithouttimezone", "datetime" -> TemporalValueType.UTC_TIMESTAMP.schema();
+      case "timewithtimezone" -> TemporalValueType.OFFSET_TIME.schema();
+      case "timestampwithtimezone" -> TemporalValueType.OFFSET_TIMESTAMP.schema();
+      case "boolean", "bool" -> Schema.create(Schema.Type.BOOLEAN);
+      case "char", "character", "nchar", "varchar", "charactervarying", "nvarchar", "string", "text", "clob",
+          "nationalcharacter", "nationalcharactervarying", "nationalchar" ->
+        Schema.create(Schema.Type.STRING);
+      case "binary", "varbinary", "binaryvarying", "blob" -> Schema.create(Schema.Type.BYTES);
+      default -> null;
+    };
   }
 
   /**
@@ -157,10 +207,23 @@ public final class ArrayExpressionSchemas {
     if (left.getType() == Schema.Type.ARRAY && right.getType() == Schema.Type.ARRAY) {
       return Schema.createArray(common(left.getElementType(), right.getElementType()));
     }
-    NumericType first = NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(left), left);
-    NumericType second = NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(right), right);
+    int leftType = JdbcTypeMapper.mapSchemaToJdbcType(left);
+    int rightType = JdbcTypeMapper.mapSchemaToJdbcType(right);
+    if ((leftType == Types.TIME || leftType == Types.TIME_WITH_TIMEZONE)
+        && (rightType == Types.TIME || rightType == Types.TIME_WITH_TIMEZONE) && leftType != rightType) {
+      return TemporalValueType.OFFSET_TIME.schema();
+    }
+    if ((leftType == Types.TIMESTAMP || leftType == Types.TIMESTAMP_WITH_TIMEZONE)
+        && (rightType == Types.TIMESTAMP || rightType == Types.TIMESTAMP_WITH_TIMEZONE) && leftType != rightType) {
+      return TemporalValueType.OFFSET_TIMESTAMP.schema();
+    }
+    NumericType first = NumericType.of(leftType, left);
+    NumericType second = NumericType.of(rightType, right);
     if (first != null && second != null) {
       return first.common(second).schema();
+    }
+    if (leftType == rightType && leftType != Types.OTHER && leftType != Types.STRUCT) {
+      return StructArrayTypes.common(left, right);
     }
     throw SqlExceptions.incompatibleArrayElements(JDBCType.valueOf(JdbcTypeMapper.mapSchemaToJdbcType(left)).getName(),
         JDBCType.valueOf(JdbcTypeMapper.mapSchemaToJdbcType(right)).getName());

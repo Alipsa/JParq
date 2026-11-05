@@ -843,7 +843,7 @@ The following SQL statements are supported:
   `getArray(index)` and `getArray(label)` return detached JDBC
   `Array` objects; SQL NULL returns null and sets `wasNull()`. JDBC arrays expose element type metadata,
   `Object[]` contents, one-based slices, and INDEX/VALUE element result sets. `free()` releases the
-  array; subsequent reads raise `SQLException`. Computed arrays retain declared numeric element types
+  array; subsequent reads raise `SQLException`. Computed arrays retain declared element types
   even when every element is NULL.
   Custom user-defined element mappings raise `SQLFeatureNotSupportedException` when requested.
   Struct fields retain their raw Avro representations:
