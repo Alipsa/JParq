@@ -887,6 +887,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     List<String> labels = null;
     List<Integer> sqlTypes = null;
     List<Schema> sourceSchemas = new ArrayList<>();
+    List<SetColumnFamily> declaredFamilies = new ArrayList<>();
     int columnCount = -1;
     for (SqlParser.SetComponent component : components) {
       List<List<Object>> componentData = new ArrayList<>();
@@ -902,6 +903,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             labels.add(columnLabel(meta, col));
             sqlTypes.add(Types.NULL);
             sourceSchemas.add(null);
+            declaredFamilies.add(SetColumnFamily.UNKNOWN);
           }
         } else if (meta.getColumnCount() != columnCount) {
           throw new SQLException("Set operation components must project the same number of columns");
@@ -934,20 +936,22 @@ public class JParqPreparedStatement implements PreparedStatement {
                   ? prepared.parsedSelect.expressions().get(index)
                   : null;
           Expression projection = ExpressionEvaluator.unwrapParenthesis(expression);
-          boolean simpleDeclaration = projection instanceof CastExpression || projection instanceof SignedExpression
+          final var simpleDeclaration = projection instanceof CastExpression || projection instanceof SignedExpression
               || LiteralConverter.isLiteral(projection);
           if (schema != null && schema.getType() == Schema.Type.NULL) {
             type = Types.NULL;
           }
+          SetColumnFamily declaredFamily = declaredSetColumnFamily(projection, type);
+          validateSetColumnFamily(declaredFamilies, index, declaredFamily);
           Schema projected = type == Types.OTHER ? setExpressionSchema(projection, values, meta) : null;
           int projectedType = projected == null ? Types.NULL : JdbcTypeMapper.mapSchemaToJdbcType(projected);
           if (!IntervalType.matches(schema) && (type == Types.OTHER || projection instanceof NullValue)) {
             boolean unknown = type == Types.OTHER;
             schema = projected;
             type = projectedType;
-            // Preserve OTHER metadata for unknown nonnumeric projections while
-            // retaining recognized datetime declarations.
-            if (unknown && !(projection instanceof CastExpression) && type != Types.NULL
+            // CLOB uses interim character storage; unresolved binary casts must
+            // not acquire VARCHAR metadata from their current String values.
+            if (unknown && declaredFamily != SetColumnFamily.CHARACTER && type != Types.NULL
                 && NumericType.of(type, 0, 0) == null && type != Types.DATE && type != Types.TIME
                 && type != Types.TIMESTAMP && type != Types.TIME_WITH_TIMEZONE
                 && type != Types.TIMESTAMP_WITH_TIMEZONE) {
@@ -996,6 +1000,76 @@ public class JParqPreparedStatement implements PreparedStatement {
     return JParqResultSet.materializedResult("set_operation_result", labels, sqlTypes, sliced, sourceSchemas);
   }
 
+  /** Declared families used to validate unresolved set-operation projections. */
+  private enum SetColumnFamily {
+    /** An untyped NULL or an expression with an unresolved declaration. */
+    UNKNOWN,
+    /** Fixed, varying, and large-object character strings. */
+    CHARACTER,
+    /** Fixed, varying, and large-object binary strings. */
+    BINARY,
+    /** Other declared types whose compatibility is checked by the type merger. */
+    OTHER
+  }
+
+  /**
+   * Retains LOB and binary CAST families independently of evaluated values.
+   * Unimplemented value conversions must not make declared binary strings appear
+   * compatible with character strings or make typed NULLs untyped.
+   *
+   * @param expression
+   *          branch projection, or null for materialized results
+   * @param jdbcType
+   *          branch metadata type
+   * @return declared family, or UNKNOWN when no declaration is available
+   */
+  private SetColumnFamily declaredSetColumnFamily(Expression expression, int jdbcType) {
+    if (expression instanceof CastExpression cast && cast.getColDataType() != null) {
+      String normalized = DateTimeFunctions
+          .normalizeTypeName(cast.getColDataType().getDataType().replaceAll("\\([^)]*\\)", ""));
+      switch (normalized) {
+        case "clob":
+          return SetColumnFamily.CHARACTER;
+        case "blob", "binary", "varbinary", "binaryvarying":
+          return SetColumnFamily.BINARY;
+        default:
+          break;
+      }
+    }
+    if (JdbcTypeMapper.isCharacterType(jdbcType) || jdbcType == Types.CLOB) {
+      return SetColumnFamily.CHARACTER;
+    }
+    return switch (jdbcType) {
+      case Types.BINARY, Types.VARBINARY, Types.BLOB -> SetColumnFamily.BINARY;
+      case Types.NULL, Types.OTHER -> SetColumnFamily.UNKNOWN;
+      default -> SetColumnFamily.OTHER;
+    };
+  }
+
+  /**
+   * Rejects incompatible declared families before value inference can erase them.
+   *
+   * @param families
+   *          retained output families
+   * @param index
+   *          zero-based column position
+   * @param family
+   *          current branch family
+   * @throws SQLException
+   *           if two known families are incompatible
+   */
+  private void validateSetColumnFamily(List<SetColumnFamily> families, int index, SetColumnFamily family)
+      throws SQLException {
+    if (family == SetColumnFamily.UNKNOWN) {
+      return;
+    }
+    SetColumnFamily previous = families.get(index);
+    if (previous != SetColumnFamily.UNKNOWN && previous != family) {
+      throw new SQLException("Set operation components must use compatible column types", "42000");
+    }
+    families.set(index, family);
+  }
+
   /**
    * Resolves untyped set projections from simple declarations or returned values.
    * Declared numeric expressions use the shared expression type resolver;
@@ -1040,8 +1114,8 @@ public class JParqPreparedStatement implements PreparedStatement {
       return schemaForColumnType(classifyValueType(literal), List.of(literal));
     }
     List<Object> returned = values.get();
-    // Unknown declarations have no type to retain when no values are returned.
-    if (returned.stream().allMatch(Objects::isNull)) {
+    // An unresolved CAST still declares a type, even for empty or NULL results.
+    if (!(projection instanceof CastExpression) && returned.stream().allMatch(Objects::isNull)) {
       return null;
     }
     return schemaForColumnType(determineColumnType(returned), returned);

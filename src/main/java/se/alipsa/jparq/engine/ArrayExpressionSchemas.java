@@ -172,8 +172,6 @@ public final class ArrayExpressionSchemas {
     return switch (normalized) {
       case "timewithtimezone" -> TemporalValueType.OFFSET_TIME.schema();
       case "timestampwithtimezone" -> TemporalValueType.OFFSET_TIMESTAMP.schema();
-      case "nationalcharacter", "nationalchar" -> JdbcTypeMapper.declaredSchema(JDBCType.NCHAR);
-      case "nationalcharactervarying" -> JdbcTypeMapper.declaredSchema(JDBCType.NVARCHAR);
       case "binary" -> JdbcTypeMapper.declaredSchema(JDBCType.BINARY);
       case "clob", "blob" -> throw SqlExceptions.unsupportedFeature(
           "ARRAY elements with declared type " + normalized.toUpperCase(java.util.Locale.ROOT) + " are not supported");

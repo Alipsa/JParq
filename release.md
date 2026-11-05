@@ -9,6 +9,10 @@
   consistently expose OTHER metadata, including in plain SELECTs and grouped queries. Keep scalar CAST
   metadata separate from ARRAY element validation so unresolved LOB, binary, and time-zone casts retain
   OTHER/Object metadata without unchecked exceptions or unsupported value-class claims.
+  Retain declared LOB/binary families for set compatibility, including typed NULLs and empty branches;
+  reject binary/character and other incompatible declarations with SQLState `42000` before value inference.
+  Support standard NATIONAL CHARACTER, NATIONAL CHAR, and NATIONAL CHARACTER VARYING spellings with
+  the same metadata, value conversion, length handling, and truncation checks as NCHAR/NVARCHAR.
 
 - Implement both ResultSet.getArray overloads (#280) for stored and computed arrays, including nested
   arrays from LATERAL queries. Return detached JDBC arrays with element type metadata, slices, element

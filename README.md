@@ -892,7 +892,11 @@ The following SQL statements are supported:
   CTEs and derived tables, including empty results, so an enclosing set operation can adopt a numeric or
   nonnumeric branch's type. String and DATE/TIME/TIMESTAMP literals, character casts, DATE casts, and
   TIME/TIMESTAMP WITHOUT TIME ZONE casts report their declared JDBC types even for empty or all-NULL
-  results. Compatible CHAR and VARCHAR set branches produce VARCHAR output.
+  results. Standard NATIONAL CHARACTER, NATIONAL CHAR, and NATIONAL CHARACTER VARYING spellings use
+  the same metadata and conversions as NCHAR/NVARCHAR. Compatible CHAR and VARCHAR set branches produce
+  VARCHAR output. Declared LOB and binary CASTs remain typed for set compatibility even for all-NULL or
+  empty results: incompatible numeric, character, binary, or datetime families raise SQLState `42000`.
+  These declared CAST NULLs remain distinct from untyped NULL projections.
   Numeric and nonnumeric branches remain incompatible. Integer literals currently use BIGINT;
   general expression typing is tracked in [#232](https://github.com/Alipsa/JParq/issues/232).
   - `EXCEPT`

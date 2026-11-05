@@ -95,7 +95,13 @@ class SetDeclaredTypeTest {
       "CAST(model AS CHAR(3)) | 1 | java.lang.String", "CAST(NULL AS VARCHAR) | 12 | java.lang.String",
       "DATE '2026-01-02' | 91 | java.sql.Date", "TIME '10:11:12' | 92 | java.sql.Time",
       "TIMESTAMP '2026-01-02 10:11:12' | 93 | java.sql.Timestamp", "CAST(NULL AS DATE) | 91 | java.sql.Date",
-      "CAST(NULL AS TIME) | 92 | java.sql.Time", "CAST(NULL AS TIMESTAMP) | 93 | java.sql.Timestamp"
+      "CAST(NULL AS TIME) | 92 | java.sql.Time", "CAST(NULL AS TIMESTAMP) | 93 | java.sql.Timestamp",
+      "CAST(123 AS NATIONAL CHARACTER(5)) | -15 | java.lang.String",
+      "CAST(123 AS NATIONAL CHAR(5)) | -15 | java.lang.String",
+      "CAST(123 AS NATIONAL CHARACTER VARYING(5)) | -9 | java.lang.String",
+      "CAST('abcdef' AS NATIONAL CHARACTER(5)) | -15 | java.lang.String",
+      "CAST('abcdef' AS NATIONAL CHAR(5)) | -15 | java.lang.String",
+      "CAST('abcdef' AS NATIONAL CHARACTER VARYING(5)) | -9 | java.lang.String"
   })
   void retainsProjectionMetadata(String expression, int type, String className) throws Exception {
     try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
@@ -114,6 +120,9 @@ class SetDeclaredTypeTest {
                 assertNull(value, sql);
               } else {
                 assertEquals(className, value.getClass().getName(), sql);
+                if (expression.contains("NATIONAL")) {
+                  assertEquals(expression.contains("123") ? "123" : "abcde", value, sql);
+                }
               }
               assertFalse(result.next(), sql);
             }
@@ -200,6 +209,37 @@ class SetDeclaredTypeTest {
   }
 
   /**
+   * National fixed-character long forms use NCHAR's default length and enforce
+   * the same numeric truncation rule.
+   *
+   * @param type
+   *          fixed national character spelling
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "NCHAR", "NATIONAL CHARACTER", "NATIONAL CHAR"
+  })
+  void retainsNationalCharacterDefaultLength(String type) throws Exception {
+    try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
+      try (var result = statement.executeQuery("SELECT CAST('ab' AS " + type + ")")) {
+        assertEquals(Types.NCHAR, result.getMetaData().getColumnType(1));
+        assertTrue(result.next());
+        assertEquals("a", result.getObject(1));
+        assertFalse(result.next());
+      }
+      SQLException error = assertThrows(SQLException.class, () -> {
+        try (var result = statement.executeQuery("SELECT CAST(12 AS " + type + ")")) {
+          assertTrue(result.next());
+          result.getObject(1);
+        }
+      });
+      assertEquals("22001", error.getSQLState());
+    }
+  }
+
+  /**
    * Preserves untyped NULL through nested materialization, including empty sets.
    *
    * @param body
@@ -250,15 +290,20 @@ class SetDeclaredTypeTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "VARCHAR", "CHAR(3)", "DATE", "TIME", "TIMESTAMP"
+      "VARCHAR", "CHAR(3)", "DATE", "TIME", "TIMESTAMP", "CLOB", "BLOB", "VARBINARY", "BINARY(2)"
   })
   void rejectsIncompatibleTypedNull(String cast) throws Exception {
     try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
-      String body = "SELECT CAST(NULL AS " + cast + ") AS x FROM mtcars WHERE 1 = 0";
-      for (String branch : List.of(body, "SELECT x FROM (" + body + ") d")) {
-        SQLException error = assertThrows(SQLException.class,
-            () -> statement.executeQuery(branch + " UNION ALL SELECT 1"));
-        assertEquals("42000", error.getSQLState());
+      for (String suffix : List.of("", " FROM mtcars WHERE model = 'Mazda RX4'", " FROM mtcars WHERE 1 = 0")) {
+        String body = "SELECT CAST(NULL AS " + cast + ") AS x" + suffix;
+        for (String branch : List.of(body, "SELECT x FROM (" + body + ") d",
+            "WITH c AS (" + body + ") SELECT x FROM c")) {
+          for (String sql : List.of(branch + " UNION ALL SELECT 1",
+              "SELECT 1 UNION ALL SELECT x FROM (" + branch + ") r")) {
+            SQLException error = assertThrows(SQLException.class, () -> statement.executeQuery(sql), sql);
+            assertEquals("42000", error.getSQLState(), sql);
+          }
+        }
       }
     }
   }

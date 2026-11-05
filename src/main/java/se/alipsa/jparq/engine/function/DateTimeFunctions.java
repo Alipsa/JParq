@@ -805,7 +805,8 @@ public final class DateTimeFunctions {
     }
     return switch (normalized) {
       case "boolean", "bool" -> toBoolean(value);
-      case "char", "character", "nchar", "varchar", "charactervarying", "nvarchar", "string" ->
+      case "char", "character", "nchar", "nationalcharacter", "nationalchar", "varchar", "charactervarying", "nvarchar",
+          "nationalcharactervarying", "string" ->
         castToString(cast, value);
       case "text", "clob" -> SqlText.cast(value);
       default -> value;
@@ -846,7 +847,8 @@ public final class DateTimeFunctions {
     }
     Integer length = firstIntegerArgument(cast);
     String target = normalizeTypeName(cast.getColDataType().getDataType());
-    if (length == null && ("char".equals(target) || "character".equals(target) || "nchar".equals(target))) {
+    if (length == null && ("char".equals(target) || "character".equals(target) || "nchar".equals(target)
+        || "nationalcharacter".equals(target) || "nationalchar".equals(target))) {
       length = 1;
     }
     if (length != null && length >= 0 && text.codePointCount(0, text.length()) > length) {

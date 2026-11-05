@@ -69,8 +69,8 @@ public final class ScalarExpressionSchemas {
       case "timestamp", "timestampwithouttimezone", "datetime" -> TemporalValueType.UTC_TIMESTAMP.schema();
       case "boolean", "bool" -> Schema.create(Schema.Type.BOOLEAN);
       case "char", "character" -> JdbcTypeMapper.declaredSchema(JDBCType.CHAR);
-      case "nchar" -> JdbcTypeMapper.declaredSchema(JDBCType.NCHAR);
-      case "nvarchar" -> JdbcTypeMapper.declaredSchema(JDBCType.NVARCHAR);
+      case "nchar", "nationalcharacter", "nationalchar" -> JdbcTypeMapper.declaredSchema(JDBCType.NCHAR);
+      case "nvarchar", "nationalcharactervarying" -> JdbcTypeMapper.declaredSchema(JDBCType.NVARCHAR);
       case "varchar", "charactervarying", "string", "text" -> Schema.create(Schema.Type.STRING);
       default -> null;
     };

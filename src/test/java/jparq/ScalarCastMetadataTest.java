@@ -98,8 +98,8 @@ class ScalarCastMetadataTest {
   }
 
   /**
-   * Unknown LOB casts retain existing NULL rows and evaluated string values in
-   * set operations, without exposing ARRAY-specific validation errors.
+   * CLOB/VARCHAR branches temporarily use VARCHAR storage until #452 implements
+   * the standard CLOB result type. NULL and non-NULL rows remain compatible.
    *
    * @param type
    *          LOB CAST type
@@ -108,9 +108,9 @@ class ScalarCastMetadataTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "CLOB", "BLOB"
+      "CLOB"
   })
-  void combinesLobCastsWithCharacterBranches(String type) throws Exception {
+  void combinesClobCastsWithCharacterBranches(String type) throws Exception {
     try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
       for (String value : List.of("NULL", "'x'")) {
         String character = "SELECT CAST(" + value + " AS VARCHAR) AS x";
@@ -125,6 +125,36 @@ class ScalarCastMetadataTest {
                 assertEquals(value.equals("NULL") ? null : "x", result.getObject(1), sql);
               }
               assertFalse(result.next(), sql);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Binary declarations cannot become character or datetime inputs because their
+   * current CAST evaluation returns String values, including empty branches.
+   *
+   * @param type
+   *          binary CAST declaration
+   * @throws Exception
+   *           if connection creation fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "BLOB", "BINARY(2)", "VARBINARY"
+  })
+  void rejectsIncompatibleBinaryCastBranches(String type) throws Exception {
+    try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
+      for (String value : List.of("NULL", "'x'")) {
+        for (String suffix : List.of("", " FROM mtcars WHERE 1 = 0")) {
+          String binary = "SELECT CAST(" + value + " AS " + type + ") AS x" + suffix;
+          for (String other : List.of("SELECT CAST(" + value + " AS VARCHAR)", "SELECT CAST(" + value + " AS CLOB)",
+              "SELECT DATE '2020-01-01'", "SELECT 1")) {
+            for (String sql : List.of(binary + " UNION ALL " + other, other + " UNION ALL " + binary)) {
+              SQLException error = assertThrows(SQLException.class, () -> statement.executeQuery(sql), sql);
+              assertEquals("42000", error.getSQLState(), sql);
             }
           }
         }
