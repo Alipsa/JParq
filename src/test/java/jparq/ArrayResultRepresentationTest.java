@@ -4,15 +4,18 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.JDBCType;
 import java.sql.ResultSetMetaData;
 import java.sql.Types;
 import java.util.List;
+import java.util.Map;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
@@ -21,6 +24,8 @@ import org.apache.parquet.avro.AvroParquetWriter;
 import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import se.alipsa.jparq.JParqResultSet;
+import se.alipsa.jparq.JParqResultSetMetaData;
 
 /**
  * Verifies that every ARRAY value exposed through {@code getObject()} uses the
@@ -29,6 +34,290 @@ import org.junit.jupiter.api.io.TempDir;
  * one result. Regression coverage for issue 234.
  */
 class ArrayResultRepresentationTest {
+
+  /**
+   * Element declarations, including unknown declarations, are resolved once per
+   * column.
+   */
+  @Test
+  void arraySchemasAreCachedPerColumn(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      try (var original = statement.executeQuery("SELECT ARRAY[1,2], ARRAY[NULL] FROM s");
+          var result = org.mockito.Mockito.spy(original)) {
+        int count = 0;
+        while (result.next()) {
+          assertEquals(Types.INTEGER, result.getArray(1).getBaseType());
+          assertEquals(Types.INTEGER, result.getArray(1).getBaseType());
+          assertEquals(Types.OTHER, result.getArray(2).getBaseType());
+          assertEquals(Types.OTHER, result.getArray(2).getBaseType());
+          count++;
+        }
+        assertEquals(2, count);
+        org.mockito.Mockito.verify(result, org.mockito.Mockito.times(2)).getMetaData();
+      }
+    }
+  }
+
+  /** Computed arrays retain declared types even when every element is null. */
+  @Test
+  void typedNullArrayElements(@TempDir Path directory) throws Exception {
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      var declarations = Map.ofEntries(Map.entry("INTEGER", Types.INTEGER), Map.entry("DATE", Types.DATE),
+          Map.entry("VARCHAR", Types.VARCHAR), Map.entry("VARCHAR(12)", Types.VARCHAR),
+          Map.entry("CHARACTER VARYING(12)", Types.VARCHAR), Map.entry("CHAR(4)", Types.CHAR),
+          Map.entry("CHARACTER(4)", Types.CHAR), Map.entry("NCHAR(4)", Types.NCHAR),
+          Map.entry("NVARCHAR(4)", Types.NVARCHAR), Map.entry("BOOLEAN", Types.BOOLEAN),
+          Map.entry("BOOL", Types.BOOLEAN), Map.entry("TIMESTAMP", Types.TIMESTAMP),
+          Map.entry("TIMESTAMP(9)", Types.TIMESTAMP), Map.entry("TIME", Types.TIME),
+          Map.entry("TIME WITHOUT TIME ZONE", Types.TIME), Map.entry("TIMESTAMP WITHOUT TIME ZONE", Types.TIMESTAMP),
+          Map.entry("TIME WITH TIME ZONE", Types.TIME_WITH_TIMEZONE),
+          Map.entry("TIMESTAMP(6) WITH TIME ZONE", Types.TIMESTAMP_WITH_TIMEZONE), Map.entry("BINARY(4)", Types.BINARY),
+          Map.entry("VARBINARY(4)", Types.VARBINARY));
+      for (var declaration : declarations.entrySet()) {
+        String array = "ARRAY[CAST(NULL AS " + declaration.getKey() + ")]";
+        for (String query : List.of("SELECT " + array + " AS a", "SELECT a FROM (SELECT " + array + " AS a) t",
+            "WITH t AS (SELECT " + array + " AS a) SELECT a FROM t", "SELECT (SELECT " + array + ") AS a")) {
+          try (var result = statement.executeQuery(query)) {
+            assertTrue(result.next(), query);
+            assertEquals(Types.ARRAY, result.getMetaData().getColumnType(1), query);
+            assertEquals(declaration.getValue(), result.getArray(1).getBaseType(), query);
+            assertEquals(JDBCType.valueOf(declaration.getValue()).getName(), result.getArray("a").getBaseTypeName(),
+                query);
+            assertArrayEquals(new Object[]{
+                null
+            }, (Object[]) result.getArray(1).getArray(), query);
+          }
+        }
+      }
+      try (var result = statement.executeQuery("SELECT ARRAY[1,2.5], ARRAY[ARRAY[CAST(NULL AS INTEGER)]]")) {
+        assertTrue(result.next());
+        assertEquals(Types.DECIMAL, result.getArray(1).getBaseType());
+        try (var elements = result.getArray(2).getResultSet()) {
+          assertTrue(elements.next());
+          assertEquals(Types.INTEGER, elements.getArray(2).getBaseType());
+        }
+      }
+    }
+  }
+
+  /**
+   * Incompatible typed elements fail at the JDBC planning boundary, including
+   * empty inputs.
+   */
+  @Test
+  void incompatibleTypedArrayElementsFailDuringPlanning(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      for (String expression : List.of("ARRAY[CAST(NULL AS VARCHAR), 1]", "ARRAY[CAST(NULL AS BOOLEAN), 1]",
+          "ARRAY[CAST(NULL AS DATE), CURRENT_TIMESTAMP]", "ARRAY[CAST(NULL AS VARCHAR), id]")) {
+        for (String query : List.of("SELECT " + expression + " AS v FROM s",
+            "SELECT " + expression + " AS v FROM s WHERE 1 = 0",
+            "SELECT v FROM (SELECT " + expression + " AS v FROM s) t",
+            "WITH t AS (SELECT " + expression + " AS v FROM s) SELECT v FROM t",
+            "SELECT CASE WHEN TRUE THEN " + expression + " ELSE NULL END FROM s",
+            "SELECT CASE WHEN TRUE THEN 7 ELSE " + expression + " END FROM s")) {
+          var error = assertThrows(java.sql.SQLSyntaxErrorException.class, () -> statement.executeQuery(query), query);
+          assertEquals("42000", error.getSQLState(), query);
+          assertTrue(error.getMessage().contains("ARRAY elements must share a common type"), query);
+        }
+      }
+      for (String query : List.of("SELECT ARRAY[CAST(NULL AS VARCHAR), a.id] FROM s a",
+          "SELECT ARRAY[CAST(NULL AS VARCHAR), a.id] FROM s a CROSS JOIN s b",
+          "SELECT ARRAY[CAST(NULL AS VARCHAR), a.id] FROM s a CROSS JOIN s b WHERE 1 = 0")) {
+        var error = assertThrows(java.sql.SQLSyntaxErrorException.class, () -> statement.executeQuery(query), query);
+        assertEquals("42000", error.getSQLState(), query);
+        assertTrue(error.getMessage().contains("ARRAY elements must share a common type"), query);
+      }
+      for (String expression : List.of("ARRAY[CAST(NULL AS VARCHAR), 1]", "ARRAY[CAST(NULL AS BOOLEAN), 1]")) {
+        var error = assertThrows(java.sql.SQLSyntaxErrorException.class,
+            () -> connection.prepareStatement("SELECT " + expression + " AS v"));
+        assertEquals("42000", error.getSQLState());
+      }
+    }
+  }
+
+  /**
+   * Every clause and unreachable subquery rejects incompatible declared elements
+   * during planning.
+   */
+  @Test
+  void invalidArraysFailInEveryQueryClause(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      for (String array : List.of("ARRAY[CAST(NULL AS VARCHAR), 1]", "ARRAY[CAST(NULL AS BOOLEAN), 1]",
+          "ARRAY[CAST(NULL AS DATE), CURRENT_TIMESTAMP]", "ARRAY[CAST(NULL AS VARCHAR), TRUE]")) {
+        for (String query : List.of("SELECT id FROM s WHERE " + array + " IS NOT NULL",
+            "SELECT id FROM s ORDER BY " + array, "SELECT id FROM s GROUP BY id HAVING " + array + " IS NOT NULL",
+            "SELECT id FROM s GROUP BY id, " + array, "SELECT a.id FROM s a JOIN s b ON " + array + " IS NOT NULL",
+            "SELECT (SELECT " + array + ") AS v FROM s WHERE 1 = 0",
+            "SELECT id FROM s WHERE EXISTS (SELECT " + array + ") AND 1 = 0",
+            "SELECT id FROM s WHERE FALSE AND " + array + " IS NOT NULL",
+            "SELECT id FROM s ORDER BY (SELECT " + array + ")",
+            "SELECT (WITH c AS (SELECT " + array + " AS v) SELECT v FROM c) FROM s WHERE 1 = 0",
+            "SELECT (SELECT id FROM s ORDER BY " + array + ") FROM s WHERE 1 = 0",
+            "SELECT id FROM s UNION ALL SELECT id FROM s ORDER BY " + array)) {
+          var error = assertThrows(java.sql.SQLSyntaxErrorException.class, () -> statement.executeQuery(query), query);
+          assertEquals("42000", error.getSQLState(), query);
+          assertTrue(error.getMessage().contains("ARRAY elements must share a common type"), query);
+        }
+      }
+    }
+  }
+
+  /**
+   * Nested inputs and WITH declarations shadow same-named outer columns during
+   * validation.
+   */
+  @Test
+  void arrayValidationUsesNestedColumnScopes(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      for (String nested : List.of("SELECT ARRAY[CAST(NULL AS VARCHAR), id] FROM s",
+          "WITH c(id) AS (SELECT CAST(NULL AS INTEGER)) SELECT ARRAY[CAST(NULL AS VARCHAR), id] FROM c",
+          "SELECT ARRAY[CAST(NULL AS VARCHAR), id] FROM (SELECT 1 AS original) t(id)")) {
+        String query = "SELECT (" + nested + ") FROM (SELECT 'outer' AS id) o WHERE 1 = 0";
+        var error = assertThrows(java.sql.SQLSyntaxErrorException.class, () -> statement.executeQuery(query), query);
+        assertEquals("42000", error.getSQLState(), query);
+      }
+      for (String nested : List.of("SELECT ARRAY[CAST(NULL AS VARCHAR), id] FROM (SELECT 'inner' AS id) t",
+          "WITH c(id) AS (SELECT 'inner') SELECT ARRAY[CAST(NULL AS VARCHAR), id] FROM c",
+          "SELECT ARRAY[CAST(NULL AS VARCHAR), id] FROM (SELECT 'inner' AS original) t(id)")) {
+        String query = "SELECT (" + nested + ") FROM s WHERE 1 = 0";
+        try (var result = statement.executeQuery(query)) {
+          assertFalse(result.next(), query);
+        }
+      }
+      String scalar = "SELECT ARRAY[CAST(NULL AS VARCHAR), (SELECT id FROM s LIMIT 1)] FROM s WHERE 1 = 0";
+      assertEquals("42000",
+          assertThrows(java.sql.SQLSyntaxErrorException.class, () -> statement.executeQuery(scalar)).getSQLState());
+    }
+  }
+
+  /**
+   * Unsupported LOB array declarations are rejected without silently changing
+   * their type.
+   */
+  @Test
+  void lobArrayElementsAreExplicitlyUnsupported(@TempDir Path directory) throws Exception {
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      for (String type : List.of("CLOB", "BLOB")) {
+        String array = "ARRAY[CAST(NULL AS " + type + ")]";
+        for (String query : List.of("SELECT " + array, "SELECT a FROM (SELECT " + array + " AS a) t",
+            "WITH t AS (SELECT " + array + " AS a) SELECT a FROM t", "SELECT (SELECT " + array + ") WHERE 1 = 0",
+            "SELECT 1 WHERE " + array + " IS NOT NULL")) {
+          var error = assertThrows(java.sql.SQLFeatureNotSupportedException.class, () -> statement.executeQuery(query),
+              query);
+          assertEquals("0A000", error.getSQLState(), query);
+          assertTrue(error.getMessage().contains(type), query);
+        }
+      }
+    }
+  }
+
+  /**
+   * Defensive array getters translate declaration failures to classified JDBC
+   * exceptions.
+   */
+  @Test
+  void arrayGetterClassifiesDeclarationFailures() throws Exception {
+    var expression = net.sf.jsqlparser.parser.CCJSqlParserUtil.parseExpression("ARRAY[CAST(NULL AS VARCHAR), 1]");
+    var metadata = new JParqResultSetMetaData(null, List.of("v"), null, null, null, null, null, List.of(expression));
+    try (var original = JParqResultSet.materializedResult("array", List.of("v"), List.of(Types.ARRAY),
+        List.of(List.of((Object) new Object[]{
+            1
+        }))); var result = org.mockito.Mockito.spy(original)) {
+      org.mockito.Mockito.doReturn(metadata).when(result).getMetaData();
+      assertTrue(result.next());
+      var error = assertThrows(java.sql.SQLSyntaxErrorException.class, () -> result.getArray(1));
+      assertEquals("42000", error.getSQLState());
+      assertEquals("42000",
+          assertThrows(java.sql.SQLSyntaxErrorException.class, () -> result.getArray("v")).getSQLState());
+    }
+  }
+
+  /** Known cast declarations preserve sibling values and temporal promotion. */
+  @Test
+  void castArrayElementsRetainCommonTypes(@TempDir Path directory) throws Exception {
+    var expressions = Map.of("ARRAY[CAST(NULL AS DATE), DATE '2026-01-02']", Types.DATE,
+        "ARRAY[CAST(NULL AS VARCHAR(12)), 'value']", Types.VARCHAR, "ARRAY[CAST(NULL AS CHAR(4)), 'value']",
+        Types.VARCHAR, "ARRAY[CAST(NULL AS BINARY(4)), CAST(NULL AS VARBINARY(4))]", Types.VARBINARY,
+        "ARRAY[CAST(NULL AS BOOLEAN), TRUE]", Types.BOOLEAN,
+        "ARRAY[CAST(NULL AS TIMESTAMP(9)), TIMESTAMP '2026-01-02 03:04:05.123456789']", Types.TIMESTAMP,
+        "ARRAY[CAST(NULL AS TIME), CURRENT_TIME]", Types.TIME_WITH_TIMEZONE,
+        "ARRAY[CAST(NULL AS TIMESTAMP), CURRENT_TIMESTAMP]", Types.TIMESTAMP_WITH_TIMEZONE);
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      for (var expression : expressions.entrySet()) {
+        for (String query : List.of("SELECT " + expression.getKey() + " AS a",
+            "SELECT a FROM (SELECT " + expression.getKey() + " AS a) t",
+            "WITH t AS (SELECT " + expression.getKey() + " AS a) SELECT a FROM t")) {
+          try (var result = statement.executeQuery(query)) {
+            assertTrue(result.next(), query);
+            var array = result.getArray(1);
+            assertEquals(expression.getValue(), array.getBaseType(), query);
+            Object[] elements = (Object[]) array.getArray();
+            assertNull(elements[0], query);
+            if (expression.getValue() == Types.VARBINARY) {
+              assertNull(elements[1], query);
+            } else {
+              assertTrue(elements[1] != null, query);
+            }
+            if (expression.getValue() == Types.TIMESTAMP) {
+              assertEquals(java.sql.Timestamp.valueOf("2026-01-02 03:04:05.123456789"), elements[1], query);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Both JDBC array accessors preserve non-null, empty, null, and computed
+   * results.
+   */
+  @Test
+  void jdbcArrayAccess(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      for (String sql : List.of("SELECT ints AS a FROM s WHERE id = 1", "SELECT ARRAY[1,2] AS a",
+          "SELECT a FROM (SELECT ARRAY[1,2] AS a) t", "WITH t AS (SELECT ARRAY[1,2] AS a) SELECT a FROM t",
+          "SELECT ints AS a FROM s WHERE id = 1 UNION ALL SELECT ARRAY[1,2]")) {
+        try (var result = statement.executeQuery(sql)) {
+          while (result.next()) {
+            Object[] expected = (Object[]) result.getObject(1);
+            assertArrayEquals(expected, (Object[]) result.getArray(1).getArray(), sql);
+            assertFalse(result.wasNull());
+            assertArrayEquals(expected, (Object[]) result.getArray("a").getArray(), sql);
+            assertFalse(result.wasNull());
+          }
+        }
+      }
+      try (var result = statement.executeQuery("SELECT ints AS a FROM s ORDER BY id")) {
+        assertTrue(result.next());
+        final var retained = result.getArray(1);
+        assertTrue(result.next());
+        assertNull(result.getArray(1));
+        assertTrue(result.wasNull());
+        assertNull(result.getArray("a"));
+        assertTrue(result.wasNull());
+        result.close();
+        assertArrayEquals(new Object[]{
+            1, 2
+        }, (Object[]) retained.getArray());
+        assertThrows(java.sql.SQLException.class, () -> result.getArray(1));
+        assertThrows(java.sql.SQLException.class, () -> result.getArray("a"));
+      }
+      try (var result = statement.executeQuery("SELECT ARRAY[] AS a, 1 AS scalar")) {
+        assertTrue(result.next());
+        assertArrayEquals(new Object[0], (Object[]) result.getArray("a").getArray());
+        assertFalse(result.wasNull());
+        assertThrows(java.sql.SQLDataException.class, () -> result.getArray("scalar"));
+        assertThrows(java.sql.SQLException.class, () -> result.getArray(0));
+        assertThrows(java.sql.SQLException.class, () -> result.getArray(3));
+        assertThrows(java.sql.SQLException.class, () -> result.getArray("missing"));
+      }
+    }
+  }
 
   @Test
   void computedArrayReturnsObjectArray(@TempDir Path directory) throws Exception {

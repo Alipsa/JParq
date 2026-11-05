@@ -21,6 +21,8 @@ import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionLi
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
+import se.alipsa.jparq.engine.ArrayExpressionSchemas;
+import se.alipsa.jparq.engine.ArrayQueryValidation;
 import se.alipsa.jparq.engine.BooleanExpressions;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.CorrelationMappings;
@@ -31,6 +33,7 @@ import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.engine.NumericExpressionTypes;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlExpressionNormalizer;
+import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.helper.TemporalValueType;
@@ -137,6 +140,48 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
       throw SqlExceptions.wrap("Invalid projection declaration", failure);
     }
     return this;
+  }
+
+  /**
+   * Validates ARRAY declarations in every clause using independently scoped
+   * subqueries.
+   *
+   * @param query
+   *          query whose local inputs are described by this metadata
+   * @param tables
+   *          nested source schema resolver
+   * @throws IllegalArgumentException
+   *           carrying a JDBC cause for invalid declarations
+   */
+  void validateArrayDeclarations(SqlParser.Select query, Function<net.sf.jsqlparser.schema.Table, Schema> tables) {
+    List<Expression> clauses = new ArrayList<>(query.expressions());
+    clauses.add(query.where());
+    clauses.add(query.having());
+    clauses.addAll(query.groupByExpressions());
+    query.orderBy().forEach(order -> clauses.add(order.expression()));
+    query.preOrderBy().forEach(order -> clauses.add(order.expression()));
+    for (SqlParser.TableReference input : query.tableReferences()) {
+      collectJoinConditions(input, clauses);
+    }
+    for (Expression expression : clauses) {
+      ArrayQueryValidation.validate(expression, reference -> {
+        Schema.Field field = resolveSourceField(reference);
+        return field == null ? null : field.schema();
+      }, tables);
+    }
+  }
+
+  /**
+   * Collects conditions from ordinary joins and parenthesized join groups.
+   *
+   * @param input
+   *          joined input
+   * @param clauses
+   *          destination expressions
+   */
+  private static void collectJoinConditions(SqlParser.TableReference input, List<Expression> clauses) {
+    clauses.add(input.joinCondition());
+    input.joinGroup().forEach(nested -> collectJoinConditions(nested, clauses));
   }
 
   @Override
@@ -292,11 +337,11 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   }
 
   /**
-   * Retains the source schema of a physical column during materialization.
+   * Retains physical and declared computed value schemas during materialization.
    *
    * @param column
    *          one-based output column index
-   * @return non-null source schema, or null when no physical field is known
+   * @return declared value schema, or null when its type is unknown
    */
   @Override
   public Schema columnValueSchema(int column) {
@@ -316,7 +361,16 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
       return numeric.schema();
     }
     Schema.Field field = resolveField(column);
-    return field == null ? null : JdbcTypeMapper.nonNullSchema(field.schema());
+    if (field != null) {
+      return JdbcTypeMapper.nonNullSchema(field.schema());
+    }
+    if (resolveComputedColumnType(column) != Types.ARRAY) {
+      return null;
+    }
+    return ArrayExpressionSchemas.resolve(expressionAtColumn(column), reference -> {
+      Schema.Field source = resolveSourceField(reference);
+      return source == null ? null : source.schema();
+    });
   }
 
   @Override

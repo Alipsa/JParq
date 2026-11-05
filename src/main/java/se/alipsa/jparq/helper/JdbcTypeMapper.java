@@ -2,6 +2,7 @@ package se.alipsa.jparq.helper;
 
 import java.math.BigDecimal;
 import java.sql.Date;
+import java.sql.JDBCType;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
@@ -14,8 +15,55 @@ import se.alipsa.jparq.engine.AvroCoercions;
  * Utility methods for mapping Avro schemas to JDBC metadata representations.
  */
 public final class JdbcTypeMapper {
+  private static final String DECLARED_JDBC_TYPE = "jparq.jdbcType";
 
   private JdbcTypeMapper() {
+  }
+
+  /**
+   * Retains a declared character or binary JDBC type on its Avro storage schema.
+   *
+   * @param type
+   *          character or binary SQL type
+   * @return value schema retaining fixed or varying type information
+   * @throws IllegalArgumentException
+   *           if the type is not supported by this mapping
+   */
+  public static Schema declaredSchema(JDBCType type) {
+    Schema.Type storage = switch (type) {
+      case CHAR, VARCHAR, NCHAR, NVARCHAR -> Schema.Type.STRING;
+      case BINARY, VARBINARY -> Schema.Type.BYTES;
+      default -> throw new IllegalArgumentException("Not a character or binary type: " + type);
+    };
+    Schema schema = Schema.create(storage);
+    schema.addProp(DECLARED_JDBC_TYPE, type.getName());
+    if (storage == Schema.Type.BYTES) {
+      schema.addProp("jparq.binary", true);
+    }
+    return schema;
+  }
+
+  /**
+   * Reads optional character and binary type declarations.
+   *
+   * @param schema
+   *          value schema
+   * @param fallback
+   *          JDBC type for unmarked schemas
+   * @return declared JDBC type or the fallback
+   */
+  private static int declaredJdbcType(Schema schema, int fallback) {
+    String declaration = schema.getProp(DECLARED_JDBC_TYPE);
+    if (declaration == null) {
+      return fallback;
+    }
+    return switch (declaration) {
+      case "CHAR" -> Types.CHAR;
+      case "NCHAR" -> Types.NCHAR;
+      case "NVARCHAR" -> Types.NVARCHAR;
+      case "VARBINARY" -> Types.VARBINARY;
+      default -> fallback;
+    };
   }
 
   /**
@@ -66,7 +114,7 @@ public final class JdbcTypeMapper {
       return Types.OTHER;
     }
     return switch (base.getType()) {
-      case STRING, ENUM -> Types.VARCHAR;
+      case STRING, ENUM -> declaredJdbcType(base, Types.VARCHAR);
       case INT -> (LogicalTypes.date().equals(base.getLogicalType())
           ? Types.DATE
           : base.getLogicalType() instanceof LogicalTypes.TimeMillis ? Types.TIME : Types.INTEGER);
@@ -89,7 +137,7 @@ public final class JdbcTypeMapper {
         if (base.getLogicalType() instanceof LogicalTypes.Decimal) {
           yield Types.DECIMAL;
         }
-        yield isUtf8String(base) ? Types.VARCHAR : Types.BINARY;
+        yield isUtf8String(base) ? Types.VARCHAR : declaredJdbcType(base, Types.BINARY);
       }
       case RECORD -> Types.STRUCT;
       case ARRAY -> Types.ARRAY;

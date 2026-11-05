@@ -722,6 +722,7 @@ public final class SqlParser {
     validateExpressions(stmt, preparation);
     SqlExpressionNormalizer.normalize(stmt);
     RelationQualifierValidation.validate(stmt);
+    ArrayQueryValidation.validate(stmt, table -> null);
     return parseSelectStatement(stmt, List.of(), Map.of(), allowQualifiedWildcards);
   }
 

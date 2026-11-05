@@ -835,12 +835,22 @@ The following SQL statements are supported:
   `ANY`/`SOME` and TRUE for `ALL`; NULL arrays or undecided comparisons with NULL elements yield UNKNOWN.
   Array-column values decode scalar element logical types, including dates, decimals, and timestamps,
   before comparison or correlation binding. Physical array and struct columns retain their types through derived tables, CTEs, and set operations,
-  with matching source schemas available even for empty results. Computed arrays and arrays with differing
-  set-branch schemas in non-LATERAL derived tables and CTEs infer element types
+  with matching source schemas available even for empty results. Computed arrays with unknown element
+  declarations and arrays with differing set-branch schemas in non-LATERAL derived tables and CTEs infer element types
   from returned values, recursively; empty or all-NULL elements use a nullable VARCHAR element schema.
   JDBC `getObject()` returns every ARRAY value, whether from a stored column or a computed constructor, as
-  `Object[]` (including mixed set-operation results), and struct columns as Avro `GenericRecord` values. Struct
-  fields retain their raw Avro representations:
+  `Object[]` (including mixed set-operation results), and struct columns as Avro `GenericRecord` values.
+  `getArray(index)` and `getArray(label)` return detached JDBC
+  `Array` objects; SQL NULL returns null and sets `wasNull()`. JDBC arrays expose element type metadata,
+  `Object[]` contents, one-based slices, and INDEX/VALUE element result sets. `free()` releases the
+  array; subsequent reads raise `SQLException`. Computed arrays retain declared element types
+  even when every element is NULL, including fixed-length character and varying binary declarations.
+  Incompatible declared element types are rejected during planning with SQLState `42000`, including NULL elements
+  in predicates, grouping, ordering, join conditions, and skipped subqueries.
+  CLOB and BLOB array elements currently raise `SQLFeatureNotSupportedException` with SQLState `0A000`;
+  support is tracked in [#452](https://github.com/Alipsa/JParq/issues/452).
+  Custom user-defined element mappings raise `SQLFeatureNotSupportedException` when requested.
+  Struct fields retain their raw Avro representations:
   strings can be `Utf8`, dates epoch-day integers, decimals `ByteBuffer`, and timestamps stored longs.
   The record's schema describes those field types; nested struct fields are not recursively decoded.
   Predicates compare ARRAY values by content, element by element, treating stored and computed representations

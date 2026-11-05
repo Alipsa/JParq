@@ -2,8 +2,10 @@ package se.alipsa.jparq;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.sql.Array;
 import java.sql.Date;
 import java.sql.ResultSetMetaData;
+import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
@@ -61,6 +63,7 @@ import se.alipsa.jparq.engine.window.WindowPlan;
 import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JParqUtil;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.model.ResultSetAdapter;
 
@@ -82,6 +85,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private Schema metadataSchema;
   private final Map<Integer, Optional<Schema.Field>> materializedColumnBindings = new HashMap<>();
   private final Map<Integer, Optional<Schema>> intervalOutputSchemas = new HashMap<>();
+  private final Map<Integer, Optional<Schema>> arrayElementSchemas = new HashMap<>();
   private final CorrelationMappings metadataSourceMappings;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
@@ -233,6 +237,13 @@ public class JParqResultSet extends ResultSetAdapter {
     List<String> canonicalLookup = canonicalPhysical == null ? null : List.copyOf(canonicalPhysical);
     final List<String> requestedColumns = canonicalLookup != null ? canonicalLookup : select.columns();
     List<String> physical = physicalColumnOrder == null ? null : List.copyOf(physicalColumnOrder);
+
+    try {
+      new JParqResultSetMetaData(reader.schema(), labels, physical, canonicalLookup, tableName, tableSchema,
+          tableCatalog, selectExpressions, metadataSourceMappings).validateArrayDeclarations(select, table -> null);
+    } catch (RuntimeException failure) {
+      throw SqlExceptions.wrap("Invalid ARRAY projection declaration", failure);
+    }
 
     AggregateFunctions.AggregatePlan aggregatePlan = AggregateFunctions.plan(select, reader.schema());
     if (aggregatePlan != null) {
@@ -453,7 +464,7 @@ public class JParqResultSet extends ResultSetAdapter {
    * @param rows
    *          materialized row data backing the result set
    */
-  private JParqResultSet(String tableName, String tableSchema, String tableCatalog, List<String> columnLabels,
+  JParqResultSet(String tableName, String tableSchema, String tableCatalog, List<String> columnLabels,
       List<Integer> sqlTypes, List<List<Object>> rows) {
     this.tableName = tableName;
     this.tableSchema = tableSchema;
@@ -1653,6 +1664,52 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public <T> T getObject(String columnLabel, Class<T> type) throws SQLException {
     return getObject(findColumn(columnLabel), type);
+  }
+
+  /**
+   * Returns a detached JDBC array containing the decoded column elements.
+   *
+   * @param columnIndex
+   *          one-based output column index
+   * @return the array, or null for SQL NULL
+   * @throws SQLException
+   *           if the result is closed, the column is invalid, or its value is not
+   *           an array
+   */
+  @Override
+  public Array getArray(int columnIndex) throws SQLException {
+    ensureOpen();
+    Object value = getObject(columnIndex);
+    if (value == null) {
+      return null;
+    }
+    if (!(value instanceof Object[] elements)) {
+      throw new SQLDataException("Column " + columnIndex + " is not an ARRAY", "22005");
+    }
+    Optional<Schema> cached = arrayElementSchemas.get(columnIndex);
+    if (cached == null) {
+      Schema declaration;
+      try {
+        declaration = getMetaData() instanceof AvroColumnMetadata metadata
+            ? JdbcTypeMapper.nonNullSchema(metadata.columnValueSchema(columnIndex))
+            : null;
+      } catch (RuntimeException failure) {
+        throw SqlExceptions.wrap("Invalid ARRAY declaration for column " + columnIndex, failure);
+      }
+      Schema elementSchema = declaration != null && declaration.getType() == Schema.Type.ARRAY
+          ? declaration.getElementType()
+          : null;
+      cached = Optional.ofNullable(elementSchema);
+      arrayElementSchemas.put(columnIndex, cached);
+    }
+    return new JParqArray(elements, cached.orElse(null));
+  }
+
+  /** {@inheritDoc} */
+  @Override
+  public Array getArray(String columnLabel) throws SQLException {
+    ensureOpen();
+    return getArray(findColumn(columnLabel));
   }
 
   @Override
