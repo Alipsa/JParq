@@ -32,6 +32,59 @@ import org.junit.jupiter.api.io.TempDir;
 class ArrayResultRepresentationTest {
 
   /**
+   * Element declarations, including unknown declarations, are resolved once per
+   * column.
+   */
+  @Test
+  void arraySchemasAreCachedPerColumn(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      try (var original = statement.executeQuery("SELECT ARRAY[1,2], ARRAY[NULL] FROM s");
+          var result = org.mockito.Mockito.spy(original)) {
+        int count = 0;
+        while (result.next()) {
+          assertEquals(Types.INTEGER, result.getArray(1).getBaseType());
+          assertEquals(Types.INTEGER, result.getArray(1).getBaseType());
+          assertEquals(Types.OTHER, result.getArray(2).getBaseType());
+          assertEquals(Types.OTHER, result.getArray(2).getBaseType());
+          count++;
+        }
+        assertEquals(2, count);
+        org.mockito.Mockito.verify(result, org.mockito.Mockito.times(2)).getMetaData();
+      }
+    }
+  }
+
+  /** Computed arrays retain declared types even when every element is null. */
+  @Test
+  void typedNullArrayElements(@TempDir Path directory) throws Exception {
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      for (String query : List.of("SELECT ARRAY[CAST(NULL AS INTEGER)] AS a",
+          "SELECT a FROM (SELECT ARRAY[CAST(NULL AS INTEGER)] AS a) t",
+          "WITH t AS (SELECT ARRAY[CAST(NULL AS INTEGER)] AS a) SELECT a FROM t",
+          "SELECT (SELECT ARRAY[CAST(NULL AS INTEGER)]) AS a")) {
+        try (var result = statement.executeQuery(query)) {
+          assertTrue(result.next(), query);
+          assertEquals(Types.ARRAY, result.getMetaData().getColumnType(1), query);
+          assertEquals(Types.INTEGER, result.getArray(1).getBaseType(), query);
+          assertEquals("INTEGER", result.getArray("a").getBaseTypeName(), query);
+          assertArrayEquals(new Object[]{
+              null
+          }, (Object[]) result.getArray(1).getArray(), query);
+        }
+      }
+      try (var result = statement.executeQuery("SELECT ARRAY[1,2.5], ARRAY[ARRAY[CAST(NULL AS INTEGER)]]")) {
+        assertTrue(result.next());
+        assertEquals(Types.DECIMAL, result.getArray(1).getBaseType());
+        try (var elements = result.getArray(2).getResultSet()) {
+          assertTrue(elements.next());
+          assertEquals(Types.INTEGER, elements.getArray(2).getBaseType());
+        }
+      }
+    }
+  }
+
+  /**
    * Both JDBC array accessors preserve non-null, empty, null, and computed
    * results.
    */

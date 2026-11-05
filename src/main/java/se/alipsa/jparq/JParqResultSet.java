@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Array;
 import java.sql.Date;
 import java.sql.ResultSetMetaData;
+import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
@@ -84,6 +85,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private Schema metadataSchema;
   private final Map<Integer, Optional<Schema.Field>> materializedColumnBindings = new HashMap<>();
   private final Map<Integer, Optional<Schema>> intervalOutputSchemas = new HashMap<>();
+  private final Map<Integer, Optional<Schema>> arrayElementSchemas = new HashMap<>();
   private final CorrelationMappings metadataSourceMappings;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
@@ -455,7 +457,7 @@ public class JParqResultSet extends ResultSetAdapter {
    * @param rows
    *          materialized row data backing the result set
    */
-  private JParqResultSet(String tableName, String tableSchema, String tableCatalog, List<String> columnLabels,
+  JParqResultSet(String tableName, String tableSchema, String tableCatalog, List<String> columnLabels,
       List<Integer> sqlTypes, List<List<Object>> rows) {
     this.tableName = tableName;
     this.tableSchema = tableSchema;
@@ -1675,15 +1677,20 @@ public class JParqResultSet extends ResultSetAdapter {
       return null;
     }
     if (!(value instanceof Object[] elements)) {
-      throw new java.sql.SQLDataException("Column " + columnIndex + " is not an ARRAY", "22005");
+      throw new SQLDataException("Column " + columnIndex + " is not an ARRAY", "22005");
     }
-    Schema declaration = getMetaData() instanceof AvroColumnMetadata metadata
-        ? JdbcTypeMapper.nonNullSchema(metadata.columnValueSchema(columnIndex))
-        : null;
-    Schema elementSchema = declaration != null && declaration.getType() == Schema.Type.ARRAY
-        ? declaration.getElementType()
-        : null;
-    return new JParqArray(elements, elementSchema);
+    Optional<Schema> cached = arrayElementSchemas.get(columnIndex);
+    if (cached == null) {
+      Schema declaration = getMetaData() instanceof AvroColumnMetadata metadata
+          ? JdbcTypeMapper.nonNullSchema(metadata.columnValueSchema(columnIndex))
+          : null;
+      Schema elementSchema = declaration != null && declaration.getType() == Schema.Type.ARRAY
+          ? declaration.getElementType()
+          : null;
+      cached = Optional.ofNullable(elementSchema);
+      arrayElementSchemas.put(columnIndex, cached);
+    }
+    return new JParqArray(elements, cached.orElse(null));
   }
 
   /** {@inheritDoc} */

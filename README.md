@@ -835,15 +835,16 @@ The following SQL statements are supported:
   `ANY`/`SOME` and TRUE for `ALL`; NULL arrays or undecided comparisons with NULL elements yield UNKNOWN.
   Array-column values decode scalar element logical types, including dates, decimals, and timestamps,
   before comparison or correlation binding. Physical array and struct columns retain their types through derived tables, CTEs, and set operations,
-  with matching source schemas available even for empty results. Computed arrays and arrays with differing
-  set-branch schemas in non-LATERAL derived tables and CTEs infer element types
+  with matching source schemas available even for empty results. Computed arrays with unknown element
+  declarations and arrays with differing set-branch schemas in non-LATERAL derived tables and CTEs infer element types
   from returned values, recursively; empty or all-NULL elements use a nullable VARCHAR element schema.
   JDBC `getObject()` returns every ARRAY value, whether from a stored column or a computed constructor, as
   `Object[]` (including mixed set-operation results), and struct columns as Avro `GenericRecord` values.
   `getArray(index)` and `getArray(label)` return detached JDBC
   `Array` objects; SQL NULL returns null and sets `wasNull()`. JDBC arrays expose element type metadata,
   `Object[]` contents, one-based slices, and INDEX/VALUE element result sets. `free()` releases the
-  array; subsequent reads raise `SQLException`. Unknown computed element types use OTHER metadata.
+  array; subsequent reads raise `SQLException`. Computed arrays retain declared numeric element types
+  even when every element is NULL.
   Custom user-defined element mappings raise `SQLFeatureNotSupportedException` when requested.
   Struct fields retain their raw Avro representations:
   strings can be `Utf8`, dates epoch-day integers, decimals `ByteBuffer`, and timestamps stored longs.

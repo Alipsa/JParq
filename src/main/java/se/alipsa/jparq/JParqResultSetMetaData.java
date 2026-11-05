@@ -21,6 +21,7 @@ import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionLi
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
+import se.alipsa.jparq.engine.ArrayExpressionSchemas;
 import se.alipsa.jparq.engine.BooleanExpressions;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.CorrelationMappings;
@@ -292,11 +293,11 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   }
 
   /**
-   * Retains the source schema of a physical column during materialization.
+   * Retains physical and declared computed value schemas during materialization.
    *
    * @param column
    *          one-based output column index
-   * @return non-null source schema, or null when no physical field is known
+   * @return declared value schema, or null when its type is unknown
    */
   @Override
   public Schema columnValueSchema(int column) {
@@ -316,7 +317,16 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
       return numeric.schema();
     }
     Schema.Field field = resolveField(column);
-    return field == null ? null : JdbcTypeMapper.nonNullSchema(field.schema());
+    if (field != null) {
+      return JdbcTypeMapper.nonNullSchema(field.schema());
+    }
+    if (resolveComputedColumnType(column) != Types.ARRAY) {
+      return null;
+    }
+    return ArrayExpressionSchemas.resolve(expressionAtColumn(column), reference -> {
+      Schema.Field source = resolveSourceField(reference);
+      return source == null ? null : source.schema();
+    });
   }
 
   @Override

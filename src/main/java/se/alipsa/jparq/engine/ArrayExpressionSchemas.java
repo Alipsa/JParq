@@ -10,6 +10,7 @@ import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
+import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.NumericType;
 import se.alipsa.jparq.engine.function.StructArrayTypes;
@@ -33,49 +34,68 @@ public final class ArrayExpressionSchemas {
    *           incompatible
    */
   public static Schema resolve(Expression expression) {
+    return resolve(expression, column -> null);
+  }
+
+  /**
+   * Resolves declarations using the input columns visible to the expression.
+   *
+   * @param expression
+   *          expression whose declaration is needed
+   * @param columns
+   *          source column schema resolver
+   * @return declared schema, or null when unknown
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 if known array element types are
+   *           incompatible
+   */
+  public static Schema resolve(Expression expression, java.util.function.Function<Column, Schema> columns) {
+    if (expression instanceof Column column) {
+      return JdbcTypeMapper.nonNullSchema(columns.apply(column));
+    }
     if (expression instanceof Function function && CorrelatedBindings.matches(function)) {
       return JdbcTypeMapper.nonNullSchema(CorrelatedBindings.schema(function));
     }
     if (expression instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
-      return resolve(list.getFirst());
+      return resolve(list.getFirst(), columns);
     }
     if (expression instanceof net.sf.jsqlparser.statement.select.ParenthesedSelect select) {
-      return resolve(select.getSelect());
+      return resolve(select.getSelect(), columns);
     }
     if (expression instanceof net.sf.jsqlparser.statement.select.PlainSelect select
         && select.getSelectItems().size() == 1) {
-      return resolve(select.getSelectItems().getFirst().getExpression());
+      return resolve(select.getSelectItems().getFirst().getExpression(), columns);
     }
     if (expression instanceof ArrayConstructor array) {
-      Schema element = common(array.getExpressions());
+      Schema element = common(array.getExpressions(), columns);
       return element == null ? null : Schema.createArray(element);
     }
     if (expression instanceof Function function && function.getParameters() != null) {
       if ("ARRAY".equalsIgnoreCase(function.getName())) {
-        Schema element = common(function.getParameters());
+        Schema element = common(function.getParameters(), columns);
         return element == null ? null : Schema.createArray(element);
       }
       if ("NULLIF".equalsIgnoreCase(function.getName()) && !function.getParameters().isEmpty()) {
-        return resolve(function.getParameters().getFirst());
+        return resolve(function.getParameters().getFirst(), columns);
       }
       if ("COALESCE".equalsIgnoreCase(function.getName())) {
-        return common(function.getParameters());
+        return common(function.getParameters(), columns);
       }
     }
     if (expression instanceof CaseExpression choice) {
-      return common(ExpressionBranches.caseResults(choice));
+      return common(ExpressionBranches.caseResults(choice), columns);
     }
     if (expression instanceof BinaryExpression binary && NumericExpressionTypes.operation(expression) != null) {
-      NumericType left = numeric(resolve(binary.getLeftExpression()));
-      NumericType right = numeric(resolve(binary.getRightExpression()));
+      NumericType left = numeric(resolve(binary.getLeftExpression(), columns));
+      NumericType right = numeric(resolve(binary.getRightExpression(), columns));
       return left == null || right == null
           ? null
           : left.arithmetic(right, NumericExpressionTypes.operation(expression)).schema();
     }
     if (expression instanceof SignedExpression signed) {
-      return resolve(signed.getExpression());
+      return resolve(signed.getExpression(), columns);
     }
-    NumericType numeric = NumericExpressionTypes.resolve(expression, column -> null);
+    NumericType numeric = NumericExpressionTypes.resolve(expression, column -> numeric(columns.apply(column)));
     if (numeric != null) {
       return numeric.schema();
     }
@@ -98,15 +118,18 @@ public final class ArrayExpressionSchemas {
    *
    * @param expressions
    *          candidate values or branches
+   * @param columns
+   *          source column schema resolver
    * @return common known schema, or null when no declaration is available
    * @throws IllegalArgumentException
    *           carrying SQLState 42000 if known array element types are
    *           incompatible
    */
-  private static Schema common(List<? extends Expression> expressions) {
+  private static Schema common(List<? extends Expression> expressions,
+      java.util.function.Function<Column, Schema> columns) {
     Schema result = null;
     for (Expression expression : expressions) {
-      result = common(result, resolve(expression));
+      result = common(result, resolve(expression, columns));
     }
     return result;
   }

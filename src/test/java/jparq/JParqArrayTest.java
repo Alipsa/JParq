@@ -4,12 +4,19 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.math.BigDecimal;
 import java.sql.Date;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Types;
+import java.time.Duration;
 import java.util.Map;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
+import org.apache.avro.SchemaBuilder;
+import org.apache.avro.generic.GenericData;
+import org.apache.avro.generic.GenericFixed;
+import org.apache.avro.generic.GenericRecord;
 import org.junit.jupiter.api.Test;
 import se.alipsa.jparq.JParqArray;
 
@@ -59,9 +66,14 @@ class JParqArrayTest {
     try (var rows = array.getResultSet()) {
       assertEquals(Types.BIGINT, rows.getMetaData().getColumnType(1));
       assertEquals(Types.INTEGER, rows.getMetaData().getColumnType(2));
+      assertEquals(ResultSetMetaData.columnNoNulls, rows.getMetaData().isNullable(1));
+      assertEquals(ResultSetMetaData.columnNullable, rows.getMetaData().isNullable(2));
+      assertEquals(ResultSet.CONCUR_READ_ONLY, rows.getConcurrency());
       for (int i = 1; i <= 3; i++) {
         assertTrue(rows.next());
         assertEquals(i, rows.getLong("INDEX"));
+        assertFalse(rows.rowInserted());
+        rows.updateObject(2, 99);
         assertEquals(i == 2 ? null : i, rows.getObject("VALUE"));
         assertEquals(i == 2, rows.wasNull());
       }
@@ -148,11 +160,153 @@ class JParqArrayTest {
     var structs = new JParqArray(new Object[]{
         null
     }, record);
+    assertEquals("example.element", structs.getBaseTypeName());
     assertArrayEquals(new Object[]{
         null
     }, (Object[]) structs.getArray(Map.of("unrelated", String.class)));
     assertThrows(SQLFeatureNotSupportedException.class,
         () -> structs.getArray(Map.of("example.element", String.class)));
+  }
+
+  /** Large element cursors retain order and avoid quadratic front insertions. */
+  @Test
+  void largeElementCursorBuildsInOrder() {
+    assertTimeout(Duration.ofSeconds(5), () -> {
+      Object[] values = new Object[200_000];
+      for (int i = 0; i < values.length; i++) {
+        values[i] = i;
+      }
+      try (var rows = new JParqArray(values, Schema.create(Schema.Type.INT)).getResultSet()) {
+        for (int i = 0; i < values.length; i++) {
+          assertTrue(rows.next());
+          assertEquals(i + 1, rows.getLong(1));
+          assertEquals(i, rows.getInt(2));
+        }
+        assertFalse(rows.next());
+      }
+    });
+  }
+
+  /** Binary and record elements are detached on input and on every accessor. */
+  @Test
+  void mutableElementsAreIndependent() throws Exception {
+    byte[] bytes = {
+        1, 2
+    };
+    var binary = new JParqArray(new Object[]{
+        bytes
+    }, Schema.create(Schema.Type.BYTES));
+    bytes[0] = 9;
+    ((byte[]) ((Object[]) binary.getArray())[0])[0] = 8;
+    ((byte[]) ((Object[]) binary.getArray(1, 1))[0])[0] = 7;
+    try (var rows = binary.getResultSet()) {
+      assertTrue(rows.next());
+      ((byte[]) rows.getObject(2))[0] = 6;
+    }
+    assertArrayEquals(new byte[]{
+        1, 2
+    }, (byte[]) ((Object[]) binary.getArray())[0]);
+
+    Schema schema = SchemaBuilder.record("element").namespace("example").fields().requiredBytes("payload").endRecord();
+    GenericRecord record = new GenericData.Record(schema);
+    record.put("payload", new byte[]{
+        3, 4
+    });
+    var structs = new JParqArray(new Object[]{
+        record
+    }, schema);
+    ((byte[]) record.get("payload"))[0] = 9;
+    GenericRecord copy = (GenericRecord) ((Object[]) structs.getArray())[0];
+    ((byte[]) copy.get("payload"))[0] = 8;
+    try (var rows = structs.getResultSet()) {
+      assertTrue(rows.next());
+      assertEquals("example.element", rows.getMetaData().getColumnTypeName(2));
+      ((GenericRecord) rows.getObject(2)).put("payload", new byte[]{
+          7
+      });
+    }
+    GenericRecord retained = (GenericRecord) ((Object[]) structs.getArray())[0];
+    assertArrayEquals(new byte[]{
+        3, 4
+    }, (byte[]) retained.get("payload"));
+  }
+
+  /** Mutable fields inside records retain independent copies at every depth. */
+  @Test
+  void nestedMutableRecordValuesAreIndependent() throws Exception {
+    Schema schema = SchemaBuilder.record("complex").fields().name("attributes").type().map().values().bytesType()
+        .noDefault().name("items").type().array().items().bytesType().noDefault().name("fixed").type().fixed("pair")
+        .size(2).noDefault().name("text").type().stringType().noDefault().name("date")
+        .type(LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT))).noDefault().endRecord();
+    var buffer = java.nio.ByteBuffer.wrap(new byte[]{
+        0, 1, 2
+    });
+    buffer.position(1);
+    var text = new org.apache.avro.util.Utf8("original");
+    var date = Date.valueOf("2026-01-02");
+    GenericRecord record = new GenericData.Record(schema);
+    record.put("attributes", Map.of("binary", buffer));
+    record.put("items", java.util.List.of(new byte[]{
+        3, 4
+    }));
+    var fixed = new GenericData.Fixed(schema.getField("fixed").schema(), new byte[]{
+        5, 6
+    });
+    record.put("fixed", fixed);
+    record.put("text", text);
+    record.put("date", date);
+    var array = new JParqArray(new Object[]{
+        record
+    }, schema);
+    buffer.put(1, (byte) 9);
+    fixed.bytes()[0] = 9;
+    text.set("changed");
+    date.setTime(0);
+    GenericRecord copy = (GenericRecord) ((Object[]) array.getArray())[0];
+    var copiedBuffer = (java.nio.ByteBuffer) ((Map<?, ?>) copy.get("attributes")).get("binary");
+    assertEquals(java.nio.ByteBuffer.wrap(new byte[]{
+        1, 2
+    }), copiedBuffer);
+    assertEquals(1, buffer.position());
+    assertArrayEquals(new byte[]{
+        5, 6
+    }, ((GenericFixed) copy.get("fixed")).bytes());
+    ((GenericFixed) copy.get("fixed")).bytes()[0] = 8;
+    assertEquals("original", copy.get("text").toString());
+    assertEquals(Date.valueOf("2026-01-02"), copy.get("date"));
+    ((byte[]) ((java.util.List<?>) copy.get("items")).getFirst())[0] = 9;
+    copiedBuffer.put(0, (byte) 8);
+    ((org.apache.avro.util.Utf8) copy.get("text")).set("changed again");
+    ((Date) copy.get("date")).setTime(0);
+    GenericRecord retained = (GenericRecord) ((Object[]) array.getArray())[0];
+    assertArrayEquals(new byte[]{
+        3, 4
+    }, (byte[]) ((java.util.List<?>) retained.get("items")).getFirst());
+    assertEquals(java.nio.ByteBuffer.wrap(new byte[]{
+        1, 2
+    }), ((Map<?, ?>) retained.get("attributes")).get("binary"));
+    assertArrayEquals(new byte[]{
+        5, 6
+    }, ((GenericFixed) retained.get("fixed")).bytes());
+    assertEquals("original", retained.get("text").toString());
+    assertEquals(Date.valueOf("2026-01-02"), retained.get("date"));
+  }
+
+  /** VALUE permits nulls for scalar, logical, and nested element declarations. */
+  @Test
+  void nullableElementMetadata() throws Exception {
+    for (Schema schema : java.util.List.of(Schema.create(Schema.Type.INT), Schema.create(Schema.Type.STRING),
+        LogicalTypes.decimal(8, 2).addToSchema(Schema.create(Schema.Type.BYTES)),
+        Schema.createArray(Schema.create(Schema.Type.INT)))) {
+      try (var rows = new JParqArray(new Object[]{
+          null
+      }, schema).getResultSet()) {
+        assertEquals(ResultSetMetaData.columnNullable, rows.getMetaData().isNullable(2));
+        assertTrue(rows.next());
+        assertNull(rows.getObject(2));
+        assertTrue(rows.wasNull());
+      }
+    }
   }
 
   /** Free is idempotent and rejects every subsequent read operation. */
