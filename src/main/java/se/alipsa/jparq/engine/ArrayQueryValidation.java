@@ -13,6 +13,7 @@ import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.AllColumns;
+import net.sf.jsqlparser.statement.select.AllTableColumns;
 import net.sf.jsqlparser.statement.select.FromItem;
 import net.sf.jsqlparser.statement.select.ParenthesedFromItem;
 import net.sf.jsqlparser.statement.select.ParenthesedSelect;
@@ -23,6 +24,7 @@ import net.sf.jsqlparser.statement.select.TableFunction;
 import net.sf.jsqlparser.statement.select.Values;
 import net.sf.jsqlparser.statement.select.WithItem;
 import org.apache.avro.Schema;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 
 /**
  * Validates ARRAY declarations throughout SQL queries without evaluating rows.
@@ -71,7 +73,20 @@ public final class ArrayQueryValidation {
    * @return declared projection schema, or null when unknown
    */
   public static Schema projectionSchema(Select query) {
-    return projectedValue(query, new Scope(column -> null, table -> null, Map.of(), new HashSet<>()));
+    return projectionSchema(query, table -> null);
+  }
+
+  /**
+   * Resolves a scalar projection using the engine's source schema declarations.
+   *
+   * @param query
+   *          scalar query
+   * @param tables
+   *          input schema resolver
+   * @return known projection schema, or null when uncertain
+   */
+  public static Schema projectionSchema(Select query, Function<Table, Schema> tables) {
+    return projectedValue(query, new Scope(column -> null, tables, Map.of(), new HashSet<>()));
   }
 
   /**
@@ -266,18 +281,100 @@ public final class ArrayQueryValidation {
    */
   private static Scope localScope(PlainSelect query, Scope outer) {
     return new Scope(column -> {
-      Binding match = new Binding(false, null);
-      for (FromItem input : inputs(query)) {
-        Binding binding = sourceColumn(input, column, outer);
-        if (binding.present()) {
-          if (match.present()) {
-            return null;
-          }
-          match = binding;
-        }
+      Binding match = localColumn(query, column, outer);
+      if (match.present()) {
+        return match.schema();
       }
-      return match.present() ? match.schema() : outer.columns().apply(column);
+      String qualifier = column.getTable() == null ? null : column.getTable().getName();
+      boolean localQualifier = qualifier != null && inputs(query).stream()
+          .anyMatch(input -> Identifier.of(qualifier).matches(Identifier.of(sourceName(input))));
+      return localQualifier ? null : outer.columns().apply(column);
     }, outer.tables(), outer.ctes(), outer.resolving());
+  }
+
+  /**
+   * Resolves only the current query's inputs, without correlation fallback.
+   *
+   * @param query
+   *          declaring SELECT
+   * @param column
+   *          requested column
+   * @param scope
+   *          enclosing declarations
+   * @return matching local binding, or an absent binding
+   */
+  private static Binding localColumn(PlainSelect query, Column column, Scope scope) {
+    Binding match = new Binding(false, null);
+    for (FromItem input : inputs(query)) {
+      Binding binding = sourceColumn(input, column, scope);
+      if (binding.present()) {
+        if (match.present()) {
+          return coalescedColumn(query, column, scope);
+        }
+        match = binding;
+      }
+    }
+    return match;
+  }
+
+  /**
+   * Reuses joined-schema binding for USING and NATURAL common columns. Other
+   * duplicate or unresolved inputs retain an unknown local binding.
+   *
+   * @param query
+   *          joined SELECT
+   * @param column
+   *          duplicate local reference
+   * @param scope
+   *          source schema context
+   * @return coalesced declaration, or an unknown local binding
+   */
+  private static Binding coalescedColumn(PlainSelect query, Column column, Scope scope) {
+    if (column.getTable() != null && column.getTable().getName() != null || query.getJoins() == null) {
+      return new Binding(true, null);
+    }
+    boolean merged = query.getJoins().stream()
+        .anyMatch(join -> join.isNatural() || join.getUsingColumns() != null && join.getUsingColumns().stream()
+            .anyMatch(key -> Identifier.of(key.getColumnName()).matches(Identifier.of(column.getColumnName()))));
+    if (!merged) {
+      return new Binding(true, null);
+    }
+    List<JoinRecordReader.JoinTable> tables = new ArrayList<>();
+    List<FromItem> sources = inputs(query);
+    for (int i = 0; i < sources.size(); i++) {
+      FromItem input = sources.get(i);
+      if (!(input instanceof Table table) || Identifier.of(table.getName()).resolve(scope.ctes()) != null
+          || input.getAlias() != null && input.getAlias().getAliasColumns() != null
+              && !input.getAlias().getAliasColumns().isEmpty()) {
+        return new Binding(true, null);
+      }
+      Schema schema = scope.tables().apply(table);
+      if (schema == null) {
+        return new Binding(true, null);
+      }
+      List<String> using = List.of();
+      SqlParser.JoinType type = SqlParser.JoinType.BASE;
+      if (i > 0) {
+        var join = query.getJoins().get(i - 1);
+        type = join.isFull()
+            ? SqlParser.JoinType.FULL_OUTER
+            : join.isRight()
+                ? SqlParser.JoinType.RIGHT_OUTER
+                : join.isLeft() ? SqlParser.JoinType.LEFT_OUTER : SqlParser.JoinType.INNER;
+        using = join.isNatural()
+            ? List.of(column.getColumnName())
+            : join.getUsingColumns() == null
+                ? List.of()
+                : join.getUsingColumns().stream().map(Column::getColumnName).toList();
+      }
+      tables.add(new JoinRecordReader.JoinTable(table.getName(),
+          input.getAlias() == null ? null : input.getAlias().getName(), schema, List.of(), type, null, using, null));
+    }
+    try {
+      return new Binding(true, JoinRecordReader.columnSchema(tables, null, column.getColumnName()));
+    } catch (IllegalArgumentException ambiguous) {
+      return new Binding(true, null);
+    }
   }
 
   /**
@@ -311,9 +408,7 @@ public final class ArrayQueryValidation {
    */
   private static Binding sourceColumn(FromItem input, Column column, Scope scope) {
     String qualifier = column.getTable() == null ? null : column.getTable().getName();
-    String name = input.getAlias() != null
-        ? input.getAlias().getName()
-        : input instanceof Table table ? table.getName() : null;
+    String name = sourceName(input);
     if (qualifier != null && !Identifier.of(qualifier).matches(Identifier.of(name))) {
       return new Binding(false, null);
     }
@@ -340,17 +435,87 @@ public final class ArrayQueryValidation {
         }
         return new Binding(false, null);
       }
-      for (Schema.Field field : schema.getFields()) {
-        if (Identifier.of(column.getColumnName()).matches(Identifier.of(field.name()))) {
-          return new Binding(true, field.schema());
-        }
-      }
-      return new Binding(false, null);
+      return schemaColumn(schema, column.getColumnName());
     }
     if (input instanceof Select select) {
       return projectedColumn(select, column.getColumnName(), aliases, scope);
     }
+    if (input instanceof TableFunction function) {
+      return unnestColumn(function, column, aliases, scope);
+    }
     return new Binding(true, null);
+  }
+
+  /**
+   * Returns the SQL-visible qualifier of a table or derived input.
+   *
+   * @param input
+   *          local source
+   * @return its alias or unaliased table name, possibly null
+   */
+  private static String sourceName(FromItem input) {
+    return input.getAlias() != null
+        ? input.getAlias().getName()
+        : input instanceof Table table ? table.getName() : null;
+  }
+
+  /**
+   * Reuses SQL label and ambiguity handling from the engine's column mappings.
+   *
+   * @param schema
+   *          source record schema
+   * @param name
+   *          SQL column name
+   * @return resolved field or an absent/uncertain binding
+   */
+  private static Binding schemaColumn(Schema schema, String name) {
+    Map<String, String> names = ColumnMappingUtil.unqualifiedColumnMapping(schema);
+    try {
+      String canonical = ColumnMappingUtil.canonicalFieldName(null, name, Map.of(), names, names);
+      canonical = MaterializedNames.sqlReference(schema, name, canonical);
+      Schema.Field field = canonical == null ? null : schema.getField(canonical);
+      return field == null ? new Binding(false, null) : new Binding(true, field.schema());
+    } catch (IllegalArgumentException ambiguous) {
+      return new Binding(true, null);
+    }
+  }
+
+  /**
+   * Reuses UNNEST alias and record expansion rules without evaluating elements.
+   *
+   * @param input
+   *          table function
+   * @param column
+   *          requested output column
+   * @param aliases
+   *          explicit output aliases
+   * @param scope
+   *          available argument declarations
+   * @return known element/ordinality declaration or an unknown local binding
+   */
+  private static Binding unnestColumn(TableFunction input, Column column, List<String> aliases, Scope scope) {
+    var function = input.getFunction();
+    if (function == null || !"UNNEST".equalsIgnoreCase(function.getName()) || function.getParameters() == null
+        || function.getParameters().size() != 1) {
+      return new Binding(true, null);
+    }
+    Expression argument = function.getParameters().getFirst();
+    Schema array = JdbcTypeMapper.nonNullSchema(resolve(argument, scope));
+    if (array == null || array.getType() != Schema.Type.ARRAY) {
+      return new Binding(true, null);
+    }
+    Schema element = JdbcTypeMapper.nonNullSchema(array.getElementType());
+    String alias = input.getAlias() == null ? "unnest" : input.getAlias().getName();
+    var definition = new SqlParser.UnnestDefinition(argument, "ORDINALITY".equalsIgnoreCase(input.getWithClause()),
+        aliases);
+    var reference = new SqlParser.TableReference(null, null, alias, SqlParser.JoinType.BASE, null, null, null, null,
+        List.of(), null, definition, false, null, List.of(), List.of());
+    try {
+      var plan = UnnestTableBuilder.AliasPlan.build(definition, element, alias);
+      return schemaColumn(UnnestTableBuilder.buildSchema(reference, element, plan), column.getColumnName());
+    } catch (java.sql.SQLException invalid) {
+      throw new IllegalArgumentException(invalid.getMessage(), invalid);
+    }
   }
 
   /**
@@ -376,12 +541,30 @@ public final class ArrayQueryValidation {
         return projectedColumn(nested.getSelect(), name, aliases, inherited);
       }
       if (query instanceof PlainSelect plain) {
+        if (!aliases.isEmpty()
+            && plain.getSelectItems().stream().anyMatch(item -> item.getExpression() instanceof AllColumns)) {
+          // Wildcards can expand to several positions. Let bound engine metadata
+          // establish their types rather than assigning aliases by select-item index.
+          boolean exported = aliases.stream().anyMatch(alias -> Identifier.of(name).matches(Identifier.of(alias)));
+          return new Binding(exported, null);
+        }
         Scope local = localScope(plain, inherited);
+        Binding match = new Binding(false, null);
         for (int i = 0; i < plain.getSelectItems().size(); i++) {
           var item = plain.getSelectItems().get(i);
           Expression expression = item.getExpression();
           if (expression instanceof AllColumns) {
-            return new Binding(true, local.columns().apply(new Column(name)));
+            Column reference = expression instanceof AllTableColumns all
+                ? new Column(all.getTable(), name)
+                : new Column(name);
+            Binding binding = localColumn(plain, reference, inherited);
+            if (binding.present()) {
+              if (match.present()) {
+                return new Binding(true, null);
+              }
+              match = binding;
+            }
+            continue;
           }
           String label = i < aliases.size()
               ? aliases.get(i)
@@ -389,10 +572,13 @@ public final class ArrayQueryValidation {
                   ? item.getAlias().getName()
                   : expression instanceof Column column ? column.getColumnName() : expression.toString();
           if (Identifier.of(name).matches(Identifier.of(label))) {
-            return new Binding(true, resolve(expression, local));
+            if (match.present()) {
+              return new Binding(true, null);
+            }
+            match = new Binding(true, resolve(expression, local));
           }
         }
-        return new Binding(false, null);
+        return match;
       }
       return new Binding(true, null);
     } finally {

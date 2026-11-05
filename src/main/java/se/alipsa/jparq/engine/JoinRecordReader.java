@@ -454,6 +454,30 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
     this.resultIndex = 0;
   }
 
+  /**
+   * Resolves a column using the same joined schema and USING mappings as
+   * execution. Input rows and join predicates are not evaluated.
+   *
+   * @param tables
+   *          ordered inputs with their declared schemas
+   * @param qualifier
+   *          optional SQL table qualifier
+   * @param name
+   *          SQL column name
+   * @return declared field schema, or null when the column is absent
+   * @throws IllegalArgumentException
+   *           if the joined column name is ambiguous or the inputs are invalid
+   */
+  public static Schema columnSchema(List<JoinTable> tables, String qualifier, String name) {
+    SchemaContext context = buildSchema(tables, new ArrayList<>(), UsingMetadata.from(tables));
+    Map<String, String> index = MaterializedNames.lookupIndex(context.schema());
+    String canonical = ColumnMappingUtil.canonicalFieldName(qualifier, name, context.qualifierMapping(),
+        context.unqualifiedMapping(), index);
+    canonical = MaterializedNames.sqlReference(context.schema(), name, canonical);
+    Schema.Field field = canonical == null ? null : context.schema().getField(canonical);
+    return field == null ? null : field.schema();
+  }
+
   private static SchemaContext buildSchema(List<JoinTable> tables, List<FieldMapping> mappings,
       UsingMetadata usingMetadata) {
     Map<String, UsingFieldState> usingFieldStates = new LinkedHashMap<>();
