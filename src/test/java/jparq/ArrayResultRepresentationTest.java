@@ -138,6 +138,84 @@ class ArrayResultRepresentationTest {
   }
 
   /**
+   * Every clause and unreachable subquery rejects incompatible declared elements
+   * during planning.
+   */
+  @Test
+  void invalidArraysFailInEveryQueryClause(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      for (String array : List.of("ARRAY[CAST(NULL AS VARCHAR), 1]", "ARRAY[CAST(NULL AS BOOLEAN), 1]",
+          "ARRAY[CAST(NULL AS DATE), CURRENT_TIMESTAMP]", "ARRAY[CAST(NULL AS VARCHAR), TRUE]")) {
+        for (String query : List.of("SELECT id FROM s WHERE " + array + " IS NOT NULL",
+            "SELECT id FROM s ORDER BY " + array, "SELECT id FROM s GROUP BY id HAVING " + array + " IS NOT NULL",
+            "SELECT id FROM s GROUP BY id, " + array, "SELECT a.id FROM s a JOIN s b ON " + array + " IS NOT NULL",
+            "SELECT (SELECT " + array + ") AS v FROM s WHERE 1 = 0",
+            "SELECT id FROM s WHERE EXISTS (SELECT " + array + ") AND 1 = 0",
+            "SELECT id FROM s WHERE FALSE AND " + array + " IS NOT NULL",
+            "SELECT id FROM s ORDER BY (SELECT " + array + ")",
+            "SELECT (WITH c AS (SELECT " + array + " AS v) SELECT v FROM c) FROM s WHERE 1 = 0",
+            "SELECT (SELECT id FROM s ORDER BY " + array + ") FROM s WHERE 1 = 0",
+            "SELECT id FROM s UNION ALL SELECT id FROM s ORDER BY " + array)) {
+          var error = assertThrows(java.sql.SQLSyntaxErrorException.class, () -> statement.executeQuery(query), query);
+          assertEquals("42000", error.getSQLState(), query);
+          assertTrue(error.getMessage().contains("ARRAY elements must share a common type"), query);
+        }
+      }
+    }
+  }
+
+  /**
+   * Nested inputs and WITH declarations shadow same-named outer columns during
+   * validation.
+   */
+  @Test
+  void arrayValidationUsesNestedColumnScopes(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      for (String nested : List.of("SELECT ARRAY[CAST(NULL AS VARCHAR), id] FROM s",
+          "WITH c(id) AS (SELECT CAST(NULL AS INTEGER)) SELECT ARRAY[CAST(NULL AS VARCHAR), id] FROM c",
+          "SELECT ARRAY[CAST(NULL AS VARCHAR), id] FROM (SELECT 1 AS original) t(id)")) {
+        String query = "SELECT (" + nested + ") FROM (SELECT 'outer' AS id) o WHERE 1 = 0";
+        var error = assertThrows(java.sql.SQLSyntaxErrorException.class, () -> statement.executeQuery(query), query);
+        assertEquals("42000", error.getSQLState(), query);
+      }
+      for (String nested : List.of("SELECT ARRAY[CAST(NULL AS VARCHAR), id] FROM (SELECT 'inner' AS id) t",
+          "WITH c(id) AS (SELECT 'inner') SELECT ARRAY[CAST(NULL AS VARCHAR), id] FROM c",
+          "SELECT ARRAY[CAST(NULL AS VARCHAR), id] FROM (SELECT 'inner' AS original) t(id)")) {
+        String query = "SELECT (" + nested + ") FROM s WHERE 1 = 0";
+        try (var result = statement.executeQuery(query)) {
+          assertFalse(result.next(), query);
+        }
+      }
+      String scalar = "SELECT ARRAY[CAST(NULL AS VARCHAR), (SELECT id FROM s LIMIT 1)] FROM s WHERE 1 = 0";
+      assertEquals("42000",
+          assertThrows(java.sql.SQLSyntaxErrorException.class, () -> statement.executeQuery(scalar)).getSQLState());
+    }
+  }
+
+  /**
+   * Unsupported LOB array declarations are rejected without silently changing
+   * their type.
+   */
+  @Test
+  void lobArrayElementsAreExplicitlyUnsupported(@TempDir Path directory) throws Exception {
+    try (var connection = connect(directory); var statement = connection.createStatement()) {
+      for (String type : List.of("CLOB", "BLOB")) {
+        String array = "ARRAY[CAST(NULL AS " + type + ")]";
+        for (String query : List.of("SELECT " + array, "SELECT a FROM (SELECT " + array + " AS a) t",
+            "WITH t AS (SELECT " + array + " AS a) SELECT a FROM t", "SELECT (SELECT " + array + ") WHERE 1 = 0",
+            "SELECT 1 WHERE " + array + " IS NOT NULL")) {
+          var error = assertThrows(java.sql.SQLFeatureNotSupportedException.class, () -> statement.executeQuery(query),
+              query);
+          assertEquals("0A000", error.getSQLState(), query);
+          assertTrue(error.getMessage().contains(type), query);
+        }
+      }
+    }
+  }
+
+  /**
    * Defensive array getters translate declaration failures to classified JDBC
    * exceptions.
    */

@@ -5,11 +5,11 @@ import java.sql.Types;
 import java.util.List;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.BinaryExpression;
+import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
 import net.sf.jsqlparser.expression.Expression;
-import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.StringValue;
@@ -32,7 +32,7 @@ public final class ArrayExpressionSchemas {
 
   /**
    * Validates ARRAY declarations in a projection without evaluating its values.
-   * Nested query scopes validate their own projections during planning.
+   * Nested queries resolve declarations in their own lexical scopes.
    *
    * @param expression
    *          projected expression
@@ -42,31 +42,7 @@ public final class ArrayExpressionSchemas {
    *           carrying SQLState 42000 for incompatible element declarations
    */
   public static void validate(Expression expression, java.util.function.Function<Column, Schema> columns) {
-    expression.accept(new ExpressionVisitorAdapter<Void>() {
-      @Override
-      public <S> Void visit(ArrayConstructor array, S context) {
-        resolve(array, columns);
-        return super.visit(array, context);
-      }
-
-      @Override
-      public <S> Void visit(Function function, S context) {
-        if ("ARRAY".equalsIgnoreCase(function.getName())) {
-          resolve(function, columns);
-        }
-        return super.visit(function, context);
-      }
-
-      @Override
-      public <S> Void visit(net.sf.jsqlparser.statement.select.Select select, S context) {
-        return null;
-      }
-
-      @Override
-      public <S> Void visit(net.sf.jsqlparser.statement.select.ParenthesedSelect select, S context) {
-        return null;
-      }
-    }, null);
+    ArrayQueryValidation.validate(expression, columns, table -> null);
   }
 
   /**
@@ -97,50 +73,67 @@ public final class ArrayExpressionSchemas {
    *           incompatible
    */
   public static Schema resolve(Expression expression, java.util.function.Function<Column, Schema> columns) {
+    return resolve(expression, columns, ArrayQueryValidation::projectionSchema);
+  }
+
+  /**
+   * Resolves declarations with independently scoped scalar subquery metadata.
+   *
+   * @param expression
+   *          expression whose declaration is needed
+   * @param columns
+   *          local column schema resolver
+   * @param scalarSchemas
+   *          scalar projection schema resolver
+   * @return declared schema, or null when unknown
+   * @throws IllegalArgumentException
+   *           carrying a JDBC cause for incompatible declarations
+   */
+  public static Schema resolve(Expression expression, java.util.function.Function<Column, Schema> columns,
+      java.util.function.Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarSchemas) {
     if (expression instanceof Column column) {
       return JdbcTypeMapper.nonNullSchema(columns.apply(column));
+    }
+    if (expression instanceof BooleanValue || BooleanExpressions.isPredicate(expression)) {
+      return Schema.create(Schema.Type.BOOLEAN);
     }
     if (expression instanceof Function function && CorrelatedBindings.matches(function)) {
       return JdbcTypeMapper.nonNullSchema(CorrelatedBindings.schema(function));
     }
     if (expression instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
-      return resolve(list.getFirst(), columns);
+      return resolve(list.getFirst(), columns, scalarSchemas);
     }
-    if (expression instanceof net.sf.jsqlparser.statement.select.ParenthesedSelect select) {
-      return resolve(select.getSelect(), columns);
-    }
-    if (expression instanceof net.sf.jsqlparser.statement.select.PlainSelect select
-        && select.getSelectItems().size() == 1) {
-      return resolve(select.getSelectItems().getFirst().getExpression(), columns);
+    if (expression instanceof net.sf.jsqlparser.statement.select.Select select) {
+      return scalarSchemas.apply(select);
     }
     if (expression instanceof ArrayConstructor array) {
-      Schema element = common(array.getExpressions(), columns);
+      Schema element = common(array.getExpressions(), columns, scalarSchemas);
       return element == null ? null : Schema.createArray(element);
     }
     if (expression instanceof Function function && function.getParameters() != null) {
       if ("ARRAY".equalsIgnoreCase(function.getName())) {
-        Schema element = common(function.getParameters(), columns);
+        Schema element = common(function.getParameters(), columns, scalarSchemas);
         return element == null ? null : Schema.createArray(element);
       }
       if ("NULLIF".equalsIgnoreCase(function.getName()) && !function.getParameters().isEmpty()) {
-        return resolve(function.getParameters().getFirst(), columns);
+        return resolve(function.getParameters().getFirst(), columns, scalarSchemas);
       }
       if ("COALESCE".equalsIgnoreCase(function.getName())) {
-        return common(function.getParameters(), columns);
+        return common(function.getParameters(), columns, scalarSchemas);
       }
     }
     if (expression instanceof CaseExpression choice) {
-      return common(ExpressionBranches.caseResults(choice), columns);
+      return common(ExpressionBranches.caseResults(choice), columns, scalarSchemas);
     }
     if (expression instanceof BinaryExpression binary && NumericExpressionTypes.operation(expression) != null) {
-      NumericType left = numeric(resolve(binary.getLeftExpression(), columns));
-      NumericType right = numeric(resolve(binary.getRightExpression(), columns));
+      NumericType left = numeric(resolve(binary.getLeftExpression(), columns, scalarSchemas));
+      NumericType right = numeric(resolve(binary.getRightExpression(), columns, scalarSchemas));
       return left == null || right == null
           ? null
           : left.arithmetic(right, NumericExpressionTypes.operation(expression)).schema();
     }
     if (expression instanceof SignedExpression signed) {
-      return resolve(signed.getExpression(), columns);
+      return resolve(signed.getExpression(), columns, scalarSchemas);
     }
     if (expression instanceof CastExpression cast && cast.getColDataType() != null) {
       Schema declared = nonnumericSchema(cast.getColDataType().getDataType());
@@ -187,8 +180,10 @@ public final class ArrayExpressionSchemas {
       case "char", "character" -> JdbcTypeMapper.declaredSchema(JDBCType.CHAR);
       case "nchar", "nationalcharacter", "nationalchar" -> JdbcTypeMapper.declaredSchema(JDBCType.NCHAR);
       case "nvarchar", "nationalcharactervarying" -> JdbcTypeMapper.declaredSchema(JDBCType.NVARCHAR);
-      case "varchar", "charactervarying", "string", "text", "clob" -> Schema.create(Schema.Type.STRING);
-      case "binary", "blob" -> JdbcTypeMapper.declaredSchema(JDBCType.BINARY);
+      case "varchar", "charactervarying", "string", "text" -> Schema.create(Schema.Type.STRING);
+      case "binary" -> JdbcTypeMapper.declaredSchema(JDBCType.BINARY);
+      case "clob", "blob" -> throw SqlExceptions.unsupportedFeature(
+          "ARRAY elements with declared type " + normalized.toUpperCase(java.util.Locale.ROOT) + " are not supported");
       case "varbinary", "binaryvarying" -> JdbcTypeMapper.declaredSchema(JDBCType.VARBINARY);
       default -> null;
     };
@@ -212,16 +207,19 @@ public final class ArrayExpressionSchemas {
    *          candidate values or branches
    * @param columns
    *          source column schema resolver
+   * @param scalarSchemas
+   *          independently scoped scalar projection resolver
    * @return common known schema, or null when no declaration is available
    * @throws IllegalArgumentException
    *           carrying SQLState 42000 if known array element types are
    *           incompatible
    */
   private static Schema common(List<? extends Expression> expressions,
-      java.util.function.Function<Column, Schema> columns) {
+      java.util.function.Function<Column, Schema> columns,
+      java.util.function.Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarSchemas) {
     Schema result = null;
     for (Expression expression : expressions) {
-      result = common(result, resolve(expression, columns));
+      result = common(result, resolve(expression, columns, scalarSchemas));
     }
     return result;
   }

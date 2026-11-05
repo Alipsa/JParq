@@ -484,8 +484,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             }
 
           }
-          new JParqResultSetMetaData(tmpFileAvro, tmpSelect.labels(), tmpSelect.columnNames(), null, null,
-              tmpSchemaName, null, tmpSelect.expressions()).validateArrayDeclarations();
+          validateArrayDeclarations(tmpSelect, tmpFileAvro, tmpSchemaName, tmpCteResults, tmpConf);
           if (tmpBaseCteResult != null) {
             validateSelectColumns(tmpSelect, tmpFileAvro, aggregatePlan, tmpCteResults, tmpConf);
           }
@@ -3883,6 +3882,53 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       return null;
     }
+  }
+
+  /**
+   * Resolves nested input declarations without reading their rows.
+   *
+   * @param table
+   *          local table or inherited CTE
+   * @param ctes
+   *          materialized CTE context
+   * @param configuration
+   *          physical input configuration, or null
+   * @return source schema, or null when unknown
+   */
+  private Schema subqueryTableSchema(Table table, Map<Identifier, CteResult> ctes, Configuration configuration) {
+    try {
+      CteResult cte = resolveCteResultByName(table.getName(), ctes);
+      if (cte != null) {
+        return cte.schema();
+      }
+      var location = stmt.getConn().resolveTable(table.getSchemaName(), table.getName());
+      return validatedTable(location, configuration == null ? HadoopConfigurations.create() : configuration).schema();
+    } catch (SQLException exception) {
+      if (QueryCancellation.findCancellation(exception).isPresent()) {
+        throw new IllegalStateException("Canceled while resolving subquery schemas", exception);
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Checks all clauses and nested queries against their own source declarations.
+   *
+   * @param query
+   *          query being planned
+   * @param schema
+   *          bound input schema
+   * @param schemaName
+   *          owning SQL schema
+   * @param ctes
+   *          inherited materialized CTEs
+   * @param configuration
+   *          physical input configuration
+   */
+  private void validateArrayDeclarations(SqlParser.Select query, Schema schema, String schemaName,
+      Map<Identifier, CteResult> ctes, Configuration configuration) {
+    new JParqResultSetMetaData(schema, query.labels(), query.columnNames(), null, null, schemaName, null,
+        query.expressions()).validateArrayDeclarations(query, table -> subqueryTableSchema(table, ctes, configuration));
   }
 
   private Schema schemaForTableReference(SqlParser.TableReference ref) throws SQLException {

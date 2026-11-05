@@ -240,7 +240,7 @@ public class JParqResultSet extends ResultSetAdapter {
 
     try {
       new JParqResultSetMetaData(reader.schema(), labels, physical, canonicalLookup, tableName, tableSchema,
-          tableCatalog, selectExpressions, metadataSourceMappings).validateArrayDeclarations();
+          tableCatalog, selectExpressions, metadataSourceMappings).validateArrayDeclarations(select, table -> null);
     } catch (RuntimeException failure) {
       throw SqlExceptions.wrap("Invalid ARRAY projection declaration", failure);
     }

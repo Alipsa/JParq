@@ -22,6 +22,7 @@ import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.ArrayExpressionSchemas;
+import se.alipsa.jparq.engine.ArrayQueryValidation;
 import se.alipsa.jparq.engine.BooleanExpressions;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.CorrelationMappings;
@@ -32,6 +33,7 @@ import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.engine.NumericExpressionTypes;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlExpressionNormalizer;
+import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.helper.TemporalValueType;
@@ -141,18 +143,45 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   }
 
   /**
-   * Validates known ARRAY element declarations before projected rows are read.
+   * Validates ARRAY declarations in every clause using independently scoped
+   * subqueries.
    *
+   * @param query
+   *          query whose local inputs are described by this metadata
+   * @param tables
+   *          nested source schema resolver
    * @throws IllegalArgumentException
-   *           carrying SQLState 42000 for incompatible declarations
+   *           carrying a JDBC cause for invalid declarations
    */
-  void validateArrayDeclarations() {
-    for (Expression expression : expressions) {
-      ArrayExpressionSchemas.validate(expression, reference -> {
+  void validateArrayDeclarations(SqlParser.Select query, Function<net.sf.jsqlparser.schema.Table, Schema> tables) {
+    List<Expression> clauses = new ArrayList<>(query.expressions());
+    clauses.add(query.where());
+    clauses.add(query.having());
+    clauses.addAll(query.groupByExpressions());
+    query.orderBy().forEach(order -> clauses.add(order.expression()));
+    query.preOrderBy().forEach(order -> clauses.add(order.expression()));
+    for (SqlParser.TableReference input : query.tableReferences()) {
+      collectJoinConditions(input, clauses);
+    }
+    for (Expression expression : clauses) {
+      ArrayQueryValidation.validate(expression, reference -> {
         Schema.Field field = resolveSourceField(reference);
         return field == null ? null : field.schema();
-      });
+      }, tables);
     }
+  }
+
+  /**
+   * Collects conditions from ordinary joins and parenthesized join groups.
+   *
+   * @param input
+   *          joined input
+   * @param clauses
+   *          destination expressions
+   */
+  private static void collectJoinConditions(SqlParser.TableReference input, List<Expression> clauses) {
+    clauses.add(input.joinCondition());
+    input.joinGroup().forEach(nested -> collectJoinConditions(nested, clauses));
   }
 
   @Override
