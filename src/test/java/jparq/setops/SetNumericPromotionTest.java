@@ -92,7 +92,7 @@ class SetNumericPromotionTest {
   }
 
   /**
-   * Normalizes aggregate Java values even when their metadata reports REAL.
+   * Promotes REAL sums and scalar REAL branches to matching DOUBLE values.
    *
    * @param pushdown
    *          whether pushdown is enabled
@@ -110,11 +110,11 @@ class SetNumericPromotionTest {
         try (var statement = connection.prepareStatement(sql)) {
           for (int execution = 0; execution < 2; execution++) {
             try (var result = statement.executeQuery()) {
-              assertEquals(Types.REAL, result.getMetaData().getColumnType(1), sql);
-              assertEquals(Float.class.getName(), result.getMetaData().getColumnClassName(1), sql);
+              assertEquals(Types.DOUBLE, result.getMetaData().getColumnType(1), sql);
+              assertEquals(Double.class.getName(), result.getMetaData().getColumnClassName(1), sql);
               int count = 0;
               while (result.next()) {
-                assertEquals(0.1f, result.getObject(1), sql);
+                assertEquals((double) 0.1f, result.getObject(1), sql);
                 count++;
               }
               int expected = operator.startsWith("EXCEPT") ? 0 : operator.equals("UNION ALL") ? 3 : 1;
@@ -125,8 +125,8 @@ class SetNumericPromotionTest {
       }
       try (var statement = connection.createStatement();
           var result = statement.executeQuery("SELECT SUM(f) AS x FROM numbers UNION ALL SELECT f FROM numbers")) {
-        assertEquals(Types.REAL, result.getMetaData().getColumnType(1));
-        for (float expected : List.of(0.2f, 0.1f, 0.1f)) {
+        assertEquals(Types.DOUBLE, result.getMetaData().getColumnType(1));
+        for (double expected : List.of(2 * (double) 0.1f, (double) 0.1f, (double) 0.1f)) {
           assertTrue(result.next());
           assertEquals(expected, result.getObject(1));
         }
