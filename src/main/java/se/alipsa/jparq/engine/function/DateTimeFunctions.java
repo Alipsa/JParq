@@ -39,6 +39,7 @@ import net.sf.jsqlparser.statement.create.table.ColDataType;
 import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.NumericCastTarget;
 import se.alipsa.jparq.engine.NumericCasts;
+import se.alipsa.jparq.engine.ScalarExpressionSchemas;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.helper.TemporalInterval;
@@ -762,18 +763,19 @@ public final class DateTimeFunctions {
    *          the evaluated inner value
    * @return the cast result converted to the requested type when possible
    * @throws IllegalArgumentException
-   *           if decimal bounds are invalid (SQLState 42000) or the rounded value
-   *           exceeds the target's range or precision (SQLState 22003), or
-   *           numeric input is invalid or non-finite (SQLState 22018), or
-   *           temporal input has invalid format (22007) or out-of-range fields
-   *           (22008), or a non-character interval operand is used implicitly as
-   *           text (42000), carried by the cause
+   *           if decimal bounds or binary lengths or source types are invalid
+   *           (SQLState 42000) or the rounded value exceeds the target's range or
+   *           precision (SQLState 22003), or numeric input is invalid or
+   *           non-finite (SQLState 22018), or temporal input has invalid format
+   *           (22007) or out-of-range fields (22008), or a non-character interval
+   *           operand is used implicitly as text (42000), carried by the cause
    */
   public static Object castLiteral(CastExpression cast, Object value) {
     if (cast != null && cast.getColDataType() != null
         && DecimalCasts.isDecimalType(cast.getColDataType().getDataType())) {
       return castToBigDecimal(cast, value);
     }
+    ScalarExpressionSchemas.binaryLength(cast);
     if (cast == null || value == null) {
       return value;
     }
@@ -830,13 +832,10 @@ public final class DateTimeFunctions {
    */
   private static byte[] castToBinary(CastExpression cast, Object value) {
     byte[] bytes = binaryBytes(value);
-    Integer length = firstIntegerArgument(cast);
+    Integer length = ScalarExpressionSchemas.binaryLength(cast);
     boolean fixed = "binary".equals(normalizeTypeName(cast.getColDataType().getDataType()));
     if (length == null && fixed) {
       length = 1;
-    }
-    if (length != null && length < 1) {
-      throw SqlExceptions.syntaxFailure("Binary CAST length must be positive");
     }
     return length != null && (fixed || bytes.length > length) ? Arrays.copyOf(bytes, length) : bytes;
   }
@@ -847,6 +846,8 @@ public final class DateTimeFunctions {
    * @param value
    *          non-null CAST operand
    * @return independent binary value
+   * @throws IllegalArgumentException
+   *           if the operand is not character or binary, carrying SQLState 42000
    */
   private static byte[] binaryBytes(Object value) {
     if (value instanceof byte[] bytes) {
@@ -858,7 +859,10 @@ public final class DateTimeFunctions {
       copy.get(bytes);
       return bytes;
     }
-    return SqlText.cast(value).getBytes(StandardCharsets.UTF_8);
+    if (value instanceof CharSequence || value instanceof Character) {
+      return value.toString().getBytes(StandardCharsets.UTF_8);
+    }
+    throw SqlExceptions.syntaxFailure("Binary CAST requires a character or binary operand");
   }
 
   /**

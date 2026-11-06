@@ -144,8 +144,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   }
 
   /**
-   * Validates ARRAY declarations in every clause using independently scoped
-   * subqueries.
+   * Validates ARRAY declarations and binary CAST operands in every clause using
+   * scoped subqueries.
    *
    * @param query
    *          query whose local inputs are described by this metadata

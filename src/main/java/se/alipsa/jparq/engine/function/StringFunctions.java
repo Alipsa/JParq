@@ -1,5 +1,6 @@
 package se.alipsa.jparq.engine.function;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
@@ -10,7 +11,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 import net.sf.jsqlparser.expression.Expression;
-
 import se.alipsa.jparq.engine.SqlText;
 
 /**
@@ -91,7 +91,7 @@ public final class StringFunctions {
   }
 
   /**
-   * Return the number of UTF-8 encoded bytes required for the supplied value.
+   * Return the binary octet count or the UTF-8 byte count of character input.
    *
    * @param value
    *          value to inspect
@@ -100,6 +100,12 @@ public final class StringFunctions {
   public static Integer octetLength(Object value) {
     if (value == null) {
       return null;
+    }
+    if (value instanceof byte[] bytes) {
+      return bytes.length;
+    }
+    if (value instanceof ByteBuffer buffer) {
+      return buffer.remaining();
     }
     return SqlText.valueOf(value).getBytes(StandardCharsets.UTF_8).length;
   }

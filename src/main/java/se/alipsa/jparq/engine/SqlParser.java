@@ -727,9 +727,9 @@ public final class SqlParser {
   }
 
   /**
-   * Validates decimal bounds and rejects aggregate FILTER clauses in one pass
-   * before query planning, optionally collecting row-count parameters and
-   * datetime dependencies.
+   * Validates decimal bounds and binary lengths and rejects aggregate FILTER
+   * clauses in one pass before query planning, optionally collecting row-count
+   * parameters and datetime dependencies.
    *
    * @param statement
    *          parsed SELECT, including nested scopes
@@ -793,6 +793,7 @@ public final class SqlParser {
         // When #432 makes TIME-to-TIMESTAMP casts depend on CURRENT_DATE,
         // include that implicit dependency in preparation.timeDependent too.
         DecimalCasts.validateBounds(cast);
+        ScalarExpressionSchemas.binaryLength(cast);
         return super.visit(cast, context);
       }
     });

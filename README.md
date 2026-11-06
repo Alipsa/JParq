@@ -893,13 +893,17 @@ The following SQL statements are supported:
   nonnumeric branch's type. String (including national `N'...'`) and DATE/TIME/TIMESTAMP literals,
   character casts, DATE casts, and TIME/TIMESTAMP WITHOUT TIME ZONE casts report their declared JDBC
   types even for empty or all-NULL results. Standard NATIONAL CHARACTER, NATIONAL CHAR, and
-  NATIONAL CHARACTER VARYING spellings use
-  the same metadata and conversions as NCHAR/NVARCHAR. Compatible CHAR and VARCHAR set branches produce
-  VARCHAR output. Declared LOB and binary CASTs remain typed for set compatibility even for all-NULL or
+  NATIONAL CHARACTER VARYING spellings use the same metadata and conversions as NCHAR/NVARCHAR.
+  Compatible CHAR and VARCHAR set branches produce VARCHAR output. Declared LOB and binary CASTs remain typed for set compatibility even for all-NULL or
   empty results: incompatible numeric, character, binary, or datetime families raise SQLState `42000`.
   Binary CASTs return `byte[]` and retain BINARY, VARBINARY, or BLOB metadata through CTEs and
-  derived tables, including all-NULL and empty results. Standard CHARACTER LARGE OBJECT, NCLOB,
-  NATIONAL CHARACTER LARGE OBJECT, and BINARY LARGE OBJECT spellings share the corresponding LOB
+  derived tables, including all-NULL and empty results. Character/binary CAST conversions use UTF-8;
+  other binary CAST source types and invalid lengths raise SQLState `42000`. Known invalid declarations
+  fail during preparation, including for NULL and empty inputs. OCTET_LENGTH counts binary bytes;
+  character-only functions and text-column comparisons require an explicit character CAST for binary
+  arguments. Both `getBlob` overloads return detached BLOBs, or null for SQL NULL.
+  Standard CHARACTER LARGE OBJECT, NCLOB, NATIONAL CHARACTER LARGE OBJECT, and BINARY LARGE OBJECT
+  spellings share the corresponding LOB
   compatibility checks. CLOB/NCLOB still use interim character storage; full character LOB metadata
   and ARRAY LOB support are tracked in [#452](https://github.com/Alipsa/JParq/issues/452).
   These declared CAST NULLs remain distinct from untyped NULL projections.

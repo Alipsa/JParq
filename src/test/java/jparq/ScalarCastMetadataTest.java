@@ -306,19 +306,22 @@ class ScalarCastMetadataTest {
    *
    * @param type
    *          unsupported ARRAY element type
+   * @param canonical
+   *          canonical LOB type name in diagnostics
    * @throws Exception
    *           if connection creation fails
    */
   @ParameterizedTest
-  @ValueSource(strings = {
-      "CLOB", "CHARACTER LARGE OBJECT", "NCLOB", "NATIONAL CHARACTER LARGE OBJECT", "BLOB", "BINARY LARGE OBJECT"
+  @CsvSource(delimiter = '|', value = {
+      "CLOB | CLOB", "CHARACTER LARGE OBJECT | CLOB", "NCLOB | NCLOB", "NATIONAL CHARACTER LARGE OBJECT | NCLOB",
+      "BLOB | BLOB", "BINARY LARGE OBJECT | BLOB"
   })
-  void retainsArrayLobValidation(String type) throws Exception {
+  void retainsArrayLobValidation(String type, String canonical) throws Exception {
     try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
       SQLException error = assertThrows(SQLException.class,
           () -> statement.executeQuery("SELECT ARRAY[CAST(NULL AS " + type + ")]"));
       assertEquals("0A000", error.getSQLState());
-      assertTrue(error.getMessage().contains("ARRAY elements"));
+      assertTrue(error.getMessage().contains("ARRAY elements with declared type " + canonical + " are not supported"));
     }
   }
 

@@ -170,8 +170,8 @@ public final class ArrayExpressionSchemas {
     String normalized = ScalarExpressionSchemas.normalizeTypeName(typeName);
     JDBCType type = ScalarExpressionSchemas.declaredJdbcType(typeName);
     if (type == JDBCType.CLOB || type == JDBCType.NCLOB || type == JDBCType.BLOB) {
-      throw SqlExceptions.unsupportedFeature(
-          "ARRAY elements with declared type " + normalized.toUpperCase(java.util.Locale.ROOT) + " are not supported");
+      throw SqlExceptions
+          .unsupportedFeature("ARRAY elements with declared type " + type.getName() + " are not supported");
     }
     return switch (normalized) {
       case "timewithtimezone" -> TemporalValueType.OFFSET_TIME.schema();

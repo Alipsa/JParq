@@ -7,12 +7,22 @@
   Accept compatible character set-operation branches and retain untyped NULL columns through nested CTEs
   and derived tables so enclosing set operations can adopt the other branch's type. Untyped NULL projections
   consistently expose OTHER metadata, including in plain SELECTs and grouped queries. Keep scalar CAST
-  metadata separate from ARRAY element validation so unresolved LOB, binary, and time-zone casts retain
+  metadata separate from ARRAY element validation so unresolved character LOB and time-zone casts retain
   OTHER/Object metadata without unchecked exceptions or unsupported value-class claims.
   Retain declared LOB/binary families for set compatibility, including typed NULLs and empty branches;
   reject binary/character and other incompatible declarations with SQLState `42000` before value inference.
   Support standard NATIONAL CHARACTER, NATIONAL CHAR, and NATIONAL CHARACTER VARYING spellings with
   the same metadata, value conversion, length handling, and truncation checks as NCHAR/NVARCHAR.
+  **Behavior changes:** binary CASTs return `byte[]` with BINARY, VARBINARY, or BLOB metadata,
+  retained through CTEs and derived tables, including NULL and empty results (#450, #458).
+  BLOB columns report `byte[]` as their JDBC class name; both `getBlob` overloads return detached BLOBs
+  and preserve SQL NULL. Binary CAST operands must be binary or character values; known incompatible
+  sources and invalid binary lengths fail during preparation with SQLState `42000`.
+  Character-to-binary and explicit binary-to-character CASTs use UTF-8; OCTET_LENGTH counts binary bytes.
+  Character-only functions and text-column comparisons reject implicit binary operands with `42000`
+  instead of Java identity text (#355); use an explicit CAST to choose the comparison family.
+  National `N'…'` literals report NVARCHAR, while unresolved `B'…'` literals report OTHER.
+  Standard LOB spellings share ARRAY restrictions and canonical CLOB/NCLOB/BLOB diagnostics (#459).
 
 - Implement both ResultSet.getArray overloads (#280) for stored and computed arrays, including nested
   arrays from LATERAL queries. Return detached JDBC arrays with element type metadata, slices, element

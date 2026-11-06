@@ -9,6 +9,7 @@ import java.util.Set;
 import java.util.function.Function;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
+import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
@@ -27,7 +28,8 @@ import org.apache.avro.Schema;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 
 /**
- * Validates ARRAY declarations throughout SQL queries without evaluating rows.
+ * Validates ARRAY declarations and binary CAST operands throughout queries
+ * without evaluating rows.
  */
 public final class ArrayQueryValidation {
   /** Prevents utility class construction. */
@@ -154,6 +156,16 @@ public final class ArrayQueryValidation {
           resolve(function, scope);
         }
         return super.visit(function, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(CastExpression cast, S context) {
+        ScalarExpressionSchemas.validateBinaryCast(cast, operand -> {
+          Schema scalar = ScalarExpressionSchemas.resolve(operand);
+          return scalar == null ? resolve(operand, scope) : scalar;
+        });
+        return super.visit(cast, context);
       }
 
       @Override
