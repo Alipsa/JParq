@@ -420,6 +420,11 @@ public final class ArrayQueryValidation {
    * @return local scope
    */
   private static Scope localScope(PlainSelect query, Scope outer) {
+    // Result construction can repeat validation without nested table schemas.
+    // An unknown local input might shadow a correlated column, so defer strict
+    // CONVERT disambiguation until those schemas or correlation bindings exist.
+    boolean bound = outer.bound() && inputs(query).stream().allMatch(input -> !(input instanceof Table table)
+        || Identifier.of(table.getName()).resolve(outer.ctes()) != null || outer.tables().apply(table) != null);
     return new Scope(column -> {
       Binding match = localColumn(query, column, outer);
       if (match.present()) {
@@ -429,7 +434,7 @@ public final class ArrayQueryValidation {
       boolean localQualifier = qualifier != null && inputs(query).stream()
           .anyMatch(input -> Identifier.of(qualifier).matches(Identifier.of(sourceName(input))));
       return localQualifier ? null : outer.columns().apply(column);
-    }, outer.tables(), outer.ctes(), outer.resolving(), outer.bound());
+    }, outer.tables(), outer.ctes(), outer.resolving(), bound);
   }
 
   /**

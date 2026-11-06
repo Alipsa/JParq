@@ -17,6 +17,56 @@ import org.junit.jupiter.params.provider.ValueSource;
 class ConvertCastDeclarationTest {
 
   /**
+   * Type-named correlated columns remain visible when resolving CONVERT.
+   *
+   * @param suffix
+   *          optional empty-input filter
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "", " WHERE 1=0"
+  })
+  void resolvesCorrelatedTypeNamedColumn(String suffix) throws Exception {
+    String sql = "SELECT (SELECT CONVERT(VARCHAR, integer) FROM mtcars LIMIT 1) AS c " + "FROM (SELECT 7 AS integer) d"
+        + suffix;
+    try (var connection = DriverManager.getConnection(url());
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      if (suffix.isEmpty()) {
+        assertTrue(result.next());
+        assertEquals("7", result.getObject(1));
+      }
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Correlated conversion reads each outer binding, including SQL NULL.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void convertsEachCorrelatedTypeNamedBinding() throws Exception {
+    String sql = "SELECT (SELECT CONVERT(VARCHAR, integer) FROM mtcars LIMIT 1) AS c "
+        + "FROM (SELECT 7 AS integer UNION ALL SELECT 9 UNION ALL SELECT CAST(NULL AS INTEGER)) d";
+    try (var connection = DriverManager.getConnection(url());
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      assertTrue(result.next());
+      assertEquals("7", result.getObject(1));
+      assertTrue(result.next());
+      assertEquals("9", result.getObject(1));
+      assertTrue(result.next());
+      assertNull(result.getObject(1));
+      assertTrue(result.wasNull());
+      assertFalse(result.next());
+    }
+  }
+
+  /**
    * Function operands whose names are SQL types remain value expressions.
    *
    * @param source

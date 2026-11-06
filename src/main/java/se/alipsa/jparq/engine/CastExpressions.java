@@ -3,6 +3,7 @@ package se.alipsa.jparq.engine;
 import java.util.function.Predicate;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.TranscodingFunction;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.statement.create.table.ColDataType;
@@ -52,8 +53,12 @@ public final class CastExpressions {
     String candidate = type.getDataType();
     String operandText = operand.toString();
     boolean firstType = SqlParser.isConvertTypeName(candidate);
-    boolean secondType = SqlParser.isConvertTypeName(operandText);
     boolean firstColumn = columns.test(candidate);
+    // A valid target followed by a function is a value expression, even when
+    // its name (such as CHAR) is also a SQL type. Source-first binary bounds
+    // still use the type position when it names a bound source column.
+    boolean functionValue = operand instanceof Function && firstType && !firstColumn;
+    boolean secondType = !functionValue && SqlParser.isConvertTypeName(operandText);
     boolean secondColumn = columns.test(operandText);
     if (firstType && secondType && firstColumn == secondColumn && operand instanceof Column) {
       return null;
