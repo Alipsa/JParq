@@ -24,6 +24,7 @@ import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.ArrayExpressionSchemas;
 import se.alipsa.jparq.engine.ArrayQueryValidation;
 import se.alipsa.jparq.engine.BooleanExpressions;
+import se.alipsa.jparq.engine.CastExpressions;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.DecimalCasts;
@@ -31,6 +32,7 @@ import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.IntervalExpressionTypes;
 import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.engine.NumericExpressionTypes;
+import se.alipsa.jparq.engine.ScalarExpressionSchemas;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlExpressionNormalizer;
 import se.alipsa.jparq.engine.SqlParser;
@@ -143,8 +145,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   }
 
   /**
-   * Validates ARRAY declarations in every clause using independently scoped
-   * subqueries.
+   * Validates ARRAY declarations and binary CAST operands in every clause using
+   * scoped subqueries.
    *
    * @param query
    *          query whose local inputs are described by this metadata
@@ -265,16 +267,35 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     if (numeric != null) {
       return numeric.jdbcType();
     }
+    Schema declaration = declaredProjectionSchema(column);
+    if (declaration != null) {
+      return publicColumnType(declaration);
+    }
     int computedType = resolveComputedColumnType(column);
     // A computed Boolean alias may have the same name as a source field.
     if (computedType == Types.BOOLEAN) {
       return computedType;
     }
+    if (projectionCast(column) != null) {
+      return Types.OTHER;
+    }
     Schema.Field field = resolveField(column);
     if (field == null) {
       return computedType;
     }
-    return JdbcTypeMapper.mapSchemaToJdbcType(field.schema());
+    return publicColumnType(field.schema());
+  }
+
+  /**
+   * Keeps untyped NULL schemas internal while exposing JDBC OTHER consistently.
+   *
+   * @param valueSchema
+   *          declared or source value schema
+   * @return public JDBC column type
+   */
+  private static int publicColumnType(Schema valueSchema) {
+    int type = JdbcTypeMapper.mapSchemaToJdbcType(valueSchema);
+    return type == Types.NULL ? Types.OTHER : type;
   }
 
   /**
@@ -360,6 +381,13 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     if (numeric != null) {
       return numeric.schema();
     }
+    Schema declaration = declaredProjectionSchema(column);
+    if (declaration != null) {
+      return declaration;
+    }
+    if (projectionCast(column) != null) {
+      return null;
+    }
     Schema.Field field = resolveField(column);
     if (field != null) {
       return JdbcTypeMapper.nonNullSchema(field.schema());
@@ -371,6 +399,29 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
       Schema.Field source = resolveSourceField(reference);
       return source == null ? null : source.schema();
     });
+  }
+
+  /**
+   * Resolves literal and CAST declarations independently of returned rows.
+   *
+   * @param column
+   *          one-based output column
+   * @return declared schema, or null for other expressions
+   */
+  private Schema declaredProjectionSchema(int column) {
+    return ScalarExpressionSchemas.resolve(expressionAtColumn(column),
+        name -> resolveSourceField(new Column(name)) != null);
+  }
+
+  /**
+   * Resolves a declared CAST or cast-style CONVERT using bound source columns.
+   *
+   * @param column
+   *          one-based projection position
+   * @return equivalent CAST, or null for other expressions
+   */
+  CastExpression projectionCast(int column) {
+    return CastExpressions.asCast(expressionAtColumn(column), name -> resolveSourceField(new Column(name)) != null);
   }
 
   @Override
@@ -427,7 +478,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * @return the declared decimal type, or null without an explicit precision
    */
   private LogicalTypes.Decimal declaredDecimalType(int column) {
-    return expressionAtColumn(column) instanceof CastExpression cast ? DecimalCasts.declaredType(cast) : null;
+    CastExpression cast = projectionCast(column);
+    return cast == null ? null : DecimalCasts.declaredType(cast);
   }
 
   /**
@@ -442,8 +494,18 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     if (isIntervalColumn(column)) {
       return TemporalInterval.class.getName();
     }
-    if (numericType(column) != null || getColumnType(column) == Types.BOOLEAN) {
+    if (numericType(column) != null) {
       return JdbcTypeMapper.mapJdbcTypeToClassName(getColumnType(column));
+    }
+    Schema declaration = declaredProjectionSchema(column);
+    if (declaration != null) {
+      return JdbcTypeMapper.mapSchemaToJavaClassName(declaration);
+    }
+    if (getColumnType(column) == Types.BOOLEAN) {
+      return JdbcTypeMapper.mapJdbcTypeToClassName(getColumnType(column));
+    }
+    if (projectionCast(column) != null) {
+      return Object.class.getName();
     }
     Schema.Field field = resolveField(column);
     if (field != null) {
@@ -538,7 +600,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * @return the numeric declaration, or null when unresolved
    */
   NumericType numericExpressionType(Expression expression) {
-    return NumericExpressionTypes.resolve(expression, reference -> {
+    CastExpression cast = CastExpressions.asCast(expression, name -> resolveSourceField(new Column(name)) != null);
+    return NumericExpressionTypes.resolve(cast == null ? expression : cast, reference -> {
       Schema.Field field = resolveSourceField(reference);
       return field == null
           ? null

@@ -1,5 +1,10 @@
 package se.alipsa.jparq.engine;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
+import java.sql.SQLDataException;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
@@ -18,7 +23,8 @@ public final class SqlText {
    *          the SQL value
    * @return its text, or null for SQL NULL
    * @throws IllegalArgumentException
-   *           if an interval is used implicitly as text, carrying SQLState 42000
+   *           if binary data or an interval is used implicitly as text, carrying
+   *           SQLState 42000
    */
   public static String valueOf(Object value) {
     validateStringOperand(value);
@@ -26,25 +32,60 @@ public final class SqlText {
   }
 
   /**
-   * Converts a value for an explicit character CAST, preserving SQL NULL.
+   * Converts a value for an explicit character CAST, preserving SQL NULL. Binary
+   * inputs are decoded as UTF-8.
    *
    * @param value
    *          SQL value to convert
-   * @return SQL interval text or the value's normal character representation
+   *
+   * @return UTF-8 binary text, SQL interval text, or the normal character
+   *         representation
+   * @throws IllegalArgumentException
+   *           if binary data is not valid UTF-8, carrying SQLState 22021
    */
   public static String cast(Object value) {
+    if (value instanceof byte[] bytes) {
+      return decodeBinary(ByteBuffer.wrap(bytes));
+    }
+    if (value instanceof ByteBuffer buffer) {
+      return decodeBinary(buffer.duplicate());
+    }
     return value == null ? null : value.toString();
   }
 
   /**
-   * Rejects interval operands in operations that require character values.
+   * Decodes UTF-8 bytes without replacing malformed or unmappable sequences.
+   *
+   * @param bytes
+   *          binary input buffer
+   * @return decoded character data
+   * @throws IllegalArgumentException
+   *           if bytes are not valid UTF-8, carrying SQLState 22021
+   */
+  private static String decodeBinary(ByteBuffer bytes) {
+    try {
+      return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+          .onUnmappableCharacter(CodingErrorAction.REPORT).decode(bytes).toString();
+    } catch (CharacterCodingException failure) {
+      throw new IllegalArgumentException("Binary data is not valid UTF-8",
+          new SQLDataException("Character not in repertoire: invalid UTF-8", "22021", failure));
+    }
+  }
+
+  /**
+   * Rejects binary and interval operands in operations that require character
+   * values.
    *
    * @param value
    *          the value, including nested SQL arrays
    * @throws IllegalArgumentException
-   *           if an interval is used implicitly as text, carrying SQLState 42000
+   *           if binary data or an interval is used implicitly as text, carrying
+   *           SQLState 42000
    */
   private static void validateStringOperand(Object value) {
+    if (value instanceof byte[] || value instanceof ByteBuffer) {
+      throw SqlExceptions.syntaxFailure("Binary data requires an explicit character cast for text operations");
+    }
     if (value instanceof TemporalInterval) {
       throw SqlExceptions.syntaxFailure("INTERVAL requires an explicit character cast for text operations");
     }

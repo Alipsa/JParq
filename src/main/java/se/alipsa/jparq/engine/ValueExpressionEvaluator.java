@@ -41,7 +41,6 @@ import net.sf.jsqlparser.expression.operators.arithmetic.Multiplication;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
-import net.sf.jsqlparser.statement.create.table.ColDataType;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.NumericType;
@@ -65,6 +64,8 @@ public final class ValueExpressionEvaluator {
   private final Map<String, Schema> fieldSchemas;
   private final Map<Expression, NumericType> numericTypes = new IdentityHashMap<>();
   private final Map<Expression, Optional<Schema>> intervalTypes = new IdentityHashMap<>();
+  private final Map<CastExpression, Optional<DateTimeFunctions.BinaryCast>> binaryCasts = new IdentityHashMap<>();
+  private final Map<TranscodingFunction, CastExpression> convertCasts = new IdentityHashMap<>();
   private final Map<String, String> caseInsensitiveIndex;
   private final Schema schema;
   private final SubqueryExecutor subqueryExecutor;
@@ -285,7 +286,7 @@ public final class ValueExpressionEvaluator {
     }
     if (expression instanceof CastExpression cast) {
       Object inner = evalInternal(cast.getLeftExpression(), record);
-      return DateTimeFunctions.castLiteral(cast, inner);
+      return evaluateCast(cast, inner);
     }
     if (expression instanceof SignedExpression se) {
       return LiteralConverter.applySign(evalInternal(se.getExpression(), record), se);
@@ -362,31 +363,40 @@ public final class ValueExpressionEvaluator {
       Object value = evalInternal(convert.getExpression(), record);
       return StringFunctions.convertCharset(value, convert.getTranscodingName());
     }
-    ConvertArguments args = resolveConvertArguments(convert);
-    Object value = evalInternal(args.valueExpression(), record);
-    if (args.colDataType() == null) {
-      return value;
-    }
-    CastExpression cast = new CastExpression();
-    cast.setColDataType(args.colDataType());
-    cast.setLeftExpression(args.valueExpression());
-    return DateTimeFunctions.castLiteral(cast, value);
+    CastExpression cast = convertCasts.computeIfAbsent(convert, this::convertCast);
+    Object value = evalInternal(cast.getLeftExpression(), record);
+    return cast.getColDataType() == null ? value : evaluateCast(cast, value);
   }
 
-  private ConvertArguments resolveConvertArguments(TranscodingFunction convert) {
-    Expression valueExpr = convert.getExpression();
-    ColDataType colType = convert.getColDataType();
-    if (colType != null && valueExpr != null) {
-      String typeCandidate = colType.getDataType();
-      String exprText = valueExpr.toString();
-      if (looksLikeSchemaColumn(typeCandidate) && isTypeName(exprText) && !looksLikeSchemaColumn(exprText)) {
-        valueExpr = new Column(typeCandidate);
-        ColDataType swapped = new ColDataType();
-        swapped.setDataType(exprText);
-        colType = swapped;
-      }
-    }
-    return new ConvertArguments(valueExpr, colType);
+  /**
+   * Converts a current row value using cached binary rules or the ordinary CAST
+   * path.
+   *
+   * @param cast
+   *          stable CAST expression
+   * @param value
+   *          current row value
+   * @return converted value, possibly null
+   * @throws IllegalArgumentException
+   *           if the conversion is invalid
+   */
+  private Object evaluateCast(CastExpression cast, Object value) {
+    DateTimeFunctions.BinaryCast binary = binaryCasts
+        .computeIfAbsent(cast, shape -> Optional.ofNullable(DateTimeFunctions.compileBinaryCast(shape))).orElse(null);
+    return binary == null ? DateTimeFunctions.castLiteral(cast, value) : binary.convert(value);
+  }
+
+  /**
+   * Resolves one stable CAST shape for a cast-style CONVERT expression.
+   *
+   * @param convert
+   *          parsed CONVERT expression
+   * @return equivalent CAST shape retaining the operand and declaration
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 if the arguments are ambiguous
+   */
+  private CastExpression convertCast(TranscodingFunction convert) {
+    return CastExpressions.requireCast(convert, this::looksLikeSchemaColumn);
   }
 
   private boolean looksLikeSchemaColumn(String name) {
@@ -395,13 +405,6 @@ public final class ValueExpressionEvaluator {
     }
     String normalized = Identifier.lookupKey(name);
     return normalized != null && caseInsensitiveIndex.containsKey(normalized);
-  }
-
-  private boolean isTypeName(String name) {
-    return SqlParser.isConvertTypeName(name);
-  }
-
-  private record ConvertArguments(Expression valueExpression, ColDataType colDataType) {
   }
 
   private Object evaluateAnalytic(AnalyticExpression analytic, GenericRecord record) {

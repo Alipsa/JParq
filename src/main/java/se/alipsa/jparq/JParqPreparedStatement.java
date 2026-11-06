@@ -13,6 +13,7 @@ import java.sql.Blob;
 import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.Date;
+import java.sql.JDBCType;
 import java.sql.NClob;
 import java.sql.ParameterMetaData;
 import java.sql.PreparedStatement;
@@ -75,6 +76,7 @@ import org.slf4j.LoggerFactory;
 import se.alipsa.jparq.engine.ArrayExpressionSchemas;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.AvroProjections;
+import se.alipsa.jparq.engine.CastExpressions;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelatedBindings;
@@ -99,6 +101,7 @@ import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.RenamingRecordReader;
 import se.alipsa.jparq.engine.SamplingRecordReader;
+import se.alipsa.jparq.engine.ScalarExpressionSchemas;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
@@ -451,6 +454,7 @@ public class JParqPreparedStatement implements PreparedStatement {
                 tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
               }
               aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
+              validateArrayDeclarations(tmpSelect, tmpFileAvro, tmpSchemaName, tmpCteResults, tmpConf);
               configureProjectionPushdown(tmpSelect, pushdownSchema, aggregatePlan, tmpConf, tmpCteResults);
               if (stmt.getConn().isPredicatePushdown() && baseRef.tableSample() == null && tmpSelect.where() != null) {
                 var split = ParquetFilterBuilder.split(tmpFileAvro, tmpSelect.where());
@@ -470,6 +474,7 @@ public class JParqPreparedStatement implements PreparedStatement {
               }
 
               aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
+              validateArrayDeclarations(tmpSelect, tmpFileAvro, tmpSchemaName, tmpCteResults, tmpConf);
               configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf, tmpCteResults);
 
               if (stmt.getConn().isPredicatePushdown() && (baseRef == null || baseRef.tableSample() == null)
@@ -484,7 +489,10 @@ public class JParqPreparedStatement implements PreparedStatement {
             }
 
           }
-          validateArrayDeclarations(tmpSelect, tmpFileAvro, tmpSchemaName, tmpCteResults, tmpConf);
+          // Physical inputs already validated declarations before projection pushdown.
+          if (tmpBaseLocation == null) {
+            validateArrayDeclarations(tmpSelect, tmpFileAvro, tmpSchemaName, tmpCteResults, tmpConf);
+          }
           if (tmpBaseCteResult != null) {
             validateSelectColumns(tmpSelect, tmpFileAvro, aggregatePlan, tmpCteResults, tmpConf);
           }
@@ -568,7 +576,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return executeReplannedQuery();
     }
     if (reusablePlan == null) {
-      executionPlans = new SubqueryExecutor.ExecutionPlans();
+      executionPlans = new SubqueryExecutor.ExecutionPlans(validatedTables);
     }
     Connection conn = getConnection();
     JParqDatabaseMetaData metaData = (JParqDatabaseMetaData) conn.getMetaData();
@@ -886,6 +894,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     List<String> labels = null;
     List<Integer> sqlTypes = null;
     List<Schema> sourceSchemas = new ArrayList<>();
+    List<SetColumnFamily> declaredFamilies = new ArrayList<>();
     int columnCount = -1;
     for (SqlParser.SetComponent component : components) {
       List<List<Object>> componentData = new ArrayList<>();
@@ -901,6 +910,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             labels.add(columnLabel(meta, col));
             sqlTypes.add(Types.NULL);
             sourceSchemas.add(null);
+            declaredFamilies.add(SetColumnFamily.UNKNOWN);
           }
         } else if (meta.getColumnCount() != columnCount) {
           throw new SQLException("Set operation components must project the same number of columns");
@@ -933,18 +943,30 @@ public class JParqPreparedStatement implements PreparedStatement {
                   ? prepared.parsedSelect.expressions().get(index)
                   : null;
           Expression projection = ExpressionEvaluator.unwrapParenthesis(expression);
-          boolean simpleDeclaration = projection instanceof CastExpression || projection instanceof SignedExpression
+          CastExpression declaration = meta instanceof JParqResultSetMetaData projectedMetadata
+              ? projectedMetadata.projectionCast(col)
+              : CastExpressions.asCast(projection);
+          if (declaration != null) {
+            projection = declaration;
+          }
+          final var simpleDeclaration = projection instanceof CastExpression || projection instanceof SignedExpression
               || LiteralConverter.isLiteral(projection);
+          if (schema != null && schema.getType() == Schema.Type.NULL) {
+            type = Types.NULL;
+          }
+          SetColumnFamily declaredFamily = declaredSetColumnFamily(projection, type);
+          validateSetColumnFamily(declaredFamilies, index, declaredFamily);
           Schema projected = type == Types.OTHER ? setExpressionSchema(projection, values, meta) : null;
           int projectedType = projected == null ? Types.NULL : JdbcTypeMapper.mapSchemaToJdbcType(projected);
           if (!IntervalType.matches(schema) && (type == Types.OTHER || projection instanceof NullValue)) {
             boolean unknown = type == Types.OTHER;
             schema = projected;
             type = projectedType;
-            // Preserve OTHER metadata for unknown nonnumeric projections while
-            // retaining recognized datetime declarations.
-            if (unknown && type != Types.NULL && NumericType.of(type, 0, 0) == null && type != Types.DATE
-                && type != Types.TIME && type != Types.TIMESTAMP && type != Types.TIME_WITH_TIMEZONE
+            // Character LOBs use interim character storage; other unresolved
+            // declarations must not acquire VARCHAR metadata from their values.
+            if (unknown && declaredFamily != SetColumnFamily.CHARACTER && type != Types.NULL
+                && NumericType.of(type, 0, 0) == null && type != Types.DATE && type != Types.TIME
+                && type != Types.TIMESTAMP && type != Types.TIME_WITH_TIMEZONE
                 && type != Types.TIMESTAMP_WITH_TIMEZONE) {
               type = Types.OTHER;
               schema = sourceColumnSchema(meta, col);
@@ -978,12 +1000,82 @@ public class JParqPreparedStatement implements PreparedStatement {
       componentRows.add(componentData);
       componentTypes.add(normalizedTypes);
     }
-    sqlTypes.replaceAll(type -> type == Types.NULL ? Types.OTHER : type);
+    for (int index = 0; index < sqlTypes.size(); index++) {
+      if (sqlTypes.get(index) == Types.NULL) {
+        sourceSchemas.set(index, Schema.create(Schema.Type.NULL));
+        sqlTypes.set(index, Types.OTHER);
+      }
+    }
     coerceSetRows(componentRows, componentTypes, sqlTypes, sourceSchemas);
     List<List<Object>> combined = evaluateSetOperation(components, componentRows, setKeyFunction(sqlTypes));
     List<List<Object>> ordered = applySetOrdering(combined, labels, sqlTypes, sourceSchemas, parsedSetQuery.orderBy());
     List<List<Object>> sliced = applySetLimitOffset(ordered, parsedSetQuery.limit(), parsedSetQuery.offset());
     return JParqResultSet.materializedResult("set_operation_result", labels, sqlTypes, sliced, sourceSchemas);
+  }
+
+  /** Declared families used to validate unresolved set-operation projections. */
+  private enum SetColumnFamily {
+    /** An untyped NULL or an expression with an unresolved declaration. */
+    UNKNOWN,
+    /** Fixed, varying, and large-object character strings. */
+    CHARACTER,
+    /** Fixed, varying, and large-object binary strings. */
+    BINARY,
+    /** Other declared types whose compatibility is checked by the type merger. */
+    OTHER
+  }
+
+  /**
+   * Retains LOB and binary CAST families independently of evaluated values.
+   * Unimplemented value conversions must not make declared binary strings appear
+   * compatible with character strings or make typed NULLs untyped.
+   *
+   * @param expression
+   *          branch projection, or null for materialized results
+   * @param jdbcType
+   *          branch metadata type
+   * @return declared family, or UNKNOWN when no declaration is available
+   */
+  private SetColumnFamily declaredSetColumnFamily(Expression expression, int jdbcType) {
+    int resolvedType = jdbcType;
+    if (expression instanceof CastExpression cast && cast.getColDataType() != null) {
+      JDBCType declared = ScalarExpressionSchemas.declaredJdbcType(cast.getColDataType().getDataType());
+      if (declared != null) {
+        resolvedType = declared.getVendorTypeNumber();
+      }
+    }
+    if (JdbcTypeMapper.isCharacterType(resolvedType) || resolvedType == Types.CLOB || resolvedType == Types.NCLOB) {
+      return SetColumnFamily.CHARACTER;
+    }
+    return switch (resolvedType) {
+      case Types.BINARY, Types.VARBINARY, Types.BLOB -> SetColumnFamily.BINARY;
+      case Types.NULL, Types.OTHER -> SetColumnFamily.UNKNOWN;
+      default -> SetColumnFamily.OTHER;
+    };
+  }
+
+  /**
+   * Rejects incompatible declared families before value inference can erase them.
+   *
+   * @param families
+   *          retained output families
+   * @param index
+   *          zero-based column position
+   * @param family
+   *          current branch family
+   * @throws SQLException
+   *           if two known families are incompatible
+   */
+  private void validateSetColumnFamily(List<SetColumnFamily> families, int index, SetColumnFamily family)
+      throws SQLException {
+    if (family == SetColumnFamily.UNKNOWN) {
+      return;
+    }
+    SetColumnFamily previous = families.get(index);
+    if (previous != SetColumnFamily.UNKNOWN && previous != family) {
+      throw new SQLException("Set operation components must use compatible column types", "42000");
+    }
+    families.set(index, family);
   }
 
   /**
@@ -1030,8 +1122,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return schemaForColumnType(classifyValueType(literal), List.of(literal));
     }
     List<Object> returned = values.get();
-    // Other nonnumeric CAST declarations remain tracked in #288.
-    // Keep them distinct from an untyped NULL.
+    // An unresolved CAST still declares a type, even for empty or NULL results.
     if (!(projection instanceof CastExpression) && returned.stream().allMatch(Objects::isNull)) {
       return null;
     }
@@ -1106,6 +1197,14 @@ public class JParqPreparedStatement implements PreparedStatement {
         || (type == Types.TIMESTAMP && previous == Types.TIMESTAMP_WITH_TIMEZONE)) {
       types.set(index, Types.TIMESTAMP_WITH_TIMEZONE);
       schemas.set(index, TemporalValueType.OFFSET_TIMESTAMP.schema());
+    } else if (JdbcTypeMapper.isCharacterType(previous) && JdbcTypeMapper.isCharacterType(type) && previous != type) {
+      JDBCType common = JdbcTypeMapper.commonCharacterType(previous, type);
+      types.set(index, common.getVendorTypeNumber());
+      schemas.set(index, JdbcTypeMapper.declaredSchema(common));
+    } else if (JdbcTypeMapper.isBinaryType(previous) && JdbcTypeMapper.isBinaryType(type)) {
+      JDBCType common = JdbcTypeMapper.commonBinaryType(previous, type);
+      types.set(index, common.getVendorTypeNumber());
+      schemas.set(index, JdbcTypeMapper.declaredSchema(common));
     } else if (previous != type) {
       throw new SQLException("Set operation components must use compatible column types", "42000");
     } else if (!Objects.equals(prior, schema)) {
@@ -3742,7 +3841,9 @@ public class JParqPreparedStatement implements PreparedStatement {
           valueSchema = inferred;
         }
       }
-      Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
+      Schema union = valueSchema.getType() == Schema.Type.NULL
+          ? valueSchema
+          : Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
       Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
       field.addProp(MaterializedNames.LOOKUP_KEY, Identifier.lookupKey(sqlLabel));
       field.addProp(MaterializedNames.SQL_LABEL, sqlLabel);
@@ -4020,7 +4121,9 @@ public class JParqPreparedStatement implements PreparedStatement {
       } else {
         valueSchema = columnSchema(meta, i);
       }
-      Schema union = Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
+      Schema union = valueSchema.getType() == Schema.Type.NULL
+          ? valueSchema
+          : Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
       String sqlLabel = columnName;
       columnName = MaterializedNames.allocate(sqlLabel, usedNames);
       Field field = new Field(columnName, union, null, Field.NULL_DEFAULT_VALUE);
@@ -4052,8 +4155,10 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private boolean requiresValueInference(ResultSetMetaData meta, int column) throws SQLException {
     int type = meta.getColumnType(column);
-    return (type == Types.OTHER && !IntervalType.matches(sourceColumnSchema(meta, column)))
-        || ((type == Types.ARRAY || type == Types.STRUCT) && sourceColumnSchema(meta, column) == null)
+    Schema source = sourceColumnSchema(meta, column);
+    return (type == Types.OTHER && !IntervalType.matches(source)
+        && (source == null || source.getType() != Schema.Type.NULL))
+        || ((type == Types.ARRAY || type == Types.STRUCT) && source == null)
         || ((type == Types.DECIMAL || type == Types.NUMERIC) && meta.getPrecision(column) == 0);
   }
 
@@ -4072,10 +4177,12 @@ public class JParqPreparedStatement implements PreparedStatement {
     int type = meta.getColumnType(column);
     Schema source = sourceColumnSchema(meta, column);
     if (source != null && (type == Types.ARRAY || type == Types.STRUCT || IntervalType.matches(source)
-        || TemporalValueType.fromSchema(source) != null)) {
+        || TemporalValueType.fromSchema(source) != null || source.getType() == Schema.Type.NULL
+        || JdbcTypeMapper.isCharacterType(type) || JdbcTypeMapper.isBinaryType(type))) {
       return source;
     }
     return switch (type) {
+      case Types.NULL -> Schema.create(Schema.Type.NULL);
       case Types.BOOLEAN, Types.BIT -> Schema.create(Schema.Type.BOOLEAN);
       case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> Schema.create(Schema.Type.INT);
       case Types.BIGINT -> Schema.create(Schema.Type.LONG);

@@ -9,7 +9,18 @@ import java.util.Set;
 import java.util.function.Function;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
+import net.sf.jsqlparser.expression.BinaryExpression;
+import net.sf.jsqlparser.expression.CaseExpression;
+import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.HexValue;
+import net.sf.jsqlparser.expression.TranscodingFunction;
+import net.sf.jsqlparser.expression.operators.relational.Between;
+import net.sf.jsqlparser.expression.operators.relational.ComparisonOperator;
+import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
+import net.sf.jsqlparser.expression.operators.relational.InExpression;
+import net.sf.jsqlparser.expression.operators.relational.IsDistinctExpression;
+import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.AllColumns;
@@ -27,7 +38,8 @@ import org.apache.avro.Schema;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 
 /**
- * Validates ARRAY declarations throughout SQL queries without evaluating rows.
+ * Validates ARRAY declarations and binary CAST operands throughout queries
+ * without evaluating rows.
  */
 public final class ArrayQueryValidation {
   /** Prevents utility class construction. */
@@ -45,7 +57,7 @@ public final class ArrayQueryValidation {
    *           carrying a JDBC cause for invalid declarations
    */
   public static void validate(Select query, Function<Table, Schema> tables) {
-    visitSelect(query, new Scope(column -> null, tables, Map.of(), new HashSet<>()));
+    visitSelect(query, new Scope(column -> null, tables, Map.of(), new HashSet<>(), false));
   }
 
   /**
@@ -62,7 +74,7 @@ public final class ArrayQueryValidation {
    *           carrying a JDBC cause for invalid declarations
    */
   public static void validate(Expression expression, Function<Column, Schema> columns, Function<Table, Schema> tables) {
-    visitExpression(expression, new Scope(columns, tables, Map.of(), new HashSet<>()));
+    visitExpression(expression, new Scope(columns, tables, Map.of(), new HashSet<>(), true));
   }
 
   /**
@@ -86,7 +98,7 @@ public final class ArrayQueryValidation {
    * @return known projection schema, or null when uncertain
    */
   public static Schema projectionSchema(Select query, Function<Table, Schema> tables) {
-    return projectedValue(query, new Scope(column -> null, tables, Map.of(), new HashSet<>()));
+    return projectedValue(query, new Scope(column -> null, tables, Map.of(), new HashSet<>(), false));
   }
 
   /**
@@ -153,7 +165,94 @@ public final class ArrayQueryValidation {
         if ("ARRAY".equalsIgnoreCase(function.getName())) {
           resolve(function, scope);
         }
+        if ("NULLIF".equalsIgnoreCase(function.getName()) && function.getParameters() != null
+            && function.getParameters().size() == 2) {
+          ScalarExpressionSchemas.validateBinaryComparison(function.getParameters().get(0),
+              function.getParameters().get(1), operand -> scalarOperand(operand, scope));
+        }
+        ScalarExpressionSchemas.validateCharacterFunction(function.getName(), function.getParameters(),
+            operand -> scalarOperand(operand, scope));
         return super.visit(function, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(CastExpression cast, S context) {
+        ScalarExpressionSchemas.validateBinaryCast(cast, operand -> scalarOperand(operand, scope));
+        return super.visit(cast, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(TranscodingFunction convert, S context) {
+        if (!convert.isTranscodeStyle()) {
+          CastExpression cast = scope.bound()
+              ? CastExpressions.requireCast(convert, name -> scope.columns().apply(new Column(name)) != null)
+              : CastExpressions.asCast(convert, name -> scope.columns().apply(new Column(name)) != null);
+          if (cast != null) {
+            DecimalCasts.validateBounds(cast);
+            ScalarExpressionSchemas.validateBinaryCast(cast, operand -> scalarOperand(operand, scope));
+          }
+        }
+        return super.visit(convert, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      protected <S> Void visitBinaryExpression(BinaryExpression binary, S context) {
+        if (binary instanceof ComparisonOperator || binary instanceof IsDistinctExpression) {
+          ScalarExpressionSchemas.validateBinaryComparison(binary.getLeftExpression(), binary.getRightExpression(),
+              operand -> scalarOperand(operand, scope));
+        }
+        return super.visitBinaryExpression(binary, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(InExpression in, S context) {
+        Schema left = scalarOperand(in.getLeftExpression(), scope);
+        Expression candidates = in.getRightExpression();
+        if (candidates instanceof ExpressionList<?> list) {
+          for (Expression candidate : list) {
+            ScalarExpressionSchemas.validateBinaryComparison(left, scalarOperand(candidate, scope));
+          }
+        } else {
+          ScalarExpressionSchemas.validateBinaryComparison(left, scalarOperand(candidates, scope));
+        }
+        return super.visit(in, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(Between between, S context) {
+        ScalarExpressionSchemas.validateBinaryComparison(between.getLeftExpression(),
+            between.getBetweenExpressionStart(), operand -> scalarOperand(operand, scope));
+        ScalarExpressionSchemas.validateBinaryComparison(between.getLeftExpression(), between.getBetweenExpressionEnd(),
+            operand -> scalarOperand(operand, scope));
+        return super.visit(between, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(LikeExpression like, S context) {
+        ScalarExpressionSchemas.validateBinaryComparison(like.getLeftExpression(), like.getRightExpression(),
+            operand -> scalarOperand(operand, scope));
+        if (like.getEscape() != null) {
+          ScalarExpressionSchemas.validateBinaryComparison(like.getLeftExpression(), like.getEscape(),
+              operand -> scalarOperand(operand, scope));
+        }
+        return super.visit(like, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(CaseExpression choice, S context) {
+        if (choice.getSwitchExpression() != null && choice.getWhenClauses() != null) {
+          choice.getWhenClauses()
+              .forEach(branch -> ScalarExpressionSchemas.validateBinaryComparison(choice.getSwitchExpression(),
+                  branch.getWhenExpression(), operand -> scalarOperand(operand, scope)));
+        }
+        return super.visit(choice, context);
       }
 
       @Override
@@ -173,6 +272,47 @@ public final class ArrayQueryValidation {
         return null;
       }
     });
+  }
+
+  /**
+   * Resolves known scalar and interval operands without evaluating their values.
+   *
+   * @param expression
+   *          scoped operand
+   * @param scope
+   *          current lexical scope
+   * @return known scalar schema, or null when unresolved
+   */
+  private static Schema scalarOperand(Expression expression, Scope scope) {
+    Expression operand = ExpressionEvaluator.unwrapParenthesis(expression);
+    if (operand instanceof AnyComparisonExpression quantified) {
+      return projectedValue(quantified.getSelect(), scope);
+    }
+    if (operand instanceof net.sf.jsqlparser.expression.Function quantified
+        && JSqlParserSupport.isQuantifiedOperand(quantified) && quantified.getParameters() != null
+        && quantified.getParameters().size() == 1) {
+      Schema array = JdbcTypeMapper.nonNullSchema(scalarOperand(quantified.getParameters().getFirst(), scope));
+      return array != null && array.getType() == Schema.Type.ARRAY
+          ? JdbcTypeMapper.nonNullSchema(array.getElementType())
+          : null;
+    }
+    Schema scalar = ScalarExpressionSchemas.resolve(operand, name -> scope.columns().apply(new Column(name)) != null);
+    if (scalar != null) {
+      return scalar;
+    }
+    if (operand instanceof HexValue) {
+      return JdbcTypeMapper.declaredSchema(java.sql.JDBCType.VARBINARY);
+    }
+    CastExpression cast = CastExpressions.asCast(operand, name -> scope.columns().apply(new Column(name)) != null);
+    if (cast != null && cast.getColDataType() != null) {
+      java.sql.JDBCType type = ScalarExpressionSchemas.declaredJdbcType(cast.getColDataType().getDataType());
+      if (type == java.sql.JDBCType.CLOB || type == java.sql.JDBCType.NCLOB) {
+        return Schema.create(Schema.Type.STRING);
+      }
+    }
+    Schema interval = IntervalExpressionTypes.resolve(operand, scope.columns(),
+        nested -> projectedValue(nested, scope));
+    return interval != null ? interval : resolve(operand, scope);
   }
 
   /**
@@ -267,7 +407,7 @@ public final class ArrayQueryValidation {
     if (query.getWithItemsList() != null) {
       query.getWithItemsList().forEach(cte -> ctes.put(Identifier.of(cte.getAliasName()), cte));
     }
-    return new Scope(outer.columns(), outer.tables(), ctes, outer.resolving());
+    return new Scope(outer.columns(), outer.tables(), ctes, outer.resolving(), outer.bound());
   }
 
   /**
@@ -280,6 +420,11 @@ public final class ArrayQueryValidation {
    * @return local scope
    */
   private static Scope localScope(PlainSelect query, Scope outer) {
+    // Result construction can repeat validation without nested table schemas.
+    // An unknown local input might shadow a correlated column, so defer strict
+    // CONVERT disambiguation until those schemas or correlation bindings exist.
+    boolean bound = outer.bound() && inputs(query).stream().allMatch(input -> !(input instanceof Table table)
+        || Identifier.of(table.getName()).resolve(outer.ctes()) != null || outer.tables().apply(table) != null);
     return new Scope(column -> {
       Binding match = localColumn(query, column, outer);
       if (match.present()) {
@@ -289,7 +434,7 @@ public final class ArrayQueryValidation {
       boolean localQualifier = qualifier != null && inputs(query).stream()
           .anyMatch(input -> Identifier.of(qualifier).matches(Identifier.of(sourceName(input))));
       return localQualifier ? null : outer.columns().apply(column);
-    }, outer.tables(), outer.ctes(), outer.resolving());
+    }, outer.tables(), outer.ctes(), outer.resolving(), bound);
   }
 
   /**
@@ -597,9 +742,11 @@ public final class ArrayQueryValidation {
    *          visible WITH declarations
    * @param resolving
    *          projections currently being resolved
+   * @param bound
+   *          whether source schemas have been supplied for declaration validation
    */
   private record Scope(Function<Column, Schema> columns, Function<Table, Schema> tables,
-      Map<Identifier, WithItem<?>> ctes, Set<Select> resolving) {
+      Map<Identifier, WithItem<?>> ctes, Set<Select> resolving, boolean bound) {
   }
 
   /**

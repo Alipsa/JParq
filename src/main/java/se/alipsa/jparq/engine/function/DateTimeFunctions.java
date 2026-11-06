@@ -1,7 +1,10 @@
 package se.alipsa.jparq.engine.function;
 
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.sql.Date;
+import java.sql.JDBCType;
 import java.sql.SQLDataException;
 import java.sql.Time;
 import java.sql.Timestamp;
@@ -24,6 +27,7 @@ import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAccessor;
 import java.time.temporal.UnsupportedTemporalTypeException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -36,8 +40,10 @@ import net.sf.jsqlparser.statement.create.table.ColDataType;
 import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.NumericCastTarget;
 import se.alipsa.jparq.engine.NumericCasts;
+import se.alipsa.jparq.engine.ScalarExpressionSchemas;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlText;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
@@ -759,12 +765,12 @@ public final class DateTimeFunctions {
    *          the evaluated inner value
    * @return the cast result converted to the requested type when possible
    * @throws IllegalArgumentException
-   *           if decimal bounds are invalid (SQLState 42000) or the rounded value
-   *           exceeds the target's range or precision (SQLState 22003), or
-   *           numeric input is invalid or non-finite (SQLState 22018), or
-   *           temporal input has invalid format (22007) or out-of-range fields
-   *           (22008), or a non-character interval operand is used implicitly as
-   *           text (42000), carried by the cause
+   *           if decimal bounds or binary lengths or source types are invalid
+   *           (SQLState 42000) or the rounded value exceeds the target's range or
+   *           precision (SQLState 22003), or numeric input is invalid or
+   *           non-finite (SQLState 22018), or temporal input has invalid format
+   *           (22007) or out-of-range fields (22008), or a non-character interval
+   *           operand is used implicitly as text (42000), carried by the cause
    */
   public static Object castLiteral(CastExpression cast, Object value) {
     if (cast != null && cast.getColDataType() != null
@@ -805,11 +811,102 @@ public final class DateTimeFunctions {
     }
     return switch (normalized) {
       case "boolean", "bool" -> toBoolean(value);
-      case "char", "character", "nchar", "varchar", "charactervarying", "nvarchar", "string" ->
+      case "char", "character", "nchar", "nationalcharacter", "nationalchar", "varchar", "charactervarying", "nvarchar",
+          "nationalcharactervarying", "string" ->
         castToString(cast, value);
-      case "text", "clob" -> SqlText.cast(value);
+      case "text", "clob", "characterlargeobject", "nclob", "nationalcharacterlargeobject" -> SqlText.cast(value);
+      case "binary", "varbinary", "binaryvarying", "blob", "binarylargeobject" ->
+        compileBinaryCast(cast).convert(value);
       default -> value;
     };
+  }
+
+  /**
+   * Compiles immutable binary rules for an evaluator's local expression cache.
+   * One-shot literal folding can compile directly without shared mutable state.
+   *
+   * @param cast
+   *          CAST expression
+   * @return compiled binary conversion, or null for another type
+   * @throws IllegalArgumentException
+   *           if the declaration is invalid, carrying SQLState 42000
+   */
+  public static BinaryCast compileBinaryCast(CastExpression cast) {
+    if (cast.getColDataType() == null) {
+      return null;
+    }
+    JDBCType type = ScalarExpressionSchemas.declaredJdbcType(cast.getColDataType().getDataType());
+    if (type == null || !JdbcTypeMapper.isBinaryType(type.getVendorTypeNumber())) {
+      return null;
+    }
+    Long length = ScalarExpressionSchemas.binaryLength(cast);
+    if (length == null && type == JDBCType.BINARY) {
+      length = 1L;
+    }
+    return new BinaryCast(length, type == JDBCType.BINARY);
+  }
+
+  /**
+   * Immutable binary length and padding rules compiled from a CAST declaration.
+   */
+  public static final class BinaryCast {
+    private final Long length;
+    private final boolean fixed;
+
+    /**
+     * Retains validated conversion bounds.
+     *
+     * @param length
+     *          declared maximum length, or null when unbounded
+     * @param fixed
+     *          whether zero-octet padding is required
+     */
+    private BinaryCast(Long length, boolean fixed) {
+      this.length = length;
+      this.fixed = fixed;
+    }
+
+    /**
+     * Copies and converts a row value using the compiled bounds.
+     *
+     * @param value
+     *          character or binary input, possibly null
+     * @return independent binary value, or null for SQL NULL
+     * @throws IllegalArgumentException
+     *           if the operand is incompatible, carrying SQLState 42000
+     */
+    public byte[] convert(Object value) {
+      if (value == null) {
+        return null;
+      }
+      byte[] bytes = binaryBytes(value);
+      return length != null && (fixed || bytes.length > length) ? Arrays.copyOf(bytes, length.intValue()) : bytes;
+    }
+  }
+
+  /**
+   * Copies binary input or encodes character input as UTF-8 for binary casts.
+   *
+   * @param value
+   *          non-null CAST operand
+   * @return independent binary value
+   * @throws IllegalArgumentException
+   *           if the operand is not character or binary, carrying SQLState 42000
+   */
+  private static byte[] binaryBytes(Object value) {
+    if (value instanceof byte[] bytes) {
+      return bytes.clone();
+    }
+    if (value instanceof ByteBuffer buffer) {
+      ByteBuffer copy = buffer.duplicate();
+      byte[] bytes = new byte[copy.remaining()];
+      copy.get(bytes);
+      return bytes;
+    }
+    if (value instanceof CharSequence || value instanceof Character) {
+      return value.toString().getBytes(StandardCharsets.UTF_8);
+    }
+    throw SqlExceptions.syntaxFailure("Binary CAST requires a character or binary operand");
   }
 
   /**
@@ -846,7 +943,8 @@ public final class DateTimeFunctions {
     }
     Integer length = firstIntegerArgument(cast);
     String target = normalizeTypeName(cast.getColDataType().getDataType());
-    if (length == null && ("char".equals(target) || "character".equals(target) || "nchar".equals(target))) {
+    if (length == null && ("char".equals(target) || "character".equals(target) || "nchar".equals(target)
+        || "nationalcharacter".equals(target) || "nationalchar".equals(target))) {
       length = 1;
     }
     if (length != null && length >= 0 && text.codePointCount(0, text.length()) > length) {

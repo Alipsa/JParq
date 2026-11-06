@@ -21,7 +21,7 @@ public final class SqlExceptions {
   public static final String OUTER_VALUE = "<outer value>";
   private static final int DIAGNOSTIC_VALUE_LIMIT = 64;
   private static final Set<String> CLASSIFIED_STATES = Set.of("21000", "42000", "42702", "22001", "22005", "22003",
-      "22007", "22008", "22018", "2201W", "2201X", "0A000");
+      "22007", "22008", "22018", "22021", "2201W", "2201X", "0A000");
   private static final Pattern CORRELATED_BINDING = Pattern
       .compile("__JPARQ_CORRELATED_VALUE\\s*\\(\\s*'[^']*'\\s*,\\s*\\d+\\s*\\)", Pattern.CASE_INSENSITIVE);
 
@@ -200,8 +200,8 @@ public final class SqlExceptions {
    * @param failure
    *          the exception or wrapper to inspect
    * @return the SQLState 21000, 42000, 42702, 22001, 22005, 22003, 22007, 22008,
-   *         22018, 2201W, 2201X, or 0A000 exception, or null without a recognized
-   *         state
+   *         22018, 22021, 2201W, 2201X, or 0A000 exception, or null without a
+   *         recognized state
    */
   public static SQLException findSqlStateFailure(Throwable failure) {
     Throwable current = failure;

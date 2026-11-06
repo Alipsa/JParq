@@ -24,6 +24,7 @@ import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.helper.IntervalType;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalValueType;
 
 /**
@@ -121,6 +122,13 @@ public final class AvroCoercions {
       return null;
     }
     Schema effective = effectiveSchema(s);
+    if (lit instanceof byte[] || lit instanceof ByteBuffer) {
+      int targetType = JdbcTypeMapper.mapSchemaToJdbcType(effective);
+      if (targetType != java.sql.Types.OTHER && targetType != java.sql.Types.NULL
+          && !JdbcTypeMapper.isBinaryType(targetType)) {
+        throw SqlExceptions.syntaxFailure("Cannot compare binary and nonbinary operands");
+      }
+    }
     if (IntervalType.matches(effective)) {
       return lit;
     }

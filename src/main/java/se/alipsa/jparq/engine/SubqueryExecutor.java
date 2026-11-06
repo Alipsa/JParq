@@ -621,6 +621,16 @@ public final class SubqueryExecutor implements AutoCloseable {
     }
 
     /**
+     * Reuses immutable physical schemas already validated during preparation.
+     *
+     * @param validatedTables
+     *          prepared-plan table declarations
+     */
+    public ExecutionPlans(Map<JParqConnection.TableLocation, ParquetTable> validatedTables) {
+      tables.putAll(validatedTables);
+    }
+
+    /**
      * Obtains a child shape scoped to its declaring query and SQL text.
      *
      * @param sql
@@ -628,7 +638,7 @@ public final class SubqueryExecutor implements AutoCloseable {
      * @return the child cache
      */
     public ExecutionPlans child(String sql) {
-      return children.computeIfAbsent(sql, ignored -> new ExecutionPlans());
+      return children.computeIfAbsent(sql, ignored -> new ExecutionPlans(tables));
     }
 
     /**

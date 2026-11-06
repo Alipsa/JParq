@@ -2,6 +2,50 @@
 
 ### 1.4.0
 
+- Preserve declared string and DATE/TIME/TIMESTAMP literal types and implemented character, DATE, and
+  TIME/TIMESTAMP WITHOUT TIME ZONE CAST types, including empty and all-NULL results (#288).
+  Accept compatible character set-operation branches and retain untyped NULL columns through nested CTEs
+  and derived tables so enclosing set operations can adopt the other branch's type. Untyped NULL projections
+  consistently expose OTHER metadata, including in plain SELECTs and grouped queries. Keep scalar CAST
+  metadata separate from ARRAY element validation so unresolved character LOB and time-zone casts retain
+  OTHER/Object metadata without unchecked exceptions or unsupported value-class claims.
+  Retain declared LOB/binary families for set compatibility, including typed NULLs and empty branches;
+  reject binary/character and other incompatible declarations with SQLState `42000` before value inference.
+  Support standard NATIONAL CHARACTER, NATIONAL CHAR, and NATIONAL CHARACTER VARYING spellings with
+  the same metadata, value conversion, length handling, and truncation checks as NCHAR/NVARCHAR.
+  **Behavior changes:** binary CASTs return `byte[]` with BINARY, VARBINARY, or BLOB metadata,
+  retained through CTEs and derived tables, including NULL and empty results (#450, #458).
+  BLOB columns report `byte[]` as their JDBC class name; both `getBlob` overloads return detached BLOBs
+  and preserve SQL NULL. Binary CAST operands must be binary or character values; known incompatible
+  sources (including INTERVAL) and invalid binary lengths fail during preparation in plain SELECTs with
+  SQLState `42000`.
+  BLOB lengths support K/M/G/T/P multipliers with overflow-checked long bounds; short values do not
+  allocate the declared capacity. Nonbinary CASTs no longer parse binary lengths during row evaluation.
+  Character-to-binary and explicit binary-to-character CASTs use UTF-8; malformed UTF-8 raises `22021`
+  rather than inserting replacement characters. OCTET_LENGTH counts binary bytes.
+  Character-only functions and text-column comparisons reject implicit binary operands with `42000`
+  instead of Java identity text (partial #355); known incompatible length/case/CONCAT calls and
+  comparisons in plain SELECTs are validated before rows are read, including IN, BETWEEN, quantified
+  comparisons, mixed binary/character LIKE, simple CASE, and NULLIF. Use an explicit CAST to choose
+  the comparison family.
+  IN resolves its left declaration once per candidate list. Binary CAST length and padding rules are
+  cached locally by each row evaluator, including stable CONVERT shapes. One-shot literal folding
+  compiles directly without a global CAST cache. Cast-style CONVERT shares CAST metadata and declared
+  length, source-type, character-function, and comparison validation in both supported argument orders.
+  Preserve function operands such as `CONVERT(VARCHAR, CHAR(65))`; a function's arguments no longer
+  trigger a type-order swap. In plain SELECTs, ambiguous cast-style CONVERT arguments fail preparation
+  with `42000` after source binding instead of silently bypassing conversion.
+  Validation without inner table schemas defers CONVERT argument disambiguation, preserving correlated
+  references to outer columns whose names are SQL types, including empty and NULL inputs.
+  Set-operation branch declarations and cross-branch compatibility are validated during execution,
+  including for empty inputs; preparation-time consistency remains tracked in #464.
+  Reused prepared footer schemas avoid duplicate footer reads. Subqueries still rediscover shard lists
+  when re-executed: added or removed files change the TableLocation cache key.
+  LENGTH remains a character-only alias of CHAR_LENGTH; binary LENGTH behavior remains open in #355.
+  Binary SUBSTRING rejection is no longer asserted as correct behavior; support remains tracked in #461.
+  National `N'…'` literals report NVARCHAR, while unresolved `B'…'` literals report OTHER.
+  Standard LOB spellings share ARRAY restrictions and canonical CLOB/NCLOB/BLOB diagnostics (#459).
+
 - Implement both ResultSet.getArray overloads (#280) for stored and computed arrays, including nested
   arrays from LATERAL queries. Return detached JDBC arrays with element type metadata, slices, element
   result sets, and free semantics. Preserve SQL NULL and wasNull; reject non-array values with SQLState 22005.
@@ -13,7 +57,7 @@
   **Behavior changes:** VALUES mixing DATE with TIMESTAMP or TIME now fails with SQLState `42000`;
   these inputs previously widened to TIMESTAMP or fell back to VARCHAR. Set operations containing
   CAST(NULL AS DATE/TIME/TIMESTAMP), including precision with WITH/WITHOUT TIME ZONE clauses, now retain the
-  declared temporal JDBC metadata instead of OTHER (partially addresses #288).
+  declared temporal JDBC metadata instead of OTHER.
 
 - Keep datetime value functions stable within a statement (#275), including across rows, nested queries,
   and lazy result reads. Capture fresh datetime values for every prepared-statement execution.

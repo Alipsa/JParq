@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,6 +24,8 @@ import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.cli.JParqCliSession;
 import se.alipsa.jparq.engine.AvroProjections;
@@ -137,6 +140,52 @@ class HfDatasetLayoutTest {
           }
         }
       }
+    }
+  }
+
+  /**
+   * Re-executed subqueries rediscover added and removed shards despite reusing
+   * prepared footer schemas. TableLocation keys include the complete ordered file
+   * list.
+   *
+   * @param sql
+   *          scalar, EXISTS, or IN subquery using a changing logical table
+   * @throws Exception
+   *           if fixture changes or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT (SELECT COUNT(*) FROM changing WHERE id >= 0) FROM single WHERE id=1",
+      "SELECT COUNT(*) FROM single s WHERE EXISTS (SELECT 1 FROM changing c WHERE c.id=s.id)",
+      "SELECT COUNT(*) FROM single WHERE id IN (SELECT id FROM changing)"
+  })
+  void preparedSubqueriesRediscoverChangedShardLists(String sql) throws Exception {
+    Path first = base.resolve("changing/0.parquet");
+    write(first, schema("ChangingFirst"), 1);
+    try (var connection = connect(true, true); var query = connection.prepareStatement(sql)) {
+      assertEquals(1, preparedCount(query));
+      write(base.resolve("changing/1.parquet"), schema("ChangingAdded"), 2, 3);
+      assertEquals(3, preparedCount(query));
+      Files.delete(first);
+      assertEquals(2, preparedCount(query));
+    }
+  }
+
+  /**
+   * Reads one aggregate count from a freshly executed prepared query.
+   *
+   * @param query
+   *          prepared statement to execute again
+   * @return count returned by the query
+   * @throws SQLException
+   *           if execution fails
+   */
+  private static long preparedCount(PreparedStatement query) throws SQLException {
+    try (var result = query.executeQuery()) {
+      assertTrue(result.next());
+      long count = result.getLong(1);
+      assertFalse(result.next());
+      return count;
     }
   }
 

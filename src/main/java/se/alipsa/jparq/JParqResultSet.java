@@ -3,6 +3,7 @@ import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.sql.Array;
+import java.sql.Blob;
 import java.sql.Date;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLDataException;
@@ -23,6 +24,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import javax.sql.rowset.serial.SerialBlob;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
@@ -242,7 +244,7 @@ public class JParqResultSet extends ResultSetAdapter {
       new JParqResultSetMetaData(reader.schema(), labels, physical, canonicalLookup, tableName, tableSchema,
           tableCatalog, selectExpressions, metadataSourceMappings).validateArrayDeclarations(select, table -> null);
     } catch (RuntimeException failure) {
-      throw SqlExceptions.wrap("Invalid ARRAY projection declaration", failure);
+      throw SqlExceptions.wrap("Invalid projection declaration", failure);
     }
 
     AggregateFunctions.AggregatePlan aggregatePlan = AggregateFunctions.plan(select, reader.schema());
@@ -1549,6 +1551,41 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public BigDecimal getBigDecimal(String columnLabel) throws SQLException {
     return getBigDecimal(findColumn(columnLabel));
+  }
+
+  /**
+   * Returns a detached BLOB containing the column's binary bytes.
+   *
+   * @param columnIndex
+   *          one-based column position
+   * @return independent BLOB, or null for SQL NULL
+   * @throws SQLException
+   *           if the column is unavailable or is not binary (22005)
+   */
+  @Override
+  public Blob getBlob(int columnIndex) throws SQLException {
+    Object raw = value(columnIndex);
+    if (raw == null) {
+      return null;
+    }
+    if (raw instanceof byte[] bytes) {
+      return new SerialBlob(bytes);
+    }
+    throw new SQLDataException("Cannot convert nonbinary column to BLOB", "22005");
+  }
+
+  /**
+   * Returns a detached BLOB by its SQL column label.
+   *
+   * @param columnLabel
+   *          SQL column label
+   * @return independent BLOB, or null for SQL NULL
+   * @throws SQLException
+   *           if the column is unavailable or is not binary (22005)
+   */
+  @Override
+  public Blob getBlob(String columnLabel) throws SQLException {
+    return getBlob(findColumn(columnLabel));
   }
 
   @Override

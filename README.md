@@ -887,10 +887,49 @@ The following SQL statements are supported:
   retain REAL and Float values, other approximate combinations use DOUBLE, and DECIMAL with exact numeric inputs retains the largest
   integer-digit count and scale. Values are converted before set comparison, and metadata preserves
   the common type and decimal bounds, including empty results. At the top level, untyped NULL adopts
-  the other branch's type, and wholly untyped NULL results retain OTHER metadata. NULL typing across
-  CTE and derived-table boundaries is tracked in [#288](https://github.com/Alipsa/JParq/issues/288).
+  the other branch's type. Untyped NULL projections consistently report OTHER metadata in plain SELECTs,
+  grouped results, set operations, CTEs, and derived tables. Their internal schemas remain untyped through
+  CTEs and derived tables, including empty results, so an enclosing set operation can adopt a numeric or
+  nonnumeric branch's type. String (including national `N'...'`) and DATE/TIME/TIMESTAMP literals,
+  character casts, DATE casts, and TIME/TIMESTAMP WITHOUT TIME ZONE casts report their declared JDBC
+  types even for empty or all-NULL results. Standard NATIONAL CHARACTER, NATIONAL CHAR, and
+  NATIONAL CHARACTER VARYING spellings use the same metadata and conversions as NCHAR/NVARCHAR.
+  Compatible CHAR and VARCHAR set branches produce VARCHAR output. Declared LOB and binary CASTs remain
+  typed for set compatibility even for all-NULL or empty results: incompatible numeric, character,
+  binary, or datetime families raise SQLState `42000`.
+  Binary CASTs and cast-style CONVERT return `byte[]` and retain BINARY, VARBINARY, or BLOB metadata
+  through CTEs and derived tables, including all-NULL and empty results. Character/binary CAST
+  conversions use UTF-8;
+  malformed UTF-8 raises SQLState `22021` instead of replacing bytes. BLOB lengths accept K/M/G/T/P
+  multipliers using overflow-checked long bounds. Plain LOB lengths above `Integer.MAX_VALUE` still hit
+  a parser restriction tracked in [#462](https://github.com/Alipsa/JParq/issues/462).
+  In plain SELECTs, known incompatible binary CAST sources (including INTERVAL), invalid lengths,
+  binary arguments to CHAR_LENGTH/UPPER/LOWER/CONCAT, and binary/nonbinary comparisons raise `42000`
+  during preparation.
+  Preparation checks include IN, BETWEEN, quantified comparisons, mixed binary/character LIKE,
+  simple CASE, and NULLIF, even for NULL and empty inputs. Unknown operand types retain runtime
+  validation.
+  Preparation-time type inference can still leave joined columns in ON, correlated outer references,
+  row-value comparisons ([#388](https://github.com/Alipsa/JParq/issues/388)), and set-operation subquery
+  projections unresolved; their binary compatibility checks can run during execution. These preparation
+  gaps are tracked in [#464](https://github.com/Alipsa/JParq/issues/464), alongside #388. Set-operation
+  branch declaration checks and cross-branch type compatibility run during execution, including for
+  empty inputs; earlier validation is also tracked in #464.
+  Cast-style CONVERT shares CAST declaration checks. Use target-first syntax for NULL inputs; the
+  NULL-first parser gap is tracked in [#465](https://github.com/Alipsa/JParq/issues/465).
+  OCTET_LENGTH counts binary bytes. LENGTH remains an alias of character-only CHAR_LENGTH; the binary
+  LENGTH request remains open in [#355](https://github.com/Alipsa/JParq/issues/355).
+  Standard binary SUBSTRING, POSITION, TRIM, OVERLAY, and binary-pattern LIKE remain tracked in
+  [#461](https://github.com/Alipsa/JParq/issues/461). Both `getBlob` overloads return detached BLOBs,
+  or null for SQL NULL.
+  Standard CHARACTER LARGE OBJECT, NCLOB, NATIONAL CHARACTER LARGE OBJECT, and BINARY LARGE OBJECT
+  spellings share the corresponding LOB compatibility checks. CLOB/NCLOB still use interim character
+  storage; full character LOB metadata and ARRAY LOB support are tracked in
+  [#452](https://github.com/Alipsa/JParq/issues/452).
+  These declared CAST NULLs remain distinct from untyped NULL projections.
   Numeric and nonnumeric branches remain incompatible. Integer literals currently use BIGINT;
-  general expression typing is tracked in [#232](https://github.com/Alipsa/JParq/issues/232).
+  general character expression typing is tracked in [#460](https://github.com/Alipsa/JParq/issues/460),
+  with scalar function typing in [#424](https://github.com/Alipsa/JParq/issues/424).
   - `EXCEPT`
   - `INTERSECT`
   - `INTERSECT ALL`

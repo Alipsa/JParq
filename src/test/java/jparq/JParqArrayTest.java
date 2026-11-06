@@ -255,7 +255,7 @@ class JParqArrayTest {
     record.put("fixed", fixed);
     record.put("text", text);
     record.put("date", date);
-    var array = new JParqArray(new Object[]{
+    final var array = new JParqArray(new Object[]{
         record
     }, schema);
     buffer.put(1, (byte) 9);

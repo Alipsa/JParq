@@ -21,6 +21,59 @@ public final class JdbcTypeMapper {
   }
 
   /**
+   * Identifies the fixed and varying character types retained by value schemas.
+   *
+   * @param type
+   *          JDBC type
+   * @return whether the type is CHAR, VARCHAR, NCHAR, or NVARCHAR
+   */
+  public static boolean isCharacterType(int type) {
+    return type == Types.CHAR || type == Types.VARCHAR || type == Types.NCHAR || type == Types.NVARCHAR;
+  }
+
+  /**
+   * Finds the common fixed or varying character type of two character inputs.
+   *
+   * @param left
+   *          first JDBC character type
+   * @param right
+   *          second JDBC character type
+   * @return common type retaining national and varying declarations
+   */
+  public static JDBCType commonCharacterType(int left, int right) {
+    boolean national = left == Types.NCHAR || left == Types.NVARCHAR || right == Types.NCHAR || right == Types.NVARCHAR;
+    boolean varying = left == Types.VARCHAR || left == Types.NVARCHAR || right == Types.VARCHAR
+        || right == Types.NVARCHAR;
+    return national ? varying ? JDBCType.NVARCHAR : JDBCType.NCHAR : varying ? JDBCType.VARCHAR : JDBCType.CHAR;
+  }
+
+  /**
+   * Identifies binary string declarations, including large objects.
+   *
+   * @param type
+   *          JDBC type
+   * @return whether the type is BINARY, VARBINARY, or BLOB
+   */
+  public static boolean isBinaryType(int type) {
+    return type == Types.BINARY || type == Types.VARBINARY || type == Types.BLOB;
+  }
+
+  /**
+   * Finds the common binary type, preferring large objects and varying strings.
+   *
+   * @param left
+   *          first JDBC binary type
+   * @param right
+   *          second JDBC binary type
+   * @return common binary type
+   */
+  public static JDBCType commonBinaryType(int left, int right) {
+    return left == Types.BLOB || right == Types.BLOB
+        ? JDBCType.BLOB
+        : left == Types.VARBINARY || right == Types.VARBINARY ? JDBCType.VARBINARY : JDBCType.BINARY;
+  }
+
+  /**
    * Retains a declared character or binary JDBC type on its Avro storage schema.
    *
    * @param type
@@ -32,7 +85,7 @@ public final class JdbcTypeMapper {
   public static Schema declaredSchema(JDBCType type) {
     Schema.Type storage = switch (type) {
       case CHAR, VARCHAR, NCHAR, NVARCHAR -> Schema.Type.STRING;
-      case BINARY, VARBINARY -> Schema.Type.BYTES;
+      case BINARY, VARBINARY, BLOB -> Schema.Type.BYTES;
       default -> throw new IllegalArgumentException("Not a character or binary type: " + type);
     };
     Schema schema = Schema.create(storage);
@@ -62,6 +115,7 @@ public final class JdbcTypeMapper {
       case "NCHAR" -> Types.NCHAR;
       case "NVARCHAR" -> Types.NVARCHAR;
       case "VARBINARY" -> Types.VARBINARY;
+      case "BLOB" -> Types.BLOB;
       default -> fallback;
     };
   }
@@ -90,8 +144,8 @@ public final class JdbcTypeMapper {
    *         {@code false}
    */
   public static boolean isNullable(Schema schema) {
-    return schema != null && schema.getType() == Schema.Type.UNION
-        && schema.getTypes().stream().anyMatch(s -> s.getType() == Schema.Type.NULL);
+    return schema != null && (schema.getType() == Schema.Type.NULL || schema.getType() == Schema.Type.UNION
+        && schema.getTypes().stream().anyMatch(s -> s.getType() == Schema.Type.NULL));
   }
 
   /**
@@ -139,6 +193,7 @@ public final class JdbcTypeMapper {
         }
         yield isUtf8String(base) ? Types.VARCHAR : declaredJdbcType(base, Types.BINARY);
       }
+      case NULL -> Types.NULL;
       case RECORD -> Types.STRUCT;
       case ARRAY -> Types.ARRAY;
       case MAP -> Types.STRUCT;
@@ -226,10 +281,9 @@ public final class JdbcTypeMapper {
       case Types.DATE -> Date.class.getName();
       case Types.TIME, Types.TIME_WITH_TIMEZONE -> Time.class.getName();
       case Types.TIMESTAMP, Types.TIMESTAMP_WITH_TIMEZONE -> Timestamp.class.getName();
-      case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY -> byte[].class.getName();
+      case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY, Types.BLOB -> byte[].class.getName();
       case Types.ARRAY -> Object[].class.getName();
       case Types.CLOB, Types.NCLOB -> java.sql.Clob.class.getName();
-      case Types.BLOB -> java.sql.Blob.class.getName();
       case Types.STRUCT -> org.apache.avro.generic.GenericRecord.class.getName();
       default -> Object.class.getName();
     };

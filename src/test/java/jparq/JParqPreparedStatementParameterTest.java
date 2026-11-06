@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.File;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.sql.Date;
 import java.sql.ParameterMetaData;
@@ -13,6 +14,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.util.List;
 import java.util.Properties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -245,14 +247,14 @@ class JParqPreparedStatementParameterTest {
 
   @Test
   void bindsByteArrayParameter() throws SQLException {
-    try (PreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) FROM mtcars WHERE model = ?")) {
-      byte[] testBytes = new byte[]{
-          0x48, 0x65, 0x6C, 0x6C, 0x6F
-      };
-      ps.setBytes(1, testBytes);
-      try (ResultSet rs = ps.executeQuery()) {
-        assertTrue(rs.next());
-        assertEquals(0, rs.getInt(1));
+    try (PreparedStatement ps = connection
+        .prepareStatement("SELECT COUNT(*) FROM mtcars WHERE CAST(model AS VARBINARY) = ?")) {
+      for (String model : List.of("Hello", "Mazda RX4")) {
+        ps.setBytes(1, model.getBytes(StandardCharsets.UTF_8));
+        try (ResultSet rs = ps.executeQuery()) {
+          assertTrue(rs.next());
+          assertEquals(model.equals("Mazda RX4") ? 1 : 0, rs.getInt(1));
+        }
       }
     }
   }

@@ -58,8 +58,8 @@ public final class SqlParser {
     if (paren > 0) {
       normalized = normalized.substring(0, paren).trim();
     }
-    return CONVERT_TYPE_NAMES.contains(normalized) || NumericCastTarget.fromNormalizedName(normalized) != null
-        || DecimalCasts.isDecimalType(normalized);
+    return CONVERT_TYPE_NAMES.contains(normalized) || ScalarExpressionSchemas.declaredJdbcType(normalized) != null
+        || NumericCastTarget.fromNormalizedName(normalized) != null || DecimalCasts.isDecimalType(normalized);
   }
 
   /**
@@ -100,7 +100,8 @@ public final class SqlParser {
     }
     Expression inner = convert.getExpression();
     String typeCandidate = convert.getColDataType() == null ? null : convert.getColDataType().getDataType();
-    if (inner instanceof Column column && isConvertTypeName(column.getColumnName()) && typeCandidate != null) {
+    if (inner != null && isConvertTypeName(inner.toString()) && typeCandidate != null
+        && (inner instanceof Column || !isConvertTypeName(typeCandidate))) {
       return new ConvertProcessingResult(false, typeCandidate);
     }
     return new ConvertProcessingResult(true, null);
@@ -727,9 +728,9 @@ public final class SqlParser {
   }
 
   /**
-   * Validates decimal bounds and rejects aggregate FILTER clauses in one pass
-   * before query planning, optionally collecting row-count parameters and
-   * datetime dependencies.
+   * Validates decimal bounds and binary lengths and rejects aggregate FILTER
+   * clauses in one pass before query planning, optionally collecting row-count
+   * parameters and datetime dependencies.
    *
    * @param statement
    *          parsed SELECT, including nested scopes
@@ -789,10 +790,22 @@ public final class SqlParser {
 
       /** {@inheritDoc} */
       @Override
+      public <S> Void visit(TranscodingFunction convert, S context) {
+        CastExpression cast = CastExpressions.asCast(convert);
+        if (cast != null) {
+          DecimalCasts.validateBounds(cast);
+          ScalarExpressionSchemas.binaryLength(cast);
+        }
+        return super.visit(convert, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
       public <S> Void visit(CastExpression cast, S context) {
         // When #432 makes TIME-to-TIMESTAMP casts depend on CURRENT_DATE,
         // include that implicit dependency in preparation.timeDependent too.
         DecimalCasts.validateBounds(cast);
+        ScalarExpressionSchemas.binaryLength(cast);
         return super.visit(cast, context);
       }
     });
@@ -1194,6 +1207,16 @@ public final class SqlParser {
    */
   private static void validateTableFreeSelect(PlainSelect select, boolean lateral) {
     final var validator = new ExpressionVisitorAdapter<Void>() {
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(TranscodingFunction convert, S context) {
+        if (!lateral && !convert.isTranscodeStyle()) {
+          CastExpression cast = CastExpressions.requireCast(convert, name -> false);
+          return cast.getLeftExpression().accept(this, context);
+        }
+        return super.visit(convert, context);
+      }
+
       @Override
       public <S> Void visit(Column column, S context) {
         if (column.getTable() == null && isTimeKeyword(column.getColumnName())) {
