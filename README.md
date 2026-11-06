@@ -903,15 +903,18 @@ The following SQL statements are supported:
   malformed UTF-8 raises SQLState `22021` instead of replacing bytes. BLOB lengths accept K/M/G/T/P
   multipliers using overflow-checked long bounds. Plain LOB lengths above `Integer.MAX_VALUE` still hit
   a parser restriction tracked in [#462](https://github.com/Alipsa/JParq/issues/462).
-  Known incompatible binary CAST sources (including INTERVAL), invalid lengths, binary arguments to
-  CHAR_LENGTH/UPPER/LOWER/CONCAT, and binary/nonbinary comparisons raise `42000` during preparation.
+  In plain SELECTs, known incompatible binary CAST sources (including INTERVAL), invalid lengths,
+  binary arguments to CHAR_LENGTH/UPPER/LOWER/CONCAT, and binary/nonbinary comparisons raise `42000`
+  during preparation.
   Preparation checks include IN, BETWEEN, quantified comparisons, mixed binary/character LIKE,
   simple CASE, and NULLIF, even for NULL and empty inputs. Unknown operand types retain runtime
   validation.
   Preparation-time type inference can still leave joined columns in ON, correlated outer references,
   row-value comparisons ([#388](https://github.com/Alipsa/JParq/issues/388)), and set-operation subquery
   projections unresolved; their binary compatibility checks can run during execution. These preparation
-  gaps are bugs tracked in [#464](https://github.com/Alipsa/JParq/issues/464), alongside #388.
+  gaps are tracked in [#464](https://github.com/Alipsa/JParq/issues/464), alongside #388. Set-operation
+  branch declaration checks and cross-branch type compatibility run during execution, including for
+  empty inputs; earlier validation is also tracked in #464.
   Cast-style CONVERT shares CAST declaration checks. Use target-first syntax for NULL inputs; the
   NULL-first parser gap is tracked in [#465](https://github.com/Alipsa/JParq/issues/465).
   OCTET_LENGTH counts binary bytes. LENGTH remains an alias of character-only CHAR_LENGTH; the binary
