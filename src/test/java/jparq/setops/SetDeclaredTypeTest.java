@@ -26,8 +26,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 class SetDeclaredTypeTest {
 
   /**
-   * Set declaration checks reject invalid branches independently of row data.
-   * Earlier preparation-time checks remain tracked in issue 464.
+   * Set declaration checks reject invalid branches independently of row data and
+   * whether validation occurs during preparation or execution.
    *
    * @param expression
    *          invalid set branch projection
@@ -41,18 +41,20 @@ class SetDeclaredTypeTest {
       "CONVERT(VARCHAR, TEXT) | Ambiguous CONVERT arguments",
       "CAST(model AS VARBINARY) | Set operation components must use compatible column types"
   })
-  void rejectsSetDeclarationsAtExecution(String expression, String diagnostic) throws Exception {
+  void rejectsInvalidSetDeclarations(String expression, String diagnostic) throws Exception {
     String url = "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath();
     try (var connection = DriverManager.getConnection(url)) {
       for (String suffix : List.of("", " WHERE 1=0")) {
         String invalid = "SELECT " + expression + " AS c FROM mtcars" + suffix;
         String text = "SELECT model FROM mtcars" + suffix;
         for (String sql : List.of(invalid + " UNION " + text, text + " UNION " + invalid)) {
-          try (var statement = connection.prepareStatement(sql)) {
-            SQLException error = assertThrows(SQLException.class, statement::executeQuery, sql);
-            assertEquals("42000", error.getSQLState(), sql);
-            assertTrue(error.getMessage().contains(diagnostic), error.getMessage());
-          }
+          SQLException error = assertThrows(SQLException.class, () -> {
+            try (var statement = connection.prepareStatement(sql)) {
+              statement.executeQuery().close();
+            }
+          }, sql);
+          assertEquals("42000", error.getSQLState(), sql);
+          assertTrue(error.getMessage().contains(diagnostic), error.getMessage());
         }
       }
     }
