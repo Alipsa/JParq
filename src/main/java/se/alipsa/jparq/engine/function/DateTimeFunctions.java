@@ -1,6 +1,8 @@
 package se.alipsa.jparq.engine.function;
 
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.SQLDataException;
 import java.sql.Time;
@@ -24,6 +26,7 @@ import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAccessor;
 import java.time.temporal.UnsupportedTemporalTypeException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -808,9 +811,54 @@ public final class DateTimeFunctions {
       case "char", "character", "nchar", "nationalcharacter", "nationalchar", "varchar", "charactervarying", "nvarchar",
           "nationalcharactervarying", "string" ->
         castToString(cast, value);
-      case "text", "clob" -> SqlText.cast(value);
+      case "text", "clob", "characterlargeobject", "nclob", "nationalcharacterlargeobject" -> SqlText.cast(value);
+      case "binary", "varbinary", "binaryvarying", "blob", "binarylargeobject" -> castToBinary(cast, value);
       default -> value;
     };
+  }
+
+  /**
+   * Applies the declared binary length, padding fixed strings with zero octets.
+   *
+   * @param cast
+   *          binary CAST declaration
+   * @param value
+   *          non-null operand
+   * @return independent binary value with the requested length
+   * @throws IllegalArgumentException
+   *           if the length is invalid, carrying SQLState 42000
+   */
+  private static byte[] castToBinary(CastExpression cast, Object value) {
+    byte[] bytes = binaryBytes(value);
+    Integer length = firstIntegerArgument(cast);
+    boolean fixed = "binary".equals(normalizeTypeName(cast.getColDataType().getDataType()));
+    if (length == null && fixed) {
+      length = 1;
+    }
+    if (length != null && length < 1) {
+      throw SqlExceptions.syntaxFailure("Binary CAST length must be positive");
+    }
+    return length != null && (fixed || bytes.length > length) ? Arrays.copyOf(bytes, length) : bytes;
+  }
+
+  /**
+   * Copies binary input or encodes character input as UTF-8 for binary casts.
+   *
+   * @param value
+   *          non-null CAST operand
+   * @return independent binary value
+   */
+  private static byte[] binaryBytes(Object value) {
+    if (value instanceof byte[] bytes) {
+      return bytes.clone();
+    }
+    if (value instanceof ByteBuffer buffer) {
+      ByteBuffer copy = buffer.duplicate();
+      byte[] bytes = new byte[copy.remaining()];
+      copy.get(bytes);
+      return bytes;
+    }
+    return SqlText.cast(value).getBytes(StandardCharsets.UTF_8);
   }
 
   /**

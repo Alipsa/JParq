@@ -100,6 +100,7 @@ import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.RenamingRecordReader;
 import se.alipsa.jparq.engine.SamplingRecordReader;
+import se.alipsa.jparq.engine.ScalarExpressionSchemas;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
@@ -949,8 +950,8 @@ public class JParqPreparedStatement implements PreparedStatement {
             boolean unknown = type == Types.OTHER;
             schema = projected;
             type = projectedType;
-            // CLOB uses interim character storage; unresolved binary casts must
-            // not acquire VARCHAR metadata from their current String values.
+            // Character LOBs use interim character storage; other unresolved
+            // declarations must not acquire VARCHAR metadata from their values.
             if (unknown && declaredFamily != SetColumnFamily.CHARACTER && type != Types.NULL
                 && NumericType.of(type, 0, 0) == null && type != Types.DATE && type != Types.TIME
                 && type != Types.TIMESTAMP && type != Types.TIME_WITH_TIMEZONE
@@ -1024,22 +1025,17 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @return declared family, or UNKNOWN when no declaration is available
    */
   private SetColumnFamily declaredSetColumnFamily(Expression expression, int jdbcType) {
+    int resolvedType = jdbcType;
     if (expression instanceof CastExpression cast && cast.getColDataType() != null) {
-      String normalized = DateTimeFunctions
-          .normalizeTypeName(cast.getColDataType().getDataType().replaceAll("\\([^)]*\\)", ""));
-      switch (normalized) {
-        case "clob":
-          return SetColumnFamily.CHARACTER;
-        case "blob", "binary", "varbinary", "binaryvarying":
-          return SetColumnFamily.BINARY;
-        default:
-          break;
+      JDBCType declared = ScalarExpressionSchemas.declaredJdbcType(cast.getColDataType().getDataType());
+      if (declared != null) {
+        resolvedType = declared.getVendorTypeNumber();
       }
     }
-    if (JdbcTypeMapper.isCharacterType(jdbcType) || jdbcType == Types.CLOB) {
+    if (JdbcTypeMapper.isCharacterType(resolvedType) || resolvedType == Types.CLOB || resolvedType == Types.NCLOB) {
       return SetColumnFamily.CHARACTER;
     }
-    return switch (jdbcType) {
+    return switch (resolvedType) {
       case Types.BINARY, Types.VARBINARY, Types.BLOB -> SetColumnFamily.BINARY;
       case Types.NULL, Types.OTHER -> SetColumnFamily.UNKNOWN;
       default -> SetColumnFamily.OTHER;
@@ -1190,13 +1186,11 @@ public class JParqPreparedStatement implements PreparedStatement {
       types.set(index, Types.TIMESTAMP_WITH_TIMEZONE);
       schemas.set(index, TemporalValueType.OFFSET_TIMESTAMP.schema());
     } else if (JdbcTypeMapper.isCharacterType(previous) && JdbcTypeMapper.isCharacterType(type) && previous != type) {
-      boolean national = previous == Types.NCHAR || previous == Types.NVARCHAR || type == Types.NCHAR
-          || type == Types.NVARCHAR;
-      boolean varying = (previous != Types.CHAR && previous != Types.NCHAR)
-          || (type != Types.CHAR && type != Types.NCHAR);
-      JDBCType common = national
-          ? varying ? JDBCType.NVARCHAR : JDBCType.NCHAR
-          : varying ? JDBCType.VARCHAR : JDBCType.CHAR;
+      JDBCType common = JdbcTypeMapper.commonCharacterType(previous, type);
+      types.set(index, common.getVendorTypeNumber());
+      schemas.set(index, JdbcTypeMapper.declaredSchema(common));
+    } else if (JdbcTypeMapper.isBinaryType(previous) && JdbcTypeMapper.isBinaryType(type)) {
+      JDBCType common = JdbcTypeMapper.commonBinaryType(previous, type);
       types.set(index, common.getVendorTypeNumber());
       schemas.set(index, JdbcTypeMapper.declaredSchema(common));
     } else if (previous != type) {
@@ -4172,7 +4166,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     Schema source = sourceColumnSchema(meta, column);
     if (source != null && (type == Types.ARRAY || type == Types.STRUCT || IntervalType.matches(source)
         || TemporalValueType.fromSchema(source) != null || source.getType() == Schema.Type.NULL
-        || JdbcTypeMapper.isCharacterType(type))) {
+        || JdbcTypeMapper.isCharacterType(type) || JdbcTypeMapper.isBinaryType(type))) {
       return source;
     }
     return switch (type) {

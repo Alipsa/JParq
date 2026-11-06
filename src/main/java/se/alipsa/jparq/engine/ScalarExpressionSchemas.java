@@ -40,7 +40,9 @@ public final class ScalarExpressionSchemas {
       case DateValue value -> declaredSchema("date");
       case TimeValue value -> declaredSchema("time");
       case TimestampValue value -> declaredSchema("timestamp");
-      case StringValue value -> Schema.create(Schema.Type.STRING);
+      case StringValue value when "N".equalsIgnoreCase(value.getPrefix()) ->
+        JdbcTypeMapper.declaredSchema(JDBCType.NVARCHAR);
+      case StringValue value when value.getPrefix() == null -> Schema.create(Schema.Type.STRING);
       case CastExpression cast when cast.getColDataType() != null ->
         declaredSchema(cast.getColDataType().getDataType());
       case DateTimeLiteralExpression literal -> declaredSchema(literal.getType().name());
@@ -50,7 +52,7 @@ public final class ScalarExpressionSchemas {
 
   /**
    * Maps implemented nonnumeric scalar type declarations to value schemas.
-   * Numeric declarations use the numeric expression resolver. LOB, binary, and
+   * Numeric declarations use the numeric expression resolver. Character LOB and
    * time-zone CAST declarations remain unresolved until their scalar evaluation
    * supplies the corresponding value representations.
    *
@@ -62,17 +64,52 @@ public final class ScalarExpressionSchemas {
     if (typeName == null) {
       return null;
     }
-    String normalized = DateTimeFunctions.normalizeTypeName(typeName.replaceAll("\\([^)]*\\)", ""));
+    String normalized = normalizeTypeName(typeName);
     return switch (normalized) {
       case "date" -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
       case "time", "timewithouttimezone" -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
       case "timestamp", "timestampwithouttimezone", "datetime" -> TemporalValueType.UTC_TIMESTAMP.schema();
       case "boolean", "bool" -> Schema.create(Schema.Type.BOOLEAN);
-      case "char", "character" -> JdbcTypeMapper.declaredSchema(JDBCType.CHAR);
-      case "nchar", "nationalcharacter", "nationalchar" -> JdbcTypeMapper.declaredSchema(JDBCType.NCHAR);
-      case "nvarchar", "nationalcharactervarying" -> JdbcTypeMapper.declaredSchema(JDBCType.NVARCHAR);
-      case "varchar", "charactervarying", "string", "text" -> Schema.create(Schema.Type.STRING);
+      default -> {
+        JDBCType type = declaredJdbcType(typeName);
+        yield type == null || type == JDBCType.CLOB || type == JDBCType.NCLOB
+            ? null
+            : JdbcTypeMapper.declaredSchema(type);
+      }
+    };
+  }
+
+  /**
+   * Normalizes SQL type names while retaining clauses following precision.
+   *
+   * @param typeName
+   *          SQL type name, possibly including precision
+   * @return normalized name, or an empty string for null
+   */
+  public static String normalizeTypeName(String typeName) {
+    return typeName == null ? "" : DateTimeFunctions.normalizeTypeName(typeName.replaceAll("\\([^)]*\\)", ""));
+  }
+
+  /**
+   * Identifies character, binary, and LOB declarations for shared validation.
+   *
+   * @param typeName
+   *          SQL type name, possibly including precision
+   * @return declared JDBC type, or null for other declarations
+   */
+  public static JDBCType declaredJdbcType(String typeName) {
+    return switch (normalizeTypeName(typeName)) {
+      case "char", "character" -> JDBCType.CHAR;
+      case "nchar", "nationalcharacter", "nationalchar" -> JDBCType.NCHAR;
+      case "nvarchar", "nationalcharactervarying" -> JDBCType.NVARCHAR;
+      case "varchar", "charactervarying", "string", "text" -> JDBCType.VARCHAR;
+      case "clob", "characterlargeobject" -> JDBCType.CLOB;
+      case "nclob", "nationalcharacterlargeobject" -> JDBCType.NCLOB;
+      case "blob", "binarylargeobject" -> JDBCType.BLOB;
+      case "binary" -> JDBCType.BINARY;
+      case "varbinary", "binaryvarying" -> JDBCType.VARBINARY;
       default -> null;
     };
   }
+
 }

@@ -18,7 +18,6 @@ import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionLi
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.NumericType;
-import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.engine.function.StructArrayTypes;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalValueType;
@@ -157,7 +156,7 @@ public final class ArrayExpressionSchemas {
     if (numeric != null) {
       return numeric.schema();
     }
-    return expression instanceof StringValue ? Schema.create(Schema.Type.STRING) : null;
+    return expression instanceof StringValue ? ScalarExpressionSchemas.resolve(expression) : null;
   }
 
   /**
@@ -168,14 +167,15 @@ public final class ArrayExpressionSchemas {
    * @return declared schema, or null for numeric or unrecognized declarations
    */
   private static Schema nonnumericSchema(String typeName) {
-    String normalized = DateTimeFunctions.normalizeTypeName(typeName.replaceAll("\\([^)]*\\)", ""));
+    String normalized = ScalarExpressionSchemas.normalizeTypeName(typeName);
+    JDBCType type = ScalarExpressionSchemas.declaredJdbcType(typeName);
+    if (type == JDBCType.CLOB || type == JDBCType.NCLOB || type == JDBCType.BLOB) {
+      throw SqlExceptions.unsupportedFeature(
+          "ARRAY elements with declared type " + normalized.toUpperCase(java.util.Locale.ROOT) + " are not supported");
+    }
     return switch (normalized) {
       case "timewithtimezone" -> TemporalValueType.OFFSET_TIME.schema();
       case "timestampwithtimezone" -> TemporalValueType.OFFSET_TIMESTAMP.schema();
-      case "binary" -> JdbcTypeMapper.declaredSchema(JDBCType.BINARY);
-      case "clob", "blob" -> throw SqlExceptions.unsupportedFeature(
-          "ARRAY elements with declared type " + normalized.toUpperCase(java.util.Locale.ROOT) + " are not supported");
-      case "varbinary", "binaryvarying" -> JdbcTypeMapper.declaredSchema(JDBCType.VARBINARY);
       default -> ScalarExpressionSchemas.declaredSchema(typeName);
     };
   }
@@ -244,18 +244,12 @@ public final class ArrayExpressionSchemas {
     int leftType = JdbcTypeMapper.mapSchemaToJdbcType(left);
     int rightType = JdbcTypeMapper.mapSchemaToJdbcType(right);
     if (JdbcTypeMapper.isCharacterType(leftType) && JdbcTypeMapper.isCharacterType(rightType)) {
-      boolean national = leftType == Types.NCHAR || leftType == Types.NVARCHAR || rightType == Types.NCHAR
-          || rightType == Types.NVARCHAR;
-      boolean varying = leftType == Types.VARCHAR || leftType == Types.NVARCHAR || rightType == Types.VARCHAR
-          || rightType == Types.NVARCHAR;
-      return JdbcTypeMapper.declaredSchema(
-          national ? varying ? JDBCType.NVARCHAR : JDBCType.NCHAR : varying ? JDBCType.VARCHAR : JDBCType.CHAR);
+      return JdbcTypeMapper.declaredSchema(JdbcTypeMapper.commonCharacterType(leftType, rightType));
     }
-    if ((leftType == Types.BINARY || leftType == Types.VARBINARY)
-        && (rightType == Types.BINARY || rightType == Types.VARBINARY)) {
-      return JdbcTypeMapper.declaredSchema(
-          leftType == Types.VARBINARY || rightType == Types.VARBINARY ? JDBCType.VARBINARY : JDBCType.BINARY);
+    if (JdbcTypeMapper.isBinaryType(leftType) && JdbcTypeMapper.isBinaryType(rightType)) {
+      return JdbcTypeMapper.declaredSchema(JdbcTypeMapper.commonBinaryType(leftType, rightType));
     }
+
     if ((leftType == Types.TIME || leftType == Types.TIME_WITH_TIMEZONE)
         && (rightType == Types.TIME || rightType == Types.TIME_WITH_TIMEZONE) && leftType != rightType) {
       return TemporalValueType.OFFSET_TIME.schema();
