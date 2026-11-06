@@ -1,7 +1,10 @@
 package se.alipsa.jparq.engine;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.sql.SQLDataException;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
@@ -37,15 +40,36 @@ public final class SqlText {
    *
    * @return UTF-8 binary text, SQL interval text, or the normal character
    *         representation
+   * @throws IllegalArgumentException
+   *           if binary data is not valid UTF-8, carrying SQLState 22021
    */
   public static String cast(Object value) {
     if (value instanceof byte[] bytes) {
-      return new String(bytes, StandardCharsets.UTF_8);
+      return decodeBinary(ByteBuffer.wrap(bytes));
     }
     if (value instanceof ByteBuffer buffer) {
-      return StandardCharsets.UTF_8.decode(buffer.duplicate()).toString();
+      return decodeBinary(buffer.duplicate());
     }
     return value == null ? null : value.toString();
+  }
+
+  /**
+   * Decodes UTF-8 bytes without replacing malformed or unmappable sequences.
+   *
+   * @param bytes
+   *          binary input buffer
+   * @return decoded character data
+   * @throws IllegalArgumentException
+   *           if bytes are not valid UTF-8, carrying SQLState 22021
+   */
+  private static String decodeBinary(ByteBuffer bytes) {
+    try {
+      return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+          .onUnmappableCharacter(CodingErrorAction.REPORT).decode(bytes).toString();
+    } catch (CharacterCodingException failure) {
+      throw new IllegalArgumentException("Binary data is not valid UTF-8",
+          new SQLDataException("Character not in repertoire: invalid UTF-8", "22021", failure));
+    }
   }
 
   /**

@@ -570,7 +570,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return executeReplannedQuery();
     }
     if (reusablePlan == null) {
-      executionPlans = new SubqueryExecutor.ExecutionPlans();
+      executionPlans = new SubqueryExecutor.ExecutionPlans(validatedTables);
     }
     Connection conn = getConnection();
     JParqDatabaseMetaData metaData = (JParqDatabaseMetaData) conn.getMetaData();

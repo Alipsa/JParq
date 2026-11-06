@@ -9,8 +9,12 @@ import java.util.Set;
 import java.util.function.Function;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
+import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.HexValue;
+import net.sf.jsqlparser.expression.operators.relational.ComparisonOperator;
+import net.sf.jsqlparser.expression.operators.relational.IsDistinctExpression;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.AllColumns;
@@ -155,17 +159,26 @@ public final class ArrayQueryValidation {
         if ("ARRAY".equalsIgnoreCase(function.getName())) {
           resolve(function, scope);
         }
+        ScalarExpressionSchemas.validateCharacterFunction(function.getName(), function.getParameters(),
+            operand -> scalarOperand(operand, scope));
         return super.visit(function, context);
       }
 
       /** {@inheritDoc} */
       @Override
       public <S> Void visit(CastExpression cast, S context) {
-        ScalarExpressionSchemas.validateBinaryCast(cast, operand -> {
-          Schema scalar = ScalarExpressionSchemas.resolve(operand);
-          return scalar == null ? resolve(operand, scope) : scalar;
-        });
+        ScalarExpressionSchemas.validateBinaryCast(cast, operand -> scalarOperand(operand, scope));
         return super.visit(cast, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      protected <S> Void visitBinaryExpression(BinaryExpression binary, S context) {
+        if (binary instanceof ComparisonOperator || binary instanceof IsDistinctExpression) {
+          ScalarExpressionSchemas.validateBinaryComparison(binary.getLeftExpression(), binary.getRightExpression(),
+              operand -> scalarOperand(operand, scope));
+        }
+        return super.visitBinaryExpression(binary, context);
       }
 
       @Override
@@ -185,6 +198,35 @@ public final class ArrayQueryValidation {
         return null;
       }
     });
+  }
+
+  /**
+   * Resolves known scalar and interval operands without evaluating their values.
+   *
+   * @param expression
+   *          scoped operand
+   * @param scope
+   *          current lexical scope
+   * @return known scalar schema, or null when unresolved
+   */
+  private static Schema scalarOperand(Expression expression, Scope scope) {
+    Expression operand = ExpressionEvaluator.unwrapParenthesis(expression);
+    Schema scalar = ScalarExpressionSchemas.resolve(operand);
+    if (scalar != null) {
+      return scalar;
+    }
+    if (operand instanceof HexValue) {
+      return JdbcTypeMapper.declaredSchema(java.sql.JDBCType.VARBINARY);
+    }
+    if (operand instanceof CastExpression cast && cast.getColDataType() != null) {
+      java.sql.JDBCType type = ScalarExpressionSchemas.declaredJdbcType(cast.getColDataType().getDataType());
+      if (type == java.sql.JDBCType.CLOB || type == java.sql.JDBCType.NCLOB) {
+        return Schema.create(Schema.Type.STRING);
+      }
+    }
+    Schema interval = IntervalExpressionTypes.resolve(operand, scope.columns(),
+        nested -> projectedValue(nested, scope));
+    return interval != null ? interval : resolve(operand, scope);
   }
 
   /**

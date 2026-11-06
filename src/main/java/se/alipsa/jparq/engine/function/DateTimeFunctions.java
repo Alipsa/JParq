@@ -775,7 +775,6 @@ public final class DateTimeFunctions {
         && DecimalCasts.isDecimalType(cast.getColDataType().getDataType())) {
       return castToBigDecimal(cast, value);
     }
-    ScalarExpressionSchemas.binaryLength(cast);
     if (cast == null || value == null) {
       return value;
     }
@@ -832,12 +831,12 @@ public final class DateTimeFunctions {
    */
   private static byte[] castToBinary(CastExpression cast, Object value) {
     byte[] bytes = binaryBytes(value);
-    Integer length = ScalarExpressionSchemas.binaryLength(cast);
+    Long length = ScalarExpressionSchemas.binaryLength(cast);
     boolean fixed = "binary".equals(normalizeTypeName(cast.getColDataType().getDataType()));
     if (length == null && fixed) {
-      length = 1;
+      length = 1L;
     }
-    return length != null && (fixed || bytes.length > length) ? Arrays.copyOf(bytes, length) : bytes;
+    return length != null && (fixed || bytes.length > length) ? Arrays.copyOf(bytes, length.intValue()) : bytes;
   }
 
   /**

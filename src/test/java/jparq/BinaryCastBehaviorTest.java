@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.engine.function.StringFunctions;
 
@@ -84,7 +85,7 @@ class BinaryCastBehaviorTest {
   @ParameterizedTest
   @ValueSource(strings = {
       "CHAR_LENGTH(CAST('xy' AS VARBINARY))", "UPPER(CAST('xy' AS VARBINARY))", "LOWER(CAST('xy' AS VARBINARY))",
-      "SUBSTRING(CAST('xyz' AS VARBINARY) FROM 1 FOR 2)", "CONCAT('a', CAST('xy' AS VARBINARY))"
+      "CONCAT('a', CAST('xy' AS VARBINARY))"
   })
   void rejectsImplicitBinaryText(String expression) throws Exception {
     try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
@@ -109,7 +110,8 @@ class BinaryCastBehaviorTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "1", "1.5", "TRUE", "DATE '2020-01-01'", "TIME '10:00:00'", "CAST(NULL AS INTEGER)", "cyl", "cyl + 1"
+      "1", "1.5", "TRUE", "DATE '2020-01-01'", "TIME '10:00:00'", "CAST(NULL AS INTEGER)", "cyl", "cyl + 1",
+      "INTERVAL '1' DAY"
   })
   void rejectsNonbinarySourcesDuringPreparation(String source) throws Exception {
     try (var connection = DriverManager.getConnection(url())) {
@@ -133,7 +135,8 @@ class BinaryCastBehaviorTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "BINARY(0)", "VARBINARY(0)", "BLOB(0)", "BINARY(-1)", "VARBINARY(2147483648)"
+      "BINARY(0)", "VARBINARY(0)", "BLOB(0)", "BINARY(-1)", "VARBINARY(2147483648)", "BLOB(0K)", "BLOB(8192P)",
+      "BINARY(1K)", "BLOB(1Q)"
   })
   void rejectsInvalidLengthsDuringPreparation(String type) throws Exception {
     try (var connection = DriverManager.getConnection(url())) {
@@ -143,6 +146,146 @@ class BinaryCastBehaviorTest {
           "SELECT 1 WHERE 1=1 OR EXISTS(SELECT " + cast + ")")) {
         SQLException error = assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql);
         assertEquals("42000", error.getSQLState(), sql);
+      }
+    }
+  }
+
+  /**
+   * LOB multipliers retain long bounds without allocating the declared capacity.
+   *
+   * @param type
+   *          valid binary type declaration
+   * @param jdbcType
+   *          expected JDBC type
+   * @throws Exception
+   *           if preparation or execution fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "BLOB(1K) | 2004", "BLOB(1M) | 2004", "BINARY LARGE OBJECT(2K) | 2004", "BINARY LARGE OBJECT(2M) | 2004",
+      "BLOB(2G) | 2004", "BLOB(1T) | 2004", "BLOB(1P) | 2004", "BLOB(8191P) | 2004", "BLOB(10) | 2004",
+      "VARBINARY(4) | -3", "BINARY(2) | -2"
+  })
+  void acceptsValidLengthsDuringPreparation(String type, int jdbcType) throws Exception {
+    try (var connection = DriverManager.getConnection(url())) {
+      for (String value : List.of("NULL", "'xy'")) {
+        for (String suffix : List.of("", " FROM mtcars WHERE 1=0")) {
+          String sql = "SELECT CAST(" + value + " AS " + type + ") AS x" + suffix;
+          try (var query = connection.prepareStatement(sql); var result = query.executeQuery()) {
+            assertEquals(jdbcType, result.getMetaData().getColumnType(1), sql);
+            if (suffix.isEmpty()) {
+              assertTrue(result.next(), sql);
+              if (value.equals("NULL")) {
+                assertNull(result.getBytes(1), sql);
+              } else {
+                assertArrayEquals(new byte[]{
+                    120, 121
+                }, result.getBytes(1), sql);
+              }
+            } else {
+              assertFalse(result.next(), sql);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * A K multiplier limits the value to 1024 octets, rather than decimal
+   * kilobytes.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void appliesLobMultiplierCap() throws Exception {
+    try (var connection = DriverManager.getConnection(url());
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT CAST(REPEAT('x', 1025) AS BLOB(1K))")) {
+      assertTrue(result.next());
+      assertEquals(1024, result.getBytes(1).length);
+    }
+  }
+
+  /**
+   * Known binary misuse fails before empty or skipped inputs can hide it.
+   *
+   * @param expression
+   *          expression with incompatible known operand declarations
+   * @throws Exception
+   *           if connection creation fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "CHAR_LENGTH(CAST(model AS VARBINARY))", "UPPER(CAST(model AS VARBINARY))", "LOWER(CAST(model AS VARBINARY))",
+      "CONCAT('x', CAST(model AS VARBINARY))", "CAST(INTERVAL '1' DAY AS VARBINARY)"
+  })
+  void rejectsBinaryMisuseBeforeReadingRows(String expression) throws Exception {
+    try (var connection = DriverManager.getConnection(url())) {
+      for (String suffix : List.of("", " WHERE 1=0")) {
+        String sql = "SELECT " + expression + " FROM mtcars" + suffix;
+        assertEquals("42000",
+            assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql).getSQLState());
+      }
+    }
+  }
+
+  /**
+   * Binary comparison diagnostics describe incompatible types instead of text
+   * conversion.
+   *
+   * @param other
+   *          incompatible operand
+   * @throws Exception
+   *           if connection creation fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "'x'", "1", "DATE '2020-01-01'", "INTERVAL '1' DAY"
+  })
+  void rejectsKnownIncompatibleComparisons(String other) throws Exception {
+    for (boolean pushdown : List.of(true, false)) {
+      try (var connection = DriverManager.getConnection(url() + "?predicatePushdown=" + pushdown)) {
+        for (String predicate : List.of("CAST(model AS VARBINARY) = " + other, other + " < CAST(model AS VARBINARY)")) {
+          for (String suffix : List.of("", " AND 1=0")) {
+            String sql = "SELECT model FROM mtcars WHERE " + predicate + suffix;
+            SQLException error = assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql);
+            assertEquals("42000", error.getSQLState(), sql);
+            assertTrue(error.getMessage().contains("Cannot compare binary and nonbinary"), error.getMessage());
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Malformed UTF-8 raises a repertoire error rather than inserting replacement
+   * characters.
+   *
+   * @param hex
+   *          malformed UTF-8 octets
+   * @throws Exception
+   *           if connection creation fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "FF", "C328", "E282", "EDA080"
+  })
+  void rejectsMalformedUtf8(String hex) throws Exception {
+    try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
+      for (String body : List.of("SELECT X'" + hex + "' AS x", "SELECT CAST(X'" + hex + "' AS VARBINARY) AS x")) {
+        for (String sql : List.of("SELECT CAST(X'" + hex + "' AS VARCHAR)",
+            "SELECT CAST(x AS VARCHAR) FROM (" + body + ") d")) {
+          SQLException error = assertThrows(SQLException.class, () -> {
+            try (var result = statement.executeQuery(sql)) {
+              while (result.next()) {
+                result.getObject(1);
+              }
+            }
+          }, sql);
+          assertEquals("22021", error.getSQLState(), sql);
+        }
       }
     }
   }
@@ -267,6 +410,26 @@ class BinaryCastBehaviorTest {
     assertEquals(3, buffer.limit());
     assertEquals("xy", SqlText.cast("xy".getBytes(StandardCharsets.UTF_8)));
     assertThrows(IllegalArgumentException.class, () -> SqlText.valueOf(buffer));
+  }
+
+  /** Verifies strict buffer decoding and comparison preserve buffer state. */
+  @Test
+  void rejectsMalformedBuffersAndDescribesIncompatibleValues() {
+    ByteBuffer buffer = ByteBuffer.wrap(new byte[]{
+        0, (byte) 0xff, 0
+    });
+    buffer.position(1);
+    buffer.limit(2);
+    var decoding = assertThrows(IllegalArgumentException.class, () -> SqlText.cast(buffer));
+    assertEquals("22021", assertInstanceOf(SQLException.class, decoding.getCause()).getSQLState());
+    assertEquals(1, buffer.position());
+    assertEquals(2, buffer.limit());
+    var comparison = assertThrows(IllegalArgumentException.class, () -> SqlComparisons.typedCompare(buffer, 1));
+    assertTrue(comparison.getMessage().contains("Cannot compare binary and nonbinary"));
+    assertEquals(0, SqlComparisons.typedCompare(buffer, new byte[]{
+        (byte) 0xff
+    }));
+    assertEquals(1, buffer.position());
   }
 
   /**

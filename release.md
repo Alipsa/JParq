@@ -17,10 +17,16 @@
   retained through CTEs and derived tables, including NULL and empty results (#450, #458).
   BLOB columns report `byte[]` as their JDBC class name; both `getBlob` overloads return detached BLOBs
   and preserve SQL NULL. Binary CAST operands must be binary or character values; known incompatible
-  sources and invalid binary lengths fail during preparation with SQLState `42000`.
-  Character-to-binary and explicit binary-to-character CASTs use UTF-8; OCTET_LENGTH counts binary bytes.
+  sources (including INTERVAL) and invalid binary lengths fail during preparation with SQLState `42000`.
+  BLOB lengths support K/M/G/T/P multipliers with overflow-checked long bounds; short values do not
+  allocate the declared capacity. Nonbinary CASTs no longer parse binary lengths during row evaluation.
+  Character-to-binary and explicit binary-to-character CASTs use UTF-8; malformed UTF-8 raises `22021`
+  rather than inserting replacement characters. OCTET_LENGTH counts binary bytes.
   Character-only functions and text-column comparisons reject implicit binary operands with `42000`
-  instead of Java identity text (#355); use an explicit CAST to choose the comparison family.
+  instead of Java identity text (partial #355); known incompatible length/case/CONCAT calls and
+  comparisons are validated before rows are read. Use an explicit CAST to choose the comparison family.
+  LENGTH remains a character-only alias of CHAR_LENGTH; binary LENGTH behavior remains open in #355.
+  Binary SUBSTRING rejection is no longer asserted as correct behavior; support remains tracked in #461.
   National `N'…'` literals report NVARCHAR, while unresolved `B'…'` literals report OTHER.
   Standard LOB spellings share ARRAY restrictions and canonical CLOB/NCLOB/BLOB diagnostics (#459).
 

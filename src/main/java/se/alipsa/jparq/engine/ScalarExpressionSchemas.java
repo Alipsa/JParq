@@ -3,6 +3,8 @@ package se.alipsa.jparq.engine;
 import java.sql.JDBCType;
 import java.sql.Types;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.function.Function;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
@@ -15,6 +17,7 @@ import net.sf.jsqlparser.expression.TimestampValue;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
+import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalValueType;
 
@@ -23,6 +26,9 @@ import se.alipsa.jparq.helper.TemporalValueType;
  * representation.
  */
 public final class ScalarExpressionSchemas {
+
+  private static final Set<String> CHARACTER_ONLY_FUNCTIONS = Set.of("LENGTH", "CHAR_LENGTH", "CHARACTER_LENGTH",
+      "UPPER", "UCASE", "LOWER", "LCASE", "CONCAT");
 
   /** Prevents utility class construction. */
   private ScalarExpressionSchemas() {
@@ -54,7 +60,8 @@ public final class ScalarExpressionSchemas {
   }
 
   /**
-   * Validates a binary length independently of NULL values and empty inputs.
+   * Validates a binary length independently of NULL values and empty inputs. LOB
+   * lengths support K/M/G/T/P multipliers, each a power of 1024.
    *
    * @param cast
    *          SQL CAST declaration
@@ -62,7 +69,7 @@ public final class ScalarExpressionSchemas {
    * @throws IllegalArgumentException
    *           if a length is invalid, carrying SQLState 42000
    */
-  public static Integer binaryLength(CastExpression cast) {
+  public static Long binaryLength(CastExpression cast) {
     if (cast == null || cast.getColDataType() == null) {
       return null;
     }
@@ -81,12 +88,17 @@ public final class ScalarExpressionSchemas {
       arguments = List.of(name.substring(start + 1, end).split(",", -1));
     }
     try {
-      int length = Integer.parseInt(arguments.getFirst().trim());
-      if (arguments.size() == 1 && length > 0) {
+      String argument = arguments.getFirst().trim().toUpperCase(Locale.ROOT);
+      int exponent = target == JDBCType.BLOB && !argument.isEmpty()
+          ? "KMGTP".indexOf(argument.charAt(argument.length() - 1)) + 1
+          : 0;
+      String digits = exponent == 0 ? argument : argument.substring(0, argument.length() - 1);
+      long length = Math.multiplyExact(Long.parseLong(digits), 1L << (exponent * 10));
+      if (arguments.size() == 1 && length > 0 && (target == JDBCType.BLOB || length <= Integer.MAX_VALUE)) {
         return length;
       }
-    } catch (NumberFormatException ignored) {
-      // Report all invalid binary lengths consistently as SQL syntax errors.
+    } catch (ArithmeticException | NumberFormatException ignored) {
+      // Report malformed or overflowing lengths consistently as SQL syntax errors.
     }
     throw SqlExceptions.syntaxFailure("Invalid binary CAST length: " + cast.getColDataType());
   }
@@ -120,9 +132,60 @@ public final class ScalarExpressionSchemas {
     }
     Schema source = JdbcTypeMapper.nonNullSchema(sources.apply(operand));
     int type = JdbcTypeMapper.mapSchemaToJdbcType(source);
-    if (type != Types.NULL && type != Types.OTHER && !JdbcTypeMapper.isCharacterType(type)
-        && !JdbcTypeMapper.isBinaryType(type)) {
+    if (IntervalType.matches(source) || type != Types.NULL && type != Types.OTHER
+        && !JdbcTypeMapper.isCharacterType(type) && !JdbcTypeMapper.isBinaryType(type)) {
       throw SqlExceptions.syntaxFailure("Binary CAST requires a character or binary operand");
+    }
+  }
+
+  /**
+   * Rejects binary operands of functions whose signatures require characters.
+   *
+   * @param name
+   *          function name
+   * @param arguments
+   *          function arguments, possibly null
+   * @param sources
+   *          scoped argument schema resolver
+   * @throws IllegalArgumentException
+   *           if an argument is binary, carrying SQLState 42000
+   */
+  public static void validateCharacterFunction(String name, List<? extends Expression> arguments,
+      Function<Expression, Schema> sources) {
+    if (name == null || arguments == null || !CHARACTER_ONLY_FUNCTIONS.contains(name.toUpperCase(Locale.ROOT))) {
+      return;
+    }
+    for (Expression argument : arguments) {
+      Schema schema = sources.apply(argument);
+      if (JdbcTypeMapper.isBinaryType(JdbcTypeMapper.mapSchemaToJdbcType(schema))) {
+        throw SqlExceptions.syntaxFailure(name + " requires character arguments, not binary values");
+      }
+    }
+  }
+
+  /**
+   * Rejects a known binary/nonbinary comparison independently of returned rows.
+   *
+   * @param left
+   *          left operand
+   * @param right
+   *          right operand
+   * @param sources
+   *          scoped operand schema resolver
+   * @throws IllegalArgumentException
+   *           if known operand types are incompatible, carrying SQLState 42000
+   */
+  public static void validateBinaryComparison(Expression left, Expression right, Function<Expression, Schema> sources) {
+    Schema first = sources.apply(left);
+    Schema second = sources.apply(right);
+    int leftType = JdbcTypeMapper.mapSchemaToJdbcType(first);
+    int rightType = JdbcTypeMapper.mapSchemaToJdbcType(second);
+    boolean leftBinary = JdbcTypeMapper.isBinaryType(leftType);
+    boolean rightBinary = JdbcTypeMapper.isBinaryType(rightType);
+    boolean leftKnown = leftType != Types.NULL && (leftType != Types.OTHER || IntervalType.matches(first));
+    boolean rightKnown = rightType != Types.NULL && (rightType != Types.OTHER || IntervalType.matches(second));
+    if (leftBinary && !rightBinary && rightKnown || rightBinary && !leftBinary && leftKnown) {
+      throw SqlExceptions.syntaxFailure("Cannot compare binary and nonbinary operands");
     }
   }
 

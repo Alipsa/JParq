@@ -42,9 +42,9 @@ public final class SqlComparisons {
    * @throws NullPointerException
    *           if either value is null
    * @throws IllegalArgumentException
-   *           if a number is compared with an interval; the cause carries
-   *           SQLState 42000; implicit interval-to-text conversion also carries
-   *           SQLState 42000
+   *           if binary and nonbinary values or a number and an interval are
+   *           compared; the cause carries SQLState 42000; implicit
+   *           interval-to-text conversion also carries SQLState 42000
    */
   public static int typedCompare(Object l, Object r) {
     if (l instanceof Number ln && r instanceof Number rn) {
@@ -53,15 +53,13 @@ public final class SqlComparisons {
     if (l instanceof Boolean && r instanceof Boolean) {
       return Boolean.compare((Boolean) l, (Boolean) r);
     }
-    if (l instanceof byte[] && r instanceof byte[]) {
-      return compareBinary((byte[]) l, (byte[]) r);
-    }
-    if (l instanceof java.nio.ByteBuffer lb && r instanceof java.nio.ByteBuffer rb) {
-      byte[] la = new byte[lb.remaining()];
-      byte[] ra = new byte[rb.remaining()];
-      lb.duplicate().get(la);
-      rb.duplicate().get(ra);
-      return compareBinary(la, ra);
+    boolean leftBinary = l instanceof byte[] || l instanceof java.nio.ByteBuffer;
+    boolean rightBinary = r instanceof byte[] || r instanceof java.nio.ByteBuffer;
+    if (leftBinary || rightBinary) {
+      if (!leftBinary || !rightBinary) {
+        throw syntaxFailure("Cannot compare binary and nonbinary operands");
+      }
+      return compareBinary(binaryBytes(l), binaryBytes(r));
     }
     if (l instanceof Timestamp && r instanceof Timestamp) {
       return ((Timestamp) l).compareTo((Timestamp) r);
@@ -82,6 +80,23 @@ public final class SqlComparisons {
       return compareArrays(l, r);
     }
     return SqlText.valueOf(l).compareTo(SqlText.valueOf(r));
+  }
+
+  /**
+   * Reads binary bytes without changing a buffer's position.
+   *
+   * @param value
+   *          binary array or buffer
+   * @return bytes to compare
+   */
+  private static byte[] binaryBytes(Object value) {
+    if (value instanceof byte[] bytes) {
+      return bytes;
+    }
+    java.nio.ByteBuffer buffer = ((java.nio.ByteBuffer) value).duplicate();
+    byte[] bytes = new byte[buffer.remaining()];
+    buffer.get(bytes);
+    return bytes;
   }
 
   /**
@@ -187,8 +202,8 @@ public final class SqlComparisons {
    * @return the comparison result, or {@code null} when either side is NULL or
    *         the values cannot be compared
    * @throws IllegalArgumentException
-   *           if a number is compared with an interval; the cause carries
-   *           SQLState 42000
+   *           if binary and nonbinary values or a number and an interval are
+   *           compared; the cause carries SQLState 42000
    */
   public static Integer compareOrUnknown(Object left, Object right) {
     if (left == null || right == null) {
