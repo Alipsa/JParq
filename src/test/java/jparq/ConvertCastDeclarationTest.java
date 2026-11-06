@@ -17,6 +17,69 @@ import org.junit.jupiter.params.provider.ValueSource;
 class ConvertCastDeclarationTest {
 
   /**
+   * Function operands whose names are SQL types remain value expressions.
+   *
+   * @param source
+   *          optional table clause
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "", " FROM mtcars LIMIT 1"
+  })
+  void preservesCharFunctionOperand(String source) throws Exception {
+    try (var connection = DriverManager.getConnection(url());
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT CONVERT(VARCHAR, CHAR(65)) AS c" + source)) {
+      assertEquals(java.sql.Types.VARCHAR, result.getMetaData().getColumnType(1));
+      assertEquals("c", result.getMetaData().getColumnLabel(1));
+      assertTrue(result.next());
+      assertEquals("A", result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Ambiguous declarations fail preparation even when no rows will be read.
+   *
+   * @param source
+   *          optional table or empty source clause
+   * @throws Exception
+   *           if connection creation fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "", " FROM mtcars LIMIT 1", " FROM mtcars WHERE 1=0"
+  })
+  void rejectsAmbiguousConversionsDuringPreparation(String source) throws Exception {
+    try (var connection = DriverManager.getConnection(url())) {
+      String sql = "SELECT CONVERT(VARCHAR, INTEGER)" + source;
+      SQLException error = assertThrows(SQLException.class, () -> connection.prepareStatement(sql));
+      assertEquals("42000", error.getSQLState(), error.getMessage());
+      if (source.isEmpty()) {
+        assertTrue(error.getMessage().contains("Ambiguous CONVERT arguments"), error.getMessage());
+      }
+    }
+  }
+
+  /**
+   * Two bound type-named columns cannot silently select either argument order.
+   *
+   * @throws Exception
+   *           if connection creation fails
+   */
+  @Test
+  void rejectsAmbiguousBoundColumnsDuringPreparation() throws Exception {
+    try (var connection = DriverManager.getConnection(url())) {
+      String sql = "SELECT CONVERT(integer, varchar) FROM (SELECT 1 AS integer, 'x' AS varchar) d WHERE 1=0";
+      SQLException error = assertThrows(SQLException.class, () -> connection.prepareStatement(sql));
+      assertEquals("42000", error.getSQLState());
+      assertTrue(error.getMessage().contains("Ambiguous CONVERT arguments"), error.getMessage());
+    }
+  }
+
+  /**
    * Shared declarations preserve decimal bounds before reading any rows.
    *
    * @throws Exception
@@ -148,7 +211,7 @@ class ConvertCastDeclarationTest {
           () -> statement.executeQuery(binary + " UNION ALL SELECT 'x'"));
       assertEquals("42000", error.getSQLState());
       try (var result = statement.executeQuery("SELECT CONVERT(VARBINARY, 'x')")) {
-        assertTrue(result.getMetaData().getColumnLabel(1).startsWith("CONVERT"));
+        assertEquals("CONVERT( VARBINARY, 'x' )", result.getMetaData().getColumnLabel(1));
         assertEquals(java.sql.Types.VARBINARY, result.getMetaData().getColumnType(1));
         assertTrue(result.next());
         assertArrayEquals(new byte[]{

@@ -100,7 +100,8 @@ public final class SqlParser {
     }
     Expression inner = convert.getExpression();
     String typeCandidate = convert.getColDataType() == null ? null : convert.getColDataType().getDataType();
-    if (inner != null && isConvertTypeName(inner.toString()) && typeCandidate != null) {
+    if (inner != null && isConvertTypeName(inner.toString()) && typeCandidate != null
+        && (inner instanceof Column || !isConvertTypeName(typeCandidate))) {
       return new ConvertProcessingResult(false, typeCandidate);
     }
     return new ConvertProcessingResult(true, null);
@@ -1206,6 +1207,16 @@ public final class SqlParser {
    */
   private static void validateTableFreeSelect(PlainSelect select, boolean lateral) {
     final var validator = new ExpressionVisitorAdapter<Void>() {
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(TranscodingFunction convert, S context) {
+        if (!lateral && !convert.isTranscodeStyle()) {
+          CastExpression cast = CastExpressions.requireCast(convert, name -> false);
+          return cast.getLeftExpression().accept(this, context);
+        }
+        return super.visit(convert, context);
+      }
+
       @Override
       public <S> Void visit(Column column, S context) {
         if (column.getTable() == null && isTimeKeyword(column.getColumnName())) {

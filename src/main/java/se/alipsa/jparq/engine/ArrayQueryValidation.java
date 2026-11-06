@@ -57,7 +57,7 @@ public final class ArrayQueryValidation {
    *           carrying a JDBC cause for invalid declarations
    */
   public static void validate(Select query, Function<Table, Schema> tables) {
-    visitSelect(query, new Scope(column -> null, tables, Map.of(), new HashSet<>()));
+    visitSelect(query, new Scope(column -> null, tables, Map.of(), new HashSet<>(), false));
   }
 
   /**
@@ -74,7 +74,7 @@ public final class ArrayQueryValidation {
    *           carrying a JDBC cause for invalid declarations
    */
   public static void validate(Expression expression, Function<Column, Schema> columns, Function<Table, Schema> tables) {
-    visitExpression(expression, new Scope(columns, tables, Map.of(), new HashSet<>()));
+    visitExpression(expression, new Scope(columns, tables, Map.of(), new HashSet<>(), true));
   }
 
   /**
@@ -98,7 +98,7 @@ public final class ArrayQueryValidation {
    * @return known projection schema, or null when uncertain
    */
   public static Schema projectionSchema(Select query, Function<Table, Schema> tables) {
-    return projectedValue(query, new Scope(column -> null, tables, Map.of(), new HashSet<>()));
+    return projectedValue(query, new Scope(column -> null, tables, Map.of(), new HashSet<>(), false));
   }
 
   /**
@@ -185,9 +185,14 @@ public final class ArrayQueryValidation {
       /** {@inheritDoc} */
       @Override
       public <S> Void visit(TranscodingFunction convert, S context) {
-        CastExpression cast = CastExpressions.asCast(convert, name -> scope.columns().apply(new Column(name)) != null);
-        if (cast != null) {
-          ScalarExpressionSchemas.validateBinaryCast(cast, operand -> scalarOperand(operand, scope));
+        if (!convert.isTranscodeStyle()) {
+          CastExpression cast = scope.bound()
+              ? CastExpressions.requireCast(convert, name -> scope.columns().apply(new Column(name)) != null)
+              : CastExpressions.asCast(convert, name -> scope.columns().apply(new Column(name)) != null);
+          if (cast != null) {
+            DecimalCasts.validateBounds(cast);
+            ScalarExpressionSchemas.validateBinaryCast(cast, operand -> scalarOperand(operand, scope));
+          }
         }
         return super.visit(convert, context);
       }
@@ -402,7 +407,7 @@ public final class ArrayQueryValidation {
     if (query.getWithItemsList() != null) {
       query.getWithItemsList().forEach(cte -> ctes.put(Identifier.of(cte.getAliasName()), cte));
     }
-    return new Scope(outer.columns(), outer.tables(), ctes, outer.resolving());
+    return new Scope(outer.columns(), outer.tables(), ctes, outer.resolving(), outer.bound());
   }
 
   /**
@@ -424,7 +429,7 @@ public final class ArrayQueryValidation {
       boolean localQualifier = qualifier != null && inputs(query).stream()
           .anyMatch(input -> Identifier.of(qualifier).matches(Identifier.of(sourceName(input))));
       return localQualifier ? null : outer.columns().apply(column);
-    }, outer.tables(), outer.ctes(), outer.resolving());
+    }, outer.tables(), outer.ctes(), outer.resolving(), outer.bound());
   }
 
   /**
@@ -732,9 +737,11 @@ public final class ArrayQueryValidation {
    *          visible WITH declarations
    * @param resolving
    *          projections currently being resolved
+   * @param bound
+   *          whether source schemas have been supplied for declaration validation
    */
   private record Scope(Function<Column, Schema> columns, Function<Table, Schema> tables,
-      Map<Identifier, WithItem<?>> ctes, Set<Select> resolving) {
+      Map<Identifier, WithItem<?>> ctes, Set<Select> resolving, boolean bound) {
   }
 
   /**

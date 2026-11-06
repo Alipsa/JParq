@@ -364,9 +364,6 @@ public final class ValueExpressionEvaluator {
       return StringFunctions.convertCharset(value, convert.getTranscodingName());
     }
     CastExpression cast = convertCasts.computeIfAbsent(convert, this::convertCast);
-    if (cast == null) {
-      return evalInternal(convert.getExpression(), record);
-    }
     Object value = evalInternal(cast.getLeftExpression(), record);
     return cast.getColDataType() == null ? value : evaluateCast(cast, value);
   }
@@ -395,9 +392,11 @@ public final class ValueExpressionEvaluator {
    * @param convert
    *          parsed CONVERT expression
    * @return equivalent CAST shape retaining the operand and declaration
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 if the arguments are ambiguous
    */
   private CastExpression convertCast(TranscodingFunction convert) {
-    return CastExpressions.asCast(convert, this::looksLikeSchemaColumn);
+    return CastExpressions.requireCast(convert, this::looksLikeSchemaColumn);
   }
 
   private boolean looksLikeSchemaColumn(String name) {

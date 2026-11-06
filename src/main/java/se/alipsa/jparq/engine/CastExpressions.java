@@ -35,7 +35,8 @@ public final class CastExpressions {
    *          expression to inspect
    * @param columns
    *          identifies visible source column names
-   * @return original or equivalent CAST, or null for a non-CAST expression
+   * @return original or equivalent CAST, or null for a non-CAST or ambiguous
+   *         expression
    */
   public static CastExpression asCast(Expression expression, Predicate<String> columns) {
     Expression value = ExpressionEvaluator.unwrapParenthesis(expression);
@@ -54,14 +55,10 @@ public final class CastExpressions {
     boolean secondType = SqlParser.isConvertTypeName(operandText);
     boolean firstColumn = columns.test(candidate);
     boolean secondColumn = columns.test(operandText);
-    boolean firstBounded = type.getArgumentsStringList() != null && !type.getArgumentsStringList().isEmpty()
-        || candidate != null && candidate.indexOf('(') >= 0;
-    boolean secondBounded = secondType && operandText.indexOf('(') >= 0;
-    if (firstType && secondType && !firstColumn && !secondColumn && firstBounded == secondBounded) {
+    if (firstType && secondType && firstColumn == secondColumn && operand instanceof Column) {
       return null;
     }
-    boolean swap = secondType
-        && (firstColumn && !secondColumn || !firstType || !firstBounded && secondBounded && !secondColumn);
+    boolean swap = secondType && (firstColumn && !secondColumn || !firstType);
     if (swap) {
       operand = new Column(candidate);
       type = new ColDataType();
@@ -70,6 +67,26 @@ public final class CastExpressions {
     CastExpression cast = new CastExpression();
     cast.setColDataType(type);
     cast.setLeftExpression(operand);
+    return cast;
+  }
+
+  /**
+   * Resolves a cast-style CONVERT after source columns have been bound.
+   *
+   * @param convert
+   *          cast-style conversion
+   * @param columns
+   *          identifies visible source column names
+   * @return equivalent CAST declaration
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 if the arguments cannot be resolved
+   */
+  public static CastExpression requireCast(TranscodingFunction convert, Predicate<String> columns) {
+    CastExpression cast = asCast(convert, columns);
+    if (cast == null) {
+      throw SqlExceptions.syntaxFailure(
+          "Ambiguous CONVERT arguments; use CAST with an explicit target type: " + SqlExceptions.describe(convert));
+    }
     return cast;
   }
 }

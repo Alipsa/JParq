@@ -15,7 +15,9 @@ import java.util.List;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.StringValue;
+import net.sf.jsqlparser.expression.TranscodingFunction;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.statement.create.table.ColDataType;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
@@ -45,6 +47,23 @@ class ValueExpressionEvaluatorTest {
     nullNoteRecord.put("note", null);
 
     evaluator = new ValueExpressionEvaluator(schema);
+  }
+
+  /**
+   * Direct evaluation cannot silently bypass an ambiguous conversion target.
+   */
+  @Test
+  void rejectsAmbiguousConvertInsteadOfReturningOperand() {
+    var type = new ColDataType();
+    type.setDataType("VARCHAR");
+    var convert = new TranscodingFunction();
+    convert.setTranscodeStyle(false);
+    convert.setColDataType(type);
+    convert.setExpression(new Column("INTEGER"));
+    IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        () -> evaluator.eval(convert, nullNoteRecord));
+    assertEquals("42000", assertInstanceOf(java.sql.SQLException.class, error.getCause()).getSQLState());
+    assertTrue(error.getMessage().contains("Ambiguous CONVERT arguments"));
   }
 
   /**

@@ -31,6 +31,9 @@
   cached locally by each row evaluator, including stable CONVERT shapes. One-shot literal folding
   compiles directly without a global CAST cache. Cast-style CONVERT shares CAST metadata and declared
   length, source-type, character-function, and comparison validation in both supported argument orders.
+  Preserve function operands such as `CONVERT(VARCHAR, CHAR(65))`; a function's arguments no longer
+  trigger a type-order swap. Ambiguous cast-style CONVERT arguments fail preparation with `42000`
+  after source binding instead of silently bypassing conversion.
   Reused prepared footer schemas avoid duplicate footer reads. Subqueries still rediscover shard lists
   when re-executed: added or removed files change the TableLocation cache key.
   LENGTH remains a character-only alias of CHAR_LENGTH; binary LENGTH behavior remains open in #355.
