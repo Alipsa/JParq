@@ -66,6 +66,7 @@ public final class ValueExpressionEvaluator {
   private final Map<Expression, NumericType> numericTypes = new IdentityHashMap<>();
   private final Map<Expression, Optional<Schema>> intervalTypes = new IdentityHashMap<>();
   private final Map<CastExpression, Optional<DateTimeFunctions.BinaryCast>> binaryCasts = new IdentityHashMap<>();
+  private final Map<TranscodingFunction, CastExpression> convertCasts = new IdentityHashMap<>();
   private final Map<String, String> caseInsensitiveIndex;
   private final Schema schema;
   private final SubqueryExecutor subqueryExecutor;
@@ -286,9 +287,7 @@ public final class ValueExpressionEvaluator {
     }
     if (expression instanceof CastExpression cast) {
       Object inner = evalInternal(cast.getLeftExpression(), record);
-      DateTimeFunctions.BinaryCast binary = binaryCasts
-          .computeIfAbsent(cast, shape -> Optional.ofNullable(DateTimeFunctions.compileBinaryCast(shape))).orElse(null);
-      return binary == null ? DateTimeFunctions.castLiteral(cast, inner) : binary.convert(inner);
+      return evaluateCast(cast, inner);
     }
     if (expression instanceof SignedExpression se) {
       return LiteralConverter.applySign(evalInternal(se.getExpression(), record), se);
@@ -365,15 +364,42 @@ public final class ValueExpressionEvaluator {
       Object value = evalInternal(convert.getExpression(), record);
       return StringFunctions.convertCharset(value, convert.getTranscodingName());
     }
+    CastExpression cast = convertCasts.computeIfAbsent(convert, this::convertCast);
+    Object value = evalInternal(cast.getLeftExpression(), record);
+    return cast.getColDataType() == null ? value : evaluateCast(cast, value);
+  }
+
+  /**
+   * Converts a current row value using cached binary rules or the ordinary CAST
+   * path.
+   *
+   * @param cast
+   *          stable CAST expression
+   * @param value
+   *          current row value
+   * @return converted value, possibly null
+   * @throws IllegalArgumentException
+   *           if the conversion is invalid
+   */
+  private Object evaluateCast(CastExpression cast, Object value) {
+    DateTimeFunctions.BinaryCast binary = binaryCasts
+        .computeIfAbsent(cast, shape -> Optional.ofNullable(DateTimeFunctions.compileBinaryCast(shape))).orElse(null);
+    return binary == null ? DateTimeFunctions.castLiteral(cast, value) : binary.convert(value);
+  }
+
+  /**
+   * Resolves one stable CAST shape for a cast-style CONVERT expression.
+   *
+   * @param convert
+   *          parsed CONVERT expression
+   * @return equivalent CAST shape retaining the operand and declaration
+   */
+  private CastExpression convertCast(TranscodingFunction convert) {
     ConvertArguments args = resolveConvertArguments(convert);
-    Object value = evalInternal(args.valueExpression(), record);
-    if (args.colDataType() == null) {
-      return value;
-    }
     CastExpression cast = new CastExpression();
     cast.setColDataType(args.colDataType());
     cast.setLeftExpression(args.valueExpression());
-    return DateTimeFunctions.castLiteral(cast, value);
+    return cast;
   }
 
   private ConvertArguments resolveConvertArguments(TranscodingFunction convert) {

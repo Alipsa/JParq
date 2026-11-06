@@ -58,8 +58,8 @@ public final class SqlParser {
     if (paren > 0) {
       normalized = normalized.substring(0, paren).trim();
     }
-    return CONVERT_TYPE_NAMES.contains(normalized) || NumericCastTarget.fromNormalizedName(normalized) != null
-        || DecimalCasts.isDecimalType(normalized);
+    return CONVERT_TYPE_NAMES.contains(normalized) || ScalarExpressionSchemas.declaredJdbcType(normalized) != null
+        || NumericCastTarget.fromNormalizedName(normalized) != null || DecimalCasts.isDecimalType(normalized);
   }
 
   /**

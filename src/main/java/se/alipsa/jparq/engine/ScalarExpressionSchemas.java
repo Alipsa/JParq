@@ -176,8 +176,21 @@ public final class ScalarExpressionSchemas {
    *           if known operand types are incompatible, carrying SQLState 42000
    */
   public static void validateBinaryComparison(Expression left, Expression right, Function<Expression, Schema> sources) {
-    Schema first = sources.apply(left);
-    Schema second = sources.apply(right);
+    validateBinaryComparison(sources.apply(left), sources.apply(right));
+  }
+
+  /**
+   * Compares declarations already resolved in their lexical scopes.
+   *
+   * @param first
+   *          left operand schema, possibly unknown
+   * @param second
+   *          right operand schema, possibly unknown
+   * @throws IllegalArgumentException
+   *           if known binary and nonbinary operands are mixed, carrying SQLState
+   *           42000
+   */
+  public static void validateBinaryComparison(Schema first, Schema second) {
     int leftType = JdbcTypeMapper.mapSchemaToJdbcType(first);
     int rightType = JdbcTypeMapper.mapSchemaToJdbcType(second);
     boolean leftBinary = JdbcTypeMapper.isBinaryType(leftType);

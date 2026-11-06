@@ -164,6 +164,11 @@ public final class ArrayQueryValidation {
         if ("ARRAY".equalsIgnoreCase(function.getName())) {
           resolve(function, scope);
         }
+        if ("NULLIF".equalsIgnoreCase(function.getName()) && function.getParameters() != null
+            && function.getParameters().size() == 2) {
+          ScalarExpressionSchemas.validateBinaryComparison(function.getParameters().get(0),
+              function.getParameters().get(1), operand -> scalarOperand(operand, scope));
+        }
         ScalarExpressionSchemas.validateCharacterFunction(function.getName(), function.getParameters(),
             operand -> scalarOperand(operand, scope));
         return super.visit(function, context);
@@ -189,15 +194,14 @@ public final class ArrayQueryValidation {
       /** {@inheritDoc} */
       @Override
       public <S> Void visit(InExpression in, S context) {
+        Schema left = scalarOperand(in.getLeftExpression(), scope);
         Expression candidates = in.getRightExpression();
         if (candidates instanceof ExpressionList<?> list) {
           for (Expression candidate : list) {
-            ScalarExpressionSchemas.validateBinaryComparison(in.getLeftExpression(), candidate,
-                operand -> scalarOperand(operand, scope));
+            ScalarExpressionSchemas.validateBinaryComparison(left, scalarOperand(candidate, scope));
           }
         } else {
-          ScalarExpressionSchemas.validateBinaryComparison(in.getLeftExpression(), candidates,
-              operand -> scalarOperand(operand, scope));
+          ScalarExpressionSchemas.validateBinaryComparison(left, scalarOperand(candidates, scope));
         }
         return super.visit(in, context);
       }

@@ -11,9 +11,12 @@ import static org.mockito.Mockito.*;
 import java.nio.ByteBuffer;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.List;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import net.sf.jsqlparser.statement.create.table.ColDataType;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
@@ -24,6 +27,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.ScalarExpressionSchemas;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
+import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 class ValueExpressionEvaluatorTest {
@@ -69,6 +73,70 @@ class ValueExpressionEvaluatorTest {
       row.put("note", null);
       assertNull(values.eval(cast, row));
       declarations.verify(() -> ScalarExpressionSchemas.binaryLength(cast), times(1));
+    }
+  }
+
+  /**
+   * Cast-style CONVERT keeps one compiled binary declaration across current row
+   * values.
+   *
+   * @param sql
+   *          CONVERT in either supported argument order
+   * @throws Exception
+   *           if expression parsing fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "CONVERT(note, BINARY(4))", "CONVERT(BINARY(4), note)"
+  })
+  void compilesConvertBinaryLengthOnceAcrossRows(String sql) throws Exception {
+    Expression convert = CCJSqlParserUtil.parseExpression(sql);
+    var values = new ValueExpressionEvaluator(schema);
+    var row = new GenericData.Record(schema);
+    try (var declarations = mockStatic(ScalarExpressionSchemas.class, CALLS_REAL_METHODS)) {
+      row.put("note", "xy");
+      assertArrayEquals(new byte[]{
+          120, 121, 0, 0
+      }, assertInstanceOf(byte[].class, values.eval(convert, row)));
+      row.put("note", "abcde");
+      assertArrayEquals(new byte[]{
+          97, 98, 99, 100
+      }, assertInstanceOf(byte[].class, values.eval(convert, row)));
+      row.put("note", null);
+      assertNull(values.eval(convert, row));
+      declarations.verify(() -> ScalarExpressionSchemas.binaryLength(any(CastExpression.class)), times(1));
+    }
+  }
+
+  /**
+   * Literal folding shares compiled bounds without caching values or stale
+   * declarations.
+   *
+   * @throws Exception
+   *           if expression parsing fails
+   */
+  @Test
+  void reusesLiteralBinaryBoundsAndInvalidatesChangedDeclaration() throws Exception {
+    CastExpression cast = (CastExpression) CCJSqlParserUtil.parseExpression("CAST('abcd' AS VARBINARY(3))");
+    try (var declarations = mockStatic(ScalarExpressionSchemas.class, CALLS_REAL_METHODS)) {
+      byte[] first = assertInstanceOf(byte[].class, LiteralConverter.toLiteral(cast));
+      assertArrayEquals(new byte[]{
+          97, 98, 99
+      }, first);
+      first[0] = 0;
+      cast.setLeftExpression(new StringValue("wxyz"));
+      assertArrayEquals(new byte[]{
+          119, 120, 121
+      }, assertInstanceOf(byte[].class, LiteralConverter.toLiteral(cast)));
+      declarations.verify(() -> ScalarExpressionSchemas.binaryLength(cast), times(1));
+      var shorter = new ColDataType();
+      shorter.setDataType("VARBINARY");
+      shorter.setArgumentsStringList(List.of("2"));
+      cast.setColDataType(shorter);
+      assertArrayEquals(new byte[]{
+          119, 120
+      }, assertInstanceOf(byte[].class, LiteralConverter.toLiteral(cast)));
+      declarations.verify(() -> ScalarExpressionSchemas.binaryLength(cast), times(2));
     }
   }
 

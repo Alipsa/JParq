@@ -31,7 +31,9 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
+import java.util.WeakHashMap;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.IntervalQualifier;
@@ -58,6 +60,8 @@ public final class DateTimeFunctions {
       .withResolverStyle(ResolverStyle.STRICT);
   private static final DateTimeFormatter SQL_TIMESTAMP = new DateTimeFormatterBuilder().append(SQL_DATE)
       .appendLiteral(' ').append(SQL_TIME).toFormatter(Locale.ROOT).withResolverStyle(ResolverStyle.STRICT);
+
+  private static final Map<CastExpression, CachedBinaryCast> BINARY_CASTS = new WeakHashMap<>();
 
   private DateTimeFunctions() {
   }
@@ -822,7 +826,9 @@ public final class DateTimeFunctions {
   }
 
   /**
-   * Compiles a binary declaration once for reuse across row evaluations.
+   * Reuses compiled binary rules across evaluators and literal-folding calls.
+   * Weak keys do not retain completed query ASTs, and declaration changes
+   * invalidate entries.
    *
    * @param cast
    *          CAST expression
@@ -831,6 +837,44 @@ public final class DateTimeFunctions {
    *           if the declared length is invalid, carrying SQLState 42000
    */
   public static BinaryCast compileBinaryCast(CastExpression cast) {
+    ColDataType declaration = cast.getColDataType();
+    String name = declaration == null ? null : declaration.getDataType();
+    List<String> arguments = declaration == null ? null : declaration.getArgumentsStringList();
+    synchronized (BINARY_CASTS) {
+      CachedBinaryCast cached = BINARY_CASTS.get(cast);
+      if (cached != null && Objects.equals(cached.name(), name) && Objects.equals(cached.arguments(), arguments)) {
+        return cached.conversion();
+      }
+      BinaryCast conversion = compileBinaryDeclaration(cast);
+      BINARY_CASTS.put(cast, new CachedBinaryCast(name, arguments == null ? null : List.copyOf(arguments), conversion));
+      return conversion;
+    }
+  }
+
+  /**
+   * Snapshots declaration text and compiled rules without retaining an AST or row
+   * values.
+   *
+   * @param name
+   *          raw SQL type name
+   * @param arguments
+   *          copied type arguments, or null
+   * @param conversion
+   *          binary conversion, or null for another type
+   */
+  private record CachedBinaryCast(String name, List<String> arguments, BinaryCast conversion) {
+  }
+
+  /**
+   * Validates and compiles a binary declaration on a cache miss.
+   *
+   * @param cast
+   *          CAST expression
+   * @return compiled binary conversion, or null for another type
+   * @throws IllegalArgumentException
+   *           if the declaration is invalid, carrying SQLState 42000
+   */
+  private static BinaryCast compileBinaryDeclaration(CastExpression cast) {
     if (cast.getColDataType() == null) {
       return null;
     }

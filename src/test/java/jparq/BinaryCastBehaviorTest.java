@@ -7,11 +7,16 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.apache.avro.SchemaBuilder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.ArrayQueryValidation;
+import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.engine.function.StringFunctions;
@@ -219,7 +224,9 @@ class BinaryCastBehaviorTest {
   @ParameterizedTest
   @ValueSource(strings = {
       "CHAR_LENGTH(CAST(model AS VARBINARY))", "UPPER(CAST(model AS VARBINARY))", "LOWER(CAST(model AS VARBINARY))",
-      "CONCAT('x', CAST(model AS VARBINARY))", "CAST(INTERVAL '1' DAY AS VARBINARY)"
+      "CONCAT('x', CAST(model AS VARBINARY))", "CAST(INTERVAL '1' DAY AS VARBINARY)",
+      "NULLIF(CAST(model AS VARBINARY), 'x')", "NULLIF(model, CAST('x' AS VARBINARY))",
+      "NULLIF(CAST(NULL AS VARBINARY), 'x')"
   })
   void rejectsBinaryMisuseBeforeReadingRows(String expression) throws Exception {
     try (var connection = DriverManager.getConnection(url())) {
@@ -228,6 +235,53 @@ class BinaryCastBehaviorTest {
         assertEquals("42000",
             assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql).getSQLState());
       }
+    }
+  }
+
+  /**
+   * NULLIF retains binary values or SQL NULL for compatible declarations.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void evaluatesCompatibleBinaryNullif() throws Exception {
+    try (var connection = DriverManager.getConnection(url());
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT NULLIF(CAST('x' AS VARBINARY), CAST('y' AS VARBINARY)), "
+            + "NULLIF(CAST('x' AS VARBINARY), CAST('x' AS VARBINARY))")) {
+      assertTrue(result.next());
+      assertArrayEquals(new byte[]{
+          120
+      }, assertInstanceOf(byte[].class, result.getObject(1)));
+      assertNull(result.getObject(2));
+      assertTrue(result.wasNull());
+    }
+  }
+
+  /**
+   * Candidate-list size does not increase left scalar-subquery schema resolution.
+   *
+   * @throws Exception
+   *           if expression parsing fails
+   */
+  @Test
+  void resolvesInLeftSubqueryIndependentlyOfListSize() throws Exception {
+    var sourceSchema = SchemaBuilder.record("binary_source").fields().requiredBytes("b").endRecord();
+    Integer baseline = null;
+    for (int size : List.of(1, 50)) {
+      var reads = new AtomicInteger();
+      String candidates = String.join(", ", Collections.nCopies(size, "X'78'"));
+      var expression = JSqlParserSupport.parseExpression("(SELECT b FROM binary_source) IN (" + candidates + ")");
+      ArrayQueryValidation.validate(expression, column -> null, table -> {
+        reads.incrementAndGet();
+        return sourceSchema;
+      });
+      assertTrue(reads.get() > 0);
+      if (baseline != null) {
+        assertEquals(baseline.intValue(), reads.get());
+      }
+      baseline = reads.get();
     }
   }
 
