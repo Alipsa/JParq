@@ -454,6 +454,7 @@ public class JParqPreparedStatement implements PreparedStatement {
                 tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
               }
               aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
+              validateArrayDeclarations(tmpSelect, tmpFileAvro, tmpSchemaName, tmpCteResults, tmpConf);
               configureProjectionPushdown(tmpSelect, pushdownSchema, aggregatePlan, tmpConf, tmpCteResults);
               if (stmt.getConn().isPredicatePushdown() && baseRef.tableSample() == null && tmpSelect.where() != null) {
                 var split = ParquetFilterBuilder.split(tmpFileAvro, tmpSelect.where());
@@ -473,6 +474,7 @@ public class JParqPreparedStatement implements PreparedStatement {
               }
 
               aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
+              validateArrayDeclarations(tmpSelect, tmpFileAvro, tmpSchemaName, tmpCteResults, tmpConf);
               configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf, tmpCteResults);
 
               if (stmt.getConn().isPredicatePushdown() && (baseRef == null || baseRef.tableSample() == null)
@@ -487,7 +489,10 @@ public class JParqPreparedStatement implements PreparedStatement {
             }
 
           }
-          validateArrayDeclarations(tmpSelect, tmpFileAvro, tmpSchemaName, tmpCteResults, tmpConf);
+          // Physical inputs already validated declarations before projection pushdown.
+          if (tmpBaseLocation == null) {
+            validateArrayDeclarations(tmpSelect, tmpFileAvro, tmpSchemaName, tmpCteResults, tmpConf);
+          }
           if (tmpBaseCteResult != null) {
             validateSelectColumns(tmpSelect, tmpFileAvro, aggregatePlan, tmpCteResults, tmpConf);
           }

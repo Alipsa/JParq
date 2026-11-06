@@ -104,10 +104,10 @@ class ConvertCastDeclarationTest {
   })
   void rejectsAmbiguousConversionsDuringPreparation(String source) throws Exception {
     try (var connection = DriverManager.getConnection(url())) {
-      String sql = "SELECT CONVERT(VARCHAR, INTEGER)" + source;
-      SQLException error = assertThrows(SQLException.class, () -> connection.prepareStatement(sql));
-      assertEquals("42000", error.getSQLState(), error.getMessage());
-      if (source.isEmpty()) {
+      for (String operand : List.of("INTEGER", "TEXT")) {
+        String sql = "SELECT CONVERT(VARCHAR, " + operand + ") AS c" + source;
+        SQLException error = assertThrows(SQLException.class, () -> connection.prepareStatement(sql));
+        assertEquals("42000", error.getSQLState(), error.getMessage());
         assertTrue(error.getMessage().contains("Ambiguous CONVERT arguments"), error.getMessage());
       }
     }
