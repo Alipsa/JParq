@@ -260,6 +260,91 @@ class BinaryCastBehaviorTest {
   }
 
   /**
+   * Predicate forms compare declarations before rows or CASE branches are
+   * evaluated.
+   *
+   * @param predicate
+   *          incompatible binary/nonbinary predicate
+   * @throws Exception
+   *           if connection creation fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "CAST(model AS VARBINARY) IN ('x')", "CAST(model AS VARBINARY) NOT IN ('x', NULL)",
+      "CAST(model AS VARBINARY) IN (SELECT model FROM mtcars)", "CAST(model AS VARBINARY) BETWEEN 'a' AND 'z'",
+      "CAST(model AS VARBINARY) NOT BETWEEN X'61' AND 'z'", "CAST(model AS VARBINARY) = ANY (SELECT model FROM mtcars)",
+      "CAST(model AS VARBINARY) = SOME (SELECT model FROM mtcars)",
+      "CAST(model AS VARBINARY) > ALL (SELECT model FROM mtcars WHERE 1=0)",
+      "CAST(model AS VARBINARY) = ANY (ARRAY['x'])", "CAST(model AS VARBINARY) LIKE 'x%'",
+      "'x' LIKE CAST(model AS VARBINARY)"
+  })
+  void rejectsIncompatiblePredicateFormsDuringPreparation(String predicate) throws Exception {
+    for (boolean pushdown : List.of(true, false)) {
+      try (var connection = DriverManager.getConnection(url() + "?predicatePushdown=" + pushdown)) {
+        for (String suffix : List.of("", " AND 1=0")) {
+          String sql = "SELECT model FROM mtcars WHERE " + predicate + suffix;
+          assertEquals("42000",
+              assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql).getSQLState());
+        }
+      }
+    }
+  }
+
+  /**
+   * Simple CASE validates its switch/WHEN comparison even when no rows survive.
+   *
+   * @throws Exception
+   *           if connection creation fails
+   */
+  @Test
+  void rejectsIncompatibleCaseSwitchDuringPreparation() throws Exception {
+    try (var connection = DriverManager.getConnection(url())) {
+      for (String sql : List.of("SELECT CASE CAST(model AS VARBINARY) WHEN 'x' THEN 1 END FROM mtcars WHERE 1=0",
+          "SELECT CASE model WHEN CAST('x' AS VARBINARY) THEN 1 END FROM mtcars WHERE 1=0")) {
+        assertEquals("42000",
+            assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql).getSQLState());
+      }
+    }
+  }
+
+  /**
+   * Compatible binary predicates retain content comparison and NULL semantics.
+   *
+   * @param expression
+   *          compatible binary predicate or CASE result
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "X'78' IN (X'78', X'79')", "X'78' BETWEEN X'61' AND X'7A'", "X'78' = ANY (SELECT CAST('x' AS VARBINARY))",
+      "X'78' = ANY (ARRAY[X'78'])", "CASE X'78' WHEN X'78' THEN TRUE ELSE FALSE END"
+  })
+  void acceptsCompatibleBinaryPredicateForms(String expression) throws Exception {
+    try (var connection = DriverManager.getConnection(url());
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT " + expression)) {
+      assertTrue(result.next());
+      assertTrue(result.getBoolean(1));
+    }
+  }
+
+  /**
+   * Octet LIKE has a valid binary signature; its execution support remains in
+   * #461.
+   *
+   * @throws Exception
+   *           if preparing the valid signature fails
+   */
+  @Test
+  void acceptsBinaryLikeSignatureDuringPreparation() throws Exception {
+    try (var connection = DriverManager.getConnection(url());
+        var query = connection.prepareStatement("SELECT model FROM mtcars WHERE CAST(model AS VARBINARY) LIKE X'78'")) {
+      assertNotNull(query);
+    }
+  }
+
+  /**
    * Malformed UTF-8 raises a repertoire error rather than inserting replacement
    * characters.
    *

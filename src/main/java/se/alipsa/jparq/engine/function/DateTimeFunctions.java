@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.sql.Date;
+import java.sql.JDBCType;
 import java.sql.SQLDataException;
 import java.sql.Time;
 import java.sql.Timestamp;
@@ -42,6 +43,7 @@ import se.alipsa.jparq.engine.NumericCasts;
 import se.alipsa.jparq.engine.ScalarExpressionSchemas;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlText;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
@@ -813,30 +815,72 @@ public final class DateTimeFunctions {
           "nationalcharactervarying", "string" ->
         castToString(cast, value);
       case "text", "clob", "characterlargeobject", "nclob", "nationalcharacterlargeobject" -> SqlText.cast(value);
-      case "binary", "varbinary", "binaryvarying", "blob", "binarylargeobject" -> castToBinary(cast, value);
+      case "binary", "varbinary", "binaryvarying", "blob", "binarylargeobject" ->
+        compileBinaryCast(cast).convert(value);
       default -> value;
     };
   }
 
   /**
-   * Applies the declared binary length, padding fixed strings with zero octets.
+   * Compiles a binary declaration once for reuse across row evaluations.
    *
    * @param cast
-   *          binary CAST declaration
-   * @param value
-   *          non-null operand
-   * @return independent binary value with the requested length
+   *          CAST expression
+   * @return immutable binary conversion, or null for a nonbinary CAST
    * @throws IllegalArgumentException
-   *           if the length is invalid, carrying SQLState 42000
+   *           if the declared length is invalid, carrying SQLState 42000
    */
-  private static byte[] castToBinary(CastExpression cast, Object value) {
-    byte[] bytes = binaryBytes(value);
+  public static BinaryCast compileBinaryCast(CastExpression cast) {
+    if (cast.getColDataType() == null) {
+      return null;
+    }
+    JDBCType type = ScalarExpressionSchemas.declaredJdbcType(cast.getColDataType().getDataType());
+    if (type == null || !JdbcTypeMapper.isBinaryType(type.getVendorTypeNumber())) {
+      return null;
+    }
     Long length = ScalarExpressionSchemas.binaryLength(cast);
-    boolean fixed = "binary".equals(normalizeTypeName(cast.getColDataType().getDataType()));
-    if (length == null && fixed) {
+    if (length == null && type == JDBCType.BINARY) {
       length = 1L;
     }
-    return length != null && (fixed || bytes.length > length) ? Arrays.copyOf(bytes, length.intValue()) : bytes;
+    return new BinaryCast(length, type == JDBCType.BINARY);
+  }
+
+  /**
+   * Immutable binary length and padding rules compiled from a CAST declaration.
+   */
+  public static final class BinaryCast {
+    private final Long length;
+    private final boolean fixed;
+
+    /**
+     * Retains validated conversion bounds.
+     *
+     * @param length
+     *          declared maximum length, or null when unbounded
+     * @param fixed
+     *          whether zero-octet padding is required
+     */
+    private BinaryCast(Long length, boolean fixed) {
+      this.length = length;
+      this.fixed = fixed;
+    }
+
+    /**
+     * Copies and converts a row value using the compiled bounds.
+     *
+     * @param value
+     *          character or binary input, possibly null
+     * @return independent binary value, or null for SQL NULL
+     * @throws IllegalArgumentException
+     *           if the operand is incompatible, carrying SQLState 42000
+     */
+    public byte[] convert(Object value) {
+      if (value == null) {
+        return null;
+      }
+      byte[] bytes = binaryBytes(value);
+      return length != null && (fixed || bytes.length > length) ? Arrays.copyOf(bytes, length.intValue()) : bytes;
+    }
   }
 
   /**

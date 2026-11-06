@@ -24,7 +24,11 @@
   rather than inserting replacement characters. OCTET_LENGTH counts binary bytes.
   Character-only functions and text-column comparisons reject implicit binary operands with `42000`
   instead of Java identity text (partial #355); known incompatible length/case/CONCAT calls and
-  comparisons are validated before rows are read. Use an explicit CAST to choose the comparison family.
+  comparisons are validated before rows are read, including IN, BETWEEN, quantified comparisons,
+  mixed binary/character LIKE, and simple CASE. Use an explicit CAST to choose the comparison family.
+  Binary CAST length and padding rules are compiled once per expression in each value evaluator.
+  Reused prepared footer schemas avoid duplicate footer reads. Subqueries still rediscover shard lists
+  when re-executed: added or removed files change the TableLocation cache key.
   LENGTH remains a character-only alias of CHAR_LENGTH; binary LENGTH behavior remains open in #355.
   Binary SUBSTRING rejection is no longer asserted as correct behavior; support remains tracked in #461.
   National `N'…'` literals report NVARCHAR, while unresolved `B'…'` literals report OTHER.

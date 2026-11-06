@@ -65,6 +65,7 @@ public final class ValueExpressionEvaluator {
   private final Map<String, Schema> fieldSchemas;
   private final Map<Expression, NumericType> numericTypes = new IdentityHashMap<>();
   private final Map<Expression, Optional<Schema>> intervalTypes = new IdentityHashMap<>();
+  private final Map<CastExpression, Optional<DateTimeFunctions.BinaryCast>> binaryCasts = new IdentityHashMap<>();
   private final Map<String, String> caseInsensitiveIndex;
   private final Schema schema;
   private final SubqueryExecutor subqueryExecutor;
@@ -285,7 +286,9 @@ public final class ValueExpressionEvaluator {
     }
     if (expression instanceof CastExpression cast) {
       Object inner = evalInternal(cast.getLeftExpression(), record);
-      return DateTimeFunctions.castLiteral(cast, inner);
+      DateTimeFunctions.BinaryCast binary = binaryCasts
+          .computeIfAbsent(cast, shape -> Optional.ofNullable(DateTimeFunctions.compileBinaryCast(shape))).orElse(null);
+      return binary == null ? DateTimeFunctions.castLiteral(cast, inner) : binary.convert(inner);
     }
     if (expression instanceof SignedExpression se) {
       return LiteralConverter.applySign(evalInternal(se.getExpression(), record), se);

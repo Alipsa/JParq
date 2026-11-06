@@ -10,11 +10,16 @@ import java.util.function.Function;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.BinaryExpression;
+import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.HexValue;
+import net.sf.jsqlparser.expression.operators.relational.Between;
 import net.sf.jsqlparser.expression.operators.relational.ComparisonOperator;
+import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
+import net.sf.jsqlparser.expression.operators.relational.InExpression;
 import net.sf.jsqlparser.expression.operators.relational.IsDistinctExpression;
+import net.sf.jsqlparser.expression.operators.relational.LikeExpression;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.AllColumns;
@@ -181,6 +186,55 @@ public final class ArrayQueryValidation {
         return super.visitBinaryExpression(binary, context);
       }
 
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(InExpression in, S context) {
+        Expression candidates = in.getRightExpression();
+        if (candidates instanceof ExpressionList<?> list) {
+          for (Expression candidate : list) {
+            ScalarExpressionSchemas.validateBinaryComparison(in.getLeftExpression(), candidate,
+                operand -> scalarOperand(operand, scope));
+          }
+        } else {
+          ScalarExpressionSchemas.validateBinaryComparison(in.getLeftExpression(), candidates,
+              operand -> scalarOperand(operand, scope));
+        }
+        return super.visit(in, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(Between between, S context) {
+        ScalarExpressionSchemas.validateBinaryComparison(between.getLeftExpression(),
+            between.getBetweenExpressionStart(), operand -> scalarOperand(operand, scope));
+        ScalarExpressionSchemas.validateBinaryComparison(between.getLeftExpression(), between.getBetweenExpressionEnd(),
+            operand -> scalarOperand(operand, scope));
+        return super.visit(between, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(LikeExpression like, S context) {
+        ScalarExpressionSchemas.validateBinaryComparison(like.getLeftExpression(), like.getRightExpression(),
+            operand -> scalarOperand(operand, scope));
+        if (like.getEscape() != null) {
+          ScalarExpressionSchemas.validateBinaryComparison(like.getLeftExpression(), like.getEscape(),
+              operand -> scalarOperand(operand, scope));
+        }
+        return super.visit(like, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(CaseExpression choice, S context) {
+        if (choice.getSwitchExpression() != null && choice.getWhenClauses() != null) {
+          choice.getWhenClauses()
+              .forEach(branch -> ScalarExpressionSchemas.validateBinaryComparison(choice.getSwitchExpression(),
+                  branch.getWhenExpression(), operand -> scalarOperand(operand, scope)));
+        }
+        return super.visit(choice, context);
+      }
+
       @Override
       public <S> Void visit(Select nested, S context) {
         visitSelect(nested, scope);
@@ -211,6 +265,17 @@ public final class ArrayQueryValidation {
    */
   private static Schema scalarOperand(Expression expression, Scope scope) {
     Expression operand = ExpressionEvaluator.unwrapParenthesis(expression);
+    if (operand instanceof AnyComparisonExpression quantified) {
+      return projectedValue(quantified.getSelect(), scope);
+    }
+    if (operand instanceof net.sf.jsqlparser.expression.Function quantified
+        && JSqlParserSupport.isQuantifiedOperand(quantified) && quantified.getParameters() != null
+        && quantified.getParameters().size() == 1) {
+      Schema array = JdbcTypeMapper.nonNullSchema(scalarOperand(quantified.getParameters().getFirst(), scope));
+      return array != null && array.getType() == Schema.Type.ARRAY
+          ? JdbcTypeMapper.nonNullSchema(array.getElementType())
+          : null;
+    }
     Schema scalar = ScalarExpressionSchemas.resolve(operand);
     if (scalar != null) {
       return scalar;

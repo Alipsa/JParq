@@ -6,10 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.*;
 
 import java.nio.ByteBuffer;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.apache.avro.Schema;
@@ -20,6 +22,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.ScalarExpressionSchemas;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.helper.TemporalInterval;
 
@@ -38,6 +41,35 @@ class ValueExpressionEvaluatorTest {
     nullNoteRecord.put("note", null);
 
     evaluator = new ValueExpressionEvaluator(schema);
+  }
+
+  /**
+   * Reuses compiled binary bounds while reading fresh values and returning
+   * independent arrays.
+   *
+   * @throws Exception
+   *           if the expression cannot be parsed
+   */
+  @Test
+  void compilesBinaryCastLengthOnceAcrossRows() throws Exception {
+    CastExpression cast = (CastExpression) CCJSqlParserUtil.parseExpression("CAST(note AS BINARY(4))");
+    var row = new GenericData.Record(schema);
+    var values = new ValueExpressionEvaluator(schema);
+    try (var declarations = mockStatic(ScalarExpressionSchemas.class, CALLS_REAL_METHODS)) {
+      row.put("note", "xy");
+      byte[] first = assertInstanceOf(byte[].class, values.eval(cast, row));
+      assertArrayEquals(new byte[]{
+          120, 121, 0, 0
+      }, first);
+      first[0] = 0;
+      row.put("note", "abcdz");
+      assertArrayEquals(new byte[]{
+          97, 98, 99, 100
+      }, assertInstanceOf(byte[].class, values.eval(cast, row)));
+      row.put("note", null);
+      assertNull(values.eval(cast, row));
+      declarations.verify(() -> ScalarExpressionSchemas.binaryLength(cast), times(1));
+    }
   }
 
   private Object eval(String sqlExpression, GenericRecord record) throws Exception {

@@ -895,23 +895,26 @@ The following SQL statements are supported:
   types even for empty or all-NULL results. Standard NATIONAL CHARACTER, NATIONAL CHAR, and
   NATIONAL CHARACTER VARYING spellings use the same metadata and conversions as NCHAR/NVARCHAR.
   Compatible CHAR and VARCHAR set branches produce VARCHAR output. Declared LOB and binary CASTs remain
-  typed for set compatibility even for all-NULL or empty results: incompatible numeric, character, binary, or datetime families raise SQLState `42000`.
+  typed for set compatibility even for all-NULL or empty results: incompatible numeric, character,
+  binary, or datetime families raise SQLState `42000`.
   Binary CASTs return `byte[]` and retain BINARY, VARBINARY, or BLOB metadata through CTEs and
   derived tables, including all-NULL and empty results. Character/binary CAST conversions use UTF-8;
   malformed UTF-8 raises SQLState `22021` instead of replacing bytes. BLOB lengths accept K/M/G/T/P
   multipliers using overflow-checked long bounds. Plain LOB lengths above `Integer.MAX_VALUE` still hit
   a parser restriction tracked in [#462](https://github.com/Alipsa/JParq/issues/462).
   Known incompatible binary CAST sources (including INTERVAL), invalid lengths, binary arguments to
-  CHAR_LENGTH/UPPER/LOWER/CONCAT, and binary/nonbinary comparisons raise `42000` during preparation,
-  including for NULL and empty inputs. Unknown operand types retain runtime validation.
+  CHAR_LENGTH/UPPER/LOWER/CONCAT, and binary/nonbinary comparisons raise `42000` during preparation.
+  Preparation checks include IN, BETWEEN, quantified comparisons, mixed binary/character LIKE, and
+  simple CASE, even for NULL and empty inputs. Unknown operand types retain runtime validation.
   OCTET_LENGTH counts binary bytes. LENGTH remains an alias of character-only CHAR_LENGTH; the binary
   LENGTH request remains open in [#355](https://github.com/Alipsa/JParq/issues/355).
-  Standard binary SUBSTRING, POSITION, TRIM, and OVERLAY remain tracked in
+  Standard binary SUBSTRING, POSITION, TRIM, OVERLAY, and binary-pattern LIKE remain tracked in
   [#461](https://github.com/Alipsa/JParq/issues/461). Both `getBlob` overloads return detached BLOBs,
   or null for SQL NULL.
   Standard CHARACTER LARGE OBJECT, NCLOB, NATIONAL CHARACTER LARGE OBJECT, and BINARY LARGE OBJECT
-  spellings share the corresponding LOB compatibility checks. CLOB/NCLOB still use interim character storage; full character LOB metadata
-  and ARRAY LOB support are tracked in [#452](https://github.com/Alipsa/JParq/issues/452).
+  spellings share the corresponding LOB compatibility checks. CLOB/NCLOB still use interim character
+  storage; full character LOB metadata and ARRAY LOB support are tracked in
+  [#452](https://github.com/Alipsa/JParq/issues/452).
   These declared CAST NULLs remain distinct from untyped NULL projections.
   Numeric and nonnumeric branches remain incompatible. Integer literals currently use BIGINT;
   general character expression typing is tracked in [#460](https://github.com/Alipsa/JParq/issues/460),
