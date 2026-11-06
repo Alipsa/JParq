@@ -28,8 +28,9 @@
   mixed binary/character LIKE, simple CASE, and NULLIF. Use an explicit CAST to choose the comparison
   family.
   IN resolves its left declaration once per candidate list. Binary CAST length and padding rules are
-  reused across row evaluation, stable CONVERT shapes, and literal folding; weak keys do not retain
-  query ASTs, and changed declarations invalidate cached rules.
+  cached locally by each row evaluator, including stable CONVERT shapes. One-shot literal folding
+  compiles directly without a global CAST cache. Cast-style CONVERT shares CAST metadata and declared
+  length, source-type, character-function, and comparison validation in both supported argument orders.
   Reused prepared footer schemas avoid duplicate footer reads. Subqueries still rediscover shard lists
   when re-executed: added or removed files change the TableLocation cache key.
   LENGTH remains a character-only alias of CHAR_LENGTH; binary LENGTH behavior remains open in #355.

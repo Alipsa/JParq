@@ -14,6 +14,7 @@ import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.HexValue;
+import net.sf.jsqlparser.expression.TranscodingFunction;
 import net.sf.jsqlparser.expression.operators.relational.Between;
 import net.sf.jsqlparser.expression.operators.relational.ComparisonOperator;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
@@ -183,6 +184,16 @@ public final class ArrayQueryValidation {
 
       /** {@inheritDoc} */
       @Override
+      public <S> Void visit(TranscodingFunction convert, S context) {
+        CastExpression cast = CastExpressions.asCast(convert, name -> scope.columns().apply(new Column(name)) != null);
+        if (cast != null) {
+          ScalarExpressionSchemas.validateBinaryCast(cast, operand -> scalarOperand(operand, scope));
+        }
+        return super.visit(convert, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
       protected <S> Void visitBinaryExpression(BinaryExpression binary, S context) {
         if (binary instanceof ComparisonOperator || binary instanceof IsDistinctExpression) {
           ScalarExpressionSchemas.validateBinaryComparison(binary.getLeftExpression(), binary.getRightExpression(),
@@ -280,14 +291,15 @@ public final class ArrayQueryValidation {
           ? JdbcTypeMapper.nonNullSchema(array.getElementType())
           : null;
     }
-    Schema scalar = ScalarExpressionSchemas.resolve(operand);
+    Schema scalar = ScalarExpressionSchemas.resolve(operand, name -> scope.columns().apply(new Column(name)) != null);
     if (scalar != null) {
       return scalar;
     }
     if (operand instanceof HexValue) {
       return JdbcTypeMapper.declaredSchema(java.sql.JDBCType.VARBINARY);
     }
-    if (operand instanceof CastExpression cast && cast.getColDataType() != null) {
+    CastExpression cast = CastExpressions.asCast(operand, name -> scope.columns().apply(new Column(name)) != null);
+    if (cast != null && cast.getColDataType() != null) {
       java.sql.JDBCType type = ScalarExpressionSchemas.declaredJdbcType(cast.getColDataType().getDataType());
       if (type == java.sql.JDBCType.CLOB || type == java.sql.JDBCType.NCLOB) {
         return Schema.create(Schema.Type.STRING);

@@ -100,7 +100,7 @@ public final class SqlParser {
     }
     Expression inner = convert.getExpression();
     String typeCandidate = convert.getColDataType() == null ? null : convert.getColDataType().getDataType();
-    if (inner instanceof Column column && isConvertTypeName(column.getColumnName()) && typeCandidate != null) {
+    if (inner != null && isConvertTypeName(inner.toString()) && typeCandidate != null) {
       return new ConvertProcessingResult(false, typeCandidate);
     }
     return new ConvertProcessingResult(true, null);
@@ -785,6 +785,17 @@ public final class SqlParser {
           throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000"));
         }
         return super.visit(analytic, context);
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(TranscodingFunction convert, S context) {
+        CastExpression cast = CastExpressions.asCast(convert);
+        if (cast != null) {
+          DecimalCasts.validateBounds(cast);
+          ScalarExpressionSchemas.binaryLength(cast);
+        }
+        return super.visit(convert, context);
       }
 
       /** {@inheritDoc} */

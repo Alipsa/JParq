@@ -109,35 +109,31 @@ class ValueExpressionEvaluatorTest {
   }
 
   /**
-   * Literal folding shares compiled bounds without caching values or stale
-   * declarations.
+   * One-shot literal folding uses current values and declarations without global
+   * caching.
    *
    * @throws Exception
    *           if expression parsing fails
    */
   @Test
-  void reusesLiteralBinaryBoundsAndInvalidatesChangedDeclaration() throws Exception {
+  void foldsBinaryLiteralsUsingCurrentValuesAndDeclarations() throws Exception {
     CastExpression cast = (CastExpression) CCJSqlParserUtil.parseExpression("CAST('abcd' AS VARBINARY(3))");
-    try (var declarations = mockStatic(ScalarExpressionSchemas.class, CALLS_REAL_METHODS)) {
-      byte[] first = assertInstanceOf(byte[].class, LiteralConverter.toLiteral(cast));
-      assertArrayEquals(new byte[]{
-          97, 98, 99
-      }, first);
-      first[0] = 0;
-      cast.setLeftExpression(new StringValue("wxyz"));
-      assertArrayEquals(new byte[]{
-          119, 120, 121
-      }, assertInstanceOf(byte[].class, LiteralConverter.toLiteral(cast)));
-      declarations.verify(() -> ScalarExpressionSchemas.binaryLength(cast), times(1));
-      var shorter = new ColDataType();
-      shorter.setDataType("VARBINARY");
-      shorter.setArgumentsStringList(List.of("2"));
-      cast.setColDataType(shorter);
-      assertArrayEquals(new byte[]{
-          119, 120
-      }, assertInstanceOf(byte[].class, LiteralConverter.toLiteral(cast)));
-      declarations.verify(() -> ScalarExpressionSchemas.binaryLength(cast), times(2));
-    }
+    byte[] first = assertInstanceOf(byte[].class, LiteralConverter.toLiteral(cast));
+    assertArrayEquals(new byte[]{
+        97, 98, 99
+    }, first);
+    first[0] = 0;
+    cast.setLeftExpression(new StringValue("wxyz"));
+    assertArrayEquals(new byte[]{
+        119, 120, 121
+    }, assertInstanceOf(byte[].class, LiteralConverter.toLiteral(cast)));
+    var shorter = new ColDataType();
+    shorter.setDataType("VARBINARY");
+    shorter.setArgumentsStringList(List.of("2"));
+    cast.setColDataType(shorter);
+    assertArrayEquals(new byte[]{
+        119, 120
+    }, assertInstanceOf(byte[].class, LiteralConverter.toLiteral(cast)));
   }
 
   private Object eval(String sqlExpression, GenericRecord record) throws Exception {

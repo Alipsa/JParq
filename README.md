@@ -897,8 +897,9 @@ The following SQL statements are supported:
   Compatible CHAR and VARCHAR set branches produce VARCHAR output. Declared LOB and binary CASTs remain
   typed for set compatibility even for all-NULL or empty results: incompatible numeric, character,
   binary, or datetime families raise SQLState `42000`.
-  Binary CASTs return `byte[]` and retain BINARY, VARBINARY, or BLOB metadata through CTEs and
-  derived tables, including all-NULL and empty results. Character/binary CAST conversions use UTF-8;
+  Binary CASTs and cast-style CONVERT return `byte[]` and retain BINARY, VARBINARY, or BLOB metadata
+  through CTEs and derived tables, including all-NULL and empty results. Character/binary CAST
+  conversions use UTF-8;
   malformed UTF-8 raises SQLState `22021` instead of replacing bytes. BLOB lengths accept K/M/G/T/P
   multipliers using overflow-checked long bounds. Plain LOB lengths above `Integer.MAX_VALUE` still hit
   a parser restriction tracked in [#462](https://github.com/Alipsa/JParq/issues/462).
@@ -909,7 +910,10 @@ The following SQL statements are supported:
   validation.
   Preparation-time type inference can still leave joined columns in ON, correlated outer references,
   row-value comparisons ([#388](https://github.com/Alipsa/JParq/issues/388)), and set-operation subquery
-  projections unresolved; their binary compatibility checks can run during execution.
+  projections unresolved; their binary compatibility checks can run during execution. These preparation
+  gaps are bugs tracked in [#464](https://github.com/Alipsa/JParq/issues/464), alongside #388.
+  Cast-style CONVERT shares CAST declaration checks. Use target-first syntax for NULL inputs; the
+  NULL-first parser gap is tracked in [#465](https://github.com/Alipsa/JParq/issues/465).
   OCTET_LENGTH counts binary bytes. LENGTH remains an alias of character-only CHAR_LENGTH; the binary
   LENGTH request remains open in [#355](https://github.com/Alipsa/JParq/issues/355).
   Standard binary SUBSTRING, POSITION, TRIM, OVERLAY, and binary-pattern LIKE remain tracked in

@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
 import net.sf.jsqlparser.expression.DateValue;
@@ -44,6 +45,23 @@ public final class ScalarExpressionSchemas {
    * @return declared schema, or null when unresolved
    */
   public static Schema resolve(Expression expression) {
+    return resolve(expression, name -> false);
+  }
+
+  /**
+   * Resolves scalar declarations with source names for CONVERT argument ordering.
+   *
+   * @param expression
+   *          projected expression
+   * @param columns
+   *          identifies visible source column names
+   * @return declared schema, or null when unresolved
+   */
+  public static Schema resolve(Expression expression, Predicate<String> columns) {
+    CastExpression cast = CastExpressions.asCast(expression, columns);
+    if (cast != null && cast.getColDataType() != null) {
+      return declaredSchema(cast.getColDataType().getDataType());
+    }
     return switch (ExpressionEvaluator.unwrapParenthesis(expression)) {
       case NullValue value -> Schema.create(Schema.Type.NULL);
       case DateValue value -> declaredSchema("date");
@@ -52,8 +70,6 @@ public final class ScalarExpressionSchemas {
       case StringValue value when "N".equalsIgnoreCase(value.getPrefix()) ->
         JdbcTypeMapper.declaredSchema(JDBCType.NVARCHAR);
       case StringValue value when value.getPrefix() == null -> Schema.create(Schema.Type.STRING);
-      case CastExpression cast when cast.getColDataType() != null ->
-        declaredSchema(cast.getColDataType().getDataType());
       case DateTimeLiteralExpression literal -> declaredSchema(literal.getType().name());
       case null, default -> null;
     };
@@ -124,7 +140,8 @@ public final class ScalarExpressionSchemas {
       return;
     }
     Expression operand = ExpressionEvaluator.unwrapParenthesis(cast.getLeftExpression());
-    if (operand instanceof CastExpression inner && inner.getColDataType() != null) {
+    CastExpression inner = CastExpressions.asCast(operand);
+    if (inner != null && inner.getColDataType() != null) {
       JDBCType source = declaredJdbcType(inner.getColDataType().getDataType());
       if (source == JDBCType.CLOB || source == JDBCType.NCLOB) {
         return;

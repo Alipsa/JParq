@@ -76,6 +76,7 @@ import org.slf4j.LoggerFactory;
 import se.alipsa.jparq.engine.ArrayExpressionSchemas;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.AvroProjections;
+import se.alipsa.jparq.engine.CastExpressions;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelatedBindings;
@@ -937,6 +938,12 @@ public class JParqPreparedStatement implements PreparedStatement {
                   ? prepared.parsedSelect.expressions().get(index)
                   : null;
           Expression projection = ExpressionEvaluator.unwrapParenthesis(expression);
+          CastExpression declaration = meta instanceof JParqResultSetMetaData projectedMetadata
+              ? projectedMetadata.projectionCast(col)
+              : CastExpressions.asCast(projection);
+          if (declaration != null) {
+            projection = declaration;
+          }
           final var simpleDeclaration = projection instanceof CastExpression || projection instanceof SignedExpression
               || LiteralConverter.isLiteral(projection);
           if (schema != null && schema.getType() == Schema.Type.NULL) {

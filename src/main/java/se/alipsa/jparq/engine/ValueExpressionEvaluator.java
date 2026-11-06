@@ -41,7 +41,6 @@ import net.sf.jsqlparser.expression.operators.arithmetic.Multiplication;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
-import net.sf.jsqlparser.statement.create.table.ColDataType;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.NumericType;
@@ -365,6 +364,9 @@ public final class ValueExpressionEvaluator {
       return StringFunctions.convertCharset(value, convert.getTranscodingName());
     }
     CastExpression cast = convertCasts.computeIfAbsent(convert, this::convertCast);
+    if (cast == null) {
+      return evalInternal(convert.getExpression(), record);
+    }
     Object value = evalInternal(cast.getLeftExpression(), record);
     return cast.getColDataType() == null ? value : evaluateCast(cast, value);
   }
@@ -395,27 +397,7 @@ public final class ValueExpressionEvaluator {
    * @return equivalent CAST shape retaining the operand and declaration
    */
   private CastExpression convertCast(TranscodingFunction convert) {
-    ConvertArguments args = resolveConvertArguments(convert);
-    CastExpression cast = new CastExpression();
-    cast.setColDataType(args.colDataType());
-    cast.setLeftExpression(args.valueExpression());
-    return cast;
-  }
-
-  private ConvertArguments resolveConvertArguments(TranscodingFunction convert) {
-    Expression valueExpr = convert.getExpression();
-    ColDataType colType = convert.getColDataType();
-    if (colType != null && valueExpr != null) {
-      String typeCandidate = colType.getDataType();
-      String exprText = valueExpr.toString();
-      if (looksLikeSchemaColumn(typeCandidate) && isTypeName(exprText) && !looksLikeSchemaColumn(exprText)) {
-        valueExpr = new Column(typeCandidate);
-        ColDataType swapped = new ColDataType();
-        swapped.setDataType(exprText);
-        colType = swapped;
-      }
-    }
-    return new ConvertArguments(valueExpr, colType);
+    return CastExpressions.asCast(convert, this::looksLikeSchemaColumn);
   }
 
   private boolean looksLikeSchemaColumn(String name) {
@@ -424,13 +406,6 @@ public final class ValueExpressionEvaluator {
     }
     String normalized = Identifier.lookupKey(name);
     return normalized != null && caseInsensitiveIndex.containsKey(normalized);
-  }
-
-  private boolean isTypeName(String name) {
-    return SqlParser.isConvertTypeName(name);
-  }
-
-  private record ConvertArguments(Expression valueExpression, ColDataType colDataType) {
   }
 
   private Object evaluateAnalytic(AnalyticExpression analytic, GenericRecord record) {

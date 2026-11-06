@@ -14,6 +14,7 @@ import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
+import net.sf.jsqlparser.expression.TranscodingFunction;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
@@ -89,6 +90,10 @@ public final class ArrayExpressionSchemas {
    */
   public static Schema resolve(Expression expression, java.util.function.Function<Column, Schema> columns,
       java.util.function.Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarSchemas) {
+    if (expression instanceof TranscodingFunction) {
+      CastExpression cast = CastExpressions.asCast(expression, name -> columns.apply(new Column(name)) != null);
+      return cast == null ? null : resolve(cast, columns, scalarSchemas);
+    }
     if (expression instanceof Column column) {
       return JdbcTypeMapper.nonNullSchema(columns.apply(column));
     }

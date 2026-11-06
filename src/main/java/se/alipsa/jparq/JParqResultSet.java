@@ -244,7 +244,7 @@ public class JParqResultSet extends ResultSetAdapter {
       new JParqResultSetMetaData(reader.schema(), labels, physical, canonicalLookup, tableName, tableSchema,
           tableCatalog, selectExpressions, metadataSourceMappings).validateArrayDeclarations(select, table -> null);
     } catch (RuntimeException failure) {
-      throw SqlExceptions.wrap("Invalid ARRAY projection declaration", failure);
+      throw SqlExceptions.wrap("Invalid projection declaration", failure);
     }
 
     AggregateFunctions.AggregatePlan aggregatePlan = AggregateFunctions.plan(select, reader.schema());
