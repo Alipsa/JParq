@@ -90,6 +90,52 @@ class UnnestIdentifierTest {
   }
 
   /**
+   * Rejects references to equivalent qualifiers belonging to different inputs.
+   *
+   * @param grouped
+   *          whether the conflicting inputs form a join group
+   * @throws Exception
+   *           if connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void equivalentQualifiersAreAmbiguous(boolean grouped) throws Exception {
+    try (var connection = DriverManager.getConnection(url())) {
+      String inputs = "(SELECT ARRAY[1] AS a) n CROSS JOIN (SELECT ARRAY[2] AS a) \"n\"";
+      if (grouped) {
+        inputs = "(" + inputs + ")";
+      }
+      for (String argument : List.of("n.a", "\"n\".a")) {
+        String sql = "SELECT u.x FROM " + inputs + " CROSS JOIN UNNEST(" + argument + ") AS u(x)";
+        var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
+          try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
+            result.next();
+          }
+        }, sql);
+        assertEquals("42702", failure.getSQLState(), sql);
+        assertEquals("Ambiguous UNNEST column reference: " + argument, failure.getMessage());
+      }
+    }
+  }
+
+  /**
+   * Allows equivalent qualifier keys when they identify the same source input.
+   *
+   * @throws Exception
+   *           if the builder rejects the reference
+   */
+  @Test
+  void equivalentKeysForSameInputAreNotAmbiguous() throws Exception {
+    var schema = SchemaBuilder.record("input").fields().name("a").type().array().items().intType().noDefault()
+        .endRecord();
+    var input = new JoinTable("n", null, schema, List.of(), SqlParser.JoinType.BASE, null, List.of(), null);
+    var result = UnnestTableBuilder.build(unnestReference("n"), List.of(input), Map.of("U:n", 0, "Q:n", 0));
+    assertEquals(1, result.schema().getFields().size());
+  }
+
+  /**
    * Verifies the builder's unknown-qualifier diagnostic without earlier SQL
    * validation.
    */
@@ -98,9 +144,7 @@ class UnnestIdentifierTest {
     var schema = SchemaBuilder.record("input").fields().name("a").type().array().items().intType().noDefault()
         .endRecord();
     var input = new JoinTable("n", null, schema, List.of(), SqlParser.JoinType.BASE, null, List.of(), null);
-    var definition = new SqlParser.UnnestDefinition(new Column(new Table("nosuch"), "a"), false, List.of("x"));
-    var reference = new SqlParser.TableReference(null, null, "u", SqlParser.JoinType.CROSS, null, null, null, null,
-        List.of(), null, definition, false, null, List.of());
+    var reference = unnestReference("nosuch");
     var failure = assertThrows(SQLSyntaxErrorException.class,
         () -> UnnestTableBuilder.build(reference, List.of(input), Map.of("U:n", 0)));
     assertEquals("42000", failure.getSQLState());
@@ -116,7 +160,7 @@ class UnnestIdentifierTest {
   @Test
   void duplicateLabelsAndGeneratedNames() throws Exception {
     try (var connection = DriverManager.getConnection(url())) {
-      String duplicate = "SELECT u.x FROM (SELECT ARRAY[1] AS a, ARRAY[2] AS a) n " + "CROSS JOIN UNNEST(n.a) AS u(x)";
+      String duplicate = "SELECT u.x FROM (SELECT ARRAY[1] AS a, ARRAY[2] AS a) n CROSS JOIN UNNEST(n.a) AS u(x)";
       var ambiguous = assertThrows(SQLSyntaxErrorException.class, () -> {
         try (var statement = connection.prepareStatement(duplicate); var result = statement.executeQuery()) {
           result.next();
@@ -232,6 +276,19 @@ class UnnestIdentifierTest {
         assertFalse(failure.getMessage().contains("Failed to open query data source"), failure.getMessage());
       }
     }
+  }
+
+  /**
+   * Builds a column-based UNNEST reference for direct builder tests.
+   *
+   * @param qualifier
+   *          source relation qualifier
+   * @return table reference exposing array elements as x
+   */
+  private static SqlParser.TableReference unnestReference(String qualifier) {
+    var definition = new SqlParser.UnnestDefinition(new Column(new Table(qualifier), "a"), false, List.of("x"));
+    return new SqlParser.TableReference(null, null, "u", SqlParser.JoinType.CROSS, null, null, null, null, List.of(),
+        null, definition, false, null, List.of());
   }
 
   /**

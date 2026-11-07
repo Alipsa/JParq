@@ -139,8 +139,12 @@ public final class UnnestTableBuilder {
     if (normalizedQualifier != null && qualifierIndex != null) {
       Integer index = qualifierIndex.get(normalizedQualifier);
       String alternative = ColumnMappingUtil.alternativeQualifierKey(normalizedQualifier);
-      if (index == null && alternative != null) {
-        index = qualifierIndex.get(alternative);
+      Integer alternativeIndex = alternative == null ? null : qualifierIndex.get(alternative);
+      if (index != null && alternativeIndex != null && !index.equals(alternativeIndex)) {
+        throw ambiguousColumn(column.toString());
+      }
+      if (index == null) {
+        index = alternativeIndex;
       }
       if (index == null) {
         throw new SQLSyntaxErrorException("UNNEST references unknown qualifier '" + qualifier + "'", "42000");
@@ -151,7 +155,7 @@ public final class UnnestTableBuilder {
     for (int i = priorTables.size() - 1; i >= 0; i--) {
       if (resolveField(priorTables.get(i).schema(), columnName) != null) {
         if (resolved >= 0) {
-          throw new SQLSyntaxErrorException("Ambiguous UNNEST column reference: " + columnName, "42702");
+          throw ambiguousColumn(columnName);
         }
         resolved = i;
       }
@@ -177,6 +181,13 @@ public final class UnnestTableBuilder {
     String qualifier = column.getTable() == null ? null : column.getTable().getName();
     if (qualifier != null && !table.nestedQualifiers().isEmpty()) {
       Map<String, Map<String, String>> mappings = ColumnMappingUtil.normaliseQualifierMapping(table.nestedQualifiers());
+      String key = JParqUtil.normalizeQualifier(qualifier);
+      String alternative = ColumnMappingUtil.alternativeQualifierKey(key);
+      Map<String, String> exact = mappings.get(key);
+      Map<String, String> equivalent = alternative == null ? null : mappings.get(alternative);
+      if (exact != null && equivalent != null && !exact.equals(equivalent)) {
+        throw ambiguousColumn(column.toString());
+      }
       Map<String, String> columns = ColumnMappingUtil.qualifierColumns(mappings, qualifier);
       return resolveField(table.schema(), column.getColumnName(), columns);
     }
@@ -215,9 +226,20 @@ public final class UnnestTableBuilder {
       throws SQLSyntaxErrorException {
     String field = ColumnMappingUtil.canonicalOrderColumn(columnName, null, Map.of(), columns, null);
     if ("".equals(field)) {
-      throw new SQLSyntaxErrorException("Ambiguous UNNEST column reference: " + columnName, "42702");
+      throw ambiguousColumn(columnName);
     }
     return schema == null || field == null ? null : schema.getField(field);
+  }
+
+  /**
+   * Creates a checked ambiguity error for an UNNEST column reference.
+   *
+   * @param columnName
+   *          ambiguous SQL reference
+   * @return syntax error carrying SQLState 42702
+   */
+  private static SQLSyntaxErrorException ambiguousColumn(String columnName) {
+    return new SQLSyntaxErrorException("Ambiguous UNNEST column reference: " + columnName, "42702");
   }
 
   /**
