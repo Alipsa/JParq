@@ -2,7 +2,12 @@ package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.sql.SQLSyntaxErrorException;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import org.apache.avro.SchemaBuilder;
 import org.junit.jupiter.api.Test;
@@ -45,6 +50,83 @@ class ColumnMappingUtilTest {
     assertEquals("quoted_mx", ColumnMappingUtil.qualifierColumns(mappings, "\"m\"").get("U:x"));
     assertEquals("mx", ColumnMappingUtil.qualifierColumns(Map.of("U:m", Map.of("U:x", "mx")), "\"m\"").get("U:x"));
     assertEquals(Map.of(), ColumnMappingUtil.qualifierColumns(mappings, "\"M\""));
+  }
+
+  /**
+   * Preserves exact qualifier precedence and resolves both lowercase quoting
+   * forms.
+   */
+  @Test
+  void qualifierFallbackIsBidirectional() {
+    var quoted = Map.of("U:x", "quoted_x");
+    var unquoted = Map.of("U:x", "unquoted_x");
+    assertEquals(quoted, ColumnMappingUtil.qualifierColumns(Map.of("Q:n", quoted), "n"));
+    assertEquals(unquoted, ColumnMappingUtil.qualifierColumns(Map.of("U:n", unquoted), "\"n\""));
+    var both = Map.of("Q:n", quoted, "U:n", unquoted);
+    assertEquals(unquoted, ColumnMappingUtil.qualifierColumns(both, "n"));
+    assertEquals(quoted, ColumnMappingUtil.qualifierColumns(both, "\"n\""));
+    assertEquals(Map.of(), ColumnMappingUtil.qualifierColumns(Map.of("Q:N", quoted), "n"));
+    assertEquals(Map.of(), ColumnMappingUtil.qualifierColumns(Map.of("U:n", unquoted), "\"N\""));
+    assertEquals("Q:n", ColumnMappingUtil.alternativeQualifierKey("U:n"));
+    assertEquals("U:n", ColumnMappingUtil.alternativeQualifierKey("Q:n"));
+    assertNull(ColumnMappingUtil.alternativeQualifierKey(null));
+    assertNull(ColumnMappingUtil.alternativeQualifierKey("Q:N"));
+  }
+
+  /**
+   * Resolves either lowercase quoting form and preserves unknown-name behavior.
+   *
+   * @throws SQLSyntaxErrorException
+   *           if a nonconflicting mapping is rejected
+   */
+  @Test
+  void checkedQualifierLookupResolvesEquivalentNames() throws SQLSyntaxErrorException {
+    var columns = Map.of("U:a", "input__a");
+    for (String reference : List.of("n", "\"n\"", "U:n", "Q:n")) {
+      for (String declaration : List.of("U:n", "Q:n")) {
+        assertEquals(columns, ColumnMappingUtil.qualifierColumns(Map.of(declaration, columns), reference,
+            () -> new SQLSyntaxErrorException("Unexpected ambiguity", "42702")));
+      }
+    }
+    var mappings = Map.of("U:n", columns);
+    for (String reference : List.of("missing", "\"N\"", "")) {
+      assertEquals(Map.of(), ColumnMappingUtil.qualifierColumns(mappings, reference,
+          () -> new SQLSyntaxErrorException("Unexpected ambiguity", "42702")));
+    }
+    assertEquals(Map.of(), ColumnMappingUtil.qualifierColumns(mappings, null,
+        () -> new SQLSyntaxErrorException("Unexpected ambiguity", "42702")));
+  }
+
+  /**
+   * Treats equal mapping contents as the same input without invoking the factory.
+   *
+   * @throws SQLSyntaxErrorException
+   *           if equal mappings are rejected
+   */
+  @Test
+  void equalQualifierMappingsDoNotInvokeAmbiguityFactory() throws SQLSyntaxErrorException {
+    var columns = Map.of("U:a", "input__a");
+    var mappings = Map.of("U:n", columns, "Q:n", new HashMap<>(columns));
+    for (String reference : List.of("n", "\"n\"")) {
+      assertEquals(columns, ColumnMappingUtil.qualifierColumns(mappings, reference, () -> {
+        throw new AssertionError("The ambiguity factory must not run for equal mappings");
+      }));
+    }
+  }
+
+  /**
+   * Preserves the caller's checked exception when equivalent mappings conflict.
+   */
+  @Test
+  void conflictingQualifierMappingsUseCheckedAmbiguityFactory() {
+    var mappings = Map.of("U:n", Map.of("U:a", "left__a"), "Q:n", Map.of("U:a", "right__a"));
+    for (String reference : List.of("n", "\"n\"")) {
+      var expected = new SQLSyntaxErrorException("Ambiguous qualifier " + reference, "42702");
+      var actual = assertThrows(SQLSyntaxErrorException.class,
+          () -> ColumnMappingUtil.qualifierColumns(mappings, reference, () -> expected));
+      assertSame(expected, actual);
+      assertEquals("42702", actual.getSQLState());
+    }
   }
 
   /**

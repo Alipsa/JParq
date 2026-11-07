@@ -6,6 +6,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Supplier;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.helper.JParqUtil;
 
@@ -468,7 +469,8 @@ public final class ColumnMappingUtil {
   }
 
   /**
-   * Looks up a qualifier, honoring exact quoted names before lowercase fallback.
+   * Looks up a qualifier, honoring exact mappings before equivalent lowercase
+   * names.
    *
    * @param mappings
    *          normalized qualifier-to-column mappings
@@ -477,18 +479,59 @@ public final class ColumnMappingUtil {
    * @return the qualifier's columns, or an empty map if it is unknown
    */
   public static Map<String, String> qualifierColumns(Map<String, Map<String, String>> mappings, String qualifier) {
+    return qualifierColumns(mappings, qualifier, null);
+  }
+
+  /**
+   * Resolves a qualifier and optionally rejects conflicting equivalent mappings.
+   * Ambiguity detection requires canonical field names unique across inputs.
+   *
+   * @param <E>
+   *          exception type chosen by the caller
+   * @param mappings
+   *          normalized qualifier-to-column mappings
+   * @param qualifier
+   *          raw SQL qualifier or normalized lookup key
+   * @param ambiguity
+   *          factory invoked only for conflicting mappings, or null to prefer an
+   *          exact mapping
+   * @return the qualifier's columns, or an empty map if it is unknown
+   * @throws E
+   *           if equivalent qualifiers have conflicting mappings and a factory is
+   *           provided
+   */
+  public static <E extends Exception> Map<String, String> qualifierColumns(Map<String, Map<String, String>> mappings,
+      String qualifier, Supplier<E> ambiguity) throws E {
     String key = normalizeLookupKey(qualifier);
     if (key == null) {
       return Map.of();
     }
     Map<String, String> columns = mappings.get(key);
+    String alternative = alternativeQualifierKey(key);
+    Map<String, String> equivalent = alternative == null ? null : mappings.get(alternative);
+    // Unique canonical fields mean equal mappings identify the same input.
+    if (ambiguity != null && columns != null && equivalent != null && !columns.equals(equivalent)) {
+      throw ambiguity.get();
+    }
     if (columns == null) {
-      String alternative = alternativeColumnKey(key);
-      if (alternative != null) {
-        columns = mappings.get(alternative);
-      }
+      columns = equivalent;
     }
     return columns == null ? Map.of() : columns;
+  }
+
+  /**
+   * Finds the equivalent qualifier key with the opposite quoting form. Exact
+   * mappings take precedence; quoted mixed-case names have no fallback.
+   *
+   * @param key
+   *          normalized qualifier lookup key
+   * @return equivalent key, or null when no fallback is allowed
+   */
+  public static String alternativeQualifierKey(String key) {
+    if (key != null && key.startsWith("U:") && key.length() > 2) {
+      return "Q:" + key.substring(2);
+    }
+    return alternativeColumnKey(key);
   }
 
   /**

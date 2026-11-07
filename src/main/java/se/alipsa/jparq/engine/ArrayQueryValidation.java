@@ -199,16 +199,6 @@ public final class ArrayQueryValidation {
 
       /** {@inheritDoc} */
       @Override
-      protected <S> Void visitBinaryExpression(BinaryExpression binary, S context) {
-        if (binary instanceof ComparisonOperator || binary instanceof IsDistinctExpression) {
-          ScalarExpressionSchemas.validateBinaryComparison(binary.getLeftExpression(), binary.getRightExpression(),
-              operand -> scalarOperand(operand, scope));
-        }
-        return super.visitBinaryExpression(binary, context);
-      }
-
-      /** {@inheritDoc} */
-      @Override
       public <S> Void visit(InExpression in, S context) {
         Schema left = scalarOperand(in.getLeftExpression(), scope);
         Expression candidates = in.getRightExpression();
@@ -270,6 +260,16 @@ public final class ArrayQueryValidation {
       public <S> Void visit(AnyComparisonExpression comparison, S context) {
         visitSelect(comparison.getSelect(), scope);
         return null;
+      }
+
+      /** {@inheritDoc} */
+      @Override
+      protected <S> Void visitBinaryExpression(BinaryExpression binary, S context) {
+        if (binary instanceof ComparisonOperator || binary instanceof IsDistinctExpression) {
+          ScalarExpressionSchemas.validateBinaryComparison(binary.getLeftExpression(), binary.getRightExpression(),
+              operand -> scalarOperand(operand, scope));
+        }
+        return super.visitBinaryExpression(binary, context);
       }
     });
   }
