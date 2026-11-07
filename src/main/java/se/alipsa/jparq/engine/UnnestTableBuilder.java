@@ -71,7 +71,7 @@ public final class UnnestTableBuilder {
     JoinTable sourceTable = priorTables.get(sourceIndex);
     Schema.Field arrayField = resolveField(sourceTable, column);
     if (arrayField == null) {
-      throw new SQLSyntaxErrorException("UNNEST column '" + column + "' not found in preceding input", "42000");
+      throw new SQLSyntaxErrorException("UNNEST column '" + column + "' not found in preceding tables", "42000");
     }
 
     Schema arraySchema = JdbcTypeMapper.nonNullSchema(arrayField.schema());
@@ -138,7 +138,7 @@ public final class UnnestTableBuilder {
     String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
     if (normalizedQualifier != null && qualifierIndex != null) {
       Integer index = qualifierIndex.get(normalizedQualifier);
-      String alternative = ColumnMappingUtil.alternativeColumnKey(normalizedQualifier);
+      String alternative = ColumnMappingUtil.alternativeQualifierKey(normalizedQualifier);
       if (index == null && alternative != null) {
         index = qualifierIndex.get(alternative);
       }
@@ -151,7 +151,7 @@ public final class UnnestTableBuilder {
     for (int i = priorTables.size() - 1; i >= 0; i--) {
       if (resolveField(priorTables.get(i).schema(), columnName) != null) {
         if (resolved >= 0) {
-          throw SqlExceptions.ambiguousColumn(columnName);
+          throw new SQLSyntaxErrorException("Ambiguous UNNEST column reference: " + columnName, "42702");
         }
         resolved = i;
       }
@@ -170,10 +170,10 @@ public final class UnnestTableBuilder {
    * @param column
    *          SQL array reference
    * @return resolved field, or null if the reference is unknown
-   * @throws IllegalArgumentException
+   * @throws SQLSyntaxErrorException
    *           if the column is ambiguous
    */
-  private static Schema.Field resolveField(JoinTable table, Column column) {
+  private static Schema.Field resolveField(JoinTable table, Column column) throws SQLSyntaxErrorException {
     String qualifier = column.getTable() == null ? null : column.getTable().getName();
     if (qualifier != null && !table.nestedQualifiers().isEmpty()) {
       Map<String, Map<String, String>> mappings = ColumnMappingUtil.normaliseQualifierMapping(table.nestedQualifiers());
@@ -191,10 +191,10 @@ public final class UnnestTableBuilder {
    * @param columnName
    *          SQL column identifier
    * @return resolved field, or null if absent
-   * @throws IllegalArgumentException
+   * @throws SQLSyntaxErrorException
    *           if the column is ambiguous
    */
-  private static Schema.Field resolveField(Schema schema, String columnName) {
+  private static Schema.Field resolveField(Schema schema, String columnName) throws SQLSyntaxErrorException {
     return resolveField(schema, columnName, MaterializedNames.lookupIndex(schema));
   }
 
@@ -208,13 +208,14 @@ public final class UnnestTableBuilder {
    * @param columns
    *          SQL lookup keys mapped to internal fields
    * @return resolved field, or null if absent
-   * @throws IllegalArgumentException
+   * @throws SQLSyntaxErrorException
    *           if the column is ambiguous
    */
-  private static Schema.Field resolveField(Schema schema, String columnName, Map<String, String> columns) {
+  private static Schema.Field resolveField(Schema schema, String columnName, Map<String, String> columns)
+      throws SQLSyntaxErrorException {
     String field = ColumnMappingUtil.canonicalOrderColumn(columnName, null, Map.of(), columns, null);
     if ("".equals(field)) {
-      throw SqlExceptions.ambiguousColumn(columnName);
+      throw new SQLSyntaxErrorException("Ambiguous UNNEST column reference: " + columnName, "42702");
     }
     return schema == null || field == null ? null : schema.getField(field);
   }

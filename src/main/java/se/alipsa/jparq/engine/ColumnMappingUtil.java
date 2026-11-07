@@ -468,7 +468,8 @@ public final class ColumnMappingUtil {
   }
 
   /**
-   * Looks up a qualifier, honoring exact quoted names before lowercase fallback.
+   * Looks up a qualifier, honoring exact mappings before equivalent lowercase
+   * names.
    *
    * @param mappings
    *          normalized qualifier-to-column mappings
@@ -483,12 +484,27 @@ public final class ColumnMappingUtil {
     }
     Map<String, String> columns = mappings.get(key);
     if (columns == null) {
-      String alternative = alternativeColumnKey(key);
+      String alternative = alternativeQualifierKey(key);
       if (alternative != null) {
         columns = mappings.get(alternative);
       }
     }
     return columns == null ? Map.of() : columns;
+  }
+
+  /**
+   * Finds the equivalent qualifier key with the opposite quoting form. Exact
+   * mappings take precedence; quoted mixed-case names have no fallback.
+   *
+   * @param key
+   *          normalized qualifier lookup key
+   * @return equivalent key, or null when no fallback is allowed
+   */
+  public static String alternativeQualifierKey(String key) {
+    if (key != null && key.startsWith("U:") && key.length() > 2) {
+      return "Q:" + key.substring(2);
+    }
+    return alternativeColumnKey(key);
   }
 
   /**

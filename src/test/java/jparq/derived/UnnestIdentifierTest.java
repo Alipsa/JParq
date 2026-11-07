@@ -7,11 +7,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.sql.DriverManager;
-import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.List;
+import java.util.Map;
+import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.schema.Table;
+import org.apache.avro.SchemaBuilder;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.JoinRecordReader.JoinTable;
+import se.alipsa.jparq.engine.SqlParser;
+import se.alipsa.jparq.engine.UnnestTableBuilder;
 
 /** Verifies SQL identifier binding for correlated UNNEST columns. */
 class UnnestIdentifierTest {
@@ -52,6 +59,80 @@ class UnnestIdentifierTest {
         assertEquals(3, result.getInt(1), sql);
         assertFalse(result.next(), sql);
       }
+    }
+  }
+
+  /**
+   * Allows unquoted references to lowercase quoted aliases in either input shape.
+   *
+   * @param grouped
+   *          whether the source belongs to a join group
+   * @throws Exception
+   *           if execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void unquotedReferencesToQuotedAliases(boolean grouped) throws Exception {
+    try (var connection = DriverManager.getConnection(url())) {
+      String input = "(SELECT ARRAY[3] AS a) \"n\"";
+      if (grouped) {
+        input = "(" + input + " CROSS JOIN (SELECT 1 AS k) m)";
+      }
+      String sql = "SELECT u.x FROM " + input + " CROSS JOIN UNNEST(n.a) AS u(x)";
+      try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
+        assertTrue(result.next(), sql);
+        assertEquals(3, result.getInt(1), sql);
+        assertFalse(result.next(), sql);
+      }
+    }
+  }
+
+  /**
+   * Verifies the builder's unknown-qualifier diagnostic without earlier SQL
+   * validation.
+   */
+  @Test
+  void builderRejectsUnknownQualifier() {
+    var schema = SchemaBuilder.record("input").fields().name("a").type().array().items().intType().noDefault()
+        .endRecord();
+    var input = new JoinTable("n", null, schema, List.of(), SqlParser.JoinType.BASE, null, List.of(), null);
+    var definition = new SqlParser.UnnestDefinition(new Column(new Table("nosuch"), "a"), false, List.of("x"));
+    var reference = new SqlParser.TableReference(null, null, "u", SqlParser.JoinType.CROSS, null, null, null, null,
+        List.of(), null, definition, false, null, List.of());
+    var failure = assertThrows(SQLSyntaxErrorException.class,
+        () -> UnnestTableBuilder.build(reference, List.of(input), Map.of("U:n", 0)));
+    assertEquals("42000", failure.getSQLState());
+    assertEquals("UNNEST references unknown qualifier 'nosuch'", failure.getMessage());
+  }
+
+  /**
+   * Rejects duplicate labels within a qualified input and hidden generated names.
+   *
+   * @throws Exception
+   *           if connection setup fails
+   */
+  @Test
+  void duplicateLabelsAndGeneratedNames() throws Exception {
+    try (var connection = DriverManager.getConnection(url())) {
+      String duplicate = "SELECT u.x FROM (SELECT ARRAY[1] AS a, ARRAY[2] AS a) n " + "CROSS JOIN UNNEST(n.a) AS u(x)";
+      var ambiguous = assertThrows(SQLSyntaxErrorException.class, () -> {
+        try (var statement = connection.prepareStatement(duplicate); var result = statement.executeQuery()) {
+          result.next();
+        }
+      });
+      assertEquals("42702", ambiguous.getSQLState());
+      assertEquals("Ambiguous UNNEST column reference: a", ambiguous.getMessage());
+      String generated = "SELECT u.x FROM ((SELECT ARRAY[1] AS a) m CROSS JOIN (SELECT ARRAY[3] AS a) n) "
+          + "CROSS JOIN UNNEST(n__a) AS u(x)";
+      var missing = assertThrows(SQLSyntaxErrorException.class, () -> {
+        try (var statement = connection.prepareStatement(generated); var result = statement.executeQuery()) {
+          result.next();
+        }
+      });
+      assertEquals("42000", missing.getSQLState());
+      assertTrue(missing.getMessage().contains("n__a"), missing.getMessage());
     }
   }
 
@@ -113,7 +194,8 @@ class UnnestIdentifierTest {
           }, sql);
           assertEquals("42000", failure.getSQLState(), sql);
           assertFalse(failure.getMessage().contains("table 'null'"), failure.getMessage());
-          assertTrue(failure.getMessage().contains(argument.replace("n.", "")), failure.getMessage());
+          String missingName = argument.equals("\"N\".a") ? "\"N\"" : argument.replace("n.", "");
+          assertTrue(failure.getMessage().contains(missingName), failure.getMessage());
         }
       }
     }
@@ -139,12 +221,15 @@ class UnnestIdentifierTest {
       }
       for (String argument : List.of("a", "\"a\"")) {
         String sql = "SELECT COUNT(*) FROM " + inputs + " CROSS JOIN UNNEST(" + argument + ") AS u(x)";
-        var failure = assertThrows(SQLException.class, () -> {
+        var failure = assertThrows(SQLSyntaxErrorException.class, () -> {
           try (var statement = connection.prepareStatement(sql); var result = statement.executeQuery()) {
             result.next();
           }
         }, sql);
         assertEquals("42702", failure.getSQLState(), sql);
+        assertTrue(failure.getMessage().contains("Ambiguous UNNEST column reference: " + argument),
+            failure.getMessage());
+        assertFalse(failure.getMessage().contains("Failed to open query data source"), failure.getMessage());
       }
     }
   }

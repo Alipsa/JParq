@@ -48,6 +48,27 @@ class ColumnMappingUtilTest {
   }
 
   /**
+   * Preserves exact qualifier precedence and resolves both lowercase quoting
+   * forms.
+   */
+  @Test
+  void qualifierFallbackIsBidirectional() {
+    var quoted = Map.of("U:x", "quoted_x");
+    var unquoted = Map.of("U:x", "unquoted_x");
+    assertEquals(quoted, ColumnMappingUtil.qualifierColumns(Map.of("Q:n", quoted), "n"));
+    assertEquals(unquoted, ColumnMappingUtil.qualifierColumns(Map.of("U:n", unquoted), "\"n\""));
+    var both = Map.of("Q:n", quoted, "U:n", unquoted);
+    assertEquals(unquoted, ColumnMappingUtil.qualifierColumns(both, "n"));
+    assertEquals(quoted, ColumnMappingUtil.qualifierColumns(both, "\"n\""));
+    assertEquals(Map.of(), ColumnMappingUtil.qualifierColumns(Map.of("Q:N", quoted), "n"));
+    assertEquals(Map.of(), ColumnMappingUtil.qualifierColumns(Map.of("U:n", unquoted), "\"N\""));
+    assertEquals("Q:n", ColumnMappingUtil.alternativeQualifierKey("U:n"));
+    assertEquals("U:n", ColumnMappingUtil.alternativeQualifierKey("Q:n"));
+    assertNull(ColumnMappingUtil.alternativeQualifierKey(null));
+    assertNull(ColumnMappingUtil.alternativeQualifierKey("Q:N"));
+  }
+
+  /**
    * Binds quoted correlation targets through source keys in scalar and grouped
    * evaluation.
    */
