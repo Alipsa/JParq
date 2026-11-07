@@ -480,6 +480,10 @@ evaluated in Java. With Parquet 1.18, floating-point page indexes without NaN co
 predicates; equality and `IN` can still prune pages, as can eligible predicates on other columns. Arithmetic on
 `NaN` or infinities and `DISTINCT`/`GROUP BY` of `-0.0` versus `0.0` are not yet covered.
 
+With `JOIN ... USING (x)`, unqualified `x` and `SELECT *` expose one merged key. Qualified references
+such as `a.x` and `b.x`, including `a.*` and `b.*`, retain their input values and return NULL when
+that input is absent from an outer-join row. Later joins using `x` match against the accumulated merged key.
+
 Single-table conditions in a join's `WHERE` can filter individual inputs. Unqualified columns must resolve to
 one input. Outer-join filtering preserves NULL-extended rows, and merged `FULL JOIN ... USING` columns remain
 in the final filter. The complete `WHERE` is always evaluated after the join. Predicate pushdown is disabled

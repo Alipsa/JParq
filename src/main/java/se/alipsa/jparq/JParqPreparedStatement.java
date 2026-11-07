@@ -2240,7 +2240,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     for (JoinRecordReader.JoinTable table : tables) {
       Map<String, String> columns = new LinkedHashMap<>();
       for (Field field : table.schema().getFields()) {
-        columns.put(MaterializedNames.lookupKey(field), field.name());
+        if (MaterializedNames.isVisible(field)) {
+          columns.put(MaterializedNames.lookupKey(field), field.name());
+        }
       }
       available.addAll(columns.keySet());
       for (var nested : table.nestedQualifiers().entrySet()) {
@@ -2749,7 +2751,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     List<String> names = new ArrayList<>(schema.getFields().size());
     for (Schema.Field field : schema.getFields()) {
-      names.add(field.name());
+      if (MaterializedNames.isVisible(field)) {
+        names.add(field.name());
+      }
     }
     return List.copyOf(names);
   }
@@ -4780,7 +4784,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (cached != null) {
       return cached;
     }
-    List<Field> originalFields = result.schema().getFields();
+    List<Field> originalFields = result.schema().getFields().stream().filter(MaterializedNames::isVisible).toList();
     if (aliases.size() != originalFields.size()) {
       throw SqlExceptions.syntaxFailure("Table alias declares " + aliases.size() + " columns but table '"
           + reference.tableName() + "' has " + originalFields.size() + " columns");
@@ -4807,7 +4811,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     for (GenericRecord original : result.rows()) {
       GenericRecord row = new GenericData.Record(schema);
       for (int i = 0; i < fields.size(); i++) {
-        row.put(i, original.get(i));
+        row.put(i, original.get(originalFields.get(i).name()));
       }
       rows.add(row);
     }

@@ -390,7 +390,8 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
         return direct.name();
       }
       for (Schema.Field field : schema.getFields()) {
-        if (Identifier.lookupKey(column).equals(Identifier.lookupKey(MaterializedNames.sqlLabel(field)))) {
+        if (MaterializedNames.isVisible(field)
+            && Identifier.lookupKey(column).equals(Identifier.lookupKey(MaterializedNames.sqlLabel(field)))) {
           return field.name();
         }
       }
@@ -482,7 +483,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
       UsingMetadata usingMetadata) {
     Map<String, UsingFieldState> usingFieldStates = new LinkedHashMap<>();
     List<Schema.Field> otherFields = new ArrayList<>();
-    Set<String> usedNames = new HashSet<>();
+    Set<String> usedNames = new HashSet<>(usingMetadata.order());
     Set<String> usedPrefixes = new HashSet<>();
     Map<String, Integer> columnCounts = computeColumnCounts(tables, usingMetadata);
     Map<String, Map<String, String>> qualifierMap = new LinkedHashMap<>();
@@ -535,9 +536,23 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
         String label = MaterializedNames.sqlLabel(field);
         canonicalLabels.putIfAbsent(canonical, label);
         String originalKey = lookupKey;
-        registerQualifierMappings(qualifierMap, qualifiers, includeTableQualifier, normalizedTableName, originalKey,
-            canonical);
-        registerNestedQualifierMappings(qualifierMap, joinTable.nestedQualifiers(), name, canonical);
+        String qualifiedCanonical = canonical;
+        if (usingColumn) {
+          qualifiedCanonical = MaterializedNames.allocate(qualifierPrefix + "__" + name, usedNames);
+          Schema.Field inputField = new Schema.Field(qualifiedCanonical, field.schema(), field.doc(),
+              field.defaultVal());
+          inputField.addProp(MaterializedNames.SQL_LABEL, label);
+          inputField.addProp(MaterializedNames.LOOKUP_KEY, lookupKey);
+          inputField.addProp(MaterializedNames.QUALIFIED_ONLY, "true");
+          otherFields.add(inputField);
+          mappings.add(new FieldMapping(tableIndex, name, qualifiedCanonical, List.of()));
+          canonicalLabels.put(qualifiedCanonical, label);
+        }
+        if (MaterializedNames.isVisible(field)) {
+          registerQualifierMappings(qualifierMap, qualifiers, includeTableQualifier, normalizedTableName, originalKey,
+              qualifiedCanonical);
+        }
+        registerNestedQualifierMappings(qualifierMap, joinTable.nestedQualifiers(), name, qualifiedCanonical);
         if (usingColumn) {
           final boolean owner = usingInfo.isOwner(tableIndex);
           UsingFieldState state = usingFieldStates.computeIfAbsent(canonical, key -> new UsingFieldState());
@@ -546,9 +561,6 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
           newField.addProp(MaterializedNames.LOOKUP_KEY, lookupKey);
           state.registerField(newField, owner);
           if (owner) {
-            if (!usedNames.add(canonical)) {
-              throw new IllegalArgumentException("Duplicate column name '" + canonical + "' in join schema");
-            }
             state.setOwner(tableIndex, name);
           } else {
             state.addAlternate(tableIndex, name);
@@ -559,10 +571,13 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
           Schema.Field newField = new Schema.Field(canonical, field.schema(), field.doc(), field.defaultVal());
           newField.addProp(MaterializedNames.SQL_LABEL, label);
           newField.addProp(MaterializedNames.LOOKUP_KEY, lookupKey);
+          if (!MaterializedNames.isVisible(field)) {
+            newField.addProp(MaterializedNames.QUALIFIED_ONLY, "true");
+          }
           FieldMapping mapping = new FieldMapping(tableIndex, name, canonical, List.of());
           otherFields.add(newField);
           mappings.add(mapping);
-          if (!duplicate) {
+          if (!duplicate && MaterializedNames.isVisible(field)) {
             unqualifiedMap.merge(lookupKey, canonical, (left, right) -> left.equals(right) ? left : "");
           }
         }
@@ -603,7 +618,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
       JoinTable table = tables.get(tableIndex);
       for (Schema.Field field : table.schema().getFields()) {
         UsingColumnInfo usingInfo = metadata.lookup(tableIndex, field.name());
-        if (usingInfo != null && !usingInfo.isOwner(tableIndex)) {
+        if (!MaterializedNames.isVisible(field) || usingInfo != null && !usingInfo.isOwner(tableIndex)) {
           continue;
         }
         columnCounts.merge(MaterializedNames.lookupKey(field), 1, Integer::sum);
@@ -999,12 +1014,9 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
       if (info == null || info.isOwner(tableIndex)) {
         continue;
       }
-      int ownerIndex = info.ownerIndex();
-      GenericRecord owner = ownerIndex >= 0 && ownerIndex < assignments.size() ? assignments.get(ownerIndex) : null;
-      if (owner == null) {
-        return false;
-      }
-      Object leftValue = owner.get(info.canonicalName());
+      FieldMapping merged = fieldMappings.stream().filter(mapping -> mapping.targetField().equals(info.canonicalName()))
+          .findFirst().orElseThrow();
+      Object leftValue = merged.resolveValue(assignments);
       Object rightValue = row.get(field.name());
       if (leftValue == null || rightValue == null) {
         return false;

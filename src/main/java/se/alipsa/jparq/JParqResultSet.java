@@ -1337,7 +1337,9 @@ public class JParqResultSet extends ResultSetAdapter {
     }
     if (!aggregateQuery && columnOrder.isEmpty() && selectExpressions.isEmpty() && schema != null) {
       for (Schema.Field field : schema.getFields()) {
-        columnOrder.add(field.name());
+        if (MaterializedNames.isVisible(field)) {
+          columnOrder.add(field.name());
+        }
       }
     }
   }

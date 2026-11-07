@@ -768,7 +768,9 @@ public final class QueryProcessor implements AutoCloseable {
     if (requested.isEmpty() || requested.contains("*")) {
       List<String> cols = new ArrayList<>();
       for (Schema.Field f : schema.getFields()) {
-        cols.add(f.name());
+        if (MaterializedNames.isVisible(f)) {
+          cols.add(f.name());
+        }
       }
       return cols;
     }
