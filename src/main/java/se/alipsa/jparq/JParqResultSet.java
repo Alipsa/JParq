@@ -247,7 +247,8 @@ public class JParqResultSet extends ResultSetAdapter {
       throw SqlExceptions.wrap("Invalid projection declaration", failure);
     }
 
-    AggregateFunctions.AggregatePlan aggregatePlan = AggregateFunctions.plan(select, reader.schema());
+    AggregateFunctions.AggregatePlan aggregatePlan = AggregateFunctions.plan(select, reader.schema(),
+        metadataSourceMappings);
     if (aggregatePlan != null) {
       labels = new ArrayList<>(aggregatePlan.labels());
       physical = null;
@@ -1337,7 +1338,9 @@ public class JParqResultSet extends ResultSetAdapter {
     }
     if (!aggregateQuery && columnOrder.isEmpty() && selectExpressions.isEmpty() && schema != null) {
       for (Schema.Field field : schema.getFields()) {
-        columnOrder.add(field.name());
+        if (MaterializedNames.isVisible(field)) {
+          columnOrder.add(field.name());
+        }
       }
     }
   }

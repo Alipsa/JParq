@@ -664,7 +664,8 @@ public final class QueryProcessor implements AutoCloseable {
       String column = key.column();
       String resolved = ColumnMappingUtil.canonicalOrderColumn(column, key.qualifier(), qualifierColumnMapping,
           unqualifiedColumnMapping);
-      canonical.add(new SqlParser.OrderKey(resolved, key.asc(), key.qualifier(), key.nullOrdering(), key.expression()));
+      canonical.add(new SqlParser.OrderKey(resolved, key.asc(), key.qualifier(), key.nullOrdering(), key.expression(),
+          key.projectionIndex()));
     }
     return List.copyOf(canonical);
   }
@@ -768,7 +769,9 @@ public final class QueryProcessor implements AutoCloseable {
     if (requested.isEmpty() || requested.contains("*")) {
       List<String> cols = new ArrayList<>();
       for (Schema.Field f : schema.getFields()) {
-        cols.add(f.name());
+        if (MaterializedNames.isVisible(f)) {
+          cols.add(f.name());
+        }
       }
       return cols;
     }

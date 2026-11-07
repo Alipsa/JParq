@@ -17,7 +17,21 @@ public final class MaterializedNames {
   /** Schema property retaining a column's SQL lookup key. */
   public static final String LOOKUP_KEY = "jparq.lookupKey";
 
+  /** Marks a join input field available only through qualified references. */
+  public static final String QUALIFIED_ONLY = "jparq.qualifiedOnly";
+
   private static final Pattern AVRO_NAME = Pattern.compile("[A-Za-z_][A-Za-z_0-9]*");
+
+  /**
+   * Tests whether a field belongs to the unqualified SQL row type.
+   *
+   * @param field
+   *          source field
+   * @return true for fields exposed by unqualified names and wildcard projections
+   */
+  public static boolean isVisible(Schema.Field field) {
+    return !"true".equals(field.getProp(QUALIFIED_ONLY));
+  }
 
   private MaterializedNames() {
   }
@@ -77,7 +91,9 @@ public final class MaterializedNames {
     Map<String, String> index = new LinkedHashMap<>();
     if (schema != null) {
       for (Schema.Field field : schema.getFields()) {
-        index.merge(lookupKey(field), field.name(), (left, right) -> left.equals(right) ? left : "");
+        if (isVisible(field)) {
+          index.merge(lookupKey(field), field.name(), (left, right) -> left.equals(right) ? left : "");
+        }
       }
     }
     return Map.copyOf(index);
