@@ -232,6 +232,9 @@ Joined UNNEST expressions can reference preceding inputs, including through corr
 with implicit or explicit LATERAL syntax. Subqueries use the enclosing CTEs and current parameter bindings;
 unqualified outer names must resolve uniquely. Multirow scalar results raise SQLState `21000`, while
 invalid scalar column counts and UNNEST alias counts raise `42000`.
+Column arguments to UNNEST honor quoted lowercase names such as `UNNEST("n"."a")`, including
+references into parenthesized join groups. Quoted mixed-case names require an exact match.
+Unknown columns raise SQLState `42000`; ambiguous unqualified columns raise `42702`.
 Independent joined UNNEST arguments are evaluated once per execution and support RIGHT and FULL joins.
 A RIGHT or FULL JOIN UNNEST argument cannot reference its preceding join inputs; such correlations raise `42000`.
 

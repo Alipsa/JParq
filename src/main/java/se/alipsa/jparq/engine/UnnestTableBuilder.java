@@ -71,7 +71,7 @@ public final class UnnestTableBuilder {
     JoinTable sourceTable = priorTables.get(sourceIndex);
     Schema.Field arrayField = resolveField(sourceTable, column);
     if (arrayField == null) {
-      throw new SQLException("Column '" + columnName + "' not found in table '" + sourceTable.tableName() + "'");
+      throw new SQLSyntaxErrorException("UNNEST column '" + column + "' not found in preceding input", "42000");
     }
 
     Schema arraySchema = JdbcTypeMapper.nonNullSchema(arrayField.schema());
@@ -138,8 +138,12 @@ public final class UnnestTableBuilder {
     String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
     if (normalizedQualifier != null && qualifierIndex != null) {
       Integer index = qualifierIndex.get(normalizedQualifier);
+      String alternative = ColumnMappingUtil.alternativeColumnKey(normalizedQualifier);
+      if (index == null && alternative != null) {
+        index = qualifierIndex.get(alternative);
+      }
       if (index == null) {
-        throw new SQLException("UNNEST references unknown qualifier '" + qualifier + "'");
+        throw new SQLSyntaxErrorException("UNNEST references unknown qualifier '" + qualifier + "'", "42000");
       }
       return index;
     }
@@ -147,13 +151,13 @@ public final class UnnestTableBuilder {
     for (int i = priorTables.size() - 1; i >= 0; i--) {
       if (resolveField(priorTables.get(i).schema(), columnName) != null) {
         if (resolved >= 0) {
-          throw new SQLException("Ambiguous UNNEST column reference '" + columnName + "'");
+          throw SqlExceptions.ambiguousColumn(columnName);
         }
         resolved = i;
       }
     }
     if (resolved < 0) {
-      throw new SQLException("UNNEST column '" + columnName + "' not found in preceding tables");
+      throw new SQLSyntaxErrorException("UNNEST column '" + columnName + "' not found in preceding tables", "42000");
     }
     return resolved;
   }
@@ -166,35 +170,53 @@ public final class UnnestTableBuilder {
    * @param column
    *          SQL array reference
    * @return resolved field, or null if the reference is unknown
+   * @throws IllegalArgumentException
+   *           if the column is ambiguous
    */
   private static Schema.Field resolveField(JoinTable table, Column column) {
     String qualifier = column.getTable() == null ? null : column.getTable().getName();
-    String normalized = JParqUtil.normalizeQualifier(qualifier);
-    if (normalized != null) {
-      for (var nested : table.nestedQualifiers().entrySet()) {
-        if (normalized.equals(JParqUtil.normalizeQualifier(nested.getKey()))) {
-          String field = nested.getValue().get(Identifier.lookupKey(column.getColumnName()));
-          return field == null ? null : table.schema().getField(field);
-        }
-      }
+    if (qualifier != null && !table.nestedQualifiers().isEmpty()) {
+      Map<String, Map<String, String>> mappings = ColumnMappingUtil.normaliseQualifierMapping(table.nestedQualifiers());
+      Map<String, String> columns = ColumnMappingUtil.qualifierColumns(mappings, qualifier);
+      return resolveField(table.schema(), column.getColumnName(), columns);
     }
     return resolveField(table.schema(), column.getColumnName());
   }
 
+  /**
+   * Resolves SQL-visible column names, preserving quoted case and ambiguity.
+   *
+   * @param schema
+   *          source schema
+   * @param columnName
+   *          SQL column identifier
+   * @return resolved field, or null if absent
+   * @throws IllegalArgumentException
+   *           if the column is ambiguous
+   */
   private static Schema.Field resolveField(Schema schema, String columnName) {
-    if (schema == null || columnName == null) {
-      return null;
+    return resolveField(schema, columnName, MaterializedNames.lookupIndex(schema));
+  }
+
+  /**
+   * Resolves a column using its input's SQL lookup mapping.
+   *
+   * @param schema
+   *          source schema
+   * @param columnName
+   *          SQL column identifier
+   * @param columns
+   *          SQL lookup keys mapped to internal fields
+   * @return resolved field, or null if absent
+   * @throws IllegalArgumentException
+   *           if the column is ambiguous
+   */
+  private static Schema.Field resolveField(Schema schema, String columnName, Map<String, String> columns) {
+    String field = ColumnMappingUtil.canonicalOrderColumn(columnName, null, Map.of(), columns, null);
+    if ("".equals(field)) {
+      throw SqlExceptions.ambiguousColumn(columnName);
     }
-    Schema.Field direct = schema.getField(columnName);
-    if (direct != null) {
-      return direct;
-    }
-    for (Schema.Field field : schema.getFields()) {
-      if (field.name().equalsIgnoreCase(columnName)) {
-        return field;
-      }
-    }
-    return null;
+    return schema == null || field == null ? null : schema.getField(field);
   }
 
   /**
