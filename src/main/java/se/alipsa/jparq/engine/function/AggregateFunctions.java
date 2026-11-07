@@ -623,7 +623,7 @@ public final class AggregateFunctions {
     ValueExpressionEvaluator bindingEvaluator = inputSchema == null
         ? null
         : new ValueExpressionEvaluator(inputSchema, null, mappings, WindowState.empty());
-    ColumnBinding inputBinding = bindingEvaluator == null ? null : column -> {
+    final ColumnBinding inputBinding = bindingEvaluator == null ? null : column -> {
       String key = Identifier.lookupKey(column.getColumnName());
       String alternative = ColumnMappingUtil.alternativeColumnKey(key);
       if (!isQualified(column) && !groupByAliases.availableColumns().contains(key)

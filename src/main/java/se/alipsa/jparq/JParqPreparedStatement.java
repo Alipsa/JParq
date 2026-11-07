@@ -446,7 +446,7 @@ public class JParqPreparedStatement implements PreparedStatement {
               // purely positional.
               tmpFileAvro = applyColumnAliases(new CteResult(avro, List.of()), baseRef).schema();
               tmpRenamingSource = avro;
-              Schema pushdownSchema = aliasedPushdownSchema(avro, tmpFileAvro);
+              final Schema pushdownSchema = aliasedPushdownSchema(avro, tmpFileAvro);
               final Map<String, String> physicalNames = physicalColumnNames(avro, tmpFileAvro);
               if (!tmpSelect.qualifiedWildcards().isEmpty()) {
                 Map<String, List<QualifiedExpansionColumn>> qualifierColumns = buildQualifierColumnsForSchema(tmpSelect,
@@ -924,7 +924,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
         for (int col = 1; col <= columnCount; col++) {
           int index = col - 1;
-          Supplier<List<Object>> values = new Supplier<>() {
+          final Supplier<List<Object>> values = new Supplier<>() {
             private List<Object> cached;
 
             /** {@inheritDoc} */
