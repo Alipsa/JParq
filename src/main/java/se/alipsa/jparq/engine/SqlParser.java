@@ -30,6 +30,7 @@ import net.sf.jsqlparser.statement.select.*;
 import se.alipsa.jparq.helper.FunctionEscapeResolver;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.LiteralConverter;
+import se.alipsa.jparq.helper.SqlTextScanner;
 import se.alipsa.jparq.meta.InformationSchemaColumns;
 import se.alipsa.jparq.meta.InformationSchemaTables;
 
@@ -2769,15 +2770,7 @@ public final class SqlParser {
    *           if an opening delimiter has no closing delimiter
    */
   public static int dollarQuotedLiteralEnd(String sql, int offset) {
-    if (!sql.startsWith("$$", offset) || offset > 0
-        && (sql.charAt(offset - 1) == '$' || Character.isUnicodeIdentifierPart(sql.codePointBefore(offset)))) {
-      return -1;
-    }
-    int closing = sql.indexOf("$$", offset + 2);
-    if (closing < 0) {
-      throw new IllegalArgumentException("Unterminated dollar-quoted literal in SQL");
-    }
-    return closing + 2;
+    return SqlTextScanner.dollarQuotedLiteralEnd(sql, offset);
   }
 
   /**
@@ -2810,9 +2803,6 @@ public final class SqlParser {
     }
 
     StringBuilder result = new StringBuilder(sql.length());
-    boolean inSingleQuote = false;
-    boolean inDoubleQuote = false;
-    char identifierEnd = '\0';
     boolean inLineComment = false;
     boolean inBlockComment = false;
     boolean addSpaceAfterBlock = false;
@@ -2847,48 +2837,10 @@ public final class SqlParser {
         continue;
       }
 
-      if (inSingleQuote) {
-        result.append(c);
-        if (c == '\'' && next == '\'') {
-          result.append(next);
-          i++;
-        } else if (c == '\'') {
-          inSingleQuote = false;
-        }
-        continue;
-      }
-      if (inDoubleQuote) {
-        result.append(c);
-        if (c == '"' && next == '"') {
-          result.append(next);
-          i++;
-        } else if (c == '"') {
-          inDoubleQuote = false;
-        }
-        continue;
-      }
-
-      if (identifierEnd != '\0') {
-        result.append(c);
-        if (c == identifierEnd && next == identifierEnd) {
-          result.append(next);
-          i++;
-        } else if (c == identifierEnd) {
-          identifierEnd = '\0';
-        }
-        continue;
-      }
-      if (c == '$') {
-        int end = dollarQuotedLiteralEnd(sql, i);
-        if (end >= 0) {
-          result.append(sql, i, end);
-          i = end - 1;
-          continue;
-        }
-      }
-      if (c == '`') {
-        identifierEnd = '`';
-        result.append(c);
+      int quotedEnd = SqlTextScanner.quotedRegionEnd(sql, i);
+      if (quotedEnd >= 0) {
+        result.append(sql, i, quotedEnd);
+        i = quotedEnd - 1;
         continue;
       }
 
@@ -2904,23 +2856,10 @@ public final class SqlParser {
         i++;
         continue;
       }
-      if (c == '\'') {
-        inSingleQuote = true;
-        result.append(c);
-        continue;
-      }
-      if (c == '"') {
-        inDoubleQuote = true;
-        result.append(c);
-        continue;
-      }
 
       result.append(c);
     }
 
-    if (inSingleQuote || inDoubleQuote || identifierEnd != '\0') {
-      throw new IllegalArgumentException("Unterminated quoted literal or identifier in SQL");
-    }
     return result.toString();
   }
 

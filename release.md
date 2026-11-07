@@ -2,6 +2,9 @@
 
 ### 1.4.0
 
+- Preserve JDBC function escape text inside quoted literals and identifiers while resolving real
+  function escapes, including calls whose quoted arguments contain braces or commas (#298).
+
 - Ignore parameter markers inside dollar-quoted strings during JDBC parameter discovery and binding,
   preserving literal contents and correctly binding parameters after quotes or comment markers (#296).
 
