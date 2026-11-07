@@ -2,12 +2,80 @@ package jparq.helper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.helper.FunctionEscapeResolver;
 
 /** Unit tests for {@link FunctionEscapeResolver}. */
 class FunctionEscapeResolverTest {
+
+  /**
+   * Unwraps unknown function names while retaining their quoted components.
+   *
+   * @param name
+   *          the function name, including quoted identifier text
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "\"schema\".myfn", "\"MyFn\"", "x\"y\"", "`MyFn`"
+  })
+  void preservesQuotedFunctionNames(String name) {
+    assertEquals("SELECT " + name + "(1)",
+        FunctionEscapeResolver.resolveJdbcFunctionEscapes("SELECT {fn " + name + "(1)}"));
+  }
+
+  /**
+   * Keeps malformed escapes intact instead of consuming literals as whitespace.
+   *
+   * @param escape
+   *          an escape containing quoted text outside the arguments
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "{fn UCASE 'x'}", "{fn'abc'UCASE('a')}", "{'lit' fn UCASE('a')}", "{fn UCASE('a') 'junk'}", "{fn UCASE $$x$$}",
+      "{fn UCASE('a') \"junk\"}", "{fn UCASE('a') `junk`}"
+  })
+  void preservesMalformedEscapesContainingQuotes(String escape) {
+    String sql = "SELECT " + escape + ", {fn LCASE('B')}";
+    assertEquals("SELECT " + escape + ", LOWER('B')", FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+  }
+
+  /**
+   * Leaves escape-like text inside SQL quotes unchanged.
+   *
+   * @param quoted
+   *          a quoted literal or identifier
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "'{fn UCASE(''a'')}'", "$${fn UCASE('a')}$$", "\"{fn UCASE('a')}\"", "`{fn UCASE('a')}`", "'it''s {fn NOW()}'",
+      "\"a\"\"{fn NOW()}\"", "`a``{fn NOW()}`", "$$'\"` {fn NOW()}$$"
+  })
+  void preservesQuotedEscapesAlongsideRealEscapes(String quoted) {
+    String sql = "SELECT {fn LCASE('A')}, " + quoted + ", {fn UCASE('b')}";
+    assertEquals("SELECT LOWER('A'), " + quoted + ", UPPER('b')",
+        FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+  }
+
+  /** Keeps quoted braces and escape text inside genuine function arguments. */
+  @Test
+  void preservesQuotedFunctionArguments() {
+    String sql = "SELECT {fn LCASE('{fn UCASE(''A'')}')}, {fn UCASE($$a}b$$)}";
+    assertEquals("SELECT LOWER('{fn UCASE(''A'')}'), UPPER($$a}b$$)",
+        FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+  }
+
+  /** Ignores punctuation in quoted arguments when finding a CONVERT separator. */
+  @Test
+  void convertEscapePreservesQuotedPunctuation() {
+    assertEquals("SELECT CAST('a,b){}' AS VARCHAR)",
+        FunctionEscapeResolver.resolveJdbcFunctionEscapes("SELECT {fn CONVERT('a,b){}', VARCHAR)}"));
+    assertEquals("SELECT CAST($$a,b){}$$ AS VARCHAR)",
+        FunctionEscapeResolver.resolveJdbcFunctionEscapes("SELECT {fn CONVERT($$a,b){}$$, VARCHAR)}"));
+  }
 
   @Test
   void resolvesKnownNoArgFunctionsWithoutParentheses() {
@@ -67,8 +135,8 @@ class FunctionEscapeResolverTest {
 
   @Test
   void ignoresStringsWithoutEscapes() {
-    String sql = "SELECT 1";
-    assertEquals(sql, FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+    String sql = "SELECT 'quoted text', \"identifier\", `name`, $$literal$$";
+    assertSame(sql, FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
   }
 
   @Test

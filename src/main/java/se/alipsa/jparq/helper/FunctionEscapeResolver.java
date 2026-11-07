@@ -36,21 +36,27 @@ public final class FunctionEscapeResolver {
 
   /**
    * Resolve JDBC function escapes to native SQL equivalents. Unknown functions
-   * are unwrapped (braces removed) but otherwise left unchanged.
+   * are unwrapped (braces removed) but otherwise left unchanged. Quoted literals
+   * and identifiers are preserved verbatim. SQL comments must be removed and
+   * quotes validated first; text without an opening brace is returned directly.
    *
    * @param sql
    *          the SQL text that may contain JDBC escape functions
    * @return SQL with escapes replaced by native function calls
+   * @throws IllegalArgumentException
+   *           if SQL containing an opening brace has an unterminated quoted
+   *           literal or identifier
    */
   public static String resolveJdbcFunctionEscapes(String sql) {
-    if (sql == null || sql.isEmpty()) {
+    if (sql == null || sql.indexOf('{') < 0) {
       return sql;
     }
-    Matcher matcher = FUNCTION_ESCAPE.matcher(sql);
-    StringBuffer sb = new StringBuffer();
+    Matcher matcher = FUNCTION_ESCAPE.matcher(SqlTextScanner.maskQuotedRegions(sql));
+    StringBuilder sb = new StringBuilder(sql.length());
+    int offset = 0;
     while (matcher.find()) {
-      String fnName = matcher.group(1);
-      String args = matcher.group(2);
+      String fnName = sql.substring(matcher.start(1), matcher.end(1));
+      String args = matcher.start(2) < 0 ? null : sql.substring(matcher.start(2), matcher.end(2));
       FnMapping mapping = FUNCTION_LOOKUP.get(fnName.toUpperCase(Locale.ROOT));
       String replacement;
       if ("CONVERT".equalsIgnoreCase(fnName)) {
@@ -66,10 +72,10 @@ public final class FunctionEscapeResolver {
       } else {
         replacement = fnName + (args == null ? "" : args);
       }
-      matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+      sb.append(sql, offset, matcher.start()).append(replacement);
+      offset = matcher.end();
     }
-    matcher.appendTail(sb);
-    return sb.toString();
+    return sb.append(sql, offset, sql.length()).toString();
   }
 
   private static Stream<Map.Entry<String, FnMapping>> mapNumericFunction(JdbcNumericFunction function) {
@@ -105,8 +111,9 @@ public final class FunctionEscapeResolver {
 
   private static int firstTopLevelComma(String input) {
     int depth = 0;
-    for (int i = 0; i < input.length(); i++) {
-      char ch = input.charAt(i);
+    String masked = SqlTextScanner.maskQuotedRegions(input);
+    for (int i = 0; i < masked.length(); i++) {
+      char ch = masked.charAt(i);
       if (ch == '(') {
         depth++;
       } else if (ch == ')') {

@@ -2,10 +2,16 @@
 
 ### 1.4.0
 
+- Preserve JDBC function escape text inside quoted literals and identifiers while resolving real
+  function escapes, including calls whose quoted arguments contain braces or commas (#298).
+
 - Ignore parameter markers inside dollar-quoted strings during JDBC parameter discovery and binding,
   preserving literal contents and correctly binding parameters after quotes or comment markers (#296).
 
 - Ignore parameter markers inside backtick-quoted identifiers (#484).
+
+- **Behavior change:** unterminated quoted literals and identifiers now raise `SQLSyntaxErrorException`
+  (SQLState `42000`) during `prepareStatement`, before execution.
 
 - **Behavior changes:** SUM over REAL inputs now reports DOUBLE metadata instead of REAL,
   matching the returned Double values (#289).
