@@ -5500,14 +5500,17 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Parses the SQL for positional and named parameters, rewriting any
-   * {@code :name} placeholders to JDBC {@code ?} markers.
+   * {@code :name} placeholders to JDBC {@code ?} markers. Dollar-quoted literal
+   * contents are preserved and do not contribute parameters.
    *
    * @param sql
    *          the SQL string to inspect
    * @return a parse result containing the rewritten SQL, the discovered named
    *         parameter indexes, and the total number of parameters
+   * @throws SQLSyntaxErrorException
+   *           if a dollar-quoted literal is unterminated
    */
-  private ParameterParseResult parseParameters(String sql) {
+  private ParameterParseResult parseParameters(String sql) throws SQLSyntaxErrorException {
     if (sql == null || sql.isEmpty()) {
       return new ParameterParseResult("", Map.of(), 0);
     }
@@ -5517,6 +5520,14 @@ public class JParqPreparedStatement implements PreparedStatement {
     ParseState state = ParseState.NORMAL;
     for (int i = 0; i < sql.length(); i++) {
       char c = sql.charAt(i);
+      if (state == ParseState.NORMAL && c == '$') {
+        int end = dollarQuotedLiteralEnd(sql, i);
+        if (end > i) {
+          rewritten.append(sql, i, end);
+          i = end - 1;
+          continue;
+        }
+      }
       boolean consumed = false;
       switch (state) {
         case NORMAL -> {
@@ -5588,6 +5599,31 @@ public class JParqPreparedStatement implements PreparedStatement {
       immutableNameIndexes.put(entry.getKey(), List.copyOf(entry.getValue()));
     }
     return new ParameterParseResult(rewritten.toString(), Map.copyOf(immutableNameIndexes), count);
+  }
+
+  /**
+   * Finds the end of an untagged dollar-quoted literal using the SQL parser's
+   * opener boundary rules. Dollar signs within identifiers are not openers.
+   *
+   * @param sql
+   *          the SQL being scanned in normal (unquoted, uncommented) state
+   * @param offset
+   *          the position of a dollar sign
+   * @return the exclusive end of the literal, or the offset if no literal starts
+   *         there
+   * @throws SQLSyntaxErrorException
+   *           if an opening delimiter has no closing delimiter
+   */
+  private static int dollarQuotedLiteralEnd(String sql, int offset) throws SQLSyntaxErrorException {
+    if (!sql.startsWith("$$", offset) || offset > 0
+        && (sql.charAt(offset - 1) == '$' || Character.isUnicodeIdentifierPart(sql.codePointBefore(offset)))) {
+      return offset;
+    }
+    int closing = sql.indexOf("$$", offset + 2);
+    if (closing < 0) {
+      throw new SQLSyntaxErrorException("Unterminated dollar-quoted literal in SQL", "42000");
+    }
+    return closing + 2;
   }
 
   private boolean isParameterStart(char c) {
@@ -5662,6 +5698,14 @@ public class JParqPreparedStatement implements PreparedStatement {
     int foundCount = 0;
     for (int i = 0; i < originalSql.length(); i++) {
       char c = originalSql.charAt(i);
+      if (state == ParseState.NORMAL && c == '$') {
+        int end = dollarQuotedLiteralEnd(originalSql, i);
+        if (end > i) {
+          rendered.append(originalSql, i, end);
+          i = end - 1;
+          continue;
+        }
+      }
       boolean consumed = false;
       switch (state) {
         case NORMAL -> {
