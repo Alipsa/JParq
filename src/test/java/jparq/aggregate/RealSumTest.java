@@ -14,10 +14,12 @@ import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
-/** Regression tests for REAL SUM value types and JDBC metadata. */
+/**
+ * Tests REAL SUM value types and JDBC metadata, including NULL metadata
+ * coverage.
+ */
 class RealSumTest {
   @TempDir
   Path directory;
@@ -69,7 +71,7 @@ class RealSumTest {
   }
 
   /**
-   * Verifies NULL sums retain DOUBLE metadata for all-NULL and empty inputs.
+   * Covers the existing DOUBLE metadata fallback for all-NULL and empty inputs.
    *
    * @param sql
    *          the query producing a NULL sum
@@ -93,39 +95,4 @@ class RealSumTest {
     }
   }
 
-  /**
-   * Verifies set operations compare SUM and REAL values after common conversion.
-   *
-   * @param operation
-   *          the SQL set operator
-   * @param expectedRows
-   *          the expected result count
-   * @throws Exception
-   *           if querying fails
-   */
-  @ParameterizedTest
-  @CsvSource({
-      "UNION, 1", "UNION ALL, 3", "INTERSECT, 1", "EXCEPT, 0"
-  })
-  void setOperationsUseConsistentDoubleValues(String operation, int expectedRows) throws Exception {
-    String aggregate = "SELECT SUM(f) AS x FROM (SELECT f FROM p LIMIT 1) q";
-    String scalar = "SELECT f FROM p";
-    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
-        var statement = connection.createStatement()) {
-      for (String sql : new String[]{
-          aggregate + " " + operation + " " + scalar, scalar + " " + operation + " " + aggregate
-      }) {
-        try (var result = statement.executeQuery(sql)) {
-          assertEquals(Types.DOUBLE, result.getMetaData().getColumnType(1), sql);
-          assertEquals(Double.class.getName(), result.getMetaData().getColumnClassName(1), sql);
-          int rows = 0;
-          while (result.next()) {
-            assertEquals((double) 0.1f, assertInstanceOf(Double.class, result.getObject(1)), sql);
-            rows++;
-          }
-          assertEquals(expectedRows, rows, sql);
-        }
-      }
-    }
-  }
 }

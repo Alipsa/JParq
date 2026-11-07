@@ -2,7 +2,8 @@
 
 ### 1.4.0
 
-- Report DOUBLE metadata for SUM over REAL inputs, matching the returned Double values (#289).
+- **Behavior changes:** SUM over REAL inputs now reports DOUBLE metadata instead of REAL,
+  matching the returned Double values (#289).
   Set operations with these sums retain double precision and consistent value classes.
 
 - Preserve declared string and DATE/TIME/TIMESTAMP literal types and implemented character, DATE, and
