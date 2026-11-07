@@ -2751,7 +2751,7 @@ public final class SqlParser {
     return table.getFullyQualifiedName();
   }
 
-  // === Qualifier Stripping =================================================
+  // === SQL Text Scanning ===================================================
 
   /**
    * Finds the exclusive end of an untagged dollar-quoted literal. Callers must
@@ -2923,6 +2923,8 @@ public final class SqlParser {
     }
     return result.toString();
   }
+
+  // === Qualifier Stripping =================================================
 
   /**
    * Strip the table qualifier for a single-table query when the qualifier matches

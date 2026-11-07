@@ -10,6 +10,7 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.JParqPreparedStatement;
 
@@ -142,35 +143,61 @@ class DollarQuotedStringTest {
   }
 
   /**
-   * Keeps dollar delimiters inside backtick identifiers out of parameter
-   * scanning.
+   * Preserves backtick identifiers without discovering parameters in their names.
    *
-   * @param sql
-   *          the query containing backtick identifiers
+   * @param identifier
+   *          the identifier as written inside backticks
+   * @param expectedLabel
+   *          the unescaped output column label
+   * @throws SQLException
+   *           if preparing or executing the query fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', quoteCharacter = '"', value = {
+      "$$ | $$", "a?b | a?b", ":name | :name"
+  })
+  void preservesBacktickIdentifiersWithoutParameters(String identifier, String expectedLabel) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.prepareStatement("SELECT 1 AS `" + identifier + "`")) {
+      assertEquals(0, statement.getParameterMetaData().getParameterCount());
+      try (var result = statement.executeQuery()) {
+        assertTrue(result.next());
+        assertEquals(expectedLabel, result.getMetaData().getColumnLabel(1));
+        assertEquals(1, result.getInt(1));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Binds real parameters after backtick identifiers while preserving every
+   * label.
+   *
+   * @param identifier
+   *          the identifier as written inside backticks
+   * @param expectedLabel
+   *          the unescaped output column label
    * @throws SQLException
    *           if preparing, binding, or executing the query fails
    */
   @ParameterizedTest
-  @ValueSource(strings = {
-      "SELECT 1 AS `$$`", "SELECT 1 AS `$$a`, ? AS b, 2 AS `c$$`", "SELECT 1 AS `a``$$? :name`, ? AS b, 2 AS `c$$`"
+  @CsvSource(delimiter = '|', quoteCharacter = '"', value = {
+      "$$a | $$a", "a``$$? :name | a`$$? :name", "a?b | a?b", ":name | :name", "it's | it's", "-- | --", "/* | /*"
   })
-  void preservesDollarQuotesInBacktickIdentifiers(String sql) throws SQLException {
+  void bindsParametersAfterBacktickIdentifiers(String identifier, String expectedLabel) throws SQLException {
+    String sql = "SELECT 1 AS `" + identifier + "`, ? AS b, 2 AS `c$$`";
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.prepareStatement(sql)) {
-      int count = sql.equals("SELECT 1 AS `$$`") ? 0 : 1;
-      assertEquals(count, statement.getParameterMetaData().getParameterCount());
-      if (count > 0) {
-        statement.setInt(1, 7);
-      }
+      assertEquals(1, statement.getParameterMetaData().getParameterCount());
+      statement.setInt(1, 7);
       try (var result = statement.executeQuery()) {
         assertTrue(result.next());
+        assertEquals(expectedLabel, result.getMetaData().getColumnLabel(1));
+        assertEquals("b", result.getMetaData().getColumnLabel(2));
+        assertEquals("c$$", result.getMetaData().getColumnLabel(3));
         assertEquals(1, result.getInt(1));
-        if (count > 0) {
-          assertEquals(7, result.getInt(2));
-          assertEquals(2, result.getInt(3));
-        } else {
-          assertEquals("$$", result.getMetaData().getColumnLabel(1));
-        }
+        assertEquals(7, result.getInt(2));
+        assertEquals(2, result.getInt(3));
         assertFalse(result.next());
       }
     }
