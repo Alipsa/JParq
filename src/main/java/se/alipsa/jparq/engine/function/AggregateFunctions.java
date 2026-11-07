@@ -2497,6 +2497,7 @@ public final class AggregateFunctions {
     }
   }
 
+  /** Accumulates numeric sums, promoting approximate inputs to DOUBLE. */
   private static final class SumAccumulator extends AggregateAccumulator {
     private BigDecimal sum = BigDecimal.ZERO;
     private boolean seenValue = false;
@@ -2546,10 +2547,7 @@ public final class AggregateFunctions {
       if (type == Byte.class || type == Short.class || type == Integer.class || type == Long.class) {
         return Types.BIGINT;
       }
-      if (type == Float.class) {
-        return Types.REAL;
-      }
-      if (type == Double.class) {
+      if (type == Float.class || type == Double.class) {
         return Types.DOUBLE;
       }
       if (type == BigDecimal.class) {

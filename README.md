@@ -359,6 +359,7 @@ from SELECT. This includes aggregates in the standard `SUBSTRING(... FROM ... FO
 `POSITION(... IN ...)`, and `TRIM(... FROM ...)` forms. Grouped `IS [NOT] DISTINCT FROM` predicates
 bind grouping columns, aggregates, and subqueries with their NULL semantics intact. Grouped arithmetic
 uses the same numeric and temporal rules as row expressions.
+`SUM` over REAL or DOUBLE inputs reports JDBC DOUBLE metadata and returns `Double` values.
 Grouped and global aggregate queries apply `DISTINCT` to their projected result tuples and honor
 `OFFSET`, `LIMIT`, and `FETCH ... ROWS ONLY` clauses after grouping, HAVING, and ordering.
 Value-inferred decimal bounds and interval declarations use the full aggregate result after `DISTINCT`

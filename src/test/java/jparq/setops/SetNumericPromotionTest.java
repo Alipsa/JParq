@@ -92,7 +92,8 @@ class SetNumericPromotionTest {
   }
 
   /**
-   * Normalizes aggregate Java values even when their metadata reports REAL.
+   * Promotes REAL sums and scalar REAL branches to matching DOUBLE values in
+   * either branch order across repeated prepared executions.
    *
    * @param pushdown
    *          whether pushdown is enabled
@@ -105,28 +106,39 @@ class SetNumericPromotionTest {
   })
   void realAggregatesNormalizeBeforeSetComparison(boolean pushdown) throws Exception {
     try (var connection = DriverManager.getConnection(url(pushdown))) {
+      String aggregate = "SELECT SUM(f) AS x FROM (SELECT f FROM numbers LIMIT 1) q";
+      String scalar = "SELECT f FROM numbers";
       for (String operator : List.of("UNION", "UNION ALL", "INTERSECT", "INTERSECT ALL", "EXCEPT", "EXCEPT ALL")) {
-        String sql = "SELECT SUM(f) AS x FROM (SELECT f FROM numbers LIMIT 1) q " + operator + " SELECT f FROM numbers";
-        try (var statement = connection.prepareStatement(sql)) {
-          for (int execution = 0; execution < 2; execution++) {
-            try (var result = statement.executeQuery()) {
-              assertEquals(Types.REAL, result.getMetaData().getColumnType(1), sql);
-              assertEquals(Float.class.getName(), result.getMetaData().getColumnClassName(1), sql);
-              int count = 0;
-              while (result.next()) {
-                assertEquals(0.1f, result.getObject(1), sql);
-                count++;
+        for (boolean aggregateFirst : List.of(true, false)) {
+          String sql = aggregateFirst
+              ? aggregate + " " + operator + " " + scalar
+              : scalar + " " + operator + " " + aggregate;
+          try (var statement = connection.prepareStatement(sql)) {
+            for (int execution = 0; execution < 2; execution++) {
+              try (var result = statement.executeQuery()) {
+                assertEquals(Types.DOUBLE, result.getMetaData().getColumnType(1), sql);
+                assertEquals(Double.class.getName(), result.getMetaData().getColumnClassName(1), sql);
+                int count = 0;
+                while (result.next()) {
+                  assertEquals((double) 0.1f, result.getObject(1), sql);
+                  count++;
+                }
+                int expected = switch (operator) {
+                  case "UNION ALL" -> 3;
+                  case "EXCEPT" -> 0;
+                  case "EXCEPT ALL" -> aggregateFirst ? 0 : 1;
+                  default -> 1;
+                };
+                assertEquals(expected, count, sql);
               }
-              int expected = operator.startsWith("EXCEPT") ? 0 : operator.equals("UNION ALL") ? 3 : 1;
-              assertEquals(expected, count, sql);
             }
           }
         }
       }
       try (var statement = connection.createStatement();
           var result = statement.executeQuery("SELECT SUM(f) AS x FROM numbers UNION ALL SELECT f FROM numbers")) {
-        assertEquals(Types.REAL, result.getMetaData().getColumnType(1));
-        for (float expected : List.of(0.2f, 0.1f, 0.1f)) {
+        assertEquals(Types.DOUBLE, result.getMetaData().getColumnType(1));
+        for (double expected : List.of(2 * (double) 0.1f, (double) 0.1f, (double) 0.1f)) {
           assertTrue(result.next());
           assertEquals(expected, result.getObject(1));
         }

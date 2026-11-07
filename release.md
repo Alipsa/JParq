@@ -2,6 +2,10 @@
 
 ### 1.4.0
 
+- **Behavior changes:** SUM over REAL inputs now reports DOUBLE metadata instead of REAL,
+  matching the returned Double values (#289).
+  Set operations with these sums retain double precision and consistent value classes.
+
 - Preserve declared string and DATE/TIME/TIMESTAMP literal types and implemented character, DATE, and
   TIME/TIMESTAMP WITHOUT TIME ZONE CAST types, including empty and all-NULL results (#288).
   Accept compatible character set-operation branches and retain untyped NULL columns through nested CTEs
