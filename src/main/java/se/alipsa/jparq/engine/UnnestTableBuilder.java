@@ -181,14 +181,8 @@ public final class UnnestTableBuilder {
     String qualifier = column.getTable() == null ? null : column.getTable().getName();
     if (qualifier != null && !table.nestedQualifiers().isEmpty()) {
       Map<String, Map<String, String>> mappings = ColumnMappingUtil.normaliseQualifierMapping(table.nestedQualifiers());
-      String key = JParqUtil.normalizeQualifier(qualifier);
-      String alternative = ColumnMappingUtil.alternativeQualifierKey(key);
-      Map<String, String> exact = mappings.get(key);
-      Map<String, String> equivalent = alternative == null ? null : mappings.get(alternative);
-      if (exact != null && equivalent != null && !exact.equals(equivalent)) {
-        throw ambiguousColumn(column.toString());
-      }
-      Map<String, String> columns = ColumnMappingUtil.qualifierColumns(mappings, qualifier);
+      Map<String, String> columns = ColumnMappingUtil.qualifierColumns(mappings, qualifier,
+          () -> ambiguousColumn(column.toString()));
       return resolveField(table.schema(), column.getColumnName(), columns);
     }
     return resolveField(table.schema(), column.getColumnName());
