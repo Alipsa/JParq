@@ -2796,7 +2796,6 @@ public final class SqlParser {
    * @throws IllegalArgumentException
    *           if a quoted literal or identifier is unterminated
    */
-  @SuppressWarnings("PMD.CyclomaticComplexity")
   public static String stripSqlComments(String sql) {
     if (sql == null || sql.isEmpty()) {
       return sql;

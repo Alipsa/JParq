@@ -37,16 +37,18 @@ public final class FunctionEscapeResolver {
   /**
    * Resolve JDBC function escapes to native SQL equivalents. Unknown functions
    * are unwrapped (braces removed) but otherwise left unchanged. Quoted literals
-   * and identifiers are preserved verbatim. SQL comments must be removed first.
+   * and identifiers are preserved verbatim. SQL comments must be removed and
+   * quotes validated first; text without an opening brace is returned directly.
    *
    * @param sql
    *          the SQL text that may contain JDBC escape functions
    * @return SQL with escapes replaced by native function calls
    * @throws IllegalArgumentException
-   *           if a quoted literal or identifier is unterminated
+   *           if SQL containing an opening brace has an unterminated quoted
+   *           literal or identifier
    */
   public static String resolveJdbcFunctionEscapes(String sql) {
-    if (sql == null || sql.isEmpty()) {
+    if (sql == null || sql.indexOf('{') < 0) {
       return sql;
     }
     Matcher matcher = FUNCTION_ESCAPE.matcher(SqlTextScanner.maskQuotedRegions(sql));

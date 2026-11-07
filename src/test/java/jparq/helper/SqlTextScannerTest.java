@@ -24,7 +24,7 @@ class SqlTextScannerTest {
   void findsQuotedEndsAndMasksOnlyQuotes(String quoted) {
     String sql = "SELECT " + quoted + ", x";
     assertEquals(7 + quoted.length(), SqlTextScanner.quotedRegionEnd(sql, 7));
-    assertEquals("SELECT " + " ".repeat(quoted.length()) + ", x", SqlTextScanner.maskQuotedRegions(sql));
+    assertEquals("SELECT " + "\0".repeat(quoted.length()) + ", x", SqlTextScanner.maskQuotedRegions(sql));
   }
 
   /**

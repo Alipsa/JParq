@@ -67,8 +67,10 @@ public final class SqlTextScanner {
   }
 
   /**
-   * Replaces quoted regions with spaces while retaining all character offsets.
-   * The input must have SQL comments removed before scanning.
+   * Replaces quoted regions with NUL characters while retaining all character
+   * offsets. The mask is neither whitespace nor SQL punctuation, so syntax
+   * matching cannot consume quoted text as spacing or delimiters. The input must
+   * have SQL comments removed before scanning.
    *
    * @param sql
    *          SQL text without comments
@@ -82,7 +84,7 @@ public final class SqlTextScanner {
       int end = quotedRegionEnd(sql, i);
       if (end >= 0) {
         for (int j = i; j < end; j++) {
-          masked.setCharAt(j, ' ');
+          masked.setCharAt(j, '\0');
         }
         i = end - 1;
       }

@@ -2,6 +2,7 @@ package jparq.helper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -10,6 +11,37 @@ import se.alipsa.jparq.helper.FunctionEscapeResolver;
 
 /** Unit tests for {@link FunctionEscapeResolver}. */
 class FunctionEscapeResolverTest {
+
+  /**
+   * Unwraps unknown function names while retaining their quoted components.
+   *
+   * @param name
+   *          the function name, including quoted identifier text
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "\"schema\".myfn", "\"MyFn\"", "x\"y\"", "`MyFn`"
+  })
+  void preservesQuotedFunctionNames(String name) {
+    assertEquals("SELECT " + name + "(1)",
+        FunctionEscapeResolver.resolveJdbcFunctionEscapes("SELECT {fn " + name + "(1)}"));
+  }
+
+  /**
+   * Keeps malformed escapes intact instead of consuming literals as whitespace.
+   *
+   * @param escape
+   *          an escape containing quoted text outside the arguments
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "{fn UCASE 'x'}", "{fn'abc'UCASE('a')}", "{'lit' fn UCASE('a')}", "{fn UCASE('a') 'junk'}", "{fn UCASE $$x$$}",
+      "{fn UCASE('a') \"junk\"}", "{fn UCASE('a') `junk`}"
+  })
+  void preservesMalformedEscapesContainingQuotes(String escape) {
+    String sql = "SELECT " + escape + ", {fn LCASE('B')}";
+    assertEquals("SELECT " + escape + ", LOWER('B')", FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+  }
 
   /**
    * Leaves escape-like text inside SQL quotes unchanged.
@@ -103,8 +135,8 @@ class FunctionEscapeResolverTest {
 
   @Test
   void ignoresStringsWithoutEscapes() {
-    String sql = "SELECT 1";
-    assertEquals(sql, FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
+    String sql = "SELECT 'quoted text', \"identifier\", `name`, $$literal$$";
+    assertSame(sql, FunctionEscapeResolver.resolveJdbcFunctionEscapes(sql));
   }
 
   @Test
