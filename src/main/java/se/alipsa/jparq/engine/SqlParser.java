@@ -2751,7 +2751,34 @@ public final class SqlParser {
     return table.getFullyQualifiedName();
   }
 
-  // === Qualifier Stripping =================================================
+  // === SQL Text Scanning ===================================================
+
+  /**
+   * Finds the exclusive end of an untagged dollar-quoted literal. Callers must
+   * invoke this only outside quoted literals, quoted identifiers, and comments.
+   * Dollar signs following an identifier character or another dollar sign do not
+   * open literals. Tagged dollar quotes remain identifier text.
+   *
+   * @param sql
+   *          the SQL text to inspect
+   * @param offset
+   *          a valid character index in the SQL text
+   * @return the exclusive end of the literal, or -1 if no literal starts at the
+   *         offset
+   * @throws IllegalArgumentException
+   *           if an opening delimiter has no closing delimiter
+   */
+  public static int dollarQuotedLiteralEnd(String sql, int offset) {
+    if (!sql.startsWith("$$", offset) || offset > 0
+        && (sql.charAt(offset - 1) == '$' || Character.isUnicodeIdentifierPart(sql.codePointBefore(offset)))) {
+      return -1;
+    }
+    int closing = sql.indexOf("$$", offset + 2);
+    if (closing < 0) {
+      throw new IllegalArgumentException("Unterminated dollar-quoted literal in SQL");
+    }
+    return closing + 2;
+  }
 
   /**
    * Remove SQL comments from the supplied query string while preserving string
@@ -2851,15 +2878,13 @@ public final class SqlParser {
         }
         continue;
       }
-      if (c == '$' && next == '$'
-          && (i == 0 || sql.charAt(i - 1) != '$' && !Character.isUnicodeIdentifierPart(sql.codePointBefore(i)))) {
-        int closing = sql.indexOf("$$", i + 2);
-        if (closing < 0) {
-          throw new IllegalArgumentException("Unterminated dollar-quoted literal in SQL");
+      if (c == '$') {
+        int end = dollarQuotedLiteralEnd(sql, i);
+        if (end >= 0) {
+          result.append(sql, i, end);
+          i = end - 1;
+          continue;
         }
-        result.append(sql, i, closing + 2);
-        i = closing + 1;
-        continue;
       }
       if (c == '`') {
         identifierEnd = '`';
@@ -2898,6 +2923,8 @@ public final class SqlParser {
     }
     return result.toString();
   }
+
+  // === Qualifier Stripping =================================================
 
   /**
    * Strip the table qualifier for a single-table query when the qualifier matches

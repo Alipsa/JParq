@@ -5500,14 +5500,17 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Parses the SQL for positional and named parameters, rewriting any
-   * {@code :name} placeholders to JDBC {@code ?} markers.
+   * {@code :name} placeholders to JDBC {@code ?} markers. Dollar-quoted literal
+   * contents are preserved and do not contribute parameters.
    *
    * @param sql
    *          the SQL string to inspect
    * @return a parse result containing the rewritten SQL, the discovered named
    *         parameter indexes, and the total number of parameters
+   * @throws SQLSyntaxErrorException
+   *           if a dollar-quoted literal is unterminated
    */
-  private ParameterParseResult parseParameters(String sql) {
+  private ParameterParseResult parseParameters(String sql) throws SQLSyntaxErrorException {
     if (sql == null || sql.isEmpty()) {
       return new ParameterParseResult("", Map.of(), 0);
     }
@@ -5517,6 +5520,14 @@ public class JParqPreparedStatement implements PreparedStatement {
     ParseState state = ParseState.NORMAL;
     for (int i = 0; i < sql.length(); i++) {
       char c = sql.charAt(i);
+      if (state == ParseState.NORMAL && c == '$') {
+        int end = dollarQuotedLiteralEnd(sql, i);
+        if (end >= 0) {
+          rewritten.append(sql, i, end);
+          i = end - 1;
+          continue;
+        }
+      }
       boolean consumed = false;
       switch (state) {
         case NORMAL -> {
@@ -5524,6 +5535,8 @@ public class JParqPreparedStatement implements PreparedStatement {
             state = ParseState.SINGLE_QUOTE;
           } else if (c == '"') {
             state = ParseState.DOUBLE_QUOTE;
+          } else if (c == '`') {
+            state = ParseState.BACKTICK;
           } else if (c == '-' && i + 1 < sql.length() && sql.charAt(i + 1) == '-') {
             state = ParseState.LINE_COMMENT;
           } else if (c == '/' && i + 1 < sql.length() && sql.charAt(i + 1) == '*') {
@@ -5562,6 +5575,17 @@ public class JParqPreparedStatement implements PreparedStatement {
             state = ParseState.NORMAL;
           }
         }
+        case BACKTICK -> {
+          if (c == '`') {
+            if (i + 1 < sql.length() && sql.charAt(i + 1) == '`') {
+              rewritten.append(c).append(c);
+              i++;
+              consumed = true;
+            } else {
+              state = ParseState.NORMAL;
+            }
+          }
+        }
         case LINE_COMMENT -> {
           if (c == '\n' || c == '\r') {
             state = ParseState.NORMAL;
@@ -5588,6 +5612,27 @@ public class JParqPreparedStatement implements PreparedStatement {
       immutableNameIndexes.put(entry.getKey(), List.copyOf(entry.getValue()));
     }
     return new ParameterParseResult(rewritten.toString(), Map.copyOf(immutableNameIndexes), count);
+  }
+
+  /**
+   * Delegates dollar-quote recognition to
+   * {@link SqlParser#dollarQuotedLiteralEnd(String, int)}, translating syntax
+   * errors to JDBC exceptions.
+   *
+   * @param sql
+   *          the SQL being scanned in normal (unquoted, uncommented) state
+   * @param offset
+   *          the position of a dollar sign
+   * @return the exclusive end of the literal, or -1 if no literal starts there
+   * @throws SQLSyntaxErrorException
+   *           if an opening delimiter has no closing delimiter
+   */
+  private static int dollarQuotedLiteralEnd(String sql, int offset) throws SQLSyntaxErrorException {
+    try {
+      return SqlParser.dollarQuotedLiteralEnd(sql, offset);
+    } catch (IllegalArgumentException exception) {
+      throw new SQLSyntaxErrorException(exception.getMessage(), "42000", exception);
+    }
   }
 
   private boolean isParameterStart(char c) {
@@ -5662,6 +5707,14 @@ public class JParqPreparedStatement implements PreparedStatement {
     int foundCount = 0;
     for (int i = 0; i < originalSql.length(); i++) {
       char c = originalSql.charAt(i);
+      if (state == ParseState.NORMAL && c == '$') {
+        int end = dollarQuotedLiteralEnd(originalSql, i);
+        if (end >= 0) {
+          rendered.append(originalSql, i, end);
+          i = end - 1;
+          continue;
+        }
+      }
       boolean consumed = false;
       switch (state) {
         case NORMAL -> {
@@ -5669,6 +5722,8 @@ public class JParqPreparedStatement implements PreparedStatement {
             state = ParseState.SINGLE_QUOTE;
           } else if (c == '"') {
             state = ParseState.DOUBLE_QUOTE;
+          } else if (c == '`') {
+            state = ParseState.BACKTICK;
           } else if (c == '-' && i + 1 < originalSql.length() && originalSql.charAt(i + 1) == '-') {
             state = ParseState.LINE_COMMENT;
           } else if (c == '/' && i + 1 < originalSql.length() && originalSql.charAt(i + 1) == '*') {
@@ -5702,6 +5757,17 @@ public class JParqPreparedStatement implements PreparedStatement {
         case DOUBLE_QUOTE -> {
           if (c == '"') {
             state = ParseState.NORMAL;
+          }
+        }
+        case BACKTICK -> {
+          if (c == '`') {
+            if (i + 1 < originalSql.length() && originalSql.charAt(i + 1) == '`') {
+              rendered.append(c).append(c);
+              i++;
+              consumed = true;
+            } else {
+              state = ParseState.NORMAL;
+            }
           }
         }
         case LINE_COMMENT -> {
@@ -5891,7 +5957,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   private enum ParseState {
-    NORMAL, SINGLE_QUOTE, DOUBLE_QUOTE, LINE_COMMENT, BLOCK_COMMENT
+    NORMAL, SINGLE_QUOTE, DOUBLE_QUOTE, BACKTICK, LINE_COMMENT, BLOCK_COMMENT
   }
 
   // --- Named Parameter Setters (JParq extension) ---

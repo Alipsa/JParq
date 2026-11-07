@@ -2,6 +2,11 @@
 
 ### 1.4.0
 
+- Ignore parameter markers inside dollar-quoted strings during JDBC parameter discovery and binding,
+  preserving literal contents and correctly binding parameters after quotes or comment markers (#296).
+
+- Ignore parameter markers inside backtick-quoted identifiers (#484).
+
 - **Behavior changes:** SUM over REAL inputs now reports DOUBLE metadata instead of REAL,
   matching the returned Double values (#289).
   Set operations with these sums retain double precision and consistent value classes.

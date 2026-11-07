@@ -150,4 +150,16 @@ class SqlParserCommentTest {
     assertEquals(sql + " \n", SqlParser.stripSqlComments(sql + " -- $$ ' \"\n/* $tag$ */"));
   }
 
+  /** Verifies shared dollar-quote boundaries and exact closing delimiters. */
+  @Test
+  void findsDollarQuotedLiteralEnds() {
+    assertEquals(4, SqlParser.dollarQuotedLiteralEnd("$$$$", 0));
+    assertEquals(9, SqlParser.dollarQuotedLiteralEnd("($$? ' $$)", 1));
+    assertEquals(-1, SqlParser.dollarQuotedLiteralEnd("$tag$text$tag$", 0));
+    assertEquals(-1, SqlParser.dollarQuotedLiteralEnd("a$$b", 1));
+    assertEquals(-1, SqlParser.dollarQuotedLiteralEnd("a$$b", 2));
+    assertEquals(-1, SqlParser.dollarQuotedLiteralEnd("é$$b", 1));
+    assertThrows(IllegalArgumentException.class, () -> SqlParser.dollarQuotedLiteralEnd("$$unfinished", 0));
+  }
+
 }
