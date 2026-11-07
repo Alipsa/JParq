@@ -225,6 +225,39 @@ class QualifiedUsingTest {
   }
 
   /**
+   * Sorts grouped output by its selected position or bound grouping column.
+   *
+   * @param pushdown
+   *          whether predicate pushdown is enabled
+   * @throws Exception
+   *           if setup or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void groupedOrderingKeepsProjectionIdentity(boolean pushdown) throws Exception {
+    String from = " FROM (VALUES (1), (3)) a(x) FULL JOIN (VALUES (2), (3)) b(x) USING (x)";
+    List<List<Object>> mergedOrder = Arrays.asList(Arrays.asList(null, 1), List.of(2, 2), List.of(3, 3));
+    List<List<Object>> rightOrder = Arrays.asList(List.of(2, 2), List.of(3, 3), Arrays.asList(null, 1));
+    for (String grouping : List.of("", " GROUP BY x, b.x")) {
+      for (String ordering : List.of("m", "2")) {
+        assertEquals(mergedOrder, rows("SELECT b.x, x AS m" + from + grouping + " ORDER BY " + ordering, pushdown));
+      }
+      for (String ordering : List.of("b.x", "1")) {
+        assertEquals(rightOrder,
+            rows("SELECT b.x, x AS m" + from + grouping + " ORDER BY " + ordering + " NULLS LAST", pushdown));
+      }
+    }
+    assertEquals(Arrays.asList(Arrays.asList((Object) null), List.of(2), List.of(3)),
+        rows("SELECT b.x AS right_key" + from + " GROUP BY x, b.x ORDER BY x", pushdown));
+    assertEquals(Arrays.asList(List.of(3, 3), List.of(2, 2), Arrays.asList(null, 1)),
+        rows("SELECT b.x, x AS m" + from + " GROUP BY x, b.x ORDER BY m DESC", pushdown));
+    assertEquals(List.of(List.of(3, 3), List.of(2, 2)),
+        rows("SELECT b.x, x AS m" + from + " GROUP BY x, b.x ORDER BY 2 DESC LIMIT 2", pushdown));
+  }
+
+  /**
    * Executes SQL with a fixed pushdown setting and collects nullable column
    * values.
    *

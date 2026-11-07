@@ -176,6 +176,21 @@ public final class AggregateFunctions {
     }
   }
 
+  /** Resolves SQL columns to fields in the aggregate input. */
+  @FunctionalInterface
+  public interface ColumnBinding {
+    /**
+     * Resolves an input column without interpreting SELECT aliases as inputs.
+     *
+     * @param column
+     *          SQL column reference
+     * @return canonical input field, or null for an absent input
+     * @throws IllegalArgumentException
+     *           if the reference is ambiguous
+     */
+    String resolve(Column column);
+  }
+
   /**
    * Plan describing aggregate and grouping behaviour for a SELECT statement.
    *
@@ -192,9 +207,32 @@ public final class AggregateFunctions {
    * @param groupByAliases
    *          resolution context for GROUP BY and GROUPING() references to
    *          select-list aliases
+   * @param columnBinding
+   *          resolver shared by all grouping expressions, or null when
+   *          unavailable
    */
   public record AggregatePlan(List<AggregateSpec> specs, List<ResultColumn> resultColumns,
-      List<GroupExpression> groupExpressions, List<GroupingSet> groupingSets, AliasContext groupByAliases) {
+      List<GroupExpression> groupExpressions, List<GroupingSet> groupingSets, AliasContext groupByAliases,
+      ColumnBinding columnBinding) {
+    /**
+     * Creates a plan without input bindings.
+     *
+     * @param specs
+     *          aggregate specifications
+     * @param resultColumns
+     *          output columns
+     * @param groupExpressions
+     *          grouping expressions
+     * @param groupingSets
+     *          grouping sets
+     * @param groupByAliases
+     *          SELECT alias context
+     */
+    public AggregatePlan(List<AggregateSpec> specs, List<ResultColumn> resultColumns,
+        List<GroupExpression> groupExpressions, List<GroupingSet> groupingSets, AliasContext groupByAliases) {
+      this(specs, resultColumns, groupExpressions, groupingSets, groupByAliases, null);
+    }
+
     /**
      * Canonical constructor validating the provided collections.
      *
@@ -211,6 +249,9 @@ public final class AggregateFunctions {
      * @param groupByAliases
      *          resolution context for GROUP BY and GROUPING() references to
      *          select-list aliases
+     * @param columnBinding
+     *          resolver shared by all grouping expressions, or null when
+     *          unavailable
      */
     public AggregatePlan {
       Objects.requireNonNull(specs, "specs");
@@ -422,37 +463,16 @@ public final class AggregateFunctions {
    * @param expression
    *          expression used to compute the grouping key
    * @param label
-   *          human readable label for the expression (column name or expression
-   *          text)
-   * @param columnBinding
-   *          resolver for bound input fields, or null when bindings are
-   *          unavailable
+   *          human readable label for the expression
    */
-  public record GroupExpression(Expression expression, String label,
-      java.util.function.Function<Column, String> columnBinding) {
+  public record GroupExpression(Expression expression, String label) {
     /**
-     * Creates a grouping expression without input bindings.
-     *
-     * @param expression
-     *          grouping key expression
-     * @param label
-     *          display label
-     */
-    public GroupExpression(Expression expression, String label) {
-      this(expression, label, null);
-    }
-
-    /**
-     * Canonical constructor storing the grouping expression metadata.
+     * Stores the grouping expression metadata.
      *
      * @param expression
      *          expression used to compute the grouping key
      * @param label
-     *          human readable label for the expression (column name or expression
-     *          text)
-     * @param columnBinding
-     *          resolver for bound input fields, or null when bindings are
-     *          unavailable
+     *          human readable label for the expression
      */
     public GroupExpression {
       Objects.requireNonNull(expression, "expression");
@@ -571,7 +591,7 @@ public final class AggregateFunctions {
    *         aggregate input.
    */
   public static AggregatePlan plan(SqlParser.Select select, Schema inputSchema) {
-    return plan(select, inputSchema, null);
+    return plan(select, inputSchema, CorrelationMappings.of(List.of(), Map.of(), Map.of()));
   }
 
   /**
@@ -581,14 +601,13 @@ public final class AggregateFunctions {
    *          parsed SELECT statement
    * @param inputSchema
    *          input schema, or null when unknown
-   * @param columnBinding
-   *          resolver for bound input fields, or null when unavailable
+   * @param mappings
+   *          input qualifier and column mappings shared with execution
    * @return aggregate plan, or null for a nonaggregate query
    * @throws IllegalArgumentException
    *           if a selected column is not grouped
    */
-  public static AggregatePlan plan(SqlParser.Select select, Schema inputSchema,
-      java.util.function.Function<Column, String> columnBinding) {
+  public static AggregatePlan plan(SqlParser.Select select, Schema inputSchema, CorrelationMappings mappings) {
     List<Expression> expressions = select.expressions();
     if (expressions.isEmpty()) {
       return null;
@@ -597,18 +616,23 @@ public final class AggregateFunctions {
     boolean containsAggregate = expressions.stream().anyMatch(expr -> !aggregateFunctions(expr).isEmpty())
         || !aggregateFunctions(select.having()).isEmpty()
         || select.orderBy().stream().anyMatch(key -> !aggregateFunctions(key.expression()).isEmpty());
+    if (!containsAggregate && select.groupByExpressions().isEmpty() && select.groupingSets().isEmpty()) {
+      return null;
+    }
     AliasContext groupByAliases = aliasContext(select, inputSchema);
-    java.util.function.Function<Column, String> inputBinding = columnBinding == null ? null : column -> {
+    ValueExpressionEvaluator bindingEvaluator = inputSchema == null
+        ? null
+        : new ValueExpressionEvaluator(inputSchema, null, mappings, WindowState.empty());
+    ColumnBinding inputBinding = bindingEvaluator == null ? null : column -> {
       String key = Identifier.lookupKey(column.getColumnName());
       String alternative = ColumnMappingUtil.alternativeColumnKey(key);
       if (!isQualified(column) && !groupByAliases.availableColumns().contains(key)
           && (alternative == null || !groupByAliases.availableColumns().contains(alternative))) {
         return null;
       }
-      return columnBinding.apply(column);
+      return bindingEvaluator.resolveColumnName(column);
     };
-    List<GroupExpression> groupExpressions = buildGroupExpressions(resolveGroupByAliases(select, groupByAliases),
-        inputBinding);
+    List<GroupExpression> groupExpressions = buildGroupExpressions(resolveGroupByAliases(select, groupByAliases));
     final Map<String, Integer> groupIndexByText = groupIndexLookup(groupExpressions);
     List<GroupingSet> groupingSets = buildGroupingSets(select.groupingSets(), groupExpressions.size(),
         containsAggregate);
@@ -641,7 +665,7 @@ public final class AggregateFunctions {
         }
         if (isGroupingFunction(func)) {
           List<Integer> groupingIndexes = groupingArgumentIndexes(func, groupIndexByText, groupExpressions,
-              groupByAliases);
+              groupByAliases, inputBinding);
           resultColumns
               .add(new ResultColumn(label, ColumnKind.GROUPING, -1, -1, groupingIndexes, func.toString(), null));
           continue;
@@ -653,14 +677,15 @@ public final class AggregateFunctions {
         continue;
       }
 
-      Integer groupIndex = findGroupIndex(expr, groupIndexByText, groupExpressions);
+      Integer groupIndex = findGroupIndex(expr, groupIndexByText, groupExpressions, inputBinding);
       if (groupIndex == null) {
         GroupedExpression.validate(expr, operand -> {
-          if (operand instanceof Column && findGroupIndex(operand, groupIndexByText, groupExpressions) == null) {
+          if (operand instanceof Column
+              && findGroupIndex(operand, groupIndexByText, groupExpressions, inputBinding) == null) {
             throw syntaxFailure(
                 "SELECT expression '" + expr + "' must appear in the GROUP BY clause when aggregates are present");
           }
-          return isGroupOperand(operand, groupIndexByText, groupExpressions);
+          return isGroupOperand(operand, groupIndexByText, groupExpressions, inputBinding);
         });
         resultColumns.add(new ResultColumn(label, ColumnKind.EXPRESSION, -1, -1, List.of(), expr.toString()));
         continue;
@@ -670,9 +695,10 @@ public final class AggregateFunctions {
 
     Set<String> outputNames = resultColumns.stream().map(column -> Identifier.lookupKey(column.label()))
         .collect(Collectors.toSet());
-    validateGroupReferences(select.having(), "HAVING", groupIndexByText, groupExpressions, outputNames);
+    validateGroupReferences(select.having(), "HAVING", groupIndexByText, groupExpressions, outputNames, inputBinding);
     for (OrderKey key : select.orderBy()) {
-      validateGroupReferences(key.expression(), "ORDER BY", groupIndexByText, groupExpressions, outputNames);
+      validateGroupReferences(key.expression(), "ORDER BY", groupIndexByText, groupExpressions, outputNames,
+          inputBinding);
     }
 
     for (Expression source : aggregateSources) {
@@ -684,7 +710,7 @@ public final class AggregateFunctions {
       }
     }
 
-    return new AggregatePlan(specs, resultColumns, groupExpressions, groupingSets, groupByAliases);
+    return new AggregatePlan(specs, resultColumns, groupExpressions, groupingSets, groupByAliases, inputBinding);
   }
 
   /**
@@ -703,19 +729,22 @@ public final class AggregateFunctions {
    *          visible SELECT aliases
    * @throws IllegalArgumentException
    *           if an ungrouped column is referenced
+   * @param columnBinding
+   *          resolver for bound input fields, or null when unavailable
    */
   private static void validateGroupReferences(Expression expression, String clause,
-      Map<String, Integer> groupIndexByText, List<GroupExpression> groups, Set<String> aliases) {
+      Map<String, Integer> groupIndexByText, List<GroupExpression> groups, Set<String> aliases,
+      ColumnBinding columnBinding) {
     if (expression == null) {
       return;
     }
     GroupedExpression.validate(expression, operand -> {
-      if (operand instanceof Column column && findGroupIndex(column, groupIndexByText, groups) == null
+      if (operand instanceof Column column && findGroupIndex(column, groupIndexByText, groups, columnBinding) == null
           && (column.getTable() != null || !aliases.contains(Identifier.lookupKey(column.getColumnName())))) {
         throw syntaxFailure("Missing columns in " + clause + " grouped scope: " + column
             + "; columns must appear in the GROUP BY clause or SELECT list");
       }
-      return isGroupOperand(operand, groupIndexByText, groups);
+      return isGroupOperand(operand, groupIndexByText, groups, columnBinding);
     });
   }
 
@@ -763,13 +792,15 @@ public final class AggregateFunctions {
    * @param groups
    *          grouping expressions
    * @return whether the operand needs a typed group binding
+   * @param columnBinding
+   *          resolver for bound input fields, or null when unavailable
    */
   private static boolean isGroupOperand(Expression operand, Map<String, Integer> groupIndexByText,
-      List<GroupExpression> groups) {
-    return operand instanceof Column
-        || operand instanceof Select || operand instanceof Function function && (isAggregateName(function.getName())
-            || isGroupingFunction(function) || CorrelatedBindings.isReserved(function))
-        || findGroupIndex(operand, groupIndexByText, groups) != null;
+      List<GroupExpression> groups, ColumnBinding columnBinding) {
+    return operand instanceof Column || operand instanceof Select
+        || operand instanceof Function function && (isAggregateName(function.getName()) || isGroupingFunction(function)
+            || CorrelatedBindings.isReserved(function))
+        || findGroupIndex(operand, groupIndexByText, groups, columnBinding) != null;
   }
 
   /**
@@ -985,20 +1016,22 @@ public final class AggregateFunctions {
    * @param groupByAliases
    *          resolution context for select-list alias references
    * @return immutable list of grouping expression indexes
+   * @param columnBinding
+   *          resolver for bound input fields, or null when unavailable
    */
   private static List<Integer> groupingArgumentIndexes(Function func, Map<String, Integer> groupIndexByText,
-      List<GroupExpression> groupExpressions, AliasContext groupByAliases) {
+      List<GroupExpression> groupExpressions, AliasContext groupByAliases, ColumnBinding columnBinding) {
     ExpressionList<?> parameters = func.getParameters();
     if (parameters == null || parameters.isEmpty()) {
       throw new IllegalArgumentException("GROUPING function requires at least one argument");
     }
     List<Integer> indexes = new ArrayList<>(parameters.size());
     for (Expression argument : parameters) {
-      Integer match = findGroupIndex(argument, groupIndexByText, groupExpressions);
+      Integer match = findGroupIndex(argument, groupIndexByText, groupExpressions, columnBinding);
       if (match == null) {
         Expression resolved = resolveAliasReference(argument, groupByAliases);
         if (resolved != argument) {
-          match = findGroupIndex(resolved, groupIndexByText, groupExpressions);
+          match = findGroupIndex(resolved, groupIndexByText, groupExpressions, columnBinding);
         }
       }
       if (match == null) {
@@ -1019,19 +1052,19 @@ public final class AggregateFunctions {
    * @param groupExpressions
    *          expressions defined in the GROUP BY clause
    * @return matching index or {@code null} when no match exists
+   * @param columnBinding
+   *          resolver for bound input fields, or null when unavailable
    */
   private static Integer findGroupIndex(Expression expression, Map<String, Integer> groupIndexByText,
-      List<GroupExpression> groupExpressions) {
+      List<GroupExpression> groupExpressions, ColumnBinding columnBinding) {
     if (expression == null) {
       return null;
     }
-    if (expression instanceof Column column && !groupExpressions.isEmpty()
-        && groupExpressions.getFirst().columnBinding() != null) {
-      var binding = groupExpressions.getFirst().columnBinding();
-      String canonical = binding.apply(column);
+    if (expression instanceof Column column && columnBinding != null) {
+      String canonical = columnBinding.resolve(column);
       for (int i = 0; i < groupExpressions.size(); i++) {
         if (groupExpressions.get(i).expression() instanceof Column groupColumn && canonical != null
-            && canonical.equals(binding.apply(groupColumn))) {
+            && canonical.equals(columnBinding.resolve(groupColumn))) {
           return i;
         }
       }
@@ -1388,8 +1421,7 @@ public final class AggregateFunctions {
     return name == null ? null : name.toUpperCase(Locale.ROOT);
   }
 
-  private static List<GroupExpression> buildGroupExpressions(List<Expression> groupByExpressions,
-      java.util.function.Function<Column, String> columnBinding) {
+  private static List<GroupExpression> buildGroupExpressions(List<Expression> groupByExpressions) {
     if (groupByExpressions == null || groupByExpressions.isEmpty()) {
       return List.of();
     }
@@ -1401,7 +1433,7 @@ public final class AggregateFunctions {
       } else {
         label = expr.toString();
       }
-      groups.add(new GroupExpression(expr, label, columnBinding));
+      groups.add(new GroupExpression(expr, label));
     }
     return groups;
   }
@@ -1928,13 +1960,35 @@ public final class AggregateFunctions {
       ScalarExecution execution) {
     Map<String, OrderValueAccessor> accessorByColumn = buildOrderAccessors(plan);
     List<OrderValueAccessor> accessors = new ArrayList<>(orderBy.size());
+    Map<String, Integer> groupIndexes = groupIndexLookup(plan.groupExpressions());
     for (OrderKey key : orderBy) {
-      String columnKey = Identifier.lookupKey(key.column());
-      OrderValueAccessor accessor = accessorByColumn.get(columnKey);
-      if (accessor == null) {
-        String alternative = ColumnMappingUtil.alternativeColumnKey(columnKey);
-        if (alternative != null) {
-          accessor = accessorByColumn.get(alternative);
+      OrderValueAccessor accessor = null;
+      if (key.projectionIndex() >= 0) {
+        accessor = OrderValueAccessor.projection(key.projectionIndex());
+      } else {
+        Expression expression = key.expression();
+        if (expression == null) {
+          Column reference = new Column(key.column());
+          if (key.qualifier() != null) {
+            reference.setTable(new Table(key.qualifier()));
+          }
+          expression = reference;
+        }
+        Integer groupIndex = findGroupIndex(expression, groupIndexes, plan.groupExpressions(), plan.columnBinding());
+        if (groupIndex != null) {
+          accessor = OrderValueAccessor.groupValue(groupIndex);
+        } else if (!(expression instanceof Column) || plan.columnBinding() == null) {
+          accessor = accessorByColumn.get(Identifier.lookupKey(expression.toString()));
+        }
+        if (accessor == null && key.expression() == null && key.qualifier() == null) {
+          String columnKey = Identifier.lookupKey(key.column());
+          accessor = accessorByColumn.get(columnKey);
+          if (accessor == null) {
+            String alternative = ColumnMappingUtil.alternativeColumnKey(columnKey);
+            if (alternative != null) {
+              accessor = accessorByColumn.get(alternative);
+            }
+          }
         }
       }
       if (accessor == null && key.expression() == null) {
@@ -2943,8 +2997,9 @@ public final class AggregateFunctions {
         }
         return evalBinary(be);
       }
-      if (expr instanceof Column column && (findGroupIndex(column, groupIndexLookup, plan.groupExpressions()) == null
-          || !booleanColumn.test(column))) {
+      if (expr instanceof Column column
+          && (findGroupIndex(column, groupIndexLookup, plan.groupExpressions(), plan.columnBinding()) == null
+              || !booleanColumn.test(column))) {
         throw SqlExceptions.unsupportedPredicate(expr);
       }
       Object result = value(expr);
@@ -3035,7 +3090,7 @@ public final class AggregateFunctions {
 
     private Object value(Expression expression) {
       Expression expr = unwrap(expression);
-      Integer groupIndex = findGroupIndex(expr, groupIndexLookup, plan.groupExpressions());
+      Integer groupIndex = findGroupIndex(expr, groupIndexLookup, plan.groupExpressions(), plan.columnBinding());
       if (groupIndex != null) {
         return groupValues.get(groupIndex);
       }
@@ -3092,9 +3147,9 @@ public final class AggregateFunctions {
     private Object scalarValue(Expression expression) {
       GroupedExpression scalar = scalarExpressions.computeIfAbsent(expression.toString(),
           text -> new GroupedExpression(expression, operand -> isGroupedPredicate(operand)
-              || isGroupOperand(operand, groupIndexLookup, plan.groupExpressions())));
+              || isGroupOperand(operand, groupIndexLookup, plan.groupExpressions(), plan.columnBinding())));
       return scalar.evaluate(operand -> {
-        Integer groupIndex = findGroupIndex(operand, groupIndexLookup, plan.groupExpressions());
+        Integer groupIndex = findGroupIndex(operand, groupIndexLookup, plan.groupExpressions(), plan.columnBinding());
         return groupIndex == null ? value(operand) : groupValues.get(groupIndex);
       });
     }
@@ -3175,7 +3230,7 @@ public final class AggregateFunctions {
 
     private Object grouping(Function func) {
       List<Integer> indexes = groupingArgumentIndexes(func, groupIndexLookup, plan.groupExpressions(),
-          plan.groupByAliases());
+          plan.groupByAliases(), plan.columnBinding());
       return groupingValue(plan, groupingSetIndex, indexes);
     }
 

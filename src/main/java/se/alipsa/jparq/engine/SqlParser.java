@@ -135,9 +135,29 @@ public final class SqlParser {
    * @param expression
    *          the original ORDER BY expression used for evaluation; {@code null}
    *          when the ORDER BY references a simple column
+   * @param projectionIndex
+   *          selected output position, or -1 for an input expression
    */
   public record OrderKey(String column, boolean asc, String qualifier, OrderByElement.NullOrdering nullOrdering,
-      Expression expression) {
+      Expression expression, int projectionIndex) {
+    /**
+     * Creates an ordering key before its output position is resolved.
+     *
+     * @param column
+     *          column name
+     * @param asc
+     *          whether ordering is ascending
+     * @param qualifier
+     *          optional table qualifier
+     * @param nullOrdering
+     *          optional NULL ordering
+     * @param expression
+     *          optional ordering expression
+     */
+    public OrderKey(String column, boolean asc, String qualifier, OrderByElement.NullOrdering nullOrdering,
+        Expression expression) {
+      this(column, asc, qualifier, nullOrdering, expression, -1);
+    }
   }
 
   /**
@@ -2601,11 +2621,13 @@ public final class SqlParser {
       return List.of();
     }
     Map<String, Expression> aliases = new HashMap<>();
+    Map<String, Integer> projectionIndexes = new HashMap<>();
     Set<String> ambiguous = new LinkedHashSet<>();
     for (int i = 0; i < Math.min(labels.size(), expressions.size()); i++) {
       String label = Identifier.lookupKey(labels.get(i));
       Expression selected = expressions.get(i);
       Expression previous = aliases.putIfAbsent(label, selected);
+      projectionIndexes.putIfAbsent(label, i);
       if (previous != null && !sameOrderingExpression(previous, selected, columnBinding)) {
         ambiguous.add(label);
       }
@@ -2615,6 +2637,7 @@ public final class SqlParser {
       String column = key.column();
       String qualifier = key.qualifier();
       Expression evaluation = key.expression();
+      int projectionIndex = key.projectionIndex();
       Expression selected = null;
       if (evaluation == null && qualifier == null) {
         if (column != null && column.matches("[0-9]+")) {
@@ -2624,6 +2647,7 @@ public final class SqlParser {
           }
           if (!labels.isEmpty()) {
             selected = expressions.get(position - 1);
+            projectionIndex = position - 1;
           }
         } else {
           String label = Identifier.lookupKey(column);
@@ -2637,6 +2661,9 @@ public final class SqlParser {
             throw SqlExceptions.ambiguousColumn(column);
           }
           selected = aliases.get(label);
+          if (selected != null) {
+            projectionIndex = projectionIndexes.get(label);
+          }
         }
       }
       if (selected instanceof Column reference) {
@@ -2650,7 +2677,7 @@ public final class SqlParser {
       } else if (selected != null) {
         evaluation = selected;
       }
-      resolved.add(new OrderKey(column, key.asc(), qualifier, key.nullOrdering(), evaluation));
+      resolved.add(new OrderKey(column, key.asc(), qualifier, key.nullOrdering(), evaluation, projectionIndex));
     }
     return List.copyOf(resolved);
   }
