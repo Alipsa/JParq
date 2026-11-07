@@ -10,6 +10,9 @@
 
 - Ignore parameter markers inside backtick-quoted identifiers (#484).
 
+- **Behavior change:** unterminated quoted literals and identifiers now raise `SQLSyntaxErrorException`
+  (SQLState `42000`) during `prepareStatement`, before execution.
+
 - **Behavior changes:** SUM over REAL inputs now reports DOUBLE metadata instead of REAL,
   matching the returned Double values (#289).
   Set operations with these sums retain double precision and consistent value classes.

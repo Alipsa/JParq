@@ -12,6 +12,7 @@ import java.sql.ParameterMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLSyntaxErrorException;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.List;
@@ -30,6 +31,25 @@ import se.alipsa.jparq.JParqPreparedStatement;
  * statements.
  */
 class JParqPreparedStatementParameterTest {
+
+  @TempDir
+  File tempDir;
+
+  private JParqConnection connection;
+
+  @BeforeEach
+  void setUp() throws SQLException, IOException {
+    File parquetFile = new File(tempDir, "mtcars.parquet");
+    try (var in = getClass().getResourceAsStream("/datasets/mtcars.parquet")) {
+      Files.copy(in, parquetFile.toPath());
+    }
+    connection = new JParqConnection("jdbc:jparq:" + tempDir.getAbsolutePath(), new Properties());
+  }
+
+  @AfterEach
+  void tearDown() throws SQLException {
+    connection.close();
+  }
 
   /**
    * Ignores parameter markers and comment delimiters inside quoted literals.
@@ -104,29 +124,10 @@ class JParqPreparedStatementParameterTest {
       "'", "\"", "`", "$$"
   })
   void rejectsUnterminatedQuotedRegions(String quote) {
-    var exception = assertThrows(java.sql.SQLSyntaxErrorException.class,
+    var exception = assertThrows(SQLSyntaxErrorException.class,
         () -> connection.prepareStatement("SELECT ? AS value, " + quote + "unfinished"));
     assertEquals("42000", exception.getSQLState());
     assertInstanceOf(IllegalArgumentException.class, exception.getCause());
-  }
-
-  @TempDir
-  File tempDir;
-
-  private JParqConnection connection;
-
-  @BeforeEach
-  void setUp() throws SQLException, IOException {
-    File parquetFile = new File(tempDir, "mtcars.parquet");
-    try (var in = getClass().getResourceAsStream("/datasets/mtcars.parquet")) {
-      Files.copy(in, parquetFile.toPath());
-    }
-    connection = new JParqConnection("jdbc:jparq:" + tempDir.getAbsolutePath(), new Properties());
-  }
-
-  @AfterEach
-  void tearDown() throws SQLException {
-    connection.close();
   }
 
   @Test

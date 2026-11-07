@@ -51,6 +51,7 @@ class SqlTextScannerTest {
     assertEquals(-1, SqlTextScanner.quotedRegionEnd(sql, 0));
     assertEquals(sql, SqlTextScanner.maskQuotedRegions(sql));
   }
+
   /** Verifies shared dollar-quote boundaries and exact closing delimiters. */
   @Test
   void findsDollarQuotedLiteralEnds() {
@@ -62,5 +63,4 @@ class SqlTextScannerTest {
     assertEquals(-1, SqlTextScanner.dollarQuotedLiteralEnd("é$$b", 1));
     assertThrows(IllegalArgumentException.class, () -> SqlTextScanner.dollarQuotedLiteralEnd("$$unfinished", 0));
   }
-
 }
