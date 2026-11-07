@@ -141,4 +141,39 @@ class DollarQuotedStringTest {
     }
   }
 
+  /**
+   * Keeps dollar delimiters inside backtick identifiers out of parameter
+   * scanning.
+   *
+   * @param sql
+   *          the query containing backtick identifiers
+   * @throws SQLException
+   *           if preparing, binding, or executing the query fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT 1 AS `$$`", "SELECT 1 AS `$$a`, ? AS b, 2 AS `c$$`", "SELECT 1 AS `a``$$? :name`, ? AS b, 2 AS `c$$`"
+  })
+  void preservesDollarQuotesInBacktickIdentifiers(String sql) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.prepareStatement(sql)) {
+      int count = sql.equals("SELECT 1 AS `$$`") ? 0 : 1;
+      assertEquals(count, statement.getParameterMetaData().getParameterCount());
+      if (count > 0) {
+        statement.setInt(1, 7);
+      }
+      try (var result = statement.executeQuery()) {
+        assertTrue(result.next());
+        assertEquals(1, result.getInt(1));
+        if (count > 0) {
+          assertEquals(7, result.getInt(2));
+          assertEquals(2, result.getInt(3));
+        } else {
+          assertEquals("$$", result.getMetaData().getColumnLabel(1));
+        }
+        assertFalse(result.next());
+      }
+    }
+  }
+
 }
