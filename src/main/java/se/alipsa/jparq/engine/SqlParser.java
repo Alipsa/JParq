@@ -2755,25 +2755,6 @@ public final class SqlParser {
   // === SQL Text Scanning ===================================================
 
   /**
-   * Finds the exclusive end of an untagged dollar-quoted literal. Callers must
-   * invoke this only outside quoted literals, quoted identifiers, and comments.
-   * Dollar signs following an identifier character or another dollar sign do not
-   * open literals. Tagged dollar quotes remain identifier text.
-   *
-   * @param sql
-   *          the SQL text to inspect
-   * @param offset
-   *          a valid character index in the SQL text
-   * @return the exclusive end of the literal, or -1 if no literal starts at the
-   *         offset
-   * @throws IllegalArgumentException
-   *           if an opening delimiter has no closing delimiter
-   */
-  public static int dollarQuotedLiteralEnd(String sql, int offset) {
-    return SqlTextScanner.dollarQuotedLiteralEnd(sql, offset);
-  }
-
-  /**
    * Remove SQL comments from the supplied query string while preserving string
    * literals. Block comments are removed entirely; a single separating space is
    * inserted only when needed to prevent token concatenation (e.g.

@@ -20,6 +20,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqPreparedStatement;
 
@@ -28,6 +30,85 @@ import se.alipsa.jparq.JParqPreparedStatement;
  * statements.
  */
 class JParqPreparedStatementParameterTest {
+
+  /**
+   * Ignores parameter markers and comment delimiters inside quoted literals.
+   *
+   * @param literal
+   *          a literal containing parameter-like text
+   * @throws SQLException
+   *           if preparation, binding, or execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "'? :ignored -- /*'", "'a''? :ignored -- /*'", "$$? :ignored -- /*$$", "$$'\"`? :ignored$$"
+  })
+  void bindsParametersAroundQuotedLiterals(String literal) throws SQLException {
+    String sql = "SELECT :first AS first_value, " + literal + " AS text_value, ? AS last_value "
+        + "FROM mtcars /* ' \" ` $$ ? :ignored */ LIMIT 1 -- ' \" ` $$ ? :ignored";
+    try (JParqPreparedStatement ps = connection.prepareStatement(sql)) {
+      assertEquals(2, ps.getParameterMetaData().getParameterCount());
+      ps.setInt("first", 7);
+      ps.setInt(2, 9);
+      try (ResultSet rs = ps.executeQuery()) {
+        assertTrue(rs.next());
+        assertEquals(7, rs.getInt(1));
+        String expected = literal.startsWith("$$")
+            ? literal.substring(2, literal.length() - 2)
+            : literal.substring(1, literal.length() - 1).replace("''", "'");
+        assertEquals(expected, rs.getString(2));
+        assertEquals(9, rs.getInt(3));
+        assertFalse(rs.next());
+      }
+    }
+  }
+
+  /**
+   * Preserves quoted alias text while binding positional and named parameters.
+   *
+   * @param alias
+   *          a delimited alias, possibly containing a doubled delimiter
+   * @throws SQLException
+   *           if preparation, binding, or execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "\"? :ignored -- /*\"", "\"a\"\"? :ignored$$\"", "`? :ignored -- /*`", "`a``? :ignored$$`"
+  })
+  void bindsParametersAroundQuotedIdentifiers(String alias) throws SQLException {
+    String sql = "SELECT ? AS " + alias + ", :last AS last_value FROM mtcars LIMIT 1";
+    try (JParqPreparedStatement ps = connection.prepareStatement(sql)) {
+      assertEquals(2, ps.getParameterMetaData().getParameterCount());
+      ps.setInt(1, 7);
+      ps.setInt("last", 9);
+      try (ResultSet rs = ps.executeQuery()) {
+        assertTrue(rs.next());
+        String delimiter = alias.substring(0, 1);
+        assertEquals(alias.substring(1, alias.length() - 1).replace(delimiter + delimiter, delimiter),
+            rs.getMetaData().getColumnLabel(1));
+        assertEquals(7, rs.getInt(1));
+        assertEquals(9, rs.getInt(2));
+        assertFalse(rs.next());
+      }
+    }
+  }
+
+  /**
+   * Translates shared quote-scanner errors to JDBC syntax exceptions.
+   *
+   * @param quote
+   *          the unmatched opening delimiter
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "'", "\"", "`", "$$"
+  })
+  void rejectsUnterminatedQuotedRegions(String quote) {
+    var exception = assertThrows(java.sql.SQLSyntaxErrorException.class,
+        () -> connection.prepareStatement("SELECT ? AS value, " + quote + "unfinished"));
+    assertEquals("42000", exception.getSQLState());
+    assertInstanceOf(IllegalArgumentException.class, exception.getCause());
+  }
 
   @TempDir
   File tempDir;
