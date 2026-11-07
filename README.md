@@ -483,6 +483,9 @@ predicates; equality and `IN` can still prune pages, as can eligible predicates 
 With `JOIN ... USING (x)`, unqualified `x` and `SELECT *` expose one merged key. Qualified references
 such as `a.x` and `b.x`, including `a.*` and `b.*`, retain their input values and return NULL when
 that input is absent from an outer-join row. Later joins using `x` match against the accumulated merged key.
+Grouping by merged `x` does not group the separate input keys `a.x` or `b.x`; select those keys only when
+they are also grouped or aggregated. `SELECT x, a.x ... ORDER BY x` has an ambiguous output label;
+use distinct aliases or a positional ordering reference to identify the intended expression.
 
 Single-table conditions in a join's `WHERE` can filter individual inputs. Unqualified columns must resolve to
 one input. Outer-join filtering preserves NULL-extended rows, and merged `FULL JOIN ... USING` columns remain

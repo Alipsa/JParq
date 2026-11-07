@@ -247,7 +247,11 @@ public class JParqResultSet extends ResultSetAdapter {
       throw SqlExceptions.wrap("Invalid projection declaration", failure);
     }
 
-    AggregateFunctions.AggregatePlan aggregatePlan = AggregateFunctions.plan(select, reader.schema());
+    ValueExpressionEvaluator groupBinding = reader.schema() == null
+        ? null
+        : new ValueExpressionEvaluator(reader.schema(), null, List.of(), qualifierMapping, unqualifiedMapping);
+    AggregateFunctions.AggregatePlan aggregatePlan = AggregateFunctions.plan(select, reader.schema(),
+        groupBinding == null ? null : groupBinding::resolveColumnName);
     if (aggregatePlan != null) {
       labels = new ArrayList<>(aggregatePlan.labels());
       physical = null;

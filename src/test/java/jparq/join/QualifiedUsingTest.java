@@ -1,9 +1,12 @@
 package jparq.join;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -18,6 +21,8 @@ class QualifiedUsingTest {
    *
    * @param pushdown
    *          whether predicate pushdown is enabled
+   * @throws Exception
+   *           if setup or query execution fails
    */
   @ParameterizedTest
   @ValueSource(booleans = {
@@ -48,6 +53,8 @@ class QualifiedUsingTest {
    *
    * @param pushdown
    *          whether predicate pushdown is enabled
+   * @throws Exception
+   *           if setup or query execution fails
    */
   @ParameterizedTest
   @ValueSource(booleans = {
@@ -67,6 +74,8 @@ class QualifiedUsingTest {
    *
    * @param pushdown
    *          whether predicate pushdown is enabled
+   * @throws Exception
+   *           if setup or query execution fails
    */
   @ParameterizedTest
   @ValueSource(booleans = {
@@ -87,6 +96,8 @@ class QualifiedUsingTest {
    *
    * @param pushdown
    *          whether predicate pushdown is enabled
+   * @throws Exception
+   *           if setup or query execution fails
    */
   @ParameterizedTest
   @ValueSource(booleans = {
@@ -101,6 +112,11 @@ class QualifiedUsingTest {
 
   /**
    * Checks empty metadata, alias lists, and materialized wildcard projections.
+   *
+   * @param pushdown
+   *          whether predicate pushdown is enabled
+   * @throws Exception
+   *           if setup or query execution fails
    */
   @ParameterizedTest
   @ValueSource(booleans = {
@@ -121,6 +137,8 @@ class QualifiedUsingTest {
    *
    * @param pushdown
    *          whether predicate pushdown is enabled
+   * @throws Exception
+   *           if setup or query execution fails
    */
   @ParameterizedTest
   @ValueSource(booleans = {
@@ -133,6 +151,77 @@ class QualifiedUsingTest {
     assertEquals(Arrays.asList(Arrays.asList(1, 2, 1, 2, null, null), Arrays.asList(1, 3, null, null, 1, 3)),
         rows("SELECT x AS merged, y AS second_key, a.*, b.* FROM (VALUES (1, 2)) a(x, y)"
             + " FULL JOIN (VALUES (1, 3)) b(x, y) USING (x, y) ORDER BY second_key", pushdown));
+  }
+
+  /**
+   * Rejects internal input fields as keys in a later USING clause.
+   *
+   * @param pushdown
+   *          whether predicate pushdown is enabled
+   * @throws Exception
+   *           if setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void hiddenUsingKeyIsRejected(boolean pushdown) throws Exception {
+    SQLException failure = assertThrows(SQLException.class,
+        () -> rows("SELECT * FROM ((VALUES (1)) a(x) FULL JOIN (VALUES (2)) b(x) USING (x))"
+            + " JOIN (VALUES (1)) c(a__x) USING (a__x)", pushdown));
+    assertEquals("42000", failure.getSQLState());
+    assertTrue(failure.getMessage().contains("USING column 'a__x' not found"), failure.getMessage());
+  }
+
+  /**
+   * Distinguishes each qualified grouping key from the merged key.
+   *
+   * @param pushdown
+   *          whether predicate pushdown is enabled
+   * @throws Exception
+   *           if setup or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void mergedGroupingDoesNotGroupInputKeys(boolean pushdown) throws Exception {
+    String from = " FROM (VALUES (1)) a(x) FULL JOIN (VALUES (2)) b(x) USING (x)";
+    for (String projection : List.of("b.x", "a.x, x", "b.x + 1", "COALESCE(a.x, 0)")) {
+      SQLException failure = assertThrows(SQLException.class,
+          () -> rows("SELECT " + projection + from + " GROUP BY x", pushdown));
+      assertTrue(failure.getMessage().contains("GROUP BY"), failure.getMessage());
+    }
+    assertThrows(SQLException.class, () -> rows("SELECT b.x" + from + " WHERE 1 = 0 GROUP BY x", pushdown));
+    assertThrows(SQLException.class, () -> rows("SELECT x" + from + " GROUP BY b.x", pushdown));
+    assertThrows(SQLException.class, () -> rows("SELECT x" + from + " GROUP BY x HAVING b.x IS NULL", pushdown));
+    assertEquals(List.of(List.of(1), List.of(2)), rows("SELECT x" + from + " GROUP BY x ORDER BY x", pushdown));
+    assertEquals(Arrays.asList(Arrays.asList((Object) null), List.of(2)),
+        rows("SELECT b.x" + from + " GROUP BY b.x ORDER BY b.x NULLS FIRST", pushdown));
+    assertEquals(List.of(List.of(1), List.of(2)),
+        rows("SELECT a.x FROM (VALUES (1), (2)) a(x) GROUP BY x ORDER BY a.x", pushdown));
+  }
+
+  /**
+   * Rejects ordering by a repeated label for distinct bound expressions.
+   *
+   * @param pushdown
+   *          whether predicate pushdown is enabled
+   * @throws Exception
+   *           if setup or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void mergedAndQualifiedOrderingLabelsAreAmbiguous(boolean pushdown) throws Exception {
+    String from = " FROM (VALUES (1)) a(x) FULL JOIN (VALUES (2)) b(x) USING (x)";
+    SQLException failure = assertThrows(SQLException.class,
+        () -> rows("SELECT x, a.x" + from + " ORDER BY x", pushdown));
+    assertEquals("42702", failure.getSQLState());
+    assertTrue(failure.getMessage().contains("Ambiguous column reference: x"), failure.getMessage());
+    assertEquals(Arrays.asList(Arrays.asList(1, 1), Arrays.asList(2, null)),
+        rows("SELECT x, a.x" + from + " ORDER BY 1", pushdown));
   }
 
   /**

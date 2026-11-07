@@ -35,6 +35,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
   private final Map<String, String> canonicalLabels;
   private final List<JoinTable> joinTables;
   private final List<FieldMapping> fieldMappings;
+  private final Map<String, FieldMapping> fieldMappingByName;
   private final ExpressionEvaluator evaluator;
   private final List<GenericRecord> resultRows;
   private int resultIndex;
@@ -335,11 +336,11 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
           if (info == null) {
             int ownerIndex = locateOwnerTable(tables, tableIndex, usingColumn);
             if (ownerIndex < 0) {
-              throw new IllegalArgumentException("USING column '" + usingColumn + "' not found in preceding tables");
+              throw SqlExceptions.syntaxFailure("USING column '" + usingColumn + "' not found in preceding tables");
             }
             String ownerField = resolveFieldName(tables.get(ownerIndex).schema(), usingColumn);
             if (ownerField == null) {
-              throw new IllegalArgumentException(
+              throw SqlExceptions.syntaxFailure(
                   "USING column '" + usingColumn + "' missing from table '" + tables.get(ownerIndex).tableName() + "'");
             }
             info = new UsingColumnInfo(ownerField, ownerIndex);
@@ -349,8 +350,8 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
           }
           String participantField = resolveFieldName(table.schema(), usingColumn);
           if (participantField == null) {
-            throw new IllegalArgumentException(
-                "USING column '" + usingColumn + "' missing from table '" + table.tableName() + "'");
+            throw SqlExceptions
+                .syntaxFailure("USING column '" + usingColumn + "' missing from table '" + table.tableName() + "'");
           }
           registerUsingField(tableLookup, tableIndex, participantField, info);
         }
@@ -386,7 +387,7 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
         return null;
       }
       Schema.Field direct = schema.getField(column);
-      if (direct != null) {
+      if (direct != null && MaterializedNames.isVisible(direct)) {
         return direct.name();
       }
       for (Schema.Field field : schema.getFields()) {
@@ -441,6 +442,11 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
     this.unqualifiedColumnMapping = Map.copyOf(context.unqualifiedMapping());
     this.joinTables = joinTables;
     this.fieldMappings = List.copyOf(mappings);
+    Map<String, FieldMapping> mappingsByName = new HashMap<>();
+    for (FieldMapping mapping : mappings) {
+      mappingsByName.put(mapping.targetField(), mapping);
+    }
+    this.fieldMappingByName = Map.copyOf(mappingsByName);
     List<String> qualifiers = new ArrayList<>();
     for (JoinTable table : joinTables) {
       qualifiers.addAll(qualifierSet(table));
@@ -1014,8 +1020,10 @@ public final class JoinRecordReader implements RecordReader, ColumnMappingProvid
       if (info == null || info.isOwner(tableIndex)) {
         continue;
       }
-      FieldMapping merged = fieldMappings.stream().filter(mapping -> mapping.targetField().equals(info.canonicalName()))
-          .findFirst().orElseThrow();
+      FieldMapping merged = fieldMappingByName.get(info.canonicalName());
+      if (merged == null) {
+        throw new IllegalStateException("Missing merged field mapping for USING column '" + info.canonicalName() + "'");
+      }
       Object leftValue = merged.resolveValue(assignments);
       Object rightValue = row.get(field.name());
       if (leftValue == null || rightValue == null) {
