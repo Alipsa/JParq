@@ -212,8 +212,8 @@ class JsonPathTest {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement()) {
       Map<String, String> invalidPaths = Map.of("$.missing.\"bad\\q\"", "Invalid quoted member in JSON path",
-          "$.missing[*]", "Unsupported array subscript in JSON path: [*]", "$.missing[last]",
-          "Unsupported array subscript in JSON path: [last]", "$\"a\"",
+          "$.missing[last-]", "Unsupported array subscript in JSON path: [last-]", "$.missing[0 to]",
+          "Unsupported array subscript in JSON path: [0 to]", "$\"a\"",
           "Quoted member in JSON path must be preceded by a dot", "$.\"a\" b",
           "Unexpected character after quoted member in JSON path", "$.\"a\".\"b\" x",
           "Unexpected character after quoted member in JSON path", "$.missing[]",

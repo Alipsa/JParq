@@ -8,23 +8,41 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericArray;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.AvroCoercions;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
 
-/** Minimal implementations of SQL JSON_* functions using Jackson. */
+/**
+ * SQL JSON_* functions using Jackson. Array access uses lax singleton wrapping.
+ * From the first nonterminal array step onward, the default limits are 100,000
+ * intermediate items per step and 100,000 item/range evaluations over the
+ * entire path. The positive integer system property
+ * {@code jparq.json.maxIntermediateItems} overrides both limits when an
+ * evaluation first needs an intermediate array step.
+ */
 public final class JsonFunctions {
 
   private static final ObjectMapper MAPPER = new ObjectMapper();
+
+  private static final long MAX_ARRAY_LITERAL = Integer.MAX_VALUE + 1L;
+  private static final String LAST_INDEX = "last";
+  private static final String MAX_ITEMS_PROPERTY = "jparq.json.maxIntermediateItems";
+  private static final int DEFAULT_MAX_ITEMS = 100_000;
+
+  private static final String ARRAY_INDEX = "([+-]?[0-9]+|last(?: *[+-] *[0-9]+)?)";
+  private static final Pattern ARRAY_RANGE = Pattern.compile(ARRAY_INDEX + "(?: +to +" + ARRAY_INDEX + ")?");
 
   private JsonFunctions() {
   }
@@ -37,11 +55,14 @@ public final class JsonFunctions {
    * @param path
    *          JSON path expression rooted at {@code $}; double-quoted member names
    *          use JSON string escapes; leading and trailing whitespace and
-   *          whitespace between tokens are ignored
+   *          whitespace between tokens are ignored; array steps accept integer
+   *          indexes, {@code *}, {@code last}, relative indexes such as
+   *          {@code last-1}, inclusive ranges, and comma-separated selections
    * @return extracted scalar value or {@code null} when the path cannot be
-   *         resolved
+   *         resolved to exactly one item
    * @throws IllegalArgumentException
-   *           if the document or path is malformed
+   *           if the document or path is malformed, or the configured
+   *           intermediate selection limit is invalid or exceeded
    */
   public static Object jsonValue(Object document, Object path) {
     JsonNode node = resolve(document, path);
@@ -71,7 +92,8 @@ public final class JsonFunctions {
    *          positional arguments
    * @return extracted value or {@code null} when inputs are missing
    * @throws IllegalArgumentException
-   *           if the document or path is malformed
+   *           if the document or path is malformed, or the configured
+   *           intermediate selection limit is invalid or exceeded
    */
   public static Object jsonValue(List<Object> args) {
     if (args == null || args.size() < 2) {
@@ -88,10 +110,14 @@ public final class JsonFunctions {
    * @param path
    *          JSON path expression rooted at {@code $}; double-quoted member names
    *          use JSON string escapes; leading and trailing whitespace and
-   *          whitespace between tokens are ignored
-   * @return JSON string or {@code null} when the path cannot be resolved
+   *          whitespace between tokens are ignored; array steps accept integer
+   *          indexes, {@code *}, {@code last}, relative indexes such as
+   *          {@code last-1}, inclusive ranges, and comma-separated selections
+   * @return JSON string or {@code null} when the path does not select exactly one
+   *         item
    * @throws IllegalArgumentException
-   *           if the document or path is malformed
+   *           if the document or path is malformed, or the configured
+   *           intermediate selection limit is invalid or exceeded
    */
   public static String jsonQuery(Object document, Object path) {
     JsonNode node = resolve(document, path);
@@ -109,7 +135,8 @@ public final class JsonFunctions {
    *          positional arguments
    * @return JSON fragment or {@code null} when inputs are missing
    * @throws IllegalArgumentException
-   *           if the document or path is malformed
+   *           if the document or path is malformed, or the configured
+   *           intermediate selection limit is invalid or exceeded
    */
   public static String jsonQuery(List<Object> args) {
     if (args == null || args.size() < 2) {
@@ -183,7 +210,8 @@ public final class JsonFunctions {
    *          the SQL/JSON path expression
    * @return the selected node, or null if the document, path, or match is missing
    * @throws IllegalArgumentException
-   *           if the document or path is malformed
+   *           if the document or path is malformed, or the configured
+   *           intermediate selection limit is invalid or exceeded
    */
   private static JsonNode resolve(Object document, Object path) {
     if (document == null || path == null) {
@@ -215,12 +243,16 @@ public final class JsonFunctions {
    *          the document root
    * @param path
    *          the path after the root marker
-   * @return the selected node, or null if a step has no match
+   * @return the selected node, or null unless exactly one item matches
    * @throws IllegalArgumentException
    *           if a path step is malformed
    */
   private static JsonNode navigate(JsonNode node, String path) {
-    JsonNode current = node;
+    // Without an intermediate array step, a terminal step has at most one input
+    // item, so its work is linear in the path text and needs no intermediate
+    // budget.
+    ArrayBudget budget = null;
+    List<JsonNode> current = node == null ? List.of() : List.of(node);
     int index = 0;
     while (index < path.length()) {
       char ch = path.charAt(index);
@@ -229,14 +261,12 @@ public final class JsonFunctions {
         if (close < 0) {
           throw new IllegalArgumentException("Unclosed array index in JSON path");
         }
-        String idxStr = path.substring(index + 1, close);
-        int arrayIndex;
-        try {
-          arrayIndex = Integer.parseInt(trimPathWhitespace(idxStr));
-        } catch (NumberFormatException e) {
-          throw new IllegalArgumentException("Unsupported array subscript in JSON path: [" + idxStr + "]", e);
+        List<ArrayRange> ranges = parseArraySubscript(path.substring(index + 1, close));
+        boolean terminal = skipWhitespace(path, close + 1) == path.length();
+        if (!terminal && budget == null) {
+          budget = new ArrayBudget(maxIntermediateItems());
         }
-        current = current != null && current.isArray() ? current.get(arrayIndex) : null;
+        current = selectArrayItems(current, ranges, budget, terminal);
         index = close + 1;
       } else if (isPathWhitespace(ch)) {
         index = skipWhitespace(path, index);
@@ -250,11 +280,235 @@ public final class JsonFunctions {
         }
         int next = findNextDelimiter(path, start);
         String prop = decodeMember(path.substring(start, next));
-        current = current == null ? null : current.get(prop);
+        List<JsonNode> selected = new ArrayList<>();
+        for (JsonNode item : current) {
+          JsonNode value = item.get(prop);
+          if (value != null) {
+            selected.add(value);
+          }
+        }
+        current = selected;
         index = next;
       }
     }
-    return current;
+    return current.size() == 1 ? current.getFirst() : null;
+  }
+
+  /**
+   * Reads the per-evaluation bound on intermediate selection sizes.
+   *
+   * @return configured positive limit, or 100,000 by default
+   * @throws IllegalArgumentException
+   *           if the configured limit is not a positive integer
+   */
+  private static int maxIntermediateItems() {
+    String configured = System.getProperty(MAX_ITEMS_PROPERTY);
+    if (configured == null) {
+      return DEFAULT_MAX_ITEMS;
+    }
+    try {
+      int limit = Integer.parseInt(configured);
+      if (limit > 0) {
+        return limit;
+      }
+    } catch (NumberFormatException e) {
+      throw SqlExceptions.invalidAttribute(MAX_ITEMS_PROPERTY + " must be a positive integer", e);
+    }
+    throw SqlExceptions.invalidAttribute(MAX_ITEMS_PROPERTY + " must be a positive integer");
+  }
+
+  /**
+   * Selects array items, treating non-arrays as singleton arrays in lax mode.
+   * Checks each complete range before allocating its results. Terminal steps
+   * retain at most two items because multiple results always produce NULL.
+   *
+   * @param current
+   *          input sequence
+   * @param ranges
+   *          ordered selections, including duplicates
+   * @param budget
+   *          shared evaluation budget, or null for a terminal step with no
+   *          preceding intermediate array step
+   * @param terminal
+   *          whether no path steps remain
+   * @return selected items, or at most two items for a terminal step
+   * @throws IllegalArgumentException
+   *           if an intermediate selection or array accessor work exceeds the
+   *           limit
+   */
+  private static List<JsonNode> selectArrayItems(List<JsonNode> current, List<ArrayRange> ranges, ArrayBudget budget,
+      boolean terminal) {
+    if (!terminal) {
+      budget.consume(current.size() * (long) ranges.size());
+    }
+    List<JsonNode> selected = new ArrayList<>();
+    for (JsonNode item : current) {
+      int size = item.isArray() ? item.size() : 1;
+      for (ArrayRange range : ranges) {
+        if (terminal && budget != null) {
+          budget.consume(1);
+        }
+        int first = (int) Math.min(size, Math.max(0, range.first().resolve(size)));
+        int last = (int) Math.max(-1, Math.min(size - 1L, range.last().resolve(size)));
+        long count = Math.max(0L, last - (long) first + 1);
+        if (!terminal && count > budget.limit - (long) selected.size()) {
+          throw SqlExceptions.implementationLimit("JSON path intermediate selection exceeds " + MAX_ITEMS_PROPERTY
+              + " limit of " + budget.limit + " items");
+        }
+        for (int position = first; position <= last; position++) {
+          selected.add(item.isArray() ? item.get(position) : item);
+          if (terminal && selected.size() == 2) {
+            return selected;
+          }
+        }
+      }
+    }
+    return selected;
+  }
+
+  /**
+   * Creates a classified failure for excessive array accessor work.
+   *
+   * @param limit
+   *          maximum item/range evaluations over the complete path
+   * @return failure carrying SQLState 54000
+   */
+  private static IllegalArgumentException arrayWorkLimit(int limit) {
+    return SqlExceptions.implementationLimit("JSON path array work exceeds " + MAX_ITEMS_PROPERTY + " limit of " + limit
+        + " item/range evaluations for one path");
+  }
+
+  /** Shared memory limit and remaining accessor work for one path evaluation. */
+  private static final class ArrayBudget {
+    private final int limit;
+    private long remainingWork;
+
+    /**
+     * Creates an evaluation budget without reading process settings again.
+     *
+     * @param limit
+     *          maximum intermediate items and total item/range evaluations
+     */
+    private ArrayBudget(int limit) {
+      this.limit = limit;
+      remainingWork = limit;
+    }
+
+    /**
+     * Reserves work before iterating, including ranges with no matches.
+     *
+     * @param work
+     *          number of item/range evaluations
+     * @throws IllegalArgumentException
+     *           if the cumulative work exceeds the limit
+     */
+    private void consume(long work) {
+      if (work > remainingWork) {
+        throw arrayWorkLimit(limit);
+      }
+      remainingWork -= work;
+    }
+  }
+
+  /**
+   * Parses array selections before evaluating them, including after a missing
+   * step.
+   *
+   * @param subscript
+   *          bracket contents
+   * @return inclusive index ranges in selection order
+   * @throws IllegalArgumentException
+   *           if the subscript is malformed
+   */
+  private static List<ArrayRange> parseArraySubscript(String subscript) {
+    StringBuilder normalized = new StringBuilder();
+    for (int i = 0; i < subscript.length(); i++) {
+      char ch = subscript.charAt(i);
+      normalized.append(isPathWhitespace(ch) ? ' ' : ch);
+    }
+    String text = trimPathWhitespace(normalized.toString());
+    if ("*".equals(text)) {
+      return List.of(new ArrayRange(new ArrayIndex(false, 0), new ArrayIndex(true, 0)));
+    }
+    List<ArrayRange> ranges = new ArrayList<>();
+    for (String selection : text.split(",", -1)) {
+      var matcher = ARRAY_RANGE.matcher(trimPathWhitespace(selection));
+      if (!matcher.matches()) {
+        throw new IllegalArgumentException("Unsupported array subscript in JSON path: [" + subscript + "]");
+      }
+      ArrayIndex first = parseArrayIndex(matcher.group(1));
+      ArrayIndex last = matcher.group(2) == null ? first : parseArrayIndex(matcher.group(2));
+      ranges.add(new ArrayRange(first, last));
+    }
+    return ranges;
+  }
+
+  /**
+   * Parses an integer index or an offset from the last array element.
+   *
+   * @param text
+   *          validated index expression
+   * @return index independent of the current array's size
+   */
+  private static ArrayIndex parseArrayIndex(String text) {
+    if (!text.startsWith(LAST_INDEX)) {
+      return new ArrayIndex(false, parseBoundedIndex(text));
+    }
+    String offset = text.substring(LAST_INDEX.length()).replace(" ", "");
+    return new ArrayIndex(true, offset.isEmpty() ? 0 : parseBoundedIndex(offset));
+  }
+
+  /**
+   * Parses a validated integer with saturation just beyond any possible array.
+   * Once saturated, the remaining digits cannot affect selection or clipping.
+   *
+   * @param text
+   *          signed ASCII integer literal
+   * @return signed magnitude capped at Integer.MAX_VALUE + 1
+   */
+  private static long parseBoundedIndex(String text) {
+    boolean negative = text.charAt(0) == '-';
+    int start = negative || text.charAt(0) == '+' ? 1 : 0;
+    long magnitude = 0;
+    for (int i = start; i < text.length(); i++) {
+      magnitude = Math.min(MAX_ARRAY_LITERAL, magnitude * 10 + text.charAt(i) - '0');
+      if (magnitude == MAX_ARRAY_LITERAL) {
+        break;
+      }
+    }
+    return negative ? -magnitude : magnitude;
+  }
+
+  /**
+   * An array index, optionally relative to the final element.
+   *
+   * @param fromLast
+   *          whether to add the final element's index
+   * @param offset
+   *          signed index or relative offset
+   */
+  private record ArrayIndex(boolean fromLast, long offset) {
+    /**
+     * Resolves the index without overflowing when adding a relative offset.
+     *
+     * @param size
+     *          array size
+     * @return zero-based index, possibly outside the array bounds
+     */
+    private long resolve(int size) {
+      return fromLast ? size - 1L + offset : offset;
+    }
+  }
+
+  /**
+   * An inclusive range; a single index has identical endpoints.
+   *
+   * @param first
+   *          lower endpoint
+   * @param last
+   *          upper endpoint
+   */
+  private record ArrayRange(ArrayIndex first, ArrayIndex last) {
   }
 
   /**

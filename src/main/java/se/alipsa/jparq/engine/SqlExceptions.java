@@ -21,7 +21,7 @@ public final class SqlExceptions {
   public static final String OUTER_VALUE = "<outer value>";
   private static final int DIAGNOSTIC_VALUE_LIMIT = 64;
   private static final Set<String> CLASSIFIED_STATES = Set.of("21000", "42000", "42702", "22001", "22005", "22003",
-      "22007", "22008", "22018", "22021", "2201W", "2201X", "0A000");
+      "22007", "22008", "22018", "22021", "2201W", "2201X", "0A000", "54000", "HY024");
   private static final Pattern CORRELATED_BINDING = Pattern
       .compile("__JPARQ_CORRELATED_VALUE\\s*\\(\\s*'[^']*'\\s*,\\s*\\d+\\s*\\)", Pattern.CASE_INSENSITIVE);
 
@@ -121,6 +121,54 @@ public final class SqlExceptions {
   }
 
   /**
+   * Creates a failure for an implementation resource limit.
+   *
+   * @param message
+   *          diagnostic message
+   * @return engine failure carrying SQLState 54000
+   */
+  public static IllegalArgumentException implementationLimit(String message) {
+    return implementationLimit(message, null);
+  }
+
+  /**
+   * Creates an implementation-limit failure retaining its original cause.
+   *
+   * @param message
+   *          diagnostic message
+   * @param cause
+   *          original failure, or null
+   * @return engine failure carrying SQLState 54000
+   */
+  public static IllegalArgumentException implementationLimit(String message, Throwable cause) {
+    return new IllegalArgumentException(message, new SQLException(message, "54000", cause));
+  }
+
+  /**
+   * Creates a failure for an invalid configuration attribute value.
+   *
+   * @param message
+   *          diagnostic message
+   * @return engine failure carrying SQLState HY024
+   */
+  public static IllegalArgumentException invalidAttribute(String message) {
+    return invalidAttribute(message, null);
+  }
+
+  /**
+   * Creates an invalid-attribute failure retaining its original cause.
+   *
+   * @param message
+   *          diagnostic message
+   * @param cause
+   *          original failure, or null
+   * @return engine failure carrying SQLState HY024
+   */
+  public static IllegalArgumentException invalidAttribute(String message, Throwable cause) {
+    return new IllegalArgumentException(message, new SQLException(message, "HY024", cause));
+  }
+
+  /**
    * Describes incompatible ARRAY element types consistently across evaluation and
    * inference.
    *
@@ -194,14 +242,14 @@ public final class SqlExceptions {
   }
 
   /**
-   * Finds classified syntax, numeric, temporal, row-count, or unsupported feature
-   * errors inside engine wrappers.
+   * Finds classified data, syntax, feature, resource, and configuration failures
+   * inside engine wrappers.
    *
    * @param failure
    *          the exception or wrapper to inspect
    * @return the SQLState 21000, 42000, 42702, 22001, 22005, 22003, 22007, 22008,
-   *         22018, 22021, 2201W, 2201X, or 0A000 exception, or null without a
-   *         recognized state
+   *         22018, 22021, 2201W, 2201X, 0A000, 54000, or HY024 exception, or null
+   *         without a recognized state
    */
   public static SQLException findSqlStateFailure(Throwable failure) {
     Throwable current = failure;
@@ -266,6 +314,9 @@ public final class SqlExceptions {
     if ("0A000".equals(classified.getSQLState())) {
       return new SQLFeatureNotSupportedException(rendered, classified.getSQLState(), classified.getErrorCode(),
           failure);
+    }
+    if ("54000".equals(classified.getSQLState()) || "HY024".equals(classified.getSQLState())) {
+      return new SQLException(rendered, classified.getSQLState(), classified.getErrorCode(), failure);
     }
     return new SQLDataException(rendered, classified.getSQLState(), classified.getErrorCode(), failure);
   }

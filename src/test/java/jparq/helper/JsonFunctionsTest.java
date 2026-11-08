@@ -159,7 +159,7 @@ class JsonFunctionsTest {
    */
   @Test
   void rejectsUnsupportedArraySubscripts() {
-    for (String subscript : List.of("*", "last", "0 to 1", "", " ", "2147483648")) {
+    for (String subscript : List.of("last-", "0 to", "0,,1", "*,0", "", " ", "١", "２", "last-١", "0 to ２")) {
       for (String member : List.of("a", "missing")) {
         String path = "$." + member + "[" + subscript + "]";
         String expected = "Unsupported array subscript in JSON path: [" + subscript + "]";
@@ -169,8 +169,8 @@ class JsonFunctionsTest {
             () -> JsonFunctions.jsonQuery("{\"a\":[1]}", path), path);
         assertEquals(expected, valueFailure.getMessage());
         assertEquals(expected, queryFailure.getMessage());
-        assertInstanceOf(NumberFormatException.class, valueFailure.getCause());
-        assertInstanceOf(NumberFormatException.class, queryFailure.getCause());
+        assertNull(valueFailure.getCause());
+        assertNull(queryFailure.getCause());
       }
     }
   }
