@@ -748,6 +748,22 @@ public final class ValueExpressionEvaluator {
     return AvroCoercions.resolveColumnValue(canonical, record, fieldSchemas, caseInsensitiveIndex);
   }
 
+  /**
+   * Resolves an outer reference against the current row, retaining NULL values
+   * from qualified columns and projection aliases.
+   *
+   * @param qualifier
+   *          outer table qualifier, or null for an unqualified reference
+   * @param columnName
+   *          outer column name
+   * @param record
+   *          current outer row
+   * @return the bound value, possibly null
+   * @throws IllegalStateException
+   *           if a correlation mapping names a missing field
+   * @throws IllegalArgumentException
+   *           if the column reference is unknown or ambiguous
+   */
   private Object resolveCorrelatedValue(String qualifier, String columnName, GenericRecord record) {
     String normalizedQualifier = Identifier.lookupKey(qualifier);
     String normalizedColumn = Identifier.lookupKey(columnName);
@@ -757,18 +773,12 @@ public final class ValueExpressionEvaluator {
         String canonical = mapping.get(normalizedColumn);
         if (canonical != null) {
           assertCorrelatedFieldPresent(normalizedQualifier, normalizedColumn, canonical);
-          Object val = AvroCoercions.resolveColumnValue(canonical, record, fieldSchemas, caseInsensitiveIndex);
-          if (val != null) {
-            return val;
-          }
+          return AvroCoercions.resolveColumnValue(canonical, record, fieldSchemas, caseInsensitiveIndex);
         }
       }
     }
-    Object direct = resolveColumnValue(qualifier, columnName, record);
-    if (direct != null) {
-      return direct;
-    }
-    return resolveColumnValue(null, columnName, record);
+    // NULL is a resolved SQL value, not a signal to retry without the qualifier.
+    return resolveColumnValue(qualifier, columnName, record);
   }
 
   /**
