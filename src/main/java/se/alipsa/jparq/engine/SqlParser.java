@@ -1227,7 +1227,7 @@ public final class SqlParser {
    *           if a column or projection wildcard requires an input
    */
   private static void validateTableFreeSelect(PlainSelect select, boolean lateral) {
-    final var validator = new ExpressionVisitorAdapter<Void>() {
+    final var validator = new JSqlParserSupport.NamedArgumentVisitor() {
       /** {@inheritDoc} */
       @Override
       public <S> Void visit(TranscodingFunction convert, S context) {

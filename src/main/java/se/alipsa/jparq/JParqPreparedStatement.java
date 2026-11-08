@@ -86,6 +86,7 @@ import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.HadoopConfigurations;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.InMemoryRecordReader;
+import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.JoinPredicatePlanner;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.MaterializedNames;
@@ -2858,7 +2859,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           carrying SQLState 42000 for unresolved columns
    */
   private static void validateUnnestColumns(Expression expression) {
-    expression.accept(new net.sf.jsqlparser.expression.ExpressionVisitorAdapter<Void>() {
+    expression.accept(new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(Column column, S context) {
         throw SqlExceptions.syntaxFailure("Column not found in UNNEST argument: " + column);
@@ -4996,7 +4997,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     Set<String> candidates = schema.getFields().stream().map(Schema.Field::name).collect(Collectors.toSet());
     var baseRef = select.tableReferences().isEmpty() ? null : select.tableReferences().getFirst();
     List<String> qualifiers = qualifierList(baseRef, false);
-    final var visitor = new net.sf.jsqlparser.expression.ExpressionVisitorAdapter<Void>() {
+    final var visitor = new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(net.sf.jsqlparser.expression.AnyComparisonExpression any, S context) {
         return visit(any.getSelect(), context);
@@ -5567,6 +5568,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             consumed = true;
           }
         }
+        default -> throw new IllegalStateException("Unexpected SQL parse state: " + state);
       }
       if (!consumed) {
         rewritten.append(c);
@@ -5719,6 +5721,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             consumed = true;
           }
         }
+        default -> throw new IllegalStateException("Unexpected SQL parse state: " + state);
       }
       if (!consumed) {
         rendered.append(c);

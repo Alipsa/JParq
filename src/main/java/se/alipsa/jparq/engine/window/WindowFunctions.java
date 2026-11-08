@@ -18,7 +18,6 @@ import java.util.Set;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.AnalyticType;
 import net.sf.jsqlparser.expression.Expression;
-import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.WindowElement;
 import net.sf.jsqlparser.expression.WindowOffset;
 import net.sf.jsqlparser.expression.WindowRange;
@@ -30,6 +29,7 @@ import org.apache.avro.generic.GenericRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import se.alipsa.jparq.engine.CorrelationMappings;
+import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlComparisons;
@@ -78,7 +78,7 @@ public final class WindowFunctions {
       if (expression == null) {
         continue;
       }
-      expression.accept(new ExpressionVisitorAdapter<Void>() {
+      expression.accept(new JSqlParserSupport.NamedArgumentVisitor() {
         @Override
         public <S> Void visit(AnalyticExpression analytic, S context) {
           registerAnalyticExpression(analytic, collector);

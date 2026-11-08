@@ -8,7 +8,6 @@ import java.util.Set;
 import java.util.function.Function;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.Expression;
-import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
 import net.sf.jsqlparser.expression.operators.relational.InExpression;
 import net.sf.jsqlparser.schema.Table;
@@ -61,7 +60,7 @@ public final class PredicateSubqueryValidation {
    */
   private static void visitExpressions(List<Expression> expressions, Function<Table, Set<String>> columns,
       Map<Identifier, WithItem<?>> ctes) {
-    var visitor = new ExpressionVisitorAdapter<Void>() {
+    var visitor = new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(InExpression in, S context) {
         if (in.getRightExpression() instanceof Select nested

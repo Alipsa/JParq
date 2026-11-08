@@ -25,6 +25,22 @@ public final class QueryTestSupport {
   }
 
   /**
+   * Finds the original failure without depending on the number of wrapping
+   * layers.
+   *
+   * @param failure
+   *          the failure to inspect
+   * @return the innermost cause, or the supplied failure if it has no cause
+   */
+  public static Throwable rootCause(Throwable failure) {
+    Throwable cause = failure;
+    while (cause.getCause() != null) {
+      cause = cause.getCause();
+    }
+    return cause;
+  }
+
+  /**
    * Writes table {@code o(n)} with nullable INTEGER values 1, 1, 2, 3, and NULL.
    *
    * @param directory
