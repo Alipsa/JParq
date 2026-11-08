@@ -4,11 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeout;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -19,6 +21,7 @@ import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junit.jupiter.api.parallel.Resources;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.function.JsonFunctions;
 
 /** Regression coverage for SQL/JSON array selections from issue 303. */
@@ -62,7 +65,7 @@ class JsonArraySubscriptTest {
   /** Returns NULL for empty or multiple selections without an array wrapper. */
   @Test
   void returnsNullForNonSingletonSelections() {
-    for (String document : List.of("{\"a\":[1,2,3]}", "{\"a\":[]}", "{\"a\":null}", "{}")) {
+    for (String document : List.of("{\"a\":[1,2,3]}", "{\"a\":[]}", "{}")) {
       for (String subscript : List.of("*", "0 to 2", "0,last", "last+1", "last-2147483648", "3 to 0", "2147483647",
           "last+2147483647", "-1")) {
         String path = "$.a[" + subscript + "]";
@@ -71,7 +74,6 @@ class JsonArraySubscriptTest {
       }
     }
     assertNull(JsonFunctions.jsonValue("[7]", "$[0,0]"));
-    assertNull(JsonFunctions.jsonQuery("[null]", "$[*]"));
     assertEquals(7, JsonFunctions.jsonValue("[7]", "$[*]"));
     assertEquals("7", JsonFunctions.jsonQuery("[7]", "$[0 to 2]"));
   }
@@ -215,35 +217,101 @@ class JsonArraySubscriptTest {
   void validatesSelectionLimit() {
     for (String setting : List.of("0", "-1", "oops", "2147483648")) {
       withSelectionLimit(setting, () -> {
-        var failure = assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue("[1]", "$[0]"));
+        var failure = assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue("[1]", "$[0].a"));
         assertEquals("jparq.json.maxIntermediateItems must be a positive integer", failure.getMessage());
+        assertEquals("54000", SqlExceptions.findSqlStateFailure(failure).getSQLState());
       });
     }
   }
 
   /**
-   * Reports bounded-parameter selection overflow as a JDBC error.
+   * Reports bound-parameter resource failures as implementation limits through
+   * JDBC.
    *
+   * @param function
+   *          extraction function
    * @throws SQLException
    *           if connection setup fails
    */
-  @Test
-  void reportsSelectionLimitThroughJdbc() throws SQLException {
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "JSON_VALUE", "JSON_QUERY"
+  })
+  void reportsSelectionLimitThroughJdbc(String function) throws SQLException {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
-        var statement = connection.prepareStatement("SELECT JSON_VALUE(?, ?)")) {
+        var statement = connection.prepareStatement("SELECT " + function + "(?, ?)")) {
       statement.setString(1, "[{\"b\":1},{},{}]");
       statement.setString(2, "$[0 to last].b");
-      withSelectionLimit("2", () -> {
-        var failure = assertThrows(SQLException.class, () -> {
-          try (var result = statement.executeQuery()) {
-            while (result.next()) {
-              result.getObject(1);
+      Map<String, String> settings = Map.of("2", "jparq.json.maxIntermediateItems limit of 2", "oops",
+          "jparq.json.maxIntermediateItems must be a positive integer");
+      for (var entry : settings.entrySet()) {
+        withSelectionLimit(entry.getKey(), () -> {
+          var failure = assertThrows(SQLException.class, () -> {
+            try (var result = statement.executeQuery()) {
+              while (result.next()) {
+                result.getObject(1);
+              }
             }
-          }
+          });
+          assertEquals("54000", failure.getSQLState());
+          assertTrue(failure.getMessage().contains(entry.getValue()), failure::getMessage);
         });
-        assertTrue(failure.getMessage().contains("jparq.json.maxIntermediateItems limit of 2"));
-      });
+      }
     }
+  }
+
+  /** Keeps JSON null items distinct from an empty or multiple-item selection. */
+  @Test
+  void selectsNullItems() {
+    for (String subscript : List.of("*", "0", "last", "0 to 2")) {
+      assertNull(JsonFunctions.jsonValue("{\"a\":null}", "$.a[" + subscript + "]"));
+      assertEquals("[null]", JsonFunctions.jsonQuery("[[null]]", "$[" + subscript + "]"));
+    }
+  }
+
+  /**
+   * Avoids consulting array limits for paths without an intermediate array step.
+   */
+  @Test
+  void ignoresUnusedLimitSettings() {
+    withSelectionLimit("oops", () -> {
+      for (String path : List.of("$.a", "$.a[0]", "$.a[last]", "$.a[*]", "$.a[0 to 2]")) {
+        assertEquals(1, JsonFunctions.jsonValue("{\"a\":1}", path), path);
+        assertEquals("1", JsonFunctions.jsonQuery("{\"a\":1}", path), path);
+      }
+    });
+  }
+
+  /** Bounds item/range work even when every range selects nothing. */
+  @Test
+  void boundsEmptyRangeWork() {
+    var document = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
+    for (int i = 0; i < 64; i++) {
+      document.add(0);
+    }
+    withSelectionLimit("64", () -> {
+      String ranges = "[" + String.join(",", Collections.nCopies(65, "5")) + "]";
+      for (String path : List.of("$[*]" + ranges + ".x", "$[*]" + ranges)) {
+        var failure = assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue(document, path), path);
+        assertTrue(failure.getMessage().contains("array work"), failure::getMessage);
+        assertEquals("54000", SqlExceptions.findSqlStateFailure(failure).getSQLState());
+      }
+    });
+  }
+
+  /**
+   * Parses oversized numeric literals in linear time without large-integer
+   * arithmetic.
+   */
+  @Test
+  void boundsHugeLiteralParsingCost() {
+    String huge = "9".repeat(300_000);
+    assertTimeout(Duration.ofSeconds(10), () -> {
+      for (int row = 0; row < 10; row++) {
+        assertNull(JsonFunctions.jsonValue("[1,2,3]", "$[" + huge + "]"));
+        assertEquals("3", JsonFunctions.jsonQuery("[1,2,3]", "$[2 to last+" + huge + "]"));
+      }
+    });
   }
 
   /**
@@ -267,5 +335,4 @@ class JsonArraySubscriptTest {
       }
     }
   }
-
 }

@@ -301,16 +301,23 @@ SQL:2016–2023.
   `$.a[*]`, `$.a[0]`, `$.a[last]`, and `$.a[0 to 2]` all select `1` from `{"a":1}`.
 - Array steps support `[*]` (all elements), `[last]` (the final element), offsets such as `[last-1]`,
   inclusive ranges such as `[0 to 2]` and `[last-1 to last]`, and comma-separated selections such as `[0,last]`.
-  Integer endpoints have arbitrary precision; endpoints outside the array are clipped; descending ranges have no matches. Whitespace is allowed
+  Numeric literals of any length are accepted and parsed with saturating arithmetic; endpoints outside the array
+  are clipped, and descending ranges have no matches. Whitespace is allowed
   between subscript tokens, including around the sign in `last - 1`.
 - Subsequent steps apply to every selected item. Both functions return NULL if the complete path selects zero
   or multiple items (the default SQL/JSON behavior without an array wrapper). A single selected JSON array
   remains one item and is returned intact by `JSON_QUERY`.
-- Intermediate selections are limited to 100,000 items per path step, including duplicates. Set the JVM system
-  property `-Djparq.json.maxIntermediateItems=200000` to change the limit to a positive integer. The limit is
-  read once per evaluation. Exceeding it raises `SQLException` with the property name and limit; each range is
-  checked before its items are collected. A terminal array step needs at most two items to determine whether
-  the result is a singleton and does not expand the rest of the selection.
+- Intermediate selections are limited to 100,000 items per path step, including duplicates. From the first
+  nonterminal array step onward, item/range evaluations per step have the same bound, even for ranges that
+  select nothing. Set the JVM system
+  property `-Djparq.json.maxIntermediateItems=200000` to change both limits to a positive integer. The property
+  is read only at the first nonterminal array step and reused for the remainder of that evaluation. Paths with
+  no intermediate array step do not consult the property. This process-wide budget covers JDBC and direct
+  JSON function calls; it is not a connection property.
+  Exceeding either limit or supplying an invalid setting raises `SQLException` with SQLState `54000` and the
+  property name. Each range's size is checked before its items are collected; excessive nonterminal item/range
+  combinations are rejected before iteration. A terminal array step needs at most two items to determine
+  whether the result is a singleton and does not expand the rest of the selection.
 - Numeric subscript literals accept ASCII digits only. Leading-zero validation remains tracked in
   [#496](https://github.com/Alipsa/JParq/issues/496).
 - Malformed quoted members and invalid subscripts raise `SQLException` when evaluated, even after a missing

@@ -18,6 +18,7 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericArray;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.AvroCoercions;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
@@ -25,14 +26,17 @@ import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
  * SQL JSON_* functions using Jackson. Array access uses lax singleton wrapping.
- * Intermediate path selections are limited to 100,000 items by default; the
- * positive integer system property {@code jparq.json.maxIntermediateItems}
- * overrides this limit for each evaluation.
+ * From the first nonterminal array step onward, selections and accessor work
+ * are limited to 100,000 items or item/range evaluations per step by default;
+ * the positive integer system property {@code jparq.json.maxIntermediateItems}
+ * overrides this limit when an evaluation first needs an intermediate array
+ * step.
  */
 public final class JsonFunctions {
 
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
+  private static final long MAX_ARRAY_LITERAL = Integer.MAX_VALUE + 1L;
   private static final String LAST_INDEX = "last";
   private static final String MAX_ITEMS_PROPERTY = "jparq.json.maxIntermediateItems";
   private static final int DEFAULT_MAX_ITEMS = 100_000;
@@ -244,7 +248,10 @@ public final class JsonFunctions {
    *           if a path step is malformed
    */
   private static JsonNode navigate(JsonNode node, String path) {
-    int maxItems = maxIntermediateItems();
+    // Without an intermediate array step, a terminal step has at most one input
+    // item, so its work is linear in the path text and needs no intermediate
+    // budget.
+    int maxItems = 0;
     List<JsonNode> current = node == null ? List.of() : List.of(node);
     int index = 0;
     while (index < path.length()) {
@@ -256,6 +263,9 @@ public final class JsonFunctions {
         }
         List<ArrayRange> ranges = parseArraySubscript(path.substring(index + 1, close));
         boolean terminal = skipWhitespace(path, close + 1) == path.length();
+        if (!terminal && maxItems == 0) {
+          maxItems = maxIntermediateItems();
+        }
         current = selectArrayItems(current, ranges, maxItems, terminal);
         index = close + 1;
       } else if (isPathWhitespace(ch)) {
@@ -302,9 +312,9 @@ public final class JsonFunctions {
         return limit;
       }
     } catch (NumberFormatException e) {
-      throw new IllegalArgumentException(MAX_ITEMS_PROPERTY + " must be a positive integer", e);
+      throw SqlExceptions.implementationLimit(MAX_ITEMS_PROPERTY + " must be a positive integer", e);
     }
-    throw new IllegalArgumentException(MAX_ITEMS_PROPERTY + " must be a positive integer");
+    throw SqlExceptions.implementationLimit(MAX_ITEMS_PROPERTY + " must be a positive integer");
   }
 
   /**
@@ -317,24 +327,33 @@ public final class JsonFunctions {
    * @param ranges
    *          ordered selections, including duplicates
    * @param maxItems
-   *          maximum intermediate sequence size
+   *          maximum intermediate sequence size and item/range evaluations, or
+   *          zero for a terminal step with no preceding intermediate array step
    * @param terminal
    *          whether no path steps remain
    * @return selected items, or at most two items for a terminal step
    * @throws IllegalArgumentException
-   *           if an intermediate selection exceeds the limit
+   *           if an intermediate selection or array accessor work exceeds the
+   *           limit
    */
   private static List<JsonNode> selectArrayItems(List<JsonNode> current, List<ArrayRange> ranges, int maxItems,
       boolean terminal) {
+    if (!terminal && current.size() * (long) ranges.size() > maxItems) {
+      throw arrayWorkLimit(maxItems);
+    }
+    long evaluations = 0;
     List<JsonNode> selected = new ArrayList<>();
     for (JsonNode item : current) {
       int size = item.isArray() ? item.size() : 1;
       for (ArrayRange range : ranges) {
-        int first = range.first().resolve(size).max(BigInteger.ZERO).min(BigInteger.valueOf(size)).intValue();
-        int last = range.last().resolve(size).min(BigInteger.valueOf(size - 1L)).max(BigInteger.valueOf(-1)).intValue();
+        if (maxItems > 0 && ++evaluations > maxItems) {
+          throw arrayWorkLimit(maxItems);
+        }
+        int first = (int) Math.min(size, Math.max(0, range.first().resolve(size)));
+        int last = (int) Math.max(-1, Math.min(size - 1L, range.last().resolve(size)));
         long count = Math.max(0L, last - (long) first + 1);
         if (!terminal && count > maxItems - (long) selected.size()) {
-          throw new IllegalArgumentException(
+          throw SqlExceptions.implementationLimit(
               "JSON path intermediate selection exceeds " + MAX_ITEMS_PROPERTY + " limit of " + maxItems + " items");
         }
         for (int position = first; position <= last; position++) {
@@ -346,6 +365,18 @@ public final class JsonFunctions {
       }
     }
     return selected;
+  }
+
+  /**
+   * Creates a classified failure for excessive array accessor work.
+   *
+   * @param limit
+   *          maximum item/range evaluations per array step
+   * @return failure carrying SQLState 54000
+   */
+  private static IllegalArgumentException arrayWorkLimit(int limit) {
+    return SqlExceptions.implementationLimit(
+        "JSON path array work exceeds " + MAX_ITEMS_PROPERTY + " limit of " + limit + " item/range evaluations");
   }
 
   /**
@@ -366,7 +397,7 @@ public final class JsonFunctions {
     }
     String text = trimPathWhitespace(normalized.toString());
     if ("*".equals(text)) {
-      return List.of(new ArrayRange(new ArrayIndex(false, BigInteger.ZERO), new ArrayIndex(true, BigInteger.ZERO)));
+      return List.of(new ArrayRange(new ArrayIndex(false, 0), new ArrayIndex(true, 0)));
     }
     List<ArrayRange> ranges = new ArrayList<>();
     for (String selection : text.split(",", -1)) {
@@ -390,10 +421,31 @@ public final class JsonFunctions {
    */
   private static ArrayIndex parseArrayIndex(String text) {
     if (!text.startsWith(LAST_INDEX)) {
-      return new ArrayIndex(false, new BigInteger(text));
+      return new ArrayIndex(false, parseBoundedIndex(text));
     }
     String offset = text.substring(LAST_INDEX.length()).replace(" ", "");
-    return new ArrayIndex(true, offset.isEmpty() ? BigInteger.ZERO : new BigInteger(offset));
+    return new ArrayIndex(true, offset.isEmpty() ? 0 : parseBoundedIndex(offset));
+  }
+
+  /**
+   * Parses a validated integer with saturation just beyond any possible array.
+   * Once saturated, the remaining digits cannot affect selection or clipping.
+   *
+   * @param text
+   *          signed ASCII integer literal
+   * @return signed magnitude capped at Integer.MAX_VALUE + 1
+   */
+  private static long parseBoundedIndex(String text) {
+    boolean negative = text.charAt(0) == '-';
+    int start = negative || text.charAt(0) == '+' ? 1 : 0;
+    long magnitude = 0;
+    for (int i = start; i < text.length(); i++) {
+      magnitude = Math.min(MAX_ARRAY_LITERAL, magnitude * 10 + text.charAt(i) - '0');
+      if (magnitude == MAX_ARRAY_LITERAL) {
+        break;
+      }
+    }
+    return negative ? -magnitude : magnitude;
   }
 
   /**
@@ -404,7 +456,7 @@ public final class JsonFunctions {
    * @param offset
    *          signed index or relative offset
    */
-  private record ArrayIndex(boolean fromLast, BigInteger offset) {
+  private record ArrayIndex(boolean fromLast, long offset) {
     /**
      * Resolves the index without overflowing when adding a relative offset.
      *
@@ -412,8 +464,8 @@ public final class JsonFunctions {
      *          array size
      * @return zero-based index, possibly outside the array bounds
      */
-    private BigInteger resolve(int size) {
-      return fromLast ? BigInteger.valueOf(size - 1L).add(offset) : offset;
+    private long resolve(int size) {
+      return fromLast ? size - 1L + offset : offset;
     }
   }
 

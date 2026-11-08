@@ -38,6 +38,25 @@ class SqlExceptionsTest {
   @TempDir
   Path directory;
 
+  /**
+   * Preserves implementation-limit classification and context across wrappers.
+   */
+  @Test
+  void implementationLimitsPreserveSqlState() {
+    var cause = new NumberFormatException("invalid setting");
+    var failure = SqlExceptions.implementationLimit("resource bound", cause);
+    var classified = SqlExceptions.findSqlStateFailure(failure);
+    assertEquals("54000", classified.getSQLState());
+    assertSame(cause, classified.getCause());
+    var wrapped = SqlExceptions.wrap("query context", new IllegalStateException("evaluation context", failure));
+    assertEquals(SQLException.class, wrapped.getClass());
+    assertEquals("54000", wrapped.getSQLState());
+    assertTrue(wrapped.getMessage().contains("query context"));
+    assertTrue(wrapped.getMessage().contains("resource bound"));
+    assertEquals("54000",
+        SqlExceptions.findSqlStateFailure(SqlExceptions.implementationLimit("work bound")).getSQLState());
+  }
+
   /** Preserves unsupported-feature classification and the original cause. */
   @Test
   void unsupportedFeatureFactoryPreservesCause() {
