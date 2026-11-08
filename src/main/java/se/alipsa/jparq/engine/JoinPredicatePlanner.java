@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Optional;
 import net.sf.jsqlparser.JSQLParserException;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
@@ -59,7 +60,7 @@ public final class JoinPredicatePlanner {
     boolean[] hasColumn = {
         false
     };
-    copy.accept(new JSqlParserSupport.NamedArgumentVisitor() {
+    copy.accept(new ExpressionVisitorAdapter<Void>() {
       @Override
       public <S> Void visit(Column column, S context) {
         hasColumn[0] = true;

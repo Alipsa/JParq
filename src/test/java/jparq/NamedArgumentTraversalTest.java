@@ -2,6 +2,7 @@ package jparq;
 
 import static jparq.support.QueryTestSupport.rows;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -20,6 +21,10 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.JParqResultSet;
+import se.alipsa.jparq.engine.InMemoryRecordReader;
+import se.alipsa.jparq.engine.JSqlParserSupport;
+import se.alipsa.jparq.engine.SqlParser;
 
 /** Verifies expression discovery inside SQL functions with named operands. */
 class NamedArgumentTraversalTest {
@@ -45,7 +50,11 @@ class NamedArgumentTraversalTest {
       "OVERLAY(name PLACING 'X' FROM ROW_NUMBER() OVER (ORDER BY id) FOR 1) | Xbc,aXc,abX",
       "OVERLAY(name PLACING 'X' FROM 1 FOR ROW_NUMBER() OVER (ORDER BY id)) | Xbc,Xc,X",
       "OVERLAY(name PLACING CAST(ROW_NUMBER() OVER (ORDER BY id) AS VARCHAR) FROM 1 FOR 1) | 1bc,2bc,3bc",
-      "TRIM('x' FROM CAST(ROW_NUMBER() OVER (ORDER BY id) AS VARCHAR)) | 1,2,3"
+      "TRIM('x' FROM CAST(ROW_NUMBER() OVER (ORDER BY id) AS VARCHAR)) | 1,2,3",
+      "TRIM(BOTH FROM CAST(ROW_NUMBER() OVER (ORDER BY id) AS VARCHAR)) | 1,2,3",
+      "TRIM(LEADING FROM CAST(ROW_NUMBER() OVER (ORDER BY id) AS VARCHAR)) | 1,2,3",
+      "TRIM(TRAILING FROM CAST(ROW_NUMBER() OVER (ORDER BY id) AS VARCHAR)) | 1,2,3",
+      "TRIM(FROM CAST(ROW_NUMBER() OVER (ORDER BY id) AS VARCHAR)) | 1,2,3"
   })
   void plansWindowsInNamedArguments(String expression, String expected) throws SQLException {
     String sql = "SELECT " + expression
@@ -72,13 +81,17 @@ class NamedArgumentTraversalTest {
       "SELECT SUBSTRING('abc' FROM name)", "SELECT SUBSTRING('abc' FROM 1 FOR name)",
       "SELECT OVERLAY(name PLACING 'x' FROM 1)", "SELECT OVERLAY('abc' PLACING name FROM 1)",
       "SELECT OVERLAY('abc' PLACING 'x' FROM name)", "SELECT OVERLAY('abc' PLACING 'x' FROM 1 FOR name)",
-      "SELECT TRIM('x' FROM name)", "SELECT CASE WHEN FALSE THEN POSITION('x' IN name) ELSE 1 END",
-      "SELECT 1 WHERE POSITION('x' IN name) > 0", "SELECT 1 ORDER BY SUBSTRING(name FROM 1)",
-      "SELECT COUNT(*) GROUP BY SUBSTRING(name FROM 1)", "SELECT COUNT(*) HAVING POSITION('x' IN name) > 0"
+      "SELECT TRIM('x' FROM name)", "SELECT TRIM(BOTH FROM name)", "SELECT TRIM(LEADING FROM name)",
+      "SELECT TRIM(TRAILING FROM name)", "SELECT TRIM(FROM name)",
+      "SELECT CASE WHEN FALSE THEN POSITION('x' IN name) ELSE 1 END", "SELECT 1 WHERE POSITION('x' IN name) > 0",
+      "SELECT 1 ORDER BY SUBSTRING(name FROM 1)", "SELECT COUNT(*) GROUP BY SUBSTRING(name FROM 1)",
+      "SELECT COUNT(*) HAVING POSITION('x' IN name) > 0"
   })
   void rejectsTableFreeColumnsInNamedArguments(String sql) throws SQLException {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
       var error = assertThrows(SQLException.class, () -> connection.prepareStatement(sql));
+      // SQLState classification for table-free missing columns is tracked in issue
+      // #490.
       Throwable cause = error;
       while (cause.getCause() != null) {
         cause = cause.getCause();
@@ -174,6 +187,7 @@ class NamedArgumentTraversalTest {
       var error = assertThrows(SQLException.class,
           () -> statement.executeQuery("SELECT * FROM UNNEST(ARRAY[" + expression + "]) t(x)"));
       assertEquals("42000", error.getSQLState());
+      assertTrue(error.getMessage().contains("Column not found in UNNEST argument"), error.getMessage());
     }
   }
 
@@ -182,20 +196,110 @@ class NamedArgumentTraversalTest {
    *
    * @param pushdown
    *          whether predicate pushdown is enabled
-   * @throws SQLException
-   *           if execution fails
+   * @throws Exception
+   *           if fixture creation or execution fails
    */
   @ParameterizedTest
   @ValueSource(booleans = {
       true, false
   })
-  void joinedNamedArgumentsRetainBothQualifiers(boolean pushdown) throws SQLException {
+  void parquetJoinsPreserveMixedNamedArgumentPredicates(boolean pushdown) throws Exception {
+    var leftSchema = SchemaBuilder.record("Names").fields().requiredInt("id").requiredString("name").endRecord();
+    var rightSchema = SchemaBuilder.record("Needles").fields().requiredString("needle").endRecord();
+    writeRows("names", leftSchema, List.of(List.of(1, "abc"), List.of(2, "def")));
+    writeRows("needles", rightSchema, List.of(List.of("b"), List.of("e")));
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory + "?predicatePushdown=" + pushdown)) {
-      String sql = "SELECT a.id, b.needle FROM (VALUES (1, 'abc'), (2, 'def')) a(id, name) "
-          + "CROSS JOIN (VALUES ('b'), ('e')) b(needle) WHERE POSITION(b.needle IN a.name) > 0 ORDER BY a.id";
+      String sql = "SELECT a.id, b.needle FROM names a CROSS JOIN needles b "
+          + "WHERE a.id = 1 OR POSITION(b.needle IN a.name) > 0 ORDER BY a.id, b.needle";
       for (boolean prepared : List.of(false, true)) {
-        assertEquals(List.of(List.of(1, "b"), List.of(2, "e")), rows(connection, sql, prepared));
+        assertEquals(List.of(List.of(1, "b"), List.of(1, "e"), List.of(2, "e")), rows(connection, sql, prepared));
       }
     }
   }
+
+  /**
+   * Drops residual predicates whose named operands reference an unavailable join
+   * side.
+   *
+   * @throws Exception
+   *           if parsing or result-set evaluation fails
+   */
+  @Test
+  void resultSetPrunesUnavailableNamedArgumentQualifiers() throws Exception {
+    var schema = SchemaBuilder.record("Input").fields().requiredInt("id").requiredString("name").endRecord();
+    var row = new GenericData.Record(schema);
+    row.put("id", 2);
+    row.put("name", "abc");
+    var select = SqlParser.parseSelect("SELECT id FROM a");
+    var residual = JSqlParserSupport.parseExpression("a.id = 1 OR POSITION('x' IN b.name) > 0");
+    try (var result = new JParqResultSet(new InMemoryRecordReader(List.of(row), schema, "a"), select, "a", "PUBLIC",
+        null, residual, List.of("id"), List.of("id"), null)) {
+      assertTrue(result.next());
+      assertEquals(2, result.getInt(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Evaluates standard TRIM forms without an explicit trim character.
+   *
+   * @param expression
+   *          standard TRIM expression
+   * @param expected
+   *          expected string value
+   * @throws SQLException
+   *           if preparation or execution fails
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "TRIM(BOTH FROM '  x  ') | x", "TRIM(FROM '  x  ') | x", "TRIM(LEADING FROM '  x') | x",
+      "TRIM(TRAILING FROM 'x  ') | x", "TRIM(BOTH FROM CAST(NULL AS VARCHAR)) | <null>", "TRIM(FROM MIN(name)) | x"
+  })
+  void standardTrimFormsExecute(String expression, String expected) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      for (boolean prepared : List.of(false, true)) {
+        var actual = rows(connection, "SELECT " + expression + " FROM (VALUES ('  x  ')) v(name)", prepared);
+        assertEquals(1, actual.size());
+        assertEquals("<null>".equals(expected) ? null : expected, actual.getFirst().getFirst());
+      }
+    }
+  }
+
+  /**
+   * Reports the leftmost unresolved TRIM operand first.
+   */
+  @Test
+  void trimOperandsAreValidatedInSourceOrder() {
+    var error = assertThrows(IllegalArgumentException.class, () -> SqlParser.parseSelect("SELECT TRIM(a FROM b)"));
+    assertEquals("Missing column without FROM: a", error.getCause().getMessage());
+  }
+
+  /**
+   * Writes physical join inputs so join predicate planning receives resolved
+   * schemas.
+   *
+   * @param table
+   *          physical table name
+   * @param schema
+   *          record schema
+   * @param values
+   *          ordered field values for each row
+   * @throws Exception
+   *           if fixture creation fails
+   */
+  private void writeRows(String table, org.apache.avro.Schema schema, List<List<Object>> values) throws Exception {
+    var configuration = new Configuration(false);
+    var file = new org.apache.hadoop.fs.Path(directory.resolve(table + ".parquet").toUri());
+    try (var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(file, configuration))
+        .withSchema(schema).withConf(configuration).build()) {
+      for (var fields : values) {
+        var row = new GenericData.Record(schema);
+        for (int i = 0; i < fields.size(); i++) {
+          row.put(i, fields.get(i));
+        }
+        writer.write(row);
+      }
+    }
+  }
+
 }

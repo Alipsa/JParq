@@ -153,7 +153,8 @@ public final class JSqlParserSupport {
    * Expression visitor that includes named function arguments such as POSITION's
    * IN operands and TRIM's FROM expression, which JSqlParser's default adapter
    * does not traverse. Subclasses retain control over nested query scope
-   * boundaries.
+   * boundaries. TRIM operands are visited in source order, skipping omitted trim
+   * characters.
    */
   public abstract static class NamedArgumentVisitor extends ExpressionVisitorAdapter<Void> {
     /** Creates a visitor that traverses named and positional function arguments. */
@@ -174,10 +175,13 @@ public final class JSqlParserSupport {
     /** {@inheritDoc} */
     @Override
     public <S> Void visit(TrimFunction trim, S context) {
+      if (trim.getExpression() != null) {
+        trim.getExpression().accept(this, context);
+      }
       if (trim.getFromExpression() != null) {
         trim.getFromExpression().accept(this, context);
       }
-      return super.visit(trim, context);
+      return null;
     }
 
   }

@@ -5,6 +5,14 @@
 - Discover window functions, column references, and subqueries inside named function arguments
   such as SUBSTRING FROM, POSITION IN, OVERLAY PLACING, and TRIM FROM. Reject missing columns
   in table-free queries during preparation and retain correlated dependencies for projection pushdown (#300).
+  Datetime keywords in named operands now mark prepared statements for replanning on each execution;
+  unsupported aggregate FILTER clauses in those operands fail during preparation with SQLState 42000.
+  Reserved datetime keywords used as unquoted qualified columns and projection aliases embedded in
+  table-free ORDER BY expressions are now rejected inside named operands, matching positional arguments.
+
+- Support standard TRIM(BOTH FROM x), TRIM(LEADING FROM x), TRIM(TRAILING FROM x), and TRIM(FROM x)
+  without an explicit trim character, including window and aggregate operands. Validate TRIM operands
+  in source order (#343).
 
 - Preserve JDBC function escape text inside quoted literals and identifiers while resolving real
   function escapes, including calls whose quoted arguments contain braces or commas (#298).
