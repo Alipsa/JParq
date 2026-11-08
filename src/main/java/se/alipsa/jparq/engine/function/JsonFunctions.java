@@ -375,7 +375,7 @@ public final class JsonFunctions {
    */
   private static IllegalArgumentException arrayWorkLimit(int limit) {
     return SqlExceptions.implementationLimit("JSON path array work exceeds " + MAX_ITEMS_PROPERTY + " limit of " + limit
-        + " item/range evaluations per evaluation");
+        + " item/range evaluations for one path");
   }
 
   /** Shared memory limit and remaining accessor work for one path evaluation. */

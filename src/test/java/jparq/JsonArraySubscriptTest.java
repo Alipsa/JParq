@@ -320,7 +320,8 @@ class JsonArraySubscriptTest {
         assertNull(JsonFunctions.jsonQuery("[1,2,3,4]", boundaryPath));
         var failure = assertThrows(IllegalArgumentException.class,
             () -> JsonFunctions.jsonValue("[1,2,3,4]", excessivePath));
-        assertTrue(failure.getMessage().contains("array work"), failure::getMessage);
+        assertEquals("JSON path array work exceeds jparq.json.maxIntermediateItems limit of 9 "
+            + "item/range evaluations for one path", failure.getMessage());
         assertEquals("54000", SqlExceptions.findSqlStateFailure(failure).getSQLState());
         assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonQuery("[1,2,3,4]", excessivePath));
       }

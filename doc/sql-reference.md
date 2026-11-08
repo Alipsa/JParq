@@ -310,10 +310,11 @@ SQL:2016–2023.
 - Intermediate selections are limited to 100,000 items per path step, including duplicates. From the first
   nonterminal array step onward, item/range evaluations share one cumulative budget over the complete path,
   including terminal steps and ranges that select nothing. The cumulative budget defaults to 100,000.
-  Set the JVM system property `-Djparq.json.maxIntermediateItems=200000` to change both limits to a positive integer. The property
-  is read only at the first nonterminal array step and reused for the remainder of that evaluation. Paths with
-  no intermediate array step do not consult the property. This process-wide budget covers JDBC and direct
-  JSON function calls; it is not a connection property.
+  For example, `$[*][0].x` on 100,000 elements exceeds the default work budget: `[*]` costs 1 and `[0]` costs 100,000.
+  Set the JVM system property `-Djparq.json.maxIntermediateItems=200000` to change both limits to a positive
+  integer. The property is read only at the first nonterminal array step and reused for the remainder of that
+  evaluation. Paths with no intermediate array step do not consult the property. This process-wide budget
+  covers JDBC and direct JSON function calls; it is not a connection property.
   Exceeding either limit raises `SQLException` with SQLState `54000`; an invalid setting uses `HY024`. Both
   diagnostics include the property name. Each range's size is checked before its items are collected;
   nonterminal item/range combinations are checked against the remaining cumulative budget before iteration.
