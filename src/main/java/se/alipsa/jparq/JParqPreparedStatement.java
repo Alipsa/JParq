@@ -5568,6 +5568,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             consumed = true;
           }
         }
+        default -> throw new IllegalStateException("Unexpected SQL parse state: " + state);
       }
       if (!consumed) {
         rewritten.append(c);
@@ -5720,6 +5721,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             consumed = true;
           }
         }
+        default -> throw new IllegalStateException("Unexpected SQL parse state: " + state);
       }
       if (!consumed) {
         rendered.append(c);
