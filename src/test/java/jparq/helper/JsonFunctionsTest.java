@@ -188,6 +188,65 @@ class JsonFunctionsTest {
     }
   }
 
+  /** Requires a dot before unquoted members, including after missing steps. */
+  @Test
+  void rejectsUnquotedMembersWithoutDot() {
+    String json = "{\"a\":{\"b\":[0,{\"c\":5}]}}";
+    for (String prefix : List.of("$", "$[0]", "$.a.b[1]", "$.missing[0]", "$.a.b[9]", "$.a.b[*]", "$.a.b[0 to 1]",
+        "$.a.b[0,1]")) {
+      for (String whitespace : List.of("", " ", "\t", "\n", "\r", "\u00a0", "\u2028", "\ufeff", " \t\r\n")) {
+        String path = prefix + whitespace + "a";
+        var valueFailure = assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue(json, path),
+            path);
+        var queryFailure = assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonQuery(json, path),
+            path);
+        assertEquals("Member in JSON path must be preceded by a dot", valueFailure.getMessage());
+        assertEquals(valueFailure.getMessage(), queryFailure.getMessage());
+      }
+    }
+  }
+
+  /** Identifies complete unexpected code points and members missing a dot. */
+  @Test
+  void diagnosesUnexpectedPathCharacters() {
+    Map<String, String> paths = Map.ofEntries(Map.entry("$[0]]", "']' (U+005D)"), Map.entry("$]", "']' (U+005D)"),
+        Map.entry("$*", "'*' (U+002A)"), Map.entry("$@", "'@' (U+0040)"), Map.entry("$-1", "'-' (U+002D)"),
+        Map.entry("$.a[*] ? (@ > 2)", "'?' (U+003F)"), Map.entry("$.missing[0]]", "']' (U+005D)"),
+        Map.entry("$😀", "'😀' (U+1F600)"), Map.entry("$.a[0]😀", "'😀' (U+1F600)"), Map.entry("$\0a", "'\0' (U+0000)"),
+        Map.entry("$\u200ba", "'\u200b' (U+200B)"));
+    for (var entry : paths.entrySet()) {
+      String path = entry.getKey();
+      var valueFailure = assertThrows(IllegalArgumentException.class,
+          () -> JsonFunctions.jsonValue("{\"a\":[3,7]}", path), path);
+      var queryFailure = assertThrows(IllegalArgumentException.class,
+          () -> JsonFunctions.jsonQuery("{\"a\":[3,7]}", path), path);
+      assertEquals("Unexpected character " + entry.getValue() + " in JSON path", valueFailure.getMessage());
+      assertEquals(valueFailure.getMessage(), queryFailure.getMessage());
+    }
+    for (String path : List.of("$$", "$_a", "$é", "$\ud801\udc00")) {
+      var valueFailure = assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue("{}", path), path);
+      var queryFailure = assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonQuery("{}", path), path);
+      assertEquals("Member in JSON path must be preceded by a dot", valueFailure.getMessage());
+      assertEquals(valueFailure.getMessage(), queryFailure.getMessage());
+    }
+  }
+
+  /** Preserves whitespace before the dot following an array step. */
+  @Test
+  void allowsWhitespaceBeforeMembersAfterArraySteps() {
+    String json = "{\"a\":{\"b\":[0,{\"c\":5}]}}";
+    for (String whitespace : List.of(" ", "\t", "\n", "\r", "\u00a0", "\u2028", "\ufeff", " \t\r\n")) {
+      for (String member : List.of(".c", ". c", ".\"c\"", ". \"c\"")) {
+        String path = "$.a.b[1]" + whitespace + member;
+        assertEquals(5, JsonFunctions.jsonValue(json, path), path);
+        assertEquals("5", JsonFunctions.jsonQuery(json, path), path);
+      }
+      String path = "$[0]" + whitespace + ".a";
+      assertEquals(1, JsonFunctions.jsonValue("[{\"a\":1}]", path), path);
+      assertEquals("1", JsonFunctions.jsonQuery("[{\"a\":1}]", path), path);
+    }
+  }
+
   /** Distinguishes a member's delimiters from literal quotes within the key. */
   @Test
   void distinguishesKeysContainingLiteralQuotes() {
