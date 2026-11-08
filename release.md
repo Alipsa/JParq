@@ -3,8 +3,9 @@
 ### 1.4.0
 
 - Ignore whitespace between JSON_VALUE and JSON_QUERY path tokens, including around quoted and unquoted
-  member names and array steps. Preserve whitespace inside quoted names and reject whitespace-separated
-  unquoted name fragments with a path-specific error (#302).
+  member names and array steps, before the root, and inside subscripts, using consistent ECMAScript whitespace
+  rules. Preserve whitespace inside quoted names and reject empty unquoted names and whitespace-separated
+  unquoted name fragments with path-specific errors (#302).
 
 - Discover window functions, column references, and subqueries inside named function arguments
   such as SUBSTRING FROM, POSITION IN, OVERLAY PLACING, and TRIM FROM. Reject missing columns

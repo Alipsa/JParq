@@ -35,8 +35,8 @@ public final class JsonFunctions {
    * @param document
    *          JSON document (string or {@link JsonNode})
    * @param path
-   *          JSON path expression beginning with {@code $}; double-quoted member
-   *          names use JSON string escapes; whitespace between tokens is ignored
+   *          JSON path expression rooted at {@code $}; double-quoted member names
+   *          use JSON string escapes; whitespace between tokens is ignored
    * @return extracted scalar value or {@code null} when the path cannot be
    *         resolved
    * @throws IllegalArgumentException
@@ -85,8 +85,8 @@ public final class JsonFunctions {
    * @param document
    *          JSON document (string or {@link JsonNode})
    * @param path
-   *          JSON path expression beginning with {@code $}; double-quoted member
-   *          names use JSON string escapes; whitespace between tokens is ignored
+   *          JSON path expression rooted at {@code $}; double-quoted member names
+   *          use JSON string escapes; whitespace between tokens is ignored
    * @return JSON string or {@code null} when the path cannot be resolved
    * @throws IllegalArgumentException
    *           if the document or path is malformed
@@ -186,10 +186,11 @@ public final class JsonFunctions {
       }
     }
     String pathExpr = SqlText.valueOf(path);
-    if (!pathExpr.startsWith("$")) {
+    int root = skipWhitespace(pathExpr, 0);
+    if (!pathExpr.startsWith("$", root)) {
       throw new IllegalArgumentException("JSON path must start with $");
     }
-    return navigate(node, pathExpr.substring(1));
+    return navigate(node, pathExpr.substring(root + 1));
   }
 
   /**
@@ -217,19 +218,27 @@ public final class JsonFunctions {
         String idxStr = path.substring(index + 1, close);
         int arrayIndex;
         try {
-          arrayIndex = Integer.parseInt(idxStr.trim());
+          int start = skipWhitespace(idxStr, 0);
+          int end = idxStr.length();
+          while (end > start && isPathWhitespace(idxStr.charAt(end - 1))) {
+            end--;
+          }
+          arrayIndex = Integer.parseInt(idxStr.substring(start, end));
         } catch (NumberFormatException e) {
           throw new IllegalArgumentException("Unsupported array subscript in JSON path: [" + idxStr + "]", e);
         }
         current = current != null && current.isArray() ? current.get(arrayIndex) : null;
         index = close + 1;
-      } else if (Character.isWhitespace(ch)) {
+      } else if (isPathWhitespace(ch)) {
         index = skipWhitespace(path, index);
       } else {
         if (ch == '"') {
           throw new IllegalArgumentException("Quoted member in JSON path must be preceded by a dot");
         }
         int start = ch == '.' ? skipWhitespace(path, index + 1) : index;
+        if (ch == '.' && (start == path.length() || path.charAt(start) == '.' || path.charAt(start) == '[')) {
+          throw new IllegalArgumentException("Missing member name after dot in JSON path");
+        }
         int next = findNextDelimiter(path, start);
         String prop = decodeMember(path.substring(start, next));
         current = current == null ? null : current.get(prop);
@@ -277,7 +286,7 @@ public final class JsonFunctions {
     int i = start;
     while (i < path.length()) {
       char c = path.charAt(i);
-      if (c == '.' || c == '[' || Character.isWhitespace(c)) {
+      if (c == '.' || c == '[' || isPathWhitespace(c)) {
         break;
       }
       i++;
@@ -335,17 +344,31 @@ public final class JsonFunctions {
    * Skips whitespace between path tokens without modifying quoted contents.
    *
    * @param path
-   *          the path after the root marker
+   *          the path or subscript text
    * @param start
    *          the offset from which to skip whitespace
    * @return the offset of the next non-whitespace character or the path length
    */
   private static int skipWhitespace(String path, int start) {
     int index = start;
-    while (index < path.length() && Character.isWhitespace(path.charAt(index))) {
+    while (index < path.length() && isPathWhitespace(path.charAt(index))) {
       index++;
     }
     return index;
+  }
+
+  /**
+   * Recognizes ECMAScript WhiteSpace and LineTerminator characters, including
+   * Unicode space separators and the byte order mark, but excluding other control
+   * characters.
+   *
+   * @param ch
+   *          the character to classify
+   * @return whether the character separates path tokens
+   */
+  private static boolean isPathWhitespace(char ch) {
+    return Character.getType(ch) == Character.SPACE_SEPARATOR || ch == '\t' || ch == '\u000b' || ch == '\f'
+        || ch == '\n' || ch == '\r' || ch == '\u2028' || ch == '\u2029' || ch == '\ufeff';
   }
 
   /**

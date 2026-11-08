@@ -79,10 +79,12 @@ class JsonFunctionsTest {
   @Test
   void skipsWhitespaceBetweenPathTokens() {
     String json = "{\"a\":{\"b\":[3,7]},\" a \":{\"b\":9}}";
-    for (String whitespace : List.of(" ", "  ", "\t", "\n", "\r", " \t\r\n")) {
+    for (String whitespace : List.of(" ", "  ", "\t", "\n", "\r", "\u000b", "\f", "\u00a0", "\u1680", "\u2000",
+        "\u2001", "\u2002", "\u2003", "\u2004", "\u2005", "\u2006", "\u2007", "\u2008", "\u2009", "\u200a", "\u2028",
+        "\u2029", "\u202f", "\u205f", "\u3000", "\ufeff", " \t\r\n")) {
       for (String member : List.of("a", "\"a\"")) {
-        String path = "$" + whitespace + "." + whitespace + member + whitespace + "." + whitespace + "b" + whitespace
-            + "[" + whitespace + "1" + whitespace + "]" + whitespace;
+        String path = whitespace + "$" + whitespace + "." + whitespace + member + whitespace + "." + whitespace + "b"
+            + whitespace + "[" + whitespace + "1" + whitespace + "]" + whitespace;
         assertEquals(7, JsonFunctions.jsonValue(json, path), path);
         assertEquals("7", JsonFunctions.jsonQuery(json, path), path);
         assertNull(JsonFunctions.jsonValue(json, path + ". missing"), path);
@@ -93,6 +95,37 @@ class JsonFunctionsTest {
       assertEquals("9", JsonFunctions.jsonQuery(json, quoted), quoted);
       assertEquals("{\"b\":[3,7]}", JsonFunctions.jsonQuery(json, "$.a" + whitespace));
       assertEquals("[3,7]", JsonFunctions.jsonQuery(json, "$.a" + whitespace + ". b"));
+    }
+  }
+
+  /** Requires quoted syntax for empty names, even after a missing member. */
+  @Test
+  void rejectsEmptyUnquotedMembers() {
+    String json = "{\"\":{\"a\":1},\" \":2,\"a\":[3,7]}";
+    for (String path : List.of("$.", "$. ", "$. .a", "$. [0]", "$.a. [1]", "$.missing. [0]")) {
+      var valueFailure = assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue(json, path), path);
+      var queryFailure = assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonQuery(json, path), path);
+      assertEquals("Missing member name after dot in JSON path", valueFailure.getMessage());
+      assertEquals(valueFailure.getMessage(), queryFailure.getMessage());
+    }
+    assertEquals(1, JsonFunctions.jsonValue(json, "$. \"\" .a"));
+    assertEquals("{\"a\":1}", JsonFunctions.jsonQuery(json, "$. \"\""));
+  }
+
+  /** Does not discard non-whitespace control characters around array indexes. */
+  @Test
+  void rejectsControlCharactersInSubscripts() {
+    for (char control : new char[]{
+        0, 1, 8, 14, 27, 28, 29, 30, 31, 127, 133
+    }) {
+      for (String path : List.of("$.a[" + control + "1]", "$.a[1" + control + "]", "$.missing[" + control + "1]")) {
+        var valueFailure = assertThrows(IllegalArgumentException.class,
+            () -> JsonFunctions.jsonValue("{\"a\":[3,7]}", path), path);
+        var queryFailure = assertThrows(IllegalArgumentException.class,
+            () -> JsonFunctions.jsonQuery("{\"a\":[3,7]}", path), path);
+        assertTrue(valueFailure.getMessage().startsWith("Unsupported array subscript in JSON path:"));
+        assertEquals(valueFailure.getMessage(), queryFailure.getMessage());
+      }
     }
   }
 

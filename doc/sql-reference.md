@@ -281,17 +281,22 @@ SQL:2016–2023.
 **Paths in `JSON_VALUE` and `JSON_QUERY`:**
 
 - Double-quoted member names are supported, including spaces, dots, brackets, and JSON string escapes such as `\"`,
-  `\\`, and `a`. For example, `JSON_VALUE('{"a b":1}', '$."a b"')` returns `1`.
+  `\\`, and `\u0061`. For example, `JSON_VALUE('{"a b":1}', '$."a b"')` returns `1`.
 - Quoted members require a leading dot: use `$."a"`; `$"a"` raises an error.
-- Whitespace between path tokens is ignored, including spaces, tabs, and line breaks. For example,
+- Leading and trailing whitespace and whitespace between path tokens are ignored. The parser uses ECMAScript
+  [WhiteSpace](https://262.ecma-international.org/15.0/#sec-white-space) and
+  [LineTerminator](https://262.ecma-international.org/15.0/#sec-line-terminators) characters:
+  Unicode space separators (including NBSP), tab, vertical tab,
+  form feed, LF, CR, U+2028, U+2029, and U+FEFF. Other control characters are not whitespace. For example,
   `$.a .b`, `$.a [1]`, and `$. "a"` work like their compact forms. Whitespace inside quoted names is preserved;
   unquoted names containing whitespace must be quoted (`$."a b"`, not `$.a b`).
 - `$."a"` matches the key `a`. To select a key containing literal quotes, escape them: `$."\"a\""`.
   (**Behavior change:** earlier versions matched a key containing the literal quotes.)
+- A dot must be followed by a member name; empty names must be quoted (`$.""`).
 - Missing members return NULL for supported paths.
 - Subscripts must be zero-based integer indexes. An optional `+` sign is accepted (`[+1]` selects the second
   element). Negative indexes such as `[-1]` always return NULL; they do not count from the end of the array.
-  Subscripts trim surrounding characters U+0000–U+0020, including tabs and newlines.
+  Subscripts ignore the same surrounding whitespace as other path tokens.
 - `[*]`, `[last]`, and ranges are unsupported ([#303](https://github.com/Alipsa/JParq/issues/303)). For example,
   `$.missing[*]` raises `Unsupported array subscript in JSON path: [*]`.
 - Malformed quoted members and unsupported subscripts raise `SQLException` when evaluated, even after a missing

@@ -39,8 +39,11 @@ class JsonPathTest {
                    JSON_VALUE('{"a":1}', '$. "a"')
             """)) {
       assertTrue(result.next());
-      for (int column = 1; column <= 6; column++) {
-        assertEquals(column % 3 == 2 ? "2" : "1", result.getString(column));
+      String[] expected = {
+          "1", "2", "1", "1", "2", "1"
+      };
+      for (int column = 0; column < expected.length; column++) {
+        assertEquals(expected[column], result.getString(column + 1));
       }
       assertFalse(result.next());
     }
@@ -62,11 +65,43 @@ class JsonPathTest {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.prepareStatement("SELECT " + function + "(?, ?)")) {
       statement.setString(1, "{\" a \":[{\"b\":7}]}");
-      statement.setString(2, "$ \t.\n\" a \"\r[ 0 ]\t.\n b \r");
+      statement.setString(2, "\ufeff\u00a0$ \t.\n\" a \"\r[\u2028 0 \u2029]\t.\n b \r");
       try (var result = statement.executeQuery()) {
         assertTrue(result.next());
         assertEquals("7", result.getString(1));
         assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Reports missing member names as JDBC errors instead of matching empty keys.
+   *
+   * @param function
+   *          the extraction function
+   * @throws SQLException
+   *           if connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "JSON_VALUE", "JSON_QUERY"
+  })
+  void rejectsEmptyMembersInBoundPaths(String function) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.prepareStatement("SELECT " + function + "(?, ?)")) {
+      statement.setString(1, "{\"\":{\"a\":1},\" \":2}");
+      for (String path : new String[]{
+          "$.", "$. ", "$. .a", "$. [0]", "$.missing. [0]"
+      }) {
+        statement.setString(2, path);
+        SQLException failure = assertThrows(SQLException.class, () -> {
+          try (var result = statement.executeQuery()) {
+            while (result.next()) {
+              result.getObject(1);
+            }
+          }
+        }, path);
+        assertTrue(failure.getMessage().contains("Missing member name after dot in JSON path"), failure::getMessage);
       }
     }
   }
