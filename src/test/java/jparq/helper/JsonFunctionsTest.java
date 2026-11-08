@@ -206,18 +206,21 @@ class JsonFunctionsTest {
     }
   }
 
-  /** Distinguishes unexpected characters from members missing a leading dot. */
+  /** Identifies complete unexpected code points and members missing a dot. */
   @Test
   void diagnosesUnexpectedPathCharacters() {
-    Map<String, String> paths = Map.of("$[0]]", "]", "$]", "]", "$*", "*", "$@", "@", "$-1", "-", "$.a[*] ? (@ > 2)",
-        "?", "$.missing[0]]", "]");
+    Map<String, String> paths = Map.ofEntries(Map.entry("$[0]]", "']' (U+005D)"), Map.entry("$]", "']' (U+005D)"),
+        Map.entry("$*", "'*' (U+002A)"), Map.entry("$@", "'@' (U+0040)"), Map.entry("$-1", "'-' (U+002D)"),
+        Map.entry("$.a[*] ? (@ > 2)", "'?' (U+003F)"), Map.entry("$.missing[0]]", "']' (U+005D)"),
+        Map.entry("$😀", "'😀' (U+1F600)"), Map.entry("$.a[0]😀", "'😀' (U+1F600)"), Map.entry("$\0a", "'\0' (U+0000)"),
+        Map.entry("$\u200ba", "'\u200b' (U+200B)"));
     for (var entry : paths.entrySet()) {
       String path = entry.getKey();
       var valueFailure = assertThrows(IllegalArgumentException.class,
           () -> JsonFunctions.jsonValue("{\"a\":[3,7]}", path), path);
       var queryFailure = assertThrows(IllegalArgumentException.class,
           () -> JsonFunctions.jsonQuery("{\"a\":[3,7]}", path), path);
-      assertEquals("Unexpected character '" + entry.getValue() + "' in JSON path", valueFailure.getMessage());
+      assertEquals("Unexpected character " + entry.getValue() + " in JSON path", valueFailure.getMessage());
       assertEquals(valueFailure.getMessage(), queryFailure.getMessage());
     }
     for (String path : List.of("$$", "$_a", "$é", "$\ud801\udc00")) {
