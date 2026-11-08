@@ -36,7 +36,8 @@ public final class JsonFunctions {
    *          JSON document (string or {@link JsonNode})
    * @param path
    *          JSON path expression rooted at {@code $}; double-quoted member names
-   *          use JSON string escapes; whitespace between tokens is ignored
+   *          use JSON string escapes; leading and trailing whitespace and
+   *          whitespace between tokens are ignored
    * @return extracted scalar value or {@code null} when the path cannot be
    *         resolved
    * @throws IllegalArgumentException
@@ -86,7 +87,8 @@ public final class JsonFunctions {
    *          JSON document (string or {@link JsonNode})
    * @param path
    *          JSON path expression rooted at {@code $}; double-quoted member names
-   *          use JSON string escapes; whitespace between tokens is ignored
+   *          use JSON string escapes; leading and trailing whitespace and
+   *          whitespace between tokens are ignored
    * @return JSON string or {@code null} when the path cannot be resolved
    * @throws IllegalArgumentException
    *           if the document or path is malformed
@@ -171,6 +173,18 @@ public final class JsonFunctions {
     return array.toString();
   }
 
+  /**
+   * Parses the document and evaluates a path rooted at {@code $}, ignoring
+   * leading whitespace.
+   *
+   * @param document
+   *          the JSON document (string or {@link JsonNode})
+   * @param path
+   *          the SQL/JSON path expression
+   * @return the selected node, or null if the document, path, or match is missing
+   * @throws IllegalArgumentException
+   *           if the document or path is malformed
+   */
   private static JsonNode resolve(Object document, Object path) {
     if (document == null || path == null) {
       return null;
@@ -218,12 +232,7 @@ public final class JsonFunctions {
         String idxStr = path.substring(index + 1, close);
         int arrayIndex;
         try {
-          int start = skipWhitespace(idxStr, 0);
-          int end = idxStr.length();
-          while (end > start && isPathWhitespace(idxStr.charAt(end - 1))) {
-            end--;
-          }
-          arrayIndex = Integer.parseInt(idxStr.substring(start, end));
+          arrayIndex = Integer.parseInt(trimPathWhitespace(idxStr));
         } catch (NumberFormatException e) {
           throw new IllegalArgumentException("Unsupported array subscript in JSON path: [" + idxStr + "]", e);
         }
@@ -236,7 +245,7 @@ public final class JsonFunctions {
           throw new IllegalArgumentException("Quoted member in JSON path must be preceded by a dot");
         }
         int start = ch == '.' ? skipWhitespace(path, index + 1) : index;
-        if (ch == '.' && (start == path.length() || path.charAt(start) == '.' || path.charAt(start) == '[')) {
+        if (ch == '.' && (start == path.length() || isStepDelimiter(path.charAt(start)))) {
           throw new IllegalArgumentException("Missing member name after dot in JSON path");
         }
         int next = findNextDelimiter(path, start);
@@ -286,7 +295,7 @@ public final class JsonFunctions {
     int i = start;
     while (i < path.length()) {
       char c = path.charAt(i);
-      if (c == '.' || c == '[' || isPathWhitespace(c)) {
+      if (isStepDelimiter(c) || isPathWhitespace(c)) {
         break;
       }
       i++;
@@ -334,10 +343,37 @@ public final class JsonFunctions {
    */
   private static void validateMemberEnd(String path, int end, boolean quoted) {
     int after = skipWhitespace(path, end);
-    if (after < path.length() && path.charAt(after) != '.' && path.charAt(after) != '[') {
+    if (after < path.length() && !isStepDelimiter(path.charAt(after))) {
       throw new IllegalArgumentException(
           "Unexpected character after " + (quoted ? "quoted member" : "member") + " in JSON path");
     }
+  }
+
+  /**
+   * Recognizes the delimiters that begin member and array steps.
+   *
+   * @param ch
+   *          the character to classify
+   * @return whether the character begins a path step
+   */
+  private static boolean isStepDelimiter(char ch) {
+    return ch == '.' || ch == '[';
+  }
+
+  /**
+   * Removes leading and trailing path whitespace from subscript text.
+   *
+   * @param text
+   *          the subscript text
+   * @return the text without surrounding path whitespace
+   */
+  private static String trimPathWhitespace(String text) {
+    int start = skipWhitespace(text, 0);
+    int end = text.length();
+    while (end > start && isPathWhitespace(text.charAt(end - 1))) {
+      end--;
+    }
+    return text.substring(start, end);
   }
 
   /**
