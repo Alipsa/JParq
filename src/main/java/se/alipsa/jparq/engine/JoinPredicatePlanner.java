@@ -60,6 +60,8 @@ public final class JoinPredicatePlanner {
     boolean[] hasColumn = {
         false
     };
+    // Named-operand functions stay residual because ParquetFilterBuilder.isLiteral
+    // excludes them.
     copy.accept(new ExpressionVisitorAdapter<Void>() {
       @Override
       public <S> Void visit(Column column, S context) {

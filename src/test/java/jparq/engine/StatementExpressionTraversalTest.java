@@ -1,6 +1,8 @@
 package jparq.engine;
 
+import static jparq.support.QueryTestSupport.rootCause;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -85,6 +87,21 @@ class StatementExpressionTraversalTest {
   }
 
   /**
+   * Keeps ordinary named operands independent of execution time.
+   *
+   * @param sql
+   *          query without datetime value functions
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT SUBSTRING('abc' FROM 1)", "SELECT POSITION('b' IN 'abc')", "SELECT OVERLAY('abc' PLACING 'x' FROM 1)",
+      "SELECT TRIM(BOTH FROM ' abc ')", "SELECT POSITION('CURRENT_DATE' IN 'CURRENT_DATE')"
+  })
+  void ordinaryNamedArgumentsRemainTimeIndependent(String sql) {
+    assertFalse(SqlParser.prepareQuery(sql).timeDependent(), sql);
+  }
+
+  /**
    * Rejects unsupported FILTER clauses during preparation, including in skipped
    * branches.
    *
@@ -117,8 +134,8 @@ class StatementExpressionTraversalTest {
   void namedArgumentsRejectQualifiedDatetimeKeywords() {
     var error = assertThrows(IllegalArgumentException.class,
         () -> SqlParser.prepareQuery("SELECT POSITION('x' IN CAST(t.current_date AS VARCHAR)) FROM t"));
-    assertTrue(error.getCause().getMessage().contains("Reserved datetime keyword must be delimited"),
-        error.getCause().getMessage());
+    assertTrue(rootCause(error).getMessage().contains("Reserved datetime keyword must be delimited"),
+        rootCause(error).getMessage());
   }
 
   /**
@@ -128,7 +145,7 @@ class StatementExpressionTraversalTest {
   void namedArgumentsDoNotExposeOrderByAliasesInsideExpressions() {
     var error = assertThrows(IllegalArgumentException.class,
         () -> SqlParser.prepareQuery("SELECT 'abc' AS s ORDER BY SUBSTRING(s FROM 1)"));
-    assertEquals("Missing column without FROM: s", error.getCause().getMessage());
+    assertEquals("Missing column without FROM: s", rootCause(error).getMessage());
   }
 
 }

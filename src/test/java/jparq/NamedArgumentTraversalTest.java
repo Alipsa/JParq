@@ -1,5 +1,6 @@
 package jparq;
 
+import static jparq.support.QueryTestSupport.rootCause;
 import static jparq.support.QueryTestSupport.rows;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -92,11 +93,7 @@ class NamedArgumentTraversalTest {
       var error = assertThrows(SQLException.class, () -> connection.prepareStatement(sql));
       // SQLState classification for table-free missing columns is tracked in issue
       // #490.
-      Throwable cause = error;
-      while (cause.getCause() != null) {
-        cause = cause.getCause();
-      }
-      assertEquals("Missing column without FROM: name", cause.getMessage());
+      assertEquals("Missing column without FROM: name", rootCause(error).getMessage());
     }
   }
 
@@ -271,7 +268,7 @@ class NamedArgumentTraversalTest {
   @Test
   void trimOperandsAreValidatedInSourceOrder() {
     var error = assertThrows(IllegalArgumentException.class, () -> SqlParser.parseSelect("SELECT TRIM(a FROM b)"));
-    assertEquals("Missing column without FROM: a", error.getCause().getMessage());
+    assertEquals("Missing column without FROM: a", rootCause(error).getMessage());
   }
 
   /**
