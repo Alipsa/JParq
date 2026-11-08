@@ -188,6 +188,28 @@ class JsonFunctionsTest {
     }
   }
 
+  /** Requires a dot before unquoted members, including after missing steps. */
+  @Test
+  void rejectsUnquotedMembersWithoutDot() {
+    String json = "{\"a\":{\"b\":[0,{\"c\":5}]}}";
+    for (String prefix : List.of("$", "$[0]", "$.a.b[1]", "$.missing[0]", "$.a.b[9]", "$.a.b[*]", "$.a.b[0 to 1]",
+        "$.a.b[0,1]")) {
+      for (String whitespace : List.of("", " ", "\t", "\n", "\r", "\u00a0", "\u2028", "\ufeff", " \t\r\n")) {
+        String path = prefix + whitespace + "a";
+        var valueFailure = assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue(json, path),
+            path);
+        var queryFailure = assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonQuery(json, path),
+            path);
+        assertEquals("Member in JSON path must be preceded by a dot", valueFailure.getMessage());
+        assertEquals(valueFailure.getMessage(), queryFailure.getMessage());
+      }
+    }
+    for (String path : List.of("$.a.b[1]c", "$.a.b[1] c")) {
+      assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue(json, path), path);
+      assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonQuery(json, path), path);
+    }
+  }
+
   /** Distinguishes a member's delimiters from literal quotes within the key. */
   @Test
   void distinguishesKeysContainingLiteralQuotes() {

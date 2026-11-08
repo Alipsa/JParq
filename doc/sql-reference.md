@@ -282,7 +282,8 @@ SQL:2016–2023.
 
 - Double-quoted member names are supported, including spaces, dots, brackets, and JSON string escapes such as `\"`,
   `\\`, and `\u0061`. For example, `JSON_VALUE('{"a b":1}', '$."a b"')` returns `1`.
-- Quoted members require a leading dot: use `$."a"`; `$"a"` raises an error.
+- All member steps require a leading dot: use `$.a` or `$."a"`; `$a`, `$ a`, `$"a"`,
+  and `$.a[0]b` raise errors. Whitespace between steps does not replace the dot.
 - Leading and trailing whitespace and whitespace between path tokens are ignored. The parser uses ECMAScript
   [WhiteSpace](https://262.ecma-international.org/15.0/#sec-white-space) and
   [LineTerminator](https://262.ecma-international.org/15.0/#sec-line-terminators) characters:

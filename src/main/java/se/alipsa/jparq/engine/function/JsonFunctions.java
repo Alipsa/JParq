@@ -53,11 +53,12 @@ public final class JsonFunctions {
    * @param document
    *          JSON document (string or {@link JsonNode})
    * @param path
-   *          JSON path expression rooted at {@code $}; double-quoted member names
-   *          use JSON string escapes; leading and trailing whitespace and
-   *          whitespace between tokens are ignored; array steps accept integer
-   *          indexes, {@code *}, {@code last}, relative indexes such as
-   *          {@code last-1}, inclusive ranges, and comma-separated selections
+   *          JSON path expression rooted at {@code $}; all member steps require a
+   *          leading dot; double-quoted names use JSON string escapes; leading
+   *          and trailing whitespace and whitespace between tokens are ignored;
+   *          array steps accept integer indexes, {@code *}, {@code last},
+   *          relative indexes such as {@code last-1}, inclusive ranges, and
+   *          comma-separated selections
    * @return extracted scalar value or {@code null} when the path cannot be
    *         resolved to exactly one item
    * @throws IllegalArgumentException
@@ -108,11 +109,12 @@ public final class JsonFunctions {
    * @param document
    *          JSON document (string or {@link JsonNode})
    * @param path
-   *          JSON path expression rooted at {@code $}; double-quoted member names
-   *          use JSON string escapes; leading and trailing whitespace and
-   *          whitespace between tokens are ignored; array steps accept integer
-   *          indexes, {@code *}, {@code last}, relative indexes such as
-   *          {@code last-1}, inclusive ranges, and comma-separated selections
+   *          JSON path expression rooted at {@code $}; all member steps require a
+   *          leading dot; double-quoted names use JSON string escapes; leading
+   *          and trailing whitespace and whitespace between tokens are ignored;
+   *          array steps accept integer indexes, {@code *}, {@code last},
+   *          relative indexes such as {@code last-1}, inclusive ranges, and
+   *          comma-separated selections
    * @return JSON string or {@code null} when the path does not select exactly one
    *         item
    * @throws IllegalArgumentException
@@ -237,7 +239,8 @@ public final class JsonFunctions {
 
   /**
    * Traverses member and array steps, validating the remaining path after missing
-   * values. Whitespace separates tokens and is preserved only in quoted names.
+   * values. All member steps require a leading dot. Whitespace separates tokens
+   * and is preserved only in quoted names.
    *
    * @param node
    *          the document root
@@ -274,8 +277,11 @@ public final class JsonFunctions {
         if (ch == '"') {
           throw new IllegalArgumentException("Quoted member in JSON path must be preceded by a dot");
         }
-        int start = ch == '.' ? skipWhitespace(path, index + 1) : index;
-        if (ch == '.' && (start == path.length() || isStepDelimiter(path.charAt(start)))) {
+        if (ch != '.') {
+          throw new IllegalArgumentException("Member in JSON path must be preceded by a dot");
+        }
+        int start = skipWhitespace(path, index + 1);
+        if (start == path.length() || isStepDelimiter(path.charAt(start))) {
           throw new IllegalArgumentException("Missing member name after dot in JSON path");
         }
         int next = findNextDelimiter(path, start);

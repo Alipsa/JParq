@@ -2,6 +2,10 @@
 
 ### 1.4.0
 
+- Require a leading dot before every JSON_VALUE and JSON_QUERY member step, including unquoted
+  names after the root or array steps. Reject dotless members with path-specific errors even when
+  separated by whitespace or following a missing match (#304).
+
 - Ignore whitespace between JSON_VALUE and JSON_QUERY path tokens, including around quoted and unquoted
   member names and array steps, before the root, and inside subscripts, using consistent ECMAScript whitespace
   rules. Preserve whitespace inside quoted names and reject empty unquoted names and whitespace-separated

@@ -107,6 +107,39 @@ class JsonPathTest {
   }
 
   /**
+   * Reports dotless members after roots and array steps as JDBC errors.
+   *
+   * @param function
+   *          the extraction function
+   * @throws SQLException
+   *           if connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "JSON_VALUE", "JSON_QUERY"
+  })
+  void rejectsUnquotedMembersWithoutDot(String function) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.prepareStatement("SELECT " + function + "(?, ?)")) {
+      statement.setString(1, "{\"a\":{\"b\":[0,{\"c\":5}]}}");
+      for (String path : new String[]{
+          "$a", "$ a", "$\ta", "$\u00a0a", "$[0]a", "$[0] a", "$.a.b[1]c", "$.a.b[1] c", "$.a.b[1]\nc",
+          "$.a.b[1]\u2028c", "$.missing[0]c", "$.missing[0] c", "$.a.b[9]c"
+      }) {
+        statement.setString(2, path);
+        SQLException failure = assertThrows(SQLException.class, () -> {
+          try (var result = statement.executeQuery()) {
+            while (result.next()) {
+              result.getObject(1);
+            }
+          }
+        }, path);
+        assertTrue(failure.getMessage().contains("Member in JSON path must be preceded by a dot"), failure::getMessage);
+      }
+    }
+  }
+
+  /**
    * Extracts quoted names after SQL literal decoding, including nested steps.
    *
    * @throws SQLException
