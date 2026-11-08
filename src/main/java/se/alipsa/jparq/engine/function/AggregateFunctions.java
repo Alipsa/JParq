@@ -1674,6 +1674,28 @@ public final class AggregateFunctions {
   }
 
   /**
+   * Completes a plain-table correlation context with source columns. Source
+   * columns take precedence over colliding projection aliases.
+   *
+   * @param schema
+   *          schema of the current input row
+   * @param projectionContext
+   *          normalized qualifier mappings containing projection aliases
+   * @return immutable qualifier mappings containing input columns and aliases
+   */
+  private static Map<String, Map<String, String>> inputRowCorrelationContext(Schema schema,
+      Map<String, Map<String, String>> projectionContext) {
+    Map<String, String> inputColumns = ColumnMappingUtil.unqualifiedColumnMapping(schema);
+    Map<String, Map<String, String>> completed = new LinkedHashMap<>();
+    projectionContext.forEach((qualifier, columns) -> {
+      Map<String, String> input = new LinkedHashMap<>(columns);
+      input.putAll(inputColumns);
+      completed.put(qualifier, Map.copyOf(input));
+    });
+    return Map.copyOf(completed);
+  }
+
+  /**
    * Evaluate aggregates and grouping by streaming the Parquet reader.
    *
    * @param reader
@@ -1840,19 +1862,10 @@ public final class AggregateFunctions {
           if (having != null) {
             booleanColumn = booleanColumnPredicate(schema, qualifierColumnMapping, unqualifiedColumnMapping);
           }
-          // A plain table has no explicit qualifier mapping. Complete its
-          // projection context with input columns while retaining output aliases.
-          Map<String, Map<String, String>> inputContext = normalizedCorrelationContext;
-          if (qualifierColumnMapping == null || qualifierColumnMapping.isEmpty()) {
-            Map<String, String> inputColumns = ColumnMappingUtil.unqualifiedColumnMapping(schema);
-            Map<String, Map<String, String>> completed = new LinkedHashMap<>();
-            normalizedCorrelationContext.forEach((qualifier, columns) -> {
-              Map<String, String> input = new LinkedHashMap<>(columns);
-              input.putAll(inputColumns);
-              completed.put(qualifier, Map.copyOf(input));
-            });
-            inputContext = Map.copyOf(completed);
-          }
+          Map<String, Map<String, String>> inputContext = qualifierColumnMapping == null
+              || qualifierColumnMapping.isEmpty()
+                  ? inputRowCorrelationContext(schema, normalizedCorrelationContext)
+                  : normalizedCorrelationContext;
           CorrelationMappings mappings = new CorrelationMappings(outerQualifiers, qualifierColumnMapping,
               unqualifiedColumnMapping, inputContext);
           valueEval = new ValueExpressionEvaluator(schema, subqueryExecutor, mappings, WindowState.empty());

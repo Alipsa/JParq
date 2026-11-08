@@ -20,8 +20,8 @@ import org.junit.jupiter.params.provider.CsvSource;
  */
 class AggregateScalarCorrelationTest {
   /**
-   * Compares direct and wrapped aggregates against independently collected row
-   * values.
+   * Compares direct and wrapped aggregates against independently verified fixture
+   * totals, with and without a colliding projection alias.
    *
    * @param predicate
    *          whether predicate pushdown is enabled
@@ -41,24 +41,20 @@ class AggregateScalarCorrelationTest {
         var connection = DriverManager.getConnection(
             "jdbc:jparq:" + directory + "?predicatePushdown=" + predicate + "&projectionPushdown=" + projection);
         var statement = connection.createStatement()) {
-      Map<Integer, Long> expected = new TreeMap<>();
-      try (var result = statement.executeQuery("SELECT m.cyl, " + scalar + " FROM mtcars m")) {
-        while (result.next()) {
-          expected.merge(result.getInt(1), result.getLong(2), Long::sum);
-        }
-      }
+      Map<Integer, Long> expected = new TreeMap<>(Map.of(4, 46L, 6, 28L, 8, 47L));
       for (String input : List.of("mtcars m", "(SELECT cyl, mpg FROM mtcars) m")) {
-        for (int multiplier : List.of(1, 2)) {
-          String group = multiplier == 1 ? "m.cyl" : "m.cyl AS mpg";
-          String sql = "SELECT " + group + ", SUM(" + scalar + ")" + (multiplier == 1 ? "" : " * 2") + " FROM " + input
-              + " GROUP BY m.cyl ORDER BY m.cyl";
-          try (var result = statement.executeQuery(sql)) {
-            for (var entry : expected.entrySet()) {
-              assertTrue(result.next(), sql);
-              assertEquals(entry.getKey().intValue(), result.getInt(1), sql);
-              assertEquals(entry.getValue() * multiplier, result.getLong(2), sql);
+        for (String group : List.of("m.cyl", "m.cyl AS mpg")) {
+          for (int multiplier : List.of(1, 2)) {
+            String sql = "SELECT " + group + ", SUM(" + scalar + ")" + (multiplier == 1 ? "" : " * 2") + " FROM "
+                + input + " GROUP BY m.cyl ORDER BY m.cyl";
+            try (var result = statement.executeQuery(sql)) {
+              for (var entry : expected.entrySet()) {
+                assertTrue(result.next(), sql);
+                assertEquals(entry.getKey().intValue(), result.getInt(1), sql);
+                assertEquals(entry.getValue() * multiplier, result.getLong(2), sql);
+              }
+              assertFalse(result.next(), sql);
             }
-            assertFalse(result.next(), sql);
           }
         }
       }
@@ -85,10 +81,18 @@ class AggregateScalarCorrelationTest {
             .getConnection("jdbc:jparq:.?predicatePushdown=" + predicate + "&projectionPushdown=" + projection);
         var statement = connection.createStatement()) {
       String scalar = "(SELECT o.v + x.v)";
-      String from = " FROM (VALUES (1, 2), (1, 5), (2, NULL)) o(g, v)" + " CROSS JOIN (VALUES (10)) x(v)";
+      String from = " FROM (VALUES (1, 2), (1, 5), (2, 1), (2, NULL), (3, NULL)) o(g, v)"
+          + " CROSS JOIN (VALUES (10)) x(v)";
       try (var result = statement.executeQuery("SELECT o.g, SUM(" + scalar + ") AS v, COUNT(" + scalar + "), MIN("
           + scalar + "), MAX(" + scalar + "), AVG(" + scalar + ")" + from + " GROUP BY o.g HAVING COUNT(" + scalar
           + ") > 0 ORDER BY SUM(" + scalar + ") + 1")) {
+        assertTrue(result.next());
+        assertEquals(2, result.getInt(1));
+        assertEquals(11, result.getLong(2));
+        assertEquals(1, result.getLong(3));
+        assertEquals(11, result.getInt(4));
+        assertEquals(11, result.getInt(5));
+        assertEquals(11.0, result.getDouble(6));
         assertTrue(result.next());
         assertEquals(1, result.getInt(1));
         assertEquals(27, result.getLong(2));
