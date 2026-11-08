@@ -1677,6 +1677,11 @@ public final class AggregateFunctions {
    * Completes a plain-table correlation context with source columns. Source
    * columns take precedence over colliding projection aliases.
    *
+   * <p>
+   * The retained projection aliases are part of the qualified alias visibility
+   * bug tracked in <a href="https://github.com/Alipsa/JParq/issues/507">issue
+   * #507</a>, not intended SQL scoping behavior.
+   *
    * @param schema
    *          schema of the current input row
    * @param projectionContext
