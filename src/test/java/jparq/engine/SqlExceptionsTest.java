@@ -43,7 +43,7 @@ class SqlExceptionsTest {
    */
   @Test
   void implementationLimitsPreserveSqlState() {
-    var cause = new NumberFormatException("invalid setting");
+    var cause = new IllegalStateException("work limit");
     var failure = SqlExceptions.implementationLimit("resource bound", cause);
     var classified = SqlExceptions.findSqlStateFailure(failure);
     assertEquals("54000", classified.getSQLState());
@@ -55,6 +55,24 @@ class SqlExceptionsTest {
     assertTrue(wrapped.getMessage().contains("resource bound"));
     assertEquals("54000",
         SqlExceptions.findSqlStateFailure(SqlExceptions.implementationLimit("work bound")).getSQLState());
+  }
+
+  /**
+   * Preserves invalid-attribute classification separately from exhausted limits.
+   */
+  @Test
+  void invalidAttributesPreserveSqlState() {
+    var cause = new NumberFormatException("invalid setting");
+    var failure = SqlExceptions.invalidAttribute("configuration value", cause);
+    var classified = SqlExceptions.findSqlStateFailure(failure);
+    assertEquals("HY024", classified.getSQLState());
+    assertSame(cause, classified.getCause());
+    var wrapped = SqlExceptions.wrap("query context", new IllegalStateException("evaluation context", failure));
+    assertEquals(SQLException.class, wrapped.getClass());
+    assertEquals("HY024", wrapped.getSQLState());
+    assertTrue(wrapped.getMessage().contains("configuration value"));
+    assertEquals("HY024",
+        SqlExceptions.findSqlStateFailure(SqlExceptions.invalidAttribute("invalid value")).getSQLState());
   }
 
   /** Preserves unsupported-feature classification and the original cause. */

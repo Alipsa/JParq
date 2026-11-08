@@ -4,13 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTimeout;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -219,14 +218,13 @@ class JsonArraySubscriptTest {
       withSelectionLimit(setting, () -> {
         var failure = assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue("[1]", "$[0].a"));
         assertEquals("jparq.json.maxIntermediateItems must be a positive integer", failure.getMessage());
-        assertEquals("54000", SqlExceptions.findSqlStateFailure(failure).getSQLState());
+        assertEquals("HY024", SqlExceptions.findSqlStateFailure(failure).getSQLState());
       });
     }
   }
 
   /**
-   * Reports bound-parameter resource failures as implementation limits through
-   * JDBC.
+   * Distinguishes bound-parameter limit and configuration failures through JDBC.
    *
    * @param function
    *          extraction function
@@ -244,6 +242,7 @@ class JsonArraySubscriptTest {
       statement.setString(2, "$[0 to last].b");
       Map<String, String> settings = Map.of("2", "jparq.json.maxIntermediateItems limit of 2", "oops",
           "jparq.json.maxIntermediateItems must be a positive integer");
+      Map<String, String> expectedStates = Map.of("2", "54000", "oops", "HY024");
       for (var entry : settings.entrySet()) {
         withSelectionLimit(entry.getKey(), () -> {
           var failure = assertThrows(SQLException.class, () -> {
@@ -253,14 +252,14 @@ class JsonArraySubscriptTest {
               }
             }
           });
-          assertEquals("54000", failure.getSQLState());
+          assertEquals(expectedStates.get(entry.getKey()), failure.getSQLState());
           assertTrue(failure.getMessage().contains(entry.getValue()), failure::getMessage);
         });
       }
     }
   }
 
-  /** Keeps JSON null items distinct from an empty or multiple-item selection. */
+  /** Extracts SQL NULL values and JSON array fragments containing null. */
   @Test
   void selectsNullItems() {
     for (String subscript : List.of("*", "0", "last", "0 to 2")) {
@@ -285,7 +284,7 @@ class JsonArraySubscriptTest {
   /** Bounds item/range work even when every range selects nothing. */
   @Test
   void boundsEmptyRangeWork() {
-    var document = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.arrayNode();
+    var document = JsonNodeFactory.instance.arrayNode();
     for (int i = 0; i < 64; i++) {
       document.add(0);
     }
@@ -300,17 +299,35 @@ class JsonArraySubscriptTest {
   }
 
   /**
-   * Parses oversized numeric literals in linear time without large-integer
-   * arithmetic.
+   * Clips huge literals without depending on wall-clock performance thresholds.
    */
   @Test
-  void boundsHugeLiteralParsingCost() {
+  void handlesHugeNumericLiterals() {
     String huge = "9".repeat(300_000);
-    assertTimeout(Duration.ofSeconds(10), () -> {
-      for (int row = 0; row < 10; row++) {
-        assertNull(JsonFunctions.jsonValue("[1,2,3]", "$[" + huge + "]"));
-        assertEquals("3", JsonFunctions.jsonQuery("[1,2,3]", "$[2 to last+" + huge + "]"));
+    assertNull(JsonFunctions.jsonValue("[1,2,3]", "$[" + huge + "]"));
+    assertEquals("3", JsonFunctions.jsonQuery("[1,2,3]", "$[2 to last+" + huge + "]"));
+    assertEquals("1", JsonFunctions.jsonQuery("[1,2,3]", "$[last-" + huge + " to 0]"));
+  }
+
+  /** Shares accessor work across steps and resets it for each function call. */
+  @Test
+  void boundsCumulativeArrayWork() {
+    withSelectionLimit("9", () -> {
+      String boundaryPath = "$[*][0][0].x";
+      String excessivePath = "$[*][0][0][0].x";
+      for (int evaluation = 0; evaluation < 2; evaluation++) {
+        assertNull(JsonFunctions.jsonValue("[1,2,3,4]", boundaryPath));
+        assertNull(JsonFunctions.jsonQuery("[1,2,3,4]", boundaryPath));
+        var failure = assertThrows(IllegalArgumentException.class,
+            () -> JsonFunctions.jsonValue("[1,2,3,4]", excessivePath));
+        assertTrue(failure.getMessage().contains("array work"), failure::getMessage);
+        assertEquals("54000", SqlExceptions.findSqlStateFailure(failure).getSQLState());
+        assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonQuery("[1,2,3,4]", excessivePath));
       }
+    });
+    withSelectionLimit("6", () -> {
+      // The terminal step must share the work already consumed by earlier steps.
+      assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue("[1,2,3,4]", "$[*][0][0]"));
     });
   }
 

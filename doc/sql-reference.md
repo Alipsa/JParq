@@ -308,16 +308,17 @@ SQL:2016–2023.
   or multiple items (the default SQL/JSON behavior without an array wrapper). A single selected JSON array
   remains one item and is returned intact by `JSON_QUERY`.
 - Intermediate selections are limited to 100,000 items per path step, including duplicates. From the first
-  nonterminal array step onward, item/range evaluations per step have the same bound, even for ranges that
-  select nothing. Set the JVM system
-  property `-Djparq.json.maxIntermediateItems=200000` to change both limits to a positive integer. The property
+  nonterminal array step onward, item/range evaluations share one cumulative budget over the complete path,
+  including terminal steps and ranges that select nothing. The cumulative budget defaults to 100,000.
+  Set the JVM system property `-Djparq.json.maxIntermediateItems=200000` to change both limits to a positive integer. The property
   is read only at the first nonterminal array step and reused for the remainder of that evaluation. Paths with
   no intermediate array step do not consult the property. This process-wide budget covers JDBC and direct
   JSON function calls; it is not a connection property.
-  Exceeding either limit or supplying an invalid setting raises `SQLException` with SQLState `54000` and the
-  property name. Each range's size is checked before its items are collected; excessive nonterminal item/range
-  combinations are rejected before iteration. A terminal array step needs at most two items to determine
-  whether the result is a singleton and does not expand the rest of the selection.
+  Exceeding either limit raises `SQLException` with SQLState `54000`; an invalid setting uses `HY024`. Both
+  diagnostics include the property name. Each range's size is checked before its items are collected;
+  nonterminal item/range combinations are checked against the remaining cumulative budget before iteration.
+  A terminal array step needs at most two items to determine whether the result is a singleton and does not
+  expand the rest of the selection.
 - Numeric subscript literals accept ASCII digits only. Leading-zero validation remains tracked in
   [#496](https://github.com/Alipsa/JParq/issues/496).
 - Malformed quoted members and invalid subscripts raise `SQLException` when evaluated, even after a missing

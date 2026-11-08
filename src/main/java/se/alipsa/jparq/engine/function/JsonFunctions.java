@@ -26,11 +26,11 @@ import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
  * SQL JSON_* functions using Jackson. Array access uses lax singleton wrapping.
- * From the first nonterminal array step onward, selections and accessor work
- * are limited to 100,000 items or item/range evaluations per step by default;
- * the positive integer system property {@code jparq.json.maxIntermediateItems}
- * overrides this limit when an evaluation first needs an intermediate array
- * step.
+ * From the first nonterminal array step onward, the default limits are 100,000
+ * intermediate items per step and 100,000 item/range evaluations over the
+ * entire path. The positive integer system property
+ * {@code jparq.json.maxIntermediateItems} overrides both limits when an
+ * evaluation first needs an intermediate array step.
  */
 public final class JsonFunctions {
 
@@ -251,7 +251,7 @@ public final class JsonFunctions {
     // Without an intermediate array step, a terminal step has at most one input
     // item, so its work is linear in the path text and needs no intermediate
     // budget.
-    int maxItems = 0;
+    ArrayBudget budget = null;
     List<JsonNode> current = node == null ? List.of() : List.of(node);
     int index = 0;
     while (index < path.length()) {
@@ -263,10 +263,10 @@ public final class JsonFunctions {
         }
         List<ArrayRange> ranges = parseArraySubscript(path.substring(index + 1, close));
         boolean terminal = skipWhitespace(path, close + 1) == path.length();
-        if (!terminal && maxItems == 0) {
-          maxItems = maxIntermediateItems();
+        if (!terminal && budget == null) {
+          budget = new ArrayBudget(maxIntermediateItems());
         }
-        current = selectArrayItems(current, ranges, maxItems, terminal);
+        current = selectArrayItems(current, ranges, budget, terminal);
         index = close + 1;
       } else if (isPathWhitespace(ch)) {
         index = skipWhitespace(path, index);
@@ -312,9 +312,9 @@ public final class JsonFunctions {
         return limit;
       }
     } catch (NumberFormatException e) {
-      throw SqlExceptions.implementationLimit(MAX_ITEMS_PROPERTY + " must be a positive integer", e);
+      throw SqlExceptions.invalidAttribute(MAX_ITEMS_PROPERTY + " must be a positive integer", e);
     }
-    throw SqlExceptions.implementationLimit(MAX_ITEMS_PROPERTY + " must be a positive integer");
+    throw SqlExceptions.invalidAttribute(MAX_ITEMS_PROPERTY + " must be a positive integer");
   }
 
   /**
@@ -326,9 +326,9 @@ public final class JsonFunctions {
    *          input sequence
    * @param ranges
    *          ordered selections, including duplicates
-   * @param maxItems
-   *          maximum intermediate sequence size and item/range evaluations, or
-   *          zero for a terminal step with no preceding intermediate array step
+   * @param budget
+   *          shared evaluation budget, or null for a terminal step with no
+   *          preceding intermediate array step
    * @param terminal
    *          whether no path steps remain
    * @return selected items, or at most two items for a terminal step
@@ -336,25 +336,24 @@ public final class JsonFunctions {
    *           if an intermediate selection or array accessor work exceeds the
    *           limit
    */
-  private static List<JsonNode> selectArrayItems(List<JsonNode> current, List<ArrayRange> ranges, int maxItems,
+  private static List<JsonNode> selectArrayItems(List<JsonNode> current, List<ArrayRange> ranges, ArrayBudget budget,
       boolean terminal) {
-    if (!terminal && current.size() * (long) ranges.size() > maxItems) {
-      throw arrayWorkLimit(maxItems);
+    if (!terminal) {
+      budget.consume(current.size() * (long) ranges.size());
     }
-    long evaluations = 0;
     List<JsonNode> selected = new ArrayList<>();
     for (JsonNode item : current) {
       int size = item.isArray() ? item.size() : 1;
       for (ArrayRange range : ranges) {
-        if (maxItems > 0 && ++evaluations > maxItems) {
-          throw arrayWorkLimit(maxItems);
+        if (terminal && budget != null) {
+          budget.consume(1);
         }
         int first = (int) Math.min(size, Math.max(0, range.first().resolve(size)));
         int last = (int) Math.max(-1, Math.min(size - 1L, range.last().resolve(size)));
         long count = Math.max(0L, last - (long) first + 1);
-        if (!terminal && count > maxItems - (long) selected.size()) {
-          throw SqlExceptions.implementationLimit(
-              "JSON path intermediate selection exceeds " + MAX_ITEMS_PROPERTY + " limit of " + maxItems + " items");
+        if (!terminal && count > budget.limit - (long) selected.size()) {
+          throw SqlExceptions.implementationLimit("JSON path intermediate selection exceeds " + MAX_ITEMS_PROPERTY
+              + " limit of " + budget.limit + " items");
         }
         for (int position = first; position <= last; position++) {
           selected.add(item.isArray() ? item.get(position) : item);
@@ -371,12 +370,44 @@ public final class JsonFunctions {
    * Creates a classified failure for excessive array accessor work.
    *
    * @param limit
-   *          maximum item/range evaluations per array step
+   *          maximum item/range evaluations over the complete path
    * @return failure carrying SQLState 54000
    */
   private static IllegalArgumentException arrayWorkLimit(int limit) {
-    return SqlExceptions.implementationLimit(
-        "JSON path array work exceeds " + MAX_ITEMS_PROPERTY + " limit of " + limit + " item/range evaluations");
+    return SqlExceptions.implementationLimit("JSON path array work exceeds " + MAX_ITEMS_PROPERTY + " limit of " + limit
+        + " item/range evaluations per evaluation");
+  }
+
+  /** Shared memory limit and remaining accessor work for one path evaluation. */
+  private static final class ArrayBudget {
+    private final int limit;
+    private long remainingWork;
+
+    /**
+     * Creates an evaluation budget without reading process settings again.
+     *
+     * @param limit
+     *          maximum intermediate items and total item/range evaluations
+     */
+    private ArrayBudget(int limit) {
+      this.limit = limit;
+      remainingWork = limit;
+    }
+
+    /**
+     * Reserves work before iterating, including ranges with no matches.
+     *
+     * @param work
+     *          number of item/range evaluations
+     * @throws IllegalArgumentException
+     *           if the cumulative work exceeds the limit
+     */
+    private void consume(long work) {
+      if (work > remainingWork) {
+        throw arrayWorkLimit(limit);
+      }
+      remainingWork -= work;
+    }
   }
 
   /**
