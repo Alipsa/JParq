@@ -8,10 +8,12 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericArray;
 import org.apache.avro.generic.GenericRecord;
@@ -26,6 +28,9 @@ public final class JsonFunctions {
 
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
+  private static final String ARRAY_INDEX = "([+-]?[0-9]+|last(?: *[+-] *[0-9]+)?)";
+  private static final Pattern ARRAY_RANGE = Pattern.compile(ARRAY_INDEX + "(?: +to +" + ARRAY_INDEX + ")?");
+
   private JsonFunctions() {
   }
 
@@ -37,9 +42,11 @@ public final class JsonFunctions {
    * @param path
    *          JSON path expression rooted at {@code $}; double-quoted member names
    *          use JSON string escapes; leading and trailing whitespace and
-   *          whitespace between tokens are ignored
+   *          whitespace between tokens are ignored; array steps accept integer
+   *          indexes, {@code *}, {@code last}, relative indexes such as
+   *          {@code last-1}, inclusive ranges, and comma-separated selections
    * @return extracted scalar value or {@code null} when the path cannot be
-   *         resolved
+   *         resolved to exactly one item
    * @throws IllegalArgumentException
    *           if the document or path is malformed
    */
@@ -88,8 +95,11 @@ public final class JsonFunctions {
    * @param path
    *          JSON path expression rooted at {@code $}; double-quoted member names
    *          use JSON string escapes; leading and trailing whitespace and
-   *          whitespace between tokens are ignored
-   * @return JSON string or {@code null} when the path cannot be resolved
+   *          whitespace between tokens are ignored; array steps accept integer
+   *          indexes, {@code *}, {@code last}, relative indexes such as
+   *          {@code last-1}, inclusive ranges, and comma-separated selections
+   * @return JSON string or {@code null} when the path does not select exactly one
+   *         item
    * @throws IllegalArgumentException
    *           if the document or path is malformed
    */
@@ -215,12 +225,12 @@ public final class JsonFunctions {
    *          the document root
    * @param path
    *          the path after the root marker
-   * @return the selected node, or null if a step has no match
+   * @return the selected node, or null unless exactly one item matches
    * @throws IllegalArgumentException
    *           if a path step is malformed
    */
   private static JsonNode navigate(JsonNode node, String path) {
-    JsonNode current = node;
+    List<JsonNode> current = node == null ? List.of() : List.of(node);
     int index = 0;
     while (index < path.length()) {
       char ch = path.charAt(index);
@@ -229,14 +239,20 @@ public final class JsonFunctions {
         if (close < 0) {
           throw new IllegalArgumentException("Unclosed array index in JSON path");
         }
-        String idxStr = path.substring(index + 1, close);
-        int arrayIndex;
-        try {
-          arrayIndex = Integer.parseInt(trimPathWhitespace(idxStr));
-        } catch (NumberFormatException e) {
-          throw new IllegalArgumentException("Unsupported array subscript in JSON path: [" + idxStr + "]", e);
+        List<ArrayRange> ranges = parseArraySubscript(path.substring(index + 1, close));
+        List<JsonNode> selected = new ArrayList<>();
+        for (JsonNode item : current) {
+          if (item.isArray()) {
+            for (ArrayRange range : ranges) {
+              long first = Math.max(0, range.first().resolve(item.size()));
+              long last = Math.min(item.size() - 1L, range.last().resolve(item.size()));
+              for (long position = first; position <= last; position++) {
+                selected.add(item.get((int) position));
+              }
+            }
+          }
         }
-        current = current != null && current.isArray() ? current.get(arrayIndex) : null;
+        current = selected;
         index = close + 1;
       } else if (isPathWhitespace(ch)) {
         index = skipWhitespace(path, index);
@@ -250,11 +266,104 @@ public final class JsonFunctions {
         }
         int next = findNextDelimiter(path, start);
         String prop = decodeMember(path.substring(start, next));
-        current = current == null ? null : current.get(prop);
+        List<JsonNode> selected = new ArrayList<>();
+        for (JsonNode item : current) {
+          JsonNode value = item.get(prop);
+          if (value != null) {
+            selected.add(value);
+          }
+        }
+        current = selected;
         index = next;
       }
     }
-    return current;
+    return current.size() == 1 ? current.getFirst() : null;
+  }
+
+  /**
+   * Parses array selections before evaluating them, including after a missing
+   * step.
+   *
+   * @param subscript
+   *          bracket contents
+   * @return inclusive index ranges in selection order
+   * @throws IllegalArgumentException
+   *           if the subscript is malformed or exceeds integer bounds
+   */
+  private static List<ArrayRange> parseArraySubscript(String subscript) {
+    StringBuilder normalized = new StringBuilder();
+    for (int i = 0; i < subscript.length(); i++) {
+      char ch = subscript.charAt(i);
+      normalized.append(isPathWhitespace(ch) ? ' ' : ch);
+    }
+    String text = trimPathWhitespace(normalized.toString());
+    if ("*".equals(text)) {
+      return List.of(new ArrayRange(new ArrayIndex(false, 0), new ArrayIndex(true, 0)));
+    }
+    List<ArrayRange> ranges = new ArrayList<>();
+    try {
+      for (String selection : text.split(",", -1)) {
+        var matcher = ARRAY_RANGE.matcher(trimPathWhitespace(selection));
+        if (!matcher.matches()) {
+          throw new IllegalArgumentException("Invalid array selection");
+        }
+        ArrayIndex first = parseArrayIndex(matcher.group(1));
+        ArrayIndex last = matcher.group(2) == null ? first : parseArrayIndex(matcher.group(2));
+        ranges.add(new ArrayRange(first, last));
+      }
+    } catch (IllegalArgumentException e) {
+      throw new IllegalArgumentException("Unsupported array subscript in JSON path: [" + subscript + "]", e);
+    }
+    return ranges;
+  }
+
+  /**
+   * Parses an integer index or an offset from the last array element.
+   *
+   * @param text
+   *          validated index expression
+   * @return index independent of the current array's size
+   * @throws NumberFormatException
+   *           if an integer exceeds the supported bounds
+   */
+  private static ArrayIndex parseArrayIndex(String text) {
+    if (!text.startsWith("last")) {
+      return new ArrayIndex(false, Integer.parseInt(text));
+    }
+    String offset = text.substring(4).replace(" ", "");
+    return new ArrayIndex(true, offset.isEmpty() ? 0 : Integer.parseInt(offset));
+  }
+
+  /**
+   * An array index, optionally relative to the final element.
+   *
+   * @param fromLast
+   *          whether to add the final element's index
+   * @param offset
+   *          signed index or relative offset
+   */
+  private record ArrayIndex(boolean fromLast, int offset) {
+    /**
+     * Resolves the index without overflowing when adding a relative offset.
+     *
+     * @param size
+     *          array size
+     * @return zero-based index, possibly outside the array bounds
+     */
+    private long resolve(int size) {
+      return fromLast ? size - 1L + offset : offset;
+    }
+  }
+
+  /**
+   * An inclusive range; a single index has identical endpoints.
+   *
+   * @param first
+   *          lower endpoint
+   * @param last
+   *          upper endpoint
+   */
+  private record ArrayRange(ArrayIndex first, ArrayIndex last) {
   }
 
   /**

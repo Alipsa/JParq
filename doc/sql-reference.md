@@ -294,13 +294,18 @@ SQL:2016–2023.
   (**Behavior change:** earlier versions matched a key containing the literal quotes.)
 - A dot must be followed by a member name; empty names must be quoted (`$.""`).
 - Missing members return NULL for supported paths.
-- Subscripts must be zero-based integer indexes. An optional `+` sign is accepted (`[+1]` selects the second
+- Numeric array indexes are zero-based integers. An optional `+` sign is accepted (`[+1]` selects the second
   element). Negative indexes such as `[-1]` always return NULL; they do not count from the end of the array.
   Subscripts ignore the same surrounding whitespace as other path tokens.
-- `[*]`, `[last]`, and ranges are unsupported ([#303](https://github.com/Alipsa/JParq/issues/303)). For example,
-  `$.missing[*]` raises `Unsupported array subscript in JSON path: [*]`.
-- Malformed quoted members and unsupported subscripts raise `SQLException` when evaluated, even after a missing
-  member.
+- Array steps support `[*]` (all elements), `[last]` (the final element), offsets such as `[last-1]`,
+  inclusive ranges such as `[0 to 2]` and `[last-1 to last]`, and comma-separated selections such as `[0,last]`.
+  Range endpoints outside the array are clipped; descending ranges have no matches. Whitespace is allowed
+  between subscript tokens, including around the sign in `last - 1`.
+- Subsequent steps apply to every selected item. Both functions return NULL if the complete path selects zero
+  or multiple items (the default SQL/JSON behavior without an array wrapper). A single selected JSON array
+  remains one item and is returned intact by `JSON_QUERY`.
+- Malformed quoted members and invalid subscripts raise `SQLException` when evaluated, even after a missing
+  member. Invalid subscripts include the bracket contents in the diagnostic.
 
 **Constructors (`JSON_OBJECT`, `JSON_ARRAY`):**
 
