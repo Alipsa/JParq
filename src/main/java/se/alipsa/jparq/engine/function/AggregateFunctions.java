@@ -1840,8 +1840,21 @@ public final class AggregateFunctions {
           if (having != null) {
             booleanColumn = booleanColumnPredicate(schema, qualifierColumnMapping, unqualifiedColumnMapping);
           }
+          // A plain table has no explicit qualifier mapping. Complete its
+          // projection context with input columns while retaining output aliases.
+          Map<String, Map<String, String>> inputContext = normalizedCorrelationContext;
+          if (qualifierColumnMapping == null || qualifierColumnMapping.isEmpty()) {
+            Map<String, String> inputColumns = ColumnMappingUtil.unqualifiedColumnMapping(schema);
+            Map<String, Map<String, String>> completed = new LinkedHashMap<>();
+            normalizedCorrelationContext.forEach((qualifier, columns) -> {
+              Map<String, String> input = new LinkedHashMap<>(columns);
+              input.putAll(inputColumns);
+              completed.put(qualifier, Map.copyOf(input));
+            });
+            inputContext = Map.copyOf(completed);
+          }
           CorrelationMappings mappings = new CorrelationMappings(outerQualifiers, qualifierColumnMapping,
-              unqualifiedColumnMapping, normalizedCorrelationContext);
+              unqualifiedColumnMapping, inputContext);
           valueEval = new ValueExpressionEvaluator(schema, subqueryExecutor, mappings, WindowState.empty());
         }
 

@@ -2,6 +2,10 @@
 
 ### 1.4.0
 
+- Evaluate correlated scalar subqueries in aggregate arguments against each input row,
+  including when aggregate results appear inside scalar expressions. Preserve qualified
+  NULL bindings instead of retrying them as unqualified column references (#307).
+
 - Require a leading dot before every JSON_VALUE and JSON_QUERY member step, including unquoted
   names after the root or array steps. Reject dotless members with path-specific errors even when
   separated by whitespace or following a missing match (#304).
