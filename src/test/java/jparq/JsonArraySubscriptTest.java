@@ -9,14 +9,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.function.JsonFunctions;
 
 /** Regression coverage for SQL/JSON array selections from issue 303. */
+@ResourceLock(Resources.SYSTEM_PROPERTIES)
 class JsonArraySubscriptTest {
   @TempDir
   Path directory;
@@ -25,11 +31,12 @@ class JsonArraySubscriptTest {
   @Test
   void selectsArrayElements() {
     String json = "{\"a\":[5,6,7]}";
-    for (String subscript : List.of("last", "last-0", "last - 0", "2 to 2", "2 to last", "2,9", "9,2", "-1 to 0,9",
-        "last-2 to 0")) {
-      String expected = subscript.contains("-1 to 0") || subscript.equals("last-2 to 0") ? "5" : "7";
-      assertEquals(expected, JsonFunctions.jsonValue(json, "$.a[" + subscript + "]").toString(), subscript);
-      assertEquals(expected, JsonFunctions.jsonQuery(json, "$.a[" + subscript + "]"), subscript);
+    Map<String, String> selections = Map.of("last", "7", "last-0", "7", "last - 0", "7", "2 to 2", "7", "2 to last",
+        "7", "2,9", "7", "9,2", "7", "-1 to 0,9", "5", "last-2 to 0", "5");
+    for (var entry : selections.entrySet()) {
+      String path = "$.a[" + entry.getKey() + "]";
+      assertEquals(entry.getValue(), JsonFunctions.jsonValue(json, path).toString(), path);
+      assertEquals(entry.getValue(), JsonFunctions.jsonQuery(json, path), path);
     }
     assertEquals(6, JsonFunctions.jsonValue(json, "$.a[last-1]"));
     assertEquals(7, JsonFunctions.jsonValue(json, "$.a[last\u00a0-\u2028 0]"));
@@ -55,7 +62,7 @@ class JsonArraySubscriptTest {
   /** Returns NULL for empty or multiple selections without an array wrapper. */
   @Test
   void returnsNullForNonSingletonSelections() {
-    for (String document : List.of("{\"a\":[1,2,3]}", "{\"a\":[]}", "{\"a\":null}", "{\"a\":1}", "{}")) {
+    for (String document : List.of("{\"a\":[1,2,3]}", "{\"a\":[]}", "{\"a\":null}", "{}")) {
       for (String subscript : List.of("*", "0 to 2", "0,last", "last+1", "last-2147483648", "3 to 0", "2147483647",
           "last+2147483647", "-1")) {
         String path = "$.a[" + subscript + "]";
@@ -73,7 +80,7 @@ class JsonArraySubscriptTest {
   @Test
   void validatesTheCompletePath() {
     for (String prefix : List.of("$.missing[*]", "$.a[*]", "$.a[2 to 0]")) {
-      for (String suffix : List.of("[last-]", "[0 to]", "[0,]", "[last+2147483648]", "[", ".\"bad\\q\"")) {
+      for (String suffix : List.of("[last-]", "[0 to]", "[0,]", "[last+oops]", "[", ".\"bad\\q\"")) {
         String path = prefix + suffix;
         assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue("{\"a\":[1,2]}", path), path);
         assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonQuery("{\"a\":[1,2]}", path), path);
@@ -98,9 +105,16 @@ class JsonArraySubscriptTest {
         var statement = connection.prepareStatement("SELECT " + function + "(?, ?)");
         var literal = connection.createStatement()) {
       statement.setString(1, "{\"a\":[1,2,3]}");
-      for (String path : List.of("$.a[last]", "$.a[last - 1]", "$.a[*]", "$.a[0 to 2]", "$.missing[*]")) {
+      Map<String, String> paths = new HashMap<>();
+      paths.put("$.a[last]", "3");
+      paths.put("$.a[last - 1]", "2");
+      paths.put("$.a[*]", null);
+      paths.put("$.a[0 to 2]", null);
+      paths.put("$.missing[*]", null);
+      for (var entry : paths.entrySet()) {
+        String path = entry.getKey();
         statement.setString(2, path);
-        String expected = path.equals("$.a[last]") ? "3" : path.equals("$.a[last - 1]") ? "2" : null;
+        String expected = entry.getValue();
         try (var result = statement.executeQuery();
             var literalResult = literal.executeQuery("SELECT " + function + "('{\"a\":[1,2,3]}', '" + path + "')")) {
           assertTrue(result.next());
@@ -108,8 +122,150 @@ class JsonArraySubscriptTest {
           assertEquals(expected, result.getString(1));
           assertEquals(expected, literalResult.getString(1));
           assertFalse(result.next());
+          assertFalse(literalResult.next());
         }
       }
     }
   }
+  /** Wraps scalars and objects as singleton arrays for lax array access. */
+  @Test
+  void wrapsNonArrays() {
+    for (String subscript : List.of("*", "0", "last", "0 to 2", "last-0", "-9 to last", "99,0")) {
+      String path = "$.a[" + subscript + "]";
+      assertEquals(1, JsonFunctions.jsonValue("{\"a\":1}", path), path);
+      assertEquals("1", JsonFunctions.jsonQuery("{\"a\":1}", path), path);
+      assertEquals("{\"b\":1}", JsonFunctions.jsonQuery("{\"a\":{\"b\":1}}", path), path);
+      assertEquals(1, JsonFunctions.jsonValue("{\"a\":{\"b\":1}}", path + ".b"), path);
+    }
+    assertNull(JsonFunctions.jsonValue("{\"a\":1}", "$.a[0,last]"));
+    assertNull(JsonFunctions.jsonQuery("{\"a\":1}", "$.a[0,last]"));
+  }
+
+  /**
+   * Applies lax singleton wrapping to bound SQL/JSON paths.
+   *
+   * @param function
+   *          extraction function
+   * @throws SQLException
+   *           if querying fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "JSON_VALUE", "JSON_QUERY"
+  })
+  void wrapsNonArraysThroughJdbc(String function) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.prepareStatement("SELECT " + function + "(?, ?)")) {
+      statement.setString(1, "{\"a\":1}");
+      for (String subscript : List.of("*", "0", "last", "0 to 2")) {
+        statement.setString(2, "$.a[" + subscript + "]");
+        try (var result = statement.executeQuery()) {
+          assertTrue(result.next());
+          assertEquals("1", result.getString(1), subscript);
+          assertFalse(result.next());
+        }
+      }
+    }
+  }
+
+  /**
+   * Clips arbitrary-precision endpoints and relative indexes without overflow.
+   */
+  @Test
+  void clipsLargeIndexes() {
+    String huge = "9999999999999999999999999999999999999999";
+    Map<String, String> ranges = Map.of("2 to 9999999999", "3", "2 to " + huge, "3", "-" + huge + " to 0", "1",
+        "last-" + huge + " to 0", "1", "2 to last+" + huge, "3");
+    for (var entry : ranges.entrySet()) {
+      assertEquals(entry.getValue(), JsonFunctions.jsonQuery("[1,2,3]", "$[" + entry.getKey() + "]"), entry.getKey());
+    }
+    for (String subscript : List.of(huge, "-" + huge, "last+" + huge, "last-" + huge)) {
+      assertNull(JsonFunctions.jsonValue("[1,2,3]", "$[" + subscript + "]"), subscript);
+    }
+  }
+
+  /**
+   * Bounds duplicate growth, cumulative ranges, and whole ranges before
+   * expansion.
+   */
+  @Test
+  void boundsIntermediateSelections() {
+    withSelectionLimit("64", () -> {
+      String repeated = "[" + String.join(",", Collections.nCopies(40, "0")) + "]";
+      String explosivePath = "$" + repeated.repeat(6);
+      var failure = assertThrows(IllegalArgumentException.class,
+          () -> JsonFunctions.jsonValue("[[[[[[1]]]]]]", explosivePath));
+      assertTrue(failure.getMessage().contains("jparq.json.maxIntermediateItems limit of 64"));
+      assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonQuery("[[[[[[1]]]]]]", explosivePath));
+    });
+    withSelectionLimit("2", () -> {
+      for (String path : List.of("$[0 to last].b", "$[0 to 1,0].b", "$[*][0,0].b")) {
+        assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue("[{\"b\":1},{},{}]", path), path);
+      }
+      assertEquals(1, JsonFunctions.jsonValue("[{\"b\":1},{}]", "$[0 to last].b"));
+      assertNull(JsonFunctions.jsonQuery("[1,2,3]", "$[*]   "));
+      assertNull(JsonFunctions.jsonValue("[1,2,3]", "$[0 to last,0 to last]"));
+      // A terminal shortcut must not skip validation of a later malformed step.
+      assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue("[1,2]", "$[*][bad]"));
+    });
+  }
+
+  /** Rejects invalid limit settings instead of silently removing the bound. */
+  @Test
+  void validatesSelectionLimit() {
+    for (String setting : List.of("0", "-1", "oops", "2147483648")) {
+      withSelectionLimit(setting, () -> {
+        var failure = assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue("[1]", "$[0]"));
+        assertEquals("jparq.json.maxIntermediateItems must be a positive integer", failure.getMessage());
+      });
+    }
+  }
+
+  /**
+   * Reports bounded-parameter selection overflow as a JDBC error.
+   *
+   * @throws SQLException
+   *           if connection setup fails
+   */
+  @Test
+  void reportsSelectionLimitThroughJdbc() throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.prepareStatement("SELECT JSON_VALUE(?, ?)")) {
+      statement.setString(1, "[{\"b\":1},{},{}]");
+      statement.setString(2, "$[0 to last].b");
+      withSelectionLimit("2", () -> {
+        var failure = assertThrows(SQLException.class, () -> {
+          try (var result = statement.executeQuery()) {
+            while (result.next()) {
+              result.getObject(1);
+            }
+          }
+        });
+        assertTrue(failure.getMessage().contains("jparq.json.maxIntermediateItems limit of 2"));
+      });
+    }
+  }
+
+  /**
+   * Runs a check with a limit setting and restores the previous process setting.
+   *
+   * @param setting
+   *          property value
+   * @param check
+   *          test operation
+   */
+  private static void withSelectionLimit(String setting, Runnable check) {
+    String property = "jparq.json.maxIntermediateItems";
+    String previous = System.setProperty(property, setting);
+    try {
+      check.run();
+    } finally {
+      if (previous == null) {
+        System.clearProperty(property);
+      } else {
+        System.setProperty(property, previous);
+      }
+    }
+  }
+
 }

@@ -297,13 +297,22 @@ SQL:2016–2023.
 - Numeric array indexes are zero-based integers. An optional `+` sign is accepted (`[+1]` selects the second
   element). Negative indexes such as `[-1]` always return NULL; they do not count from the end of the array.
   Subscripts ignore the same surrounding whitespace as other path tokens.
+- In the default lax behavior, array steps wrap non-array values as one-element arrays. For example,
+  `$.a[*]`, `$.a[0]`, `$.a[last]`, and `$.a[0 to 2]` all select `1` from `{"a":1}`.
 - Array steps support `[*]` (all elements), `[last]` (the final element), offsets such as `[last-1]`,
   inclusive ranges such as `[0 to 2]` and `[last-1 to last]`, and comma-separated selections such as `[0,last]`.
-  Range endpoints outside the array are clipped; descending ranges have no matches. Whitespace is allowed
+  Integer endpoints have arbitrary precision; endpoints outside the array are clipped; descending ranges have no matches. Whitespace is allowed
   between subscript tokens, including around the sign in `last - 1`.
 - Subsequent steps apply to every selected item. Both functions return NULL if the complete path selects zero
   or multiple items (the default SQL/JSON behavior without an array wrapper). A single selected JSON array
   remains one item and is returned intact by `JSON_QUERY`.
+- Intermediate selections are limited to 100,000 items per path step, including duplicates. Set the JVM system
+  property `-Djparq.json.maxIntermediateItems=200000` to change the limit to a positive integer. The limit is
+  read once per evaluation. Exceeding it raises `SQLException` with the property name and limit; each range is
+  checked before its items are collected. A terminal array step needs at most two items to determine whether
+  the result is a singleton and does not expand the rest of the selection.
+- Numeric subscript literals accept ASCII digits only. Leading-zero validation remains tracked in
+  [#496](https://github.com/Alipsa/JParq/issues/496).
 - Malformed quoted members and invalid subscripts raise `SQLException` when evaluated, even after a missing
   member. Invalid subscripts include the bracket contents in the diagnostic.
 
