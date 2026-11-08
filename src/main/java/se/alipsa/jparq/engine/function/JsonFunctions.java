@@ -35,8 +35,9 @@ public final class JsonFunctions {
    * @param document
    *          JSON document (string or {@link JsonNode})
    * @param path
-   *          JSON path expression beginning with {@code $}; double-quoted member
-   *          names use JSON string escapes
+   *          JSON path expression rooted at {@code $}; double-quoted member names
+   *          use JSON string escapes; leading and trailing whitespace and
+   *          whitespace between tokens are ignored
    * @return extracted scalar value or {@code null} when the path cannot be
    *         resolved
    * @throws IllegalArgumentException
@@ -85,8 +86,9 @@ public final class JsonFunctions {
    * @param document
    *          JSON document (string or {@link JsonNode})
    * @param path
-   *          JSON path expression beginning with {@code $}; double-quoted member
-   *          names use JSON string escapes
+   *          JSON path expression rooted at {@code $}; double-quoted member names
+   *          use JSON string escapes; leading and trailing whitespace and
+   *          whitespace between tokens are ignored
    * @return JSON string or {@code null} when the path cannot be resolved
    * @throws IllegalArgumentException
    *           if the document or path is malformed
@@ -171,6 +173,18 @@ public final class JsonFunctions {
     return array.toString();
   }
 
+  /**
+   * Parses the document and evaluates a path rooted at {@code $}, ignoring
+   * leading whitespace.
+   *
+   * @param document
+   *          the JSON document (string or {@link JsonNode})
+   * @param path
+   *          the SQL/JSON path expression
+   * @return the selected node, or null if the document, path, or match is missing
+   * @throws IllegalArgumentException
+   *           if the document or path is malformed
+   */
   private static JsonNode resolve(Object document, Object path) {
     if (document == null || path == null) {
       return null;
@@ -186,15 +200,16 @@ public final class JsonFunctions {
       }
     }
     String pathExpr = SqlText.valueOf(path);
-    if (!pathExpr.startsWith("$")) {
+    int root = skipWhitespace(pathExpr, 0);
+    if (!pathExpr.startsWith("$", root)) {
       throw new IllegalArgumentException("JSON path must start with $");
     }
-    return navigate(node, pathExpr.substring(1));
+    return navigate(node, pathExpr.substring(root + 1));
   }
 
   /**
    * Traverses member and array steps, validating the remaining path after missing
-   * values.
+   * values. Whitespace separates tokens and is preserved only in quoted names.
    *
    * @param node
    *          the document root
@@ -217,19 +232,22 @@ public final class JsonFunctions {
         String idxStr = path.substring(index + 1, close);
         int arrayIndex;
         try {
-          arrayIndex = Integer.parseInt(idxStr.trim());
+          arrayIndex = Integer.parseInt(trimPathWhitespace(idxStr));
         } catch (NumberFormatException e) {
           throw new IllegalArgumentException("Unsupported array subscript in JSON path: [" + idxStr + "]", e);
         }
         current = current != null && current.isArray() ? current.get(arrayIndex) : null;
         index = close + 1;
-      } else if (ch == ' ') {
-        index++;
+      } else if (isPathWhitespace(ch)) {
+        index = skipWhitespace(path, index);
       } else {
         if (ch == '"') {
           throw new IllegalArgumentException("Quoted member in JSON path must be preceded by a dot");
         }
-        int start = ch == '.' ? index + 1 : index;
+        int start = ch == '.' ? skipWhitespace(path, index + 1) : index;
+        if (ch == '.' && (start == path.length() || isStepDelimiter(path.charAt(start)))) {
+          throw new IllegalArgumentException("Missing member name after dot in JSON path");
+        }
         int next = findNextDelimiter(path, start);
         String prop = decodeMember(path.substring(start, next));
         current = current == null ? null : current.get(prop);
@@ -268,7 +286,7 @@ public final class JsonFunctions {
    *          the member's starting offset
    * @return the offset after the member token
    * @throws IllegalArgumentException
-   *           if a quoted member is unclosed or has a suffix
+   *           if a quoted member is unclosed or a member has a suffix
    */
   private static int findNextDelimiter(String path, int start) {
     if (start < path.length() && path.charAt(start) == '"') {
@@ -277,16 +295,17 @@ public final class JsonFunctions {
     int i = start;
     while (i < path.length()) {
       char c = path.charAt(i);
-      if (c == '.' || c == '[') {
+      if (isStepDelimiter(c) || isPathWhitespace(c)) {
         break;
       }
       i++;
     }
+    validateMemberEnd(path, i, false);
     return i;
   }
 
   /**
-   * Locates the closing quote and validates the next step after any plain spaces.
+   * Locates the closing quote and validates the next step after whitespace.
    *
    * @param path
    *          the path after the root marker
@@ -303,17 +322,89 @@ public final class JsonFunctions {
         i++;
       } else if (ch == '"') {
         int next = i + 1;
-        int after = next;
-        while (after < path.length() && path.charAt(after) == ' ') {
-          after++;
-        }
-        if (after < path.length() && path.charAt(after) != '.' && path.charAt(after) != '[') {
-          throw new IllegalArgumentException("Unexpected character after quoted member in JSON path");
-        }
+        validateMemberEnd(path, next, true);
         return next;
       }
     }
     throw new IllegalArgumentException("Unclosed quoted member in JSON path");
+  }
+
+  /**
+   * Requires a step delimiter or the end of the path after a member token.
+   *
+   * @param path
+   *          the path after the root marker
+   * @param end
+   *          the offset after the member token
+   * @param quoted
+   *          whether the member was quoted, for the error diagnostic
+   * @throws IllegalArgumentException
+   *           if a member has an unexpected suffix
+   */
+  private static void validateMemberEnd(String path, int end, boolean quoted) {
+    int after = skipWhitespace(path, end);
+    if (after < path.length() && !isStepDelimiter(path.charAt(after))) {
+      throw new IllegalArgumentException(
+          "Unexpected character after " + (quoted ? "quoted member" : "member") + " in JSON path");
+    }
+  }
+
+  /**
+   * Recognizes the delimiters that begin member and array steps.
+   *
+   * @param ch
+   *          the character to classify
+   * @return whether the character begins a path step
+   */
+  private static boolean isStepDelimiter(char ch) {
+    return ch == '.' || ch == '[';
+  }
+
+  /**
+   * Removes leading and trailing path whitespace from subscript text.
+   *
+   * @param text
+   *          the subscript text
+   * @return the text without surrounding path whitespace
+   */
+  private static String trimPathWhitespace(String text) {
+    int start = skipWhitespace(text, 0);
+    int end = text.length();
+    while (end > start && isPathWhitespace(text.charAt(end - 1))) {
+      end--;
+    }
+    return text.substring(start, end);
+  }
+
+  /**
+   * Skips whitespace between path tokens without modifying quoted contents.
+   *
+   * @param path
+   *          the path or subscript text
+   * @param start
+   *          the offset from which to skip whitespace
+   * @return the offset of the next non-whitespace character or the path length
+   */
+  private static int skipWhitespace(String path, int start) {
+    int index = start;
+    while (index < path.length() && isPathWhitespace(path.charAt(index))) {
+      index++;
+    }
+    return index;
+  }
+
+  /**
+   * Recognizes ECMAScript WhiteSpace and LineTerminator characters, including
+   * Unicode space separators and the byte order mark, but excluding other control
+   * characters.
+   *
+   * @param ch
+   *          the character to classify
+   * @return whether the character separates path tokens
+   */
+  private static boolean isPathWhitespace(char ch) {
+    return Character.getType(ch) == Character.SPACE_SEPARATOR || ch == '\t' || ch == '\u000b' || ch == '\f'
+        || ch == '\n' || ch == '\r' || ch == '\u2028' || ch == '\u2029' || ch == '\ufeff';
   }
 
   /**

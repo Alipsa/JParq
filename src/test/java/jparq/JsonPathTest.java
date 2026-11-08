@@ -15,10 +15,96 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-/** JDBC regression coverage for quoted SQL/JSON path member names. */
+/** JDBC regression coverage for SQL/JSON path member names and whitespace. */
 class JsonPathTest {
   @TempDir
   Path directory;
+
+  /**
+   * Skips whitespace around quoted and unquoted steps in SQL literals.
+   *
+   * @throws SQLException
+   *           if querying fails
+   */
+  @Test
+  void evaluatesWhitespaceInSqlLiterals() throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("""
+            SELECT JSON_QUERY('{"a":{"b":1}}', '$.a .b'),
+                   JSON_QUERY('{"a":[1,2]}', '$.a [1]'),
+                   JSON_QUERY('{"a":1}', '$. "a"'),
+                   JSON_VALUE('{"a":{"b":1}}', '$.a .b'),
+                   JSON_VALUE('{"a":[1,2]}', '$.a [1]'),
+                   JSON_VALUE('{"a":1}', '$. "a"')
+            """)) {
+      assertTrue(result.next());
+      String[] expected = {
+          "1", "2", "1", "1", "2", "1"
+      };
+      for (int column = 0; column < expected.length; column++) {
+        assertEquals(expected[column], result.getString(column + 1));
+      }
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Skips tabs and line breaks in bound paths while preserving quoted spaces.
+   *
+   * @param function
+   *          the extraction function
+   * @throws SQLException
+   *           if querying fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "JSON_VALUE", "JSON_QUERY"
+  })
+  void evaluatesWhitespaceInBoundPaths(String function) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.prepareStatement("SELECT " + function + "(?, ?)")) {
+      statement.setString(1, "{\" a \":[{\"b\":7}]}");
+      statement.setString(2, "\ufeff\u00a0$ \t.\n\" a \"\r[\u2028 0 \u2029]\t.\n b \r");
+      try (var result = statement.executeQuery()) {
+        assertTrue(result.next());
+        assertEquals("7", result.getString(1));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Reports missing member names as JDBC errors instead of matching empty keys.
+   *
+   * @param function
+   *          the extraction function
+   * @throws SQLException
+   *           if connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "JSON_VALUE", "JSON_QUERY"
+  })
+  void rejectsEmptyMembersInBoundPaths(String function) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.prepareStatement("SELECT " + function + "(?, ?)")) {
+      statement.setString(1, "{\"\":{\"a\":1},\" \":2}");
+      for (String path : new String[]{
+          "$.", "$. ", "$. .a", "$. [0]", "$.missing. [0]"
+      }) {
+        statement.setString(2, path);
+        SQLException failure = assertThrows(SQLException.class, () -> {
+          try (var result = statement.executeQuery()) {
+            while (result.next()) {
+              result.getObject(1);
+            }
+          }
+        }, path);
+        assertTrue(failure.getMessage().contains("Missing member name after dot in JSON path"), failure::getMessage);
+      }
+    }
+  }
 
   /**
    * Extracts quoted names after SQL literal decoding, including nested steps.
@@ -132,7 +218,8 @@ class JsonPathTest {
           "Unexpected character after quoted member in JSON path", "$.\"a\".\"b\" x",
           "Unexpected character after quoted member in JSON path", "$.missing[]",
           "Unsupported array subscript in JSON path: []", "$.missing[ ]",
-          "Unsupported array subscript in JSON path: [ ]");
+          "Unsupported array subscript in JSON path: [ ]", "$.missing . a b",
+          "Unexpected character after member in JSON path", "$.a\tb", "Unexpected character after member in JSON path");
       for (var entry : invalidPaths.entrySet()) {
         SQLException failure = assertThrows(SQLException.class, () -> {
           try (var result = statement.executeQuery("SELECT " + function + "('{}', '" + entry.getKey() + "')")) {
