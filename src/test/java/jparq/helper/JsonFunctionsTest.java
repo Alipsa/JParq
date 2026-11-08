@@ -55,7 +55,7 @@ class JsonFunctionsTest {
   void rejectsMalformedQuotedMembers() {
     for (String path : List.of("$.\"unterminated", "$.\"trailing\\", "$.\"bad\\q\"", "$.\"bad\\u12\"",
         "$.\"line\nbreak\"", "$.\"a\"suffix", "$.\"a\"\"b\"", "$.missing.\"unterminated", "$.\"a\" b",
-        "$.\"a\".\"b\" x", "$.\"a\" \"b\"", "$.\"a\"\t.b")) {
+        "$.\"a\".\"b\" x", "$.\"a\" \"b\"")) {
       assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonValue("{}", path), path);
       assertThrows(IllegalArgumentException.class, () -> JsonFunctions.jsonQuery("{}", path), path);
     }
@@ -73,6 +73,40 @@ class JsonFunctionsTest {
     assertEquals("9", JsonFunctions.jsonQuery(json, "$.\"obj\" .b"));
     assertEquals(9, JsonFunctions.jsonValue(json, "$.\"obj\".\"b\"  "));
     assertEquals("9", JsonFunctions.jsonQuery(json, "$.\"obj\".\"b\"  "));
+  }
+
+  /** Skips whitespace between tokens without changing quoted lookup keys. */
+  @Test
+  void skipsWhitespaceBetweenPathTokens() {
+    String json = "{\"a\":{\"b\":[3,7]},\" a \":{\"b\":9}}";
+    for (String whitespace : List.of(" ", "  ", "\t", "\n", "\r", " \t\r\n")) {
+      for (String member : List.of("a", "\"a\"")) {
+        String path = "$" + whitespace + "." + whitespace + member + whitespace + "." + whitespace + "b" + whitespace
+            + "[" + whitespace + "1" + whitespace + "]" + whitespace;
+        assertEquals(7, JsonFunctions.jsonValue(json, path), path);
+        assertEquals("7", JsonFunctions.jsonQuery(json, path), path);
+        assertNull(JsonFunctions.jsonValue(json, path + ". missing"), path);
+        assertNull(JsonFunctions.jsonQuery(json, path + ". missing"), path);
+      }
+      String quoted = "$." + whitespace + "\" a \"" + whitespace + ". b";
+      assertEquals(9, JsonFunctions.jsonValue(json, quoted), quoted);
+      assertEquals("9", JsonFunctions.jsonQuery(json, quoted), quoted);
+      assertEquals("{\"b\":[3,7]}", JsonFunctions.jsonQuery(json, "$.a" + whitespace));
+      assertEquals("[3,7]", JsonFunctions.jsonQuery(json, "$.a" + whitespace + ". b"));
+    }
+  }
+
+  /** Rejects separated name fragments, including after a missing member. */
+  @Test
+  void rejectsWhitespaceInsideUnquotedMembers() {
+    for (String path : List.of("$.a b", "$.a\tb", "$.a\nb", "$.missing . a b", "$.a \"b\"")) {
+      var valueFailure = assertThrows(IllegalArgumentException.class,
+          () -> JsonFunctions.jsonValue("{\"a b\":1}", path), path);
+      var queryFailure = assertThrows(IllegalArgumentException.class,
+          () -> JsonFunctions.jsonQuery("{\"a b\":1}", path), path);
+      assertEquals("Unexpected character after member in JSON path", valueFailure.getMessage());
+      assertEquals(valueFailure.getMessage(), queryFailure.getMessage());
+    }
   }
 
   /**

@@ -36,7 +36,7 @@ public final class JsonFunctions {
    *          JSON document (string or {@link JsonNode})
    * @param path
    *          JSON path expression beginning with {@code $}; double-quoted member
-   *          names use JSON string escapes
+   *          names use JSON string escapes; whitespace between tokens is ignored
    * @return extracted scalar value or {@code null} when the path cannot be
    *         resolved
    * @throws IllegalArgumentException
@@ -86,7 +86,7 @@ public final class JsonFunctions {
    *          JSON document (string or {@link JsonNode})
    * @param path
    *          JSON path expression beginning with {@code $}; double-quoted member
-   *          names use JSON string escapes
+   *          names use JSON string escapes; whitespace between tokens is ignored
    * @return JSON string or {@code null} when the path cannot be resolved
    * @throws IllegalArgumentException
    *           if the document or path is malformed
@@ -194,7 +194,7 @@ public final class JsonFunctions {
 
   /**
    * Traverses member and array steps, validating the remaining path after missing
-   * values.
+   * values. Whitespace separates tokens and is preserved only in quoted names.
    *
    * @param node
    *          the document root
@@ -223,13 +223,13 @@ public final class JsonFunctions {
         }
         current = current != null && current.isArray() ? current.get(arrayIndex) : null;
         index = close + 1;
-      } else if (ch == ' ') {
-        index++;
+      } else if (Character.isWhitespace(ch)) {
+        index = skipWhitespace(path, index);
       } else {
         if (ch == '"') {
           throw new IllegalArgumentException("Quoted member in JSON path must be preceded by a dot");
         }
-        int start = ch == '.' ? index + 1 : index;
+        int start = ch == '.' ? skipWhitespace(path, index + 1) : index;
         int next = findNextDelimiter(path, start);
         String prop = decodeMember(path.substring(start, next));
         current = current == null ? null : current.get(prop);
@@ -268,7 +268,7 @@ public final class JsonFunctions {
    *          the member's starting offset
    * @return the offset after the member token
    * @throws IllegalArgumentException
-   *           if a quoted member is unclosed or has a suffix
+   *           if a quoted member is unclosed or a member has a suffix
    */
   private static int findNextDelimiter(String path, int start) {
     if (start < path.length() && path.charAt(start) == '"') {
@@ -277,16 +277,17 @@ public final class JsonFunctions {
     int i = start;
     while (i < path.length()) {
       char c = path.charAt(i);
-      if (c == '.' || c == '[') {
+      if (c == '.' || c == '[' || Character.isWhitespace(c)) {
         break;
       }
       i++;
     }
+    validateMemberEnd(path, i, false);
     return i;
   }
 
   /**
-   * Locates the closing quote and validates the next step after any plain spaces.
+   * Locates the closing quote and validates the next step after whitespace.
    *
    * @param path
    *          the path after the root marker
@@ -303,17 +304,48 @@ public final class JsonFunctions {
         i++;
       } else if (ch == '"') {
         int next = i + 1;
-        int after = next;
-        while (after < path.length() && path.charAt(after) == ' ') {
-          after++;
-        }
-        if (after < path.length() && path.charAt(after) != '.' && path.charAt(after) != '[') {
-          throw new IllegalArgumentException("Unexpected character after quoted member in JSON path");
-        }
+        validateMemberEnd(path, next, true);
         return next;
       }
     }
     throw new IllegalArgumentException("Unclosed quoted member in JSON path");
+  }
+
+  /**
+   * Requires a step delimiter or the end of the path after a member token.
+   *
+   * @param path
+   *          the path after the root marker
+   * @param end
+   *          the offset after the member token
+   * @param quoted
+   *          whether the member was quoted, for the error diagnostic
+   * @throws IllegalArgumentException
+   *           if a member has an unexpected suffix
+   */
+  private static void validateMemberEnd(String path, int end, boolean quoted) {
+    int after = skipWhitespace(path, end);
+    if (after < path.length() && path.charAt(after) != '.' && path.charAt(after) != '[') {
+      throw new IllegalArgumentException(
+          "Unexpected character after " + (quoted ? "quoted member" : "member") + " in JSON path");
+    }
+  }
+
+  /**
+   * Skips whitespace between path tokens without modifying quoted contents.
+   *
+   * @param path
+   *          the path after the root marker
+   * @param start
+   *          the offset from which to skip whitespace
+   * @return the offset of the next non-whitespace character or the path length
+   */
+  private static int skipWhitespace(String path, int start) {
+    int index = start;
+    while (index < path.length() && Character.isWhitespace(path.charAt(index))) {
+      index++;
+    }
+    return index;
   }
 
   /**

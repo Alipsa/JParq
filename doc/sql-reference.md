@@ -283,8 +283,9 @@ SQL:2016–2023.
 - Double-quoted member names are supported, including spaces, dots, brackets, and JSON string escapes such as `\"`,
   `\\`, and `a`. For example, `JSON_VALUE('{"a b":1}', '$."a b"')` returns `1`.
 - Quoted members require a leading dot: use `$."a"`; `$"a"` raises an error.
-- Plain spaces (U+0020) after quoted members are accepted, such as `$."a" [1]` and `$."a" .b`. Tabs and newlines
-  after quoted members are rejected.
+- Whitespace between path tokens is ignored, including spaces, tabs, and line breaks. For example,
+  `$.a .b`, `$.a [1]`, and `$. "a"` work like their compact forms. Whitespace inside quoted names is preserved;
+  unquoted names containing whitespace must be quoted (`$."a b"`, not `$.a b`).
 - `$."a"` matches the key `a`. To select a key containing literal quotes, escape them: `$."\"a\""`.
   (**Behavior change:** earlier versions matched a key containing the literal quotes.)
 - Missing members return NULL for supported paths.
