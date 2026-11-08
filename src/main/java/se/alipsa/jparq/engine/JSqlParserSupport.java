@@ -183,12 +183,12 @@ public final class JSqlParserSupport {
   }
 
   /**
-   * Base visitor for statement expressions that also descends into quantified
-   * subqueries. Use with
+   * Base visitor for statement expressions that traverses named function
+   * arguments and descends into quantified subqueries. Use with
    * {@link #visitExpressions(Select, StatementExpressionVisitor)} to connect
    * nested SELECT traversal automatically.
    */
-  public abstract static class StatementExpressionVisitor extends ExpressionVisitorAdapter<Void> {
+  public abstract static class StatementExpressionVisitor extends NamedArgumentVisitor {
     /** Creates a visitor whose SELECT traversal is connected by the helper. */
     protected StatementExpressionVisitor() {
     }

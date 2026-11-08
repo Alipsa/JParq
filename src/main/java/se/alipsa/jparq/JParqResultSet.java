@@ -26,7 +26,6 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.sql.rowset.serial.SerialBlob;
 import net.sf.jsqlparser.expression.Expression;
-import net.sf.jsqlparser.expression.ExpressionVisitorAdapter;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
@@ -40,6 +39,7 @@ import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelationContextBuilder;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.Identifier;
+import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.JdbcConversions;
 import se.alipsa.jparq.engine.JoinRecordReader;
 import se.alipsa.jparq.engine.LegacyParenthesisSupport;
@@ -1193,7 +1193,7 @@ public class JParqResultSet extends ResultSetAdapter {
       return Set.of();
     }
     Set<String> qualifiers = new LinkedHashSet<>();
-    expression.accept(new ExpressionVisitorAdapter<Void>() {
+    expression.accept(new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(Column column, S context) {
         String qualifier = resolveQualifier(column);
