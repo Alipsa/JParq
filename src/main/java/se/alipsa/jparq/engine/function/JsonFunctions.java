@@ -278,7 +278,10 @@ public final class JsonFunctions {
           throw new IllegalArgumentException("Quoted member in JSON path must be preceded by a dot");
         }
         if (ch != '.') {
-          throw new IllegalArgumentException("Member in JSON path must be preceded by a dot");
+          throw new IllegalArgumentException(
+              Character.isUnicodeIdentifierStart(path.codePointAt(index)) || ch == '$' || ch == '_'
+                  ? "Member in JSON path must be preceded by a dot"
+                  : "Unexpected character '" + ch + "' in JSON path");
         }
         int start = skipWhitespace(path, index + 1);
         if (start == path.length() || isStepDelimiter(path.charAt(start))) {
