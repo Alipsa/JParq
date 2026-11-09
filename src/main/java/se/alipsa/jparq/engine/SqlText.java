@@ -5,12 +5,27 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLDataException;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
+import java.time.temporal.ChronoField;
+import java.util.List;
+import java.util.Locale;
+import java.util.StringJoiner;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
  * Separates explicit SQL text conversion from implicit string operand coercion.
  */
 public final class SqlText {
+
+  /**
+   * SQL timestamp character form, including seconds and significant fractions.
+   */
+  private static final DateTimeFormatter OFFSET_TIMESTAMP = new DateTimeFormatterBuilder()
+      .append(DateTimeFormatter.ISO_LOCAL_DATE).appendLiteral(' ').appendPattern("HH:mm:ss")
+      .appendFraction(ChronoField.NANO_OF_SECOND, 0, 9, true).appendOffsetId().toFormatter(Locale.ROOT);
 
   /** Prevents utility class instantiation. */
   private SqlText() {
@@ -52,9 +67,33 @@ public final class SqlText {
       return decodeBinary(buffer.duplicate());
     }
     if (value instanceof Object[] array) {
-      return java.util.Arrays.deepToString(array);
+      return arrayText(java.util.Arrays.asList(array));
+    }
+    if (value instanceof List<?> list) {
+      return arrayText(list);
+    }
+    if (value instanceof OffsetDateTime timestamp) {
+      return OFFSET_TIMESTAMP.format(timestamp);
+    }
+    if (value instanceof OffsetTime time) {
+      return DateTimeFormatter.ISO_OFFSET_TIME.format(time);
     }
     return value == null ? null : value.toString();
+  }
+
+  /**
+   * Renders ARRAY elements using the same explicit conversion as scalar values.
+   *
+   * @param values
+   *          array elements
+   * @return bracketed element text, including SQL NULL elements
+   */
+  private static String arrayText(List<?> values) {
+    StringJoiner text = new StringJoiner(", ", "[", "]");
+    for (Object value : values) {
+      text.add(value == null ? "null" : cast(value));
+    }
+    return text.toString();
   }
 
   /**

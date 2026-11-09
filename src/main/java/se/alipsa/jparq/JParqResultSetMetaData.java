@@ -409,8 +409,31 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * @return declared schema, or null for other expressions
    */
   private Schema declaredProjectionSchema(int column) {
-    return ScalarExpressionSchemas.resolve(expressionAtColumn(column),
+    Schema scalar = ScalarExpressionSchemas.resolve(expressionAtColumn(column),
         name -> resolveSourceField(new Column(name)) != null);
+    Expression expression = unwrap(expressionAtColumn(column));
+    if (scalar != null || !(expression instanceof net.sf.jsqlparser.expression.CaseExpression)
+        && !(expression instanceof net.sf.jsqlparser.expression.Function function
+            && "COALESCE".equalsIgnoreCase(function.getName()))) {
+      return scalar;
+    }
+    try {
+      Schema result = ArrayExpressionSchemas.resolve(expression, reference -> {
+        Schema.Field source = resolveSourceField(reference);
+        return source == null ? null : source.schema();
+      });
+      Schema leaf = JdbcTypeMapper.nonNullSchema(result);
+      boolean array = leaf != null && leaf.getType() == Schema.Type.ARRAY;
+      while (leaf != null && leaf.getType() == Schema.Type.ARRAY) {
+        leaf = JdbcTypeMapper.nonNullSchema(leaf.getElementType());
+      }
+      int type = JdbcTypeMapper.mapSchemaToJdbcType(leaf);
+      return type == Types.TIMESTAMP || type == Types.TIMESTAMP_WITH_TIMEZONE
+          || array && (type == Types.DATE || type == Types.TIME || type == Types.TIME_WITH_TIMEZONE) ? result : null;
+    } catch (IllegalArgumentException incompatible) {
+      // DATE/TIMESTAMP promotion remains unresolved (#431); preserve value inference.
+      return null;
+    }
   }
 
   /**

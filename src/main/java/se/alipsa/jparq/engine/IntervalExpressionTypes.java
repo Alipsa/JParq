@@ -261,7 +261,18 @@ public final class IntervalExpressionTypes {
     }
     int left = Integer.parseInt(first.getProp("jparq.temporal.precision"));
     int right = Integer.parseInt(second.getProp("jparq.temporal.precision"));
-    return left >= right ? first : second;
+    Schema common = se.alipsa.jparq.engine.function.StructArrayTypes.common(first, second);
+    Schema result = Schema.create(common.getType());
+    common.getObjectProps().forEach((name, value) -> {
+      if (!"jparq.temporal.precision".equals(name)) {
+        result.addProp(name, value);
+      }
+    });
+    if (common.getLogicalType() != null) {
+      common.getLogicalType().addToSchema(result);
+    }
+    result.addProp("jparq.temporal.precision", Integer.toString(Math.max(left, right)));
+    return result;
   }
 
   /**

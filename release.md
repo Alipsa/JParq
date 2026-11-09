@@ -3,19 +3,24 @@
 ### 1.4.0
 
 - Serialize JSON constructor TIME and TIMESTAMP values as ISO-8601 strings, including values inside
-  arrays and structs. Render UTC-adjusted timestamps in UTC independently of the JVM time zone and
-  retain local timestamp fields through literals, casts, arithmetic, subqueries, and materialization.
-  Support LOCALTIME and LOCALTIMESTAMP constructor arguments, case-insensitive column names, and
-  trailing zeros for explicitly declared TIME precision. Preserve selected CASE/COALESCE source semantics,
-  UTC summer instants, and raw local fields in DST gaps, including inside ARRAY constructors. Datetime arrays
-  with UTC or offset sources promote local elements to the session offset before serialization and share the
-  ordinary ARRAY runtime type checks. Mixed UTC/local ARRAY values now carry the common offset type
-  through JDBC ARRAY, character casts, and derived-table/CTE materialization (#525). Character casts of
-  materialized reference arrays render their elements instead of Java array identities. Keep DATE/TIMESTAMP conditional expressions accepted through
-  arithmetic and CAST wrappers while their general promotion is tracked in #431. Wrapped UTC conditionals
-  retain their selected branch's instant through interval arithmetic even when the wrapper has no declaration. Stored temporal columns
-  serialize directly without repeated ARRAY type validation or promotion buffers; enclosing constructors
-  rebuild stored elements only when their non-null types change, ignoring nullable unions at every depth. Retain direct JSON-text embedding and cache declarations (#312).
+  arrays and structs. Render standalone UTC-adjusted timestamps in UTC independently of the JVM zone
+  and retain local timestamp fields through literals, casts, arithmetic, subqueries, and materialization.
+  Support LOCALTIME and LOCALTIMESTAMP, case-insensitive columns, explicit TIME fractional digits,
+  direct JSON-text embedding, and cached declarations (#312). Wrapped UTC conditionals retain their
+  selected instant through interval arithmetic when the wrapper declaration is unknown (#431).
+  Raw local fields avoid DST gap normalization; values already decoded through Timestamp remain #446.
+
+- Keep UTC-adjusted and local storage families in their existing JDBC TIMESTAMP type when combining
+  them in CASE, COALESCE, ARRAY, and set operations. These combinations use the JDBC wall-clock view;
+  they do not acquire a zone merely because storage is UTC-adjusted. Conditional metadata and scalar
+  and ARRAY materialization retain the same common declaration (#525). Actual WITH TIME ZONE operands
+  promote compatible local values using the session displacement and preserve UTC source instants.
+  DATE-only and local-only ARRAY constructors use ordinary evaluation; offset-aware ARRAY evaluation
+  validates once. Stored arrays ignore nullable unions when deciding whether conversion is needed.
+
+- Share SQL character formatting between scalar and ARRAY casts and JDBC getString. Offset timestamps
+  use a space separator and include seconds even when zero (#442). Materialized reference arrays
+  render their elements instead of Java array identities.
 
 - DATE arithmetic with declared HOUR/MINUTE/SECOND interval fields returns JDBC Timestamp independently
   of the interval value. Zero and 24-hour intervals no longer return JDBC Date. Direct JDBC results, derived

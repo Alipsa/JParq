@@ -900,6 +900,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     List<List<List<Object>>> componentRows = new ArrayList<>(components.size());
     List<List<NumericType>> componentTypes = new ArrayList<>(components.size());
+    List<List<Schema>> componentSchemas = new ArrayList<>(components.size());
     List<String> labels = null;
     List<Integer> sqlTypes = null;
     List<Schema> sourceSchemas = new ArrayList<>();
@@ -908,6 +909,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     for (SqlParser.SetComponent component : components) {
       List<List<Object>> componentData = new ArrayList<>();
       List<NumericType> normalizedTypes = new ArrayList<>();
+      List<Schema> branchSchemas = new ArrayList<>();
       try (JParqPreparedStatement prepared = prepareSubqueryStatement(component.sql(), cteResults);
           ResultSet rs = prepared.executeQuery()) {
         ResultSetMetaData meta = rs.getMetaData();
@@ -1003,11 +1005,13 @@ public class JParqPreparedStatement implements PreparedStatement {
           // Only direct columns can bypass value normalization.
           normalizedTypes.add(projection instanceof Column && numeric != null
               && numeric.jdbcType() == meta.getColumnType(col) && numeric.equals(declared) ? numeric : null);
+          branchSchemas.add(schema);
           mergeSetColumn(sqlTypes, sourceSchemas, index, type, schema, numeric);
         }
       }
       componentRows.add(componentData);
       componentTypes.add(normalizedTypes);
+      componentSchemas.add(branchSchemas);
     }
     for (int index = 0; index < sqlTypes.size(); index++) {
       if (sqlTypes.get(index) == Types.NULL) {
@@ -1015,7 +1019,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         sqlTypes.set(index, Types.OTHER);
       }
     }
-    coerceSetRows(componentRows, componentTypes, sqlTypes, sourceSchemas);
+    coerceSetRows(componentRows, componentTypes, componentSchemas, sqlTypes, sourceSchemas);
     List<List<Object>> combined = evaluateSetOperation(components, componentRows, setKeyFunction(sqlTypes));
     List<List<Object>> ordered = applySetOrdering(combined, labels, sqlTypes, sourceSchemas, parsedSetQuery.orderBy());
     List<List<Object>> sliced = applySetLimitOffset(ordered, parsedSetQuery.limit(), parsedSetQuery.offset());
@@ -1216,6 +1220,9 @@ public class JParqPreparedStatement implements PreparedStatement {
       schemas.set(index, JdbcTypeMapper.declaredSchema(common));
     } else if (previous != type) {
       throw new SQLException("Set operation components must use compatible column types", "42000");
+    } else if (prior != null && schema != null
+        && (previous == Types.TIMESTAMP || isTemporalArray(prior) && isTemporalArray(schema))) {
+      schemas.set(index, se.alipsa.jparq.engine.function.StructArrayTypes.common(prior, schema));
     } else if (!Objects.equals(prior, schema)) {
       TemporalValueType temporal = TemporalValueType.fromSchema(prior);
       TemporalValueType branchTemporal = TemporalValueType.fromSchema(schema);
@@ -1243,6 +1250,8 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          rows of each branch
    * @param componentTypes
    *          normalized branch types, with null for unknown representations
+   * @param componentSchemas
+   *          source declarations of each branch's values
    * @param types
    *          resolved output types
    * @param schemas
@@ -1251,7 +1260,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           if a numeric conversion loses data or temporal input is invalid
    */
   private void coerceSetRows(List<List<List<Object>>> components, List<List<NumericType>> componentTypes,
-      List<Integer> types, List<Schema> schemas) throws SQLException {
+      List<List<Schema>> componentSchemas, List<Integer> types, List<Schema> schemas) throws SQLException {
     List<NumericType> numericTypes = new ArrayList<>(types.size());
     List<TemporalValueType> temporalTypes = new ArrayList<>(types.size());
     for (int col = 0; col < types.size(); col++) {
@@ -1262,6 +1271,8 @@ public class JParqPreparedStatement implements PreparedStatement {
       List<Integer> conversions = new ArrayList<>();
       for (int col = 0; col < types.size(); col++) {
         if (temporalTypes.get(col) != null
+            || isTemporalArray(schemas.get(col))
+                && !Objects.equals(schemas.get(col), componentSchemas.get(component).get(col))
             || numericTypes.get(col) != null && !numericTypes.get(col).equals(componentTypes.get(component).get(col))) {
           conversions.add(col);
         }
@@ -1279,8 +1290,8 @@ public class JParqPreparedStatement implements PreparedStatement {
           try {
             value = raw == null
                 ? null
-                : temporalTypes.get(col) != null
-                    ? temporalTypes.get(col).normalize(raw)
+                : temporalTypes.get(col) != null || isTemporalArray(schemas.get(col))
+                    ? normalizeSetTemporal(raw, componentSchemas.get(component).get(col), schemas.get(col))
                     : numericTypes.get(col).convert(raw);
           } catch (java.time.DateTimeException e) {
             throw new SQLException("Invalid temporal value in set operation", "22007", e);
@@ -1297,6 +1308,70 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
       }
     }
+  }
+
+  /**
+   * Identifies datetime ARRAY declarations that retain source conversion
+   * metadata.
+   *
+   * @param schema
+   *          source or common declaration
+   * @return whether ARRAY leaves are datetime values
+   */
+  private static boolean isTemporalArray(Schema schema) {
+    Schema leaf = JdbcTypeMapper.nonNullSchema(schema);
+    if (leaf == null || leaf.getType() != Schema.Type.ARRAY) {
+      return false;
+    }
+    while (leaf.getType() == Schema.Type.ARRAY) {
+      leaf = JdbcTypeMapper.nonNullSchema(leaf.getElementType());
+    }
+    int type = JdbcTypeMapper.mapSchemaToJdbcType(leaf);
+    return type == Types.DATE || type == Types.TIME || type == Types.TIMESTAMP || type == Types.TIME_WITH_TIMEZONE
+        || type == Types.TIMESTAMP_WITH_TIMEZONE;
+  }
+
+  /**
+   * Converts set values from their source declaration into the common datetime
+   * type.
+   *
+   * @param value
+   *          branch value
+   * @param source
+   *          branch declaration, or null when unknown
+   * @param target
+   *          common declaration
+   * @return converted scalar or nested ARRAY
+   */
+  private static Object normalizeSetTemporal(Object value, Schema source, Schema target) {
+    if (value == null) {
+      return null;
+    }
+    Schema from = JdbcTypeMapper.nonNullSchema(source);
+    Schema to = JdbcTypeMapper.nonNullSchema(target);
+    if (to.getType() == Schema.Type.ARRAY) {
+      Iterable<?> elements;
+      if (value instanceof Object[] array) {
+        elements = Arrays.asList(array);
+      } else if (value instanceof Iterable<?> iterable) {
+        elements = iterable;
+      } else {
+        return value;
+      }
+      Schema elementSource = from != null && from.getType() == Schema.Type.ARRAY ? from.getElementType() : null;
+      List<Object> result = new ArrayList<>();
+      for (Object element : elements) {
+        result.add(normalizeSetTemporal(element, elementSource, to.getElementType()));
+      }
+      return Collections.unmodifiableList(result);
+    }
+    TemporalValueType temporal = TemporalValueType.fromSchema(to);
+    if (temporal == TemporalValueType.OFFSET_TIMESTAMP && value instanceof Timestamp timestamp && from != null
+        && (TemporalValueType.fromSchema(from) == TemporalValueType.UTC_TIMESTAMP
+            || AvroCoercions.isTimestamp(from) && !AvroCoercions.isLocalTimestamp(from))) {
+      return timestamp.toInstant().atOffset(java.time.ZoneOffset.UTC);
+    }
+    return temporal == null ? value : temporal.normalize(value);
   }
 
   /**

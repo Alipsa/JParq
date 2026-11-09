@@ -134,7 +134,8 @@ public final class StructArrayTypes {
   /**
    * Retains full datetime range and precision when mixing nanosecond and coarser
    * storage. UTC-adjusted fields retain instants; local fields retain their
-   * wall-clock fields. Mixed zone semantics acquire an offset.
+   * wall-clock fields. Both physical families expose SQL TIMESTAMP, so mixing
+   * them retains the JDBC wall-clock representation without inventing a zone.
    *
    * @param left
    *          first timestamp declaration
@@ -144,7 +145,10 @@ public final class StructArrayTypes {
    */
   private static Schema timestampSchema(Schema left, Schema right) {
     if (utcTimestamp(left) != utcTimestamp(right)) {
-      return TemporalValueType.OFFSET_TIMESTAMP.schema();
+      return TemporalValueType.fromSchema(left) == TemporalValueType.LOCAL_TIMESTAMP
+          || TemporalValueType.fromSchema(right) == TemporalValueType.LOCAL_TIMESTAMP
+              ? TemporalValueType.LOCAL_TIMESTAMP.schema()
+              : TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema();
     }
     if (TemporalValueType.fromSchema(left) == TemporalValueType.LOCAL_TIMESTAMP
         || TemporalValueType.fromSchema(right) == TemporalValueType.LOCAL_TIMESTAMP) {
@@ -156,9 +160,7 @@ public final class StructArrayTypes {
     }
     if (TemporalValueType.fromSchema(left) == TemporalValueType.UTC_TIMESTAMP
         || TemporalValueType.fromSchema(right) == TemporalValueType.UTC_TIMESTAMP) {
-      return utcTimestamp(left) && utcTimestamp(right)
-          ? TemporalValueType.UTC_TIMESTAMP.schema()
-          : TemporalValueType.LOCAL_TIMESTAMP.schema();
+      return TemporalValueType.UTC_TIMESTAMP.schema();
     }
     if (!AvroCoercions.isTimestamp(left) || !AvroCoercions.isTimestamp(right)) {
       return left;

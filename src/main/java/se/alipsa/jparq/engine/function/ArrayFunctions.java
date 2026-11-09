@@ -93,6 +93,59 @@ public final class ArrayFunctions {
   }
 
   /**
+   * Validates decoded values once and applies the declared common datetime type.
+   * Source-aware callers decode UTC timestamps to offset values before invoking
+   * this overload, retaining instants when a zoned type is required.
+   *
+   * @param values
+   *          decoded ARRAY elements
+   * @param declaration
+   *          common ARRAY declaration
+   * @return normalized elements with the declared datetime representation
+   * @throws IllegalArgumentException
+   *           if values cannot share the declared type
+   */
+  public static List<Object> homogenizeArrayValues(List<Object> values, Schema declaration) {
+    ElementType type = arrayType(values);
+    applyTemporalDeclaration(type, JdbcTypeMapper.nonNullSchema(declaration).getElementType());
+    return coerceArrayValues(values, type, requiresOffset(type) ? DateTimeFunctions.sessionOffset() : null);
+  }
+
+  /**
+   * Applies a known datetime leaf family after ordinary runtime compatibility
+   * checks.
+   *
+   * @param type
+   *          inferred element family
+   * @param schema
+   *          declared element schema
+   * @throws IllegalArgumentException
+   *           if an inferred family is incompatible
+   */
+  private static void applyTemporalDeclaration(ElementType type, Schema schema) {
+    Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    if (effective.getType() == Schema.Type.ARRAY) {
+      determineObjectTarget(type.family, List.class);
+      type.family = List.class;
+      if (type.nested == null) {
+        type.nested = new ElementType();
+      }
+      applyTemporalDeclaration(type.nested, effective.getElementType());
+      return;
+    }
+    Class<?> family = switch (JdbcTypeMapper.mapSchemaToJdbcType(effective)) {
+      case java.sql.Types.DATE -> Date.class;
+      case java.sql.Types.TIME -> Time.class;
+      case java.sql.Types.TIMESTAMP -> Timestamp.class;
+      case java.sql.Types.TIME_WITH_TIMEZONE -> OffsetTime.class;
+      case java.sql.Types.TIMESTAMP_WITH_TIMEZONE -> OffsetDateTime.class;
+      default -> type.family;
+    };
+    determineObjectTarget(type.family, family);
+    type.family = family;
+  }
+
+  /**
    * Applies the ordinary runtime ARRAY compatibility checks without converting
    * local datetime fields to the JDBC storage representation.
    *

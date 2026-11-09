@@ -287,6 +287,10 @@ public final class ValueExpressionEvaluator {
     }
 
     if (expression instanceof CaseExpression caseExpr) {
+      Schema declaration = valueSchema(caseExpr);
+      if (declaration != null && timestampResult(declaration)) {
+        return declaredOperand(caseExpr, record, false).engineValue();
+      }
       Object value = evaluateCase(caseExpr, record);
       NumericType type = numericType(caseExpr);
       if (type == null || value == null) {
@@ -351,8 +355,8 @@ public final class ValueExpressionEvaluator {
     }
     if (expression instanceof ArrayConstructor array) {
       Schema declaration = valueSchema(array);
-      if (declaration != null && temporalElements(declaration)) {
-        return ArrayFunctions.homogenizeArrayValues(declaredOperand(array, record).engineValues());
+      if (declaration != null && offsetArray(declaration)) {
+        return declaredOperand(array, record, false).engineValue();
       }
       return functionSupport.evaluate(array, record);
     }
@@ -366,11 +370,17 @@ public final class ValueExpressionEvaluator {
       return evaluateConvert(convert, record);
     }
     if (expression instanceof Function func) {
+      if ("COALESCE".equalsIgnoreCase(func.getName())) {
+        Schema declaration = valueSchema(func);
+        if (declaration != null && timestampResult(declaration)) {
+          return declaredOperand(func, record, false).engineValue();
+        }
+      }
       if ("ARRAY".equalsIgnoreCase(func.getName()) && func.getParameters() != null
           && func.getParameters().stream().noneMatch(net.sf.jsqlparser.statement.select.Select.class::isInstance)) {
         Schema declaration = valueSchema(func);
-        if (declaration != null && temporalElements(declaration)) {
-          return ArrayFunctions.homogenizeArrayValues(declaredOperand(func, record).engineValues());
+        if (declaration != null && offsetArray(declaration)) {
+          return declaredOperand(func, record, false).engineValue();
         }
       }
       return functionSupport.evaluate(func, record);
@@ -710,18 +720,68 @@ public final class ValueExpressionEvaluator {
     }
 
     /**
-     * Extracts promoted ARRAY values for the ordinary engine normalizer.
+     * Decodes nested stored ARRAY sources before engine offset promotion.
      *
-     * @return elements retaining promoted offsets and JDBC scalar values
+     * @return decoded elements retaining each UTC source's instant
      */
-    private List<Object> engineValues() {
-      DeclaredArray array = (DeclaredArray) value;
-      List<Object> result = new ArrayList<>();
-      for (DeclaredOperand element : array.elements()) {
-        result.add(element.value() instanceof DeclaredArray ? element.engineValues() : element.value());
+    private Object engineDecoded() {
+      if (value instanceof DeclaredArray array) {
+        return array.elements().stream().map(DeclaredOperand::engineDecoded).toList();
       }
-      return result;
+      Schema schema = JdbcTypeMapper.nonNullSchema(declaration);
+      if (value != null && schema != null && schema.getType() == Schema.Type.ARRAY) {
+        Iterable<?> elements;
+        if (value instanceof Object[] array) {
+          elements = java.util.Arrays.asList(array);
+        } else if (value instanceof Iterable<?> iterable) {
+          elements = iterable;
+        } else {
+          return decoded();
+        }
+        List<Object> decoded = new ArrayList<>();
+        for (Object element : elements) {
+          decoded.add(new DeclaredOperand(element, schema.getElementType()).engineDecoded());
+        }
+        return decoded;
+      }
+      return decoded();
     }
+
+    /**
+     * Returns a value in the common engine representation, validating arrays once.
+     *
+     * @return JDBC or java.time value matching the common declaration
+     */
+    private Object engineValue() {
+      if (value == null) {
+        return null;
+      }
+      if (value instanceof DeclaredArray) {
+        List<Object> values = new ArrayList<>();
+        for (DeclaredOperand element : ((DeclaredArray) value).elements()) {
+          values.add(element.engineDecoded());
+        }
+        return ArrayFunctions.homogenizeArrayValues(values, declaration);
+      }
+      Schema effective = JdbcTypeMapper.nonNullSchema(declaration);
+      if (effective != null && effective.getType() == Schema.Type.ARRAY) {
+        List<Object> values = new ArrayList<>();
+        if (value instanceof Object[] array) {
+          java.util.Collections.addAll(values, array);
+        } else if (value instanceof Iterable<?> iterable) {
+          iterable.forEach(values::add);
+        }
+        return ArrayFunctions.homogenizeArrayValues(values);
+      }
+      TemporalValueType temporal = TemporalValueType.fromSchema(effective);
+      if (temporal != null) {
+        return temporal.normalize(value);
+      }
+      return value instanceof java.time.LocalDateTime && effective != null && AvroCoercions.isLocalTimestamp(effective)
+          ? DateTimeFunctions.toTimestamp(value)
+          : value;
+    }
+
   }
 
   /**
@@ -744,17 +804,35 @@ public final class ValueExpressionEvaluator {
    * @return evaluated value and source declaration
    */
   private DeclaredOperand declaredOperand(Expression expression, GenericRecord record) {
+    return declaredOperand(expression, record, true);
+  }
+
+  /**
+   * Retains source declarations, leaving engine ARRAY validation to its
+   * normalizer.
+   *
+   * @param expression
+   *          value expression
+   * @param record
+   *          current row
+   * @param validateArrays
+   *          whether JSON must perform the shared runtime checks
+   * @return evaluated operand with its source declaration
+   */
+  private DeclaredOperand declaredOperand(Expression expression, GenericRecord record, boolean validateArrays) {
     Expression unwrapped = ExpressionEvaluator.unwrapParenthesis(expression);
     if (unwrapped instanceof CaseExpression choice && numericType(choice) == null
         && intervalSchema(unwrapped) == null) {
-      return temporalBranch(unwrapped, (DeclaredOperand) evaluateCase(choice, record, this::declaredOperand));
+      return temporalBranch(unwrapped,
+          (DeclaredOperand) evaluateCase(choice, record, (branch, row) -> declaredOperand(branch, row, validateArrays)),
+          validateArrays);
     }
     if (unwrapped instanceof Function function && "COALESCE".equalsIgnoreCase(function.getName())
         && function.getParameters() != null && numericType(function) == null && intervalSchema(unwrapped) == null) {
       for (Expression argument : function.getParameters()) {
-        DeclaredOperand operand = declaredOperand(argument, record);
+        DeclaredOperand operand = declaredOperand(argument, record, validateArrays);
         if (operand.value() != null) {
-          return temporalBranch(unwrapped, operand);
+          return temporalBranch(unwrapped, operand, validateArrays);
         }
       }
       return new DeclaredOperand(null, null);
@@ -762,8 +840,8 @@ public final class ValueExpressionEvaluator {
     if ((unwrapped instanceof Addition || unwrapped instanceof Subtraction) && numericType(unwrapped) == null
         && intervalSchema(unwrapped) == null) {
       var binary = (net.sf.jsqlparser.expression.BinaryExpression) unwrapped;
-      DeclaredOperand left = declaredOperand(binary.getLeftExpression(), record);
-      DeclaredOperand right = declaredOperand(binary.getRightExpression(), record);
+      DeclaredOperand left = declaredOperand(binary.getLeftExpression(), record, validateArrays);
+      DeclaredOperand right = declaredOperand(binary.getRightExpression(), record, validateArrays);
       Operation operation = unwrapped instanceof Addition ? Operation.ADD : Operation.SUB;
       Object result = arithmetic(binary.getLeftExpression(), binary.getRightExpression(), left.value(), right.value(),
           operation);
@@ -782,9 +860,9 @@ public final class ValueExpressionEvaluator {
       if (declaration != null && temporalElements(declaration)) {
         List<DeclaredOperand> values = new ArrayList<>();
         for (Expression element : array.getExpressions()) {
-          values.add(declaredOperand(element, record));
+          values.add(declaredOperand(element, record, validateArrays));
         }
-        return temporalArray(values, declaration);
+        return temporalArray(values, declaration, validateArrays);
       }
     }
     if (unwrapped instanceof Function function && "ARRAY".equalsIgnoreCase(function.getName())
@@ -794,9 +872,9 @@ public final class ValueExpressionEvaluator {
       if (declaration != null && temporalElements(declaration)) {
         List<DeclaredOperand> values = new ArrayList<>();
         for (Expression element : function.getParameters()) {
-          values.add(declaredOperand(element, record));
+          values.add(declaredOperand(element, record, validateArrays));
         }
-        return temporalArray(values, declaration);
+        return temporalArray(values, declaration, validateArrays);
       }
     }
     Object value;
@@ -826,15 +904,20 @@ public final class ValueExpressionEvaluator {
    *          CASE or COALESCE expression
    * @param selected
    *          selected branch, or null when CASE had no matching branch
+   * @param validateArrays
+   *          whether JSON validates before promoting ARRAY values
    * @return promoted operand
    */
-  private DeclaredOperand temporalBranch(Expression expression, DeclaredOperand selected) {
+  private DeclaredOperand temporalBranch(Expression expression, DeclaredOperand selected, boolean validateArrays) {
     if (selected == null || selected.value() == null) {
       return new DeclaredOperand(null, null);
     }
     if (DateTimeFunctions.isTemporal(selected.value())
         || selected.declaration() != null && temporalElements(selected.declaration())) {
       Schema declaration = valueSchema(expression);
+      if (!validateArrays && selected.value() instanceof DeclaredArray) {
+        return new DeclaredOperand(selected.value(), declaration == null ? selected.declaration() : declaration);
+      }
       return promoteDeclaredOperand(selected, declaration);
     }
     return selected;
@@ -850,6 +933,13 @@ public final class ValueExpressionEvaluator {
   private Schema valueSchema(Expression expression) {
     return valueSchemas.computeIfAbsent(expression, shape -> {
       try {
+        if (shape instanceof CaseExpression
+            || shape instanceof Function function && "COALESCE".equalsIgnoreCase(function.getName())) {
+          Schema nativeTimestamp = ScalarExpressionSchemas.resolve(shape);
+          if (TemporalValueType.fromSchema(nativeTimestamp) == TemporalValueType.LOCAL_TIMESTAMP) {
+            return Optional.of(nativeTimestamp);
+          }
+        }
         return Optional.ofNullable(ArrayExpressionSchemas.resolve(shape, this::valueColumnSchema,
             select -> subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select)));
       } catch (IllegalArgumentException incompatible) {
@@ -873,13 +963,17 @@ public final class ValueExpressionEvaluator {
    *          evaluated elements
    * @param declaration
    *          ARRAY declaration
+   * @param validate
+   *          whether JSON requires runtime validation here
    * @return validated ARRAY operand with one temporal representation
    */
-  private DeclaredOperand temporalArray(List<DeclaredOperand> values, Schema declaration) {
-    ArrayFunctions.validateArrayValues(values.stream().map(DeclaredOperand::decoded).toList());
+  private DeclaredOperand temporalArray(List<DeclaredOperand> values, Schema declaration, boolean validate) {
+    if (validate) {
+      ArrayFunctions.validateArrayValues(values.stream().map(DeclaredOperand::decoded).toList());
+    }
     Schema target = temporalArrayTarget(declaration, values);
     DeclaredOperand array = new DeclaredOperand(new DeclaredArray(values), declaration);
-    return promoteDeclaredOperand(array, target);
+    return validate ? promoteDeclaredOperand(array, target) : new DeclaredOperand(array.value(), target);
   }
 
   /**
@@ -987,7 +1081,41 @@ public final class ValueExpressionEvaluator {
     if (temporal == TemporalValueType.OFFSET_TIMESTAMP || temporal == TemporalValueType.OFFSET_TIME) {
       return new DeclaredOperand(temporal.normalize(source.decoded()), effective);
     }
+    if (temporal == TemporalValueType.JDBC_LOCAL_TIMESTAMP || temporal == TemporalValueType.LOCAL_TIMESTAMP) {
+      Object local = source.value() instanceof Timestamp timestamp ? timestamp.toLocalDateTime() : source.value();
+      return new DeclaredOperand(local, effective);
+    }
     return source;
+  }
+
+  /**
+   * Identifies timestamp combinations and datetime ARRAY results.
+   *
+   * @param schema
+   *          conditional result declaration
+   * @return whether source-aware engine evaluation is required
+   */
+  private static boolean timestampResult(Schema schema) {
+    Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    int type = JdbcTypeMapper.mapSchemaToJdbcType(effective);
+    return type == java.sql.Types.TIMESTAMP || type == java.sql.Types.TIMESTAMP_WITH_TIMEZONE
+        || effective.getType() == Schema.Type.ARRAY && offsetArray(effective);
+  }
+
+  /**
+   * Identifies ARRAY declarations requiring offset-aware source conversion.
+   *
+   * @param schema
+   *          ARRAY declaration
+   * @return whether its leaves carry an explicit time zone
+   */
+  private static boolean offsetArray(Schema schema) {
+    Schema leaf = JdbcTypeMapper.nonNullSchema(schema);
+    while (leaf.getType() == Schema.Type.ARRAY) {
+      leaf = JdbcTypeMapper.nonNullSchema(leaf.getElementType());
+    }
+    int type = JdbcTypeMapper.mapSchemaToJdbcType(leaf);
+    return type == java.sql.Types.TIMESTAMP_WITH_TIMEZONE || type == java.sql.Types.TIME_WITH_TIMEZONE;
   }
 
   /**

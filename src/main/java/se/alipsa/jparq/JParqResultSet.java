@@ -14,7 +14,6 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -1396,7 +1395,16 @@ public class JParqResultSet extends ResultSetAdapter {
         return new String(bytes, StandardCharsets.UTF_8);
       }
       case Object[] objects -> {
-        return Arrays.deepToString(objects);
+        return se.alipsa.jparq.engine.SqlText.cast(objects);
+      }
+      case java.time.OffsetDateTime timestamp -> {
+        return se.alipsa.jparq.engine.SqlText.cast(timestamp);
+      }
+      case java.time.OffsetTime time -> {
+        return se.alipsa.jparq.engine.SqlText.cast(time);
+      }
+      case List<?> values -> {
+        return se.alipsa.jparq.engine.SqlText.cast(values);
       }
       case ByteBuffer buffer -> {
         ByteBuffer dup = buffer.duplicate();

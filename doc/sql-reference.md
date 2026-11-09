@@ -348,13 +348,14 @@ SQL:2016–2023.
   a zone suffix, including literals, casts, arithmetic, subqueries, and materialized local columns.
   For example, a UTC-adjusted timestamp of 1,700,000,000,000 epoch milliseconds becomes
   `"2023-11-14T22:13:20Z"` in every JVM time zone. These rules also apply within arrays and structs.
-- `CASE` and `COALESCE` retain the selected value's UTC instant or local fields. Datetime ARRAY constructors
-  use one offset-bearing representation when mixing UTC-adjusted and local timestamps, or when an element
-  has an explicit offset:
-  local elements acquire the SQL-session displacement and UTC elements keep their instant. Local-only arrays
-  retain wall-clock fields without offsets. Promotion happens before JSON serialization.
-  The same common offset type is retained by JDBC ARRAY values, character casts, and materialized ARRAY
-  expressions, so passing an array through a derived table does not change its zone semantics.
+- Temporal combinations use their SQL result type consistently in JSON, JDBC, and materialization.
+  UTC-adjusted and local Parquet timestamp columns both expose JDBC `TIMESTAMP` (without time zone).
+  Combining them in `CASE`, `COALESCE`, ARRAY elements, or set operations retains `TIMESTAMP`; JSON
+  renders the common local fields without an offset. UTC source fields use their JDBC wall-clock view
+  in such combinations, which reflects the JVM time zone. UTC-only results retain their UTC instant.
+  An actual `TIMESTAMP WITH TIME ZONE` operand produces a common offset-bearing result: local values
+  acquire the SQL-session displacement, and UTC sources retain their instant. The same rule applies
+  to local and offset-bearing TIME values in ARRAY constructors. Promotion precedes JSON serialization.
 - Raw local timestamp fields are serialized without normalizing nonexistent wall-clock times through the
   host's daylight-saving rules. Local values already decoded through JDBC `Timestamp` by correlation,
   materialization, `CAST`, or arithmetic can still be shifted before reaching JSON; this is tracked in
@@ -982,10 +983,11 @@ with SQLState `22008` because their era cannot round-trip through JDBC.
   - UTC-only combinations keep their instants and decode as `Timestamp`, preserving the standalone JVM-zone view,
     even during daylight-saving overlaps.
   - Local-only combinations keep wall-clock fields and decode as `LocalDateTime` or `Timestamp`.
-  - Mixed UTC-adjusted and local timestamp fields promote to `TIMESTAMP WITH TIME ZONE` and decode as
-    `OffsetDateTime`. UTC fields keep their instants; local fields acquire the SQL-session displacement.
-  - UTC-only and local-only combinations keep JDBC type `TIMESTAMP`. Timestamp promotion overflow in other
-    physical encodings raises SQLState `22008`.
+  - Mixed UTC-adjusted and local storage retains JDBC `TIMESTAMP` and the common wall-clock representation.
+    A UTC-adjusted storage declaration does not introduce SQL `WITH TIME ZONE` semantics.
+  - Actual `TIMESTAMP WITH TIME ZONE` fields promote compatible local fields to `OffsetDateTime` using the
+    SQL-session displacement. UTC source fields retain their instants during that promotion.
+  - Timestamp promotion overflow in physical encodings raises SQLState `22008`.
 
 ---
 

@@ -36,9 +36,10 @@ public final class ScalarExpressionSchemas {
   }
 
   /**
-   * Resolves nonnumeric literals and CAST declarations without evaluating rows.
-   * Unsupported scalar declarations remain unknown rather than applying ARRAY
-   * element validation or advertising an unimplemented value representation.
+   * Resolves nonnumeric literals, CAST declarations, and native timestamp
+   * conditionals without evaluating rows. Unsupported scalar declarations remain
+   * unknown rather than applying ARRAY element validation or advertising an
+   * unimplemented value representation.
    *
    * @param expression
    *          scalar projection
@@ -62,6 +63,10 @@ public final class ScalarExpressionSchemas {
     if (cast != null && cast.getColDataType() != null) {
       return declaredSchema(cast.getColDataType().getDataType());
     }
+    Schema nativeTimestamp = nativeTimestampConditional(expression);
+    if (nativeTimestamp != null) {
+      return nativeTimestamp;
+    }
     return switch (ExpressionEvaluator.unwrapParenthesis(expression)) {
       case NullValue value -> Schema.create(Schema.Type.NULL);
       case DateValue value -> declaredSchema("date");
@@ -73,6 +78,44 @@ public final class ScalarExpressionSchemas {
       case DateTimeLiteralExpression literal -> declaredSchema(literal.getType().name());
       case null, default -> null;
     };
+  }
+
+  /**
+   * Retains the native representation of conditionals containing only local
+   * timestamp value functions and NULL, independently of JDBC ARRAY coercion.
+   *
+   * @param expression
+   *          possible conditional expression
+   * @return native local timestamp declaration, or null for other branches
+   */
+  private static Schema nativeTimestampConditional(Expression expression) {
+    Expression value = ExpressionEvaluator.unwrapParenthesis(expression);
+    List<? extends Expression> branches;
+    if (value instanceof net.sf.jsqlparser.expression.CaseExpression choice) {
+      branches = ExpressionBranches.caseResults(choice);
+    } else if (value instanceof net.sf.jsqlparser.expression.Function function
+        && "COALESCE".equalsIgnoreCase(function.getName()) && function.getParameters() != null) {
+      branches = function.getParameters();
+    } else {
+      return null;
+    }
+    boolean found = false;
+    for (Expression branch : branches) {
+      Expression result = ExpressionEvaluator.unwrapParenthesis(branch);
+      if (result instanceof NullValue) {
+        continue;
+      }
+      var keyword = result instanceof net.sf.jsqlparser.schema.Column column
+          ? SqlExpressionNormalizer.timeKeyword(column)
+          : result instanceof net.sf.jsqlparser.expression.TimeKeyExpression time ? time : null;
+      if (keyword != null && "LOCALTIMESTAMP".equalsIgnoreCase(keyword.getStringValue())
+          || nativeTimestampConditional(result) != null) {
+        found = true;
+      } else {
+        return null;
+      }
+    }
+    return found ? TemporalValueType.LOCAL_TIMESTAMP.schema() : null;
   }
 
   /**

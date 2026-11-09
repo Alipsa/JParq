@@ -22,6 +22,35 @@ import org.junit.jupiter.params.provider.ValueSource;
 class ScalarCastMetadataTest {
 
   /**
+   * Retains the native local timestamp representation and metadata of value
+   * functions.
+   *
+   * @param expression
+   *          native timestamp conditional
+   * @throws Exception
+   *           if querying fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "COALESCE(LOCALTIMESTAMP,NULL)", "CASE WHEN TRUE THEN LOCALTIMESTAMP ELSE NULL END",
+      "COALESCE(CASE WHEN TRUE THEN LOCALTIMESTAMP END,LOCALTIMESTAMP)"
+  })
+  void preservesNativeTimestampConditionals(String expression) throws Exception {
+    try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
+      for (String sql : List.of("SELECT " + expression + " AS x", "SELECT x FROM (SELECT " + expression + " AS x) d",
+          "WITH c AS (SELECT " + expression + " AS x) SELECT x FROM c")) {
+        try (var result = statement.executeQuery(sql)) {
+          assertEquals(Types.TIMESTAMP, result.getMetaData().getColumnType(1), sql);
+          assertEquals(java.time.LocalDateTime.class.getName(), result.getMetaData().getColumnClassName(1), sql);
+          assertTrue(result.next());
+          assertInstanceOf(java.time.LocalDateTime.class, result.getObject(1), sql);
+          assertFalse(result.next());
+        }
+      }
+    }
+  }
+
+  /**
    * Supplies scalar CASTs whose declared representations are not implemented.
    *
    * @return SQL expressions and their existing evaluated values
