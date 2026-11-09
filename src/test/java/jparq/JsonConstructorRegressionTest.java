@@ -2,6 +2,7 @@ package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -9,11 +10,13 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.List;
 import java.util.TimeZone;
 import org.apache.avro.LogicalTypes;
@@ -92,6 +95,16 @@ class JsonConstructorRegressionTest {
           assertValue(connection, "ARRAY[lts]", " FROM t", "[\"2024-03-31T02:30:00\"]");
           String offsetGap = DateTimeFormatter.ISO_OFFSET_DATE_TIME
               .format(LocalDateTime.parse("2024-03-31T02:30:00").atOffset(DateTimeFunctions.sessionOffset()));
+          String nested = "[[\"" + offsetGap + "\"],[\"2024-07-01T12:00:00Z\"]]";
+          assertValue(connection, "ARRAY[la,ARRAY[ts]]", " FROM t", nested);
+          assertValue(connection, "ARRAY[ARRAY[lts],ARRAY[ts]]", " FROM t", nested);
+          try (var statement = connection.createStatement();
+              var result = statement.executeQuery("SELECT JSON_ARRAY(la,ts) FROM t")) {
+            assertTrue(result.next());
+            assertEquals("[[\"2024-03-31T02:30:00\"],\"2024-07-01T12:00:00Z\"]", result.getString(1));
+            assertFalse(result.next());
+          }
+          assertEngineArrayComparison(connection, localElement);
           for (String expression : List.of("COALESCE(lts,CURRENT_TIMESTAMP)",
               "CASE WHEN TRUE THEN lts ELSE CURRENT_TIMESTAMP END")) {
             assertValue(connection, expression, " FROM t", "\"" + offsetGap + "\"");
@@ -187,11 +200,55 @@ class JsonConstructorRegressionTest {
     }
     assertValue(connection, "CASE WHEN TRUE THEN TIMESTAMP '2024-01-02 03:04:05' ELSE DATE '2024-01-01' END", "",
         "\"2024-01-02T03:04:05\"");
+    String choice = "CASE WHEN TRUE THEN DATE '2024-01-01' ELSE TIMESTAMP '2024-01-02 03:04:05' END";
+    String coalesce = "COALESCE(CAST(NULL AS TIMESTAMP),DATE '2024-01-01')";
+    for (String conditional : List.of(choice, coalesce)) {
+      String arithmetic = "(" + conditional + ") + INTERVAL '1' DAY";
+      assertValue(connection, arithmetic, " FROM t", "\"2024-01-02\"");
+      assertValue(connection, "INTERVAL '1' DAY + (" + conditional + ")", " FROM t", "\"2024-01-02\"");
+      assertValue(connection, "CAST(" + arithmetic + " AS DATE)", " FROM t", "\"2024-01-02\"");
+      assertValue(connection, "CAST(" + arithmetic + " AS TIMESTAMP)", " FROM t", "\"2024-01-02T00:00:00\"");
+      assertValue(connection, "CAST(" + arithmetic + " AS VARCHAR(30))", " FROM t", "\"2024-01-02\"");
+    }
     try (var statement = connection.createStatement();
         var result = statement
             .executeQuery("SELECT JSON_ARRAY(COALESCE(id,1.5)),CAST(COALESCE(id,1.5) AS VARCHAR(20)) FROM t")) {
       assertTrue(result.next());
       assertEquals("[" + result.getString(2) + "]", result.getString(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Compares JSON with the engine's JDBC and character ARRAY representations. The
+   * existing local engine type versus offset JSON representation is tracked in
+   * #525; this comparison must be updated with that engine-side fix.
+   *
+   * @param connection
+   *          open test connection
+   * @param localElement
+   *          local literal with the current SQL-session offset
+   * @throws Exception
+   *           if query execution fails
+   */
+  private static void assertEngineArrayComparison(Connection connection, String localElement) throws Exception {
+    String expression = "ARRAY[ts,TIMESTAMP '2000-01-01 01:00:00']";
+    try (var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT JSON_ARRAY(" + expression + "),CAST(" + expression
+            + " AS VARCHAR(100))," + expression + " FROM t")) {
+      assertTrue(result.next());
+      assertEquals("[[\"2024-07-01T12:00:00Z\",\"" + localElement + "\"]]", result.getString(1));
+      var array = result.getArray(3);
+      try {
+        Object[] elements = (Object[]) array.getArray();
+        Timestamp utc = assertInstanceOf(Timestamp.class, elements[0]);
+        Timestamp local = assertInstanceOf(Timestamp.class, elements[1]);
+        assertEquals(Instant.parse("2024-07-01T12:00:00Z"), utc.toInstant());
+        assertEquals(LocalDateTime.parse("2000-01-01T01:00:00"), local.toLocalDateTime());
+        assertEquals(Arrays.toString(elements), result.getString(2));
+      } finally {
+        array.free();
+      }
       assertFalse(result.next());
     }
   }

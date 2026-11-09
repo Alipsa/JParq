@@ -760,9 +760,6 @@ public final class ValueExpressionEvaluator {
         declaration = null;
       }
     }
-    if (value != null && declaration != null && declaration.getType() == Schema.Type.ARRAY) {
-      return jsonStoredArray(value, declaration);
-    }
     return new JsonOperand(value, declaration);
   }
 
@@ -801,8 +798,8 @@ public final class ValueExpressionEvaluator {
         return Optional.ofNullable(ArrayExpressionSchemas.resolve(shape, this::jsonColumnSchema,
             select -> subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select)));
       } catch (IllegalArgumentException incompatible) {
-        if (shape instanceof CaseExpression
-            || shape instanceof Function function && "COALESCE".equalsIgnoreCase(function.getName())) {
+        if (!(shape instanceof ArrayConstructor)
+            && !(shape instanceof Function function && "ARRAY".equalsIgnoreCase(function.getName()))) {
           // Conditional DATE/TIMESTAMP promotion is tracked in #431. Optional
           // JSON metadata must not impose ARRAY compatibility on scalar values.
           return Optional.empty();
@@ -827,27 +824,6 @@ public final class ValueExpressionEvaluator {
     Schema target = jsonArrayTarget(declaration, values);
     JsonOperand array = new JsonOperand(new JsonArray(values), declaration);
     return promoteJsonOperand(array, target);
-  }
-
-  /**
-   * Retains source declarations for already decoded physical ARRAY elements.
-   *
-   * @param value
-   *          decoded ARRAY
-   * @param declaration
-   *          physical ARRAY declaration
-   * @return source-aware ARRAY operand
-   */
-  private JsonOperand jsonStoredArray(Object value, Schema declaration) {
-    Iterable<?> elements = value instanceof Object[] array ? java.util.Arrays.asList(array) : (Iterable<?>) value;
-    List<JsonOperand> values = new ArrayList<>();
-    Schema element = JdbcTypeMapper.nonNullSchema(declaration.getElementType());
-    for (Object item : elements) {
-      values.add(item != null && element.getType() == Schema.Type.ARRAY
-          ? jsonStoredArray(item, element)
-          : new JsonOperand(item, element));
-    }
-    return jsonArray(values, declaration);
   }
 
   /**
@@ -933,6 +909,18 @@ public final class ValueExpressionEvaluator {
     if (source.value() instanceof JsonArray array && effective.getType() == Schema.Type.ARRAY) {
       List<JsonOperand> elements = array.elements().stream()
           .map(element -> promoteJsonOperand(element, effective.getElementType())).toList();
+      return new JsonOperand(new JsonArray(elements), target);
+    }
+    if (effective.getType() == Schema.Type.ARRAY && source.declaration() != null
+        && !effective.equals(JdbcTypeMapper.nonNullSchema(source.declaration()))) {
+      Iterable<?> values = source.value() instanceof Object[] array
+          ? java.util.Arrays.asList(array)
+          : (Iterable<?>) source.value();
+      Schema sourceElement = JdbcTypeMapper.nonNullSchema(source.declaration()).getElementType();
+      List<JsonOperand> elements = new ArrayList<>();
+      for (Object value : values) {
+        elements.add(promoteJsonOperand(new JsonOperand(value, sourceElement), effective.getElementType()));
+      }
       return new JsonOperand(new JsonArray(elements), target);
     }
     TemporalValueType temporal = TemporalValueType.fromSchema(effective);

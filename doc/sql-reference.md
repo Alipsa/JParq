@@ -352,6 +352,8 @@ SQL:2016–2023.
   use one offset-bearing representation if any element source is UTC-adjusted or has an explicit offset:
   local elements acquire the SQL-session displacement and UTC elements keep their instant. Local-only arrays
   retain wall-clock fields without offsets. Promotion happens before JSON serialization.
+  The engine's JDBC ARRAY values, character casts, and materialization do not yet use the same mixed UTC/local
+  type rule; [#525](https://github.com/Alipsa/JParq/issues/525) tracks that disagreement and engine-wide unification.
 - Raw local timestamp fields are serialized without normalizing nonexistent wall-clock times through the
   host's daylight-saving rules. Local values already decoded through JDBC `Timestamp` by correlation,
   materialization, `CAST`, or arithmetic can still be shifted before reaching JSON; this is tracked in
