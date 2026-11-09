@@ -14,6 +14,7 @@ import java.sql.SQLException;
 import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
@@ -35,17 +36,18 @@ class JsonArraySerializationTest {
   Path directory;
 
   /**
-   * Preserves floating-point precision in scalar and nested constructor values.
+   * Preserves CAST numeric precision in scalar and nested constructor values.
    *
    * @throws SQLException
    *           if query execution fails
    */
   @Test
-  void preservesComputedNumericPrecision() throws SQLException {
+  void preservesCastNumericPrecision() throws SQLException {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
       for (String function : List.of("JSON_OBJECT(KEY 'k' VALUE %s)", "JSON_ARRAY(%s)")) {
+        // Unqualified FLOAT is an alias for REAL; verify both SQL spellings.
         for (String type : List.of("REAL", "FLOAT")) {
-          for (String value : List.of("1.1", "-2.3", "0.0")) {
+          for (String value : List.of("1.1", "-2.3", "0.1", "3.4028235E38", "1.4E-45")) {
             String expression = "CAST(" + value + " AS " + type + ")";
             assertJson(connection, function, expression, "", value);
             assertJson(connection, function, "ARRAY[" + expression + "]", "", "[" + value + "]");
@@ -58,7 +60,7 @@ class JsonArraySerializationTest {
   }
 
   /**
-   * Preserves stored FLOAT precision in scalars, arrays, and record fields.
+   * Preserves stored FLOAT precision in scalars, arrays, maps, and record fields.
    *
    * @param pushdown
    *          whether projection pushdown is enabled
@@ -74,13 +76,15 @@ class JsonArraySerializationTest {
   void preservesStoredFloatPrecision(boolean pushdown) throws IOException, SQLException {
     Schema detailSchema = SchemaBuilder.record("floatDetail").fields().requiredFloat("f").endRecord();
     Schema schema = SchemaBuilder.record("floats").fields().requiredFloat("f").name("fs")
-        .type(nullableArray(Schema.create(Schema.Type.FLOAT))).noDefault().name("detail").type(detailSchema).noDefault()
-        .endRecord();
+        .type(nullableArray(Schema.create(Schema.Type.FLOAT))).noDefault().name("fm")
+        .type(Schema.createMap(Schema.create(Schema.Type.FLOAT))).noDefault().name("detail").type(detailSchema)
+        .noDefault().endRecord();
     var detail = new GenericData.Record(detailSchema);
     detail.put("f", 1.1f);
     var row = new GenericData.Record(schema);
     row.put("f", 1.1f);
     row.put("fs", Arrays.asList(1.1f, null, -2.3f));
+    row.put("fm", Map.of("f", 1.1f));
     row.put("detail", detail);
     Configuration configuration = new Configuration(false);
     configuration.setBoolean("parquet.avro.write-old-list-structure", false);
@@ -94,6 +98,7 @@ class JsonArraySerializationTest {
       for (String function : List.of("JSON_OBJECT(KEY 'k' VALUE %s)", "JSON_ARRAY(%s)")) {
         assertJson(connection, function, "f", " FROM floats", "1.1");
         assertJson(connection, function, "fs", " FROM floats", "[1.1,null,-2.3]");
+        assertJson(connection, function, "fm", " FROM floats", "{\"f\":1.1}");
         assertJson(connection, function, "detail", " FROM floats", "{\"f\":1.1}");
       }
     }
