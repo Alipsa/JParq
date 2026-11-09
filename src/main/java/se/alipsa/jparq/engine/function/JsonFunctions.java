@@ -802,7 +802,8 @@ public final class JsonFunctions {
   }
 
   /**
-   * Preserves the numeric type and precision when constructing a JSON node.
+   * Preserves the numeric type and precision when constructing a JSON node,
+   * keeping floats at single precision to avoid widening artifacts.
    *
    * @param number
    *          numeric value
@@ -821,7 +822,10 @@ public final class JsonFunctions {
     if (number instanceof BigDecimal bigDec) {
       return MAPPER.getNodeFactory().numberNode(bigDec);
     }
-    if (number instanceof Float || number instanceof Double) {
+    if (number instanceof Float) {
+      return MAPPER.getNodeFactory().numberNode(number.floatValue());
+    }
+    if (number instanceof Double) {
       return MAPPER.getNodeFactory().numberNode(number.doubleValue());
     }
     try {
