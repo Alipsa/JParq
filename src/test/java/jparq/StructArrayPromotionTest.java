@@ -10,6 +10,9 @@ import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -28,6 +31,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.function.ArrayFunctions;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
 /**
  * Verifies STRUCT SQL type combinations independently of Avro storage details.
@@ -84,6 +88,21 @@ class StructArrayPromotionTest {
         Timestamp.from(java.time.Instant.ofEpochSecond(2, 345678000)));
     assertFieldValues(second, first, Timestamp.from(java.time.Instant.ofEpochSecond(2, 345678000)),
         Timestamp.from(java.time.Instant.ofEpochMilli(1234)));
+  }
+
+  /**
+   * Keeps UTC instants and local gap fields when STRUCT arrays acquire offsets.
+   */
+  @Test
+  void promotesMixedTimestampFieldsToOffsets() {
+    Schema utc = LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
+    Schema local = LogicalTypes.localTimestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
+    Instant instant = Instant.parse("2024-07-01T12:00:00Z");
+    LocalDateTime gap = LocalDateTime.parse("2024-03-31T02:30:00");
+    var first = record("utcField", utc, instant.toEpochMilli());
+    var second = record("localField", local, gap.toInstant(ZoneOffset.UTC).toEpochMilli());
+    assertFieldValues(first, second, instant.atOffset(ZoneOffset.UTC), gap.atOffset(DateTimeFunctions.sessionOffset()));
+    assertFieldValues(second, first, gap.atOffset(DateTimeFunctions.sessionOffset()), instant.atOffset(ZoneOffset.UTC));
   }
 
   /**

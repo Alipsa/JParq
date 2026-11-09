@@ -70,7 +70,7 @@ public final class ValueExpressionEvaluator {
   private final Map<String, Schema> fieldSchemas;
   private final Map<Expression, NumericType> numericTypes = new IdentityHashMap<>();
   private final Map<Expression, Optional<Schema>> intervalTypes = new IdentityHashMap<>();
-  private final Map<Expression, Optional<Schema>> jsonTypes = new IdentityHashMap<>();
+  private final Map<Expression, Optional<Schema>> valueSchemas = new IdentityHashMap<>();
   private final Map<CastExpression, Optional<DateTimeFunctions.BinaryCast>> binaryCasts = new IdentityHashMap<>();
   private final Map<TranscodingFunction, CastExpression> convertCasts = new IdentityHashMap<>();
   private final Map<String, String> caseInsensitiveIndex;
@@ -350,6 +350,10 @@ public final class ValueExpressionEvaluator {
       return evalInternal(collate.getLeftExpression(), record);
     }
     if (expression instanceof ArrayConstructor array) {
+      Schema declaration = valueSchema(array);
+      if (declaration != null && temporalElements(declaration)) {
+        return ArrayFunctions.homogenizeArrayValues(declaredOperand(array, record).engineValues());
+      }
       return functionSupport.evaluate(array, record);
     }
     if (BooleanExpressions.isPredicate(expression)) {
@@ -362,6 +366,13 @@ public final class ValueExpressionEvaluator {
       return evaluateConvert(convert, record);
     }
     if (expression instanceof Function func) {
+      if ("ARRAY".equalsIgnoreCase(func.getName()) && func.getParameters() != null
+          && func.getParameters().stream().noneMatch(net.sf.jsqlparser.statement.select.Select.class::isInstance)) {
+        Schema declaration = valueSchema(func);
+        if (declaration != null && temporalElements(declaration)) {
+          return ArrayFunctions.homogenizeArrayValues(declaredOperand(func, record).engineValues());
+        }
+      }
       return functionSupport.evaluate(func, record);
     }
     if (expression instanceof AnalyticExpression analytic) {
@@ -655,27 +666,27 @@ public final class ValueExpressionEvaluator {
    * @return JSON value with its declared temporal semantics
    */
   private Object evaluateJsonValue(Expression expression, GenericRecord record) {
-    return jsonOperand(expression, record).node();
+    return declaredOperand(expression, record).node();
   }
 
   /**
-   * Retains an evaluated value's declaration until JSON promotion is applied.
+   * Retains an evaluated value's declaration until temporal promotion is applied.
    *
    * @param value
    *          decoded value or already serialized array
    * @param declaration
    *          source declaration, or null when unknown
    */
-  private record JsonOperand(Object value, Schema declaration) {
+  private record DeclaredOperand(Object value, Schema declaration) {
     /**
      * Serializes the source value without reinterpreting an existing node.
      *
      * @return corresponding JSON node
      */
     private JsonNode node() {
-      if (value instanceof JsonArray array) {
+      if (value instanceof DeclaredArray array) {
         List<JsonNode> nodes = new ArrayList<>();
-        for (JsonOperand element : array.elements()) {
+        for (DeclaredOperand element : array.elements()) {
           nodes.add(element.node());
         }
         return JsonFunctions.constructorValue(nodes, null);
@@ -689,13 +700,27 @@ public final class ValueExpressionEvaluator {
      * @return value retaining its UTC instant or local fields
      */
     private Object decoded() {
-      if (value instanceof JsonArray array) {
-        return array.elements().stream().map(JsonOperand::decoded).toList();
+      if (value instanceof DeclaredArray array) {
+        return array.elements().stream().map(DeclaredOperand::decoded).toList();
       }
       if (value instanceof Timestamp timestamp) {
         return utcTimestamp(declaration) ? timestamp.toInstant().atOffset(ZoneOffset.UTC) : timestamp.toLocalDateTime();
       }
       return value;
+    }
+
+    /**
+     * Extracts promoted ARRAY values for the ordinary engine normalizer.
+     *
+     * @return elements retaining promoted offsets and JDBC scalar values
+     */
+    private List<Object> engineValues() {
+      DeclaredArray array = (DeclaredArray) value;
+      List<Object> result = new ArrayList<>();
+      for (DeclaredOperand element : array.elements()) {
+        result.add(element.value() instanceof DeclaredArray ? element.engineValues() : element.value());
+      }
+      return result;
     }
   }
 
@@ -705,12 +730,12 @@ public final class ValueExpressionEvaluator {
    * @param elements
    *          evaluated elements with source declarations
    */
-  private record JsonArray(List<JsonOperand> elements) {
+  private record DeclaredArray(List<DeclaredOperand> elements) {
   }
 
   /**
-   * Evaluates arguments once, keeping the selected conditional branch's source
-   * declaration before any required offset promotion.
+   * Evaluates temporal ARRAY and JSON arguments once, keeping selected branches'
+   * declarations before any required offset promotion.
    *
    * @param expression
    *          value expression
@@ -718,30 +743,60 @@ public final class ValueExpressionEvaluator {
    *          current input row
    * @return evaluated value and source declaration
    */
-  private JsonOperand jsonOperand(Expression expression, GenericRecord record) {
+  private DeclaredOperand declaredOperand(Expression expression, GenericRecord record) {
     Expression unwrapped = ExpressionEvaluator.unwrapParenthesis(expression);
     if (unwrapped instanceof CaseExpression choice && numericType(choice) == null
         && intervalSchema(unwrapped) == null) {
-      return jsonBranch(unwrapped, (JsonOperand) evaluateCase(choice, record, this::jsonOperand));
+      return temporalBranch(unwrapped, (DeclaredOperand) evaluateCase(choice, record, this::declaredOperand));
     }
     if (unwrapped instanceof Function function && "COALESCE".equalsIgnoreCase(function.getName())
         && function.getParameters() != null && numericType(function) == null && intervalSchema(unwrapped) == null) {
       for (Expression argument : function.getParameters()) {
-        JsonOperand operand = jsonOperand(argument, record);
+        DeclaredOperand operand = declaredOperand(argument, record);
         if (operand.value() != null) {
-          return jsonBranch(unwrapped, operand);
+          return temporalBranch(unwrapped, operand);
         }
       }
-      return new JsonOperand(null, null);
+      return new DeclaredOperand(null, null);
+    }
+    if ((unwrapped instanceof Addition || unwrapped instanceof Subtraction) && numericType(unwrapped) == null
+        && intervalSchema(unwrapped) == null) {
+      var binary = (net.sf.jsqlparser.expression.BinaryExpression) unwrapped;
+      DeclaredOperand left = declaredOperand(binary.getLeftExpression(), record);
+      DeclaredOperand right = declaredOperand(binary.getRightExpression(), record);
+      Operation operation = unwrapped instanceof Addition ? Operation.ADD : Operation.SUB;
+      Object result = arithmetic(binary.getLeftExpression(), binary.getRightExpression(), left.value(), right.value(),
+          operation);
+      Schema declaration = valueSchema(unwrapped);
+      if (declaration == null && DateTimeFunctions.isTemporal(result)) {
+        DeclaredOperand datetime = DateTimeFunctions.isTemporal(left.value()) ? left : right;
+        declaration = datetime.declaration();
+        if (result instanceof Timestamp && datetime.value() instanceof java.sql.Date) {
+          declaration = TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema();
+        }
+      }
+      return new DeclaredOperand(result, declaration);
     }
     if (unwrapped instanceof ArrayConstructor array) {
-      Schema declaration = jsonSchema(unwrapped);
+      Schema declaration = valueSchema(unwrapped);
       if (declaration != null && temporalElements(declaration)) {
-        List<JsonOperand> values = new ArrayList<>();
+        List<DeclaredOperand> values = new ArrayList<>();
         for (Expression element : array.getExpressions()) {
-          values.add(jsonOperand(element, record));
+          values.add(declaredOperand(element, record));
         }
-        return jsonArray(values, declaration);
+        return temporalArray(values, declaration);
+      }
+    }
+    if (unwrapped instanceof Function function && "ARRAY".equalsIgnoreCase(function.getName())
+        && function.getParameters() != null
+        && function.getParameters().stream().noneMatch(net.sf.jsqlparser.statement.select.Select.class::isInstance)) {
+      Schema declaration = valueSchema(unwrapped);
+      if (declaration != null && temporalElements(declaration)) {
+        List<DeclaredOperand> values = new ArrayList<>();
+        for (Expression element : function.getParameters()) {
+          values.add(declaredOperand(element, record));
+        }
+        return temporalArray(values, declaration);
       }
     }
     Object value;
@@ -755,12 +810,12 @@ public final class ValueExpressionEvaluator {
     Schema declaration = null;
     if (DateTimeFunctions.isTemporal(value) || value instanceof Object[] || value instanceof List<?>
         || value == null && unwrapped instanceof Column) {
-      declaration = jsonSchema(unwrapped);
+      declaration = valueSchema(unwrapped);
       if (declaration != null && !temporalElements(declaration)) {
         declaration = null;
       }
     }
-    return new JsonOperand(value, declaration);
+    return new DeclaredOperand(value, declaration);
   }
 
   /**
@@ -773,14 +828,14 @@ public final class ValueExpressionEvaluator {
    *          selected branch, or null when CASE had no matching branch
    * @return promoted operand
    */
-  private JsonOperand jsonBranch(Expression expression, JsonOperand selected) {
+  private DeclaredOperand temporalBranch(Expression expression, DeclaredOperand selected) {
     if (selected == null || selected.value() == null) {
-      return new JsonOperand(null, null);
+      return new DeclaredOperand(null, null);
     }
     if (DateTimeFunctions.isTemporal(selected.value())
         || selected.declaration() != null && temporalElements(selected.declaration())) {
-      Schema declaration = jsonSchema(expression);
-      return promoteJsonOperand(selected, declaration);
+      Schema declaration = valueSchema(expression);
+      return promoteDeclaredOperand(selected, declaration);
     }
     return selected;
   }
@@ -792,16 +847,17 @@ public final class ValueExpressionEvaluator {
    *          argument expression
    * @return known declaration, or null
    */
-  private Schema jsonSchema(Expression expression) {
-    return jsonTypes.computeIfAbsent(expression, shape -> {
+  private Schema valueSchema(Expression expression) {
+    return valueSchemas.computeIfAbsent(expression, shape -> {
       try {
-        return Optional.ofNullable(ArrayExpressionSchemas.resolve(shape, this::jsonColumnSchema,
+        return Optional.ofNullable(ArrayExpressionSchemas.resolve(shape, this::valueColumnSchema,
             select -> subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select)));
       } catch (IllegalArgumentException incompatible) {
         if (!(shape instanceof ArrayConstructor)
             && !(shape instanceof Function function && "ARRAY".equalsIgnoreCase(function.getName()))) {
-          // Conditional DATE/TIMESTAMP promotion is tracked in #431. Optional
-          // JSON metadata must not impose ARRAY compatibility on scalar values.
+          // Drop the wrapper's optional declaration when a nested conditional
+          // has incompatible declarations (#431). Evaluation retains selected
+          // branch provenance through datetime arithmetic.
           return Optional.empty();
         }
         throw incompatible;
@@ -819,16 +875,16 @@ public final class ValueExpressionEvaluator {
    *          ARRAY declaration
    * @return validated ARRAY operand with one temporal representation
    */
-  private JsonOperand jsonArray(List<JsonOperand> values, Schema declaration) {
-    ArrayFunctions.validateArrayValues(values.stream().map(JsonOperand::decoded).toList());
-    Schema target = jsonArrayTarget(declaration, values);
-    JsonOperand array = new JsonOperand(new JsonArray(values), declaration);
-    return promoteJsonOperand(array, target);
+  private DeclaredOperand temporalArray(List<DeclaredOperand> values, Schema declaration) {
+    ArrayFunctions.validateArrayValues(values.stream().map(DeclaredOperand::decoded).toList());
+    Schema target = temporalArrayTarget(declaration, values);
+    DeclaredOperand array = new DeclaredOperand(new DeclaredArray(values), declaration);
+    return promoteDeclaredOperand(array, target);
   }
 
   /**
-   * Chooses one offset-bearing ARRAY representation when any timestamp source
-   * retains an instant. Local-only arrays keep wall-clock values.
+   * Retains the common ARRAY declaration, including runtime offset sources whose
+   * declarations were unknown. Local-only arrays keep wall-clock values.
    *
    * @param declaration
    *          common ARRAY or leaf declaration
@@ -836,12 +892,12 @@ public final class ValueExpressionEvaluator {
    *          source elements at any nesting depth
    * @return ARRAY or leaf serialization declaration
    */
-  private static Schema jsonArrayTarget(Schema declaration, List<JsonOperand> values) {
+  private static Schema temporalArrayTarget(Schema declaration, List<DeclaredOperand> values) {
     Schema effective = JdbcTypeMapper.nonNullSchema(declaration);
     if (effective.getType() == Schema.Type.ARRAY) {
-      return Schema.createArray(jsonArrayTarget(effective.getElementType(), values));
+      return Schema.createArray(temporalArrayTarget(effective.getElementType(), values));
     }
-    boolean zoned = values.stream().anyMatch(ValueExpressionEvaluator::zonedJsonOperand);
+    boolean zoned = values.stream().anyMatch(ValueExpressionEvaluator::offsetOperand);
     int type = JdbcTypeMapper.mapSchemaToJdbcType(effective);
     if (zoned && type == java.sql.Types.TIMESTAMP) {
       return TemporalValueType.OFFSET_TIMESTAMP.schema();
@@ -853,18 +909,18 @@ public final class ValueExpressionEvaluator {
   }
 
   /**
-   * Identifies UTC and offset sources, including NULL and nested ARRAY values.
+   * Identifies explicit offset sources, including NULL and nested ARRAY values.
    *
    * @param operand
    *          source operand
    * @return whether a source has an instant or explicit offset
    */
-  private static boolean zonedJsonOperand(JsonOperand operand) {
+  private static boolean offsetOperand(DeclaredOperand operand) {
     if (operand.value() instanceof java.time.OffsetDateTime || operand.value() instanceof java.time.OffsetTime) {
       return true;
     }
-    if (operand.value() instanceof JsonArray array
-        && array.elements().stream().anyMatch(ValueExpressionEvaluator::zonedJsonOperand)) {
+    if (operand.value() instanceof DeclaredArray array
+        && array.elements().stream().anyMatch(ValueExpressionEvaluator::offsetOperand)) {
       return true;
     }
     if (operand.declaration() == null) {
@@ -875,8 +931,7 @@ public final class ValueExpressionEvaluator {
       declaration = JdbcTypeMapper.nonNullSchema(declaration.getElementType());
     }
     int type = JdbcTypeMapper.mapSchemaToJdbcType(declaration);
-    return utcTimestamp(declaration) || type == java.sql.Types.TIMESTAMP_WITH_TIMEZONE
-        || type == java.sql.Types.TIME_WITH_TIMEZONE;
+    return type == java.sql.Types.TIMESTAMP_WITH_TIMEZONE || type == java.sql.Types.TIME_WITH_TIMEZONE;
   }
 
   /**
@@ -901,33 +956,56 @@ public final class ValueExpressionEvaluator {
    *          result declaration, or null when unknown
    * @return promoted value
    */
-  private static JsonOperand promoteJsonOperand(JsonOperand source, Schema target) {
+  private static DeclaredOperand promoteDeclaredOperand(DeclaredOperand source, Schema target) {
     if (target == null || source.value() == null) {
       return source;
     }
     Schema effective = JdbcTypeMapper.nonNullSchema(target);
-    if (source.value() instanceof JsonArray array && effective.getType() == Schema.Type.ARRAY) {
-      List<JsonOperand> elements = array.elements().stream()
-          .map(element -> promoteJsonOperand(element, effective.getElementType())).toList();
-      return new JsonOperand(new JsonArray(elements), target);
+    if (source.value() instanceof DeclaredArray array && effective.getType() == Schema.Type.ARRAY) {
+      List<DeclaredOperand> elements = array.elements().stream()
+          .map(element -> promoteDeclaredOperand(element, effective.getElementType())).toList();
+      return new DeclaredOperand(new DeclaredArray(elements), target);
     }
     if (effective.getType() == Schema.Type.ARRAY && source.declaration() != null
-        && !effective.equals(JdbcTypeMapper.nonNullSchema(source.declaration()))) {
-      Iterable<?> values = source.value() instanceof Object[] array
-          ? java.util.Arrays.asList(array)
-          : (Iterable<?>) source.value();
-      Schema sourceElement = JdbcTypeMapper.nonNullSchema(source.declaration()).getElementType();
-      List<JsonOperand> elements = new ArrayList<>();
-      for (Object value : values) {
-        elements.add(promoteJsonOperand(new JsonOperand(value, sourceElement), effective.getElementType()));
+        && !sameArrayType(effective, source.declaration())) {
+      Iterable<?> values;
+      if (source.value() instanceof Object[] array) {
+        values = java.util.Arrays.asList(array);
+      } else if (source.value() instanceof Iterable<?> iterable) {
+        values = iterable;
+      } else {
+        return source;
       }
-      return new JsonOperand(new JsonArray(elements), target);
+      Schema sourceElement = JdbcTypeMapper.nonNullSchema(source.declaration()).getElementType();
+      List<DeclaredOperand> elements = new ArrayList<>();
+      for (Object value : values) {
+        elements.add(promoteDeclaredOperand(new DeclaredOperand(value, sourceElement), effective.getElementType()));
+      }
+      return new DeclaredOperand(new DeclaredArray(elements), target);
     }
     TemporalValueType temporal = TemporalValueType.fromSchema(effective);
     if (temporal == TemporalValueType.OFFSET_TIMESTAMP || temporal == TemporalValueType.OFFSET_TIME) {
-      return new JsonOperand(temporal.normalize(source.decoded()), effective);
+      return new DeclaredOperand(temporal.normalize(source.decoded()), effective);
     }
     return source;
+  }
+
+  /**
+   * Compares ARRAY declarations without treating optional elements as promotions.
+   *
+   * @param first
+   *          target declaration
+   * @param second
+   *          source declaration
+   * @return whether their non-null element types agree at every depth
+   */
+  private static boolean sameArrayType(Schema first, Schema second) {
+    Schema left = JdbcTypeMapper.nonNullSchema(first);
+    Schema right = JdbcTypeMapper.nonNullSchema(second);
+    if (left.getType() == Schema.Type.ARRAY && right.getType() == Schema.Type.ARRAY) {
+      return sameArrayType(left.getElementType(), right.getElementType());
+    }
+    return left.equals(right);
   }
 
   /**
@@ -955,11 +1033,18 @@ public final class ValueExpressionEvaluator {
    *          possible field reference
    * @return field schema, or null for a keyword or unresolved name
    */
-  private Schema jsonColumnSchema(Column column) {
+  private Schema valueColumnSchema(Column column) {
     if (SqlExpressionNormalizer.timeKeyword(column) != null) {
       return null;
     }
-    String name = resolveColumnName(column);
+    String name;
+    try {
+      name = resolveColumnName(column);
+    } catch (IllegalArgumentException unresolved) {
+      // CONVERT probes type names as possible fields during declaration lookup.
+      // Required column references remain validated by ordinary evaluation.
+      return null;
+    }
     if (name == null) {
       return null;
     }
@@ -1022,8 +1107,25 @@ public final class ValueExpressionEvaluator {
   }
 
   private Object arithmetic(Expression left, Expression right, GenericRecord record, Operation op) {
-    Object leftVal = evalInternal(left, record);
-    Object rightVal = evalInternal(right, record);
+    return arithmetic(left, right, evalInternal(left, record), evalInternal(right, record), op);
+  }
+
+  /**
+   * Applies shared arithmetic to operands already evaluated with source metadata.
+   *
+   * @param left
+   *          left expression
+   * @param right
+   *          right expression
+   * @param leftVal
+   *          evaluated left value
+   * @param rightVal
+   *          evaluated right value
+   * @param op
+   *          arithmetic operation
+   * @return arithmetic result
+   */
+  private Object arithmetic(Expression left, Expression right, Object leftVal, Object rightVal, Operation op) {
     if (leftVal == null || rightVal == null) {
       return null;
     }

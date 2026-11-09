@@ -105,6 +105,9 @@ public final class StructArrayTypes {
         result = Schema.createArray(common(left.getElementType(), right.getElementType(), path + "[]", visited));
       } else if (left.getType() == Schema.Type.MAP && right.getType() == Schema.Type.MAP) {
         result = Schema.createMap(common(left.getValueType(), right.getValueType(), path + "{}", visited));
+      } else if ((leftType == Types.TIMESTAMP || leftType == Types.TIMESTAMP_WITH_TIMEZONE)
+          && (rightType == Types.TIMESTAMP || rightType == Types.TIMESTAMP_WITH_TIMEZONE) && leftType != rightType) {
+        result = TemporalValueType.OFFSET_TIMESTAMP.schema();
       } else if (leftType == rightType && leftType != Types.OTHER && leftType != Types.STRUCT
           && leftType != Types.ARRAY) {
         result = switch (leftType) {
@@ -130,8 +133,8 @@ public final class StructArrayTypes {
 
   /**
    * Retains full datetime range and precision when mixing nanosecond and coarser
-   * storage. UTC-adjusted fields retain the JVM-zone view used by standalone
-   * reads; local fields retain their wall-clock fields.
+   * storage. UTC-adjusted fields retain instants; local fields retain their
+   * wall-clock fields. Mixed zone semantics acquire an offset.
    *
    * @param left
    *          first timestamp declaration
@@ -140,6 +143,9 @@ public final class StructArrayTypes {
    * @return lossless internal declaration, or the finer compatible physical unit
    */
   private static Schema timestampSchema(Schema left, Schema right) {
+    if (utcTimestamp(left) != utcTimestamp(right)) {
+      return TemporalValueType.OFFSET_TIMESTAMP.schema();
+    }
     if (TemporalValueType.fromSchema(left) == TemporalValueType.LOCAL_TIMESTAMP
         || TemporalValueType.fromSchema(right) == TemporalValueType.LOCAL_TIMESTAMP) {
       return TemporalValueType.LOCAL_TIMESTAMP.schema();
@@ -353,7 +359,13 @@ public final class StructArrayTypes {
       }
       return converted;
     }
-    Object decoded = AvroCoercions.unwrap(value, from);
+    Object decoded = TemporalValueType.fromSchema(to) == TemporalValueType.OFFSET_TIMESTAMP
+        ? AvroCoercions.unwrapLocalFields(value, from)
+        : AvroCoercions.unwrap(value, from);
+    if (utcTimestamp(from) && decoded instanceof Timestamp timestamp
+        && TemporalValueType.fromSchema(to) == TemporalValueType.OFFSET_TIMESTAMP) {
+      decoded = timestamp.toInstant().atOffset(ZoneOffset.UTC);
+    }
     TemporalValueType temporal = TemporalValueType.fromSchema(to);
     if (temporal != null) {
       return temporal.encode(decoded);

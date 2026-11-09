@@ -9,11 +9,13 @@
   trailing zeros for explicitly declared TIME precision. Preserve selected CASE/COALESCE source semantics,
   UTC summer instants, and raw local fields in DST gaps, including inside ARRAY constructors. Datetime arrays
   with UTC or offset sources promote local elements to the session offset before serialization and share the
-  ordinary ARRAY runtime type checks. Engine-wide agreement with JDBC ARRAY, character casts, and
-  materialization is tracked in #525. Keep DATE/TIMESTAMP conditional expressions accepted through
-  arithmetic and CAST wrappers while their general promotion is tracked in #431. Stored temporal columns
+  ordinary ARRAY runtime type checks. Mixed UTC/local ARRAY values now carry the common offset type
+  through JDBC ARRAY, character casts, and derived-table/CTE materialization (#525). Character casts of
+  materialized reference arrays render their elements instead of Java array identities. Keep DATE/TIMESTAMP conditional expressions accepted through
+  arithmetic and CAST wrappers while their general promotion is tracked in #431. Wrapped UTC conditionals
+  retain their selected branch's instant through interval arithmetic even when the wrapper has no declaration. Stored temporal columns
   serialize directly without repeated ARRAY type validation or promotion buffers; enclosing constructors
-  rebuild elements only when promotion is needed. Retain direct JSON-text embedding and cache declarations (#312).
+  rebuild stored elements only when their non-null types change, ignoring nullable unions at every depth. Retain direct JSON-text embedding and cache declarations (#312).
 
 - DATE arithmetic with declared HOUR/MINUTE/SECOND interval fields returns JDBC Timestamp independently
   of the interval value. Zero and 24-hour intervals no longer return JDBC Date. Direct JDBC results, derived

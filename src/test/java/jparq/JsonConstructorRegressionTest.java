@@ -10,10 +10,10 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
@@ -84,10 +84,10 @@ class JsonConstructorRegressionTest {
             assertValue(connection, expression, " FROM t", "\"2024-07-01T12:00:00Z\"");
             assertValue(connection, "ARRAY[" + expression + "]", " FROM t", "[\"2024-07-01T12:00:00Z\"]");
           }
-          assertValue(connection, "COALESCE(NULLIF(ts,ts),TIMESTAMP '2000-01-01 01:00:00')", " FROM t",
-              "\"2000-01-01T01:00:00\"");
           String localElement = DateTimeFormatter.ISO_OFFSET_DATE_TIME
               .format(LocalDateTime.parse("2000-01-01T01:00:00").atOffset(DateTimeFunctions.sessionOffset()));
+          assertValue(connection, "COALESCE(NULLIF(ts,ts),TIMESTAMP '2000-01-01 01:00:00')", " FROM t",
+              "\"" + localElement + "\"");
           assertValue(connection, "ARRAY[ts,TIMESTAMP '2000-01-01 01:00:00']", " FROM t",
               "[\"2024-07-01T12:00:00Z\",\"" + localElement + "\"]");
           assertValue(connection, "ARRAY[null_ts,TIMESTAMP '2000-01-01 01:00:00']", " FROM t",
@@ -105,6 +105,16 @@ class JsonConstructorRegressionTest {
             assertFalse(result.next());
           }
           assertEngineArrayComparison(connection, localElement);
+          assertWrappedUtcConditional(connection);
+          assertValue(connection, "ARRAY[nla]", " FROM t", "[[\"2024-03-31T02:30:00\",null]]");
+          String storedMixed = "[[\"" + offsetGap + "\",null],[\"2024-07-01T12:00:00Z\",null]]";
+          assertValue(connection, "ARRAY[nla,ua]", " FROM t", storedMixed);
+          assertValue(connection, "x", " FROM (SELECT ARRAY[nla,ua] AS x FROM t) d", storedMixed);
+          assertValue(connection, "ARRAY[nla,ARRAY(SELECT ts FROM t)]", " FROM t",
+              "[[\"" + offsetGap + "\",null],[\"2024-07-01T12:00:00Z\"]]");
+          String scalarMixed = "[\"2024-07-01T12:00:00Z\",\"" + offsetGap + "\"]";
+          assertValue(connection, "ARRAY[ts,lts]", " FROM t", scalarMixed);
+          assertValue(connection, "x", " FROM (SELECT ARRAY[ts,lts] AS x FROM t) d", scalarMixed);
           for (String expression : List.of("COALESCE(lts,CURRENT_TIMESTAMP)",
               "CASE WHEN TRUE THEN lts ELSE CURRENT_TIMESTAMP END")) {
             assertValue(connection, expression, " FROM t", "\"" + offsetGap + "\"");
@@ -220,9 +230,8 @@ class JsonConstructorRegressionTest {
   }
 
   /**
-   * Compares JSON with the engine's JDBC and character ARRAY representations. The
-   * existing local engine type versus offset JSON representation is tracked in
-   * #525; this comparison must be updated with that engine-side fix.
+   * Requires JSON, JDBC, character casts, and materialization to retain the same
+   * promoted ARRAY elements and instants.
    *
    * @param connection
    *          open test connection
@@ -232,24 +241,52 @@ class JsonConstructorRegressionTest {
    *           if query execution fails
    */
   private static void assertEngineArrayComparison(Connection connection, String localElement) throws Exception {
-    String expression = "ARRAY[ts,TIMESTAMP '2000-01-01 01:00:00']";
-    try (var statement = connection.createStatement();
-        var result = statement.executeQuery("SELECT JSON_ARRAY(" + expression + "),CAST(" + expression
-            + " AS VARCHAR(100))," + expression + " FROM t")) {
-      assertTrue(result.next());
-      assertEquals("[[\"2024-07-01T12:00:00Z\",\"" + localElement + "\"]]", result.getString(1));
-      var array = result.getArray(3);
-      try {
-        Object[] elements = (Object[]) array.getArray();
-        Timestamp utc = assertInstanceOf(Timestamp.class, elements[0]);
-        Timestamp local = assertInstanceOf(Timestamp.class, elements[1]);
-        assertEquals(Instant.parse("2024-07-01T12:00:00Z"), utc.toInstant());
-        assertEquals(LocalDateTime.parse("2000-01-01T01:00:00"), local.toLocalDateTime());
-        assertEquals(Arrays.toString(elements), result.getString(2));
-      } finally {
-        array.free();
+    String arrayExpression = "ARRAY[ts,TIMESTAMP '2000-01-01 01:00:00']";
+    for (String[] shape : List.of(new String[]{
+        arrayExpression, " FROM t"
+    }, new String[]{
+        "x", " FROM (SELECT " + arrayExpression + " AS x FROM t) d"
+    }, new String[]{
+        "x", " FROM (WITH c AS (SELECT " + arrayExpression + " AS x FROM t) SELECT x FROM c) d"
+    })) {
+      String expression = shape[0];
+      try (var statement = connection.createStatement();
+          var result = statement.executeQuery("SELECT JSON_ARRAY(" + expression + "),CAST(" + expression
+              + " AS VARCHAR(100))," + expression + shape[1])) {
+        assertTrue(result.next());
+        assertEquals("[[\"2024-07-01T12:00:00Z\",\"" + localElement + "\"]]", result.getString(1));
+        var array = result.getArray(3);
+        try {
+          Object[] elements = (Object[]) array.getArray();
+          OffsetDateTime utc = assertInstanceOf(OffsetDateTime.class, elements[0]);
+          OffsetDateTime local = assertInstanceOf(OffsetDateTime.class, elements[1]);
+          assertEquals(Instant.parse("2024-07-01T12:00:00Z"), utc.toInstant());
+          assertEquals(OffsetDateTime.parse(localElement), local);
+          assertEquals(java.sql.Types.TIMESTAMP_WITH_TIMEZONE, array.getBaseType());
+          assertEquals(Arrays.toString(elements), result.getString(2));
+        } finally {
+          array.free();
+        }
+        assertFalse(result.next());
       }
-      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Preserves selected UTC provenance through nested conditionals and arithmetic.
+   *
+   * @param connection
+   *          open test connection
+   * @throws Exception
+   *           if query execution fails
+   */
+  private static void assertWrappedUtcConditional(Connection connection) throws Exception {
+    for (String conditional : List.of("CASE WHEN TRUE THEN ts ELSE DATE '2024-01-01' END",
+        "COALESCE(ts,DATE '2024-01-01')")) {
+      assertValue(connection, "(" + conditional + ") + INTERVAL '1' HOUR", " FROM t", "\"2024-07-01T13:00:00Z\"");
+      assertValue(connection, "INTERVAL '1' HOUR + (" + conditional + ")", " FROM t", "\"2024-07-01T13:00:00Z\"");
+      assertValue(connection, "((" + conditional + ") + INTERVAL '2' HOUR) - INTERVAL '1' HOUR", " FROM t",
+          "\"2024-07-01T13:00:00Z\"");
     }
   }
 
@@ -289,7 +326,9 @@ class JsonConstructorRegressionTest {
     Schema local = LogicalTypes.localTimestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
     Schema schema = SchemaBuilder.record("jsonReview").fields().requiredInt("id").requiredString("j").name("null_ts")
         .type(Schema.createUnion(Schema.create(Schema.Type.NULL), utc)).noDefault().name("ts").type(utc).noDefault()
-        .name("lts").type(local).noDefault().name("la").type(Schema.createArray(local)).noDefault().name("d")
+        .name("lts").type(local).noDefault().name("la").type(Schema.createArray(local)).noDefault().name("nla")
+        .type(Schema.createArray(Schema.createUnion(Schema.create(Schema.Type.NULL), local))).noDefault().name("ua")
+        .type(Schema.createArray(Schema.createUnion(Schema.create(Schema.Type.NULL), utc))).noDefault().name("d")
         .type(LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT))).noDefault().endRecord();
     var row = new GenericData.Record(schema);
     row.put("id", 1);
@@ -298,6 +337,8 @@ class JsonConstructorRegressionTest {
     long gap = LocalDateTime.parse("2024-03-31T02:30:00").toInstant(ZoneOffset.UTC).toEpochMilli();
     row.put("lts", gap);
     row.put("la", List.of(gap));
+    row.put("nla", Arrays.asList(gap, null));
+    row.put("ua", Arrays.asList(Instant.parse("2024-07-01T12:00:00Z").toEpochMilli(), null));
     row.put("d", (int) LocalDate.parse("2024-01-02").toEpochDay());
     var configuration = new Configuration(false);
     configuration.setBoolean("parquet.avro.write-old-list-structure", false);

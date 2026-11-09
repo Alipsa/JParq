@@ -33,7 +33,8 @@ public final class SqlText {
 
   /**
    * Converts a value for an explicit character CAST, preserving SQL NULL. Binary
-   * inputs are decoded as UTF-8.
+   * inputs are decoded as UTF-8; reference arrays retain their element text
+   * across materialization.
    *
    * @param value
    *          SQL value to convert
@@ -49,6 +50,9 @@ public final class SqlText {
     }
     if (value instanceof ByteBuffer buffer) {
       return decodeBinary(buffer.duplicate());
+    }
+    if (value instanceof Object[] array) {
+      return java.util.Arrays.deepToString(array);
     }
     return value == null ? null : value.toString();
   }
