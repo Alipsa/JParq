@@ -365,6 +365,7 @@ public class JParqPreparedStatement implements PreparedStatement {
                   baseRef, tmpFileAvro);
               tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
             }
+            tmpSelect = SqlParser.resolveInputOrdering(tmpSelect, tmpFileAvro, null);
             aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
@@ -383,6 +384,7 @@ public class JParqPreparedStatement implements PreparedStatement {
                   baseRef, tmpFileAvro);
               tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
             }
+            tmpSelect = SqlParser.resolveInputOrdering(tmpSelect, tmpFileAvro, null);
             aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
@@ -397,6 +399,7 @@ public class JParqPreparedStatement implements PreparedStatement {
               tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect,
                   buildQualifierColumnsForSchema(tmpSelect, baseRef, tmpFileAvro));
             }
+            tmpSelect = SqlParser.resolveInputOrdering(tmpSelect, tmpFileAvro, null);
             aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
@@ -409,6 +412,7 @@ public class JParqPreparedStatement implements PreparedStatement {
                   baseRef, tmpFileAvro);
               tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
             }
+            tmpSelect = SqlParser.resolveInputOrdering(tmpSelect, tmpFileAvro, null);
             aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
@@ -425,6 +429,7 @@ public class JParqPreparedStatement implements PreparedStatement {
               tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
             }
             tmpSchemaName = formatSchemaForMetadata("information_schema");
+            tmpSelect = SqlParser.resolveInputOrdering(tmpSelect, tmpFileAvro, null);
             aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
             tmpResidual = tmpSelect.where();
             tmpPredicate = Optional.empty();
@@ -455,6 +460,7 @@ public class JParqPreparedStatement implements PreparedStatement {
                     baseRef, tmpFileAvro);
                 tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
               }
+              tmpSelect = SqlParser.resolveInputOrdering(tmpSelect, tmpFileAvro, null);
               aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
               validateArrayDeclarations(tmpSelect, tmpFileAvro, tmpSchemaName, tmpCteResults, tmpConf);
               configureProjectionPushdown(tmpSelect, pushdownSchema, aggregatePlan, tmpConf, tmpCteResults);
@@ -475,6 +481,7 @@ public class JParqPreparedStatement implements PreparedStatement {
                 tmpSelect = SqlParser.expandQualifiedWildcards(tmpSelect, qualifierColumns);
               }
 
+              tmpSelect = SqlParser.resolveInputOrdering(tmpSelect, tmpFileAvro, null);
               aggregatePlan = AggregateFunctions.plan(tmpSelect, tmpFileAvro);
               validateArrayDeclarations(tmpSelect, tmpFileAvro, tmpSchemaName, tmpCteResults, tmpConf);
               configureProjectionPushdown(tmpSelect, tmpFileAvro, aggregatePlan, tmpConf, tmpCteResults);
@@ -2038,7 +2045,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (!parsedSelect.orderBy().isEmpty() || !parsedSelect.preOrderBy().isEmpty()) {
       ValueExpressionEvaluator binding = new ValueExpressionEvaluator(joinReader.schema(), null, List.of(),
           joinReader.qualifierColumnMapping(), joinReader.unqualifiedColumnMapping());
-      parsedSelect = SqlParser.resolveJoinOrdering(parsedSelect, binding::resolveColumnName);
+      parsedSelect = SqlParser.resolveInputOrdering(parsedSelect, joinReader.schema(), binding::resolveColumnName);
     }
     validateJoinOutputColumns(joinReader);
     return joinReader;

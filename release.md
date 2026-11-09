@@ -2,6 +2,14 @@
 
 ### 1.4.0
 
+- Resolve SELECT aliases inside ORDER BY arithmetic and scalar functions for computed projections
+  and grouped aggregates as a fallback when no input column matches. Preserve input-column precedence,
+  nested query scopes, and output-name ambiguity checks. Reject ungrouped ORDER BY input columns even when
+  a SELECT alias shares the name. Ungrouped column references in SELECT, HAVING, ORDER BY, and grouped
+  subquery correlations now consistently report SQLState 42803 instead of 42000, including existing ungrouped
+  ORDER BY errors. Reject expression references to window, random, and subquery aliases during
+  planning with a clear SQLState 42000 diagnostic (#308).
+
 - Evaluate correlated scalar subqueries in aggregate arguments against each input row,
   including when aggregate results appear inside scalar expressions. Preserve qualified
   NULL bindings instead of retrying them as unqualified column references (#307).

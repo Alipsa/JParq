@@ -69,6 +69,9 @@ final class GroupedScalarSubquery {
    * @param aliases
    *          normalized output aliases available in the consuming clause
    * @return indexes for references bound to grouping columns
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42803 when a subquery references an ungrouped
+   *           outer column
    */
   static Map<QualifiedColumn, Integer> validateCorrelations(Select select,
       List<AggregateFunctions.GroupExpression> groups, SubqueryExecutor executor, CorrelationMappings mappings,
@@ -88,7 +91,7 @@ final class GroupedScalarSubquery {
           }
           Integer index = groupedColumns.get(canonical(qualifier, column, mappings));
           if (index == null) {
-            throw SqlExceptions.syntaxFailure("Subquery references ungrouped outer column '" + column
+            throw SqlExceptions.groupingFailure("Subquery references ungrouped outer column '" + column
                 + "'; outer columns must appear in the GROUP BY clause");
           }
           indexes.put(new QualifiedColumn(qualifier, column), index);

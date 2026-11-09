@@ -126,7 +126,10 @@ class GroupedScalarSubqueryTest {
             ? SQLDataException.class
             : SQLSyntaxErrorException.class;
         SQLException error = assertThrows(expected, () -> rows(connection, sql), sql);
-        assertEquals(sql.contains("SELECT v FROM t") ? "21000" : "42000", error.getSQLState(), sql);
+        String state = sql.contains("SELECT v FROM t")
+            ? "21000"
+            : sql.contains("SELECT v, v FROM t") ? "42000" : "42803";
+        assertEquals(state, error.getSQLState(), sql);
       }
     }
   }

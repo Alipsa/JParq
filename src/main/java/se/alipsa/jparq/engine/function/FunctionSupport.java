@@ -37,6 +37,21 @@ public final class FunctionSupport {
   private final BiFunction<Expression, GenericRecord, Object> evaluator;
 
   /**
+   * Identifies functions whose value may change on each evaluation. Function
+   * volatility is owned here alongside the central function dispatch.
+   *
+   * @param name
+   *          SQL function name, matched without regard to case
+   * @return true for volatile functions; false for other or unknown names
+   */
+  public static boolean isVolatile(String name) {
+    return name != null && switch (name.toUpperCase(Locale.ROOT)) {
+      case "RAND", "RANDOM" -> true;
+      default -> false;
+    };
+  }
+
+  /**
    * Create a new function support instance.
    *
    * @param subqueryExecutor
@@ -138,6 +153,8 @@ public final class FunctionSupport {
       case "TIMESTAMPADD" -> DateTimeFunctions.timestampAdd(args.positionalValues());
       case "TIMESTAMPDIFF" -> DateTimeFunctions.timestampDiff(args.positionalValues());
       case "ARRAY" -> evaluateArrayFunction(func, record, args);
+      // Register new volatile functions in isVolatile as well as dispatching them
+      // here.
       case "ABS", "CEIL", "CEILING", "COT", "FLOOR", "ROUND", "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW", "EXP",
           "LOG", "LOG10", "PI", "RAND", "RANDOM", "SIGN", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN", "ATAN2",
           "DEGREES", "RADIANS" ->

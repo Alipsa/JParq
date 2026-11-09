@@ -1,5 +1,6 @@
 package se.alipsa.jparq.engine.function;
 
+import static se.alipsa.jparq.engine.SqlExceptions.groupingFailure;
 import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 
 import java.io.IOException;
@@ -605,7 +606,8 @@ public final class AggregateFunctions {
    *          input qualifier and column mappings shared with execution
    * @return aggregate plan, or null for a nonaggregate query
    * @throws IllegalArgumentException
-   *           if a selected column is not grouped
+   *           if a selected column is not grouped; the cause carries SQLState
+   *           42803
    */
   public static AggregatePlan plan(SqlParser.Select select, Schema inputSchema, CorrelationMappings mappings) {
     List<Expression> expressions = select.expressions();
@@ -630,7 +632,8 @@ public final class AggregateFunctions {
           && (alternative == null || !groupByAliases.availableColumns().contains(alternative))) {
         return null;
       }
-      return bindingEvaluator.resolveColumnName(column);
+      String field = bindingEvaluator.resolveColumnName(column);
+      return field != null && inputSchema.getField(field) != null ? field : null;
     };
     List<GroupExpression> groupExpressions = buildGroupExpressions(resolveGroupByAliases(select, groupByAliases));
     final Map<String, Integer> groupIndexByText = groupIndexLookup(groupExpressions);
@@ -680,10 +683,14 @@ public final class AggregateFunctions {
       Integer groupIndex = findGroupIndex(expr, groupIndexByText, groupExpressions, inputBinding);
       if (groupIndex == null) {
         GroupedExpression.validate(expr, operand -> {
-          if (operand instanceof Column
+          if (operand instanceof Column column
               && findGroupIndex(operand, groupIndexByText, groupExpressions, inputBinding) == null) {
-            throw syntaxFailure(
-                "SELECT expression '" + expr + "' must appear in the GROUP BY clause when aggregates are present");
+            String message = "SELECT expression '" + expr
+                + "' must appear in the GROUP BY clause when aggregates are present";
+            if (inputBinding != null && inputBinding.resolve(column) == null) {
+              throw syntaxFailure(message);
+            }
+            throw groupingFailure(message);
           }
           return isGroupOperand(operand, groupIndexByText, groupExpressions, inputBinding);
         });
@@ -695,10 +702,18 @@ public final class AggregateFunctions {
 
     Set<String> outputNames = resultColumns.stream().map(column -> Identifier.lookupKey(column.label()))
         .collect(Collectors.toSet());
-    validateGroupReferences(select.having(), "HAVING", groupIndexByText, groupExpressions, outputNames, inputBinding);
+    validateGroupReferences(select.having(), "HAVING", groupIndexByText, groupExpressions, outputNames, inputBinding,
+        false);
     for (OrderKey key : select.orderBy()) {
-      validateGroupReferences(key.expression(), "ORDER BY", groupIndexByText, groupExpressions, outputNames,
-          inputBinding);
+      Expression ordering = key.expression();
+      if (ordering == null && key.projectionIndex() < 0 && inputBinding != null) {
+        Column column = new Column(key.qualifier() == null ? null : new Table(key.qualifier()), key.column());
+        if (inputBinding.resolve(column) != null) {
+          ordering = column;
+        }
+      }
+      validateGroupReferences(ordering, "ORDER BY", groupIndexByText, groupExpressions, outputNames, inputBinding,
+          true);
     }
 
     for (Expression source : aggregateSources) {
@@ -728,21 +743,32 @@ public final class AggregateFunctions {
    * @param aliases
    *          visible SELECT aliases
    * @throws IllegalArgumentException
-   *           if an ungrouped column is referenced
+   *           carrying SQLState 42803 for an ungrouped input column or 42000 for
+   *           an unknown column
    * @param columnBinding
    *          resolver for bound input fields, or null when unavailable
+   * @param inputPrecedence
+   *          whether input columns must be grouped even when an output alias
+   *          matches
    */
   private static void validateGroupReferences(Expression expression, String clause,
       Map<String, Integer> groupIndexByText, List<GroupExpression> groups, Set<String> aliases,
-      ColumnBinding columnBinding) {
+      ColumnBinding columnBinding, boolean inputPrecedence) {
     if (expression == null) {
       return;
     }
     GroupedExpression.validate(expression, operand -> {
-      if (operand instanceof Column column && findGroupIndex(column, groupIndexByText, groups, columnBinding) == null
-          && (column.getTable() != null || !aliases.contains(Identifier.lookupKey(column.getColumnName())))) {
-        throw syntaxFailure("Missing columns in " + clause + " grouped scope: " + column
-            + "; columns must appear in the GROUP BY clause or SELECT list");
+      if (operand instanceof Column column && findGroupIndex(column, groupIndexByText, groups, columnBinding) == null) {
+        boolean outputAlias = column.getTable() == null
+            && aliases.contains(Identifier.lookupKey(column.getColumnName()));
+        if ((inputPrecedence || !outputAlias) && columnBinding != null && columnBinding.resolve(column) != null) {
+          throw groupingFailure("Ungrouped input column in " + clause + ": " + column
+              + "; columns must appear in the GROUP BY clause or be used in an aggregate");
+        }
+        if (!outputAlias) {
+          throw syntaxFailure("Missing columns in " + clause + " grouped scope: " + column
+              + "; columns must appear in the GROUP BY clause or SELECT list");
+        }
       }
       return isGroupOperand(operand, groupIndexByText, groups, columnBinding);
     });
@@ -1016,6 +1042,9 @@ public final class AggregateFunctions {
    * @param groupByAliases
    *          resolution context for select-list alias references
    * @return immutable list of grouping expression indexes
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42803 for an ungrouped input column or 42000 for
+   *           an unknown argument
    * @param columnBinding
    *          resolver for bound input fields, or null when unavailable
    */
@@ -1035,7 +1064,12 @@ public final class AggregateFunctions {
         }
       }
       if (match == null) {
-        throw new IllegalArgumentException("GROUPING argument '" + argument + "' must appear in the GROUP BY clause");
+        String message = "GROUPING argument '" + argument + "' must appear in the GROUP BY clause";
+        if (unwrap(argument) instanceof Column column && columnBinding != null
+            && columnBinding.resolve(column) != null) {
+          throw groupingFailure(message);
+        }
+        throw syntaxFailure(message);
       }
       indexes.add(match);
     }

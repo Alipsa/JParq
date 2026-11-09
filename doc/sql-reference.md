@@ -57,7 +57,15 @@ Expressions skipped by filtering or `CASE` branch selection are not evaluated.
 
 ### ORDER BY
 
-Multiple sort keys with `ASC`/`DESC` and optional `NULLS FIRST`/`NULLS LAST`. See
+Multiple sort keys with `ASC`/`DESC` and optional `NULLS FIRST`/`NULLS LAST`. A bare output name resolves
+against the SELECT list first. Inside an expression, input columns take precedence, including when a SELECT
+alias has the same name. In grouped queries, an input-column operand outside an aggregate must be
+grouped; otherwise ORDER BY fails with SQLState `42803`, even if an output alias shares that name.
+As an extension, an otherwise unresolved name may refer to a deterministic SELECT
+alias, including grouped aggregates (for example,
+`SELECT cyl, SUM(mpg) AS s FROM mtcars GROUP BY cyl ORDER BY s * 2`).
+Expression references to aliases containing window functions, RAND/RANDOM, or subqueries are rejected with
+SQLState `42000`; use a derived table or CTE to expose their computed values as input columns. See
 [column labels and ambiguity](#column-labels-and-ambiguity) for how output names are resolved.
 
 ### Row limiting
@@ -501,7 +509,8 @@ SELECT a FROM employees e(a, b, c);                                 -- Parquet t
 - Grouped `IS [NOT] DISTINCT FROM` predicates bind grouping columns, aggregates, and subqueries with their NULL
   semantics intact.
 - Grouped arithmetic follows the same numeric and temporal rules as row expressions.
-- Ungrouped column references in `HAVING` are rejected with SQLState `42000`, even for empty inputs.
+- Ungrouped column references in `SELECT`, `HAVING`, and `ORDER BY` are rejected with SQLState `42803`,
+  even for empty inputs.
 - Unknown functions in grouped `SELECT` and `HAVING` raise `SQLSyntaxErrorException` with SQLState `42000` when
   evaluated.
 - `SUM` over `REAL` or `DOUBLE` inputs reports JDBC `DOUBLE` metadata and returns `Double`.
@@ -526,7 +535,7 @@ SELECT a FROM employees e(a, b, c);                                 -- Parquet t
 - Scalar subqueries in grouped `SELECT` lists can reference outer grouping columns, including grouping columns not
   in the output. Each subquery uses the current group's values; NULL grouping keys and keys suppressed by grouping
   sets bind as NULL. Inner names take precedence over outer names.
-- References to ungrouped outer columns are rejected with SQLState `42000` in `SELECT`, `HAVING`, and `ORDER BY`,
+- References to ungrouped outer columns are rejected with SQLState `42803` in `SELECT`, `HAVING`, and `ORDER BY`,
   before reading groups and even when the outer input is empty.
 - Grouped `ORDER BY` supports scalar subqueries and evaluates sort keys once per group.
 - Only surviving groups contribute to inferred scalar result types. `COUNT` subqueries keep `BIGINT` metadata when
@@ -548,7 +557,7 @@ SELECT SUM(mpg) AS mpg FROM mtcars m GROUP BY cyl HAVING mpg > 200  -- filters o
 ```
 
 A qualified name such as `m.mpg` refers to the input column and must satisfy the grouping rules, so `HAVING m.mpg >
-200` raises SQLState `42000`. In standard SQL, repeat the aggregate: `HAVING SUM(mpg) > 200`.
+200` raises SQLState `42803`. In standard SQL, repeat the aggregate: `HAVING SUM(mpg) > 200`.
 
 **GROUP BY** accepts unqualified `SELECT` aliases:
 
@@ -1049,6 +1058,7 @@ and after a result has been returned.
 | `2201X` | Invalid `OFFSET` row count |
 | `42000` | Syntax error or invalid query (unknown names, type errors, unsupported constructs) |
 | `42702` | Ambiguous column reference |
+| `42803` | Ungrouped column reference |
 | `57014` | Statement cancelled |
 
 ---

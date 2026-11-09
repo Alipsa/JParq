@@ -42,7 +42,7 @@ class AggregateExpressionReviewTest {
       for (String where : List.of("", " WHERE cyl < 0")) {
         for (String predicate : List.of("COALESCE(mpg, 1) > 0", "ABS(mpg) > 0", "mpg > 0",
             "CASE WHEN mpg IS NULL THEN 1 ELSE 0 END > 0")) {
-          assertSyntax(connection, "SELECT cyl FROM mtcars" + where + " GROUP BY cyl HAVING " + predicate);
+          assertState(connection, "SELECT cyl FROM mtcars" + where + " GROUP BY cyl HAVING " + predicate, "42803");
         }
       }
       assertCylinderOrder(connection,
@@ -57,8 +57,8 @@ class AggregateExpressionReviewTest {
   }
 
   /**
-   * Preserves SQLState 42000 for grouped planner rejections and unsupported
-   * windows.
+   * Distinguishes ungrouped references from unsupported aggregate and window
+   * constructs.
    *
    * @param pushdown
    *          whether predicate and projection pushdown are enabled
@@ -71,13 +71,41 @@ class AggregateExpressionReviewTest {
   })
   void classifiesPlannerFailures(boolean pushdown) throws Exception {
     try (var connection = connect(pushdown)) {
-      for (String sql : List.of("SELECT SUM(cyl) + mpg FROM mtcars", "SELECT SUM(SUM(cyl)) FROM mtcars",
-          "SELECT 1 FROM mtcars ORDER BY mpg + COUNT(*)", "SELECT mpg FROM mtcars ORDER BY COUNT(*)",
+      for (String sql : List.of("SELECT SUM(cyl) + mpg FROM mtcars", "SELECT mpg FROM mtcars ORDER BY COUNT(*)")) {
+        assertState(connection, sql, "42803");
+      }
+      for (String sql : List.of("SELECT SUM(SUM(cyl)) FROM mtcars",
           "SELECT cyl, SUM(COUNT(*)) OVER () FROM mtcars GROUP BY cyl",
           "SELECT cyl FROM mtcars GROUP BY cyl HAVING SUM(COUNT(*)) OVER () > 0",
           "SELECT cyl FROM mtcars GROUP BY cyl ORDER BY SUM(COUNT(*)) OVER ()",
           "SELECT cyl, ABS(SUM(COUNT(*)) OVER ()) FROM mtcars GROUP BY cyl")) {
-        assertSyntax(connection, sql);
+        assertState(connection, sql, "42000");
+      }
+    }
+  }
+
+  /**
+   * Classifies input operands outside an implicit aggregate group.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if opening the connection or executing a query fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void classifiesUngroupedOrderingInputs(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown)) {
+      for (String where : List.of("", " WHERE cyl < 0")) {
+        for (String sql : List.of("SELECT COUNT(*) AS c FROM mtcars" + where + " ORDER BY mpg + COUNT(*)",
+            "SELECT COUNT(*) AS c FROM mtcars" + where + " ORDER BY mpg",
+            "SELECT 1 FROM mtcars" + where + " ORDER BY mpg + COUNT(*)")) {
+          SQLException failure = assertThrows(java.sql.SQLSyntaxErrorException.class,
+              () -> connection.prepareStatement(sql));
+          assertEquals("42803", failure.getSQLState(), sql);
+        }
       }
     }
   }
@@ -105,7 +133,7 @@ class AggregateExpressionReviewTest {
             + "(SELECT MAX(n.cyl) FROM mtcars n WHERE n.mpg = m.mpg)";
         try (var statement = connection.createStatement()) {
           SQLException failure = assertThrows(SQLException.class, () -> statement.executeQuery(sql));
-          assertEquals("42000", failure.getSQLState(), sql);
+          assertEquals("42803", failure.getSQLState(), sql);
         }
       }
     }
@@ -194,17 +222,18 @@ class AggregateExpressionReviewTest {
   }
 
   /**
-   * Asserts that a syntax failure occurs during preparation without exposing
-   * bindings.
+   * Asserts a classified preparation failure without exposing private bindings.
    *
    * @param connection
    *          fixture connection
    * @param sql
    *          query to prepare
+   * @param state
+   *          expected SQLState
    */
-  private static void assertSyntax(Connection connection, String sql) {
+  private static void assertState(Connection connection, String sql, String state) {
     SQLException failure = assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql);
-    assertEquals("42000", failure.getSQLState(), sql);
+    assertEquals(state, failure.getSQLState(), sql);
     assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure.getMessage());
   }
 

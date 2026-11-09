@@ -164,7 +164,7 @@ class SqlExceptionsTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "42000", "42702", "22003", "22007", "22008", "22018", "22021", "2201W", "2201X"
+      "42000", "42702", "42803", "22003", "22007", "22008", "22018", "22021", "2201W", "2201X"
   })
   void wrappingRetainsSubqueryContext(String state) {
     SQLException classified = new SQLException("Inner query failed", state, 7);
@@ -177,7 +177,7 @@ class SqlExceptionsTest {
     assertSame(outer, failure.getCause());
     assertSame(classified, failure.getCause().getCause());
     assertSame(failure, SqlExceptions.wrap(failure.getMessage(), failure));
-    if ("42000".equals(state) || "42702".equals(state)) {
+    if (state.startsWith("42")) {
       assertInstanceOf(SQLSyntaxErrorException.class, failure);
     } else {
       assertInstanceOf(SQLDataException.class, failure);
@@ -313,7 +313,7 @@ class SqlExceptionsTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "42000", "42702", "22003", "22007", "22008", "22018", "22021", "2201W", "2201X"
+      "42000", "42702", "42803", "22003", "22007", "22008", "22018", "22021", "2201W", "2201X"
   })
   void iterationRetainsSubqueryContext(String state) throws Exception {
     var schema = SchemaBuilder.record("Row").fields().requiredInt("id").endRecord();
