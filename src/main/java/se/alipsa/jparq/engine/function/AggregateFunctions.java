@@ -1042,6 +1042,9 @@ public final class AggregateFunctions {
    * @param groupByAliases
    *          resolution context for select-list alias references
    * @return immutable list of grouping expression indexes
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42803 for an ungrouped input column or 42000 for
+   *           an unknown argument
    * @param columnBinding
    *          resolver for bound input fields, or null when unavailable
    */
@@ -1061,7 +1064,12 @@ public final class AggregateFunctions {
         }
       }
       if (match == null) {
-        throw new IllegalArgumentException("GROUPING argument '" + argument + "' must appear in the GROUP BY clause");
+        String message = "GROUPING argument '" + argument + "' must appear in the GROUP BY clause";
+        if (unwrap(argument) instanceof Column column && columnBinding != null
+            && columnBinding.resolve(column) != null) {
+          throw groupingFailure(message);
+        }
+        throw syntaxFailure(message);
       }
       indexes.add(match);
     }

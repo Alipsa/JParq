@@ -44,13 +44,15 @@ class GroupingErrorClassificationTest {
             for (String sql : List.of("SELECT COUNT(*)" + grouped + " ORDER BY n", "SELECT n, COUNT(*)" + grouped,
                 "SELECT SUM(n) + n" + from, "SELECT COUNT(*)" + grouped + " HAVING n > 1",
                 "SELECT COUNT(*)" + grouped + " ORDER BY (SELECT MAX(i.n) FROM o i WHERE i.n > t.n)",
-                "SELECT (SELECT t.n)" + grouped, "SELECT COUNT(*)" + grouped + " HAVING (SELECT t.n) > 1")) {
+                "SELECT (SELECT t.n)" + grouped, "SELECT COUNT(*)" + grouped + " HAVING (SELECT t.n) > 1",
+                "SELECT GROUPING(n)" + grouped, "SELECT GROUPING(t.n)" + grouped, "SELECT GROUPING((n))" + grouped)) {
               var failure = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, sql, prepared), sql);
               assertEquals("42803", failure.getSQLState(), sql);
             }
             for (String sql : List.of("SELECT absent, COUNT(*)" + grouped,
                 "SELECT COUNT(*)" + grouped + " HAVING absent > 1",
-                "SELECT COUNT(*)" + grouped + " ORDER BY absent + 1")) {
+                "SELECT COUNT(*)" + grouped + " ORDER BY absent + 1", "SELECT GROUPING(absent)" + grouped,
+                "SELECT GROUPING(t.absent)" + grouped)) {
               var failure = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, sql, prepared), sql);
               assertEquals("42000", failure.getSQLState(), sql);
             }
