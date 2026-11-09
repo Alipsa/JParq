@@ -20,8 +20,8 @@ public final class SqlExceptions {
   /** Diagnostic marker replacing private correlated value bindings. */
   public static final String OUTER_VALUE = "<outer value>";
   private static final int DIAGNOSTIC_VALUE_LIMIT = 64;
-  private static final Set<String> CLASSIFIED_STATES = Set.of("21000", "42000", "42702", "22001", "22005", "22003",
-      "22007", "22008", "22018", "22021", "2201W", "2201X", "0A000", "54000", "HY024");
+  private static final Set<String> CLASSIFIED_STATES = Set.of("21000", "42000", "42702", "42803", "22001", "22005",
+      "22003", "22007", "22008", "22018", "22021", "2201W", "2201X", "0A000", "54000", "HY024");
   private static final Pattern CORRELATED_BINDING = Pattern
       .compile("__JPARQ_CORRELATED_VALUE\\s*\\(\\s*'[^']*'\\s*,\\s*\\d+\\s*\\)", Pattern.CASE_INSENSITIVE);
 
@@ -118,6 +118,17 @@ public final class SqlExceptions {
    */
   public static IllegalArgumentException syntaxFailure(String message) {
     return new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000"));
+  }
+
+  /**
+   * Creates an engine failure for a column outside the grouped query scope.
+   *
+   * @param message
+   *          diagnostic message identifying the ungrouped column
+   * @return an engine exception carrying SQLState 42803
+   */
+  public static IllegalArgumentException groupingFailure(String message) {
+    return new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42803"));
   }
 
   /**
@@ -247,9 +258,9 @@ public final class SqlExceptions {
    *
    * @param failure
    *          the exception or wrapper to inspect
-   * @return the SQLState 21000, 42000, 42702, 22001, 22005, 22003, 22007, 22008,
-   *         22018, 22021, 2201W, 2201X, 0A000, 54000, or HY024 exception, or null
-   *         without a recognized state
+   * @return the SQLState 21000, 42000, 42702, 42803, 22001, 22005, 22003, 22007,
+   *         22008, 22018, 22021, 2201W, 2201X, 0A000, 54000, or HY024 exception,
+   *         or null without a recognized state
    */
   public static SQLException findSqlStateFailure(Throwable failure) {
     Throwable current = failure;
@@ -308,7 +319,7 @@ public final class SqlExceptions {
       message.append(": ").append(classifiedDetail);
     }
     String rendered = diagnostics.apply(message.toString());
-    if ("42000".equals(classified.getSQLState()) || "42702".equals(classified.getSQLState())) {
+    if (classified.getSQLState().startsWith("42")) {
       return new SQLSyntaxErrorException(rendered, classified.getSQLState(), classified.getErrorCode(), failure);
     }
     if ("0A000".equals(classified.getSQLState())) {

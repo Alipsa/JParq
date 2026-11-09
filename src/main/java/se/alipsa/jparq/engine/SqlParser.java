@@ -29,6 +29,7 @@ import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.*;
 import net.sf.jsqlparser.util.deparser.ExpressionDeParser;
 import org.apache.avro.Schema;
+import se.alipsa.jparq.engine.function.FunctionSupport;
 import se.alipsa.jparq.helper.FunctionEscapeResolver;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.LiteralConverter;
@@ -2578,24 +2579,6 @@ public final class SqlParser {
   }
 
   /**
-   * Resolves join ordering labels after source schemas and wildcards are bound.
-   * The column resolver distinguishes equivalent qualified and unqualified
-   * references from columns belonging to different inputs.
-   *
-   * @param select
-   *          the join query with its complete projection
-   * @param columnBinding
-   *          the resolver returning each column's canonical input field
-   * @return a query whose ordering keys reference the selected expressions
-   * @throws IllegalArgumentException
-   *           if a referenced ordering label is ambiguous
-   */
-  public static Select resolveJoinOrdering(Select select, java.util.function.Function<Column, String> columnBinding) {
-    Objects.requireNonNull(columnBinding, "columnBinding");
-    return resolveInputOrdering(select, null, columnBinding);
-  }
-
-  /**
    * Binds ordering aliases after the complete projection and input schema are
    * known. Bare names retain output-name precedence; names inside expressions
    * resolve to input columns first, with deterministic SELECT aliases as a
@@ -2846,7 +2829,7 @@ public final class SqlParser {
 
       @Override
       public <S> Void visit(Function function, S context) {
-        if ("RAND".equalsIgnoreCase(function.getName()) || "RANDOM".equalsIgnoreCase(function.getName())) {
+        if (FunctionSupport.isVolatile(function.getName())) {
           throw unsupported();
         }
         return super.visit(function, context);

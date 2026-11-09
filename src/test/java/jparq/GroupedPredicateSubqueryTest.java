@@ -180,7 +180,7 @@ class GroupedPredicateSubqueryTest {
               "SELECT m.cyl" + from + " HAVING CASE WHEN " + predicate + " THEN 1 ELSE 0 END = 1",
               "SELECT m.cyl" + from + " ORDER BY CASE WHEN " + predicate + " THEN 0 ELSE 1 END")) {
             SQLException failure = assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql);
-            assertEquals("42000", failure.getSQLState(), sql);
+            assertEquals(sql.contains(" ORDER BY ") ? "42803" : "42000", failure.getSQLState(), sql);
             assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure.getMessage());
           }
         }

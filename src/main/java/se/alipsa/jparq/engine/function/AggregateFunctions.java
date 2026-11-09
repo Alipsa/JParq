@@ -1,5 +1,6 @@
 package se.alipsa.jparq.engine.function;
 
+import static se.alipsa.jparq.engine.SqlExceptions.groupingFailure;
 import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 
 import java.io.IOException;
@@ -630,7 +631,8 @@ public final class AggregateFunctions {
           && (alternative == null || !groupByAliases.availableColumns().contains(alternative))) {
         return null;
       }
-      return bindingEvaluator.resolveColumnName(column);
+      String field = bindingEvaluator.resolveColumnName(column);
+      return field != null && inputSchema.getField(field) != null ? field : null;
     };
     List<GroupExpression> groupExpressions = buildGroupExpressions(resolveGroupByAliases(select, groupByAliases));
     final Map<String, Integer> groupIndexByText = groupIndexLookup(groupExpressions);
@@ -695,10 +697,18 @@ public final class AggregateFunctions {
 
     Set<String> outputNames = resultColumns.stream().map(column -> Identifier.lookupKey(column.label()))
         .collect(Collectors.toSet());
-    validateGroupReferences(select.having(), "HAVING", groupIndexByText, groupExpressions, outputNames, inputBinding);
+    validateGroupReferences(select.having(), "HAVING", groupIndexByText, groupExpressions, outputNames, inputBinding,
+        false);
     for (OrderKey key : select.orderBy()) {
-      validateGroupReferences(key.expression(), "ORDER BY", groupIndexByText, groupExpressions, outputNames,
-          inputBinding);
+      Expression ordering = key.expression();
+      if (ordering == null && key.projectionIndex() < 0 && inputBinding != null) {
+        Column column = new Column(key.qualifier() == null ? null : new Table(key.qualifier()), key.column());
+        if (inputBinding.resolve(column) != null) {
+          ordering = column;
+        }
+      }
+      validateGroupReferences(ordering, "ORDER BY", groupIndexByText, groupExpressions, outputNames, inputBinding,
+          true);
     }
 
     for (Expression source : aggregateSources) {
@@ -728,21 +738,30 @@ public final class AggregateFunctions {
    * @param aliases
    *          visible SELECT aliases
    * @throws IllegalArgumentException
-   *           if an ungrouped column is referenced
+   *           if an ungrouped column is referenced; ORDER BY input references
+   *           carry SQLState 42803
    * @param columnBinding
    *          resolver for bound input fields, or null when unavailable
+   * @param inputPrecedence
+   *          whether input columns must be grouped even when an output alias
+   *          matches
    */
   private static void validateGroupReferences(Expression expression, String clause,
       Map<String, Integer> groupIndexByText, List<GroupExpression> groups, Set<String> aliases,
-      ColumnBinding columnBinding) {
+      ColumnBinding columnBinding, boolean inputPrecedence) {
     if (expression == null) {
       return;
     }
     GroupedExpression.validate(expression, operand -> {
-      if (operand instanceof Column column && findGroupIndex(column, groupIndexByText, groups, columnBinding) == null
-          && (column.getTable() != null || !aliases.contains(Identifier.lookupKey(column.getColumnName())))) {
-        throw syntaxFailure("Missing columns in " + clause + " grouped scope: " + column
-            + "; columns must appear in the GROUP BY clause or SELECT list");
+      if (operand instanceof Column column && findGroupIndex(column, groupIndexByText, groups, columnBinding) == null) {
+        if (inputPrecedence && columnBinding != null && columnBinding.resolve(column) != null) {
+          throw groupingFailure("Ungrouped input column in " + clause + ": " + column
+              + "; columns must appear in the GROUP BY clause or be used in an aggregate");
+        }
+        if (column.getTable() != null || !aliases.contains(Identifier.lookupKey(column.getColumnName()))) {
+          throw syntaxFailure("Missing columns in " + clause + " grouped scope: " + column
+              + "; columns must appear in the GROUP BY clause or SELECT list");
+        }
       }
       return isGroupOperand(operand, groupIndexByText, groups, columnBinding);
     });

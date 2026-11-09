@@ -12,6 +12,7 @@ import static org.mockito.Mockito.mockStatic;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.sql.SQLSyntaxErrorException;
 import java.util.List;
 import net.sf.jsqlparser.JSQLParserException;
 import org.apache.avro.SchemaBuilder;
@@ -20,7 +21,9 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.JSqlParserSupport;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
+import se.alipsa.jparq.engine.function.FunctionSupport;
 
 /** Regression coverage for SELECT aliases used inside ORDER BY expressions. */
 class OrderByAliasExpressionTest {
@@ -129,6 +132,71 @@ class OrderByAliasExpressionTest {
           }
         }
       }
+    }
+  }
+
+  /**
+   * Rejects ungrouped input operands even when an aggregate output has that name.
+   *
+   * @param prepared
+   *          whether to use prepared statements
+   * @param directory
+   *          fixture directory
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void rejectsUngroupedInputAliases(boolean prepared, @TempDir Path directory) throws Exception {
+    writeIntegerFixture(directory);
+    for (String options : List.of("", "?projectionPushdown=false&predicatePushdown=false")) {
+      try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory + options)) {
+        for (String source : List.of("o t", "(SELECT n FROM o) t", "o t JOIN (VALUES (1)) v(x) ON TRUE")) {
+          for (String filter : List.of("", " WHERE 1 = 0")) {
+            for (String suffix : List.of(" GROUP BY n + 1 ORDER BY n * 2", " GROUP BY n + 1 ORDER BY COALESCE(n, 0)",
+                " GROUP BY n + 1 ORDER BY \"n\" * 2", " GROUP BY n + 1 ORDER BY t.n * 2", " ORDER BY n * 2")) {
+              String sql = "SELECT COUNT(*) AS n FROM " + source + filter + suffix;
+              SQLException error = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, sql, prepared));
+              assertEquals("42803", error.getSQLState(), sql);
+              assertTrue(error.getMessage().contains("Ungrouped input column in ORDER BY"), error.getMessage());
+              if (prepared && source.equals("o t")) {
+                SQLException preparation = assertThrows(SQLSyntaxErrorException.class,
+                    () -> connection.prepareStatement(sql));
+                assertEquals("42803", preparation.getSQLState(), sql);
+              }
+            }
+          }
+          String grouped = "SELECT COUNT(*) AS n, t.n AS k FROM " + source + " GROUP BY t.n ORDER BY ";
+          assertEquals(rows(connection, grouped + "t.n * -1 NULLS LAST", prepared),
+              rows(connection, grouped + "n * -1 NULLS LAST", prepared));
+          String computed = "SELECT n + 1 AS g, COUNT(*) AS c FROM " + source + " GROUP BY n + 1 ORDER BY ";
+          assertEquals(rows(connection, computed + "(n + 1) * -1 NULLS LAST", prepared),
+              rows(connection, computed + "g * -1 NULLS LAST", prepared));
+          String ungrouped = "SELECT COUNT(*) AS n FROM " + source + " GROUP BY t.n + 1 ORDER BY ";
+          assertEquals(rows(connection, ungrouped + "COUNT(*) DESC", prepared),
+              rows(connection, ungrouped + "n DESC", prepared));
+          assertEquals(rows(connection, ungrouped + "SUM(t.n) * -1 NULLS LAST", prepared),
+              rows(connection, ungrouped + "SUM(n) * -1 NULLS LAST", prepared));
+        }
+      }
+    }
+  }
+
+  /**
+   * Uses registry volatility metadata for nested functions during alias binding.
+   */
+  @Test
+  void aliasExpansionUsesFunctionVolatilityMetadata() {
+    var schema = SchemaBuilder.record("Row").fields().optionalInt("n").endRecord();
+    var query = SqlParser.parseSelect("SELECT COALESCE(ABS(n), 0) AS s FROM o ORDER BY s * 2");
+    try (var registry = mockStatic(FunctionSupport.class)) {
+      registry.when(() -> FunctionSupport.isVolatile("ABS")).thenReturn(true);
+      var error = assertThrows(IllegalArgumentException.class,
+          () -> SqlParser.resolveInputOrdering(query, schema, null));
+      assertEquals("42000", SqlExceptions.findSqlStateFailure(error).getSQLState());
+      assertTrue(error.getMessage().contains("alias 's' requires its computed projection value"));
     }
   }
 

@@ -72,12 +72,37 @@ class AggregateExpressionReviewTest {
   void classifiesPlannerFailures(boolean pushdown) throws Exception {
     try (var connection = connect(pushdown)) {
       for (String sql : List.of("SELECT SUM(cyl) + mpg FROM mtcars", "SELECT SUM(SUM(cyl)) FROM mtcars",
-          "SELECT 1 FROM mtcars ORDER BY mpg + COUNT(*)", "SELECT mpg FROM mtcars ORDER BY COUNT(*)",
-          "SELECT cyl, SUM(COUNT(*)) OVER () FROM mtcars GROUP BY cyl",
+          "SELECT mpg FROM mtcars ORDER BY COUNT(*)", "SELECT cyl, SUM(COUNT(*)) OVER () FROM mtcars GROUP BY cyl",
           "SELECT cyl FROM mtcars GROUP BY cyl HAVING SUM(COUNT(*)) OVER () > 0",
           "SELECT cyl FROM mtcars GROUP BY cyl ORDER BY SUM(COUNT(*)) OVER ()",
           "SELECT cyl, ABS(SUM(COUNT(*)) OVER ()) FROM mtcars GROUP BY cyl")) {
         assertSyntax(connection, sql);
+      }
+    }
+  }
+
+  /**
+   * Classifies input operands outside an implicit aggregate group.
+   *
+   * @param pushdown
+   *          whether pushdown is enabled
+   * @throws Exception
+   *           if opening the connection or executing a query fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void classifiesUngroupedOrderingInputs(boolean pushdown) throws Exception {
+    try (var connection = connect(pushdown)) {
+      for (String where : List.of("", " WHERE cyl < 0")) {
+        for (String sql : List.of("SELECT COUNT(*) AS c FROM mtcars" + where + " ORDER BY mpg + COUNT(*)",
+            "SELECT COUNT(*) AS c FROM mtcars" + where + " ORDER BY mpg",
+            "SELECT 1 FROM mtcars" + where + " ORDER BY mpg + COUNT(*)")) {
+          SQLException failure = assertThrows(java.sql.SQLSyntaxErrorException.class,
+              () -> connection.prepareStatement(sql));
+          assertEquals("42803", failure.getSQLState(), sql);
+        }
       }
     }
   }

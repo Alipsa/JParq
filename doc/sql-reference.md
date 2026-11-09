@@ -59,7 +59,9 @@ Expressions skipped by filtering or `CASE` branch selection are not evaluated.
 
 Multiple sort keys with `ASC`/`DESC` and optional `NULLS FIRST`/`NULLS LAST`. A bare output name resolves
 against the SELECT list first. Inside an expression, input columns take precedence, including when a SELECT
-alias has the same name. As an extension, an otherwise unresolved name may refer to a deterministic SELECT
+alias has the same name. In grouped queries, an input-column operand outside an aggregate must be
+grouped; otherwise ORDER BY fails with SQLState `42803`, even if an output alias shares that name.
+As an extension, an otherwise unresolved name may refer to a deterministic SELECT
 alias, including grouped aggregates (for example,
 `SELECT cyl, SUM(mpg) AS s FROM mtcars GROUP BY cyl ORDER BY s * 2`).
 Expression references to aliases containing window functions, RAND/RANDOM, or subqueries are rejected with
@@ -1055,6 +1057,7 @@ and after a result has been returned.
 | `2201X` | Invalid `OFFSET` row count |
 | `42000` | Syntax error or invalid query (unknown names, type errors, unsupported constructs) |
 | `42702` | Ambiguous column reference |
+| `42803` | Ungrouped input column in grouped ORDER BY |
 | `57014` | Statement cancelled |
 
 ---

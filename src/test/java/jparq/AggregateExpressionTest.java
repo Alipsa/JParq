@@ -286,7 +286,7 @@ class AggregateExpressionTest {
             statement.executeQuery("SELECT cyl, COUNT(*) FROM mtcars GROUP BY cyl ORDER BY " + order);
           }
         });
-        assertEquals("42000", failure.getSQLState());
+        assertEquals("42803", failure.getSQLState());
       }
     }
   }
@@ -326,7 +326,7 @@ class AggregateExpressionTest {
             "SELECT cyl FROM mtcars" + where + " GROUP BY cyl HAVING CASE WHEN mpg IS DISTINCT FROM 4 THEN 1 END = 1",
             "SELECT cyl FROM mtcars" + where + " GROUP BY cyl ORDER BY CASE WHEN mpg IS DISTINCT FROM 4 THEN 1 END")) {
           SQLException failure = assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql);
-          assertEquals("42000", failure.getSQLState(), sql);
+          assertEquals(sql.contains(" ORDER BY ") ? "42803" : "42000", failure.getSQLState(), sql);
         }
       }
     }
