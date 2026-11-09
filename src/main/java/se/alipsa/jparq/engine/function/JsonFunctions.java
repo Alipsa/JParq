@@ -8,6 +8,14 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
@@ -23,6 +31,7 @@ import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
+import se.alipsa.jparq.helper.TemporalValueType;
 
 /**
  * SQL JSON_* functions using Jackson. Array access uses lax singleton wrapping.
@@ -30,7 +39,9 @@ import se.alipsa.jparq.helper.TemporalInterval;
  * intermediate items per step and 100,000 item/range evaluations over the
  * entire path. The positive integer system property
  * {@code jparq.json.maxIntermediateItems} overrides both limits when an
- * evaluation first needs an intermediate array step.
+ * evaluation first needs an intermediate array step. Temporal constructor
+ * values use ISO-8601 text; UTC-adjusted timestamps use UTC and local
+ * timestamps retain their wall-clock fields.
  */
 public final class JsonFunctions {
 
@@ -200,6 +211,31 @@ public final class JsonFunctions {
       }
     }
     return array.toString();
+  }
+
+  /**
+   * Converts a constructor argument while retaining its temporal declaration.
+   * Direct character arguments retain the JSON-text parsing heuristic.
+   *
+   * @param value
+   *          evaluated argument or raw Avro column value
+   * @param schema
+   *          argument declaration, or null when unknown
+   * @return corresponding JSON node
+   * @throws IllegalArgumentException
+   *           if a value is invalid for its declared logical type
+   */
+  public static JsonNode constructorValue(Object value, Schema schema) {
+    Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    if (effective != null && effective.getType() == Schema.Type.MAP) {
+      // Direct MAP decoding is tracked separately in issue #313.
+      return toNode(value);
+    }
+    if (effective != null && effective.getType() == Schema.Type.STRING
+        && TemporalValueType.fromSchema(effective) == null) {
+      return toNode(value == null ? null : value.toString());
+    }
+    return toNode(value, schema);
   }
 
   /**
@@ -682,6 +718,24 @@ public final class JsonFunctions {
     if (value == null) {
       return MAPPER.nullNode();
     }
+    if (value instanceof Time time) {
+      return toNode(DateTimeFunctions.toLocalTime(time));
+    }
+    if (value instanceof LocalTime time) {
+      return MAPPER.getNodeFactory().textNode(DateTimeFormatter.ISO_LOCAL_TIME.format(time));
+    }
+    if (value instanceof Timestamp timestamp) {
+      return MAPPER.getNodeFactory().textNode(timestamp.toInstant().toString());
+    }
+    if (value instanceof LocalDateTime timestamp) {
+      return MAPPER.getNodeFactory().textNode(DateTimeFormatter.ISO_LOCAL_DATE_TIME.format(timestamp));
+    }
+    if (value instanceof OffsetTime time) {
+      return MAPPER.getNodeFactory().textNode(DateTimeFormatter.ISO_OFFSET_TIME.format(time));
+    }
+    if (value instanceof OffsetDateTime timestamp) {
+      return MAPPER.getNodeFactory().textNode(DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(timestamp));
+    }
     if (value instanceof TemporalInterval interval) {
       return MAPPER.getNodeFactory().textNode(interval.toString());
     }
@@ -754,6 +808,18 @@ public final class JsonFunctions {
       return toNode(value);
     }
     Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    TemporalValueType temporal = TemporalValueType.fromSchema(effective);
+    if (temporal != null) {
+      return toNode(temporal.normalize(value));
+    }
+    if (AvroCoercions.isLocalTimestamp(effective)) {
+      if (value instanceof Number number) {
+        long units = AvroCoercions.timestampUnits(effective);
+        return toNode(LocalDateTime.ofEpochSecond(Math.floorDiv(number.longValue(), units),
+            (int) (Math.floorMod(number.longValue(), units) * (1_000_000_000L / units)), ZoneOffset.UTC));
+      }
+      return toNode(value instanceof Timestamp timestamp ? timestamp.toLocalDateTime() : value);
+    }
     if (IntervalType.matches(effective)) {
       return toNode(AvroCoercions.unwrap(value, effective));
     }

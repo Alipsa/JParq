@@ -2,6 +2,10 @@
 
 ### 1.4.0
 
+- Serialize JSON constructor TIME and TIMESTAMP values as ISO-8601 strings, including values inside
+  arrays and structs. Render UTC-adjusted timestamps in UTC independently of the JVM time zone and
+  retain local timestamp fields and fractional precision (#312).
+
 - Resolve SELECT aliases inside ORDER BY arithmetic and scalar functions for computed projections
   and grouped aggregates as a fallback when no input column matches. Preserve input-column precedence,
   nested query scopes, and output-name ambiguity checks. Reject ungrouped ORDER BY input columns even when

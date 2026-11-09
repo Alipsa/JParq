@@ -342,6 +342,10 @@ SQL:2016–2023.
   returned by JSON constructors inside an SQL `ARRAY`: `JSON_ARRAY(ARRAY[JSON_OBJECT(KEY 'a' VALUE 1)])` returns
   `[["{\"a\":1}"]]`.
 - Direct constructor arguments keep the heuristic that embeds JSON-looking text as JSON.
+- Temporal values become ISO-8601 JSON strings. TIME includes seconds and retained fractional digits;
+  UTC-adjusted timestamps use UTC with a `Z` suffix, and local timestamps retain their wall-clock fields without
+  a zone suffix. For example, a timestamp of 1,700,000,000,000 epoch milliseconds becomes
+  `"2023-11-14T22:13:20Z"` in every JVM time zone. These rules also apply within arrays and structs.
 - Struct fields use their declared Avro logical types, including numeric decimals and date/timestamp strings. This
   includes maps nested within struct fields. Top-level map columns and maps inside stored arrays currently keep raw
   Avro logical values, such as epoch-day integers for dates

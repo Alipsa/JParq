@@ -582,7 +582,7 @@ public final class ValueExpressionEvaluator {
         Object valueObj = pair.getValue();
         Object value;
         if (valueObj instanceof Expression valueExpr) {
-          value = evalInternal(valueExpr, record);
+          value = evaluateJsonValue(valueExpr, record);
         } else {
           value = valueObj;
         }
@@ -594,11 +594,37 @@ public final class ValueExpressionEvaluator {
     if (type == JsonFunctionType.ARRAY) {
       List<Object> values = new ArrayList<>();
       for (JsonFunctionExpression expr : json.getExpressions()) {
-        values.add(evalInternal(expr.getExpression(), record));
+        values.add(evaluateJsonValue(expr.getExpression(), record));
       }
       return JsonFunctions.jsonArray(values);
     }
     throw syntaxFailure("Unsupported JSON function: " + SqlExceptions.describe(json));
+  }
+
+  /**
+   * Retains source schemas for temporal constructor values and nested containers.
+   *
+   * @param expression
+   *          constructor value expression
+   * @param record
+   *          current input row
+   * @return JSON value with its declared temporal semantics
+   */
+  private Object evaluateJsonValue(Expression expression, GenericRecord record) {
+    Expression unwrapped = ExpressionEvaluator.unwrapParenthesis(expression);
+    Schema declaration = unwrapped instanceof Column column ? fieldSchemas.get(resolveColumnName(column)) : null;
+    Object value = unwrapped instanceof Column column && declaration != null
+        && AvroCoercions.isLocalTimestamp(declaration)
+            ? record.get(resolveColumnName(column))
+            : evalInternal(unwrapped, record);
+    if (declaration == null
+        && (value instanceof java.sql.Timestamp || value instanceof Object[] || value instanceof List<?>)) {
+      declaration = ArrayExpressionSchemas.resolve(unwrapped, column -> {
+        String name = resolveColumnName(column);
+        return name == null ? null : fieldSchemas.get(name);
+      }, select -> subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select));
+    }
+    return JsonFunctions.constructorValue(value, declaration);
   }
 
   private String toStringValue(Object value) {
