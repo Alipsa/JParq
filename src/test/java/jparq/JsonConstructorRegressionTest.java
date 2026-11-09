@@ -2,11 +2,13 @@ package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -81,8 +83,12 @@ class JsonConstructorRegressionTest {
           }
           assertValue(connection, "COALESCE(NULLIF(ts,ts),TIMESTAMP '2000-01-01 01:00:00')", " FROM t",
               "\"2000-01-01T01:00:00\"");
+          String localElement = DateTimeFormatter.ISO_OFFSET_DATE_TIME
+              .format(LocalDateTime.parse("2000-01-01T01:00:00").atOffset(DateTimeFunctions.sessionOffset()));
           assertValue(connection, "ARRAY[ts,TIMESTAMP '2000-01-01 01:00:00']", " FROM t",
-              "[\"2024-07-01T12:00:00Z\",\"2000-01-01T01:00:00\"]");
+              "[\"2024-07-01T12:00:00Z\",\"" + localElement + "\"]");
+          assertValue(connection, "ARRAY[null_ts,TIMESTAMP '2000-01-01 01:00:00']", " FROM t",
+              "[null,\"" + localElement + "\"]");
           assertValue(connection, "ARRAY[lts]", " FROM t", "[\"2024-03-31T02:30:00\"]");
           String offsetGap = DateTimeFormatter.ISO_OFFSET_DATE_TIME
               .format(LocalDateTime.parse("2024-03-31T02:30:00").atOffset(DateTimeFunctions.sessionOffset()));
@@ -92,6 +98,29 @@ class JsonConstructorRegressionTest {
             assertValue(connection, "ARRAY[" + expression + "]", " FROM t", "[\"" + offsetGap + "\"]");
           }
           assertValue(connection, "d + INTERVAL '1' HOUR", " FROM t", "\"2024-01-02T01:00:00\"");
+          assertConditionalCompatibility(connection);
+          try (var statement = connection.createStatement();
+              var result = statement.executeQuery("SELECT JSON_ARRAY(ARRAY[lts,IFNULL(NULL,CURRENT_TIMESTAMP)]), "
+                  + "JSON_ARRAY(ARRAY[COALESCE(lts,CURRENT_TIMESTAMP),CURRENT_TIMESTAMP]), "
+                  + "JSON_ARRAY((SELECT LOCALTIMESTAMP)),JSON_ARRAY(LOCALTIMESTAMP) FROM t")) {
+            assertTrue(result.next());
+            assertEquals(result.getString(2), result.getString(1));
+            assertEquals(result.getString(4), result.getString(3));
+            assertFalse(result.next());
+          }
+          assertValue(connection, "COALESCE(ts,DATE '2024-01-01')", " FROM t", "\"2024-07-01T12:00:00Z\"");
+          for (String sql : List.of("SELECT ARRAY[CURRENT_TIMESTAMP,IFNULL(NULL,1)]",
+              "SELECT JSON_ARRAY(ARRAY[CURRENT_TIMESTAMP,IFNULL(NULL,1)])")) {
+            try (var statement = connection.createStatement()) {
+              SQLException failure = assertThrows(SQLException.class, () -> {
+                try (var result = statement.executeQuery(sql)) {
+                  result.next();
+                  result.getObject(1);
+                }
+              }, sql);
+              assertEquals("42000", failure.getSQLState(), sql);
+            }
+          }
           for (String[] sample : List.of(new String[]{
               "0", "2024-01-02T00:00:00"
           }, new String[]{
@@ -140,6 +169,34 @@ class JsonConstructorRegressionTest {
   }
 
   /**
+   * Keeps conditional DATE/TIMESTAMP combinations accepted while the shared
+   * datetime promotion fix is tracked in #431, and follows shared numeric
+   * COALESCE evaluation so a future #524 fix is inherited automatically.
+   *
+   * @param connection
+   *          open test connection
+   * @throws Exception
+   *           if query execution fails
+   */
+  private static void assertConditionalCompatibility(Connection connection) throws Exception {
+    for (String expression : List.of("COALESCE(CAST(NULL AS TIMESTAMP),DATE '2024-01-01')",
+        "CASE WHEN FALSE THEN TIMESTAMP '2024-01-02 03:04:05' ELSE DATE '2024-01-01' END",
+        "COALESCE(DATE '2024-01-01',CURRENT_TIMESTAMP)",
+        "CASE WHEN TRUE THEN DATE '2024-01-01' ELSE CURRENT_TIMESTAMP END")) {
+      assertValue(connection, expression, "", "\"2024-01-01\"");
+    }
+    assertValue(connection, "CASE WHEN TRUE THEN TIMESTAMP '2024-01-02 03:04:05' ELSE DATE '2024-01-01' END", "",
+        "\"2024-01-02T03:04:05\"");
+    try (var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("SELECT JSON_ARRAY(COALESCE(id,1.5)),CAST(COALESCE(id,1.5) AS VARCHAR(20)) FROM t")) {
+      assertTrue(result.next());
+      assertEquals("[" + result.getString(2) + "]", result.getString(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
    * Checks both constructors without changing the expression's evaluation.
    *
    * @param connection
@@ -173,10 +230,12 @@ class JsonConstructorRegressionTest {
   private void writeFixture() throws Exception {
     Schema utc = LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
     Schema local = LogicalTypes.localTimestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
-    Schema schema = SchemaBuilder.record("jsonReview").fields().requiredString("j").name("ts").type(utc).noDefault()
+    Schema schema = SchemaBuilder.record("jsonReview").fields().requiredInt("id").requiredString("j").name("null_ts")
+        .type(Schema.createUnion(Schema.create(Schema.Type.NULL), utc)).noDefault().name("ts").type(utc).noDefault()
         .name("lts").type(local).noDefault().name("la").type(Schema.createArray(local)).noDefault().name("d")
         .type(LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT))).noDefault().endRecord();
     var row = new GenericData.Record(schema);
+    row.put("id", 1);
     row.put("j", "{\"a\":1}");
     row.put("ts", Instant.parse("2024-07-01T12:00:00Z").toEpochMilli());
     long gap = LocalDateTime.parse("2024-03-31T02:30:00").toInstant(ZoneOffset.UTC).toEpochMilli();

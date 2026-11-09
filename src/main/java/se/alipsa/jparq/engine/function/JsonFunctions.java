@@ -245,74 +245,6 @@ public final class JsonFunctions {
   }
 
   /**
-   * Embeds evaluated datetime array elements without discarding their source
-   * zones or local fields. Local values acquire the SQL-session displacement only
-   * when the ARRAY's declared type requires an offset.
-   *
-   * @param values
-   *          serialized elements, with null for SQL NULL
-   * @param elementSchema
-   *          common ARRAY element declaration
-   * @return constructed array node
-   */
-  public static JsonNode constructorArray(List<JsonNode> values, Schema elementSchema) {
-    ArrayNode array = MAPPER.createArrayNode();
-    for (JsonNode value : values) {
-      array.add(temporalArrayValue(value, elementSchema));
-    }
-    return array;
-  }
-
-  /**
-   * Applies a conditional expression's required offset promotion to a selected
-   * value, retaining already explicit UTC or offset information.
-   *
-   * @param value
-   *          serialized selected value
-   * @param schema
-   *          common result declaration, or null when unknown
-   * @return promoted value
-   */
-  public static JsonNode constructorBranch(JsonNode value, Schema schema) {
-    return schema == null ? value : temporalArrayValue(value, schema);
-  }
-
-  /**
-   * Applies only required offset promotion to already serialized datetime leaves,
-   * preserving existing offsets and UTC instants.
-   *
-   * @param value
-   *          serialized element
-   * @param schema
-   *          target element declaration
-   * @return promoted value, or the unchanged node when no promotion is needed
-   */
-  private static JsonNode temporalArrayValue(JsonNode value, Schema schema) {
-    if (value == null || value.isNull()) {
-      return MAPPER.nullNode();
-    }
-    Schema effective = JdbcTypeMapper.nonNullSchema(schema);
-    if (effective.getType() == Schema.Type.ARRAY && value.isArray()) {
-      ArrayNode nested = MAPPER.createArrayNode();
-      for (JsonNode element : value) {
-        nested.add(temporalArrayValue(element, effective.getElementType()));
-      }
-      return nested;
-    }
-    TemporalValueType temporal = TemporalValueType.fromSchema(effective);
-    if (temporal == TemporalValueType.OFFSET_TIMESTAMP) {
-      Object timestamp = DateTimeFormatter.ISO_DATE_TIME.parseBest(value.asText(), OffsetDateTime::from,
-          LocalDateTime::from);
-      return toNode(temporal.normalize(timestamp));
-    }
-    if (temporal == TemporalValueType.OFFSET_TIME) {
-      Object time = DateTimeFormatter.ISO_TIME.parseBest(value.asText(), OffsetTime::from, LocalTime::from);
-      return toNode(temporal.normalize(time));
-    }
-    return value;
-  }
-
-  /**
    * Parses the document and evaluates a path rooted at {@code $}, ignoring
    * leading whitespace.
    *
@@ -887,6 +819,9 @@ public final class JsonFunctions {
     }
     if (value instanceof LocalTime time) {
       return timeNode(time, effective);
+    }
+    if (value instanceof LocalDateTime || value instanceof OffsetDateTime || value instanceof OffsetTime) {
+      return toNode(value);
     }
     TemporalValueType temporal = TemporalValueType.fromSchema(effective);
     if (temporal != null) {

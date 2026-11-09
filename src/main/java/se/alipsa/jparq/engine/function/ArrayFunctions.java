@@ -87,10 +87,37 @@ public final class ArrayFunctions {
     if (values == null || values.isEmpty()) {
       return List.of();
     }
-    ElementType type = new ElementType();
-    inferElementType(values, type);
+    ElementType type = arrayType(values);
     ZoneOffset offset = requiresOffset(type) ? DateTimeFunctions.sessionOffset() : null;
     return coerceArrayValues(values, type, offset);
+  }
+
+  /**
+   * Applies the ordinary runtime ARRAY compatibility checks without converting
+   * local datetime fields to the JDBC storage representation.
+   *
+   * @param values
+   *          evaluated ARRAY elements
+   * @throws IllegalArgumentException
+   *           if values cannot share a common ARRAY type
+   */
+  public static void validateArrayValues(List<?> values) {
+    arrayType(values);
+  }
+
+  /**
+   * Resolves and validates the common runtime type used by ARRAY consumers.
+   *
+   * @param values
+   *          evaluated ARRAY elements
+   * @return common runtime type
+   */
+  private static ElementType arrayType(List<?> values) {
+    ElementType type = new ElementType();
+    if (values != null) {
+      inferElementType(values, type);
+    }
+    return type;
   }
 
   /**

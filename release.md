@@ -7,9 +7,14 @@
   retain local timestamp fields through literals, casts, arithmetic, subqueries, and materialization.
   Support LOCALTIME and LOCALTIMESTAMP constructor arguments, case-insensitive column names, and
   trailing zeros for explicitly declared TIME precision. Preserve selected CASE/COALESCE source semantics,
-  UTC summer instants, and raw local fields in DST gaps, including inside ARRAY constructors. Promote DATE
-  arithmetic with time-field intervals to TIMESTAMP, including zero and whole-day hour counts. Retain direct
-  JSON-text embedding and cache constructor declarations per expression (#312).
+  UTC summer instants, and raw local fields in DST gaps, including inside ARRAY constructors. Datetime arrays
+  with UTC or offset sources promote local elements to the session offset before serialization and share the
+  ordinary ARRAY runtime type checks. Keep DATE/TIMESTAMP conditional expressions accepted while their
+  general promotion is tracked in #431. Retain direct JSON-text embedding and cache declarations per expression (#312).
+
+- DATE arithmetic with declared HOUR/MINUTE/SECOND interval fields returns JDBC Timestamp independently
+  of the interval value. Zero and 24-hour intervals no longer return JDBC Date. Direct JDBC results, derived
+  tables, CTEs, and UNNEST have regression coverage outside the JSON constructor suite (#312).
 
 - Resolve SELECT aliases inside ORDER BY arithmetic and scalar functions for computed projections
   and grouped aggregates as a fallback when no input column matches. Preserve input-column precedence,
