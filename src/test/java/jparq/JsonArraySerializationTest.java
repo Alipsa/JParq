@@ -35,6 +35,71 @@ class JsonArraySerializationTest {
   Path directory;
 
   /**
+   * Preserves floating-point precision in scalar and nested constructor values.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void preservesComputedNumericPrecision() throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      for (String function : List.of("JSON_OBJECT(KEY 'k' VALUE %s)", "JSON_ARRAY(%s)")) {
+        for (String type : List.of("REAL", "FLOAT")) {
+          for (String value : List.of("1.1", "-2.3", "0.0")) {
+            String expression = "CAST(" + value + " AS " + type + ")";
+            assertJson(connection, function, expression, "", value);
+            assertJson(connection, function, "ARRAY[" + expression + "]", "", "[" + value + "]");
+          }
+        }
+        assertJson(connection, function, "CAST(1.123456789012345 AS DOUBLE)", "", "1.123456789012345");
+        assertJson(connection, function, "CAST(1.50 AS DECIMAL(8,2))", "", "1.50");
+      }
+    }
+  }
+
+  /**
+   * Preserves stored FLOAT precision in scalars, arrays, and record fields.
+   *
+   * @param pushdown
+   *          whether projection pushdown is enabled
+   * @throws IOException
+   *           if fixture writing fails
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void preservesStoredFloatPrecision(boolean pushdown) throws IOException, SQLException {
+    Schema detailSchema = SchemaBuilder.record("floatDetail").fields().requiredFloat("f").endRecord();
+    Schema schema = SchemaBuilder.record("floats").fields().requiredFloat("f").name("fs")
+        .type(nullableArray(Schema.create(Schema.Type.FLOAT))).noDefault().name("detail").type(detailSchema).noDefault()
+        .endRecord();
+    var detail = new GenericData.Record(detailSchema);
+    detail.put("f", 1.1f);
+    var row = new GenericData.Record(schema);
+    row.put("f", 1.1f);
+    row.put("fs", Arrays.asList(1.1f, null, -2.3f));
+    row.put("detail", detail);
+    Configuration configuration = new Configuration(false);
+    configuration.setBoolean("parquet.avro.write-old-list-structure", false);
+    var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve("floats.parquet").toUri()),
+        configuration);
+    try (var writer = AvroParquetWriter.<GenericRecord>builder(output).withSchema(schema).withConf(configuration)
+        .build()) {
+      writer.write(row);
+    }
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory + "?projectionPushdown=" + pushdown)) {
+      for (String function : List.of("JSON_OBJECT(KEY 'k' VALUE %s)", "JSON_ARRAY(%s)")) {
+        assertJson(connection, function, "f", " FROM floats", "1.1");
+        assertJson(connection, function, "fs", " FROM floats", "[1.1,null,-2.3]");
+        assertJson(connection, function, "detail", " FROM floats", "{\"f\":1.1}");
+      }
+    }
+  }
+
+  /**
    * Embeds ARRAY constructors recursively, including NULL and empty arrays.
    *
    * @throws SQLException
