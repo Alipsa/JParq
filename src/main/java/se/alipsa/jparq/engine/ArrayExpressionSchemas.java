@@ -20,6 +20,7 @@ import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.NumericType;
 import se.alipsa.jparq.engine.function.StructArrayTypes;
+import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalValueType;
 
@@ -137,13 +138,13 @@ public final class ArrayExpressionSchemas {
       Schema second = resolve(binary.getRightExpression(), columns, scalarSchemas);
       Operation operation = NumericExpressionTypes.operation(expression);
       if (operation == Operation.ADD || operation == Operation.SUB) {
-        if (first != null && isDatetime(first)
-            && IntervalExpressionTypes.isInterval(binary.getRightExpression(), columns, scalarSchemas)) {
-          return first;
+        Schema rightInterval = IntervalExpressionTypes.resolve(binary.getRightExpression(), columns, scalarSchemas);
+        Schema leftInterval = IntervalExpressionTypes.resolve(binary.getLeftExpression(), columns, scalarSchemas);
+        if (first != null && isDatetime(first) && rightInterval != null) {
+          return intervalResult(first, rightInterval);
         }
-        if (operation == Operation.ADD && second != null && isDatetime(second)
-            && IntervalExpressionTypes.isInterval(binary.getLeftExpression(), columns, scalarSchemas)) {
-          return second;
+        if (operation == Operation.ADD && second != null && isDatetime(second) && leftInterval != null) {
+          return intervalResult(second, leftInterval);
         }
       }
       NumericType left = numeric(first);
@@ -201,6 +202,22 @@ public final class ArrayExpressionSchemas {
     int type = JdbcTypeMapper.mapSchemaToJdbcType(schema);
     return type == Types.DATE || type == Types.TIME || type == Types.TIMESTAMP || type == Types.TIME_WITH_TIMEZONE
         || type == Types.TIMESTAMP_WITH_TIMEZONE;
+  }
+
+  /**
+   * Promotes DATE to a local TIMESTAMP when an interval includes time fields.
+   *
+   * @param datetime
+   *          datetime operand declaration
+   * @param interval
+   *          interval operand declaration
+   * @return declaration matching the arithmetic result
+   */
+  private static Schema intervalResult(Schema datetime, Schema interval) {
+    return JdbcTypeMapper.mapSchemaToJdbcType(datetime) == Types.DATE
+        && IntervalType.qualifier(interval).includesTimeFields()
+            ? TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema()
+            : datetime;
   }
 
   /**

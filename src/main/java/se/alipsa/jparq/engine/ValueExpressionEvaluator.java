@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine;
 
 import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiFunction;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.CaseExpression;
@@ -239,18 +241,29 @@ public final class ValueExpressionEvaluator {
     Expression unwrapped = ExpressionEvaluator.unwrapParenthesis(expression);
     Object value = evalUnconverted(unwrapped, record);
     if (value instanceof TemporalInterval interval) {
-      Schema declaration = intervalTypes
-          .computeIfAbsent(unwrapped, shape -> Optional.ofNullable(IntervalExpressionTypes.resolve(shape, column -> {
-            try {
-              String name = resolveColumnName(column);
-              return name == null ? null : fieldSchemas.get(name);
-            } catch (IllegalArgumentException unresolved) {
-              return null;
-            }
-          }, select -> subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select)))).orElse(null);
+      Schema declaration = intervalSchema(unwrapped);
       return declaration == null ? interval : se.alipsa.jparq.helper.IntervalType.project(interval, declaration);
     }
     return value;
+  }
+
+  /**
+   * Resolves a common interval declaration once for an expression.
+   *
+   * @param expression
+   *          interval expression
+   * @return declaration, or null when unknown
+   */
+  private Schema intervalSchema(Expression expression) {
+    return intervalTypes
+        .computeIfAbsent(expression, shape -> Optional.ofNullable(IntervalExpressionTypes.resolve(shape, column -> {
+          try {
+            String name = resolveColumnName(column);
+            return name == null ? null : fieldSchemas.get(name);
+          } catch (IllegalArgumentException unresolved) {
+            return null;
+          }
+        }, select -> subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select)))).orElse(null);
   }
 
   private Object evalUnconverted(Expression expression, GenericRecord record) {
@@ -477,7 +490,33 @@ public final class ValueExpressionEvaluator {
     return result.scalarValue();
   }
 
+  /**
+   * Evaluates the selected CASE result using ordinary SQL value decoding.
+   *
+   * @param caseExpr
+   *          CASE expression
+   * @param record
+   *          current input row
+   * @return selected value, or null without a matching branch
+   */
   private Object evaluateCase(CaseExpression caseExpr, GenericRecord record) {
+    return evaluateCase(caseExpr, record, this::evalInternal);
+  }
+
+  /**
+   * Selects a CASE branch once and evaluates it with the requested value decoder.
+   * Conditions and switch operands keep their ordinary SQL evaluation.
+   *
+   * @param caseExpr
+   *          CASE expression
+   * @param record
+   *          current input row
+   * @param resultEvaluator
+   *          selected result evaluator
+   * @return selected value, or null without a matching branch
+   */
+  private Object evaluateCase(CaseExpression caseExpr, GenericRecord record,
+      BiFunction<Expression, GenericRecord, Object> resultEvaluator) {
     boolean isSimpleCase = caseExpr.getSwitchExpression() != null;
     Object switchValue = isSimpleCase ? evalInternal(caseExpr.getSwitchExpression(), record) : null;
 
@@ -487,10 +526,10 @@ public final class ValueExpressionEvaluator {
         if (isSimpleCase) {
           Object whenValue = evalInternal(clause.getWhenExpression(), record);
           if (valuesEqual(switchValue, whenValue)) {
-            return evalInternal(clause.getThenExpression(), record);
+            return resultEvaluator.apply(clause.getThenExpression(), record);
           }
         } else if (evaluateCondition(clause.getWhenExpression(), record)) {
-          return evalInternal(clause.getThenExpression(), record);
+          return resultEvaluator.apply(clause.getThenExpression(), record);
         }
       }
     }
@@ -499,7 +538,7 @@ public final class ValueExpressionEvaluator {
     if (elseExpr == null) {
       return null;
     }
-    return evalInternal(elseExpr, record);
+    return resultEvaluator.apply(elseExpr, record);
   }
 
   /**
@@ -612,17 +651,136 @@ public final class ValueExpressionEvaluator {
    * @return JSON value with its declared temporal semantics
    */
   private Object evaluateJsonValue(Expression expression, GenericRecord record) {
-    Expression unwrapped = ExpressionEvaluator.unwrapParenthesis(expression);
-    Object value = evalInternal(unwrapped, record);
-    Schema declaration = null;
-    if (value instanceof java.sql.Timestamp || value instanceof java.sql.Time || value instanceof java.time.LocalTime
-        || value instanceof Object[] || value instanceof List<?>) {
-      declaration = jsonTypes.computeIfAbsent(unwrapped,
-          shape -> Optional.ofNullable(ArrayExpressionSchemas.resolve(shape, this::jsonColumnSchema,
-              select -> subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select))))
-          .orElse(null);
+    return jsonOperand(expression, record).node();
+  }
+
+  /**
+   * Retains an evaluated value's declaration until JSON promotion is applied.
+   *
+   * @param value
+   *          decoded value or already serialized array
+   * @param declaration
+   *          source declaration, or null when unknown
+   */
+  private record JsonOperand(Object value, Schema declaration) {
+    /**
+     * Serializes the source value without reinterpreting an existing node.
+     *
+     * @return corresponding JSON node
+     */
+    private JsonNode node() {
+      return value instanceof JsonNode node ? node : JsonFunctions.constructorValue(value, declaration);
     }
-    return JsonFunctions.constructorValue(value, declaration);
+  }
+
+  /**
+   * Evaluates arguments once, keeping the selected conditional branch's source
+   * declaration before any required offset promotion.
+   *
+   * @param expression
+   *          value expression
+   * @param record
+   *          current input row
+   * @return evaluated value and source declaration
+   */
+  private JsonOperand jsonOperand(Expression expression, GenericRecord record) {
+    Expression unwrapped = ExpressionEvaluator.unwrapParenthesis(expression);
+    if (unwrapped instanceof CaseExpression choice && numericType(choice) == null) {
+      return jsonBranch(unwrapped, (JsonOperand) evaluateCase(choice, record, this::jsonOperand));
+    }
+    if (unwrapped instanceof Function function && "COALESCE".equalsIgnoreCase(function.getName())
+        && function.getParameters() != null) {
+      for (Expression argument : function.getParameters()) {
+        JsonOperand operand = jsonOperand(argument, record);
+        if (operand.value() != null) {
+          return jsonBranch(unwrapped, operand);
+        }
+      }
+      return new JsonOperand(null, null);
+    }
+    if (unwrapped instanceof ArrayConstructor array) {
+      Schema declaration = jsonSchema(unwrapped);
+      if (declaration != null && temporalElements(declaration)) {
+        List<JsonNode> values = new ArrayList<>();
+        for (Expression element : array.getExpressions()) {
+          values.add((JsonNode) evaluateJsonValue(element, record));
+        }
+        return new JsonOperand(JsonFunctions.constructorArray(values, declaration.getElementType()), declaration);
+      }
+    }
+    Object value;
+    if (unwrapped instanceof Column column && SqlExpressionNormalizer.timeKeyword(column) == null) {
+      String name = resolveColumnName(column);
+      value = AvroCoercions.resolveColumnValue(name, record, fieldSchemas, caseInsensitiveIndex,
+          AvroCoercions::unwrapLocalFields);
+    } else {
+      value = evalInternal(unwrapped, record);
+    }
+    Schema declaration = null;
+    if (DateTimeFunctions.isTemporal(value) || value instanceof Object[] || value instanceof List<?>) {
+      declaration = jsonSchema(unwrapped);
+      if (declaration != null && !temporalElements(declaration)) {
+        declaration = null;
+      }
+    }
+    return new JsonOperand(value, declaration);
+  }
+
+  /**
+   * Applies a conditional expression's required promotion without losing UTC
+   * provenance, local fields, or the common interval qualifier.
+   *
+   * @param expression
+   *          CASE or COALESCE expression
+   * @param selected
+   *          selected branch, or null when CASE had no matching branch
+   * @return promoted operand
+   */
+  private JsonOperand jsonBranch(Expression expression, JsonOperand selected) {
+    if (selected == null || selected.value() == null) {
+      return new JsonOperand(null, null);
+    }
+    if (selected.value() instanceof TemporalInterval interval) {
+      Schema declaration = intervalSchema(expression);
+      return new JsonOperand(
+          declaration == null ? interval : se.alipsa.jparq.helper.IntervalType.project(interval, declaration), null);
+    }
+    if (DateTimeFunctions.isTemporal(selected.value())
+        || selected.declaration() != null && temporalElements(selected.declaration())) {
+      Schema declaration = jsonSchema(expression);
+      return new JsonOperand(JsonFunctions.constructorBranch(selected.node(), declaration), declaration);
+    }
+    return selected;
+  }
+
+  /**
+   * Resolves a constructor declaration once for this evaluator's input schema.
+   *
+   * @param expression
+   *          argument expression
+   * @return known declaration, or null
+   */
+  private Schema jsonSchema(Expression expression) {
+    return jsonTypes.computeIfAbsent(expression, shape -> Optional.ofNullable(ArrayExpressionSchemas.resolve(shape,
+        this::jsonColumnSchema, select -> subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select))))
+        .orElse(null);
+  }
+
+  /**
+   * Identifies arrays whose datetime leaves need their source declarations.
+   *
+   * @param schema
+   *          array or leaf declaration
+   * @return whether the innermost array elements are datetime values
+   */
+  private static boolean temporalElements(Schema schema) {
+    Schema element = JdbcTypeMapper.nonNullSchema(schema);
+    while (element.getType() == Schema.Type.ARRAY) {
+      element = JdbcTypeMapper.nonNullSchema(element.getElementType());
+    }
+    int type = JdbcTypeMapper.mapSchemaToJdbcType(element);
+    return type == java.sql.Types.DATE || type == java.sql.Types.TIME || type == java.sql.Types.TIMESTAMP
+        || type == java.sql.Types.TIME_WITH_TIMEZONE || type == java.sql.Types.TIMESTAMP_WITH_TIMEZONE;
   }
 
   /**

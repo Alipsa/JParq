@@ -348,6 +348,10 @@ SQL:2016–2023.
   a zone suffix, including literals, casts, arithmetic, subqueries, and materialized local columns.
   For example, a UTC-adjusted timestamp of 1,700,000,000,000 epoch milliseconds becomes
   `"2023-11-14T22:13:20Z"` in every JVM time zone. These rules also apply within arrays and structs.
+- `CASE` and `COALESCE` retain the selected value's UTC instant or local fields, including inside ARRAY
+  constructors. When the result requires an offset, local values acquire the SQL-session displacement;
+  values with an existing offset keep their instant. Raw local timestamp fields are serialized without
+  normalizing nonexistent wall-clock times through the host's daylight-saving rules.
 - Struct fields use their declared Avro logical types, including numeric decimals and date/timestamp strings. This
   includes maps nested within struct fields. Top-level map columns and maps inside stored arrays currently keep raw
   Avro logical values, such as epoch-day integers for dates

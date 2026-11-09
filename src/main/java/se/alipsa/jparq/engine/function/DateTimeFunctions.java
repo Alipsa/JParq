@@ -714,7 +714,7 @@ public final class DateTimeFunctions {
     }
     if (temporal instanceof Date d) {
       LocalDateTime adjusted = d.toLocalDate().atStartOfDay().plus(interval.period()).plus(interval.duration());
-      if (interval.hasTimeComponent()) {
+      if (interval.qualifier().includesTimeFields() || interval.hasTimeComponent()) {
         return Timestamp.valueOf(adjusted);
       }
       return Date.valueOf(adjusted.toLocalDate());
@@ -735,7 +735,7 @@ public final class DateTimeFunctions {
     }
     if (temporal instanceof LocalDate ld) {
       LocalDateTime adjusted = ld.atStartOfDay().plus(interval.period()).plus(interval.duration());
-      if (interval.hasTimeComponent()) {
+      if (interval.qualifier().includesTimeFields() || interval.hasTimeComponent()) {
         return adjusted;
       }
       return adjusted.toLocalDate();

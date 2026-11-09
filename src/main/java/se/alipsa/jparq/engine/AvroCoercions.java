@@ -18,6 +18,7 @@ import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Map;
+import java.util.function.BiFunction;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
@@ -238,6 +239,26 @@ public final class AvroCoercions {
    */
   public static Object resolveColumnValue(String columnName, GenericRecord record, Map<String, Schema> fieldSchemas,
       Map<String, String> caseInsensitiveIndex) {
+    return resolveColumnValue(columnName, record, fieldSchemas, caseInsensitiveIndex, AvroCoercions::unwrap);
+  }
+
+  /**
+   * Resolves a field with the normal identifier lookup and a caller's decoder.
+   *
+   * @param columnName
+   *          field reference
+   * @param record
+   *          input row, possibly null
+   * @param fieldSchemas
+   *          schemas indexed by exact field names
+   * @param caseInsensitiveIndex
+   *          normalized names mapped to exact names
+   * @param decoder
+   *          schema-aware field decoder
+   * @return decoded value, or null when the row or field is missing
+   */
+  public static Object resolveColumnValue(String columnName, GenericRecord record, Map<String, Schema> fieldSchemas,
+      Map<String, String> caseInsensitiveIndex, BiFunction<Object, Schema, Object> decoder) {
     if (columnName == null || record == null) {
       return null;
     }
@@ -253,7 +274,32 @@ public final class AvroCoercions {
     if (schema == null) {
       return null;
     }
-    return unwrap(record.get(lookup), schema);
+    return decoder.apply(record.get(lookup), schema);
+  }
+
+  /**
+   * Decodes local timestamp fields without the JVM-zone normalization of JDBC
+   * Timestamp. Arrays preserve these local fields recursively; other types keep
+   * their normal JDBC decoding.
+   *
+   * @param value
+   *          raw field value
+   * @param schema
+   *          declared field schema
+   * @return decoded value with lossless local timestamp fields
+   */
+  public static Object unwrapLocalFields(Object value, Schema schema) {
+    if (value == null) {
+      return null;
+    }
+    Schema effective = effectiveSchema(schema);
+    if (isLocalTimestamp(effective) && value instanceof Number number) {
+      return LocalDateTime.ofInstant(timestampInstant(number.longValue(), effective), ZoneOffset.UTC);
+    }
+    if (effective.getType() == Schema.Type.ARRAY) {
+      return unwrapArray(value, effective.getElementType(), true);
+    }
+    return unwrap(value, schema);
   }
 
   /**
@@ -398,6 +444,21 @@ public final class AvroCoercions {
    * @return a decoded object array, or the original unsupported container
    */
   private static Object unwrapArray(Object value, Schema elementSchema) {
+    return unwrapArray(value, elementSchema, false);
+  }
+
+  /**
+   * Decodes array elements with the requested local timestamp representation.
+   *
+   * @param value
+   *          stored array or decoded array
+   * @param elementSchema
+   *          element declaration
+   * @param localFields
+   *          whether to retain local timestamp fields without JDBC normalization
+   * @return decoded elements, or the original unsupported container
+   */
+  private static Object unwrapArray(Object value, Schema elementSchema, boolean localFields) {
     Object[] elements;
     if (value instanceof Collection<?> collection) {
       elements = collection.toArray();
@@ -412,7 +473,7 @@ public final class AvroCoercions {
       if (item == null || element.getType() == Schema.Type.RECORD) {
         continue;
       }
-      elements[index] = unwrap(item, elementSchema);
+      elements[index] = localFields ? unwrapLocalFields(item, elementSchema) : unwrap(item, elementSchema);
     }
     return elements;
   }

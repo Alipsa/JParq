@@ -229,6 +229,9 @@ public final class JsonFunctions {
    *           if a value is invalid for its declared logical type
    */
   public static JsonNode constructorValue(Object value, Schema schema) {
+    if (schema == null) {
+      return toNode(value);
+    }
     Schema effective = JdbcTypeMapper.nonNullSchema(schema);
     if (effective != null && effective.getType() == Schema.Type.MAP) {
       // Direct MAP decoding is tracked separately in issue #313.
@@ -239,6 +242,74 @@ public final class JsonFunctions {
       return toNode(value == null ? null : value.toString());
     }
     return toNode(value, schema);
+  }
+
+  /**
+   * Embeds evaluated datetime array elements without discarding their source
+   * zones or local fields. Local values acquire the SQL-session displacement only
+   * when the ARRAY's declared type requires an offset.
+   *
+   * @param values
+   *          serialized elements, with null for SQL NULL
+   * @param elementSchema
+   *          common ARRAY element declaration
+   * @return constructed array node
+   */
+  public static JsonNode constructorArray(List<JsonNode> values, Schema elementSchema) {
+    ArrayNode array = MAPPER.createArrayNode();
+    for (JsonNode value : values) {
+      array.add(temporalArrayValue(value, elementSchema));
+    }
+    return array;
+  }
+
+  /**
+   * Applies a conditional expression's required offset promotion to a selected
+   * value, retaining already explicit UTC or offset information.
+   *
+   * @param value
+   *          serialized selected value
+   * @param schema
+   *          common result declaration, or null when unknown
+   * @return promoted value
+   */
+  public static JsonNode constructorBranch(JsonNode value, Schema schema) {
+    return schema == null ? value : temporalArrayValue(value, schema);
+  }
+
+  /**
+   * Applies only required offset promotion to already serialized datetime leaves,
+   * preserving existing offsets and UTC instants.
+   *
+   * @param value
+   *          serialized element
+   * @param schema
+   *          target element declaration
+   * @return promoted value, or the unchanged node when no promotion is needed
+   */
+  private static JsonNode temporalArrayValue(JsonNode value, Schema schema) {
+    if (value == null || value.isNull()) {
+      return MAPPER.nullNode();
+    }
+    Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    if (effective.getType() == Schema.Type.ARRAY && value.isArray()) {
+      ArrayNode nested = MAPPER.createArrayNode();
+      for (JsonNode element : value) {
+        nested.add(temporalArrayValue(element, effective.getElementType()));
+      }
+      return nested;
+    }
+    TemporalValueType temporal = TemporalValueType.fromSchema(effective);
+    if (temporal == TemporalValueType.OFFSET_TIMESTAMP) {
+      Object timestamp = DateTimeFormatter.ISO_DATE_TIME.parseBest(value.asText(), OffsetDateTime::from,
+          LocalDateTime::from);
+      return toNode(temporal.normalize(timestamp));
+    }
+    if (temporal == TemporalValueType.OFFSET_TIME) {
+      Object time = DateTimeFormatter.ISO_TIME.parseBest(value.asText(), OffsetTime::from, LocalTime::from);
+      return toNode(temporal.normalize(time));
+    }
+    return value;
   }
 
   /**
