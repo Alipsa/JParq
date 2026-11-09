@@ -2,6 +2,10 @@
 
 ### 1.4.0
 
+- Resolve SELECT aliases inside ORDER BY arithmetic and scalar functions for computed projections
+  and grouped aggregates. Preserve nested query scopes, qualified input references, and output-name
+  ambiguity checks (#308).
+
 - Evaluate correlated scalar subqueries in aggregate arguments against each input row,
   including when aggregate results appear inside scalar expressions. Preserve qualified
   NULL bindings instead of retrying them as unqualified column references (#307).

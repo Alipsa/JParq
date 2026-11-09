@@ -27,6 +27,7 @@ import net.sf.jsqlparser.parser.Token;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.*;
+import net.sf.jsqlparser.util.deparser.ExpressionDeParser;
 import se.alipsa.jparq.helper.FunctionEscapeResolver;
 import se.alipsa.jparq.helper.JParqUtil;
 import se.alipsa.jparq.helper.LiteralConverter;
@@ -138,9 +139,11 @@ public final class SqlParser {
    *          when the ORDER BY references a simple column
    * @param projectionIndex
    *          selected output position, or -1 for an input expression
+   * @param aliasesResolved
+   *          whether output aliases have already been bound in this key
    */
   public record OrderKey(String column, boolean asc, String qualifier, OrderByElement.NullOrdering nullOrdering,
-      Expression expression, int projectionIndex) {
+      Expression expression, int projectionIndex, boolean aliasesResolved) {
     /**
      * Creates an ordering key before its output position is resolved.
      *
@@ -158,6 +161,27 @@ public final class SqlParser {
     public OrderKey(String column, boolean asc, String qualifier, OrderByElement.NullOrdering nullOrdering,
         Expression expression) {
       this(column, asc, qualifier, nullOrdering, expression, -1);
+    }
+
+    /**
+     * Creates an ordering key with a selected output position.
+     *
+     * @param column
+     *          column name
+     * @param asc
+     *          whether ordering is ascending
+     * @param qualifier
+     *          optional table qualifier
+     * @param nullOrdering
+     *          optional NULL ordering
+     * @param expression
+     *          optional ordering expression
+     * @param projectionIndex
+     *          selected output position, or -1
+     */
+    public OrderKey(String column, boolean asc, String qualifier, OrderByElement.NullOrdering nullOrdering,
+        Expression expression, int projectionIndex) {
+      this(column, asc, qualifier, nullOrdering, expression, projectionIndex, false);
     }
   }
 
@@ -2518,9 +2542,11 @@ public final class SqlParser {
    * </p>
    *
    * <p>
-   * The method also strips any table qualifiers (e.g. {@code t.col -> col}) for
-   * single-table queries. Join label comparisons are deferred until the input
-   * schema can bind qualified and unqualified columns to their fields.
+   * The method also strips table qualifiers (e.g. {@code t.col -> col}) from bare
+   * single-table ordering columns. Qualifiers inside expressions retain their
+   * input meaning when output aliases collide with input names. Join label
+   * comparisons are deferred until the input schema can bind qualified and
+   * unqualified columns to their fields.
    * </p>
    *
    * @param ps
@@ -2545,7 +2571,7 @@ public final class SqlParser {
     if (ob != null) {
       for (OrderByElement element : ob) {
         Expression expression = element.getExpression();
-        if (tableRefs.size() == 1) {
+        if (tableRefs.size() == 1 && expression instanceof Column) {
           stripQualifier(expression, qualifiers(tableRefs));
         }
         String column;
@@ -2635,6 +2661,10 @@ public final class SqlParser {
     }
     List<OrderKey> resolved = new ArrayList<>(keys.size());
     for (OrderKey key : keys) {
+      if (key.aliasesResolved()) {
+        resolved.add(key);
+        continue;
+      }
       String column = key.column();
       String qualifier = key.qualifier();
       Expression evaluation = key.expression();
@@ -2651,16 +2681,7 @@ public final class SqlParser {
             projectionIndex = position - 1;
           }
         } else {
-          String label = Identifier.lookupKey(column);
-          if (!aliases.containsKey(label)) {
-            String alternative = ColumnMappingUtil.alternativeColumnKey(label);
-            if (alternative != null) {
-              label = alternative;
-            }
-          }
-          if (ambiguous.contains(label)) {
-            throw SqlExceptions.ambiguousColumn(column);
-          }
+          String label = orderingAliasLabel(column, aliases, ambiguous);
           selected = aliases.get(label);
           if (selected != null) {
             projectionIndex = projectionIndexes.get(label);
@@ -2678,9 +2699,95 @@ public final class SqlParser {
       } else if (selected != null) {
         evaluation = selected;
       }
-      resolved.add(new OrderKey(column, key.asc(), qualifier, key.nullOrdering(), evaluation, projectionIndex));
+      if (selected == null && evaluation != null) {
+        evaluation = resolveOrderingAliases(evaluation, aliases, ambiguous);
+      }
+      resolved.add(new OrderKey(column, key.asc(), qualifier, key.nullOrdering(), evaluation, projectionIndex, true));
     }
     return List.copyOf(resolved);
+  }
+
+  /**
+   * Resolves an output name with exact-match precedence and ambiguity checks.
+   *
+   * @param name
+   *          ordering reference
+   * @param aliases
+   *          selected expressions by output name
+   * @param ambiguous
+   *          output names denoting distinct expressions
+   * @return normalized alias lookup key
+   * @throws IllegalArgumentException
+   *           if the matching alias is ambiguous
+   */
+  private static String orderingAliasLabel(String name, Map<String, Expression> aliases, Set<String> ambiguous) {
+    String label = Identifier.lookupKey(name);
+    if (!aliases.containsKey(label)) {
+      String alternative = ColumnMappingUtil.alternativeColumnKey(label);
+      if (alternative != null) {
+        label = alternative;
+      }
+    }
+    if (ambiguous.contains(label)) {
+      throw SqlExceptions.ambiguousColumn(name);
+    }
+    return label;
+  }
+
+  /**
+   * Expands unqualified output aliases inside an ordering expression once.
+   * Inserted SELECT expressions retain their own input bindings, and nested
+   * queries keep their independent name scopes.
+   *
+   * @param expression
+   *          ordering expression
+   * @param aliases
+   *          selected expressions by normalized output name
+   * @param ambiguous
+   *          output names denoting distinct expressions
+   * @return an independent expression with alias operands expanded
+   * @throws IllegalArgumentException
+   *           if an alias is ambiguous or expansion cannot be parsed
+   */
+  private static Expression resolveOrderingAliases(Expression expression, Map<String, Expression> aliases,
+      Set<String> ambiguous) {
+    Map<Column, Expression> replacements = new java.util.IdentityHashMap<>();
+    for (Column column : ColumnsUsed.referencesInScope(expression)) {
+      if (extractQualifier(column) != null) {
+        continue;
+      }
+      String label = orderingAliasLabel(column.getColumnName(), aliases, ambiguous);
+      Expression selected = aliases.get(label);
+      if (selected != null) {
+        replacements.put(column, selected);
+      }
+    }
+    if (replacements.isEmpty()) {
+      return expression;
+    }
+    StringBuilder sql = new StringBuilder();
+    expression.accept(new ExpressionDeParser(null, sql) {
+      @Override
+      public <S> StringBuilder visit(Column column, S context) {
+        Expression replacement = replacements.get(column);
+        return replacement == null ? super.visit(column, context) : sql.append('(').append(replacement).append(')');
+      }
+
+      @Override
+      public <S> StringBuilder visit(ParenthesedSelect select, S context) {
+        return sql.append(select);
+      }
+
+      @Override
+      public <S> StringBuilder visit(net.sf.jsqlparser.statement.select.Select select, S context) {
+        return sql.append(select);
+      }
+    }, null);
+    try {
+      return JSqlParserSupport.parseExpression(sql.toString());
+    } catch (JSQLParserException e) {
+      throw new IllegalArgumentException("Cannot resolve ORDER BY aliases: " + expression, e);
+    }
   }
 
   /**
