@@ -606,7 +606,8 @@ public final class AggregateFunctions {
    *          input qualifier and column mappings shared with execution
    * @return aggregate plan, or null for a nonaggregate query
    * @throws IllegalArgumentException
-   *           if a selected column is not grouped
+   *           if a selected column is not grouped; the cause carries SQLState
+   *           42803
    */
   public static AggregatePlan plan(SqlParser.Select select, Schema inputSchema, CorrelationMappings mappings) {
     List<Expression> expressions = select.expressions();
@@ -682,10 +683,14 @@ public final class AggregateFunctions {
       Integer groupIndex = findGroupIndex(expr, groupIndexByText, groupExpressions, inputBinding);
       if (groupIndex == null) {
         GroupedExpression.validate(expr, operand -> {
-          if (operand instanceof Column
+          if (operand instanceof Column column
               && findGroupIndex(operand, groupIndexByText, groupExpressions, inputBinding) == null) {
-            throw syntaxFailure(
-                "SELECT expression '" + expr + "' must appear in the GROUP BY clause when aggregates are present");
+            String message = "SELECT expression '" + expr
+                + "' must appear in the GROUP BY clause when aggregates are present";
+            if (inputBinding != null && inputBinding.resolve(column) == null) {
+              throw syntaxFailure(message);
+            }
+            throw groupingFailure(message);
           }
           return isGroupOperand(operand, groupIndexByText, groupExpressions, inputBinding);
         });
@@ -738,8 +743,8 @@ public final class AggregateFunctions {
    * @param aliases
    *          visible SELECT aliases
    * @throws IllegalArgumentException
-   *           if an ungrouped column is referenced; ORDER BY input references
-   *           carry SQLState 42803
+   *           carrying SQLState 42803 for an ungrouped input column or 42000 for
+   *           an unknown column
    * @param columnBinding
    *          resolver for bound input fields, or null when unavailable
    * @param inputPrecedence
@@ -754,11 +759,13 @@ public final class AggregateFunctions {
     }
     GroupedExpression.validate(expression, operand -> {
       if (operand instanceof Column column && findGroupIndex(column, groupIndexByText, groups, columnBinding) == null) {
-        if (inputPrecedence && columnBinding != null && columnBinding.resolve(column) != null) {
+        boolean outputAlias = column.getTable() == null
+            && aliases.contains(Identifier.lookupKey(column.getColumnName()));
+        if ((inputPrecedence || !outputAlias) && columnBinding != null && columnBinding.resolve(column) != null) {
           throw groupingFailure("Ungrouped input column in " + clause + ": " + column
               + "; columns must appear in the GROUP BY clause or be used in an aggregate");
         }
-        if (column.getTable() != null || !aliases.contains(Identifier.lookupKey(column.getColumnName()))) {
+        if (!outputAlias) {
           throw syntaxFailure("Missing columns in " + clause + " grouped scope: " + column
               + "; columns must appear in the GROUP BY clause or SELECT list");
         }

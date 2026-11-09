@@ -153,6 +153,8 @@ public final class FunctionSupport {
       case "TIMESTAMPADD" -> DateTimeFunctions.timestampAdd(args.positionalValues());
       case "TIMESTAMPDIFF" -> DateTimeFunctions.timestampDiff(args.positionalValues());
       case "ARRAY" -> evaluateArrayFunction(func, record, args);
+      // Register new volatile functions in isVolatile as well as dispatching them
+      // here.
       case "ABS", "CEIL", "CEILING", "COT", "FLOOR", "ROUND", "SQRT", "TRUNC", "TRUNCATE", "MOD", "POWER", "POW", "EXP",
           "LOG", "LOG10", "PI", "RAND", "RANDOM", "SIGN", "SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN", "ATAN2",
           "DEGREES", "RADIANS" ->

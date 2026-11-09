@@ -227,7 +227,7 @@ class GroupByAliasTest {
       for (String sql : List.of("SELECT gear AS cyl, COUNT(*) AS n FROM mtcars GROUP BY cyl",
           "SELECT cyl AS gear, COUNT(*) AS n FROM mtcars GROUP BY gear")) {
         SQLSyntaxErrorException failure = assertThrows(SQLSyntaxErrorException.class, () -> stmt.executeQuery(sql));
-        assertEquals("42000", failure.getSQLState(), "SQLState for " + sql);
+        assertEquals("42803", failure.getSQLState(), "SQLState for " + sql);
       }
     }
   }
@@ -312,7 +312,7 @@ class GroupByAliasTest {
     try (Connection connection = connection(); Statement stmt = connection.createStatement()) {
       SQLSyntaxErrorException failure = assertThrows(SQLSyntaxErrorException.class,
           () -> stmt.executeQuery("SELECT gear AS \"cyl\", COUNT(*) AS n FROM mtcars GROUP BY \"cyl\""));
-      assertEquals("42000", failure.getSQLState());
+      assertEquals("42803", failure.getSQLState());
     }
   }
 

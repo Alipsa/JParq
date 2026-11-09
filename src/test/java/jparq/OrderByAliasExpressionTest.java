@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mockStatic;
 
 import java.nio.file.Path;
@@ -191,7 +192,7 @@ class OrderByAliasExpressionTest {
   void aliasExpansionUsesFunctionVolatilityMetadata() {
     var schema = SchemaBuilder.record("Row").fields().optionalInt("n").endRecord();
     var query = SqlParser.parseSelect("SELECT COALESCE(ABS(n), 0) AS s FROM o ORDER BY s * 2");
-    try (var registry = mockStatic(FunctionSupport.class)) {
+    try (var registry = mockStatic(FunctionSupport.class, CALLS_REAL_METHODS)) {
       registry.when(() -> FunctionSupport.isVolatile("ABS")).thenReturn(true);
       var error = assertThrows(IllegalArgumentException.class,
           () -> SqlParser.resolveInputOrdering(query, schema, null));

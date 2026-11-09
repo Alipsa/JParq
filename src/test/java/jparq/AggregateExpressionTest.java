@@ -128,7 +128,7 @@ class AggregateExpressionTest {
             "SELECT cyl FROM mtcars" + where + " GROUP BY cyl HAVING COALESCE(mpg, 0) > 0",
             "SELECT ABS(cyl) FROM mtcars" + where + " GROUP BY cyl + 1")) {
           var failure = assertThrows(SQLSyntaxErrorException.class, () -> connection.prepareStatement(sql), sql);
-          assertEquals("42000", failure.getSQLState(), sql);
+          assertEquals("42803", failure.getSQLState(), sql);
         }
       }
     }
@@ -226,7 +226,7 @@ class AggregateExpressionTest {
       for (String suffix : List.of("", " WHERE cyl < 0", " GROUP BY cyl")) {
         SQLException failure = assertThrows(SQLException.class,
             () -> connection.prepareStatement("SELECT SUM(cyl) + mpg FROM mtcars" + suffix));
-        assertEquals("42000", failure.getSQLState());
+        assertEquals("42803", failure.getSQLState());
       }
     }
   }
@@ -275,7 +275,7 @@ class AggregateExpressionTest {
                 + "FROM mtcars m" + where + " GROUP BY m.cyl");
           }
         });
-        assertEquals("42000", failure.getSQLState());
+        assertEquals("42803", failure.getSQLState());
       }
       SQLException nested = assertThrows(SQLException.class,
           () -> connection.prepareStatement("SELECT SUM(SUM(cyl)) FROM mtcars"));
@@ -326,7 +326,7 @@ class AggregateExpressionTest {
             "SELECT cyl FROM mtcars" + where + " GROUP BY cyl HAVING CASE WHEN mpg IS DISTINCT FROM 4 THEN 1 END = 1",
             "SELECT cyl FROM mtcars" + where + " GROUP BY cyl ORDER BY CASE WHEN mpg IS DISTINCT FROM 4 THEN 1 END")) {
           SQLException failure = assertThrows(SQLException.class, () -> connection.prepareStatement(sql), sql);
-          assertEquals(sql.contains(" ORDER BY ") ? "42803" : "42000", failure.getSQLState(), sql);
+          assertEquals("42803", failure.getSQLState(), sql);
         }
       }
     }
@@ -422,7 +422,7 @@ class AggregateExpressionTest {
       for (String where : List.of("", " WHERE cyl < 0")) {
         SQLException failure = assertThrows(SQLException.class, () -> connection
             .prepareStatement("SELECT SUM(mpg) AS mpg FROM mtcars m" + where + " GROUP BY cyl HAVING m.mpg > 200"));
-        assertEquals("42000", failure.getSQLState());
+        assertEquals("42803", failure.getSQLState());
       }
       assertRows(connection, "SELECT m.cyl FROM mtcars m GROUP BY m.cyl HAVING m.cyl > 4 ORDER BY m.cyl",
           List.of(List.of("6"), List.of("8")));
