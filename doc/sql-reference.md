@@ -57,11 +57,13 @@ Expressions skipped by filtering or `CASE` branch selection are not evaluated.
 
 ### ORDER BY
 
-Multiple sort keys with `ASC`/`DESC` and optional `NULLS FIRST`/`NULLS LAST`. SELECT aliases can also be used
-inside arithmetic and scalar function expressions, including aggregate aliases in grouped queries
-(for example, `SELECT cyl, SUM(mpg) AS s FROM mtcars GROUP BY cyl ORDER BY s * 2`).
-Within these expressions, unqualified output aliases take precedence over input names; qualified references
-retain their input meaning. See
+Multiple sort keys with `ASC`/`DESC` and optional `NULLS FIRST`/`NULLS LAST`. A bare output name resolves
+against the SELECT list first. Inside an expression, input columns take precedence, including when a SELECT
+alias has the same name. As an extension, an otherwise unresolved name may refer to a deterministic SELECT
+alias, including grouped aggregates (for example,
+`SELECT cyl, SUM(mpg) AS s FROM mtcars GROUP BY cyl ORDER BY s * 2`).
+Expression references to aliases containing window functions, RAND/RANDOM, or subqueries are rejected with
+SQLState `42000`; use a derived table or CTE to expose their computed values as input columns. See
 [column labels and ambiguity](#column-labels-and-ambiguity) for how output names are resolved.
 
 ### Row limiting

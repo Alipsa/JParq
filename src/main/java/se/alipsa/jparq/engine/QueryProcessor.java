@@ -665,7 +665,7 @@ public final class QueryProcessor implements AutoCloseable {
       String resolved = ColumnMappingUtil.canonicalOrderColumn(column, key.qualifier(), qualifierColumnMapping,
           unqualifiedColumnMapping);
       canonical.add(new SqlParser.OrderKey(resolved, key.asc(), key.qualifier(), key.nullOrdering(), key.expression(),
-          key.projectionIndex(), key.aliasesResolved()));
+          key.projectionIndex()));
     }
     return List.copyOf(canonical);
   }

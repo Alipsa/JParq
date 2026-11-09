@@ -3,8 +3,9 @@
 ### 1.4.0
 
 - Resolve SELECT aliases inside ORDER BY arithmetic and scalar functions for computed projections
-  and grouped aggregates. Preserve nested query scopes, qualified input references, and output-name
-  ambiguity checks (#308).
+  and grouped aggregates as a fallback when no input column matches. Preserve input-column precedence,
+  nested query scopes, and output-name ambiguity checks. Reject expression references to window, random,
+  and subquery aliases during planning with a clear SQLState 42000 diagnostic (#308).
 
 - Evaluate correlated scalar subqueries in aggregate arguments against each input row,
   including when aggregate results appear inside scalar expressions. Preserve qualified
