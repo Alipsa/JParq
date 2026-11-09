@@ -144,6 +144,10 @@ public final class StructArrayTypes {
         || TemporalValueType.fromSchema(right) == TemporalValueType.LOCAL_TIMESTAMP) {
       return TemporalValueType.LOCAL_TIMESTAMP.schema();
     }
+    if (TemporalValueType.fromSchema(left) == TemporalValueType.JDBC_LOCAL_TIMESTAMP
+        || TemporalValueType.fromSchema(right) == TemporalValueType.JDBC_LOCAL_TIMESTAMP) {
+      return TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema();
+    }
     if (TemporalValueType.fromSchema(left) == TemporalValueType.UTC_TIMESTAMP
         || TemporalValueType.fromSchema(right) == TemporalValueType.UTC_TIMESTAMP) {
       return utcTimestamp(left) && utcTimestamp(right)

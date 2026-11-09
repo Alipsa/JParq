@@ -76,6 +76,21 @@ public final class AvroCoercions {
   }
 
   /**
+   * Decodes timestamp epoch units, including negative fractional epochs. Local
+   * timestamp units use the same UTC origin to represent wall-clock fields.
+   *
+   * @param epoch
+   *          stored timestamp units
+   * @param schema
+   *          non-null timestamp declaration
+   * @return instant representing the stored units
+   */
+  public static Instant timestampInstant(long epoch, Schema schema) {
+    long units = timestampUnits(schema);
+    return Instant.ofEpochSecond(Math.floorDiv(epoch, units), Math.floorMod(epoch, units) * (1_000_000_000L / units));
+  }
+
+  /**
    * Identifies Parquet half-precision floating point values.
    * 
    * @param schema
@@ -304,10 +319,7 @@ public final class AvroCoercions {
           if (v instanceof Timestamp) {
             return v;
           }
-          long epoch = ((Number) v).longValue();
-          long units = timestampUnits(effective);
-          Instant instant = Instant.ofEpochSecond(Math.floorDiv(epoch, units),
-              Math.floorMod(epoch, units) * (1_000_000_000L / units));
+          Instant instant = timestampInstant(((Number) v).longValue(), effective);
           return isLocalTimestamp(effective)
               ? Timestamp.valueOf(LocalDateTime.ofInstant(instant, ZoneOffset.UTC))
               : Timestamp.from(instant);

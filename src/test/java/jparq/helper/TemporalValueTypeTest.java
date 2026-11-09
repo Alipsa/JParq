@@ -65,6 +65,25 @@ class TemporalValueTypeTest {
     assertNull(type.encode(null));
   }
 
+  /**
+   * Preserves local JDBC timestamp fields, precision, and value-class metadata.
+   */
+  @Test
+  void roundTripsLocalJdbcTimestampFields() {
+    var type = TemporalValueType.JDBC_LOCAL_TIMESTAMP;
+    var fields = LocalDateTime.parse("2024-01-02T03:04:05.123456789");
+    var timestamp = java.sql.Timestamp.valueOf(fields);
+    assertSame(timestamp, type.normalize(timestamp));
+    assertSame(timestamp, type.decode(timestamp));
+    assertEquals(timestamp, type.normalize(fields));
+    assertEquals(fields.toString(), type.encode(timestamp));
+    assertEquals(timestamp, AvroCoercions.unwrap(new Utf8(type.encode(timestamp)), type.schema()));
+    assertEquals(java.sql.Timestamp.class.getName(), JdbcTypeMapper.mapSchemaToJavaClassName(type.schema()));
+    assertEquals(java.sql.Types.TIMESTAMP, JdbcTypeMapper.mapSchemaToJdbcType(type.schema()));
+    assertNull(TemporalValueType.fromValue(timestamp));
+    assertNull(type.encode(null));
+  }
+
   /** Ordinary strings and NULL values do not acquire temporal descriptors. */
   @Test
   void ignoresOtherValuesAndSchemas() {

@@ -237,7 +237,7 @@ public final class ScalarExpressionSchemas {
     return switch (normalized) {
       case "date" -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
       case "time", "timewithouttimezone" -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
-      case "timestamp", "timestampwithouttimezone", "datetime" -> TemporalValueType.UTC_TIMESTAMP.schema();
+      case "timestamp", "timestampwithouttimezone", "datetime" -> TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema();
       case "boolean", "bool" -> Schema.create(Schema.Type.BOOLEAN);
       default -> {
         JDBCType type = declaredJdbcType(typeName);

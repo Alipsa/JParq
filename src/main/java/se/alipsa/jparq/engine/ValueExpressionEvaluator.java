@@ -64,6 +64,7 @@ public final class ValueExpressionEvaluator {
   private final Map<String, Schema> fieldSchemas;
   private final Map<Expression, NumericType> numericTypes = new IdentityHashMap<>();
   private final Map<Expression, Optional<Schema>> intervalTypes = new IdentityHashMap<>();
+  private final Map<Expression, Optional<Schema>> jsonTypes = new IdentityHashMap<>();
   private final Map<CastExpression, Optional<DateTimeFunctions.BinaryCast>> binaryCasts = new IdentityHashMap<>();
   private final Map<TranscodingFunction, CastExpression> convertCasts = new IdentityHashMap<>();
   private final Map<String, String> caseInsensitiveIndex;
@@ -612,19 +613,37 @@ public final class ValueExpressionEvaluator {
    */
   private Object evaluateJsonValue(Expression expression, GenericRecord record) {
     Expression unwrapped = ExpressionEvaluator.unwrapParenthesis(expression);
-    Schema declaration = unwrapped instanceof Column column ? fieldSchemas.get(resolveColumnName(column)) : null;
-    Object value = unwrapped instanceof Column column && declaration != null
-        && AvroCoercions.isLocalTimestamp(declaration)
-            ? record.get(resolveColumnName(column))
-            : evalInternal(unwrapped, record);
-    if (declaration == null
-        && (value instanceof java.sql.Timestamp || value instanceof Object[] || value instanceof List<?>)) {
-      declaration = ArrayExpressionSchemas.resolve(unwrapped, column -> {
-        String name = resolveColumnName(column);
-        return name == null ? null : fieldSchemas.get(name);
-      }, select -> subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select));
+    Object value = evalInternal(unwrapped, record);
+    Schema declaration = null;
+    if (value instanceof java.sql.Timestamp || value instanceof java.sql.Time || value instanceof java.time.LocalTime
+        || value instanceof Object[] || value instanceof List<?>) {
+      declaration = jsonTypes.computeIfAbsent(unwrapped,
+          shape -> Optional.ofNullable(ArrayExpressionSchemas.resolve(shape, this::jsonColumnSchema,
+              select -> subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select))))
+          .orElse(null);
     }
     return JsonFunctions.constructorValue(value, declaration);
+  }
+
+  /**
+   * Resolves an actual field using the same case-insensitive index as evaluation.
+   * Datetime keywords parsed as columns do not name input fields.
+   *
+   * @param column
+   *          possible field reference
+   * @return field schema, or null for a keyword or unresolved name
+   */
+  private Schema jsonColumnSchema(Column column) {
+    if (SqlExpressionNormalizer.timeKeyword(column) != null) {
+      return null;
+    }
+    String name = resolveColumnName(column);
+    if (name == null) {
+      return null;
+    }
+    Schema declaration = fieldSchemas.get(name);
+    String canonical = declaration == null ? caseInsensitiveIndex.get(Identifier.lookupKey(name)) : null;
+    return canonical == null ? declaration : fieldSchemas.get(canonical);
   }
 
   private String toStringValue(Object value) {

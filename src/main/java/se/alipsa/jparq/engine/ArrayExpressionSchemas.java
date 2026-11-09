@@ -95,6 +95,10 @@ public final class ArrayExpressionSchemas {
       return cast == null ? null : resolve(cast, columns, scalarSchemas);
     }
     if (expression instanceof Column column) {
+      TimeKeyExpression keyword = SqlExpressionNormalizer.timeKeyword(column);
+      if (keyword != null) {
+        return resolve(keyword, columns, scalarSchemas);
+      }
       return JdbcTypeMapper.nonNullSchema(columns.apply(column));
     }
     if (expression instanceof BooleanValue || BooleanExpressions.isPredicate(expression)) {
@@ -129,8 +133,21 @@ public final class ArrayExpressionSchemas {
       return common(ExpressionBranches.caseResults(choice), columns, scalarSchemas);
     }
     if (expression instanceof BinaryExpression binary && NumericExpressionTypes.operation(expression) != null) {
-      NumericType left = numeric(resolve(binary.getLeftExpression(), columns, scalarSchemas));
-      NumericType right = numeric(resolve(binary.getRightExpression(), columns, scalarSchemas));
+      Schema first = resolve(binary.getLeftExpression(), columns, scalarSchemas);
+      Schema second = resolve(binary.getRightExpression(), columns, scalarSchemas);
+      Operation operation = NumericExpressionTypes.operation(expression);
+      if (operation == Operation.ADD || operation == Operation.SUB) {
+        if (first != null && isDatetime(first)
+            && IntervalExpressionTypes.isInterval(binary.getRightExpression(), columns, scalarSchemas)) {
+          return first;
+        }
+        if (operation == Operation.ADD && second != null && isDatetime(second)
+            && IntervalExpressionTypes.isInterval(binary.getLeftExpression(), columns, scalarSchemas)) {
+          return second;
+        }
+      }
+      NumericType left = numeric(first);
+      NumericType right = numeric(second);
       return left == null || right == null
           ? null
           : left.arithmetic(right, NumericExpressionTypes.operation(expression)).schema();
@@ -139,12 +156,21 @@ public final class ArrayExpressionSchemas {
       return resolve(signed.getExpression(), columns, scalarSchemas);
     }
     if (expression instanceof CastExpression cast && cast.getColDataType() != null) {
+      String type = ScalarExpressionSchemas.normalizeTypeName(cast.getColDataType().getDataType());
+      if (("time".equals(type) || "timewithouttimezone".equals(type))
+          && (cast.getColDataType().toString().contains("(") || cast.getColDataType().getArgumentsStringList() != null
+              && !cast.getColDataType().getArgumentsStringList().isEmpty())) {
+        return IntervalExpressionTypes.resolveTemporal(cast, columns, scalarSchemas);
+      }
       Schema declared = nonnumericSchema(cast.getColDataType().getDataType());
       if (declared != null) {
         return declared;
       }
     }
     if (expression instanceof DateTimeLiteralExpression literal) {
+      if (literal.getType() == DateTimeLiteralExpression.DateTime.TIME) {
+        return IntervalExpressionTypes.resolveTemporal(literal, columns, scalarSchemas);
+      }
       return nonnumericSchema(literal.getType().name());
     }
     if (expression instanceof TimeKeyExpression time) {
@@ -162,6 +188,19 @@ public final class ArrayExpressionSchemas {
       return numeric.schema();
     }
     return expression instanceof StringValue ? ScalarExpressionSchemas.resolve(expression) : null;
+  }
+
+  /**
+   * Identifies datetime schemas whose zone semantics survive interval arithmetic.
+   *
+   * @param schema
+   *          non-null value schema
+   * @return whether the schema describes a datetime value
+   */
+  private static boolean isDatetime(Schema schema) {
+    int type = JdbcTypeMapper.mapSchemaToJdbcType(schema);
+    return type == Types.DATE || type == Types.TIME || type == Types.TIMESTAMP || type == Types.TIME_WITH_TIMEZONE
+        || type == Types.TIMESTAMP_WITH_TIMEZONE;
   }
 
   /**

@@ -1223,6 +1223,12 @@ public class JParqPreparedStatement implements PreparedStatement {
         temporal = branchTemporal;
       } else if (temporal == TemporalValueType.UTC_TIMESTAMP && branchTemporal == TemporalValueType.LOCAL_TIMESTAMP) {
         temporal = TemporalValueType.LOCAL_TIMESTAMP;
+      } else if (temporal == TemporalValueType.UTC_TIMESTAMP
+          && branchTemporal == TemporalValueType.JDBC_LOCAL_TIMESTAMP) {
+        temporal = TemporalValueType.JDBC_LOCAL_TIMESTAMP;
+      } else if (temporal == TemporalValueType.JDBC_LOCAL_TIMESTAMP
+          && branchTemporal == TemporalValueType.LOCAL_TIMESTAMP) {
+        temporal = TemporalValueType.LOCAL_TIMESTAMP;
       }
       schemas.set(index, temporal != null && temporal.jdbcType() == type ? temporal.schema() : null);
     }
@@ -3112,7 +3118,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return switch (temporal) {
         case LOCAL_TIME -> ValueColumnType.LOCAL_TIME;
         case LOCAL_TIMESTAMP -> ValueColumnType.LOCAL_TIMESTAMP;
-        case UTC_TIMESTAMP -> ValueColumnType.TIMESTAMP;
+        case UTC_TIMESTAMP, JDBC_LOCAL_TIMESTAMP -> ValueColumnType.TIMESTAMP;
         case OFFSET_TIME -> ValueColumnType.OFFSET_TIME;
         case OFFSET_TIMESTAMP -> ValueColumnType.OFFSET_TIMESTAMP;
       };
@@ -4189,6 +4195,9 @@ public class JParqPreparedStatement implements PreparedStatement {
   private Schema columnSchema(ResultSetMetaData meta, int column) throws SQLException {
     int type = meta.getColumnType(column);
     Schema source = sourceColumnSchema(meta, column);
+    if (source != null && AvroCoercions.isLocalTimestamp(source)) {
+      return TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema();
+    }
     if (source != null && (type == Types.ARRAY || type == Types.STRUCT || IntervalType.matches(source)
         || TemporalValueType.fromSchema(source) != null || source.getType() == Schema.Type.NULL
         || JdbcTypeMapper.isCharacterType(type) || JdbcTypeMapper.isBinaryType(type))) {

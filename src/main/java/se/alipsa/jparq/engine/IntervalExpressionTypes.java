@@ -219,6 +219,18 @@ public final class IntervalExpressionTypes {
   public static Schema resolveTemporal(Expression expression, Function<Column, Schema> columns,
       Function<Select, Schema> subqueries) {
     int type = temporalType(expression, columns, subqueries);
+    Expression value = ExpressionEvaluator.unwrapParenthesis(expression);
+    Schema declared = type == Types.TIMESTAMP || value instanceof Addition || value instanceof Subtraction
+        ? ArrayExpressionSchemas.resolve(value, columns, subqueries)
+        : null;
+    if (declared != null && JdbcTypeMapper.mapSchemaToJdbcType(declared) == Types.TIMESTAMP) {
+      Schema schema = new Schema.Parser().parse(declared.toString());
+      if (schema.getProp("jparq.temporal.precision") == null) {
+        schema.addProp("jparq.temporal.precision",
+            Integer.toString(temporalPrecision(expression, columns, subqueries)));
+      }
+      return schema;
+    }
     if (type == Types.OTHER) {
       return null;
     }

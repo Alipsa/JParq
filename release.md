@@ -4,7 +4,9 @@
 
 - Serialize JSON constructor TIME and TIMESTAMP values as ISO-8601 strings, including values inside
   arrays and structs. Render UTC-adjusted timestamps in UTC independently of the JVM time zone and
-  retain local timestamp fields and fractional precision (#312).
+  retain local timestamp fields through literals, casts, arithmetic, subqueries, and materialization.
+  Support LOCALTIME and LOCALTIMESTAMP constructor arguments, case-insensitive column names, and
+  trailing zeros for explicitly declared TIME precision. Cache constructor declarations per expression (#312).
 
 - Resolve SELECT aliases inside ORDER BY arithmetic and scalar functions for computed projections
   and grouped aggregates as a fallback when no input column matches. Preserve input-column precedence,

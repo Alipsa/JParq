@@ -16,6 +16,8 @@ import java.time.OffsetDateTime;
 import java.time.OffsetTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
+import java.time.temporal.ChronoField;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
@@ -46,6 +48,7 @@ import se.alipsa.jparq.helper.TemporalValueType;
 public final class JsonFunctions {
 
   private static final ObjectMapper MAPPER = new ObjectMapper();
+  private static final DateTimeFormatter[] TIME_FORMATTERS = timeFormatters();
 
   private static final long MAX_ARRAY_LITERAL = Integer.MAX_VALUE + 1L;
   private static final String LAST_INDEX = "last";
@@ -725,7 +728,7 @@ public final class JsonFunctions {
       return MAPPER.getNodeFactory().textNode(DateTimeFormatter.ISO_LOCAL_TIME.format(time));
     }
     if (value instanceof Timestamp timestamp) {
-      return MAPPER.getNodeFactory().textNode(timestamp.toInstant().toString());
+      return toNode(timestamp.toLocalDateTime());
     }
     if (value instanceof LocalDateTime timestamp) {
       return MAPPER.getNodeFactory().textNode(DateTimeFormatter.ISO_LOCAL_DATE_TIME.format(timestamp));
@@ -808,17 +811,29 @@ public final class JsonFunctions {
       return toNode(value);
     }
     Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    if (value instanceof Time time) {
+      return timeNode(DateTimeFunctions.toLocalTime(time), effective);
+    }
+    if (value instanceof LocalTime time) {
+      return timeNode(time, effective);
+    }
     TemporalValueType temporal = TemporalValueType.fromSchema(effective);
     if (temporal != null) {
+      if (temporal == TemporalValueType.UTC_TIMESTAMP) {
+        return MAPPER.getNodeFactory().textNode(temporal.encode(value));
+      }
       return toNode(temporal.normalize(value));
     }
     if (AvroCoercions.isLocalTimestamp(effective)) {
       if (value instanceof Number number) {
-        long units = AvroCoercions.timestampUnits(effective);
-        return toNode(LocalDateTime.ofEpochSecond(Math.floorDiv(number.longValue(), units),
-            (int) (Math.floorMod(number.longValue(), units) * (1_000_000_000L / units)), ZoneOffset.UTC));
+        return toNode(
+            LocalDateTime.ofInstant(AvroCoercions.timestampInstant(number.longValue(), effective), ZoneOffset.UTC));
       }
       return toNode(value instanceof Timestamp timestamp ? timestamp.toLocalDateTime() : value);
+    }
+    if (AvroCoercions.isTimestamp(effective)) {
+      Timestamp timestamp = (Timestamp) AvroCoercions.unwrap(value, effective);
+      return MAPPER.getNodeFactory().textNode(timestamp.toInstant().toString());
     }
     if (IntervalType.matches(effective)) {
       return toNode(AvroCoercions.unwrap(value, effective));
@@ -831,6 +846,41 @@ public final class JsonFunctions {
       case BYTES -> toNode(effective.getLogicalType() == null ? value : AvroCoercions.unwrap(value, effective));
       default -> toNode(AvroCoercions.unwrap(value, effective));
     };
+  }
+
+  /**
+   * Formats TIME with an explicit SQL fractional precision when available.
+   * Storage resolution alone does not impose fractional padding.
+   *
+   * @param time
+   *          decoded wall-clock time
+   * @param schema
+   *          value declaration
+   * @return ISO time text preserving explicitly declared fractional digits
+   */
+  private static JsonNode timeNode(LocalTime time, Schema schema) {
+    String precision = schema.getProp("jparq.temporal.precision");
+    DateTimeFormatter formatter = precision == null
+        ? DateTimeFormatter.ISO_LOCAL_TIME
+        : TIME_FORMATTERS[Integer.parseInt(precision)];
+    return MAPPER.getNodeFactory().textNode(formatter.format(time));
+  }
+
+  /**
+   * Builds immutable TIME formatters once for supported SQL precisions.
+   *
+   * @return formatters indexed by fractional-second precision
+   */
+  private static DateTimeFormatter[] timeFormatters() {
+    DateTimeFormatter[] formatters = new DateTimeFormatter[10];
+    for (int digits = 0; digits < formatters.length; digits++) {
+      var builder = new DateTimeFormatterBuilder().appendPattern("HH:mm:ss");
+      if (digits > 0) {
+        builder.appendFraction(ChronoField.NANO_OF_SECOND, digits, digits, true);
+      }
+      formatters[digits] = builder.toFormatter();
+    }
+    return formatters;
   }
 
   /**
