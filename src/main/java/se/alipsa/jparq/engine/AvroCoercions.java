@@ -65,6 +65,19 @@ public final class AvroCoercions {
   }
 
   /**
+   * Recognizes physical or internally encoded UTC-adjusted timestamps.
+   *
+   * @param schema
+   *          nullable value declaration
+   * @return whether the declaration retains an instant
+   */
+  public static boolean utcTimestamp(Schema schema) {
+    Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    return effective != null && (TemporalValueType.fromSchema(effective) == TemporalValueType.UTC_TIMESTAMP
+        || isTimestamp(effective) && !isLocalTimestamp(effective));
+  }
+
+  /**
    * Returns the physical timestamp units per second.
    * 
    * @param schema

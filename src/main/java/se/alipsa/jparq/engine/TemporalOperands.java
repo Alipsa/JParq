@@ -65,7 +65,9 @@ public final class TemporalOperands {
         return array.elements().stream().map(Operand::decoded).toList();
       }
       if (value instanceof Timestamp timestamp) {
-        return utcTimestamp(declaration) ? timestamp.toInstant().atOffset(ZoneOffset.UTC) : timestamp.toLocalDateTime();
+        return AvroCoercions.utcTimestamp(declaration)
+            ? timestamp.toInstant().atOffset(ZoneOffset.UTC)
+            : timestamp.toLocalDateTime();
       }
       return value;
     }
@@ -203,19 +205,6 @@ public final class TemporalOperands {
   }
 
   /**
-   * Recognizes physical or internally encoded UTC-adjusted timestamps.
-   *
-   * @param schema
-   *          nullable value declaration
-   * @return whether the declaration retains an instant
-   */
-  public static boolean utcTimestamp(Schema schema) {
-    Schema effective = JdbcTypeMapper.nonNullSchema(schema);
-    return effective != null && (TemporalValueType.fromSchema(effective) == TemporalValueType.UTC_TIMESTAMP
-        || AvroCoercions.isTimestamp(effective) && !AvroCoercions.isLocalTimestamp(effective));
-  }
-
-  /**
    * Identifies arrays whose datetime leaves need their source declarations.
    *
    * @param schema
@@ -243,8 +232,8 @@ public final class TemporalOperands {
   }
 
   /**
-   * Identifies explicit offset sources, including NULL and nested ARRAY values. *
-   * 
+   * Identifies explicit offset sources, including NULL and nested ARRAY values.
+   *
    * @param operand
    *          source operand
    * @return whether a source has an instant or explicit offset

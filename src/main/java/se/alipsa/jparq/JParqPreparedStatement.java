@@ -738,11 +738,28 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           if an input schema cannot be inspected
    */
   public Schema declaredProjectionSchema() throws SQLException {
+    if (!setOperationQuery && (parsedSelect == null || parsedSelect.expressions().size() != 1)) {
+      return null;
+    }
+    return declaredProjectionSchema(1);
+  }
+
+  /**
+   * Resolves one projection column's interval or datetime declaration without
+   * reading rows, combining set operation branches into their common type.
+   *
+   * @param column
+   *          one-based projection column index
+   * @return the declared schema, or null when its type cannot be established
+   * @throws SQLException
+   *           if an input schema cannot be inspected
+   */
+  Schema declaredProjectionSchema(int column) throws SQLException {
     if (setOperationQuery && parsedSetQuery != null) {
       Schema common = null;
       for (SqlParser.SetComponent component : parsedSetQuery.components()) {
         try (JParqPreparedStatement branch = prepareSubqueryStatement(component.sql(), cteResults)) {
-          Schema declaration = branch.declaredProjectionSchema();
+          Schema declaration = branch.declaredProjectionSchema(column);
           common = IntervalType.matches(declaration) || IntervalType.matches(common)
               ? IntervalType.common(common, declaration)
               : IntervalExpressionTypes.commonTemporal(common, declaration);
@@ -750,36 +767,58 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       return common;
     }
-    if (parsedSelect == null || parsedSelect.expressions().size() != 1) {
+    if (parsedSelect == null || column < 1 || column > parsedSelect.expressions().size()) {
       return null;
     }
     Map<Column, Schema> columns = new HashMap<>();
-    Expression expression = parsedSelect.expressions().getFirst();
-    java.util.function.Function<Column, Schema> columnSchemas = column -> {
-      return columns.computeIfAbsent(column, reference -> {
-        try {
-          Schema source = resolveSchemaForColumn(tableReferences, reference.getTable());
-          if (source == null && !joinQuery) {
-            source = fileAvroSchema;
-          }
-          Schema.Field field = findFieldIgnoreCase(source, reference.getColumnName());
-          return field == null ? null : field.schema();
-        } catch (SQLException exception) {
-          return null;
+    Expression expression = parsedSelect.expressions().get(column - 1);
+    java.util.function.Function<Column, Schema> columnSchemas = projectionColumnSchemas(columns);
+    java.util.function.Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarSchemas = projectionScalarSchemas(
+        cteResults);
+    Schema interval = IntervalExpressionTypes.resolve(expression, columnSchemas, scalarSchemas);
+    return interval != null
+        ? interval
+        : IntervalExpressionTypes.resolveTemporal(expression, columnSchemas, scalarSchemas);
+  }
+
+  /**
+   * Resolves input column declarations for projection metadata lookups.
+   *
+   * @param cache
+   *          per-statement resolution cache
+   * @return column schema resolver backed by this statement's inputs
+   */
+  private java.util.function.Function<Column, Schema> projectionColumnSchemas(Map<Column, Schema> cache) {
+    return column -> cache.computeIfAbsent(column, reference -> {
+      try {
+        Schema source = resolveSchemaForColumn(tableReferences, reference.getTable());
+        if (source == null && !joinQuery) {
+          source = fileAvroSchema;
         }
-      });
-    };
-    java.util.function.Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarSchemas = select -> {
-      try (JParqPreparedStatement nested = prepareSubqueryStatement(select.toString(), cteResults)) {
+        Schema.Field field = findFieldIgnoreCase(source, reference.getColumnName());
+        return field == null ? null : field.schema();
+      } catch (SQLException exception) {
+        return null;
+      }
+    });
+  }
+
+  /**
+   * Resolves scalar subquery declarations for projection metadata lookups.
+   *
+   * @param cteContext
+   *          CTE values visible to the scalar subqueries
+   * @return scalar declaration resolver preparing independent nested plans
+   */
+  private java.util.function.Function<net.sf.jsqlparser.statement.select.Select, Schema> projectionScalarSchemas(
+      Map<Identifier, CteResult> cteContext) {
+    return select -> {
+      try (JParqPreparedStatement nested = prepareSubqueryStatement(select.toString(), cteContext)) {
         return nested.declaredProjectionSchema();
       } catch (SQLException exception) {
         return null;
       }
     };
-    Schema interval = IntervalExpressionTypes.resolve(expression, columnSchemas, scalarSchemas);
-    return interval != null
-        ? interval
-        : IntervalExpressionTypes.resolveTemporal(expression, columnSchemas, scalarSchemas);
   }
 
   @Override
@@ -1321,13 +1360,8 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @return whether ARRAY leaves are datetime values
    */
   private static boolean isTemporalArray(Schema schema) {
-    Schema leaf = JdbcTypeMapper.nonNullSchema(schema);
-    if (leaf == null || leaf.getType() != Schema.Type.ARRAY) {
-      return false;
-    }
-    int type = JdbcTypeMapper.mapSchemaToJdbcType(JdbcTypeMapper.innermostElementType(leaf));
-    return type == Types.DATE || type == Types.TIME || type == Types.TIMESTAMP || type == Types.TIME_WITH_TIMEZONE
-        || type == Types.TIMESTAMP_WITH_TIMEZONE;
+    Schema root = JdbcTypeMapper.nonNullSchema(schema);
+    return root != null && root.getType() == Schema.Type.ARRAY && TemporalOperands.temporalElements(root);
   }
 
   /**
@@ -1362,7 +1396,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     TemporalValueType temporal = TemporalValueType.fromSchema(to);
     if (temporal == TemporalValueType.OFFSET_TIMESTAMP && value instanceof Timestamp timestamp && from != null
-        && TemporalOperands.utcTimestamp(from)) {
+        && AvroCoercions.utcTimestamp(from)) {
       return timestamp.toInstant().atOffset(java.time.ZoneOffset.UTC);
     }
     return temporal == null ? value : temporal.normalize(value);
@@ -3620,6 +3654,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     try (PreparedStatement subStmt = prepareSubqueryStatement(sql, cteContext); ResultSet rs = subStmt.executeQuery()) {
       ResultSetMetaData meta = rs.getMetaData();
+      JParqPreparedStatement declaredSource = subStmt instanceof JParqPreparedStatement nested ? nested : null;
       int columnCount = meta.getColumnCount();
       List<String> columnAliases = ref == null ? List.of() : ref.columnAliases();
       if (!columnAliases.isEmpty() && columnAliases.size() != columnCount) {
@@ -3634,7 +3669,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           // Infer computed values before converting them to Avro; a string
           // fallback would lose their numeric type and aggregate promotion.
           if ((ref == null || !ref.lateral()) && requiresValueInference(meta, i)) {
-            CteResult data = consumeResultSet(rs, derivedRecordName(ref), columnAliases);
+            CteResult data = consumeResultSet(rs, derivedRecordName(ref), columnAliases, declaredSource);
             for (Field field : data.schema().getFields()) {
               fieldNames.add(field.name());
               valueSchemas.add(JdbcTypeMapper.nonNullSchema(field.schema()));
@@ -3642,7 +3677,7 @@ public class JParqPreparedStatement implements PreparedStatement {
             return new SubqueryTableData(data.schema(), List.copyOf(data.rows()));
           }
         }
-        schemaToUse = buildSubquerySchema(meta, ref, fieldNames, valueSchemas);
+        schemaToUse = buildSubquerySchema(meta, ref, fieldNames, valueSchemas, declaredSource);
       } else if (fieldNames.size() != columnCount || valueSchemas.size() != columnCount) {
         throw new SQLException("LATERAL subquery column count mismatch");
       }
@@ -3893,22 +3928,59 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Build an Avro schema describing the result of a derived table subquery.
+   * Retains a declared fractional-second precision on a materialized temporal
+   * column whose JDBC metadata drops it. The metadata-derived physical type is
+   * kept so stored values keep their existing representation, and precision
+   * already implied by the source storage is not re-declared.
+   *
+   * @param valueSchema
+   *          metadata-derived column schema
+   * @param source
+   *          retained source schema, or null for computed columns
+   * @param declared
+   *          producing statement's declared column schema, or null
+   * @return schema carrying the declared precision when applicable
+   */
+  private static Schema withDeclaredPrecision(Schema valueSchema, Schema source, Schema declared) {
+    Schema base = JdbcTypeMapper.nonNullSchema(valueSchema);
+    Schema declaration = JdbcTypeMapper.nonNullSchema(declared);
+    String precision = declaration == null ? null : declaration.getProp("jparq.temporal.precision");
+    Schema storage = JdbcTypeMapper.nonNullSchema(source);
+    int implied = IntervalExpressionTypes.logicalPrecision((storage == null ? base : storage).getLogicalType());
+    if (precision == null || base == null || base.getProp("jparq.temporal.precision") != null
+        || JdbcTypeMapper.mapSchemaToJdbcType(base) != JdbcTypeMapper.mapSchemaToJdbcType(declaration)
+        || implied == Integer.parseInt(precision)) {
+      return valueSchema;
+    }
+    Schema copy = Schema.create(base.getType());
+    base.getObjectProps().forEach(copy::addProp);
+    if (base.getLogicalType() != null) {
+      base.getLogicalType().addToSchema(copy);
+    }
+    copy.addProp("jparq.temporal.precision", precision);
+    return copy;
+  }
+
+  /**
+   * Builds a derived table schema from JDBC metadata, retaining declared temporal
+   * precision the metadata drops.
    *
    * @param meta
-   *          metadata describing the subquery result set
+   *          subquery result metadata
    * @param ref
-   *          table reference owning the subquery
+   *          derived table reference, or null for anonymous inputs
    * @param fieldNames
-   *          output list capturing the field names in column order
+   *          receives the allocated field names in projection order
    * @param valueSchemas
-   *          output list receiving the non-null Avro schema for each column
-   * @return the constructed Avro schema for the derived table
+   *          receives the non-null value schemas in projection order
+   * @param declaredSource
+   *          producing statement, or null when its declarations are unknown
+   * @return record schema for the materialized derived table
    * @throws SQLException
-   *           if metadata cannot be interrogated
+   *           if column metadata cannot be accessed
    */
   private Schema buildSubquerySchema(ResultSetMetaData meta, SqlParser.TableReference ref, List<String> fieldNames,
-      List<Schema> valueSchemas) throws SQLException {
+      List<Schema> valueSchemas, JParqPreparedStatement declaredSource) throws SQLException {
     String recordName = derivedRecordName(ref);
     int columnCount = meta.getColumnCount();
     List<Field> fields = new ArrayList<>(columnCount);
@@ -3928,6 +4000,8 @@ public class JParqPreparedStatement implements PreparedStatement {
           valueSchema = inferred;
         }
       }
+      valueSchema = withDeclaredPrecision(valueSchema, sourceColumnSchema(meta, i),
+          declaredSource == null ? null : declaredSource.declaredProjectionSchema(i));
       Schema union = valueSchema.getType() == Schema.Type.NULL
           ? valueSchema
           : Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
@@ -4162,7 +4236,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   private Schema buildResultSchema(ResultSetMetaData meta, String recordName, List<String> fieldNames,
-      List<Schema> valueSchemas, List<String> columnAliases, List<List<Object>> rawRows) throws SQLException {
+      List<Schema> valueSchemas, List<String> columnAliases, List<List<Object>> rawRows,
+      JParqPreparedStatement declaredSource) throws SQLException {
     int columnCount = meta.getColumnCount();
     if (columnAliases != null && !columnAliases.isEmpty() && columnAliases.size() != columnCount) {
       List<String> metaLabels = new ArrayList<>(columnCount);
@@ -4206,7 +4281,8 @@ public class JParqPreparedStatement implements PreparedStatement {
         };
         valueSchema = schemaForColumnType(type, values);
       } else {
-        valueSchema = columnSchema(meta, i);
+        valueSchema = withDeclaredPrecision(columnSchema(meta, i), sourceColumnSchema(meta, i),
+            declaredSource == null ? null : declaredSource.declaredProjectionSchema(i));
       }
       Schema union = valueSchema.getType() == Schema.Type.NULL
           ? valueSchema
@@ -4671,11 +4747,28 @@ public class JParqPreparedStatement implements PreparedStatement {
     try (JParqPreparedStatement prepared = prepareSubqueryStatement(sql, context);
         ResultSet rs = prepared.executeQuery()) {
       String recordName = tableName == null ? null : tableName.text();
-      return consumeResultSet(rs, recordName, columnAliases);
+      return consumeResultSet(rs, recordName, columnAliases, prepared);
     }
   }
 
-  private CteResult consumeResultSet(ResultSet rs, String tableName, List<String> columnAliases) throws SQLException {
+  /**
+   * Converts a subquery result to records, retaining declared temporal precision
+   * the JDBC metadata drops.
+   *
+   * @param rs
+   *          subquery result positioned before the first row
+   * @param tableName
+   *          record name carrying the CTE or derived table identity
+   * @param columnAliases
+   *          optional output column aliases
+   * @param declaredSource
+   *          producing statement, or null when its declarations are unknown
+   * @return materialized rows and their schema
+   * @throws SQLException
+   *           if a value cannot be converted to its output type
+   */
+  private CteResult consumeResultSet(ResultSet rs, String tableName, List<String> columnAliases,
+      JParqPreparedStatement declaredSource) throws SQLException {
     ResultSetMetaData meta = rs.getMetaData();
     List<String> fieldNames = new ArrayList<>(meta.getColumnCount());
     List<Schema> valueSchemas = new ArrayList<>(meta.getColumnCount());
@@ -4686,7 +4779,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     List<List<Object>> rawRows = new ArrayList<>();
     Schema schema = inferTypes
         ? null
-        : buildResultSchema(meta, tableName, fieldNames, valueSchemas, columnAliases, List.of());
+        : buildResultSchema(meta, tableName, fieldNames, valueSchemas, columnAliases, List.of(), declaredSource);
     List<GenericRecord> rows = new ArrayList<>();
     while (rs.next()) {
       List<Object> values = new ArrayList<>(meta.getColumnCount());
@@ -4702,7 +4795,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (inferTypes) {
       // Unknown types or decimal bounds require buffering. Release each row as it
       // is converted so the two complete row collections are never retained.
-      schema = buildResultSchema(meta, tableName, fieldNames, valueSchemas, columnAliases, rawRows);
+      schema = buildResultSchema(meta, tableName, fieldNames, valueSchemas, columnAliases, rawRows, declaredSource);
       for (int i = 0; i < rawRows.size(); i++) {
         rows.add(materializeResultRow(rawRows.set(i, null), schema, fieldNames, valueSchemas));
       }

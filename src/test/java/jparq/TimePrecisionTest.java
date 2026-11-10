@@ -409,6 +409,53 @@ class TimePrecisionTest {
   }
 
   /**
+   * Derived tables, CTEs, and set operations retain the declared TIME precision
+   * so JSON serialization pads every row to the common width.
+   *
+   * @throws Exception
+   *           if a query fails
+   */
+  @Test
+  void nestedTimePrecisionPadsJsonRows() throws Exception {
+    try (var connection = connection(true, true); var statement = connection.createStatement()) {
+      String[][] queries = {
+          {
+              "SELECT JSON_ARRAY(x) FROM (SELECT CAST(TIME '01:02:03' AS TIME(6)) AS x) d", "01:02:03.000000"
+          }, {
+              "WITH t AS (SELECT CAST(TIME '01:02:03' AS TIME(6)) AS x) SELECT JSON_ARRAY(x) FROM t", "01:02:03.000000"
+          }
+      };
+      for (String[] sample : queries) {
+        try (var result = statement.executeQuery(sample[0])) {
+          assertTrue(result.next(), sample[0]);
+          assertEquals("[\"" + sample[1] + "\"]", result.getString(1), sample[0]);
+          assertFalse(result.next(), sample[0]);
+        }
+      }
+      String[][] unions = {
+          {
+              "SELECT JSON_ARRAY(x) FROM (SELECT CAST(TIME '01:02:03.1' AS TIME(1)) AS x "
+                  + "UNION ALL SELECT CAST(TIME '01:02:03' AS TIME(6))) d",
+              "01:02:03.100000", "01:02:03.000000"
+          }, {
+              "WITH t AS (SELECT CAST(TIME '01:02:03.1' AS TIME(1)) AS x "
+                  + "UNION ALL SELECT CAST(TIME '01:02:03' AS TIME(6))) SELECT JSON_ARRAY(x) FROM t",
+              "01:02:03.100000", "01:02:03.000000"
+          }
+      };
+      for (String[] sample : unions) {
+        try (var result = statement.executeQuery(sample[0])) {
+          assertTrue(result.next(), sample[0]);
+          assertEquals("[\"" + sample[1] + "\"]", result.getString(1), sample[0]);
+          assertTrue(result.next(), sample[0]);
+          assertEquals("[\"" + sample[2] + "\"]", result.getString(1), sample[0]);
+          assertFalse(result.next(), sample[0]);
+        }
+      }
+    }
+  }
+
+  /**
    * Collects query IDs in their returned order.
    *
    * @param connection

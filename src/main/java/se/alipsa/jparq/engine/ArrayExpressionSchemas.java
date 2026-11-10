@@ -213,9 +213,7 @@ public final class ArrayExpressionSchemas {
    * @return whether the schema describes a datetime value
    */
   private static boolean isDatetime(Schema schema) {
-    int type = JdbcTypeMapper.mapSchemaToJdbcType(schema);
-    return type == Types.DATE || type == Types.TIME || type == Types.TIMESTAMP || type == Types.TIME_WITH_TIMEZONE
-        || type == Types.TIMESTAMP_WITH_TIMEZONE;
+    return TemporalOperands.temporalElements(schema);
   }
 
   /**

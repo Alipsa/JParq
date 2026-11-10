@@ -25,6 +25,7 @@ import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.select.SetOperationList;
+import org.apache.avro.LogicalType;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
@@ -43,6 +44,12 @@ public final class IntervalExpressionTypes {
   /** Prevents utility class instantiation. */
   private IntervalExpressionTypes() {
   }
+
+  /** Matches an explicit precision declaration such as {@code TIME(6)}. */
+  private static final Pattern DECLARED_PRECISION = Pattern.compile("\\(\\s*(\\d+)\\s*\\)");
+
+  /** Matches a literal's fractional-second digits. */
+  private static final Pattern LITERAL_FRACTION = Pattern.compile("\\.(\\d+)");
 
   /**
    * Recognizes interval literals, arithmetic, and typed input columns.
@@ -308,10 +315,25 @@ public final class IntervalExpressionTypes {
     if (precision != null) {
       return Integer.parseInt(precision);
     }
-    String logical = schema.getProp("logicalType");
-    return logical == null
-        ? 0
-        : logical.endsWith("nanos") ? 9 : logical.endsWith("micros") ? 6 : logical.endsWith("millis") ? 3 : 0;
+    return logicalPrecision(schema.getLogicalType());
+  }
+
+  /**
+   * Maps a datetime logical type to its fractional-second precision.
+   *
+   * @param logical
+   *          declared logical type, or null
+   * @return fractional-second digits, or 0 for other declarations
+   */
+  public static int logicalPrecision(LogicalType logical) {
+    return logical instanceof LogicalTypes.TimeMicros || logical instanceof LogicalTypes.TimestampMicros
+        || logical instanceof LogicalTypes.LocalTimestampMicros
+            ? 6
+            : logical instanceof LogicalTypes.TimeMillis || logical instanceof LogicalTypes.TimestampMillis
+                || logical instanceof LogicalTypes.LocalTimestampMillis
+                    ? 3
+                    : logical instanceof LogicalTypes.TimestampNanos
+                        || logical instanceof LogicalTypes.LocalTimestampNanos ? 9 : 0;
   }
 
   /**
@@ -401,20 +423,14 @@ public final class IntervalExpressionTypes {
     if (schema != null) {
       Schema declaration = JdbcTypeMapper.nonNullSchema(schema);
       String precision = declaration.getProp("jparq.temporal.precision");
-      if (precision != null) {
-        return Integer.parseInt(precision);
-      }
-      String logical = declaration.getProp("logicalType");
-      return logical == null
-          ? 0
-          : logical.endsWith("nanos") ? 9 : logical.endsWith("micros") ? 6 : logical.endsWith("millis") ? 3 : 0;
+      return precision == null ? logicalPrecision(declaration.getLogicalType()) : Integer.parseInt(precision);
     }
     if (value instanceof CastExpression cast) {
       if (cast.getColDataType() != null && cast.getColDataType().getArgumentsStringList() != null
           && !cast.getColDataType().getArgumentsStringList().isEmpty()) {
         return Integer.parseInt(cast.getColDataType().getArgumentsStringList().getFirst());
       }
-      Matcher declared = Pattern.compile("\\(\\s*(\\d+)\\s*\\)").matcher(cast.getColDataType().toString());
+      Matcher declared = DECLARED_PRECISION.matcher(cast.getColDataType().toString());
       return declared.find()
           ? Integer.parseInt(declared.group(1))
           : temporalType(value, columns, subqueries) == Types.TIMESTAMP ? 6 : 0;
@@ -423,7 +439,7 @@ public final class IntervalExpressionTypes {
       return 9;
     }
     String text = value == null ? "" : value.toString();
-    Matcher fraction = Pattern.compile("\\.(\\d+)").matcher(text);
+    Matcher fraction = LITERAL_FRACTION.matcher(text);
     return fraction.find() ? Math.min(9, fraction.group(1).length()) : 0;
   }
 

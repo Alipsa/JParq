@@ -15,6 +15,7 @@ import java.util.List;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.TemporalOperands;
 import se.alipsa.jparq.engine.TemporalOperands.Operand;
 import se.alipsa.jparq.helper.TemporalValueType;
@@ -27,11 +28,11 @@ class TemporalOperandsTest {
   void recognizesUtcTimestamps() {
     Schema utc = LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
     Schema local = LogicalTypes.localTimestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
-    assertTrue(TemporalOperands.utcTimestamp(utc));
-    assertFalse(TemporalOperands.utcTimestamp(local));
-    assertTrue(TemporalOperands.utcTimestamp(TemporalValueType.UTC_TIMESTAMP.schema()));
-    assertFalse(TemporalOperands.utcTimestamp(TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema()));
-    assertFalse(TemporalOperands.utcTimestamp(null));
+    assertTrue(AvroCoercions.utcTimestamp(utc));
+    assertFalse(AvroCoercions.utcTimestamp(local));
+    assertTrue(AvroCoercions.utcTimestamp(TemporalValueType.UTC_TIMESTAMP.schema()));
+    assertFalse(AvroCoercions.utcTimestamp(TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema()));
+    assertFalse(AvroCoercions.utcTimestamp(null));
   }
 
   /** Finds the innermost element type of nested ARRAY declarations. */

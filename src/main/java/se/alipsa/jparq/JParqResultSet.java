@@ -1,7 +1,6 @@
 package se.alipsa.jparq;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.sql.Array;
 import java.sql.Blob;
 import java.sql.Date;
@@ -1395,7 +1394,7 @@ public class JParqResultSet extends ResultSetAdapter {
         return null;
       }
       case byte[] bytes -> {
-        return new String(bytes, StandardCharsets.UTF_8);
+        return sqlText(bytes);
       }
       case Object[] objects -> {
         return sqlText(objects);
@@ -1410,10 +1409,7 @@ public class JParqResultSet extends ResultSetAdapter {
         return sqlText(values);
       }
       case ByteBuffer buffer -> {
-        ByteBuffer dup = buffer.duplicate();
-        byte[] bytes = new byte[dup.remaining()];
-        dup.get(bytes);
-        return new String(bytes, StandardCharsets.UTF_8);
+        return sqlText(buffer);
       }
       default -> {
       }
