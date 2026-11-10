@@ -22,10 +22,19 @@ public final class SqlText {
 
   /**
    * SQL timestamp character form, including seconds and significant fractions.
+   * The offset follows the SQL time zone interval syntax, printing {@code +00:00}
+   * for a zero offset.
    */
   private static final DateTimeFormatter OFFSET_TIMESTAMP = new DateTimeFormatterBuilder()
       .append(DateTimeFormatter.ISO_LOCAL_DATE).appendLiteral(' ').appendPattern("HH:mm:ss")
-      .appendFraction(ChronoField.NANO_OF_SECOND, 0, 9, true).appendOffsetId().toFormatter(Locale.ROOT);
+      .appendFraction(ChronoField.NANO_OF_SECOND, 0, 9, true).appendOffset("+HH:MM", "+00:00").toFormatter(Locale.ROOT);
+
+  /**
+   * SQL time character form with an explicit offset, printing {@code +00:00} for
+   * a zero offset.
+   */
+  private static final DateTimeFormatter OFFSET_TIME = new DateTimeFormatterBuilder().appendPattern("HH:mm:ss")
+      .appendFraction(ChronoField.NANO_OF_SECOND, 0, 9, true).appendOffset("+HH:MM", "+00:00").toFormatter(Locale.ROOT);
 
   /** Prevents utility class instantiation. */
   private SqlText() {
@@ -76,7 +85,7 @@ public final class SqlText {
       return OFFSET_TIMESTAMP.format(timestamp);
     }
     if (value instanceof OffsetTime time) {
-      return DateTimeFormatter.ISO_OFFSET_TIME.format(time);
+      return OFFSET_TIME.format(time);
     }
     return value == null ? null : value.toString();
   }

@@ -23,6 +23,7 @@ import org.apache.avro.generic.IndexedRecord;
 import se.alipsa.jparq.NumericType;
 import se.alipsa.jparq.engine.AvroCoercions;
 import se.alipsa.jparq.engine.SqlExceptions;
+import se.alipsa.jparq.engine.TemporalOperands;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalValueType;
 
@@ -144,7 +145,7 @@ public final class StructArrayTypes {
    * @return lossless internal declaration, or the finer compatible physical unit
    */
   private static Schema timestampSchema(Schema left, Schema right) {
-    if (utcTimestamp(left) != utcTimestamp(right)) {
+    if (TemporalOperands.utcTimestamp(left) != TemporalOperands.utcTimestamp(right)) {
       return TemporalValueType.fromSchema(left) == TemporalValueType.LOCAL_TIMESTAMP
           || TemporalValueType.fromSchema(right) == TemporalValueType.LOCAL_TIMESTAMP
               ? TemporalValueType.LOCAL_TIMESTAMP.schema()
@@ -168,23 +169,11 @@ public final class StructArrayTypes {
     long first = AvroCoercions.timestampUnits(left);
     long second = AvroCoercions.timestampUnits(right);
     if (first != second && Math.max(first, second) == 1_000_000_000L) {
-      return utcTimestamp(left) && utcTimestamp(right)
+      return TemporalOperands.utcTimestamp(left) && TemporalOperands.utcTimestamp(right)
           ? TemporalValueType.UTC_TIMESTAMP.schema()
           : TemporalValueType.LOCAL_TIMESTAMP.schema();
     }
     return first >= second ? left : right;
-  }
-
-  /**
-   * Identifies physical or internally encoded UTC-adjusted timestamps.
-   *
-   * @param schema
-   *          non-null timestamp declaration
-   * @return whether the declaration retains an instant rather than local fields
-   */
-  private static boolean utcTimestamp(Schema schema) {
-    return TemporalValueType.fromSchema(schema) == TemporalValueType.UTC_TIMESTAMP
-        || AvroCoercions.isTimestamp(schema) && !AvroCoercions.isLocalTimestamp(schema);
   }
 
   /**
@@ -364,7 +353,7 @@ public final class StructArrayTypes {
     Object decoded = TemporalValueType.fromSchema(to) == TemporalValueType.OFFSET_TIMESTAMP
         ? AvroCoercions.unwrapLocalFields(value, from)
         : AvroCoercions.unwrap(value, from);
-    if (utcTimestamp(from) && decoded instanceof Timestamp timestamp
+    if (TemporalOperands.utcTimestamp(from) && decoded instanceof Timestamp timestamp
         && TemporalValueType.fromSchema(to) == TemporalValueType.OFFSET_TIMESTAMP) {
       decoded = timestamp.toInstant().atOffset(ZoneOffset.UTC);
     }

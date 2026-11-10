@@ -68,6 +68,18 @@ public enum TemporalValueType {
   }
 
   /**
+   * Tests whether a value already has this type's Java representation, in which
+   * case {@link #normalize(Object)} returns it unchanged.
+   *
+   * @param value
+   *          value to test, possibly null
+   * @return whether the value needs no conversion
+   */
+  public boolean isInstance(Object value) {
+    return value != null && javaClass.isInstance(value);
+  }
+
+  /**
    * Creates the lossless internal schema.
    *
    * @return internal string schema retaining the temporal descriptor

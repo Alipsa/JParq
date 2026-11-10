@@ -18,7 +18,8 @@ import se.alipsa.jparq.engine.SqlText;
  */
 class TemporalCharacterFormatTest {
   /**
-   * Includes seconds and uses a space even when Java's default text omits them.
+   * Includes seconds and uses a space even when Java's default text omits them. A
+   * zero offset prints as {@code +00:00}, the SQL time zone interval syntax.
    */
   @Test
   void formatsOffsetElementsWithScalarRules() {
@@ -29,6 +30,8 @@ class TemporalCharacterFormatTest {
     assertEquals("[[2024-01-02 03:04:00+01:00, null], [03:04:00+01:00]]", SqlText.cast(List.of(new Object[]{
         timestamp, null
     }, List.of(time))));
+    assertEquals("2024-07-01 12:00:00+00:00", SqlText.cast(OffsetDateTime.parse("2024-07-01T12:00:00Z")));
+    assertEquals("12:00:00+00:00", SqlText.cast(OffsetTime.parse("12:00:00Z")));
   }
 
   /**
@@ -51,16 +54,28 @@ class TemporalCharacterFormatTest {
                 + "CAST(ARRAY[ts] AS VARCHAR(200)),tm,CAST(tm AS VARCHAR(100)) FROM (" + source + ") s")) {
           assertTrue(result.next());
           OffsetDateTime timestamp = result.getObject(1, OffsetDateTime.class);
-          String expectedTimestamp = DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(timestamp).replace('T', ' ');
+          String expectedTimestamp = sqlOffsetText(DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(timestamp));
           assertEquals(expectedTimestamp, result.getString(1));
           assertEquals(expectedTimestamp, result.getString(2));
           assertEquals("[" + expectedTimestamp + "]", result.getString(3));
           assertEquals("[" + expectedTimestamp + "]", result.getString(4));
           OffsetTime time = result.getObject(5, OffsetTime.class);
-          assertEquals(DateTimeFormatter.ISO_OFFSET_TIME.format(time), result.getString(5));
+          assertEquals(sqlOffsetText(DateTimeFormatter.ISO_OFFSET_TIME.format(time)), result.getString(5));
           assertEquals(result.getString(5), result.getString(6));
         }
       }
     }
+  }
+
+  /**
+   * Prints a zero offset as {@code +00:00} in the SQL time zone interval syntax,
+   * matching the scalar and ARRAY character CAST output.
+   *
+   * @param isoText
+   *          ISO offset date-time or time text ending in {@code Z}
+   * @return the SQL text form with an explicit zero offset
+   */
+  private static String sqlOffsetText(String isoText) {
+    return isoText.endsWith("Z") ? isoText.substring(0, isoText.length() - 1) + "+00:00" : isoText.replace('T', ' ');
   }
 }

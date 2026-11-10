@@ -6,6 +6,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.DriverManager;
+import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.util.Collections;
 import java.util.List;
@@ -578,5 +579,29 @@ class BinaryCastBehaviorTest {
    */
   private static String url() {
     return "jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath();
+  }
+
+  /**
+   * A JDBC getter reports invalid UTF-8 elements of an ARRAY as a
+   * SQLDataException (SQLState 22021) rather than an unchecked
+   * IllegalArgumentException.
+   *
+   * @throws Exception
+   *           if connection creation fails
+   */
+  @Test
+  void getStringOnBinaryArrayThrowsSqlDataException() throws Exception {
+    try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
+      try (var result = statement.executeQuery("SELECT ARRAY[X'FF']")) {
+        assertTrue(result.next());
+        SQLException failure = assertThrows(SQLDataException.class, () -> result.getString(1));
+        assertEquals("22021", failure.getSQLState());
+      }
+      try (var result = statement.executeQuery("SELECT ARRAY[ARRAY[X'FF']]")) {
+        assertTrue(result.next());
+        SQLException failure = assertThrows(SQLDataException.class, () -> result.getString(1));
+        assertEquals("22021", failure.getSQLState());
+      }
+    }
   }
 }

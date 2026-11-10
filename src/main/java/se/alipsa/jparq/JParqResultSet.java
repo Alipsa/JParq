@@ -13,6 +13,8 @@ import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -53,6 +55,7 @@ import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
+import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
@@ -1395,16 +1398,16 @@ public class JParqResultSet extends ResultSetAdapter {
         return new String(bytes, StandardCharsets.UTF_8);
       }
       case Object[] objects -> {
-        return se.alipsa.jparq.engine.SqlText.cast(objects);
+        return sqlText(objects);
       }
-      case java.time.OffsetDateTime timestamp -> {
-        return se.alipsa.jparq.engine.SqlText.cast(timestamp);
+      case OffsetDateTime timestamp -> {
+        return SqlText.cast(timestamp);
       }
-      case java.time.OffsetTime time -> {
-        return se.alipsa.jparq.engine.SqlText.cast(time);
+      case OffsetTime time -> {
+        return SqlText.cast(time);
       }
       case List<?> values -> {
-        return se.alipsa.jparq.engine.SqlText.cast(values);
+        return sqlText(values);
       }
       case ByteBuffer buffer -> {
         ByteBuffer dup = buffer.duplicate();
@@ -1421,6 +1424,27 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public String getString(String columnLabel) throws SQLException {
     return getString(findColumn(columnLabel));
+  }
+
+  /**
+   * Renders an ARRAY through the shared SQL text form, converting invalid binary
+   * elements into the SQLDataException (SQLState 22021) a JDBC getter must throw.
+   *
+   * @param value
+   *          array elements
+   * @return bracketed element text
+   * @throws SQLException
+   *           if an element is not valid UTF-8, with SQLState 22021
+   */
+  private static String sqlText(Object value) throws SQLException {
+    try {
+      return SqlText.cast(value);
+    } catch (IllegalArgumentException failure) {
+      if (failure.getCause() instanceof SQLException sql) {
+        throw sql;
+      }
+      throw failure;
+    }
   }
 
   @Override

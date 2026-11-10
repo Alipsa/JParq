@@ -86,6 +86,7 @@ import se.alipsa.jparq.engine.ExpressionEvaluator;
 import se.alipsa.jparq.engine.HadoopConfigurations;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.InMemoryRecordReader;
+import se.alipsa.jparq.engine.IntervalExpressionTypes;
 import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.JoinPredicatePlanner;
 import se.alipsa.jparq.engine.JoinRecordReader;
@@ -109,6 +110,7 @@ import se.alipsa.jparq.engine.SqlParser;
 import se.alipsa.jparq.engine.SqlParser.QualifiedExpansionColumn;
 import se.alipsa.jparq.engine.SqlParser.ValueTableDefinition;
 import se.alipsa.jparq.engine.SubqueryExecutor;
+import se.alipsa.jparq.engine.TemporalOperands;
 import se.alipsa.jparq.engine.UnnestTableBuilder;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
@@ -743,7 +745,7 @@ public class JParqPreparedStatement implements PreparedStatement {
           Schema declaration = branch.declaredProjectionSchema();
           common = IntervalType.matches(declaration) || IntervalType.matches(common)
               ? IntervalType.common(common, declaration)
-              : se.alipsa.jparq.engine.IntervalExpressionTypes.commonTemporal(common, declaration);
+              : IntervalExpressionTypes.commonTemporal(common, declaration);
         }
       }
       return common;
@@ -774,10 +776,10 @@ public class JParqPreparedStatement implements PreparedStatement {
         return null;
       }
     };
-    Schema interval = se.alipsa.jparq.engine.IntervalExpressionTypes.resolve(expression, columnSchemas, scalarSchemas);
+    Schema interval = IntervalExpressionTypes.resolve(expression, columnSchemas, scalarSchemas);
     return interval != null
         ? interval
-        : se.alipsa.jparq.engine.IntervalExpressionTypes.resolveTemporal(expression, columnSchemas, scalarSchemas);
+        : IntervalExpressionTypes.resolveTemporal(expression, columnSchemas, scalarSchemas);
   }
 
   @Override
@@ -1323,10 +1325,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (leaf == null || leaf.getType() != Schema.Type.ARRAY) {
       return false;
     }
-    while (leaf.getType() == Schema.Type.ARRAY) {
-      leaf = JdbcTypeMapper.nonNullSchema(leaf.getElementType());
-    }
-    int type = JdbcTypeMapper.mapSchemaToJdbcType(leaf);
+    int type = JdbcTypeMapper.mapSchemaToJdbcType(JdbcTypeMapper.innermostElementType(leaf));
     return type == Types.DATE || type == Types.TIME || type == Types.TIMESTAMP || type == Types.TIME_WITH_TIMEZONE
         || type == Types.TIMESTAMP_WITH_TIMEZONE;
   }
@@ -1350,12 +1349,8 @@ public class JParqPreparedStatement implements PreparedStatement {
     Schema from = JdbcTypeMapper.nonNullSchema(source);
     Schema to = JdbcTypeMapper.nonNullSchema(target);
     if (to.getType() == Schema.Type.ARRAY) {
-      Iterable<?> elements;
-      if (value instanceof Object[] array) {
-        elements = Arrays.asList(array);
-      } else if (value instanceof Iterable<?> iterable) {
-        elements = iterable;
-      } else {
+      Iterable<?> elements = TemporalOperands.elementsOf(value);
+      if (elements == null) {
         return value;
       }
       Schema elementSource = from != null && from.getType() == Schema.Type.ARRAY ? from.getElementType() : null;
@@ -1367,8 +1362,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     TemporalValueType temporal = TemporalValueType.fromSchema(to);
     if (temporal == TemporalValueType.OFFSET_TIMESTAMP && value instanceof Timestamp timestamp && from != null
-        && (TemporalValueType.fromSchema(from) == TemporalValueType.UTC_TIMESTAMP
-            || AvroCoercions.isTimestamp(from) && !AvroCoercions.isLocalTimestamp(from))) {
+        && TemporalOperands.utcTimestamp(from)) {
       return timestamp.toInstant().atOffset(java.time.ZoneOffset.UTC);
     }
     return temporal == null ? value : temporal.normalize(value);
@@ -3055,8 +3049,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       Schema intervalDeclaration = null;
       for (List<Expression> expressions : valueTable.rows()) {
-        Schema declaration = se.alipsa.jparq.engine.IntervalExpressionTypes.resolve(expressions.get(i), column -> null,
-            select -> null);
+        Schema declaration = IntervalExpressionTypes.resolve(expressions.get(i), column -> null, select -> null);
         intervalDeclaration = IntervalType.common(intervalDeclaration, declaration);
       }
       if (intervalDeclaration != null) {
@@ -4338,7 +4331,10 @@ public class JParqPreparedStatement implements PreparedStatement {
     TemporalValueType temporal = TemporalValueType.fromSchema(effective);
     if (temporal != null) {
       try {
-        return temporal.encode(value);
+        // Values already in the target's Java representation are stored as-is:
+        // re-encoding a JDBC Timestamp as wall-clock text would collapse
+        // distinct instants during a DST overlap on decode.
+        return temporal.isInstance(value) ? value : temporal.encode(value);
       } catch (java.time.DateTimeException e) {
         throw new SQLException("Invalid temporal value during materialization", "22007", e);
       }

@@ -17,6 +17,7 @@ import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TranscodingFunction;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.NumericType;
 import se.alipsa.jparq.engine.function.StructArrayTypes;
@@ -28,6 +29,19 @@ import se.alipsa.jparq.helper.TemporalValueType;
 public final class ArrayExpressionSchemas {
   /** Prevents utility class construction. */
   private ArrayExpressionSchemas() {
+  }
+
+  /**
+   * Identifies a plain {@code ARRAY(...)} constructor call, excluding
+   * {@code ARRAY(SELECT ...)} subquery forms.
+   *
+   * @param function
+   *          parsed function expression
+   * @return whether it is an ARRAY constructor with value arguments
+   */
+  public static boolean isArrayConstructor(Function function) {
+    return function != null && "ARRAY".equalsIgnoreCase(function.getName()) && function.getParameters() != null
+        && function.getParameters().stream().noneMatch(Select.class::isInstance);
   }
 
   /**
@@ -90,7 +104,7 @@ public final class ArrayExpressionSchemas {
    *           carrying a JDBC cause for incompatible declarations
    */
   public static Schema resolve(Expression expression, java.util.function.Function<Column, Schema> columns,
-      java.util.function.Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarSchemas) {
+      java.util.function.Function<Select, Schema> scalarSchemas) {
     if (expression instanceof TranscodingFunction) {
       CastExpression cast = CastExpressions.asCast(expression, name -> columns.apply(new Column(name)) != null);
       return cast == null ? null : resolve(cast, columns, scalarSchemas);
@@ -111,7 +125,7 @@ public final class ArrayExpressionSchemas {
     if (expression instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
       return resolve(list.getFirst(), columns, scalarSchemas);
     }
-    if (expression instanceof net.sf.jsqlparser.statement.select.Select select) {
+    if (expression instanceof Select select) {
       return scalarSchemas.apply(select);
     }
     if (expression instanceof ArrayConstructor array) {
@@ -267,8 +281,7 @@ public final class ArrayExpressionSchemas {
    *           incompatible
    */
   private static Schema common(List<? extends Expression> expressions,
-      java.util.function.Function<Column, Schema> columns,
-      java.util.function.Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarSchemas) {
+      java.util.function.Function<Column, Schema> columns, java.util.function.Function<Select, Schema> scalarSchemas) {
     Schema result = null;
     for (Expression expression : expressions) {
       result = common(result, resolve(expression, columns, scalarSchemas));
@@ -318,6 +331,11 @@ public final class ArrayExpressionSchemas {
     if ((leftType == Types.TIMESTAMP || leftType == Types.TIMESTAMP_WITH_TIMEZONE)
         && (rightType == Types.TIMESTAMP || rightType == Types.TIMESTAMP_WITH_TIMEZONE) && leftType != rightType) {
       return TemporalValueType.OFFSET_TIMESTAMP.schema();
+    }
+    if (leftType == Types.TIME && rightType == Types.TIME) {
+      // Keep the widest fractional-second precision so every combined row
+      // serializes with the same width.
+      return IntervalExpressionTypes.commonTemporal(left, right);
     }
     NumericType first = NumericType.of(leftType, left);
     NumericType second = NumericType.of(rightType, right);

@@ -7,14 +7,17 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
 import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.NullValue;
 import net.sf.jsqlparser.expression.StringValue;
+import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TimeValue;
 import net.sf.jsqlparser.expression.TimestampValue;
+import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
@@ -91,7 +94,7 @@ public final class ScalarExpressionSchemas {
   private static Schema nativeTimestampConditional(Expression expression) {
     Expression value = ExpressionEvaluator.unwrapParenthesis(expression);
     List<? extends Expression> branches;
-    if (value instanceof net.sf.jsqlparser.expression.CaseExpression choice) {
+    if (value instanceof CaseExpression choice) {
       branches = ExpressionBranches.caseResults(choice);
     } else if (value instanceof net.sf.jsqlparser.expression.Function function
         && "COALESCE".equalsIgnoreCase(function.getName()) && function.getParameters() != null) {
@@ -105,9 +108,9 @@ public final class ScalarExpressionSchemas {
       if (result instanceof NullValue) {
         continue;
       }
-      var keyword = result instanceof net.sf.jsqlparser.schema.Column column
+      var keyword = result instanceof Column column
           ? SqlExpressionNormalizer.timeKeyword(column)
-          : result instanceof net.sf.jsqlparser.expression.TimeKeyExpression time ? time : null;
+          : result instanceof TimeKeyExpression time ? time : null;
       if (keyword != null && "LOCALTIMESTAMP".equalsIgnoreCase(keyword.getStringValue())
           || nativeTimestampConditional(result) != null) {
         found = true;

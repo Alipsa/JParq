@@ -2,12 +2,11 @@ package se.alipsa.jparq.engine;
 
 import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.sql.Date;
 import java.sql.SQLException;
 import java.sql.Timestamp;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
@@ -20,6 +19,7 @@ import java.util.Set;
 import java.util.function.BiFunction;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
+import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.CollateExpression;
@@ -45,9 +45,12 @@ import net.sf.jsqlparser.expression.operators.arithmetic.Multiplication;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.NumericType;
+import se.alipsa.jparq.engine.TemporalOperands.Elements;
+import se.alipsa.jparq.engine.TemporalOperands.Operand;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
 import se.alipsa.jparq.engine.function.ArrayFunctions;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
@@ -84,6 +87,12 @@ public final class ValueExpressionEvaluator {
   private final WindowState windowState;
   private final FunctionSupport functionSupport;
   private ExpressionEvaluator conditionEvaluator;
+  /** Branch decoder retained across rows so JSON validation stays enabled. */
+  private final BiFunction<Expression, GenericRecord, Object> jsonBranchOperand = (branch,
+      row) -> declaredOperand(branch, row, true);
+  /** Branch decoder retained across rows for engine-value evaluation. */
+  private final BiFunction<Expression, GenericRecord, Object> engineBranchOperand = (branch,
+      row) -> declaredOperand(branch, row, false);
 
   /**
    * Create an evaluator bound to the supplied Avro {@link Schema}.
@@ -288,7 +297,7 @@ public final class ValueExpressionEvaluator {
 
     if (expression instanceof CaseExpression caseExpr) {
       Schema declaration = valueSchema(caseExpr);
-      if (declaration != null && timestampResult(declaration)) {
+      if (declaration != null && TemporalOperands.timestampResult(declaration)) {
         return declaredOperand(caseExpr, record, false).engineValue();
       }
       Object value = evaluateCase(caseExpr, record);
@@ -355,7 +364,7 @@ public final class ValueExpressionEvaluator {
     }
     if (expression instanceof ArrayConstructor array) {
       Schema declaration = valueSchema(array);
-      if (declaration != null && offsetArray(declaration)) {
+      if (declaration != null && TemporalOperands.offsetArray(declaration)) {
         return declaredOperand(array, record, false).engineValue();
       }
       return functionSupport.evaluate(array, record);
@@ -372,14 +381,13 @@ public final class ValueExpressionEvaluator {
     if (expression instanceof Function func) {
       if ("COALESCE".equalsIgnoreCase(func.getName())) {
         Schema declaration = valueSchema(func);
-        if (declaration != null && timestampResult(declaration)) {
+        if (declaration != null && TemporalOperands.timestampResult(declaration)) {
           return declaredOperand(func, record, false).engineValue();
         }
       }
-      if ("ARRAY".equalsIgnoreCase(func.getName()) && func.getParameters() != null
-          && func.getParameters().stream().noneMatch(net.sf.jsqlparser.statement.select.Select.class::isInstance)) {
+      if (ArrayExpressionSchemas.isArrayConstructor(func)) {
         Schema declaration = valueSchema(func);
-        if (declaration != null && offsetArray(declaration)) {
+        if (declaration != null && TemporalOperands.offsetArray(declaration)) {
           return declaredOperand(func, record, false).engineValue();
         }
       }
@@ -388,7 +396,7 @@ public final class ValueExpressionEvaluator {
     if (expression instanceof AnalyticExpression analytic) {
       return evaluateAnalytic(analytic, record);
     }
-    if (expression instanceof net.sf.jsqlparser.statement.select.Select subSelect) {
+    if (expression instanceof Select subSelect) {
       return evaluateScalarSubquery(subSelect, record);
     }
     if (LiteralConverter.isLiteral(expression)) {
@@ -505,7 +513,7 @@ public final class ValueExpressionEvaluator {
     throw new IllegalArgumentException("Unsupported analytic function: " + analytic);
   }
 
-  private Object evaluateScalarSubquery(net.sf.jsqlparser.statement.select.Select subSelect, GenericRecord record) {
+  private Object evaluateScalarSubquery(Select subSelect, GenericRecord record) {
     if (subqueryExecutor == null) {
       throw new IllegalStateException("Scalar subqueries require a subquery executor");
     }
@@ -680,120 +688,6 @@ public final class ValueExpressionEvaluator {
   }
 
   /**
-   * Retains an evaluated value's declaration until temporal promotion is applied.
-   *
-   * @param value
-   *          decoded value or already serialized array
-   * @param declaration
-   *          source declaration, or null when unknown
-   */
-  private record DeclaredOperand(Object value, Schema declaration) {
-    /**
-     * Serializes the source value without reinterpreting an existing node.
-     *
-     * @return corresponding JSON node
-     */
-    private JsonNode node() {
-      if (value instanceof DeclaredArray array) {
-        List<JsonNode> nodes = new ArrayList<>();
-        for (DeclaredOperand element : array.elements()) {
-          nodes.add(element.node());
-        }
-        return JsonFunctions.constructorValue(nodes, null);
-      }
-      return value instanceof JsonNode node ? node : JsonFunctions.constructorValue(value, declaration);
-    }
-
-    /**
-     * Returns decoded values for shared ARRAY validation and temporal promotion.
-     *
-     * @return value retaining its UTC instant or local fields
-     */
-    private Object decoded() {
-      if (value instanceof DeclaredArray array) {
-        return array.elements().stream().map(DeclaredOperand::decoded).toList();
-      }
-      if (value instanceof Timestamp timestamp) {
-        return utcTimestamp(declaration) ? timestamp.toInstant().atOffset(ZoneOffset.UTC) : timestamp.toLocalDateTime();
-      }
-      return value;
-    }
-
-    /**
-     * Decodes nested stored ARRAY sources before engine offset promotion.
-     *
-     * @return decoded elements retaining each UTC source's instant
-     */
-    private Object engineDecoded() {
-      if (value instanceof DeclaredArray array) {
-        return array.elements().stream().map(DeclaredOperand::engineDecoded).toList();
-      }
-      Schema schema = JdbcTypeMapper.nonNullSchema(declaration);
-      if (value != null && schema != null && schema.getType() == Schema.Type.ARRAY) {
-        Iterable<?> elements;
-        if (value instanceof Object[] array) {
-          elements = java.util.Arrays.asList(array);
-        } else if (value instanceof Iterable<?> iterable) {
-          elements = iterable;
-        } else {
-          return decoded();
-        }
-        List<Object> decoded = new ArrayList<>();
-        for (Object element : elements) {
-          decoded.add(new DeclaredOperand(element, schema.getElementType()).engineDecoded());
-        }
-        return decoded;
-      }
-      return decoded();
-    }
-
-    /**
-     * Returns a value in the common engine representation, validating arrays once.
-     *
-     * @return JDBC or java.time value matching the common declaration
-     */
-    private Object engineValue() {
-      if (value == null) {
-        return null;
-      }
-      if (value instanceof DeclaredArray) {
-        List<Object> values = new ArrayList<>();
-        for (DeclaredOperand element : ((DeclaredArray) value).elements()) {
-          values.add(element.engineDecoded());
-        }
-        return ArrayFunctions.homogenizeArrayValues(values, declaration);
-      }
-      Schema effective = JdbcTypeMapper.nonNullSchema(declaration);
-      if (effective != null && effective.getType() == Schema.Type.ARRAY) {
-        List<Object> values = new ArrayList<>();
-        if (value instanceof Object[] array) {
-          java.util.Collections.addAll(values, array);
-        } else if (value instanceof Iterable<?> iterable) {
-          iterable.forEach(values::add);
-        }
-        return ArrayFunctions.homogenizeArrayValues(values);
-      }
-      TemporalValueType temporal = TemporalValueType.fromSchema(effective);
-      if (temporal != null) {
-        return temporal.normalize(value);
-      }
-      return value instanceof java.time.LocalDateTime && effective != null && AvroCoercions.isLocalTimestamp(effective)
-          ? DateTimeFunctions.toTimestamp(value)
-          : value;
-    }
-
-  }
-
-  /**
-   * Retains decoded ARRAY elements until validation and promotion are complete.
-   *
-   * @param elements
-   *          evaluated elements with source declarations
-   */
-  private record DeclaredArray(List<DeclaredOperand> elements) {
-  }
-
-  /**
    * Evaluates temporal ARRAY and JSON arguments once, keeping selected branches'
    * declarations before any required offset promotion.
    *
@@ -803,7 +697,7 @@ public final class ValueExpressionEvaluator {
    *          current input row
    * @return evaluated value and source declaration
    */
-  private DeclaredOperand declaredOperand(Expression expression, GenericRecord record) {
+  private Operand declaredOperand(Expression expression, GenericRecord record) {
     return declaredOperand(expression, record, true);
   }
 
@@ -819,58 +713,56 @@ public final class ValueExpressionEvaluator {
    *          whether JSON must perform the shared runtime checks
    * @return evaluated operand with its source declaration
    */
-  private DeclaredOperand declaredOperand(Expression expression, GenericRecord record, boolean validateArrays) {
+  private Operand declaredOperand(Expression expression, GenericRecord record, boolean validateArrays) {
     Expression unwrapped = ExpressionEvaluator.unwrapParenthesis(expression);
     if (unwrapped instanceof CaseExpression choice && numericType(choice) == null
         && intervalSchema(unwrapped) == null) {
       return temporalBranch(unwrapped,
-          (DeclaredOperand) evaluateCase(choice, record, (branch, row) -> declaredOperand(branch, row, validateArrays)),
+          (Operand) evaluateCase(choice, record, validateArrays ? jsonBranchOperand : engineBranchOperand),
           validateArrays);
     }
     if (unwrapped instanceof Function function && "COALESCE".equalsIgnoreCase(function.getName())
         && function.getParameters() != null && numericType(function) == null && intervalSchema(unwrapped) == null) {
       for (Expression argument : function.getParameters()) {
-        DeclaredOperand operand = declaredOperand(argument, record, validateArrays);
+        Operand operand = declaredOperand(argument, record, validateArrays);
         if (operand.value() != null) {
           return temporalBranch(unwrapped, operand, validateArrays);
         }
       }
-      return new DeclaredOperand(null, null);
+      return new Operand(null, null);
     }
     if ((unwrapped instanceof Addition || unwrapped instanceof Subtraction) && numericType(unwrapped) == null
         && intervalSchema(unwrapped) == null) {
-      var binary = (net.sf.jsqlparser.expression.BinaryExpression) unwrapped;
-      DeclaredOperand left = declaredOperand(binary.getLeftExpression(), record, validateArrays);
-      DeclaredOperand right = declaredOperand(binary.getRightExpression(), record, validateArrays);
+      var binary = (BinaryExpression) unwrapped;
+      Operand left = declaredOperand(binary.getLeftExpression(), record, validateArrays);
+      Operand right = declaredOperand(binary.getRightExpression(), record, validateArrays);
       Operation operation = unwrapped instanceof Addition ? Operation.ADD : Operation.SUB;
       Object result = arithmetic(binary.getLeftExpression(), binary.getRightExpression(), left.value(), right.value(),
           operation);
       Schema declaration = valueSchema(unwrapped);
       if (declaration == null && DateTimeFunctions.isTemporal(result)) {
-        DeclaredOperand datetime = DateTimeFunctions.isTemporal(left.value()) ? left : right;
+        Operand datetime = DateTimeFunctions.isTemporal(left.value()) ? left : right;
         declaration = datetime.declaration();
-        if (result instanceof Timestamp && datetime.value() instanceof java.sql.Date) {
+        if (result instanceof Timestamp && datetime.value() instanceof Date) {
           declaration = TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema();
         }
       }
-      return new DeclaredOperand(result, declaration);
+      return new Operand(result, declaration);
     }
     if (unwrapped instanceof ArrayConstructor array) {
       Schema declaration = valueSchema(unwrapped);
-      if (declaration != null && temporalElements(declaration)) {
-        List<DeclaredOperand> values = new ArrayList<>();
+      if (declaration != null && TemporalOperands.temporalElements(declaration)) {
+        List<Operand> values = new ArrayList<>();
         for (Expression element : array.getExpressions()) {
           values.add(declaredOperand(element, record, validateArrays));
         }
         return temporalArray(values, declaration, validateArrays);
       }
     }
-    if (unwrapped instanceof Function function && "ARRAY".equalsIgnoreCase(function.getName())
-        && function.getParameters() != null
-        && function.getParameters().stream().noneMatch(net.sf.jsqlparser.statement.select.Select.class::isInstance)) {
+    if (unwrapped instanceof Function function && ArrayExpressionSchemas.isArrayConstructor(function)) {
       Schema declaration = valueSchema(unwrapped);
-      if (declaration != null && temporalElements(declaration)) {
-        List<DeclaredOperand> values = new ArrayList<>();
+      if (declaration != null && TemporalOperands.temporalElements(declaration)) {
+        List<Operand> values = new ArrayList<>();
         for (Expression element : function.getParameters()) {
           values.add(declaredOperand(element, record, validateArrays));
         }
@@ -889,11 +781,11 @@ public final class ValueExpressionEvaluator {
     if (DateTimeFunctions.isTemporal(value) || value instanceof Object[] || value instanceof List<?>
         || value == null && unwrapped instanceof Column) {
       declaration = valueSchema(unwrapped);
-      if (declaration != null && !temporalElements(declaration)) {
+      if (declaration != null && !TemporalOperands.temporalElements(declaration)) {
         declaration = null;
       }
     }
-    return new DeclaredOperand(value, declaration);
+    return new Operand(value, declaration);
   }
 
   /**
@@ -908,17 +800,17 @@ public final class ValueExpressionEvaluator {
    *          whether JSON validates before promoting ARRAY values
    * @return promoted operand
    */
-  private DeclaredOperand temporalBranch(Expression expression, DeclaredOperand selected, boolean validateArrays) {
+  private Operand temporalBranch(Expression expression, Operand selected, boolean validateArrays) {
     if (selected == null || selected.value() == null) {
-      return new DeclaredOperand(null, null);
+      return new Operand(null, null);
     }
     if (DateTimeFunctions.isTemporal(selected.value())
-        || selected.declaration() != null && temporalElements(selected.declaration())) {
+        || selected.declaration() != null && TemporalOperands.temporalElements(selected.declaration())) {
       Schema declaration = valueSchema(expression);
-      if (!validateArrays && selected.value() instanceof DeclaredArray) {
-        return new DeclaredOperand(selected.value(), declaration == null ? selected.declaration() : declaration);
+      if (!validateArrays && selected.value() instanceof Elements) {
+        return new Operand(selected.value(), declaration == null ? selected.declaration() : declaration);
       }
-      return promoteDeclaredOperand(selected, declaration);
+      return TemporalOperands.promote(selected, declaration);
     }
     return selected;
   }
@@ -943,8 +835,9 @@ public final class ValueExpressionEvaluator {
         return Optional.ofNullable(ArrayExpressionSchemas.resolve(shape, this::valueColumnSchema,
             select -> subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select)));
       } catch (IllegalArgumentException incompatible) {
-        if (!(shape instanceof ArrayConstructor)
-            && !(shape instanceof Function function && "ARRAY".equalsIgnoreCase(function.getName()))) {
+        boolean arrayConstructor = shape instanceof Function function
+            && ArrayExpressionSchemas.isArrayConstructor(function);
+        if (!(shape instanceof ArrayConstructor) && !arrayConstructor) {
           // Drop the wrapper's optional declaration when a nested conditional
           // has incompatible declarations (#431). Evaluation retains selected
           // branch provenance through datetime arithmetic.
@@ -967,190 +860,13 @@ public final class ValueExpressionEvaluator {
    *          whether JSON requires runtime validation here
    * @return validated ARRAY operand with one temporal representation
    */
-  private DeclaredOperand temporalArray(List<DeclaredOperand> values, Schema declaration, boolean validate) {
+  private Operand temporalArray(List<Operand> values, Schema declaration, boolean validate) {
     if (validate) {
-      ArrayFunctions.validateArrayValues(values.stream().map(DeclaredOperand::decoded).toList());
+      ArrayFunctions.validateArrayValues(values.stream().map(Operand::decoded).toList());
     }
-    Schema target = temporalArrayTarget(declaration, values);
-    DeclaredOperand array = new DeclaredOperand(new DeclaredArray(values), declaration);
-    return validate ? promoteDeclaredOperand(array, target) : new DeclaredOperand(array.value(), target);
-  }
-
-  /**
-   * Retains the common ARRAY declaration, including runtime offset sources whose
-   * declarations were unknown. Local-only arrays keep wall-clock values.
-   *
-   * @param declaration
-   *          common ARRAY or leaf declaration
-   * @param values
-   *          source elements at any nesting depth
-   * @return ARRAY or leaf serialization declaration
-   */
-  private static Schema temporalArrayTarget(Schema declaration, List<DeclaredOperand> values) {
-    Schema effective = JdbcTypeMapper.nonNullSchema(declaration);
-    if (effective.getType() == Schema.Type.ARRAY) {
-      return Schema.createArray(temporalArrayTarget(effective.getElementType(), values));
-    }
-    boolean zoned = values.stream().anyMatch(ValueExpressionEvaluator::offsetOperand);
-    int type = JdbcTypeMapper.mapSchemaToJdbcType(effective);
-    if (zoned && type == java.sql.Types.TIMESTAMP) {
-      return TemporalValueType.OFFSET_TIMESTAMP.schema();
-    }
-    if (zoned && type == java.sql.Types.TIME) {
-      return TemporalValueType.OFFSET_TIME.schema();
-    }
-    return effective;
-  }
-
-  /**
-   * Identifies explicit offset sources, including NULL and nested ARRAY values.
-   *
-   * @param operand
-   *          source operand
-   * @return whether a source has an instant or explicit offset
-   */
-  private static boolean offsetOperand(DeclaredOperand operand) {
-    if (operand.value() instanceof java.time.OffsetDateTime || operand.value() instanceof java.time.OffsetTime) {
-      return true;
-    }
-    if (operand.value() instanceof DeclaredArray array
-        && array.elements().stream().anyMatch(ValueExpressionEvaluator::offsetOperand)) {
-      return true;
-    }
-    if (operand.declaration() == null) {
-      return false;
-    }
-    Schema declaration = JdbcTypeMapper.nonNullSchema(operand.declaration());
-    while (declaration.getType() == Schema.Type.ARRAY) {
-      declaration = JdbcTypeMapper.nonNullSchema(declaration.getElementType());
-    }
-    int type = JdbcTypeMapper.mapSchemaToJdbcType(declaration);
-    return type == java.sql.Types.TIMESTAMP_WITH_TIMEZONE || type == java.sql.Types.TIME_WITH_TIMEZONE;
-  }
-
-  /**
-   * Recognizes physical or internally encoded UTC-adjusted timestamps.
-   *
-   * @param schema
-   *          nullable value declaration
-   * @return whether the declaration retains an instant
-   */
-  private static boolean utcTimestamp(Schema schema) {
-    Schema effective = JdbcTypeMapper.nonNullSchema(schema);
-    return effective != null && (TemporalValueType.fromSchema(effective) == TemporalValueType.UTC_TIMESTAMP
-        || AvroCoercions.isTimestamp(effective) && !AvroCoercions.isLocalTimestamp(effective));
-  }
-
-  /**
-   * Promotes decoded temporal values without formatting or reparsing JSON text.
-   *
-   * @param source
-   *          source value with its original declaration
-   * @param target
-   *          result declaration, or null when unknown
-   * @return promoted value
-   */
-  private static DeclaredOperand promoteDeclaredOperand(DeclaredOperand source, Schema target) {
-    if (target == null || source.value() == null) {
-      return source;
-    }
-    Schema effective = JdbcTypeMapper.nonNullSchema(target);
-    if (source.value() instanceof DeclaredArray array && effective.getType() == Schema.Type.ARRAY) {
-      List<DeclaredOperand> elements = array.elements().stream()
-          .map(element -> promoteDeclaredOperand(element, effective.getElementType())).toList();
-      return new DeclaredOperand(new DeclaredArray(elements), target);
-    }
-    if (effective.getType() == Schema.Type.ARRAY && source.declaration() != null
-        && !sameArrayType(effective, source.declaration())) {
-      Iterable<?> values;
-      if (source.value() instanceof Object[] array) {
-        values = java.util.Arrays.asList(array);
-      } else if (source.value() instanceof Iterable<?> iterable) {
-        values = iterable;
-      } else {
-        return source;
-      }
-      Schema sourceElement = JdbcTypeMapper.nonNullSchema(source.declaration()).getElementType();
-      List<DeclaredOperand> elements = new ArrayList<>();
-      for (Object value : values) {
-        elements.add(promoteDeclaredOperand(new DeclaredOperand(value, sourceElement), effective.getElementType()));
-      }
-      return new DeclaredOperand(new DeclaredArray(elements), target);
-    }
-    TemporalValueType temporal = TemporalValueType.fromSchema(effective);
-    if (temporal == TemporalValueType.OFFSET_TIMESTAMP || temporal == TemporalValueType.OFFSET_TIME) {
-      return new DeclaredOperand(temporal.normalize(source.decoded()), effective);
-    }
-    if (temporal == TemporalValueType.JDBC_LOCAL_TIMESTAMP || temporal == TemporalValueType.LOCAL_TIMESTAMP) {
-      Object local = source.value() instanceof Timestamp timestamp ? timestamp.toLocalDateTime() : source.value();
-      return new DeclaredOperand(local, effective);
-    }
-    return source;
-  }
-
-  /**
-   * Identifies timestamp combinations and datetime ARRAY results.
-   *
-   * @param schema
-   *          conditional result declaration
-   * @return whether source-aware engine evaluation is required
-   */
-  private static boolean timestampResult(Schema schema) {
-    Schema effective = JdbcTypeMapper.nonNullSchema(schema);
-    int type = JdbcTypeMapper.mapSchemaToJdbcType(effective);
-    return type == java.sql.Types.TIMESTAMP || type == java.sql.Types.TIMESTAMP_WITH_TIMEZONE
-        || effective.getType() == Schema.Type.ARRAY && offsetArray(effective);
-  }
-
-  /**
-   * Identifies ARRAY declarations requiring offset-aware source conversion.
-   *
-   * @param schema
-   *          ARRAY declaration
-   * @return whether its leaves carry an explicit time zone
-   */
-  private static boolean offsetArray(Schema schema) {
-    Schema leaf = JdbcTypeMapper.nonNullSchema(schema);
-    while (leaf.getType() == Schema.Type.ARRAY) {
-      leaf = JdbcTypeMapper.nonNullSchema(leaf.getElementType());
-    }
-    int type = JdbcTypeMapper.mapSchemaToJdbcType(leaf);
-    return type == java.sql.Types.TIMESTAMP_WITH_TIMEZONE || type == java.sql.Types.TIME_WITH_TIMEZONE;
-  }
-
-  /**
-   * Compares ARRAY declarations without treating optional elements as promotions.
-   *
-   * @param first
-   *          target declaration
-   * @param second
-   *          source declaration
-   * @return whether their non-null element types agree at every depth
-   */
-  private static boolean sameArrayType(Schema first, Schema second) {
-    Schema left = JdbcTypeMapper.nonNullSchema(first);
-    Schema right = JdbcTypeMapper.nonNullSchema(second);
-    if (left.getType() == Schema.Type.ARRAY && right.getType() == Schema.Type.ARRAY) {
-      return sameArrayType(left.getElementType(), right.getElementType());
-    }
-    return left.equals(right);
-  }
-
-  /**
-   * Identifies arrays whose datetime leaves need their source declarations.
-   *
-   * @param schema
-   *          array or leaf declaration
-   * @return whether the innermost array elements are datetime values
-   */
-  private static boolean temporalElements(Schema schema) {
-    Schema element = JdbcTypeMapper.nonNullSchema(schema);
-    while (element.getType() == Schema.Type.ARRAY) {
-      element = JdbcTypeMapper.nonNullSchema(element.getElementType());
-    }
-    int type = JdbcTypeMapper.mapSchemaToJdbcType(element);
-    return type == java.sql.Types.DATE || type == java.sql.Types.TIME || type == java.sql.Types.TIMESTAMP
-        || type == java.sql.Types.TIME_WITH_TIMEZONE || type == java.sql.Types.TIMESTAMP_WITH_TIMEZONE;
+    Schema target = TemporalOperands.arrayTarget(declaration, values);
+    Operand array = new Operand(new Elements(values), declaration);
+    return validate ? TemporalOperands.promote(array, target) : new Operand(array.value(), target);
   }
 
   /**

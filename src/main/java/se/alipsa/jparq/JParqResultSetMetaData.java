@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.function.Function;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
+import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
 import net.sf.jsqlparser.expression.DateValue;
@@ -19,6 +20,7 @@ import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.ArrayExpressionSchemas;
@@ -45,7 +47,7 @@ import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements AvroColumnMetadata {
 
-  private Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarProjectionSchemas = select -> null;
+  private Function<Select, Schema> scalarProjectionSchemas = select -> null;
   private final Schema schema; // may be null if empty file
   private final List<String> labels; // projection labels (aliases if present)
   private final List<String> physicalNames; // underlying physical column names (null for computed)
@@ -131,8 +133,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * @throws SQLException
    *           if a projection has an invalid declaration
    */
-  public JParqResultSetMetaData withScalarProjectionSchemas(
-      Function<net.sf.jsqlparser.statement.select.Select, Schema> resolver) throws SQLException {
+  public JParqResultSetMetaData withScalarProjectionSchemas(Function<Select, Schema> resolver) throws SQLException {
     scalarProjectionSchemas = resolver;
     try {
       for (int column = 1; column <= getColumnCount(); column++) {
@@ -412,7 +413,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     Schema scalar = ScalarExpressionSchemas.resolve(expressionAtColumn(column),
         name -> resolveSourceField(new Column(name)) != null);
     Expression expression = unwrap(expressionAtColumn(column));
-    if (scalar != null || !(expression instanceof net.sf.jsqlparser.expression.CaseExpression)
+    if (scalar != null || !(expression instanceof CaseExpression)
         && !(expression instanceof net.sf.jsqlparser.expression.Function function
             && "COALESCE".equalsIgnoreCase(function.getName()))) {
       return scalar;
@@ -422,12 +423,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
         Schema.Field source = resolveSourceField(reference);
         return source == null ? null : source.schema();
       });
-      Schema leaf = JdbcTypeMapper.nonNullSchema(result);
-      boolean array = leaf != null && leaf.getType() == Schema.Type.ARRAY;
-      while (leaf != null && leaf.getType() == Schema.Type.ARRAY) {
-        leaf = JdbcTypeMapper.nonNullSchema(leaf.getElementType());
-      }
-      int type = JdbcTypeMapper.mapSchemaToJdbcType(leaf);
+      Schema root = JdbcTypeMapper.nonNullSchema(result);
+      boolean array = root != null && root.getType() == Schema.Type.ARRAY;
+      int type = JdbcTypeMapper.mapSchemaToJdbcType(JdbcTypeMapper.innermostElementType(result));
       return type == Types.TIMESTAMP || type == Types.TIMESTAMP_WITH_TIMEZONE
           || array && (type == Types.DATE || type == Types.TIME || type == Types.TIME_WITH_TIMEZONE) ? result : null;
     } catch (IllegalArgumentException incompatible) {
@@ -671,8 +669,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
         Types.BIGINT;
       case AnalyticExpression analytic -> resolveAnalyticFunctionType(analytic);
       case ArrayConstructor arrayConstructor -> Types.ARRAY;
-      case net.sf.jsqlparser.statement.select.Select select ->
-        isArrayConstructor(unwrap(scalarSubqueryProjection(select))) ? Types.ARRAY : Types.OTHER;
+      case Select select -> isArrayConstructor(unwrap(scalarSubqueryProjection(select))) ? Types.ARRAY : Types.OTHER;
       case net.sf.jsqlparser.expression.Function func when func.getName() != null
           && "ARRAY".equalsIgnoreCase(func.getName()) ->
         Types.ARRAY;
@@ -705,8 +702,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * @return the first projection expression, or {@code null} when the shape is
    *         unsupported or projects nothing
    */
-  private static Expression scalarSubqueryProjection(net.sf.jsqlparser.statement.select.Select select) {
-    net.sf.jsqlparser.statement.select.Select unwrapped = select;
+  private static Expression scalarSubqueryProjection(Select select) {
+    Select unwrapped = select;
     while (unwrapped instanceof net.sf.jsqlparser.statement.select.ParenthesedSelect parenthesed) {
       unwrapped = parenthesed.getSelect();
     }
@@ -771,7 +768,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     return switch (expression) {
       case AnalyticExpression analytic -> resolveAnalyticFunctionClassName(analytic);
       case ArrayConstructor arrayConstructor -> Object[].class.getName();
-      case net.sf.jsqlparser.statement.select.Select select ->
+      case Select select ->
         isArrayConstructor(unwrap(scalarSubqueryProjection(select))) ? Object[].class.getName() : null;
       case net.sf.jsqlparser.expression.Function func when func.getName() != null
           && "ARRAY".equalsIgnoreCase(func.getName()) ->

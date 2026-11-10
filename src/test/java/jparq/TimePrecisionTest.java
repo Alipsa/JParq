@@ -373,6 +373,42 @@ class TimePrecisionTest {
   }
 
   /**
+   * Applies the common fractional-second precision of conditional TIME values so
+   * every JSON row pads to the same width, whichever branch was selected.
+   *
+   * @throws Exception
+   *           if a query fails
+   */
+  @Test
+  void conditionalTimePrecisionPadsJsonRows() throws Exception {
+    try (var connection = connection(true, true); var statement = connection.createStatement()) {
+      for (String[] sample : new String[][]{
+          {
+              "CASE WHEN id = 1 THEN CAST(TIME '01:02:03.123' AS TIME(3)) ELSE CAST(TIME '01:02:03' AS TIME(6)) END",
+              "01:02:03.123000"
+          }, {
+              "CASE WHEN id = 2 THEN CAST(TIME '01:02:03.123' AS TIME(3)) ELSE CAST(TIME '01:02:03' AS TIME(6)) END",
+              "01:02:03.000000"
+          }, {
+              "COALESCE(CAST(TIME '01:02:03.1' AS TIME(1)), CAST(TIME '01:02:03' AS TIME(6)))", "01:02:03.100000"
+          }
+      }) {
+        String sql = "SELECT JSON_ARRAY(" + sample[0] + ") FROM (SELECT 1 AS id) q";
+        try (var result = statement.executeQuery(sql)) {
+          assertTrue(result.next(), sql);
+          assertEquals("[\"" + sample[1] + "\"]", result.getString(1), sql);
+          assertFalse(result.next(), sql);
+        }
+      }
+      try (var result = statement.executeQuery("SELECT JSON_ARRAY(CAST(TIME '01:02:03.123' AS TIME(6)))")) {
+        assertTrue(result.next());
+        assertEquals("[\"01:02:03.123000\"]", result.getString(1));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
    * Collects query IDs in their returned order.
    *
    * @param connection

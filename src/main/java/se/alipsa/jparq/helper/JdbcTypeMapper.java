@@ -136,6 +136,23 @@ public final class JdbcTypeMapper {
   }
 
   /**
+   * Resolves the innermost element type of a possibly nested ARRAY declaration,
+   * returning the schema itself when it is not an ARRAY.
+   *
+   * @param schema
+   *          array or leaf declaration (may be {@code null})
+   * @return the innermost non-null element type, or {@code null} when the input
+   *         is null
+   */
+  public static Schema innermostElementType(Schema schema) {
+    Schema element = nonNullSchema(schema);
+    while (element != null && element.getType() == Schema.Type.ARRAY) {
+      element = nonNullSchema(element.getElementType());
+    }
+    return element;
+  }
+
+  /**
    * Determine whether the supplied schema represents a nullable value.
    *
    * @param schema
