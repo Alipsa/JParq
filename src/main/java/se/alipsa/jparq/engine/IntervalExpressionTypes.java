@@ -293,7 +293,7 @@ public final class IntervalExpressionTypes {
    *          declaration to copy
    * @return mutable copy carrying the same logical type and properties
    */
-  static Schema copyWithProps(Schema source) {
+  public static Schema copyWithProps(Schema source) {
     Schema copy = Schema.create(source.getType());
     source.getObjectProps().forEach(copy::addProp);
     if (source.getLogicalType() != null) {

@@ -747,6 +747,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   /**
    * Resolves one projection column's interval or datetime declaration without
    * reading rows, combining set operation branches into their common type.
+   * Resolves all columns at once so each set operation branch is prepared only
+   * once per lookup.
    *
    * @param column
    *          one-based projection column index
@@ -755,30 +757,67 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           if an input schema cannot be inspected
    */
   Schema declaredProjectionSchema(int column) throws SQLException {
+    List<Schema> schemas = declaredProjectionSchemas();
+    return column >= 1 && column <= schemas.size() ? schemas.get(column - 1) : null;
+  }
+
+  /**
+   * Resolves every projection column's interval or datetime declaration without
+   * reading rows, preparing each set operation branch only once.
+   *
+   * @return declared schemas in projection order, empty when the statement has no
+   *         resolvable select list
+   * @throws SQLException
+   *           if an input schema cannot be inspected
+   */
+  List<Schema> declaredProjectionSchemas() throws SQLException {
     if (setOperationQuery && parsedSetQuery != null) {
-      Schema common = null;
+      List<Schema> common = null;
       for (SqlParser.SetComponent component : parsedSetQuery.components()) {
         try (JParqPreparedStatement branch = prepareSubqueryStatement(component.sql(), cteResults)) {
-          Schema declaration = branch.declaredProjectionSchema(column);
-          common = IntervalType.matches(declaration) || IntervalType.matches(common)
-              ? IntervalType.common(common, declaration)
-              : IntervalExpressionTypes.commonTemporal(common, declaration);
+          List<Schema> declarations = branch.declaredProjectionSchemas();
+          common = common == null ? declarations : combineDeclarations(common, declarations);
         }
       }
-      return common;
+      return common == null ? List.of() : common;
     }
-    if (parsedSelect == null || column < 1 || column > parsedSelect.expressions().size()) {
-      return null;
+    if (parsedSelect == null) {
+      return List.of();
     }
     Map<Column, Schema> columns = new HashMap<>();
-    Expression expression = parsedSelect.expressions().get(column - 1);
     java.util.function.Function<Column, Schema> columnSchemas = projectionColumnSchemas(columns);
     java.util.function.Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarSchemas = projectionScalarSchemas(
         cteResults);
-    Schema interval = IntervalExpressionTypes.resolve(expression, columnSchemas, scalarSchemas);
-    return interval != null
-        ? interval
-        : IntervalExpressionTypes.resolveTemporal(expression, columnSchemas, scalarSchemas);
+    List<Schema> schemas = new ArrayList<>(parsedSelect.expressions().size());
+    for (Expression expression : parsedSelect.expressions()) {
+      Schema interval = IntervalExpressionTypes.resolve(expression, columnSchemas, scalarSchemas);
+      schemas.add(interval != null
+          ? interval
+          : IntervalExpressionTypes.resolveTemporal(expression, columnSchemas, scalarSchemas));
+    }
+    return schemas;
+  }
+
+  /**
+   * Combines per-column branch declarations into their common type.
+   *
+   * @param common
+   *          declarations combined so far
+   * @param declarations
+   *          declarations of the next branch
+   * @return per-column common declarations up to the shorter select list
+   */
+  private static List<Schema> combineDeclarations(List<Schema> common, List<Schema> declarations) {
+    int columns = Math.min(common.size(), declarations.size());
+    List<Schema> combined = new ArrayList<>(columns);
+    for (int i = 0; i < columns; i++) {
+      Schema first = common.get(i);
+      Schema second = declarations.get(i);
+      combined.add(IntervalType.matches(second) || IntervalType.matches(first)
+          ? IntervalType.common(first, second)
+          : IntervalExpressionTypes.commonTemporal(first, second));
+    }
+    return combined;
   }
 
   /**
@@ -3943,20 +3982,21 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private static Schema withDeclaredPrecision(Schema valueSchema, Schema source, Schema declared) {
     Schema base = JdbcTypeMapper.nonNullSchema(valueSchema);
-    Schema declaration = JdbcTypeMapper.nonNullSchema(declared);
-    String precision = declaration == null ? null : declaration.getProp("jparq.temporal.precision");
-    Schema storage = JdbcTypeMapper.nonNullSchema(source);
-    int implied = IntervalExpressionTypes.logicalPrecision((storage == null ? base : storage).getLogicalType());
-    if (precision == null || base == null || base.getProp("jparq.temporal.precision") != null
-        || JdbcTypeMapper.mapSchemaToJdbcType(base) != JdbcTypeMapper.mapSchemaToJdbcType(declaration)
-        || implied == Integer.parseInt(precision)) {
+    if (base == null) {
       return valueSchema;
     }
-    Schema copy = Schema.create(base.getType());
-    base.getObjectProps().forEach(copy::addProp);
-    if (base.getLogicalType() != null) {
-      base.getLogicalType().addToSchema(copy);
+    Schema declaration = JdbcTypeMapper.nonNullSchema(declared);
+    String precision = declaration == null ? null : declaration.getProp("jparq.temporal.precision");
+    if (precision == null || base.getProp("jparq.temporal.precision") != null
+        || JdbcTypeMapper.mapSchemaToJdbcType(base) != JdbcTypeMapper.mapSchemaToJdbcType(declaration)) {
+      return valueSchema;
     }
+    Schema storage = JdbcTypeMapper.nonNullSchema(source);
+    int implied = IntervalExpressionTypes.logicalPrecision((storage == null ? base : storage).getLogicalType());
+    if (implied == Integer.parseInt(precision)) {
+      return valueSchema;
+    }
+    Schema copy = IntervalExpressionTypes.copyWithProps(base);
     copy.addProp("jparq.temporal.precision", precision);
     return copy;
   }
@@ -3985,6 +4025,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     int columnCount = meta.getColumnCount();
     List<Field> fields = new ArrayList<>(columnCount);
     Set<String> usedNames = new LinkedHashSet<>();
+    List<Schema> declaredSchemas = null;
     for (int i = 1; i <= columnCount; i++) {
       String alias = ref == null || ref.columnAliases().isEmpty() ? null : ref.columnAliases().get(i - 1);
       String sqlLabel = alias == null ? columnLabel(meta, i) : alias;
@@ -4000,8 +4041,14 @@ public class JParqPreparedStatement implements PreparedStatement {
           valueSchema = inferred;
         }
       }
-      valueSchema = withDeclaredPrecision(valueSchema, sourceColumnSchema(meta, i),
-          declaredSource == null ? null : declaredSource.declaredProjectionSchema(i));
+      int columnType = meta.getColumnType(i);
+      if (declaredSource != null && (columnType == Types.TIME || columnType == Types.TIMESTAMP)) {
+        if (declaredSchemas == null) {
+          declaredSchemas = declaredSource.declaredProjectionSchemas();
+        }
+        valueSchema = withDeclaredPrecision(valueSchema, sourceColumnSchema(meta, i),
+            i <= declaredSchemas.size() ? declaredSchemas.get(i - 1) : null);
+      }
       Schema union = valueSchema.getType() == Schema.Type.NULL
           ? valueSchema
           : Schema.createUnion(List.of(Schema.create(Schema.Type.NULL), valueSchema));
@@ -4249,6 +4296,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     List<Field> fields = new ArrayList<>(columnCount);
     Set<String> usedNames = new LinkedHashSet<>();
+    List<Schema> declaredSchemas = null;
     for (int i = 1; i <= columnCount; i++) {
       String columnName;
       String lookupKey = null;
@@ -4281,8 +4329,16 @@ public class JParqPreparedStatement implements PreparedStatement {
         };
         valueSchema = schemaForColumnType(type, values);
       } else {
-        valueSchema = withDeclaredPrecision(columnSchema(meta, i), sourceColumnSchema(meta, i),
-            declaredSource == null ? null : declaredSource.declaredProjectionSchema(i));
+        int columnType = meta.getColumnType(i);
+        if (declaredSource != null && (columnType == Types.TIME || columnType == Types.TIMESTAMP)) {
+          if (declaredSchemas == null) {
+            declaredSchemas = declaredSource.declaredProjectionSchemas();
+          }
+          valueSchema = withDeclaredPrecision(columnSchema(meta, i), sourceColumnSchema(meta, i),
+              i <= declaredSchemas.size() ? declaredSchemas.get(i - 1) : null);
+        } else {
+          valueSchema = columnSchema(meta, i);
+        }
       }
       Schema union = valueSchema.getType() == Schema.Type.NULL
           ? valueSchema
@@ -4344,6 +4400,8 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     if (source != null && (type == Types.ARRAY || type == Types.STRUCT || IntervalType.matches(source)
         || TemporalValueType.fromSchema(source) != null || source.getType() == Schema.Type.NULL
+        || type == Types.TIME && source.getLogicalType() instanceof LogicalTypes.TimeMillis
+        || type == Types.TIME && source.getLogicalType() instanceof LogicalTypes.TimeMicros
         || JdbcTypeMapper.isCharacterType(type) || JdbcTypeMapper.isBinaryType(type))) {
       return source;
     }

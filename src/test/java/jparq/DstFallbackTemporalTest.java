@@ -99,6 +99,11 @@ class DstFallbackTemporalTest {
           assertTrue(groups.containsKey(firstInstant), "the first overlapping UTC instant stays distinct: " + groups);
           assertTrue(groups.containsKey(secondInstant), "the second overlapping UTC instant stays distinct: " + groups);
           assertEquals(1, groups.get(firstInstant), "the first instant forms its own group: " + groups);
+          // The local wall-clock rows decode through Timestamp.valueOf, which
+          // resolves an ambiguous fall-back local time to the later occurrence
+          // (standard time). Only in the fixture's own fall-back zone does that
+          // merge them with the second instant's group; the counts below pin
+          // that JVM behavior so a JDK change here is caught deliberately.
           assertEquals(exercisesOverlap ? 3 : 1, groups.get(secondInstant),
               "the shared wall-clock merges only during the fall-back overlap: " + groups);
           assertEquals(exercisesOverlap ? 2 : 3, groups.size(), "unexpected grouping in zone " + zone + ": " + groups);

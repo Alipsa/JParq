@@ -456,6 +456,39 @@ class TimePrecisionTest {
   }
 
   /**
+   * Stored TIME columns pad JSON output to their storage precision so every row
+   * in a column prints with the same fractional width, directly and through
+   * nested inputs.
+   *
+   * @throws Exception
+   *           if a query fails
+   */
+  @Test
+  void storedTimePadsJsonToStoragePrecision() throws Exception {
+    try (var connection = connection(true, true); var statement = connection.createStatement()) {
+      List<String> expected = List.of("[\"10:00:00.000\"]", "[\"10:00:00.500\"]", "[\"10:00:00.250\"]");
+      try (var result = statement.executeQuery("SELECT JSON_ARRAY(t) FROM clocks ORDER BY id")) {
+        for (String json : expected) {
+          assertTrue(result.next());
+          assertEquals(json, result.getString(1));
+        }
+        assertFalse(result.next());
+      }
+      List<String> queries = List.of("SELECT JSON_ARRAY(t) FROM (SELECT t FROM clocks) d",
+          "WITH c AS (SELECT t FROM clocks) SELECT JSON_ARRAY(t) FROM c");
+      for (String sql : queries) {
+        List<String> rows = new ArrayList<>();
+        try (var result = statement.executeQuery(sql)) {
+          while (result.next()) {
+            rows.add(result.getString(1));
+          }
+        }
+        assertEquals(expected.stream().sorted().toList(), rows.stream().sorted().toList(), sql);
+      }
+    }
+  }
+
+  /**
    * Collects query IDs in their returned order.
    *
    * @param connection

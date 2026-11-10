@@ -209,11 +209,13 @@ public final class ArrayExpressionSchemas {
    * Identifies datetime schemas whose zone semantics survive interval arithmetic.
    *
    * @param schema
-   *          non-null value schema
-   * @return whether the schema describes a datetime value
+   *          value schema, possibly null
+   * @return whether the schema describes a scalar datetime value
    */
   private static boolean isDatetime(Schema schema) {
-    return TemporalOperands.temporalElements(schema);
+    Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    return effective != null && effective.getType() != Schema.Type.ARRAY
+        && TemporalOperands.temporalElements(effective);
   }
 
   /**
