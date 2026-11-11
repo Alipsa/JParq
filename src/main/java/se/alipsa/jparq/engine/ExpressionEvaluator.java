@@ -571,9 +571,8 @@ public final class ExpressionEvaluator {
 
   private Object resolveCorrelatedOperand(String qualifier, String columnName, GenericRecord rec) {
     String canonical = canonicalFieldName(qualifier, columnName);
-    return new TemporalOperands.Operand(
-        AvroCoercions.resolveColumnValue(canonical, rec, fieldSchemas, caseInsensitiveIndex),
-        fieldSchemas.get(canonical));
+    return new TemporalOperands.Operand(AvroCoercions.resolveColumnValue(canonical, rec, fieldSchemas,
+        caseInsensitiveIndex, AvroCoercions::unwrapLocalFields), fieldSchemas.get(canonical));
   }
 
   private String canonicalFieldName(String qualifier, String columnName) {
@@ -605,7 +604,7 @@ public final class ExpressionEvaluator {
       Object v = AvroCoercions.unwrap(rec.get(lookupName), colSchema);
       return new Operand(v, colSchema);
     }
-    TemporalOperands.Operand evaluated = literalEvaluator.evalOperand(expr, rec);
+    TemporalOperands.Operand evaluated = literalEvaluator.evalPredicateOperand(expr, rec);
     return new Operand(evaluated.value(), evaluated.declaration());
   }
 

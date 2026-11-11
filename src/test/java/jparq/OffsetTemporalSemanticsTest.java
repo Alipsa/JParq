@@ -83,6 +83,8 @@ class OffsetTemporalSemanticsTest {
           assertKeysAndOrder(connection);
           assertCastsAndGetters(connection);
           assertCorrelations(connection);
+          assertGroupedCorrelations(connection);
+          assertLocalFieldCorrelations(connection);
           assertWindowOrder(connection);
           assertTimeGetters(connection);
           assertArithmeticRepresentation(connection);
@@ -230,6 +232,71 @@ class OffsetTemporalSemanticsTest {
       }
       assertFalse(result.next());
     }
+  }
+
+  /**
+   * Keeps grouped column declarations in HAVING and scalar subquery bindings.
+   *
+   * @param connection
+   *          open connection
+   * @throws Exception
+   *           if querying fails
+   */
+  private static void assertGroupedCorrelations(Connection connection) throws Exception {
+    String predicate = "EXISTS(SELECT 1 FROM correlated i WHERE CAST(i.o AS TIMESTAMP WITH TIME ZONE) = t.o)";
+    String having = "SELECT id FROM correlated t GROUP BY id,o HAVING " + predicate;
+    assertCount(connection, "SELECT COUNT(*) FROM (" + having + ") q", 2);
+    for (String query : List.of(
+        "SELECT id,(SELECT COUNT(*) FROM correlated i WHERE CAST(i.o AS TIMESTAMP WITH TIME ZONE) = t.o) "
+            + "FROM correlated t GROUP BY id,o ORDER BY id",
+        "SELECT id,0 + (SELECT COUNT(*) FROM correlated i WHERE CAST(i.o AS TIMESTAMP WITH TIME ZONE) = t.o) "
+            + "FROM correlated t GROUP BY id,o ORDER BY id")) {
+      try (var statement = connection.createStatement(); var result = statement.executeQuery(query)) {
+        for (int id : List.of(1, 2)) {
+          assertTrue(result.next(), query);
+          assertEquals(id, result.getInt(1));
+          assertEquals(1, result.getInt(2));
+        }
+        assertFalse(result.next());
+      }
+    }
+    String rollup = "SELECT GROUPING(o),(SELECT COUNT(*) FROM correlated i "
+        + "WHERE CAST(i.o AS TIMESTAMP WITH TIME ZONE) = t.o) FROM correlated t GROUP BY ROLLUP(o)";
+    try (var statement = connection.createStatement(); var result = statement.executeQuery(rollup)) {
+      int groups = 0;
+      while (result.next()) {
+        assertEquals(result.getInt(1) == 1 ? 0 : 1, result.getInt(2));
+        groups++;
+      }
+      assertEquals(3, groups);
+    }
+  }
+
+  /**
+   * Binds raw local fields even when JDBC Timestamp would normalize a DST gap.
+   *
+   * @param connection
+   *          open connection
+   * @throws Exception
+   *           if querying fails
+   */
+  private static void assertLocalFieldCorrelations(Connection connection) throws Exception {
+    String inner = "SELECT COUNT(*) FROM t i WHERE CAST(i.l AS TIMESTAMP WITH TIME ZONE) = t.l";
+    for (String suffix : List.of("", " GROUP BY id,l")) {
+      try (var statement = connection.createStatement();
+          var result = statement.executeQuery("SELECT (" + inner + ") FROM t" + suffix)) {
+        for (int row = 0; row < 2; row++) {
+          assertTrue(result.next());
+          assertEquals(2, result.getInt(1));
+        }
+        assertFalse(result.next());
+      }
+    }
+    assertCount(connection,
+        "SELECT COUNT(*) FROM t WHERE EXISTS(SELECT 1 FROM t i " + "WHERE CAST(i.l AS TIMESTAMP WITH TIME ZONE) = t.l)",
+        2);
+    assertCount(connection, "SELECT COUNT(*) FROM (SELECT id FROM t GROUP BY id,l "
+        + "HAVING EXISTS(SELECT 1 FROM t i WHERE CAST(i.l AS TIMESTAMP WITH TIME ZONE) = t.l)) q", 2);
   }
 
   /**

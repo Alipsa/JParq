@@ -142,7 +142,11 @@
   Correlated outer bindings and subquery results retain temporal source declarations for IN, ANY,
   EXISTS, and scalar queries. Window ordering, ranks, and MIN/MAX use the same SQL comparison rules
   as ordinary ordering. Addition and subtraction retain the same JDBC timestamp representation
-  and character forms for stored local timestamps.
+  and character forms for stored local timestamps. Grouped HAVING and scalar-subquery bindings
+  retain grouped operands' declarations, including suppressed NULL keys. Correlated local timestamp
+  bindings preserve stored clock fields through DST gaps before offset promotion.
+  Window ordering and MIN/MAX reject binary/nonbinary and numeric/INTERVAL mixtures with SQLState
+  `42000`.
   **Behavior changes:** VALUES mixing DATE with TIMESTAMP or TIME now fails with SQLState `42000`;
   these inputs previously widened to TIMESTAMP or fell back to VARCHAR. Set operations containing
   CAST(NULL AS DATE/TIME/TIMESTAMP), including precision with WITH/WITHOUT TIME ZONE clauses, now retain the

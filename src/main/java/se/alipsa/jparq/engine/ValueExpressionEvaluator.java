@@ -267,6 +267,52 @@ public final class ValueExpressionEvaluator {
   }
 
   /**
+   * Retains original local fields when a predicate will promote them to an
+   * offset.
+   *
+   * @param expression
+   *          predicate operand
+   * @param record
+   *          current row
+   * @return value and declaration suitable for source-aware comparisons
+   */
+  public Operand evalPredicateOperand(Expression expression, GenericRecord record) {
+    Operand source = declaredOperand(expression, record, false);
+    Schema declaration = JdbcTypeMapper.nonNullSchema(source.declaration());
+    if (source.value() instanceof LocalDateTime && declaration != null && AvroCoercions.isLocalTimestamp(declaration)) {
+      return source;
+    }
+    if (ExpressionEvaluator.unwrapParenthesis(expression) instanceof TimeKeyExpression
+        && source.value() instanceof LocalDateTime) {
+      return new Operand(source.value(), TemporalValueType.LOCAL_TIMESTAMP.schema());
+    }
+    return new Operand(source.engineValue(), source.declaration());
+  }
+
+  /**
+   * Attaches source metadata to an already evaluated grouping operand. Physical
+   * column bindings retain decoded local fields without reevaluating expressions.
+   *
+   * @param expression
+   *          evaluated expression
+   * @param value
+   *          ordinary engine value
+   * @param record
+   *          source row
+   * @return original source fields and declaration
+   */
+  public Operand sourceOperand(Expression expression, Object value, GenericRecord record) {
+    Expression shape = ExpressionEvaluator.unwrapParenthesis(expression);
+    Schema declaration = valueSchema(shape);
+    Schema leaf = JdbcTypeMapper.innermostElementType(declaration);
+    if (shape instanceof Column column && SqlExpressionNormalizer.timeKeyword(column) == null && leaf != null
+        && AvroCoercions.isLocalTimestamp(leaf)) {
+      return correlatedOperand(resolveColumnName(column), record);
+    }
+    return new Operand(value, declaration);
+  }
+
+  /**
    * Applies the expression's common interval declaration after lazy evaluation.
    *
    * @param expression
@@ -1198,8 +1244,8 @@ public final class ValueExpressionEvaluator {
    * @return typed correlated binding
    */
   private Operand correlatedOperand(String canonical, GenericRecord record) {
-    return new Operand(AvroCoercions.resolveColumnValue(canonical, record, fieldSchemas, caseInsensitiveIndex),
-        fieldSchemas.get(canonical));
+    return new Operand(AvroCoercions.resolveColumnValue(canonical, record, fieldSchemas, caseInsensitiveIndex,
+        AvroCoercions::unwrapLocalFields), fieldSchemas.get(canonical));
   }
 
   /**

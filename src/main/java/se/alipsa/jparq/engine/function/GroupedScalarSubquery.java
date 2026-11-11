@@ -20,6 +20,7 @@ import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SubqueryExecutor;
+import se.alipsa.jparq.engine.TemporalOperands.Operand;
 
 /**
  * Binds scalar and predicate subquery correlations exclusively to grouped
@@ -125,14 +126,14 @@ final class GroupedScalarSubquery {
    * Evaluates a scalar against current values, including NULLs suppressed by
    * grouping sets.
    *
-   * @param groupValues
-   *          current group's values
+   * @param groupOperands
+   *          current group's source values and declarations
    * @return scalar value, or null for an empty scalar result
    */
-  Object evaluate(List<Object> groupValues) {
+  Object evaluate(List<Operand> groupOperands) {
     var result = executor.executeCorrelated(select, mappings.outerQualifiers(), candidates,
         mappings.qualifierColumnMapping(),
-        (qualifier, column) -> groupValues.get(groupIndexes.get(new QualifiedColumn(qualifier, column))));
+        (qualifier, column) -> groupOperands.get(groupIndexes.get(new QualifiedColumn(qualifier, column))));
     return result.scalarValue();
   }
 

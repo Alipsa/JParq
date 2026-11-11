@@ -96,6 +96,7 @@ import se.alipsa.jparq.engine.SqlParser.OrderKey;
 import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.engine.SqlTruth;
 import se.alipsa.jparq.engine.SubqueryExecutor;
+import se.alipsa.jparq.engine.TemporalOperands.Operand;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowState;
@@ -1912,7 +1913,8 @@ public final class AggregateFunctions {
 
         boolean matches = residual == null || whereEval.eval(residual, rec);
         if (matches) {
-          List<Object> groupValues = evaluateGroupValues(groupExpressions, valueEval, rec, groupTrackers);
+          GroupValues evaluated = evaluateGroupValues(groupExpressions, valueEval, rec, groupTrackers);
+          List<Object> groupValues = evaluated.values();
           for (int setIndex = 0; setIndex < groupingSets.size(); setIndex++) {
             GroupingSet groupingSet = groupingSets.get(setIndex);
             List<Object> keyValues = keyValuesForGroupingSet(groupValues, groupingSet);
@@ -1920,7 +1922,12 @@ public final class AggregateFunctions {
             GroupState state = states.get(key);
             if (state == null) {
               List<Object> projected = projectGroupValuesForSet(groupValues, groupingSet, groupExpressions.size());
-              state = new GroupState(projected, plan.specs(), setIndex);
+              List<Operand> sources = new ArrayList<>(evaluated.operands().size());
+              for (int index = 0; index < evaluated.operands().size(); index++) {
+                Operand source = evaluated.operands().get(index);
+                sources.add(groupingSet.contains(index) ? source : new Operand(null, source.declaration()));
+              }
+              state = new GroupState(projected, sources, plan.specs(), setIndex);
               states.put(key, state);
             }
             state.add(valueEval, rec);
@@ -1933,7 +1940,7 @@ public final class AggregateFunctions {
 
     if (states.isEmpty() && groupExpressions.isEmpty()) {
       for (int i = 0; i < groupingSets.size(); i++) {
-        GroupState state = new GroupState(List.of(), plan.specs(), i);
+        GroupState state = new GroupState(List.of(), List.of(), plan.specs(), i);
         states.put(new GroupKey(i, List.of()), state);
       }
     }
@@ -1965,8 +1972,8 @@ public final class AggregateFunctions {
       if (normalizedHaving != null) {
         HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues,
             buildLabelLookup(plan, row, state.groupValues()), subqueryExecutor, outerQualifiers,
-            normalizedCorrelationContext, booleanColumn,
-            new GroupEvaluation(state.groupValues(), state.groupingSetIndex(), scalarExpressions, Map.of()));
+            normalizedCorrelationContext, booleanColumn, new GroupEvaluation(state.groupValues(), state.groupOperands(),
+                state.groupingSetIndex(), scalarExpressions, Map.of()));
         include = evaluator.eval(normalizedHaving);
       }
       if (include) {
@@ -1976,7 +1983,8 @@ public final class AggregateFunctions {
           row.set(index, value);
           entry.getValue().track(value);
         }
-        rows.add(new AggregatedRow(row, state.groupValues(), aggregateValues, state.groupingSetIndex()));
+        rows.add(new AggregatedRow(row, state.groupValues(), state.groupOperands(), aggregateValues,
+            state.groupingSetIndex()));
       }
     }
 
@@ -2069,8 +2077,8 @@ public final class AggregateFunctions {
           ? new HavingEvaluator(plan, row.aggregateValues(), buildLabelLookup(plan, row.rowValues(), row.groupValues()),
               execution.subqueryExecutor(), execution.outerQualifiers(), execution.correlationContext(),
               column -> false,
-              new GroupEvaluation(row.groupValues(), row.groupingSetIndex(), execution.scalarExpressions(),
-                  execution.subqueries()))
+              new GroupEvaluation(row.groupValues(), row.groupOperands(), row.groupingSetIndex(),
+                  execution.scalarExpressions(), execution.subqueries()))
           : null;
       List<Object> values = new ArrayList<>(orderBy.size());
       for (int index = 0; index < orderBy.size(); index++) {
@@ -2219,13 +2227,15 @@ public final class AggregateFunctions {
   private static final class AggregatedRow {
     private final List<Object> rowValues;
     private final List<Object> groupValues;
+    private final List<Operand> groupOperands;
     private final List<Object> aggregateValues;
     private final int groupingSetIndex;
 
-    AggregatedRow(List<Object> rowValues, List<Object> groupValues, List<Object> aggregateValues,
-        int groupingSetIndex) {
+    AggregatedRow(List<Object> rowValues, List<Object> groupValues, List<Operand> groupOperands,
+        List<Object> aggregateValues, int groupingSetIndex) {
       this.rowValues = immutableListAllowingNulls(rowValues);
       this.groupValues = immutableListAllowingNulls(groupValues);
+      this.groupOperands = List.copyOf(groupOperands);
       this.aggregateValues = immutableListAllowingNulls(aggregateValues);
       this.groupingSetIndex = groupingSetIndex;
     }
@@ -2236,6 +2246,15 @@ public final class AggregateFunctions {
 
     List<Object> groupValues() {
       return groupValues;
+    }
+
+    /**
+     * Returns grouping sources without JDBC wall-clock normalization.
+     *
+     * @return typed grouping operands
+     */
+    List<Operand> groupOperands() {
+      return groupOperands;
     }
 
     List<Object> aggregateValues() {
@@ -2258,18 +2277,42 @@ public final class AggregateFunctions {
         + ")";
   }
 
-  private static List<Object> evaluateGroupValues(List<GroupExpression> groupExpressions, ValueExpressionEvaluator eval,
+  /**
+   * Group values for output and their source-aware correlation operands.
+   *
+   * @param values
+   *          ordinary engine representations
+   * @param operands
+   *          original values and declarations
+   */
+  private record GroupValues(List<Object> values, List<Operand> operands) {
+  }
+
+  /**
+   * Evaluates each grouping expression once and retains its original declaration.
+   *
+   * @param groupExpressions
+   *          grouping expressions
+   * @param eval
+   *          source evaluator
+   * @param record
+   *          current row
+   * @param trackers
+   *          observed result types
+   * @return engine values and typed sources
+   */
+  private static GroupValues evaluateGroupValues(List<GroupExpression> groupExpressions, ValueExpressionEvaluator eval,
       GenericRecord record, List<GroupTypeTracker> trackers) {
-    if (groupExpressions.isEmpty()) {
-      return List.of();
-    }
     List<Object> values = new ArrayList<>(groupExpressions.size());
+    List<Operand> operands = new ArrayList<>(groupExpressions.size());
     for (int i = 0; i < groupExpressions.size(); i++) {
-      Object value = eval.eval(groupExpressions.get(i).expression(), record);
+      Expression expression = groupExpressions.get(i).expression();
+      Object value = eval.eval(expression, record);
       values.add(value);
+      operands.add(eval.sourceOperand(expression, value, record));
       trackers.get(i).track(value);
     }
-    return values;
+    return new GroupValues(values, operands);
   }
 
   /**
@@ -2388,7 +2431,7 @@ public final class AggregateFunctions {
         row.add(groupingValue(plan, state.groupingSetIndex(), column.groupingIndexes()));
       } else if (column.subquery() != null) {
         GroupedScalarSubquery subquery = scalarSubqueries.get(index);
-        row.add(new LazyScalarValue(() -> subquery.evaluate(state.groupValues())));
+        row.add(new LazyScalarValue(() -> subquery.evaluate(state.groupOperands())));
       } else if (column.kind() == ColumnKind.EXPRESSION) {
         row.add(null);
       } else {
@@ -2398,8 +2441,8 @@ public final class AggregateFunctions {
     if (!projectionExpressions.isEmpty()) {
       Map<String, Object> labels = buildLabelLookup(plan, row, state.groupValues());
       HavingEvaluator evaluator = new HavingEvaluator(plan, aggregateValues, labels, subqueryExecutor, outerQualifiers,
-          correlationContext, column -> false,
-          new GroupEvaluation(state.groupValues(), state.groupingSetIndex(), scalarExpressions, groupedSubqueries));
+          correlationContext, column -> false, new GroupEvaluation(state.groupValues(), state.groupOperands(),
+              state.groupingSetIndex(), scalarExpressions, groupedSubqueries));
       for (int index = 0; index < plan.resultColumns().size(); index++) {
         ResultColumn column = plan.resultColumns().get(index);
         if (column.kind() == ColumnKind.EXPRESSION) {
@@ -2499,11 +2542,13 @@ public final class AggregateFunctions {
 
   private static final class GroupState {
     private final List<Object> groupValues;
+    private final List<Operand> groupOperands;
     private final AggregateAccumulator[] accumulators;
     private final int groupingSetIndex;
 
-    GroupState(List<Object> groupValues, List<AggregateSpec> specs, int groupingSetIndex) {
+    GroupState(List<Object> groupValues, List<Operand> groupOperands, List<AggregateSpec> specs, int groupingSetIndex) {
       this.groupValues = immutableListAllowingNulls(groupValues);
+      this.groupOperands = List.copyOf(groupOperands);
       this.groupingSetIndex = groupingSetIndex;
       this.accumulators = new AggregateAccumulator[specs.size()];
       for (int i = 0; i < specs.size(); i++) {
@@ -2519,6 +2564,15 @@ public final class AggregateFunctions {
 
     List<Object> groupValues() {
       return groupValues;
+    }
+
+    /**
+     * Returns grouping sources without JDBC wall-clock normalization.
+     *
+     * @return typed grouping operands
+     */
+    List<Operand> groupOperands() {
+      return groupOperands;
     }
 
     int groupingSetIndex() {
@@ -2950,6 +3004,8 @@ public final class AggregateFunctions {
    *
    * @param groupValues
    *          grouping values, including suppressed NULL keys
+   * @param groupOperands
+   *          source values and declarations, including suppressed NULLs
    * @param groupingSetIndex
    *          current grouping set
    * @param scalarExpressions
@@ -2957,7 +3013,7 @@ public final class AggregateFunctions {
    * @param groupedSubqueries
    *          validated scalar subqueries inside grouped expressions
    */
-  private record GroupEvaluation(List<Object> groupValues, int groupingSetIndex,
+  private record GroupEvaluation(List<Object> groupValues, List<Operand> groupOperands, int groupingSetIndex,
       Map<String, GroupedExpression> scalarExpressions, Map<String, GroupedScalarSubquery> groupedSubqueries) {
   }
 
@@ -2974,6 +3030,7 @@ public final class AggregateFunctions {
     private final Map<String, Integer> groupIndexLookup;
     private final Predicate<Column> booleanColumn;
     private final List<Object> groupValues;
+    private final List<Operand> groupOperands;
     private final Map<String, GroupedExpression> scalarExpressions;
     private final Map<String, GroupedScalarSubquery> groupedSubqueries;
 
@@ -2982,6 +3039,7 @@ public final class AggregateFunctions {
         Map<String, Map<String, String>> correlationContext, Predicate<Column> booleanColumn, GroupEvaluation group) {
       this.plan = plan;
       this.groupValues = group.groupValues();
+      this.groupOperands = group.groupOperands();
       this.scalarExpressions = group.scalarExpressions();
       this.groupedSubqueries = group.groupedSubqueries();
       this.aggregateValues = aggregateValues;
@@ -3164,7 +3222,7 @@ public final class AggregateFunctions {
       }
       if (expr instanceof Select subSelect) {
         GroupedScalarSubquery grouped = groupedSubqueries.get(subSelect.toString());
-        return grouped == null ? evaluateScalarSubquery(subSelect) : grouped.evaluate(groupValues);
+        return grouped == null ? evaluateScalarSubquery(subSelect) : grouped.evaluate(groupOperands);
       }
       if (expr instanceof ArrayConstructor array) {
         return arrayValues(array.getExpressions());
@@ -3215,7 +3273,10 @@ public final class AggregateFunctions {
               || isGroupOperand(operand, groupIndexLookup, plan.groupExpressions(), plan.columnBinding())));
       return scalar.evaluate(operand -> {
         Integer groupIndex = findGroupIndex(operand, groupIndexLookup, plan.groupExpressions(), plan.columnBinding());
-        return groupIndex == null ? value(operand) : groupValues.get(groupIndex);
+        return groupIndex == null ? value(operand) : groupOperands.get(groupIndex).value();
+      }, operand -> {
+        Integer index = findGroupIndex(operand, groupIndexLookup, plan.groupExpressions(), plan.columnBinding());
+        return index == null ? null : groupOperands.get(index).declaration();
       });
     }
 
@@ -3300,6 +3361,14 @@ public final class AggregateFunctions {
     }
 
     private Object correlatedValue(String qualifier, String column) {
+      Column reference = new Column(column);
+      if (qualifier != null) {
+        reference.setTable(new Table(qualifier));
+      }
+      Integer index = findGroupIndex(reference, groupIndexLookup, plan.groupExpressions(), plan.columnBinding());
+      if (index != null) {
+        return groupOperands.get(index);
+      }
       String normalizedQualifier = JParqUtil.normalizeQualifier(qualifier);
       String normalizedColumn = Identifier.lookupKey(column);
       if (normalizedQualifier != null && normalizedColumn != null && !correlationContext.isEmpty()) {

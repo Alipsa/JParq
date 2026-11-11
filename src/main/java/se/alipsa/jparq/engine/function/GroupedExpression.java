@@ -255,12 +255,14 @@ final class GroupedExpression {
    *
    * @param values
    *          resolves each bound operand
+   * @param declarations
+   *          resolves operand types without evaluating their values
    * @return scalar value, possibly null
    * @throws IllegalArgumentException
    *           if a classified evaluation failure occurs, preserving its SQLState
    *           and original cause with the source expression as diagnostic context
    */
-  Object evaluate(Function<Expression, Object> values) {
+  Object evaluate(Function<Expression, Object> values, Function<Expression, Schema> declarations) {
     List<Object> operands = new AbstractList<>() {
       @Override
       public Object get(int index) {
@@ -272,7 +274,18 @@ final class GroupedExpression {
         return bindings.size();
       }
     };
-    var frame = new CorrelatedBindings(BINDING_KEY, operands);
+    List<Schema> schemas = new AbstractList<>() {
+      @Override
+      public Schema get(int index) {
+        return declarations.apply(bindings.get(index));
+      }
+
+      @Override
+      public int size() {
+        return bindings.size();
+      }
+    };
+    var frame = new CorrelatedBindings(BINDING_KEY, operands, schemas);
     try (frame) {
       return evaluator.eval(expression, new GenericData.Record(schema));
     } catch (RuntimeException failure) {
