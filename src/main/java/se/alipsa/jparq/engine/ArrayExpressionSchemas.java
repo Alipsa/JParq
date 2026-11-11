@@ -3,6 +3,8 @@ package se.alipsa.jparq.engine;
 import java.sql.JDBCType;
 import java.sql.Types;
 import java.util.List;
+import java.util.Locale;
+import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.BooleanValue;
@@ -128,6 +130,13 @@ public final class ArrayExpressionSchemas {
     if (expression instanceof Select select) {
       return scalarSchemas.apply(select);
     }
+    if (expression instanceof AnalyticExpression analytic && analytic.getName() != null) {
+      return switch (analytic.getName().toUpperCase(Locale.ROOT)) {
+        case "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE", "LAG", "LEAD", "MIN", "MAX" ->
+          resolve(analytic.getExpression(), columns, scalarSchemas);
+        default -> null;
+      };
+    }
     if (expression instanceof ArrayConstructor array) {
       Schema element = common(array.getExpressions(), columns, scalarSchemas);
       return element == null ? null : Schema.createArray(element);
@@ -187,7 +196,7 @@ public final class ArrayExpressionSchemas {
       return nonnumericSchema(literal.getType().name());
     }
     if (expression instanceof TimeKeyExpression time) {
-      return switch (time.getStringValue().toUpperCase(java.util.Locale.ROOT)) {
+      return switch (time.getStringValue().toUpperCase(Locale.ROOT)) {
         case "CURRENT_DATE" -> nonnumericSchema("DATE");
         case "LOCALTIME" -> nativeTimeSchema();
         case "LOCALTIMESTAMP" -> nonnumericSchema("TIMESTAMP");

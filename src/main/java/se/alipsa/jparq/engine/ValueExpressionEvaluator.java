@@ -313,6 +313,26 @@ public final class ValueExpressionEvaluator {
   }
 
   /**
+   * Evaluates an aggregate input once, retaining original column fields and its
+   * declaration. Computed expressions keep their ordinary engine semantics.
+   *
+   * @param expression
+   *          aggregate input expression
+   * @param record
+   *          source row
+   * @return evaluated source fields and declaration
+   * @throws IllegalArgumentException
+   *           if expression evaluation or column resolution fails
+   */
+  public Operand sourceOperand(Expression expression, GenericRecord record) {
+    Expression shape = ExpressionEvaluator.unwrapParenthesis(expression);
+    if (shape instanceof Column column && SqlExpressionNormalizer.timeKeyword(column) == null) {
+      return correlatedOperand(resolveColumnName(column), record);
+    }
+    return new Operand(eval(shape, record), valueSchema(shape));
+  }
+
+  /**
    * Applies the expression's common interval declaration after lazy evaluation.
    *
    * @param expression

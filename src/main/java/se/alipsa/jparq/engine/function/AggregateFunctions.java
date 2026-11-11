@@ -2842,24 +2842,25 @@ public final class AggregateFunctions {
 
     @Override
     void add(ValueExpressionEvaluator eval, GenericRecord record) {
-      Object value = evaluate(eval, record);
+      Operand candidate = eval.sourceOperand(spec.arguments().getFirst(), record);
+      Object value = candidate.engineValue();
       if (value == null) {
         if (extremum == null && source.declaration() == null) {
-          source = eval.sourceOperand(spec.arguments().getFirst(), null, record);
+          source = candidate;
         }
         return;
       }
       trackType(value);
       if (extremum == null) {
         extremum = value;
-        source = eval.sourceOperand(spec.arguments().getFirst(), value, record);
+        source = candidate;
         return;
       }
       int cmp = SqlComparisons.typedCompare(value, extremum);
       if ((isMax && cmp > 0) || (!isMax && cmp < 0)
           || (cmp == 0 && value instanceof TemporalInterval interval && interval.isTemporalDifference())) {
         extremum = value;
-        source = eval.sourceOperand(spec.arguments().getFirst(), value, record);
+        source = candidate;
       }
     }
 
@@ -3218,11 +3219,14 @@ public final class AggregateFunctions {
       Expression leftExpr = be.getLeftExpression();
       Expression rightExpr = be.getRightExpression();
       if (JSqlParserSupport.isQuantifiedOperand(leftExpr) || JSqlParserSupport.isQuantifiedOperand(rightExpr)) {
-        return QuantifiedComparisons
-            .evaluate(be,
-                expression -> new QuantifiedComparisons.ScalarOperand(predicateOperand(expression),
-                    UnaryOperator.identity()),
-                this::value, subSelect -> evaluateSubquery(subSelect).singleColumnValues());
+        return QuantifiedComparisons.evaluate(be,
+            expression -> new QuantifiedComparisons.ScalarOperand(predicateOperand(expression),
+                UnaryOperator.identity()),
+            this::value, subSelect -> {
+              SubqueryExecutor.SubqueryResult result = evaluateSubquery(subSelect);
+              return result.singleColumnValues().stream()
+                  .<Object>map(candidate -> new Operand(candidate, result.projectionSchema())).toList();
+            });
       }
       String op = be.getStringExpression();
       Operand left = predicateOperand(be.getLeftExpression());
@@ -3368,6 +3372,10 @@ public final class AggregateFunctions {
       }
       if (operand instanceof Function function && isAggregateName(function.getName())) {
         return aggregateOperands.get(aggregateIndex(function));
+      }
+      if (operand instanceof Select select) {
+        SubqueryExecutor.SubqueryResult result = evaluateSubquery(select);
+        return new Operand(result.scalarValue(), result.projectionSchema());
       }
       return new Operand(value(operand), operandSchema(operand));
     }

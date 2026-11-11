@@ -87,6 +87,8 @@ class OffsetTemporalSemanticsTest {
           assertGroupedCorrelations(connection);
           assertLocalFieldCorrelations(connection);
           assertAggregateDeclarations(connection);
+          assertHavingSubqueryDeclarations(connection);
+          assertWindowDeclarations(connection);
           assertLocalPredicates(connection);
           assertCorrelatedRepresentations(connection);
           assertWindowOrder(connection);
@@ -337,6 +339,71 @@ class OffsetTemporalSemanticsTest {
           assertEquals(2, rows, expression);
         }
       }
+    }
+  }
+
+  /**
+   * HAVING retains subquery declarations for scalar and quantified comparisons.
+   *
+   * @param connection
+   *          open connection
+   * @throws Exception
+   *           if querying fails
+   */
+  private static void assertHavingSubqueryDeclarations(Connection connection) throws Exception {
+    String offset = "CAST(o AS TIMESTAMP WITH TIME ZONE)";
+    String[] predicates = {
+        offset + " = ANY (SELECT i.o FROM correlated i)", offset + " = ANY (SELECT MAX(i.o) FROM correlated i)",
+        offset + " = ALL (SELECT i.o FROM correlated i WHERE i.id = 1)",
+        offset + " = (SELECT MAX(i.o) FROM correlated i)", offset + " IN (SELECT i.o FROM correlated i)",
+        offset + " = ANY (SELECT i.o FROM correlated i WHERE i.o = t.o)",
+        offset + " = (SELECT MAX(i.o) FROM correlated i WHERE i.o = t.o)",
+        offset + " = (SELECT i.n FROM correlated i WHERE i.id = 1)"
+    };
+    int[] counts = {
+        2, 1, 1, 1, 2, 2, 2, 0
+    };
+    for (int index = 0; index < predicates.length; index++) {
+      assertCount(connection,
+          "SELECT COUNT(*) FROM (SELECT o FROM correlated t GROUP BY o HAVING " + predicates[index] + ") q",
+          counts[index]);
+      assertCount(connection, "SELECT COUNT(*) FROM correlated t WHERE " + predicates[index], counts[index]);
+    }
+  }
+
+  /**
+   * Value-returning windows retain UTC input declarations in scalar predicates.
+   *
+   * @param connection
+   *          open connection
+   * @throws Exception
+   *           if querying fails
+   */
+  private static void assertWindowDeclarations(Connection connection) throws Exception {
+    String offset = "CAST(o AS TIMESTAMP WITH TIME ZONE)";
+    String query = "SELECT id," + offset + " = FIRST_VALUE(o) OVER (ORDER BY id)," + offset
+        + " = MIN(o) OVER (PARTITION BY id)," + offset + " = MAX(o) OVER ()," + offset
+        + " = LAST_VALUE(o) OVER (ORDER BY id)," + offset + " = NTH_VALUE(o,1) OVER (ORDER BY id)," + offset
+        + " - INTERVAL '1' HOUR = LAG(o) OVER (ORDER BY id)," + offset
+        + " + INTERVAL '1' HOUR = LEAD(o) OVER (ORDER BY id) FROM correlated ORDER BY id";
+    try (var statement = connection.createStatement(); var result = statement.executeQuery(query)) {
+      assertTrue(result.next(), query);
+      assertEquals(1, result.getInt(1));
+      for (int column : List.of(2, 3, 5, 6, 8)) {
+        assertEquals(Boolean.TRUE, result.getObject(column), query + " column " + column);
+      }
+      assertEquals(Boolean.FALSE, result.getObject(4), query);
+      assertNull(result.getObject(7), query);
+      assertTrue(result.next(), query);
+      assertEquals(2, result.getInt(1));
+      for (int column : List.of(3, 4, 5, 7)) {
+        assertEquals(Boolean.TRUE, result.getObject(column), query + " column " + column);
+      }
+      for (int column : List.of(2, 6)) {
+        assertEquals(Boolean.FALSE, result.getObject(column), query + " column " + column);
+      }
+      assertNull(result.getObject(8), query);
+      assertFalse(result.next(), query);
     }
   }
 

@@ -146,6 +146,10 @@
   retain grouped operands' declarations, including suppressed NULL keys. Correlated local timestamp
   bindings preserve stored clock fields through DST gaps before offset promotion.
   MIN/MAX retain the selected input's declaration for grouped predicates and scalar expressions.
+  HAVING scalar and quantified subquery comparisons retain the executing projection's declaration.
+  FIRST_VALUE, LAST_VALUE, NTH_VALUE, LAG, LEAD, and window MIN/MAX retain their input declarations
+  when compared with offset values. Grouped MIN/MAX evaluate each input once and retain the
+  winning source operand, including its stored local fields.
   Correlated local timestamp projections, character casts, and arithmetic retain JDBC Timestamp
   values matching their metadata. Ordinary local predicates use consistent engine values on both
   sides, while offset promotion retains the original stored fields. Grouping sources are decoded
