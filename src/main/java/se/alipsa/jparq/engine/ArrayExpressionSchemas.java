@@ -189,7 +189,7 @@ public final class ArrayExpressionSchemas {
     if (expression instanceof TimeKeyExpression time) {
       return switch (time.getStringValue().toUpperCase(java.util.Locale.ROOT)) {
         case "CURRENT_DATE" -> nonnumericSchema("DATE");
-        case "LOCALTIME" -> nonnumericSchema("TIME");
+        case "LOCALTIME" -> nativeTimeSchema();
         case "LOCALTIMESTAMP" -> nonnumericSchema("TIMESTAMP");
         case "CURRENT_TIME" -> TemporalValueType.OFFSET_TIME.schema();
         case "CURRENT_TIMESTAMP" -> TemporalValueType.OFFSET_TIMESTAMP.schema();
@@ -201,6 +201,18 @@ public final class ArrayExpressionSchemas {
       return numeric.schema();
     }
     return expression instanceof StringValue ? ScalarExpressionSchemas.resolve(expression) : null;
+  }
+
+  /**
+   * Retains native value-function digits without changing JDBC TIME array
+   * classes.
+   *
+   * @return TIME declaration whose JSON text preserves significant native digits
+   */
+  private static Schema nativeTimeSchema() {
+    Schema schema = nonnumericSchema("TIME");
+    schema.addProp("jparq.temporal.nativePrecision", "true");
+    return schema;
   }
 
   /**

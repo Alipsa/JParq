@@ -140,6 +140,9 @@ public final class QuantifiedComparisons {
    * @return whether the value is an array, map, or record
    */
   private static boolean isNonScalar(Object value) {
+    if (value instanceof TemporalOperands.Operand operand) {
+      return isNonScalar(operand.value());
+    }
     return value instanceof List<?> || value instanceof Map<?, ?> || value instanceof Object[]
         || value instanceof IndexedRecord;
   }

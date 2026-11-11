@@ -862,8 +862,8 @@ public final class JsonFunctions {
   }
 
   /**
-   * Formats TIME with an explicit SQL fractional precision when available.
-   * Storage resolution alone does not impose fractional padding.
+   * Formats TIME with an explicit SQL fractional precision when available. Stored
+   * TIME values use their storage resolution as their SQL precision.
    *
    * @param time
    *          decoded wall-clock time
@@ -873,9 +873,14 @@ public final class JsonFunctions {
    */
   private static JsonNode timeNode(LocalTime time, Schema schema) {
     String declared = schema.getProp("jparq.temporal.precision");
-    DateTimeFormatter formatter = declared == null
-        ? DateTimeFormatter.ISO_LOCAL_TIME
-        : TIME_FORMATTERS[Integer.parseInt(declared)];
+    int precision = declared != null
+        ? Integer.parseInt(declared)
+        : "true".equals(schema.getProp("jparq.temporal.nativePrecision"))
+            ? -1
+            : schema.getLogicalType() instanceof LogicalTypes.TimeMillis
+                ? 3
+                : schema.getLogicalType() instanceof LogicalTypes.TimeMicros ? 6 : -1;
+    DateTimeFormatter formatter = precision < 0 ? DateTimeFormatter.ISO_LOCAL_TIME : TIME_FORMATTERS[precision];
     return MAPPER.getNodeFactory().textNode(formatter.format(time));
   }
 

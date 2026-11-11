@@ -131,7 +131,13 @@
   local and offset temporal values using the session offset. Explicit WITH TIME ZONE casts use the same
   source-aware promotion, preserving UTC-adjusted column instants. Their scalar JDBC metadata and
   values now expose TIME_WITH_TIMEZONE/OffsetTime or TIMESTAMP_WITH_TIMEZONE/OffsetDateTime;
-  `getTime` and `getTimestamp` also accept those offset values.
+  `getDate`, `getTime`, and `getTimestamp` also accept offset timestamps, converting their instants
+  to JVM-local JDBC fields. Offset TIME getters use the date anchor 1970-01-01 for the same conversion.
+  TIMESTAMP WITH TIME ZONE comparisons, ordering, subtraction, and relational keys use UTC instants;
+  TIME WITH TIME ZONE uses UTC-normalized clock fields. Timestamp-to-TIME WITH TIME ZONE casts preserve
+  both the source instant's time and its displacement. Stored TIME JSON text retains its SQL storage
+  precision (three digits for time-millis, six for time-micros); unqualified TIME casts retain precision
+  zero, while LOCALTIME retains native fractional digits.
   **Behavior changes:** VALUES mixing DATE with TIMESTAMP or TIME now fails with SQLState `42000`;
   these inputs previously widened to TIMESTAMP or fell back to VARCHAR. Set operations containing
   CAST(NULL AS DATE/TIME/TIMESTAMP), including precision with WITH/WITHOUT TIME ZONE clauses, now retain the

@@ -184,7 +184,7 @@ public final class ValueExpressionEvaluator {
     this.effectiveQualifierMapping = mergeQualifierMappings(this.qualifierColumnMapping, this.correlationContext);
     this.windowState = windowState == null ? WindowState.empty() : windowState;
     this.functionSupport = new FunctionSupport(subqueryExecutor, correlationQualifiers(), correlationColumns(),
-        this.correlationContext, this::resolveCorrelatedValue, this::evalInternal);
+        this.correlationContext, this::resolveCorrelatedValue, this::evalInternal, this::evalOperand);
   }
 
   /**
@@ -244,6 +244,26 @@ public final class ValueExpressionEvaluator {
    */
   public Object eval(Expression expression, GenericRecord record) {
     return evalInternal(ExpressionEvaluator.unwrapParenthesis(expression), record);
+  }
+
+  /**
+   * Evaluates a value while retaining temporal source metadata for predicates.
+   *
+   * @param expression
+   *          value expression
+   * @param record
+   *          current row
+   * @return engine value and its temporal declaration
+   * @throws IllegalArgumentException
+   *           if evaluation or temporal conversion fails
+   */
+  public Operand evalOperand(Expression expression, GenericRecord record) {
+    Operand source = declaredOperand(expression, record, false);
+    if (ExpressionEvaluator.unwrapParenthesis(expression) instanceof TimeKeyExpression
+        && source.value() instanceof LocalDateTime) {
+      return new Operand(source.value(), TemporalValueType.LOCAL_TIMESTAMP.schema());
+    }
+    return new Operand(source.engineValue(), source.declaration());
   }
 
   /**
@@ -434,6 +454,12 @@ public final class ValueExpressionEvaluator {
     TemporalValueType temporal = TemporalValueType.fromSchema(target);
     if (temporal == TemporalValueType.OFFSET_TIMESTAMP || temporal == TemporalValueType.OFFSET_TIME) {
       Operand source = declaredOperand(cast.getLeftExpression(), record, false);
+      if (temporal == TemporalValueType.OFFSET_TIME && (source.value() instanceof Timestamp
+          || source.value() instanceof LocalDateTime || source.value() instanceof OffsetDateTime)) {
+        OffsetDateTime timestamp = (OffsetDateTime) TemporalOperands
+            .promote(source, TemporalValueType.OFFSET_TIMESTAMP.schema()).engineValue();
+        source = new Operand(timestamp.toOffsetTime(), TemporalValueType.OFFSET_TIME.schema());
+      }
       boolean compatible = temporal == TemporalValueType.OFFSET_TIMESTAMP
           ? source.value() instanceof Timestamp || source.value() instanceof LocalDateTime
               || source.value() instanceof OffsetDateTime
@@ -590,13 +616,13 @@ public final class ValueExpressionEvaluator {
   private Object evaluateCase(CaseExpression caseExpr, GenericRecord record,
       BiFunction<Expression, GenericRecord, Object> resultEvaluator) {
     boolean isSimpleCase = caseExpr.getSwitchExpression() != null;
-    Object switchValue = isSimpleCase ? evalInternal(caseExpr.getSwitchExpression(), record) : null;
+    Operand switchValue = isSimpleCase ? evalOperand(caseExpr.getSwitchExpression(), record) : null;
 
     List<WhenClause> whenClauses = caseExpr.getWhenClauses();
     if (whenClauses != null) {
       for (WhenClause clause : whenClauses) {
         if (isSimpleCase) {
-          Object whenValue = evalInternal(clause.getWhenExpression(), record);
+          Operand whenValue = evalOperand(clause.getWhenExpression(), record);
           if (valuesEqual(switchValue, whenValue)) {
             return resultEvaluator.apply(clause.getThenExpression(), record);
           }
@@ -646,17 +672,26 @@ public final class ValueExpressionEvaluator {
     return conditionEvaluator;
   }
 
-  private static boolean valuesEqual(Object left, Object right) {
-    if (left == null || right == null) {
+  /**
+   * Matches simple CASE operands after source-aware datetime promotion.
+   *
+   * @param left
+   *          switch operand
+   * @param right
+   *          WHEN operand
+   * @return whether both values are non-null and compare as equal
+   */
+  private static boolean valuesEqual(Operand left, Operand right) {
+    if (left.value() == null || right.value() == null) {
       return false;
     }
     try {
-      return ExpressionEvaluator.typedCompare(left, right) == 0;
+      return Integer.valueOf(0).equals(TemporalOperands.compare(left, right));
     } catch (RuntimeException e) {
       if (SqlExceptions.findSqlStateFailure(e) != null) {
         throw e;
       }
-      return left.equals(right);
+      return left.value().equals(right.value());
     }
   }
 
@@ -990,6 +1025,11 @@ public final class ValueExpressionEvaluator {
   }
 
   private Object arithmetic(Expression left, Expression right, GenericRecord record, Operation op) {
+    if (op == Operation.SUB) {
+      Operand first = declaredOperand(left, record, false);
+      Operand second = declaredOperand(right, record, false);
+      return arithmetic(left, right, first.value(), second.value(), op);
+    }
     return arithmetic(left, right, evalInternal(left, record), evalInternal(right, record), op);
   }
 
@@ -1019,7 +1059,14 @@ public final class ValueExpressionEvaluator {
       }
     }
     if (op == Operation.SUB) {
-      Object temporal = DateTimeFunctions.minus(leftVal, rightVal);
+      Object first = leftVal;
+      Object second = rightVal;
+      if (leftVal instanceof OffsetDateTime || rightVal instanceof OffsetDateTime || leftVal instanceof OffsetTime
+          || rightVal instanceof OffsetTime) {
+        first = TemporalOperands.comparisonValue(new Operand(leftVal, valueSchema(left)), rightVal);
+        second = TemporalOperands.comparisonValue(new Operand(rightVal, valueSchema(right)), leftVal);
+      }
+      Object temporal = DateTimeFunctions.minus(first, second);
       if (temporal != null) {
         return temporal;
       }

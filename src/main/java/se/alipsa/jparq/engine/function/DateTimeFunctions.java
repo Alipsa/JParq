@@ -481,7 +481,7 @@ public final class DateTimeFunctions {
   }
 
   /**
-   * Handle subtraction for temporal values.
+   * Handles temporal subtraction, using UTC for offset datetime differences.
    *
    * @param left
    *          the left operand
@@ -491,8 +491,7 @@ public final class DateTimeFunctions {
    *         internal interval for other temporal differences, the result of an
    *         interval offset, or {@code null} if not a supported temporal
    *         subtraction, including TIME paired with DATE or TIMESTAMP; internal
-   *         differences support comparison and extraction but cannot be returned
-   *         as JDBC column values
+   *         differences support comparison, extraction, and JDBC interval values
    */
   public static Object minus(Object left, Object right) {
     if (left instanceof TemporalInterval li && right instanceof TemporalInterval ri) {
@@ -500,6 +499,13 @@ public final class DateTimeFunctions {
     }
     if (right instanceof TemporalInterval ri) {
       return applyInterval(left, ri.negate());
+    }
+    if (left instanceof OffsetDateTime end && right instanceof OffsetDateTime start) {
+      return TemporalInterval.between(start.toInstant(), end.toInstant());
+    }
+    if (left instanceof OffsetTime end && right instanceof OffsetTime start) {
+      return TemporalInterval.between(start.withOffsetSameInstant(ZoneOffset.UTC).toLocalTime(),
+          end.withOffsetSameInstant(ZoneOffset.UTC).toLocalTime());
     }
     if (isTemporal(left) && isTemporal(right)) {
       TemporalAccessor start = toTemporalAccessor(right);

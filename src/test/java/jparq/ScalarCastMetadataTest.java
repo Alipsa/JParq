@@ -122,7 +122,10 @@ class ScalarCastMetadataTest {
             assertTrue(result.next());
             assertTrue(Class.forName(className).isInstance(result.getObject(1)));
             if (jdbcType == Types.TIME_WITH_TIMEZONE) {
-              assertEquals(java.sql.Time.valueOf("10:00:00"), result.getTime(1));
+              var time = result.getObject(1, java.time.OffsetTime.class);
+              var instant = time.atDate(java.time.LocalDate.ofEpochDay(0)).toInstant();
+              assertEquals(se.alipsa.jparq.engine.function.DateTimeFunctions.toTime(java.sql.Timestamp.from(instant)),
+                  result.getTime(1));
             } else {
               var timestamp = result.getObject(1, java.time.OffsetDateTime.class);
               assertEquals(timestamp.toInstant(), result.getTimestamp(1).toInstant());

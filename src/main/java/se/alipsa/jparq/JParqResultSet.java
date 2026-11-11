@@ -1630,6 +1630,15 @@ public class JParqResultSet extends ResultSetAdapter {
     return (byte[]) v;
   }
 
+  /**
+   * Returns the JVM-local date, converting offset timestamp instants first.
+   *
+   * @param columnIndex
+   *          one-based column index
+   * @return JDBC date, or null for SQL NULL
+   * @throws SQLException
+   *           if the value is unavailable or cannot be converted to DATE
+   */
   @Override
   public Date getDate(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
@@ -1637,6 +1646,7 @@ public class JParqResultSet extends ResultSetAdapter {
       case null -> null;
       case Date date -> date;
       case Timestamp ts -> new Date(ts.getTime());
+      case OffsetDateTime timestamp -> new Date(timestamp.toInstant().toEpochMilli());
       case String s -> Date.valueOf(s);
       case Long l -> new Date(l);
       case Double d -> new Date(d.longValue());
@@ -1651,6 +1661,16 @@ public class JParqResultSet extends ResultSetAdapter {
     return getDate(findColumn(columnLabel));
   }
 
+  /**
+   * Returns JVM-local clock fields for offset datetime instants. Offset TIME
+   * values use 1970-01-01 as their date anchor, matching JDBC TIME storage.
+   *
+   * @param columnIndex
+   *          one-based column index
+   * @return JDBC time, or null for SQL NULL
+   * @throws SQLException
+   *           if the value is unavailable or cannot be converted to TIME
+   */
   @Override
   public Time getTime(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
@@ -1658,7 +1678,10 @@ public class JParqResultSet extends ResultSetAdapter {
       return null;
     }
     if (v instanceof OffsetTime time) {
-      v = time.toLocalTime();
+      v = Timestamp.from(time.atDate(LocalDate.ofEpochDay(0)).toInstant());
+    }
+    if (v instanceof OffsetDateTime timestamp) {
+      v = Timestamp.from(timestamp.toInstant());
     }
     if (!(v instanceof Timestamp || v instanceof Time || v instanceof LocalTime || v instanceof String
         || v instanceof Long || v instanceof Double)) {

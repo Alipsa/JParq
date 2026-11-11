@@ -107,7 +107,7 @@ class JsonTemporalSerializationTest {
           LogicalTypes.localTimestampNanos().addToSchema(Schema.create(Schema.Type.LONG)));
       List<Number> values = List.of(3_600_123, 3_600_123_000L, 1_700_000_000_123L, 1_700_000_000_123_456L, -1L,
           1_700_000_000_123L, 1_700_000_000_123_456L, -1L);
-      List<String> expected = List.of("01:00:00.123", "01:00:00.123", "2023-11-14T22:13:20.123Z",
+      List<String> expected = List.of("01:00:00.123", "01:00:00.123000", "2023-11-14T22:13:20.123Z",
           "2023-11-14T22:13:20.123456Z", "1969-12-31T23:59:59.999999999Z", "2023-11-14T22:13:20.123",
           "2023-11-14T22:13:20.123456", "1969-12-31T23:59:59.999999999");
       for (int index = 0; index < types.size(); index++) {

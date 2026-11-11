@@ -506,9 +506,9 @@ class TimePrecisionTest {
    *           if a query fails
    */
   @Test
-  void storedTimePreservesSignificantDigits() throws Exception {
+  void storedTimePadsToSqlPrecision() throws Exception {
     try (var connection = connection(true, true); var statement = connection.createStatement()) {
-      List<String> expected = List.of("[\"10:00:00\"]", "[\"10:00:00.5\"]", "[\"10:00:00.25\"]");
+      List<String> expected = List.of("[\"10:00:00.000\"]", "[\"10:00:00.500\"]", "[\"10:00:00.250\"]");
       try (var result = statement.executeQuery("SELECT JSON_ARRAY(t) FROM clocks ORDER BY id")) {
         for (String json : expected) {
           assertTrue(result.next());
@@ -526,6 +526,33 @@ class TimePrecisionTest {
           }
         }
         assertEquals(expected.stream().sorted().toList(), rows.stream().sorted().toList(), sql);
+      }
+    }
+  }
+
+  /**
+   * Matches stored TIME text to equivalent explicit and conditional declarations.
+   *
+   * @throws Exception
+   *           if querying fails
+   */
+  @Test
+  void storedTimeMatchesDeclaredJsonPrecision() throws Exception {
+    try (var connection = connection(true, true); var statement = connection.createStatement()) {
+      for (String[] sample : List.of(new String[]{
+          "t", "3"
+      }, new String[]{
+          "u", "6"
+      })) {
+        String column = sample[0];
+        String type = "TIME(" + sample[1] + ")";
+        try (var result = statement.executeQuery("SELECT JSON_ARRAY(" + column + "),JSON_ARRAY(CAST(" + column + " AS "
+            + type + ")),JSON_ARRAY(COALESCE(" + column + ",CAST(NULL AS " + type + "))) FROM clocks")) {
+          while (result.next()) {
+            assertEquals(result.getString(1), result.getString(2));
+            assertEquals(result.getString(1), result.getString(3));
+          }
+        }
       }
     }
   }

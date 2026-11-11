@@ -1,9 +1,11 @@
 package se.alipsa.jparq.engine;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.OffsetTime;
 import java.time.ZoneOffset;
@@ -202,6 +204,41 @@ public final class TemporalOperands {
       return new Operand(source.value(), effective);
     }
     return source;
+  }
+
+  /**
+   * Promotes a datetime operand to match an offset comparison partner. Source
+   * declarations distinguish stored UTC instants from local fields.
+   *
+   * @param source
+   *          value and its original declaration
+   * @param other
+   *          comparison or subtraction partner
+   * @return source value with compatible offset semantics
+   */
+  public static Object comparisonValue(Operand source, Object other) {
+    if (other instanceof OffsetDateTime && (source.value() instanceof Timestamp
+        || source.value() instanceof LocalDateTime || source.value() instanceof OffsetDateTime)) {
+      return promote(source, TemporalValueType.OFFSET_TIMESTAMP.schema()).engineValue();
+    }
+    if (other instanceof OffsetTime && (source.value() instanceof Time || source.value() instanceof LocalTime
+        || source.value() instanceof OffsetTime)) {
+      return promote(source, TemporalValueType.OFFSET_TIME.schema()).engineValue();
+    }
+    return source.value();
+  }
+
+  /**
+   * Compares evaluated operands after source-aware offset promotion.
+   *
+   * @param left
+   *          first source operand
+   * @param right
+   *          second source operand
+   * @return comparison result, or null for SQL UNKNOWN
+   */
+  public static Integer compare(Operand left, Operand right) {
+    return SqlComparisons.compareOrUnknown(comparisonValue(left, right.value()), comparisonValue(right, left.value()));
   }
 
   /**
