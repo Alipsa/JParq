@@ -5,9 +5,11 @@ import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.sql.Date;
+import java.sql.JDBCType;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
@@ -50,6 +52,7 @@ import net.sf.jsqlparser.expression.operators.arithmetic.Multiplication;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.statement.create.table.ColDataType;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
@@ -330,6 +333,61 @@ public final class ValueExpressionEvaluator {
       return correlatedOperand(resolveColumnName(column), record);
     }
     return new Operand(eval(shape, record), valueSchema(shape));
+  }
+
+  /**
+   * Evaluates a selected LAG/LEAD default in the value expression's SQL type.
+   * Timestamp sources retain their storage provenance when they already have that
+   * SQL type, so local defaults are not mistaken for stored UTC instants.
+   *
+   * @param valueExpression
+   *          window value expression
+   * @param defaultExpression
+   *          selected default, or null for the implicit NULL
+   * @param record
+   *          current row
+   * @return converted default with its source declaration
+   * @throws IllegalArgumentException
+   *           if the default cannot be converted
+   */
+  public Operand navigationDefault(Expression valueExpression, Expression defaultExpression, GenericRecord record) {
+    Schema target = valueSchema(valueExpression);
+    if (defaultExpression == null) {
+      return new Operand(null, target);
+    }
+    Operand source = sourceOperand(defaultExpression, record);
+    if (target == null || source.value() == null) {
+      return source;
+    }
+    int type = JdbcTypeMapper.mapSchemaToJdbcType(target);
+    NumericType numeric = numericType(valueExpression);
+    if (numeric != null) {
+      try {
+        return new Operand(numeric.convert(source.engineValue()), target);
+      } catch (SQLException failure) {
+        throw new IllegalArgumentException("Cannot convert navigation default", failure);
+      }
+    }
+    TemporalValueType temporal = TemporalValueType.fromSchema(target);
+    if (temporal == TemporalValueType.OFFSET_TIMESTAMP || temporal == TemporalValueType.OFFSET_TIME) {
+      return TemporalOperands.promote(source, target);
+    }
+    Object value = source.engineValue();
+    if (type == JdbcTypeMapper.mapSchemaToJdbcType(source.declaration())
+        && (temporal == null || value.getClass().getName().equals(temporal.className()))) {
+      return source;
+    }
+    var cast = new CastExpression();
+    var dataType = new ColDataType();
+    dataType.setDataType(JDBCType.valueOf(type).getName());
+    cast.setColDataType(dataType);
+    Object converted = DateTimeFunctions.castLiteral(cast, value);
+    if (temporal == TemporalValueType.LOCAL_TIMESTAMP || temporal == TemporalValueType.LOCAL_TIME) {
+      converted = temporal.normalize(converted);
+    }
+    Schema declaration = type == Types.TIMESTAMP && AvroCoercions.utcTimestamp(target)
+        && !(value instanceof OffsetDateTime) ? TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema() : target;
+    return new Operand(converted, declaration);
   }
 
   /**
@@ -855,6 +913,10 @@ public final class ValueExpressionEvaluator {
    */
   private Operand declaredOperand(Expression expression, GenericRecord record, boolean validateArrays) {
     Expression unwrapped = ExpressionEvaluator.unwrapParenthesis(expression);
+    if (unwrapped instanceof AnalyticExpression analytic && windowState != null && !windowState.isEmpty()
+        && ("LAG".equalsIgnoreCase(analytic.getName()) || "LEAD".equalsIgnoreCase(analytic.getName()))) {
+      return windowState.navigationSource(analytic, record);
+    }
     if (unwrapped instanceof Function function && CorrelatedBindings.matches(function)) {
       return CorrelatedBindings.source(function);
     }
@@ -1210,7 +1272,7 @@ public final class ValueExpressionEvaluator {
     if (value instanceof LocalTime || value instanceof OffsetTime) {
       return "TIME";
     }
-    return java.sql.JDBCType.valueOf(JdbcTypeMapper.mapJavaClassNameToJdbcType(value.getClass().getName())).getName();
+    return JDBCType.valueOf(JdbcTypeMapper.mapJavaClassNameToJdbcType(value.getClass().getName())).getName();
   }
 
   private Object columnValue(Column column, GenericRecord record) {

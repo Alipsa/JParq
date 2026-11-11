@@ -120,8 +120,9 @@ public final class CorrelatedBindings implements AutoCloseable {
    */
   public static TemporalOperands.Operand source(Function function) {
     Slot slot = slot(function);
+    Object value = slot.frame().values().get(slot.index());
     Schema declaration = slot.frame().schemas().isEmpty() ? null : slot.frame().schemas().get(slot.index());
-    return new TemporalOperands.Operand(slot.frame().values().get(slot.index()), declaration);
+    return new TemporalOperands.Operand(value, declaration);
   }
 
   /**

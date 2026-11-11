@@ -1812,6 +1812,7 @@ public final class AggregateFunctions {
     final Map<String, Map<String, String>> normalizedCorrelationContext = ColumnMappingUtil
         .normaliseQualifierMapping(correlationContext);
 
+    final Map<String, GroupedScalarSubquery> groupedSubqueries = new HashMap<>();
     Map<Integer, GroupedScalarSubquery> scalarSubqueries = new HashMap<>();
     Map<Integer, GroupTypeTracker> scalarTypes = new HashMap<>();
     for (int index = 0; index < plan.resultColumns().size(); index++) {
@@ -1822,13 +1823,14 @@ public final class AggregateFunctions {
       Select subquery = resultColumn.subquery();
       if (subquery != null) {
         Objects.requireNonNull(subqueryExecutor, "Scalar subqueries require a subquery executor");
-        scalarSubqueries.put(index, new GroupedScalarSubquery(subquery, groupExpressions, subqueryExecutor,
-            CorrelationMappings.of(outerQualifiers, qualifierColumnMapping, unqualifiedColumnMapping)));
+        scalarSubqueries.put(index,
+            groupedSubqueries.computeIfAbsent(subquery.toString(),
+                text -> new GroupedScalarSubquery(subquery, groupExpressions, subqueryExecutor,
+                    CorrelationMappings.of(outerQualifiers, qualifierColumnMapping, unqualifiedColumnMapping))));
         scalarTypes.put(index, new GroupTypeTracker());
       }
     }
 
-    final Map<String, GroupedScalarSubquery> groupedSubqueries = new HashMap<>();
     Map<Integer, Expression> projectionExpressions = new HashMap<>();
     for (int index = 0; index < plan.resultColumns().size(); index++) {
       ResultColumn column = plan.resultColumns().get(index);
@@ -2235,7 +2237,8 @@ public final class AggregateFunctions {
         List<Operand> aggregateOperands, int groupingSetIndex) {
       this.rowValues = immutableListAllowingNulls(rowValues);
       this.groupValues = immutableListAllowingNulls(groupValues);
-      this.groupOperands = List.copyOf(groupOperands);
+      // GroupState owns this immutable list; its identity scopes subquery caching.
+      this.groupOperands = groupOperands;
       this.aggregateOperands = immutableListAllowingNulls(aggregateOperands);
       this.groupingSetIndex = groupingSetIndex;
     }
@@ -2541,7 +2544,7 @@ public final class AggregateFunctions {
 
     GroupState(List<Object> groupValues, List<Operand> groupOperands, List<AggregateSpec> specs, int groupingSetIndex) {
       this.groupValues = immutableListAllowingNulls(groupValues);
-      this.groupOperands = List.copyOf(groupOperands);
+      this.groupOperands = immutableListAllowingNulls(groupOperands);
       this.groupingSetIndex = groupingSetIndex;
       this.accumulators = new AggregateAccumulator[specs.size()];
       for (int i = 0; i < specs.size(); i++) {
@@ -3052,6 +3055,7 @@ public final class AggregateFunctions {
     private final List<Operand> groupOperands;
     private final Map<String, GroupedExpression> scalarExpressions;
     private final Map<String, GroupedScalarSubquery> groupedSubqueries;
+    private final Map<String, SubqueryExecutor.SubqueryResult> subqueryResults = new HashMap<>();
 
     HavingEvaluator(AggregatePlan plan, List<Operand> aggregateOperands, Map<String, Object> labelLookup,
         SubqueryExecutor subqueryExecutor, List<String> correlatedQualifiers,
@@ -3248,8 +3252,7 @@ public final class AggregateFunctions {
         return evalTruth(expr);
       }
       if (expr instanceof Select subSelect) {
-        GroupedScalarSubquery grouped = groupedSubqueries.get(subSelect.toString());
-        return grouped == null ? evaluateScalarSubquery(subSelect) : grouped.evaluate(groupOperands);
+        return evaluateScalarSubquery(subSelect);
       }
       if (expr instanceof ArrayConstructor array) {
         return arrayValues(array.getExpressions());
@@ -3335,8 +3338,12 @@ public final class AggregateFunctions {
       if (subqueryExecutor == null) {
         throw new IllegalStateException("HAVING subqueries require a subquery executor");
       }
-      return subqueryExecutor.executeCorrelated(subSelect, correlationQualifiers(), correlationColumns(),
-          correlationContext, (qualifier, column) -> correlatedValue(qualifier, column));
+      GroupedScalarSubquery grouped = groupedSubqueries.get(subSelect.toString());
+      return grouped == null
+          ? subqueryResults.computeIfAbsent(subSelect.toString(),
+              text -> subqueryExecutor.executeCorrelated(subSelect, correlationQualifiers(), correlationColumns(),
+                  correlationContext, (qualifier, column) -> correlatedValue(qualifier, column)))
+          : grouped.evaluateResult(groupOperands);
     }
 
     /**
@@ -3351,6 +3358,16 @@ public final class AggregateFunctions {
       Integer index = findGroupIndex(operand, groupIndexLookup, plan.groupExpressions(), plan.columnBinding());
       if (index != null) {
         return groupOperands.get(index).declaration();
+      }
+      if (operand instanceof Select select) {
+        GroupedScalarSubquery grouped = groupedSubqueries.get(select.toString());
+        if (grouped != null) {
+          return grouped.projectionSchema(groupOperands);
+        }
+        SubqueryExecutor.SubqueryResult result = subqueryResults.get(select.toString());
+        return result != null
+            ? result.projectionSchema()
+            : subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select);
       }
       return operand instanceof Function function && isAggregateName(function.getName())
           ? aggregateOperands.get(aggregateIndex(function)).declaration()

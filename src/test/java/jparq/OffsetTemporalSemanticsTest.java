@@ -88,7 +88,9 @@ class OffsetTemporalSemanticsTest {
           assertLocalFieldCorrelations(connection);
           assertAggregateDeclarations(connection);
           assertHavingSubqueryDeclarations(connection);
+          assertGroupedSelectSubqueryDeclarations(connection);
           assertWindowDeclarations(connection);
+          assertNavigationDefaults(connection);
           assertLocalPredicates(connection);
           assertCorrelatedRepresentations(connection);
           assertWindowOrder(connection);
@@ -368,6 +370,80 @@ class OffsetTemporalSemanticsTest {
           "SELECT COUNT(*) FROM (SELECT o FROM correlated t GROUP BY o HAVING " + predicates[index] + ") q",
           counts[index]);
       assertCount(connection, "SELECT COUNT(*) FROM correlated t WHERE " + predicates[index], counts[index]);
+    }
+  }
+
+  /**
+   * Grouped scalar bindings retain result declarations without evaluating skipped
+   * branches.
+   *
+   * @param connection
+   *          open connection
+   * @throws Exception
+   *           if querying fails
+   */
+  private static void assertGroupedSelectSubqueryDeclarations(Connection connection) throws Exception {
+    String scalar = "(SELECT i.o FROM correlated i WHERE i.o = t.o)";
+    String query = "SELECT o," + scalar + ",CAST(o AS TIMESTAMP WITH TIME ZONE) = " + scalar
+        + " FROM correlated t GROUP BY o ORDER BY o";
+    try (var statement = connection.createStatement(); var result = statement.executeQuery(query)) {
+      for (int hour : List.of(10, 11)) {
+        assertTrue(result.next(), query);
+        assertEquals(Instant.parse("2024-07-01T" + hour + ":00:00Z"), result.getTimestamp(2).toInstant());
+        assertEquals(Boolean.TRUE, result.getObject(3), query);
+      }
+      assertFalse(result.next(), query);
+    }
+    String nullable = "SELECT CAST(n AS TIMESTAMP WITH TIME ZONE) = "
+        + "(SELECT i.n FROM correlated i WHERE i.id = t.id) FROM correlated t GROUP BY id,n ORDER BY id";
+    try (var statement = connection.createStatement(); var result = statement.executeQuery(nullable)) {
+      assertTrue(result.next(), nullable);
+      assertNull(result.getObject(1), nullable);
+      assertTrue(result.next(), nullable);
+      assertEquals(Boolean.TRUE, result.getObject(1), nullable);
+      assertFalse(result.next(), nullable);
+    }
+    assertCount(connection, "SELECT COUNT(*) FROM (SELECT CASE WHEN 1 = 1 THEN TRUE "
+        + "ELSE CAST(o AS TIMESTAMP WITH TIME ZONE) = (SELECT 1 / 0) END FROM correlated GROUP BY o) q", 2);
+  }
+
+  /**
+   * Navigation defaults preserve local provenance and convert offset values to
+   * JDBC types.
+   *
+   * @param connection
+   *          open connection
+   * @throws Exception
+   *           if querying fails
+   */
+  private static void assertNavigationDefaults(Connection connection) throws Exception {
+    String literal = "TIMESTAMP '2024-07-01 12:00:00'";
+    String offset = "CAST(" + literal + " AS TIMESTAMP WITH TIME ZONE)";
+    for (String function : List.of("LAG", "LEAD")) {
+      for (boolean offsetDefault : List.of(false, true)) {
+        String navigation = function + "(o,1," + (offsetDefault ? offset : literal) + ") OVER (ORDER BY id)";
+        String query = "SELECT id," + offset + " = " + navigation + ",CAST(" + navigation
+            + " AS TIMESTAMP WITH TIME ZONE)," + offset + "," + navigation + " FROM correlated ORDER BY id";
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(query)) {
+          for (int id : List.of(1, 2)) {
+            assertTrue(result.next(), query);
+            boolean usesDefault = function.equals("LAG") ? id == 1 : id == 2;
+            OffsetDateTime direct = result.getObject(4, OffsetDateTime.class);
+            Instant expected = usesDefault
+                ? direct.toInstant()
+                : Instant.parse("2024-07-01T" + (function.equals("LAG") ? "10" : "11") + ":00:00Z");
+            assertEquals(expected, result.getObject(3, OffsetDateTime.class).toInstant(), query);
+            assertEquals(direct.toInstant().equals(expected), result.getBoolean(2), query);
+            assertInstanceOf(Timestamp.class, result.getObject(5), query);
+            assertEquals(Timestamp.class.getName(), result.getMetaData().getColumnClassName(5), query);
+            Timestamp nativeExpected = usesDefault && !offsetDefault
+                ? Timestamp.valueOf("2024-07-01 12:00:00")
+                : Timestamp.from(expected);
+            assertEquals(nativeExpected, result.getObject(5), query);
+          }
+          assertFalse(result.next(), query);
+        }
+      }
     }
   }
 

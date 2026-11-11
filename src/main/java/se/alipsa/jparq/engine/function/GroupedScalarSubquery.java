@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine.function;
 
 import java.sql.Types;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +15,7 @@ import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.select.SelectVisitor;
 import net.sf.jsqlparser.util.deparser.ExpressionDeParser;
 import net.sf.jsqlparser.util.deparser.SelectDeParser;
+import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter.QualifiedColumn;
 import se.alipsa.jparq.engine.CorrelationMappings;
@@ -32,6 +34,7 @@ final class GroupedScalarSubquery {
   private final CorrelationMappings mappings;
   private final Set<String> candidates;
   private final Map<QualifiedColumn, Integer> groupIndexes = new HashMap<>();
+  private final Map<List<Operand>, SubqueryExecutor.SubqueryResult> results = new IdentityHashMap<>();
 
   /**
    * Validates outer references before any groups are read, including empty
@@ -131,10 +134,36 @@ final class GroupedScalarSubquery {
    * @return scalar value, or null for an empty scalar result
    */
   Object evaluate(List<Operand> groupOperands) {
-    var result = executor.executeCorrelated(select, mappings.outerQualifiers(), candidates,
-        mappings.qualifierColumnMapping(),
-        (qualifier, column) -> groupOperands.get(groupIndexes.get(new QualifiedColumn(qualifier, column))));
-    return result.scalarValue();
+    return evaluateResult(groupOperands).scalarValue();
+  }
+
+  /**
+   * Captures a scalar subquery's values and projection declaration once per
+   * group.
+   *
+   * @param groupOperands
+   *          current group's immutable binding identity
+   * @return materialized result with its projection declaration
+   */
+  SubqueryExecutor.SubqueryResult evaluateResult(List<Operand> groupOperands) {
+    return results.computeIfAbsent(groupOperands,
+        operands -> executor.executeCorrelated(select, mappings.outerQualifiers(), candidates,
+            mappings.qualifierColumnMapping(),
+            (qualifier, column) -> operands.get(groupIndexes.get(new QualifiedColumn(qualifier, column)))));
+  }
+
+  /**
+   * Resolves metadata without executing a skipped scalar subquery. Once
+   * evaluated, the executing scope's declaration supersedes standalone planning
+   * metadata.
+   *
+   * @param groupOperands
+   *          current group's immutable binding identity
+   * @return projection declaration, or null when unavailable before evaluation
+   */
+  Schema projectionSchema(List<Operand> groupOperands) {
+    SubqueryExecutor.SubqueryResult result = results.get(groupOperands);
+    return result == null ? executor.projectionSchema(select) : result.projectionSchema();
   }
 
   /**

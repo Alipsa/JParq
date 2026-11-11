@@ -150,6 +150,10 @@
   FIRST_VALUE, LAST_VALUE, NTH_VALUE, LAG, LEAD, and window MIN/MAX retain their input declarations
   when compared with offset values. Grouped MIN/MAX evaluate each input once and retain the
   winning source operand, including its stored local fields.
+  Grouped SELECT-list comparisons retain scalar subquery projection declarations. Selected and
+  compared occurrences share one materialized result per group, while skipped branches remain lazy.
+  LAG/LEAD defaults convert to the value expression's SQL type when selected; navigation results
+  retain the selected source's temporal provenance so local defaults are not read as UTC storage.
   Correlated local timestamp projections, character casts, and arithmetic retain JDBC Timestamp
   values matching their metadata. Ordinary local predicates use consistent engine values on both
   sides, while offset promotion retains the original stored fields. Grouping sources are decoded

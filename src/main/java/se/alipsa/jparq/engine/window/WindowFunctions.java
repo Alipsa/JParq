@@ -31,6 +31,7 @@ import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SubqueryExecutor;
+import se.alipsa.jparq.engine.TemporalOperands.Operand;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.helper.LiteralConverter;
 
@@ -1534,18 +1535,15 @@ public final class WindowFunctions {
       return values;
     }
 
-    List<Object> argumentValues = new ArrayList<>(contexts.size());
+    List<Operand> argumentValues = new ArrayList<>(contexts.size());
     List<Long> offsets = new ArrayList<>(contexts.size());
-    List<Object> defaultValues = new ArrayList<>(contexts.size());
     boolean hasOffset = window.offsetExpression() != null;
-    boolean hasDefault = window.defaultExpression() != null;
 
     for (RowContext context : contexts) {
       GenericRecord record = context.record();
-      argumentValues.add(evaluator.eval(window.valueExpression(), record));
+      argumentValues.add(evaluator.sourceOperand(window.valueExpression(), record));
       Object offsetValue = hasOffset ? evaluator.eval(window.offsetExpression(), record) : null;
       offsets.add(resolvePositiveOffset(offsetValue, window.expression(), "LAG"));
-      defaultValues.add(hasDefault ? evaluator.eval(window.defaultExpression(), record) : null);
     }
 
     int index = 0;
@@ -1566,7 +1564,8 @@ public final class WindowFunctions {
         } else {
           long candidateIndex = i - offset;
           if (candidateIndex < partitionStart) {
-            result = defaultValues.get(i);
+            result = evaluator.navigationDefault(window.valueExpression(), window.defaultExpression(),
+                contexts.get(i).record());
           } else {
             result = argumentValues.get((int) candidateIndex);
           }
@@ -1590,18 +1589,15 @@ public final class WindowFunctions {
       return values;
     }
 
-    List<Object> argumentValues = new ArrayList<>(contexts.size());
+    List<Operand> argumentValues = new ArrayList<>(contexts.size());
     List<Long> offsets = new ArrayList<>(contexts.size());
-    List<Object> defaultValues = new ArrayList<>(contexts.size());
     boolean hasOffset = window.offsetExpression() != null;
-    boolean hasDefault = window.defaultExpression() != null;
 
     for (RowContext context : contexts) {
       GenericRecord record = context.record();
-      argumentValues.add(evaluator.eval(window.valueExpression(), record));
+      argumentValues.add(evaluator.sourceOperand(window.valueExpression(), record));
       Object offsetValue = hasOffset ? evaluator.eval(window.offsetExpression(), record) : null;
       offsets.add(resolvePositiveOffset(offsetValue, window.expression(), "LEAD"));
-      defaultValues.add(hasDefault ? evaluator.eval(window.defaultExpression(), record) : null);
     }
 
     int index = 0;
@@ -1622,7 +1618,8 @@ public final class WindowFunctions {
         } else {
           long candidateIndex = i + offset;
           if (candidateIndex >= partitionEnd) {
-            result = defaultValues.get(i);
+            result = evaluator.navigationDefault(window.valueExpression(), window.defaultExpression(),
+                contexts.get(i).record());
           } else {
             result = argumentValues.get((int) candidateIndex);
           }
