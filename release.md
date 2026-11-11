@@ -170,7 +170,10 @@
   only when a group is created.
   Window ordering and MIN/MAX reject binary/nonbinary and numeric/INTERVAL mixtures with SQLState
   `42000`.
-  **Behavior changes:** VALUES mixing DATE with TIMESTAMP or TIME now fails with SQLState `42000`;
+  **Behavior changes:** Changing only `System.setProperty("user.timezone", ...)` at runtime no longer
+  overrides the effective JVM default zone for `CURRENT_*`/`LOCAL*` datetime values or temporal conversions;
+  use `TimeZone.setDefault(...)` to change the runtime zone. VALUES mixing DATE with TIMESTAMP or TIME
+  now fails with SQLState `42000`;
   these inputs previously widened to TIMESTAMP or fell back to VARCHAR. Set operations containing
   CAST(NULL AS DATE/TIME/TIMESTAMP), including precision with WITH/WITHOUT TIME ZONE clauses, now retain the
   declared temporal JDBC metadata instead of OTHER.

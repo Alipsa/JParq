@@ -708,6 +708,11 @@ public final class SqlParser {
       String message = "Failed to parse SQL: " + sql;
       throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000", e));
     } catch (Exception e) {
+      if (e instanceof IllegalArgumentException validation && SqlExceptions.findSqlStateFailure(validation) != null) {
+        // Valid SQL can fail semantic checks before input schemas are bound.
+        // Preserve the same classified diagnostic as later preparation checks.
+        throw validation;
+      }
       throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
     }
   }

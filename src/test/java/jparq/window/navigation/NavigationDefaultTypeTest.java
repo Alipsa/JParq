@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.SQLDataException;
 import java.sql.SQLSyntaxErrorException;
@@ -17,6 +18,29 @@ import se.alipsa.jparq.helper.TemporalInterval;
  * representations.
  */
 class NavigationDefaultTypeTest {
+  /**
+   * Early interval and schema-bound default errors share preparation diagnostics.
+   *
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @Test
+  void incompatibleDefaultsSharePreparationContext() throws Exception {
+    Path fixtures = Path.of("src/test/resources").toAbsolutePath();
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + fixtures)) {
+      for (String function : List.of("LAG", "LEAD")) {
+        for (String arguments : List.of("INTERVAL '1' DAY,1,INTERVAL '1' YEAR", "gear,1,INTERVAL '1' DAY")) {
+          String query = "SELECT " + function + "(" + arguments + ") OVER (ORDER BY gear) FROM mtcars";
+          var failure = assertThrows(SQLSyntaxErrorException.class, () -> connection.prepareStatement(query));
+          assertEquals("42000", failure.getSQLState());
+          assertTrue(failure.getMessage().startsWith("Failed to prepare query: "), failure.getMessage());
+          assertTrue(failure.getMessage().contains(function + " default type INTERVAL"), failure.getMessage());
+          assertFalse(failure.getMessage().contains("Failed to parse SQL"), failure.getMessage());
+        }
+      }
+    }
+  }
+
   /**
    * Reports nested ARRAY element types instead of only repeating ARRAY.
    *
