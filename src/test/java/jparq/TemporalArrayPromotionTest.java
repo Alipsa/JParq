@@ -115,7 +115,7 @@ class TemporalArrayPromotionTest {
       ZoneOffset session = DateTimeFunctions.sessionOffset();
       Object[] zonedTimestamps = (Object[]) result.getObject(1);
       assertInstanceOf(OffsetDateTime.class, zonedTimestamps[0]);
-      assertEquals(LocalDateTime.parse("2026-07-01T10:00:00").atOffset(session), zonedTimestamps[1]);
+      assertEquals(DateTimeFunctions.offsetTimestamp(LocalDateTime.parse("2026-07-01T10:00:00")), zonedTimestamps[1]);
       Object[] zonedTimes = (Object[]) result.getObject(2);
       assertEquals(LocalTime.of(10, 0).atOffset(session), zonedTimes[0]);
       assertInstanceOf(OffsetTime.class, zonedTimes[1]);

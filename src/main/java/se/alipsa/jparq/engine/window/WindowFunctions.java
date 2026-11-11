@@ -2,6 +2,8 @@ package se.alipsa.jparq.engine.window;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
+import java.sql.JDBCType;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -11,6 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.AnalyticType;
 import net.sf.jsqlparser.expression.Expression;
@@ -24,6 +27,7 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import se.alipsa.jparq.NumericType;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.OrderingUtil;
@@ -33,6 +37,7 @@ import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.TemporalOperands.Operand;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.LiteralConverter;
 
 /**
@@ -85,6 +90,70 @@ public final class WindowFunctions {
       return null;
     }
     return collector.toWindowPlan();
+  }
+
+  /**
+   * Checks navigation default assignment types without evaluating any rows.
+   *
+   * @param analytic
+   *          window expression
+   * @param schemas
+   *          scoped expression declaration resolver
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 for incompatible types
+   */
+  public static void validateNavigationDefault(AnalyticExpression analytic, Function<Expression, Schema> schemas) {
+    if ((!"LAG".equalsIgnoreCase(analytic.getName()) && !"LEAD".equalsIgnoreCase(analytic.getName()))
+        || analytic.getDefaultValue() == null) {
+      return;
+    }
+    Schema target = schemas.apply(analytic.getExpression());
+    Schema source = schemas.apply(analytic.getDefaultValue());
+    if (!assignableDefault(target, source)) {
+      throw SqlExceptions.syntaxFailure(
+          analytic.getName() + " default type " + JDBCType.valueOf(JdbcTypeMapper.mapSchemaToJdbcType(source)).getName()
+              + " is not assignable to " + JDBCType.valueOf(JdbcTypeMapper.mapSchemaToJdbcType(target)).getName());
+    }
+  }
+
+  /**
+   * Tests SQL assignment families, including nested ARRAY element types.
+   *
+   * @param target
+   *          destination declaration, possibly unknown
+   * @param source
+   *          default declaration, possibly unknown or NULL
+   * @return whether known declarations allow assignment
+   */
+  private static boolean assignableDefault(Schema target, Schema source) {
+    Schema destination = JdbcTypeMapper.nonNullSchema(target);
+    Schema value = JdbcTypeMapper.nonNullSchema(source);
+    if (destination == null || value == null || destination.getType() == Schema.Type.NULL
+        || value.getType() == Schema.Type.NULL) {
+      return true;
+    }
+    if (destination.getType() == Schema.Type.ARRAY || value.getType() == Schema.Type.ARRAY) {
+      return destination.getType() == Schema.Type.ARRAY && value.getType() == Schema.Type.ARRAY
+          && assignableDefault(destination.getElementType(), value.getElementType());
+    }
+    int targetType = JdbcTypeMapper.mapSchemaToJdbcType(destination);
+    int sourceType = JdbcTypeMapper.mapSchemaToJdbcType(value);
+    if (NumericType.of(targetType, destination) != null) {
+      return NumericType.of(sourceType, value) != null;
+    }
+    if (JdbcTypeMapper.isCharacterType(targetType)) {
+      return JdbcTypeMapper.isCharacterType(sourceType);
+    }
+    if (JdbcTypeMapper.isBinaryType(targetType)) {
+      return JdbcTypeMapper.isBinaryType(sourceType);
+    }
+    int targetFields = targetType == Types.TIMESTAMP_WITH_TIMEZONE
+        ? Types.TIMESTAMP
+        : targetType == Types.TIME_WITH_TIMEZONE ? Types.TIME : targetType;
+    int sourceFields = sourceType == Types.TIMESTAMP_WITH_TIMEZONE
+        ? Types.TIMESTAMP
+        : sourceType == Types.TIME_WITH_TIMEZONE ? Types.TIME : sourceType;
+    return targetFields == sourceFields;
   }
 
   /**

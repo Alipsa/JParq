@@ -19,8 +19,8 @@ import se.alipsa.jparq.engine.function.DateTimeFunctions;
 class TemporalArrayTimeZoneTest {
 
   /**
-   * Attaches the session displacement without resolving a local timestamp in a
-   * daylight-saving gap. The JVM and SQL-session zones agree during this test.
+   * Resolves local timestamp gaps and seasonal displacements using their dates.
+   * Date-free TIME values continue to use the execution displacement.
    *
    * @param zoneName
    *          zone containing the daylight-saving gap
@@ -31,7 +31,7 @@ class TemporalArrayTimeZoneTest {
   @CsvSource({
       "America/New_York, 2026-03-08T02:30:00.123456789", "Europe/Stockholm, 2026-03-29T02:30:00.123456789"
   })
-  void preservesLocalFieldsUsingSessionOffset(String zoneName, String gapText) {
+  void resolvesTimestampDatesAndRetainsTimeSessionOffset(String zoneName, String gapText) {
     String previousProperty = System.getProperty("user.timezone");
     TimeZone previousDefault = TimeZone.getDefault();
     try {
@@ -43,10 +43,12 @@ class TemporalArrayTimeZoneTest {
       var winter = LocalDateTime.parse("2026-01-01T12:00:00.123456789");
       var summer = LocalDateTime.parse("2026-07-01T12:00:00.987654321");
       var explicit = OffsetDateTime.parse("2026-01-01T12:00:00+03:00");
-      var expected = List.of(gap.atOffset(session), winter.atOffset(session), summer.atOffset(session), explicit);
+      var expected = List.of(gap.atZone(ZoneId.of(zoneName)).toOffsetDateTime(),
+          winter.atZone(ZoneId.of(zoneName)).toOffsetDateTime(), summer.atZone(ZoneId.of(zoneName)).toOffsetDateTime(),
+          explicit);
       assertEquals(expected,
           ArrayFunctions.homogenizeArrayValues(List.of(gap, java.sql.Timestamp.valueOf(winter), summer, explicit)));
-      assertEquals(List.of(List.of(gap.atOffset(session)), List.of(explicit)),
+      assertEquals(List.of(List.of(gap.atZone(ZoneId.of(zoneName)).toOffsetDateTime()), List.of(explicit)),
           ArrayFunctions.homogenizeArrayValues(List.of(List.of(gap), List.of(explicit))));
       var time = java.time.LocalTime.of(10, 0, 0, 123456789);
       var zonedTime = java.time.OffsetTime.parse("12:00:00+03:00");

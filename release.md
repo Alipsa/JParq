@@ -14,7 +14,8 @@
   them in CASE, COALESCE, ARRAY, and set operations. These combinations use the JDBC wall-clock view;
   they do not acquire a zone merely because storage is UTC-adjusted. Conditional metadata and scalar
   and ARRAY materialization retain the same common declaration (#525). Actual WITH TIME ZONE operands
-  promote compatible local values using the session displacement and preserve UTC source instants.
+  promote local timestamps using their date's zone rules and preserve UTC source instants;
+  date-free TIME values use the execution displacement.
   DATE-only and local-only ARRAY constructors use ordinary evaluation; offset-aware ARRAY evaluation
   validates once. Stored arrays ignore nullable unions when deciding whether conversion is needed.
 
@@ -128,7 +129,9 @@
 - Preserve CURRENT_TIMESTAMP, CURRENT_TIME, LOCALTIMESTAMP, and LOCALTIME values through derived tables
   and CTEs (#277), including their JDBC metadata, nanosecond precision, and UTC offsets.
   Preserve temporal CAST declarations in set operations and derived MIN/MAX metadata. Promote compatible
-  local and offset temporal values using the session offset. Explicit WITH TIME ZONE casts use the same
+  local timestamps using their date's zone rules and date-free times using the execution offset.
+  Timestamp gaps shift forward, and overlaps choose the later offset, matching JDBC decoding.
+  Explicit WITH TIME ZONE casts use the same
   source-aware promotion, preserving UTC-adjusted column instants. Their scalar JDBC metadata and
   values now expose TIME_WITH_TIMEZONE/OffsetTime or TIMESTAMP_WITH_TIMEZONE/OffsetDateTime;
   `getDate`, `getTime`, and `getTimestamp` also accept offset timestamps, converting their instants
@@ -151,9 +154,13 @@
   when compared with offset values. Grouped MIN/MAX evaluate each input once and retain the
   winning source operand, including its stored local fields.
   Grouped SELECT-list comparisons retain scalar subquery projection declarations. Selected and
-  compared occurrences share one materialized result per group, while skipped branches remain lazy.
+  compared occurrences share one materialized result for the current group, while skipped branches
+  remain lazy. Moving to another group releases the previous subquery snapshot.
   LAG/LEAD defaults convert to the value expression's SQL type when selected; navigation results
   retain the selected source's temporal provenance so local defaults are not read as UTC storage.
+  Incompatible LAG/LEAD default types fail during preparation with SQLState `42000`, including
+  empty inputs. Numeric defaults truncate fractional digits toward zero on assignment, retaining
+  range checks for leading-digit overflow.
   Correlated local timestamp projections, character casts, and arithmetic retain JDBC Timestamp
   values matching their metadata. Ordinary local predicates use consistent engine values on both
   sides, while offset promotion retains the original stored fields. Grouping sources are decoded

@@ -18,6 +18,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
 /**
  * Verifies scalar metadata does not claim unimplemented CAST representations.
@@ -151,9 +152,9 @@ class ScalarCastMetadataTest {
         var result = statement.executeQuery("SELECT CAST(DATE '2024-07-01' AS TIMESTAMP WITH TIME ZONE),"
             + "CAST(TIMESTAMP '2024-07-01 10:02:03.987' AS TIME WITH TIME ZONE),CURRENT_TIMESTAMP")) {
       assertTrue(result.next());
-      var offset = result.getObject(3, OffsetDateTime.class).getOffset();
-      assertEquals(LocalDateTime.parse("2024-07-01T00:00:00").atOffset(offset), result.getObject(1));
-      assertEquals(java.time.LocalTime.parse("10:02:03").atOffset(offset), result.getObject(2));
+      assertEquals(DateTimeFunctions.offsetTimestamp(LocalDateTime.parse("2024-07-01T00:00:00")), result.getObject(1));
+      assertEquals(DateTimeFunctions.offsetTimestamp(LocalDateTime.parse("2024-07-01T10:02:03")).toOffsetTime(),
+          result.getObject(2));
     }
   }
 

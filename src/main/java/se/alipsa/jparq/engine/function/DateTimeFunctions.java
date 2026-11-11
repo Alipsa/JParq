@@ -110,14 +110,27 @@ public final class DateTimeFunctions {
 
   /**
    * Resolve the SQL-session time zone displacement: the current offset of the
-   * active time zone at statement execution. Local TIME and TIMESTAMP values
-   * promoted to their WITH TIME ZONE counterparts receive this displacement
-   * regardless of their own date.
+   * active time zone at statement execution. Local TIME values have no date and
+   * use this displacement; local timestamps use their own date's zone rules.
    *
    * @return the current offset of the active time zone
    */
   public static ZoneOffset sessionOffset() {
     return StatementTime.current().getOffset();
+  }
+
+  /**
+   * Resolves local timestamp fields using the active zone's rules for their date.
+   * Gaps shift forward by the transition duration, and overlaps choose the later
+   * offset, matching ordinary JDBC Timestamp decoding.
+   *
+   * @param timestamp
+   *          local date and time
+   * @return timestamp with its date-specific displacement and normalized gap
+   *         fields
+   */
+  public static OffsetDateTime offsetTimestamp(LocalDateTime timestamp) {
+    return timestamp.atZone(defaultZone()).withLaterOffsetAtOverlap().toOffsetDateTime();
   }
 
   /**

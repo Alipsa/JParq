@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.AnyComparisonExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.BinaryExpression;
@@ -35,11 +36,12 @@ import net.sf.jsqlparser.statement.select.TableFunction;
 import net.sf.jsqlparser.statement.select.Values;
 import net.sf.jsqlparser.statement.select.WithItem;
 import org.apache.avro.Schema;
+import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 
 /**
- * Validates ARRAY declarations and binary CAST operands throughout queries
- * without evaluating rows.
+ * Validates ARRAY declarations, binary CAST operands, and navigation defaults
+ * throughout queries without evaluating rows.
  */
 public final class ArrayQueryValidation {
   /** Prevents utility class construction. */
@@ -154,6 +156,12 @@ public final class ArrayQueryValidation {
       return;
     }
     expression.accept(new JSqlParserSupport.NamedArgumentVisitor() {
+      @Override
+      public <S> Void visit(AnalyticExpression analytic, S context) {
+        WindowFunctions.validateNavigationDefault(analytic, operand -> scalarOperand(operand, scope));
+        return super.visit(analytic, context);
+      }
+
       @Override
       public <S> Void visit(ArrayConstructor array, S context) {
         resolve(array, scope);

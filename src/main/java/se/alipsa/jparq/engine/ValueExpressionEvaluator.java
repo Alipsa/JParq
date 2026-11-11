@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine;
 
 import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 
+import java.math.RoundingMode;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.sql.Date;
@@ -363,7 +364,13 @@ public final class ValueExpressionEvaluator {
     NumericType numeric = numericType(valueExpression);
     if (numeric != null) {
       try {
-        return new Operand(numeric.convert(source.engineValue()), target);
+        Object value = source.engineValue();
+        if (numeric.jdbcType() != Types.DECIMAL) {
+          NumericCastTarget numericTarget = NumericCastTarget.fromName(JDBCType.valueOf(numeric.jdbcType()).getName());
+          return new Operand(NumericCasts.convert(value, numericTarget, "navigation default"), target);
+        }
+        return new Operand(
+            numeric.convert(NumericCasts.toBigDecimal(value).setScale(numeric.scale(), RoundingMode.DOWN)), target);
       } catch (SQLException failure) {
         throw new IllegalArgumentException("Cannot convert navigation default", failure);
       }

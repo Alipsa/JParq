@@ -146,7 +146,8 @@ public enum TemporalValueType {
 
   /**
    * Normalizes compatible temporal values without copying values of this type.
-   * Local values acquire the SQL session offset when an offset is required.
+   * Local timestamps use their date's zone rules; date-free times use the
+   * execution's current displacement when an offset is required.
    *
    * @param value
    *          temporal value or ISO representation
@@ -182,7 +183,7 @@ public enum TemporalValueType {
       return time.atOffset(DateTimeFunctions.sessionOffset());
     }
     if (this == OFFSET_TIMESTAMP && local instanceof LocalDateTime timestamp) {
-      return timestamp.atOffset(DateTimeFunctions.sessionOffset());
+      return DateTimeFunctions.offsetTimestamp(timestamp);
     }
     return decode(local);
   }

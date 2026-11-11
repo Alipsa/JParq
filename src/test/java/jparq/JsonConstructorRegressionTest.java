@@ -101,7 +101,7 @@ class JsonConstructorRegressionTest {
               "[null,\"" + localElement + "\"]");
           assertValue(connection, "ARRAY[lts]", " FROM t", "[\"2024-03-31T02:30:00\"]");
           final String offsetGap = DateTimeFormatter.ISO_OFFSET_DATE_TIME
-              .format(LocalDateTime.parse("2024-03-31T02:30:00").atOffset(DateTimeFunctions.sessionOffset()));
+              .format(DateTimeFunctions.offsetTimestamp(LocalDateTime.parse("2024-03-31T02:30:00")));
           String nested = "[[\"2024-03-31T02:30:00\"],[\"" + utcWall + "\"]]";
           assertValue(connection, "ARRAY[la,ARRAY[ts]]", " FROM t", nested);
           assertValue(connection, "ARRAY[ARRAY[lts],ARRAY[ts]]", " FROM t", nested);

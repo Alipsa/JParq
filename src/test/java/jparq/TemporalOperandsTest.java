@@ -84,7 +84,7 @@ class TemporalOperandsTest {
     }
   }
 
-  /** Attaches the session displacement to local values for offset targets. */
+  /** Keeps stored UTC instants when promoting to an offset target. */
   @Test
   void promoteConvertsUtcSourcesForOffsetTargets() {
     Timestamp timestamp = Timestamp.from(Instant.parse("2024-07-01T12:00:00Z"));

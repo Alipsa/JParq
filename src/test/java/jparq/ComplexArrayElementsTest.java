@@ -88,7 +88,7 @@ class ComplexArrayElementsTest {
   void promotesTemporalMapValues() {
     var local = LocalDateTime.parse("2026-01-01T12:00:00.123456789");
     var zoned = OffsetDateTime.parse("2026-01-02T12:00:00+03:00");
-    assertEquals(List.of(Map.of("k", local.atOffset(DateTimeFunctions.sessionOffset())), Map.of("k", zoned)),
+    assertEquals(List.of(Map.of("k", DateTimeFunctions.offsetTimestamp(local)), Map.of("k", zoned)),
         ArrayFunctions.homogenizeArrayValues(List.of(Map.of("k", local), Map.of("k", zoned))));
   }
 

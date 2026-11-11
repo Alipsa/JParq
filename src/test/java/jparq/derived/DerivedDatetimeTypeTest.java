@@ -19,6 +19,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
 /** Verifies datetime values and metadata through materialized SQL inputs. */
 class DerivedDatetimeTypeTest {
@@ -123,7 +124,7 @@ class DerivedDatetimeTypeTest {
         OffsetDateTime expected = result.getObject(1, OffsetDateTime.class);
         assertEquals(OffsetDateTime.class, values[0].getClass());
         assertEquals(expected, values[0]);
-        assertEquals(literal.atOffset(expected.getOffset()), values[1]);
+        assertEquals(DateTimeFunctions.offsetTimestamp(literal), values[1]);
       } else {
         assertEquals(java.sql.Timestamp.class, values[0].getClass());
         assertEquals(java.sql.Timestamp.valueOf(result.getObject(1, LocalDateTime.class)), values[0]);
@@ -218,14 +219,14 @@ class DerivedDatetimeTypeTest {
               boolean localRow = (count == 0) == operands[0].equals(local);
               Object expected = result.getObject(localRow ? 3 : 2);
               if (localRow) {
-                if (result.getObject(2) instanceof OffsetDateTime timestamp) {
+                if (result.getObject(2) instanceof OffsetDateTime) {
                   LocalDateTime localValue = expected instanceof java.sql.Timestamp value
                       ? value.toLocalDateTime()
                       : (LocalDateTime) expected;
-                  expected = localValue.atOffset(timestamp.getOffset());
+                  expected = DateTimeFunctions.offsetTimestamp(localValue);
                 } else {
                   LocalTime localValue = expected instanceof java.sql.Time value
-                      ? se.alipsa.jparq.engine.function.DateTimeFunctions.toLocalTime(value)
+                      ? DateTimeFunctions.toLocalTime(value)
                       : (LocalTime) expected;
                   expected = localValue.atOffset(((OffsetTime) result.getObject(2)).getOffset());
                 }

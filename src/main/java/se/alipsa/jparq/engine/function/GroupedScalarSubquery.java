@@ -138,14 +138,17 @@ final class GroupedScalarSubquery {
   }
 
   /**
-   * Captures a scalar subquery's values and projection declaration once per
-   * group.
+   * Captures a scalar subquery's values and projection declaration for the
+   * current group. Moving to another group releases the previous cached snapshot.
    *
    * @param groupOperands
    *          current group's immutable binding identity
    * @return materialized result with its projection declaration
    */
   SubqueryExecutor.SubqueryResult evaluateResult(List<Operand> groupOperands) {
+    if (!results.containsKey(groupOperands)) {
+      results.clear();
+    }
     return results.computeIfAbsent(groupOperands,
         operands -> executor.executeCorrelated(select, mappings.outerQualifiers(), candidates,
             mappings.qualifierColumnMapping(),

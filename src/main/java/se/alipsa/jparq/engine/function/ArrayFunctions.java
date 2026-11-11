@@ -65,16 +65,17 @@ public final class ArrayFunctions {
    * Normalize ARRAY element types so that a single SQL ARRAY has a consistent
    * element type and nesting depth. Numeric leaves are promoted across sibling
    * arrays; datetime leaves must have the same fields (DATE, TIME, or TIMESTAMP),
-   * and zoned leaves promote compatible local values using the SQL-session time
-   * zone displacement (the active time zone's current offset). SQL and java.time
-   * representations share a family; temporal leaves are always converted to the
-   * JDBC representation of their family. NULLs and empty arrays do not constrain
-   * the inferred leaf type. Nested reference arrays, including stored Parquet
-   * array columns, are normalized to unmodifiable lists. Primitive arrays remain
-   * scalar values. MAP keys and values are recursively validated and normalized
-   * across sibling maps. STRUCT elements must have matching field names, order,
-   * and compatible SQL field types, resolved recursively with numeric promotion.
-   * Nullability, Avro names, and storage properties do not distinguish SQL types.
+   * and zoned leaves promote local timestamps using their date's zone rules.
+   * Date-free local times use the execution's current displacement. SQL and
+   * java.time representations share a family; temporal leaves are always
+   * converted to the JDBC representation of their family. NULLs and empty arrays
+   * do not constrain the inferred leaf type. Nested reference arrays, including
+   * stored Parquet array columns, are normalized to unmodifiable lists. Primitive
+   * arrays remain scalar values. MAP keys and values are recursively validated
+   * and normalized across sibling maps. STRUCT elements must have matching field
+   * names, order, and compatible SQL field types, resolved recursively with
+   * numeric promotion. Nullability, Avro names, and storage properties do not
+   * distinguish SQL types.
    *
    * @param values
    *          raw values
@@ -291,7 +292,7 @@ public final class ArrayFunctions {
    * @param type
    *          common type
    * @param offset
-   *          session displacement for temporal promotion
+   *          execution displacement for date-free TIME and existing instants
    * @return normalized value, retaining unchanged scalar instances
    * @throws IllegalArgumentException
    *           if conversion fails
@@ -331,7 +332,7 @@ public final class ArrayFunctions {
    * @param type
    *          shared map element type
    * @param offset
-   *          session displacement for temporal promotion
+   *          execution displacement for date-free TIME and existing instants
    * @return map with normalized keys and values
    * @throws IllegalArgumentException
    *           if key promotion creates duplicate keys; the cause carries SQLState
@@ -459,8 +460,8 @@ public final class ArrayFunctions {
         case OffsetDateTime dateTime -> dateTime;
         case ZonedDateTime dateTime -> dateTime.toOffsetDateTime();
         case Instant instant -> instant.atOffset(offset);
-        case LocalDateTime dateTime -> dateTime.atOffset(offset);
-        case Timestamp timestamp -> timestamp.toLocalDateTime().atOffset(offset);
+        case LocalDateTime dateTime -> DateTimeFunctions.offsetTimestamp(dateTime);
+        case Timestamp timestamp -> DateTimeFunctions.offsetTimestamp(timestamp.toLocalDateTime());
         default ->
           throw SqlExceptions.incompatibleArrayElements(sqlTypeName(temporalFamily(value)), sqlTypeName(family));
       };
