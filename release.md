@@ -94,7 +94,10 @@
   BLOB lengths support K/M/G/T/P multipliers with overflow-checked long bounds; short values do not
   allocate the declared capacity. Nonbinary CASTs no longer parse binary lengths during row evaluation.
   Character-to-binary and explicit binary-to-character CASTs use UTF-8; malformed UTF-8 raises `22021`
-  rather than inserting replacement characters. OCTET_LENGTH counts binary bytes.
+  rather than inserting replacement characters. JDBC `getString` also uses strict UTF-8 decoding for
+  scalar binary values and ARRAY elements: malformed bytes now raise `SQLDataException` (`22021`).
+  Clients displaying binary columns should use `getBytes` or `getBinaryStream` to retrieve the original
+  bytes. OCTET_LENGTH counts binary bytes.
   Character-only functions and text-column comparisons reject implicit binary operands with `42000`
   instead of Java identity text (partial #355); known incompatible length/case/CONCAT calls and
   comparisons in plain SELECTs are validated before rows are read, including IN, BETWEEN, quantified
@@ -125,7 +128,10 @@
 - Preserve CURRENT_TIMESTAMP, CURRENT_TIME, LOCALTIMESTAMP, and LOCALTIME values through derived tables
   and CTEs (#277), including their JDBC metadata, nanosecond precision, and UTC offsets.
   Preserve temporal CAST declarations in set operations and derived MIN/MAX metadata. Promote compatible
-  local and offset temporal values using the session offset.
+  local and offset temporal values using the session offset. Explicit WITH TIME ZONE casts use the same
+  source-aware promotion, preserving UTC-adjusted column instants. Their scalar JDBC metadata and
+  values now expose TIME_WITH_TIMEZONE/OffsetTime or TIMESTAMP_WITH_TIMEZONE/OffsetDateTime;
+  `getTime` and `getTimestamp` also accept those offset values.
   **Behavior changes:** VALUES mixing DATE with TIMESTAMP or TIME now fails with SQLState `42000`;
   these inputs previously widened to TIMESTAMP or fell back to VARCHAR. Set operations containing
   CAST(NULL AS DATE/TIME/TIMESTAMP), including precision with WITH/WITHOUT TIME ZONE clauses, now retain the

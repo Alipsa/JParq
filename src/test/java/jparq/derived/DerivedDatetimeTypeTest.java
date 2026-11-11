@@ -317,6 +317,29 @@ class DerivedDatetimeTypeTest {
   }
 
   /**
+   * Reports incompatible datetime fields through a multi-column derived
+   * projection.
+   *
+   * @throws Exception
+   *           if connection setup fails
+   */
+  @Test
+  void derivedArithmeticErrorsDescribeDatetimeFields() throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + Path.of("src/test/resources").toAbsolutePath());
+        var statement = connection.createStatement()) {
+      SQLException exception = assertThrows(SQLException.class,
+          () -> statement.executeQuery("SELECT cyl,x FROM (SELECT cyl,CASE WHEN cyl = 4 THEN DATE '2020-01-01' "
+              + "ELSE TIMESTAMP '2020-01-01 10:00:00' END + INTERVAL '1' DAY AS x FROM mtcars) q"));
+      assertInstanceOf(java.sql.SQLSyntaxErrorException.class, exception);
+      assertEquals("42000", exception.getSQLState());
+      assertTrue(exception.getMessage().contains("Incompatible datetime fields:"), exception.getMessage());
+      assertTrue(exception.getMessage().contains("DATE"));
+      assertTrue(exception.getMessage().contains("TIMESTAMP"));
+      assertFalse(exception.getMessage().contains("ARRAY"));
+    }
+  }
+
+  /**
    * Checks all-NULL sets retain declared datetime types and Java classes.
    *
    * @param type

@@ -924,7 +924,7 @@ public final class DateTimeFunctions {
    *           if precision is outside the supported range, carrying SQLState
    *           42000
    */
-  private static int castFractionalNanos(CastExpression cast, int nanos, int defaultPrecision) {
+  public static int castFractionalNanos(CastExpression cast, int nanos, int defaultPrecision) {
     Integer precision = firstIntegerArgument(cast);
     if (precision == null) {
       precision = defaultPrecision;

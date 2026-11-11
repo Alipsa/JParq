@@ -97,7 +97,7 @@ public final class ScalarExpressionSchemas {
     if (value instanceof CaseExpression choice) {
       branches = ExpressionBranches.caseResults(choice);
     } else if (value instanceof net.sf.jsqlparser.expression.Function function
-        && "COALESCE".equalsIgnoreCase(function.getName()) && function.getParameters() != null) {
+        && ExpressionBranches.isCoalesce(function) && function.getParameters() != null) {
       branches = function.getParameters();
     } else {
       return null;
@@ -267,9 +267,8 @@ public final class ScalarExpressionSchemas {
 
   /**
    * Maps implemented nonnumeric scalar type declarations to value schemas.
-   * Numeric declarations use the numeric expression resolver. Character LOB and
-   * time-zone CAST declarations remain unresolved until their scalar evaluation
-   * supplies the corresponding value representations.
+   * Numeric declarations use the numeric expression resolver. Character LOB
+   * declarations remain unresolved until scalar evaluation supplies their values.
    *
    * @param typeName
    *          SQL type name, including optional precision
@@ -284,6 +283,8 @@ public final class ScalarExpressionSchemas {
       case "date" -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
       case "time", "timewithouttimezone" -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
       case "timestamp", "timestampwithouttimezone", "datetime" -> TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema();
+      case "timewithtimezone" -> TemporalValueType.OFFSET_TIME.schema();
+      case "timestampwithtimezone" -> TemporalValueType.OFFSET_TIMESTAMP.schema();
       case "boolean", "bool" -> Schema.create(Schema.Type.BOOLEAN);
       default -> {
         JDBCType type = declaredJdbcType(typeName);

@@ -10,6 +10,7 @@ import java.time.OffsetTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatterBuilder;
 import java.time.temporal.ChronoField;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.StringJoiner;
@@ -76,7 +77,7 @@ public final class SqlText {
       return decodeBinary(buffer.duplicate());
     }
     if (value instanceof Object[] array) {
-      return arrayText(java.util.Arrays.asList(array));
+      return arrayText(Arrays.asList(array));
     }
     if (value instanceof List<?> list) {
       return arrayText(list);

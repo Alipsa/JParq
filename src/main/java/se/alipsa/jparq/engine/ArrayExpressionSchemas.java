@@ -140,7 +140,7 @@ public final class ArrayExpressionSchemas {
       if ("NULLIF".equalsIgnoreCase(function.getName()) && !function.getParameters().isEmpty()) {
         return resolve(function.getParameters().getFirst(), columns, scalarSchemas);
       }
-      if ("COALESCE".equalsIgnoreCase(function.getName())) {
+      if (ExpressionBranches.isCoalesce(function)) {
         return common(function.getParameters(), columns, scalarSchemas);
       }
     }
@@ -172,9 +172,7 @@ public final class ArrayExpressionSchemas {
     }
     if (expression instanceof CastExpression cast && cast.getColDataType() != null) {
       String type = ScalarExpressionSchemas.normalizeTypeName(cast.getColDataType().getDataType());
-      if (("time".equals(type) || "timewithouttimezone".equals(type))
-          && (cast.getColDataType().toString().contains("(") || cast.getColDataType().getArgumentsStringList() != null
-              && !cast.getColDataType().getArgumentsStringList().isEmpty())) {
+      if ("time".equals(type) || "timewithouttimezone".equals(type)) {
         return IntervalExpressionTypes.resolveTemporal(cast, columns, scalarSchemas);
       }
       Schema declared = nonnumericSchema(cast.getColDataType().getDataType());
@@ -242,17 +240,12 @@ public final class ArrayExpressionSchemas {
    * @return declared schema, or null for numeric or unrecognized declarations
    */
   private static Schema nonnumericSchema(String typeName) {
-    String normalized = ScalarExpressionSchemas.normalizeTypeName(typeName);
     JDBCType type = ScalarExpressionSchemas.declaredJdbcType(typeName);
     if (type == JDBCType.CLOB || type == JDBCType.NCLOB || type == JDBCType.BLOB) {
       throw SqlExceptions
           .unsupportedFeature("ARRAY elements with declared type " + type.getName() + " are not supported");
     }
-    return switch (normalized) {
-      case "timewithtimezone" -> TemporalValueType.OFFSET_TIME.schema();
-      case "timestampwithtimezone" -> TemporalValueType.OFFSET_TIMESTAMP.schema();
-      default -> ScalarExpressionSchemas.declaredSchema(typeName);
-    };
+    return ScalarExpressionSchemas.declaredSchema(typeName);
   }
 
   /**

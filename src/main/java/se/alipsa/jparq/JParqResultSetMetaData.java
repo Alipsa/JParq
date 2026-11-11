@@ -30,6 +30,7 @@ import se.alipsa.jparq.engine.CastExpressions;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.DecimalCasts;
+import se.alipsa.jparq.engine.ExpressionBranches;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.IntervalExpressionTypes;
 import se.alipsa.jparq.engine.MaterializedNames;
@@ -413,9 +414,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     Schema scalar = ScalarExpressionSchemas.resolve(expressionAtColumn(column),
         name -> resolveSourceField(new Column(name)) != null);
     Expression expression = unwrap(expressionAtColumn(column));
-    if (scalar != null || !(expression instanceof CaseExpression)
-        && !(expression instanceof net.sf.jsqlparser.expression.Function function
-            && "COALESCE".equalsIgnoreCase(function.getName()))) {
+    if (scalar != null || !(expression instanceof CaseExpression) && !ExpressionBranches.isCoalesce(expression)) {
       return scalar;
     }
     try {
@@ -426,8 +425,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
       Schema root = JdbcTypeMapper.nonNullSchema(result);
       boolean array = root != null && root.getType() == Schema.Type.ARRAY;
       int type = JdbcTypeMapper.mapSchemaToJdbcType(JdbcTypeMapper.innermostElementType(result));
-      return type == Types.TIMESTAMP || type == Types.TIMESTAMP_WITH_TIMEZONE
-          || array && (type == Types.DATE || type == Types.TIME || type == Types.TIME_WITH_TIMEZONE) ? result : null;
+      return type == Types.TIMESTAMP || TemporalValueType.hasTimeZone(result)
+          || array && (type == Types.DATE || type == Types.TIME) ? result : null;
     } catch (IllegalArgumentException incompatible) {
       // DATE/TIMESTAMP promotion remains unresolved (#431); preserve value inference.
       return null;

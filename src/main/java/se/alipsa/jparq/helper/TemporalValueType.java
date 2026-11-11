@@ -91,6 +91,22 @@ public enum TemporalValueType {
   }
 
   /**
+   * Identifies offset datetime declarations, including nested ARRAY leaves.
+   *
+   * @param schema
+   *          nullable scalar or ARRAY declaration
+   * @return whether the leaf type carries a time zone
+   */
+  public static boolean hasTimeZone(Schema schema) {
+    Schema leaf = JdbcTypeMapper.nonNullSchema(schema);
+    while (leaf != null && leaf.getType() == Schema.Type.ARRAY) {
+      leaf = JdbcTypeMapper.nonNullSchema(leaf.getElementType());
+    }
+    int type = JdbcTypeMapper.mapSchemaToJdbcType(leaf);
+    return type == Types.TIME_WITH_TIMEZONE || type == Types.TIMESTAMP_WITH_TIMEZONE;
+  }
+
+  /**
    * Resolves a temporal descriptor from an internal schema.
    *
    * @param schema

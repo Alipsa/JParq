@@ -1657,6 +1657,9 @@ public class JParqResultSet extends ResultSetAdapter {
     if (v == null) {
       return null;
     }
+    if (v instanceof OffsetTime time) {
+      v = time.toLocalTime();
+    }
     if (!(v instanceof Timestamp || v instanceof Time || v instanceof LocalTime || v instanceof String
         || v instanceof Long || v instanceof Double)) {
       throw new SQLException("Unsupported time type: " + v.getClass().getName());
@@ -1679,6 +1682,7 @@ public class JParqResultSet extends ResultSetAdapter {
     return switch (v) {
       case null -> null;
       case Timestamp t -> t;
+      case OffsetDateTime timestamp -> Timestamp.from(timestamp.toInstant());
       case Date d -> new Timestamp(d.getTime());
       case String s -> Timestamp.valueOf(s);
       case Long l -> new Timestamp(l);

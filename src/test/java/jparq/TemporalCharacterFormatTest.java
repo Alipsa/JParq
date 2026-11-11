@@ -35,6 +35,41 @@ class TemporalCharacterFormatTest {
   }
 
   /**
+   * Retains SQL TIME cast precision without treating storage resolution as
+   * padding.
+   *
+   * @param directory
+   *          database directory
+   * @throws Exception
+   *           if querying fails
+   */
+  @Test
+  void preservesTimePrecisionInJson(@TempDir Path directory) throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String source : List.of("", " FROM (SELECT TIME '01:02:03.5' AS tm) t")) {
+        String operand = source.isEmpty() ? "'01:02:03.5'" : "tm";
+        try (var result = statement.executeQuery("SELECT JSON_ARRAY(CAST(" + operand + " AS TIME)),"
+            + "JSON_ARRAY(CAST(" + operand + " AS TIME(3)))" + source)) {
+          assertTrue(result.next());
+          assertEquals("[\"01:02:03\"]", result.getString(1));
+          assertEquals("[\"01:02:03.500\"]", result.getString(2));
+        }
+      }
+      try (var result = statement.executeQuery("SELECT JSON_ARRAY((SELECT CAST(tm AS TIME) FROM "
+          + "(SELECT TIME '01:02:03.5' AS tm) t UNION ALL SELECT CAST(NULL AS TIME) WHERE FALSE))")) {
+        assertTrue(result.next());
+        assertEquals("[\"01:02:03\"]", result.getString(1));
+      }
+      try (var result = statement.executeQuery("SELECT LOCALTIME,JSON_ARRAY(LOCALTIME)")) {
+        assertTrue(result.next());
+        String expected = DateTimeFormatter.ISO_LOCAL_TIME.format(result.getObject(1, java.time.LocalTime.class));
+        assertEquals("[\"" + expected + "\"]", result.getString(2));
+      }
+    }
+  }
+
+  /**
    * Uses the same character form for CAST and JDBC getString at every nesting
    * depth.
    *
@@ -76,6 +111,7 @@ class TemporalCharacterFormatTest {
    * @return the SQL text form with an explicit zero offset
    */
   private static String sqlOffsetText(String isoText) {
-    return isoText.endsWith("Z") ? isoText.substring(0, isoText.length() - 1) + "+00:00" : isoText.replace('T', ' ');
+    String text = isoText.replace('T', ' ');
+    return text.endsWith("Z") ? text.substring(0, text.length() - 1) + "+00:00" : text;
   }
 }

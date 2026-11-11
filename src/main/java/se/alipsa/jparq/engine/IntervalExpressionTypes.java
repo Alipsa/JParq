@@ -231,6 +231,9 @@ public final class IntervalExpressionTypes {
       Function<Select, Schema> subqueries) {
     int type = temporalType(expression, columns, subqueries);
     Expression value = ExpressionEvaluator.unwrapParenthesis(expression);
+    if (type == Types.TIME && value instanceof Column column) {
+      return JdbcTypeMapper.nonNullSchema(columns.apply(column));
+    }
     Schema declared = type == Types.TIMESTAMP || value instanceof Addition || value instanceof Subtraction
         ? ArrayExpressionSchemas.resolve(value, columns, subqueries)
         : null;
@@ -280,8 +283,10 @@ public final class IntervalExpressionTypes {
     if (combined.getLogicalType() != null) {
       combined.getLogicalType().addToSchema(common);
     }
-    common.addProp("jparq.temporal.precision",
-        Integer.toString(Math.max(declaredPrecision(first), declaredPrecision(second))));
+    if (first.getProp("jparq.temporal.precision") != null || second.getProp("jparq.temporal.precision") != null) {
+      common.addProp("jparq.temporal.precision",
+          Integer.toString(Math.max(declaredPrecision(first), declaredPrecision(second))));
+    }
     return common;
   }
 

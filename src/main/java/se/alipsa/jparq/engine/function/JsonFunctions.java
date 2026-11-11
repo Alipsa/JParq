@@ -24,13 +24,11 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
-import org.apache.avro.LogicalType;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericArray;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.AvroCoercions;
-import se.alipsa.jparq.engine.IntervalExpressionTypes;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.helper.IntervalType;
@@ -864,9 +862,8 @@ public final class JsonFunctions {
   }
 
   /**
-   * Formats TIME with an explicit SQL fractional precision when available, or
-   * with the storage precision of a stored TIME column. Other declarations keep
-   * their significant digits.
+   * Formats TIME with an explicit SQL fractional precision when available.
+   * Storage resolution alone does not impose fractional padding.
    *
    * @param time
    *          decoded wall-clock time
@@ -876,22 +873,10 @@ public final class JsonFunctions {
    */
   private static JsonNode timeNode(LocalTime time, Schema schema) {
     String declared = schema.getProp("jparq.temporal.precision");
-    int precision = declared == null ? storagePrecision(schema.getLogicalType()) : Integer.parseInt(declared);
-    DateTimeFormatter formatter = precision < 0 ? DateTimeFormatter.ISO_LOCAL_TIME : TIME_FORMATTERS[precision];
+    DateTimeFormatter formatter = declared == null
+        ? DateTimeFormatter.ISO_LOCAL_TIME
+        : TIME_FORMATTERS[Integer.parseInt(declared)];
     return MAPPER.getNodeFactory().textNode(formatter.format(time));
-  }
-
-  /**
-   * Maps a TIME storage logical type to its fractional-second precision.
-   *
-   * @param logical
-   *          declared logical type, or null
-   * @return fractional-second digits, or -1 when the schema is not TIME storage
-   */
-  private static int storagePrecision(LogicalType logical) {
-    return logical instanceof LogicalTypes.TimeMillis || logical instanceof LogicalTypes.TimeMicros
-        ? IntervalExpressionTypes.logicalPrecision(logical)
-        : -1;
   }
 
   /**

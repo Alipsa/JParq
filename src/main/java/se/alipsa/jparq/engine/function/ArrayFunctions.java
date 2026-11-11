@@ -5,6 +5,7 @@ import java.sql.Date;
 import java.sql.JDBCType;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -134,11 +135,11 @@ public final class ArrayFunctions {
       return;
     }
     Class<?> family = switch (JdbcTypeMapper.mapSchemaToJdbcType(effective)) {
-      case java.sql.Types.DATE -> Date.class;
-      case java.sql.Types.TIME -> Time.class;
-      case java.sql.Types.TIMESTAMP -> Timestamp.class;
-      case java.sql.Types.TIME_WITH_TIMEZONE -> OffsetTime.class;
-      case java.sql.Types.TIMESTAMP_WITH_TIMEZONE -> OffsetDateTime.class;
+      case Types.DATE -> Date.class;
+      case Types.TIME -> Time.class;
+      case Types.TIMESTAMP -> Timestamp.class;
+      case Types.TIME_WITH_TIMEZONE -> OffsetTime.class;
+      case Types.TIMESTAMP_WITH_TIMEZONE -> OffsetDateTime.class;
       default -> type.family;
     };
     determineObjectTarget(type.family, family);

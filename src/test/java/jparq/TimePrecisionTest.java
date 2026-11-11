@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.JParqResultSet;
 import se.alipsa.jparq.helper.TemporalInterval;
 
@@ -84,7 +85,13 @@ class TimePrecisionTest {
         try (var result = statement.executeQuery(query)) {
           assertTrue(result.next(), query);
           assertEquals(expectedNanos, result.getTimestamp(1).getNanos(), query);
-          assertEquals(expectedNanos, assertInstanceOf(Timestamp.class, result.getObject(1)).getNanos(), query);
+          if (target.equals("TIMESTAMP WITH TIME ZONE")) {
+            var offset = assertInstanceOf(java.time.OffsetDateTime.class, result.getObject(1));
+            assertEquals(expectedNanos, offset.getNano(), query);
+            assertEquals(offset.toInstant(), result.getTimestamp(1).toInstant(), query);
+          } else {
+            assertEquals(expectedNanos, assertInstanceOf(Timestamp.class, result.getObject(1)).getNanos(), query);
+          }
           assertFalse(result.next(), query);
         }
         String difference = "SELECT CAST(s AS " + target
@@ -104,6 +111,42 @@ class TimePrecisionTest {
           "SELECT CAST(s AS " + target + ") - TIMESTAMP '2024-01-01 00:00:00' AS x FROM dated WHERE id > 5")) {
         assertEquals("INTERVAL", result.getMetaData().getColumnTypeName(1));
         assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Applies offset CAST precision to temporal operands without shifting instants.
+   *
+   * @param precision
+   *          declared fractional digits
+   * @throws Exception
+   *           if querying fails
+   */
+  @ParameterizedTest
+  @ValueSource(ints = {
+      0, 3, 6, 9
+  })
+  void offsetCastsApplyPrecisionToTemporalSources(int precision) throws Exception {
+    try (var connection = connection(true, true); var statement = connection.createStatement()) {
+      for (String operand : List.of("TIMESTAMP '2024-01-02 00:00:00.123456789'", "ts")) {
+        String suffix = operand.equals("ts") ? " FROM dated WHERE id = 1" : "";
+        try (var result = statement.executeQuery("SELECT CAST(" + operand + " AS TIMESTAMP(" + precision
+            + ") WITH TIME ZONE),CAST(TIME '01:02:03.987' AS TIME(" + precision + ") WITH TIME ZONE)" + suffix)) {
+          assertTrue(result.next());
+          int unit = (int) Math.pow(10, 9 - precision);
+          int sourceNanos = operand.equals("ts") ? 500999000 : 123456789;
+          var timestamp = result.getObject(1, java.time.OffsetDateTime.class);
+          assertEquals(sourceNanos / unit * unit, timestamp.getNano());
+          var time = result.getObject(2, java.time.OffsetTime.class);
+          assertEquals(987000000 / unit * unit, time.getNano());
+        }
+      }
+      try (var result = statement.executeQuery("SELECT CAST(TIMESTAMP '2024-01-02 00:00:00.123456789' "
+          + "AS TIMESTAMP WITH TIME ZONE),CAST(TIME '01:02:03.987' AS TIME WITH TIME ZONE)")) {
+        assertTrue(result.next());
+        assertEquals(123456000, result.getObject(1, java.time.OffsetDateTime.class).getNano());
+        assertEquals(0, result.getObject(2, java.time.OffsetTime.class).getNano());
       }
     }
   }
@@ -456,17 +499,16 @@ class TimePrecisionTest {
   }
 
   /**
-   * Stored TIME columns pad JSON output to their storage precision so every row
-   * in a column prints with the same fractional width, directly and through
-   * nested inputs.
+   * Stored TIME columns preserve significant digits without storage-based
+   * padding, directly and through nested inputs.
    *
    * @throws Exception
    *           if a query fails
    */
   @Test
-  void storedTimePadsJsonToStoragePrecision() throws Exception {
+  void storedTimePreservesSignificantDigits() throws Exception {
     try (var connection = connection(true, true); var statement = connection.createStatement()) {
-      List<String> expected = List.of("[\"10:00:00.000\"]", "[\"10:00:00.500\"]", "[\"10:00:00.250\"]");
+      List<String> expected = List.of("[\"10:00:00\"]", "[\"10:00:00.5\"]", "[\"10:00:00.25\"]");
       try (var result = statement.executeQuery("SELECT JSON_ARRAY(t) FROM clocks ORDER BY id")) {
         for (String json : expected) {
           assertTrue(result.next());

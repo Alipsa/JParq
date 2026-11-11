@@ -34,6 +34,7 @@ import java.sql.Types;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -50,6 +51,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
@@ -60,6 +62,7 @@ import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.OrderByElement;
+import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.LogicalType;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
@@ -115,6 +118,7 @@ import se.alipsa.jparq.engine.UnnestTableBuilder;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
+import se.alipsa.jparq.engine.function.StructArrayTypes;
 import se.alipsa.jparq.engine.function.SystemFunctions;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 import se.alipsa.jparq.engine.window.WindowPlan;
@@ -785,15 +789,20 @@ public class JParqPreparedStatement implements PreparedStatement {
       return List.of();
     }
     Map<Column, Schema> columns = new HashMap<>();
-    java.util.function.Function<Column, Schema> columnSchemas = projectionColumnSchemas(columns);
-    java.util.function.Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarSchemas = projectionScalarSchemas(
-        cteResults);
+    Function<Column, Schema> columnSchemas = projectionColumnSchemas(columns);
+    Function<Select, Schema> scalarSchemas = projectionScalarSchemas(cteResults);
     List<Schema> schemas = new ArrayList<>(parsedSelect.expressions().size());
     for (Expression expression : parsedSelect.expressions()) {
-      Schema interval = IntervalExpressionTypes.resolve(expression, columnSchemas, scalarSchemas);
-      schemas.add(interval != null
-          ? interval
-          : IntervalExpressionTypes.resolveTemporal(expression, columnSchemas, scalarSchemas));
+      try {
+        Schema interval = IntervalExpressionTypes.resolve(expression, columnSchemas, scalarSchemas);
+        schemas.add(interval != null
+            ? interval
+            : IntervalExpressionTypes.resolveTemporal(expression, columnSchemas, scalarSchemas));
+      } catch (IllegalArgumentException incompatible) {
+        // Optional declarations must leave incompatible conditional fields to
+        // runtime datetime validation, which reports the original SQL types.
+        schemas.add(null);
+      }
     }
     return schemas;
   }
@@ -827,7 +836,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          per-statement resolution cache
    * @return column schema resolver backed by this statement's inputs
    */
-  private java.util.function.Function<Column, Schema> projectionColumnSchemas(Map<Column, Schema> cache) {
+  private Function<Column, Schema> projectionColumnSchemas(Map<Column, Schema> cache) {
     return column -> cache.computeIfAbsent(column, reference -> {
       try {
         Schema source = resolveSchemaForColumn(tableReferences, reference.getTable());
@@ -849,15 +858,15 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          CTE values visible to the scalar subqueries
    * @return scalar declaration resolver preparing independent nested plans
    */
-  private java.util.function.Function<net.sf.jsqlparser.statement.select.Select, Schema> projectionScalarSchemas(
-      Map<Identifier, CteResult> cteContext) {
-    return select -> {
-      try (JParqPreparedStatement nested = prepareSubqueryStatement(select.toString(), cteContext)) {
-        return nested.declaredProjectionSchema();
+  private Function<Select, Schema> projectionScalarSchemas(Map<Identifier, CteResult> cteContext) {
+    Map<Select, Optional<Schema>> declarations = new HashMap<>();
+    return select -> declarations.computeIfAbsent(select, query -> {
+      try (JParqPreparedStatement nested = prepareSubqueryStatement(query.toString(), cteContext)) {
+        return Optional.ofNullable(nested.declaredProjectionSchema());
       } catch (SQLException exception) {
-        return null;
+        return Optional.empty();
       }
-    };
+    }).orElse(null);
   }
 
   @Override
@@ -1302,7 +1311,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       throw new SQLException("Set operation components must use compatible column types", "42000");
     } else if (prior != null && schema != null
         && (previous == Types.TIMESTAMP || isTemporalArray(prior) && isTemporalArray(schema))) {
-      schemas.set(index, se.alipsa.jparq.engine.function.StructArrayTypes.common(prior, schema));
+      schemas.set(index, StructArrayTypes.common(prior, schema));
     } else if (!Objects.equals(prior, schema)) {
       TemporalValueType temporal = TemporalValueType.fromSchema(prior);
       TemporalValueType branchTemporal = TemporalValueType.fromSchema(schema);
@@ -1436,7 +1445,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     TemporalValueType temporal = TemporalValueType.fromSchema(to);
     if (temporal == TemporalValueType.OFFSET_TIMESTAMP && value instanceof Timestamp timestamp && from != null
         && AvroCoercions.utcTimestamp(from)) {
-      return timestamp.toInstant().atOffset(java.time.ZoneOffset.UTC);
+      return timestamp.toInstant().atOffset(ZoneOffset.UTC);
     }
     return temporal == null ? value : temporal.normalize(value);
   }
@@ -3021,7 +3030,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
 
       @Override
-      public <S> Void visit(net.sf.jsqlparser.statement.select.Select select, S context) {
+      public <S> Void visit(Select select, S context) {
         return null;
       }
     }, null);
@@ -5242,7 +5251,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
 
       @Override
-      public <S> Void visit(net.sf.jsqlparser.statement.select.Select nested, S context) {
+      public <S> Void visit(Select nested, S context) {
         addColumns(required, resolver.rewrite(nested, qualifiers, candidates, Map.of(), (qualifier, column) -> null)
             .correlatedColumns());
         return null;
@@ -5250,7 +5259,7 @@ public class JParqPreparedStatement implements PreparedStatement {
 
       @Override
       public <S> Void visit(net.sf.jsqlparser.statement.select.ParenthesedSelect nested, S context) {
-        return visit((net.sf.jsqlparser.statement.select.Select) nested, context);
+        return visit((Select) nested, context);
       }
     };
     List<Expression> expressions = new ArrayList<>(select.expressions());

@@ -226,9 +226,7 @@ public final class TemporalOperands {
    * @return whether its leaves carry an explicit time zone
    */
   public static boolean offsetArray(Schema schema) {
-    Schema leaf = JdbcTypeMapper.innermostElementType(schema);
-    int type = JdbcTypeMapper.mapSchemaToJdbcType(leaf);
-    return type == Types.TIMESTAMP_WITH_TIMEZONE || type == Types.TIME_WITH_TIMEZONE;
+    return TemporalValueType.hasTimeZone(schema);
   }
 
   /**
@@ -246,12 +244,7 @@ public final class TemporalOperands {
         && array.elements().stream().anyMatch(TemporalOperands::offsetOperand)) {
       return true;
     }
-    if (operand.declaration() == null) {
-      return false;
-    }
-    Schema declaration = JdbcTypeMapper.innermostElementType(operand.declaration());
-    int type = JdbcTypeMapper.mapSchemaToJdbcType(declaration);
-    return type == Types.TIMESTAMP_WITH_TIMEZONE || type == Types.TIME_WITH_TIMEZONE;
+    return TemporalValueType.hasTimeZone(operand.declaration());
   }
 
   /**
@@ -290,8 +283,7 @@ public final class TemporalOperands {
   public static boolean timestampResult(Schema schema) {
     Schema effective = JdbcTypeMapper.nonNullSchema(schema);
     int type = JdbcTypeMapper.mapSchemaToJdbcType(effective);
-    return type == Types.TIMESTAMP || type == Types.TIMESTAMP_WITH_TIMEZONE
-        || effective.getType() == Schema.Type.ARRAY && offsetArray(effective);
+    return type == Types.TIMESTAMP || TemporalValueType.hasTimeZone(effective);
   }
 
   /**

@@ -100,7 +100,7 @@ class JsonConstructorRegressionTest {
           assertValue(connection, "ARRAY[null_ts,TIMESTAMP '2000-01-01 01:00:00']", " FROM t",
               "[null,\"" + localElement + "\"]");
           assertValue(connection, "ARRAY[lts]", " FROM t", "[\"2024-03-31T02:30:00\"]");
-          String offsetGap = DateTimeFormatter.ISO_OFFSET_DATE_TIME
+          final String offsetGap = DateTimeFormatter.ISO_OFFSET_DATE_TIME
               .format(LocalDateTime.parse("2024-03-31T02:30:00").atOffset(DateTimeFunctions.sessionOffset()));
           String nested = "[[\"2024-03-31T02:30:00\"],[\"" + utcWall + "\"]]";
           assertValue(connection, "ARRAY[la,ARRAY[ts]]", " FROM t", nested);
@@ -402,7 +402,7 @@ class JsonConstructorRegressionTest {
    *           if a query fails
    */
   private static void assertSummerInstantPromotion(Connection connection) throws Exception {
-    for (String expression : List.of("COALESCE(ts,CURRENT_TIMESTAMP)",
+    for (String expression : List.of("COALESCE(ts,CURRENT_TIMESTAMP)", "CAST(ts AS TIMESTAMP WITH TIME ZONE)",
         "CASE WHEN TRUE THEN ts ELSE CURRENT_TIMESTAMP END")) {
       try (var statement = connection.createStatement();
           var result = statement.executeQuery("SELECT " + expression + ",JSON_ARRAY(" + expression + ") FROM t")) {

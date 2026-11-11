@@ -6,7 +6,12 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.SQLException;
+import java.sql.Time;
 import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
@@ -316,8 +321,7 @@ public final class ValueExpressionEvaluator {
       return DateTimeFunctions.evaluateTimeKey(tk);
     }
     if (expression instanceof CastExpression cast) {
-      Object inner = evalInternal(cast.getLeftExpression(), record);
-      return evaluateCast(cast, inner);
+      return evaluateCastOperand(cast, record);
     }
     if (expression instanceof SignedExpression se) {
       return LiteralConverter.applySign(evalInternal(se.getExpression(), record), se);
@@ -379,7 +383,7 @@ public final class ValueExpressionEvaluator {
       return evaluateConvert(convert, record);
     }
     if (expression instanceof Function func) {
-      if ("COALESCE".equalsIgnoreCase(func.getName())) {
+      if (ExpressionBranches.isCoalesce(func)) {
         Schema declaration = valueSchema(func);
         if (declaration != null && TemporalOperands.timestampResult(declaration)) {
           return declaredOperand(func, record, false).engineValue();
@@ -411,8 +415,43 @@ public final class ValueExpressionEvaluator {
       return StringFunctions.convertCharset(value, convert.getTranscodingName());
     }
     CastExpression cast = convertCasts.computeIfAbsent(convert, this::convertCast);
-    Object value = evalInternal(cast.getLeftExpression(), record);
-    return cast.getColDataType() == null ? value : evaluateCast(cast, value);
+    return evaluateCastOperand(cast, record);
+  }
+
+  /**
+   * Applies source-aware promotion for casts to offset datetime types.
+   *
+   * @param cast
+   *          target cast expression
+   * @param record
+   *          current input row
+   * @return converted value, possibly null
+   * @throws IllegalArgumentException
+   *           if the source cannot be converted to the target type
+   */
+  private Object evaluateCastOperand(CastExpression cast, GenericRecord record) {
+    Schema target = valueSchema(cast);
+    TemporalValueType temporal = TemporalValueType.fromSchema(target);
+    if (temporal == TemporalValueType.OFFSET_TIMESTAMP || temporal == TemporalValueType.OFFSET_TIME) {
+      Operand source = declaredOperand(cast.getLeftExpression(), record, false);
+      boolean compatible = temporal == TemporalValueType.OFFSET_TIMESTAMP
+          ? source.value() instanceof Timestamp || source.value() instanceof LocalDateTime
+              || source.value() instanceof OffsetDateTime
+          : source.value() instanceof Time || source.value() instanceof LocalTime
+              || source.value() instanceof OffsetTime;
+      if (source.value() != null && !compatible) {
+        source = new Operand(evaluateCast(cast, source.value()), null);
+      }
+      Object promoted = TemporalOperands.promote(source, target).engineValue();
+      if (promoted instanceof OffsetDateTime timestamp) {
+        return timestamp.withNano(DateTimeFunctions.castFractionalNanos(cast, timestamp.getNano(), 6));
+      }
+      if (promoted instanceof OffsetTime time) {
+        return time.withNano(DateTimeFunctions.castFractionalNanos(cast, time.getNano(), 0));
+      }
+      return promoted;
+    }
+    return evaluateCast(cast, evalInternal(cast.getLeftExpression(), record));
   }
 
   /**
@@ -721,7 +760,7 @@ public final class ValueExpressionEvaluator {
           (Operand) evaluateCase(choice, record, validateArrays ? jsonBranchOperand : engineBranchOperand),
           validateArrays);
     }
-    if (unwrapped instanceof Function function && "COALESCE".equalsIgnoreCase(function.getName())
+    if (unwrapped instanceof Function function && ExpressionBranches.isCoalesce(function)
         && function.getParameters() != null && numericType(function) == null && intervalSchema(unwrapped) == null) {
       for (Expression argument : function.getParameters()) {
         Operand operand = declaredOperand(argument, record, validateArrays);
@@ -826,7 +865,7 @@ public final class ValueExpressionEvaluator {
     return valueSchemas.computeIfAbsent(expression, shape -> {
       try {
         if (shape instanceof CaseExpression
-            || shape instanceof Function function && "COALESCE".equalsIgnoreCase(function.getName())) {
+            || shape instanceof Function function && ExpressionBranches.isCoalesce(function)) {
           Schema nativeTimestamp = ScalarExpressionSchemas.resolve(shape);
           if (TemporalValueType.fromSchema(nativeTimestamp) == TemporalValueType.LOCAL_TIMESTAMP) {
             return Optional.of(nativeTimestamp);
@@ -1041,10 +1080,10 @@ public final class ValueExpressionEvaluator {
     if (value instanceof java.time.LocalDate) {
       return "DATE";
     }
-    if (value instanceof java.time.LocalDateTime || value instanceof java.time.OffsetDateTime) {
+    if (value instanceof LocalDateTime || value instanceof OffsetDateTime) {
       return "TIMESTAMP";
     }
-    if (value instanceof java.time.LocalTime || value instanceof java.time.OffsetTime) {
+    if (value instanceof LocalTime || value instanceof OffsetTime) {
       return "TIME";
     }
     return java.sql.JDBCType.valueOf(JdbcTypeMapper.mapJavaClassNameToJdbcType(value.getClass().getName())).getName();
