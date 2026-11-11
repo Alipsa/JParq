@@ -1024,12 +1024,20 @@ public final class ValueExpressionEvaluator {
     throw new IllegalArgumentException("Unsupported binary value: " + value);
   }
 
+  /**
+   * Evaluates arithmetic operands using their ordinary engine representations.
+   *
+   * @param left
+   *          left operand expression
+   * @param right
+   *          right operand expression
+   * @param record
+   *          current row
+   * @param op
+   *          arithmetic operation
+   * @return computed result, or null for SQL NULL
+   */
   private Object arithmetic(Expression left, Expression right, GenericRecord record, Operation op) {
-    if (op == Operation.SUB) {
-      Operand first = declaredOperand(left, record, false);
-      Operand second = declaredOperand(right, record, false);
-      return arithmetic(left, right, first.value(), second.value(), op);
-    }
     return arithmetic(left, right, evalInternal(left, record), evalInternal(right, record), op);
   }
 
@@ -1157,7 +1165,7 @@ public final class ValueExpressionEvaluator {
    *          outer column name
    * @param record
    *          current outer row
-   * @return the bound value, possibly null
+   * @return the bound value and its source declaration, including SQL NULL
    * @throws IllegalStateException
    *           if a correlation mapping names a missing field
    * @throws IllegalArgumentException
@@ -1172,12 +1180,26 @@ public final class ValueExpressionEvaluator {
         String canonical = mapping.get(normalizedColumn);
         if (canonical != null) {
           assertCorrelatedFieldPresent(normalizedQualifier, normalizedColumn, canonical);
-          return AvroCoercions.resolveColumnValue(canonical, record, fieldSchemas, caseInsensitiveIndex);
+          return correlatedOperand(canonical, record);
         }
       }
     }
     // NULL is a resolved SQL value, not a signal to retry without the qualifier.
-    return resolveColumnValue(qualifier, columnName, record);
+    return correlatedOperand(canonicalFieldName(qualifier, columnName), record);
+  }
+
+  /**
+   * Retains a resolved outer column's value and original temporal semantics.
+   *
+   * @param canonical
+   *          canonical outer field name
+   * @param record
+   *          current outer row
+   * @return typed correlated binding
+   */
+  private Operand correlatedOperand(String canonical, GenericRecord record) {
+    return new Operand(AvroCoercions.resolveColumnValue(canonical, record, fieldSchemas, caseInsensitiveIndex),
+        fieldSchemas.get(canonical));
   }
 
   /**

@@ -2,10 +2,6 @@ package se.alipsa.jparq.engine.window;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
-import java.nio.ByteBuffer;
-import java.sql.Date;
-import java.sql.Time;
-import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -34,11 +30,9 @@ import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlExceptions;
-import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.helper.LiteralConverter;
-import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
  * Utility methods for planning and evaluating SQL window functions that appear
@@ -2555,48 +2549,20 @@ public final class WindowFunctions {
   }
 
   /**
-   * Compare two values of potentially different types.
+   * Compares window values using the ordinary SQL comparison rules, including UTC
+   * semantics for offset datetime values.
    *
    * @param left
-   *          left-hand value (may be {@code null})
+   *          non-null left-hand value
    * @param right
-   *          right-hand value (may be {@code null})
+   *          non-null right-hand value
    * @return negative when {@code left < right}, zero when equal, otherwise
    *         positive
    * @throws IllegalArgumentException
-   *           if an interval is implicitly compared as text, carrying SQLState
-   *           42000
+   *           if operand types are incompatible, carrying SQLState 42000
    */
   public static int compareValues(Object left, Object right) {
-    if (left instanceof Number ln && right instanceof Number rn) {
-      return SqlComparisons.compareNumbers(ln, rn);
-    }
-    if (left instanceof Boolean && right instanceof Boolean) {
-      return Boolean.compare((Boolean) left, (Boolean) right);
-    }
-    if (left instanceof byte[] && right instanceof byte[]) {
-      return compareBinary((byte[]) left, (byte[]) right);
-    }
-    if (left instanceof ByteBuffer lb && right instanceof ByteBuffer rb) {
-      byte[] la = new byte[lb.remaining()];
-      byte[] ra = new byte[rb.remaining()];
-      lb.duplicate().get(la);
-      rb.duplicate().get(ra);
-      return compareBinary(la, ra);
-    }
-    if (left instanceof Timestamp && right instanceof Timestamp) {
-      return Long.compare(((Timestamp) left).getTime(), ((Timestamp) right).getTime());
-    }
-    if (left instanceof Time leftTime && right instanceof Time rightTime) {
-      return leftTime.compareTo(rightTime);
-    }
-    if (left instanceof Date && right instanceof Date) {
-      return Long.compare(((Date) left).getTime(), ((Date) right).getTime());
-    }
-    if (left instanceof TemporalInterval li && right instanceof TemporalInterval ri) {
-      return li.compareTo(ri);
-    }
-    return SqlText.valueOf(left).compareTo(SqlText.valueOf(right));
+    return SqlComparisons.typedCompare(left, right);
   }
 
   /**

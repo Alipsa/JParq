@@ -551,7 +551,8 @@ public final class FunctionSupport {
      *          column name to resolve
      * @param record
      *          current record providing the values
-     * @return resolved value (may be {@code null})
+     * @return resolved value (possibly null), or an operand retaining its source
+     *         declaration
      */
     Object resolve(String qualifier, String column, GenericRecord record);
   }

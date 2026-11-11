@@ -229,8 +229,12 @@ public final class IntervalExpressionTypes {
    */
   public static Schema resolveTemporal(Expression expression, Function<Column, Schema> columns,
       Function<Select, Schema> subqueries) {
-    int type = temporalType(expression, columns, subqueries);
     Expression value = ExpressionEvaluator.unwrapParenthesis(expression);
+    if (value instanceof net.sf.jsqlparser.expression.Function function && CorrelatedBindings.matches(function)) {
+      Schema bound = JdbcTypeMapper.nonNullSchema(CorrelatedBindings.schema(function));
+      return TemporalOperands.temporalElements(bound) ? bound : null;
+    }
+    int type = temporalType(expression, columns, subqueries);
     if (type == Types.TIME && value instanceof Column column) {
       return JdbcTypeMapper.nonNullSchema(columns.apply(column));
     }
@@ -480,7 +484,8 @@ public final class IntervalExpressionTypes {
       return Types.TIMESTAMP;
     }
     if (value instanceof net.sf.jsqlparser.expression.Function function && CorrelatedBindings.matches(function)) {
-      return JdbcTypeMapper.mapSchemaToJdbcType(CorrelatedBindings.schema(function));
+      int type = JdbcTypeMapper.mapSchemaToJdbcType(CorrelatedBindings.schema(function));
+      return type == Types.DATE || type == Types.TIME || type == Types.TIMESTAMP ? type : Types.OTHER;
     }
     String type = null;
     if (value instanceof net.sf.jsqlparser.expression.Function function) {

@@ -2,17 +2,23 @@ package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.OffsetTime;
+import java.time.ZoneOffset;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.TimeZone;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
@@ -27,6 +33,7 @@ import org.junit.jupiter.api.parallel.Isolated;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.SqlComparisons;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.helper.TemporalInterval;
 import se.alipsa.jparq.helper.TemporalValueType;
 
@@ -41,13 +48,13 @@ class OffsetTemporalSemanticsTest {
    */
   @Test
   void comparesLocalRepresentations() {
-    var local = java.time.LocalDateTime.parse("2024-07-01T10:00:00.123456789");
+    var local = LocalDateTime.parse("2024-07-01T10:00:00.123456789");
     assertEquals(0, SqlComparisons.typedCompare(local, Timestamp.valueOf(local)));
     assertEquals(0, SqlComparisons.typedCompare(Timestamp.valueOf(local), local));
-    var time = java.sql.Time.valueOf("10:00:00");
+    var time = Time.valueOf("10:00:00");
     time.setTime(time.getTime() + 500);
-    assertEquals(0, SqlComparisons.typedCompare(java.time.LocalTime.parse("10:00:00.5"), time));
-    assertEquals(0, SqlComparisons.typedCompare(time, java.time.LocalTime.parse("10:00:00.5")));
+    assertEquals(0, SqlComparisons.typedCompare(LocalTime.parse("10:00:00.5"), time));
+    assertEquals(0, SqlComparisons.typedCompare(time, LocalTime.parse("10:00:00.5")));
   }
 
   /**
@@ -60,7 +67,7 @@ class OffsetTemporalSemanticsTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "UTC", "Europe/Stockholm", "America/New_York"
+      "UTC", "Europe/Stockholm", "America/New_York", "Australia/Sydney"
   })
   void usesUtcSemantics(String zone) throws Exception {
     TimeZone original = TimeZone.getDefault();
@@ -75,6 +82,10 @@ class OffsetTemporalSemanticsTest {
           assertPredicates(connection);
           assertKeysAndOrder(connection);
           assertCastsAndGetters(connection);
+          assertCorrelations(connection);
+          assertWindowOrder(connection);
+          assertTimeGetters(connection);
+          assertArithmeticRepresentation(connection);
         }
       }
     } finally {
@@ -177,7 +188,7 @@ class OffsetTemporalSemanticsTest {
         var result = statement.executeQuery("SELECT CAST(o AS TIME WITH TIME ZONE),"
             + "CAST(CAST(o AS TIMESTAMP WITH TIME ZONE) AS TIME WITH TIME ZONE),"
             + "CAST(COALESCE(o,CURRENT_TIMESTAMP) AS TIME WITH TIME ZONE),"
-            + "CAST(o AS TIMESTAMP WITH TIME ZONE),ta,edge FROM t WHERE id = 1")) {
+            + "CAST(o AS TIMESTAMP WITH TIME ZONE),ta,edge,CURRENT_TIME FROM t WHERE id = 1")) {
       assertTrue(result.next());
       for (int column = 1; column <= 3; column++) {
         assertEquals(OffsetTime.parse("10:00:00Z"), result.getObject(column, OffsetTime.class));
@@ -185,12 +196,134 @@ class OffsetTemporalSemanticsTest {
       Timestamp timestamp = Timestamp.from(Instant.parse("2024-07-01T10:00:00Z"));
       assertEquals(timestamp, result.getTimestamp(4));
       assertEquals(new java.sql.Date(timestamp.getTime()), result.getDate(4));
-      assertEquals(se.alipsa.jparq.engine.function.DateTimeFunctions.toTime(timestamp), result.getTime(4));
-      Timestamp epochTime = Timestamp.from(OffsetTime.parse("10:00:00Z").atDate(LocalDate.ofEpochDay(0)).toInstant());
-      assertEquals(se.alipsa.jparq.engine.function.DateTimeFunctions.toTime(epochTime), result.getTime(5));
+      assertEquals(DateTimeFunctions.toTime(timestamp), result.getTime(4));
+      int displacement = result.getObject(7, OffsetTime.class).getOffset().getTotalSeconds();
+      assertEquals(Time.valueOf(LocalTime.of(10, 0).plusSeconds(displacement)), result.getTime(5));
       Timestamp edge = Timestamp.from(result.getObject(6, OffsetDateTime.class).toInstant());
       assertEquals(new java.sql.Date(edge.getTime()), result.getDate(6));
-      assertEquals(se.alipsa.jparq.engine.function.DateTimeFunctions.toTime(edge), result.getTime(6));
+      assertEquals(DateTimeFunctions.toTime(edge), result.getTime(6));
+    }
+  }
+
+  /**
+   * Keeps UTC provenance through correlated predicates and scalar subqueries.
+   *
+   * @param connection
+   *          open connection
+   * @throws Exception
+   *           if querying fails
+   */
+  private static void assertCorrelations(Connection connection) throws Exception {
+    for (String predicate : List.of(
+        "CAST(t.o AS TIMESTAMP WITH TIME ZONE) IN (SELECT i.o FROM correlated i WHERE i.id = t.id)",
+        "CAST(t.o AS TIMESTAMP WITH TIME ZONE) = ANY(SELECT i.o FROM correlated i WHERE i.id = t.id)",
+        "EXISTS(SELECT 1 FROM correlated i WHERE i.o = CAST(t.o AS TIMESTAMP WITH TIME ZONE))",
+        "EXISTS(SELECT 1 FROM correlated i WHERE CAST(i.o AS TIMESTAMP WITH TIME ZONE) = t.o)")) {
+      assertCount(connection, "SELECT COUNT(*) FROM correlated t WHERE " + predicate, 2);
+    }
+    try (var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT COUNT(*) FROM correlated i "
+            + "WHERE CAST(i.o AS TIMESTAMP WITH TIME ZONE) = t.o) FROM correlated t")) {
+      for (int row = 0; row < 2; row++) {
+        assertTrue(result.next());
+        assertEquals(1, result.getInt(1));
+      }
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Shares instant ordering for window ranks, peers, and extrema.
+   *
+   * @param connection
+   *          open connection
+   * @throws Exception
+   *           if querying fails
+   */
+  private static void assertWindowOrder(Connection connection) throws Exception {
+    for (String[] columns : List.of(new String[]{
+        "a", "b"
+    }, new String[]{
+        "ta", "tb"
+    })) {
+      String source = "SELECT " + columns[0] + " AS x FROM t WHERE id = 1 UNION ALL SELECT " + columns[1]
+          + " AS x FROM t WHERE id = 1 UNION ALL SELECT " + columns[1] + " AS x FROM t WHERE id = 2";
+      try (var statement = connection.createStatement();
+          var result = statement.executeQuery("SELECT x,ROW_NUMBER() OVER(ORDER BY x),RANK() OVER(ORDER BY x),"
+              + "DENSE_RANK() OVER(ORDER BY x),MIN(x) OVER(),MAX(x) OVER(),COUNT(*) OVER(PARTITION BY x) " + "FROM ("
+              + source + ") q ORDER BY x")) {
+        var rowNumbers = new HashSet<Integer>();
+        for (int index = 0; index < 3; index++) {
+          assertTrue(result.next());
+          assertEquals(index == 0 ? 1 : 2, result.getInt(3));
+          assertEquals(index == 0 ? 1 : 2, result.getInt(4));
+          assertEquals(index == 0 ? 1 : 2, result.getInt(7));
+          if (index == 0) {
+            assertEquals(1, result.getInt(2));
+          } else {
+            rowNumbers.add(result.getInt(2));
+          }
+          Object minimum = result.getObject(5);
+          Object maximum = result.getObject(6);
+          if (minimum instanceof OffsetDateTime timestamp) {
+            assertEquals(Instant.parse("2024-07-01T09:30:00Z"), timestamp.toInstant());
+            assertEquals(Instant.parse("2024-07-01T10:00:00Z"), ((OffsetDateTime) maximum).toInstant());
+          } else {
+            assertEquals(LocalTime.of(9, 30),
+                ((OffsetTime) minimum).withOffsetSameInstant(ZoneOffset.UTC).toLocalTime());
+            assertEquals(LocalTime.of(10, 0),
+                ((OffsetTime) maximum).withOffsetSameInstant(ZoneOffset.UTC).toLocalTime());
+          }
+        }
+        assertEquals(Set.of(2, 3), rowNumbers);
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Checks fixed SQL clock values rather than reproducing a date-anchor formula.
+   *
+   * @param connection
+   *          open connection
+   * @throws Exception
+   *           if querying fails
+   */
+  private static void assertTimeGetters(Connection connection) throws Exception {
+    try (var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("SELECT LOCALTIME,CURRENT_TIME," + "CAST('10:00:00' AS TIME WITH TIME ZONE)")) {
+      assertTrue(result.next());
+      assertEquals(result.getTime(1), result.getTime(2));
+      assertEquals(Time.valueOf("10:00:00"), result.getTime(3));
+    }
+  }
+
+  /**
+   * Keeps the same JDBC class and SQL character form for addition and
+   * subtraction. Local-field normalization in DST gaps remains tracked separately
+   * in #446.
+   *
+   * @param connection
+   *          open connection
+   * @throws Exception
+   *           if querying fails
+   */
+  private static void assertArithmeticRepresentation(Connection connection) throws Exception {
+    String minus = "l - INTERVAL '1' HOUR";
+    String plus = "l + INTERVAL '1' HOUR";
+    try (var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT " + minus + "," + plus + ",CAST(" + minus
+            + " AS VARCHAR(100)),CAST(" + plus + " AS VARCHAR(100)) FROM t")) {
+      while (result.next()) {
+        for (int column = 1; column <= 2; column++) {
+          assertInstanceOf(Timestamp.class, result.getObject(column));
+          String text = result.getString(column);
+          assertFalse(text.contains("T"));
+          assertTrue(text.matches("[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}.*"));
+          assertEquals(text, result.getString(column + 2));
+        }
+      }
     }
   }
 
@@ -220,22 +353,40 @@ class OffsetTemporalSemanticsTest {
    *           if fixture creation fails
    */
   private void writeFixture() throws Exception {
+    writeFixture("t", false);
+    writeFixture("correlated", true);
+  }
+
+  /**
+   * Writes a physical table, optionally using distinct UTC instants per row.
+   *
+   * @param table
+   *          table file name
+   * @param distinct
+   *          whether each row has a different UTC instant
+   * @throws Exception
+   *           if fixture creation fails
+   */
+  private void writeFixture(String table, boolean distinct) throws Exception {
     Schema schema = SchemaBuilder.record("offsets").fields().requiredInt("id").name("o")
         .type(LogicalTypes.timestampMicros().addToSchema(Schema.create(Schema.Type.LONG))).noDefault().name("a")
         .type(TemporalValueType.OFFSET_TIMESTAMP.schema()).noDefault().name("b")
         .type(TemporalValueType.OFFSET_TIMESTAMP.schema()).noDefault().name("ta")
         .type(TemporalValueType.OFFSET_TIME.schema()).noDefault().name("tb")
         .type(TemporalValueType.OFFSET_TIME.schema()).noDefault().name("edge")
-        .type(TemporalValueType.OFFSET_TIMESTAMP.schema()).noDefault().endRecord();
+        .type(TemporalValueType.OFFSET_TIMESTAMP.schema()).noDefault().name("l")
+        .type(LogicalTypes.localTimestampMicros().addToSchema(Schema.create(Schema.Type.LONG))).noDefault().endRecord();
     Configuration configuration = new Configuration();
-    var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve("t.parquet").toUri()),
+    var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve(table + ".parquet").toUri()),
         configuration);
     try (var writer = AvroParquetWriter.<GenericData.Record>builder(output).withSchema(schema).withConf(configuration)
         .build()) {
       for (int id : List.of(1, 2)) {
         var row = new GenericData.Record(schema);
         row.put("id", id);
-        row.put("o", Instant.parse("2024-07-01T10:00:00Z").getEpochSecond() * 1_000_000L);
+        row.put("o",
+            (Instant.parse("2024-07-01T10:00:00Z").getEpochSecond() + (distinct ? (id - 1) * 3600L : 0)) * 1_000_000L);
+        row.put("l", LocalDateTime.parse("2024-03-31T02:30:00").toEpochSecond(ZoneOffset.UTC) * 1_000_000L);
         row.put("a", "2024-07-01T10:00:00Z");
         row.put("b", id == 1 ? "2024-07-01T11:00:00+01:00" : "2024-07-01T10:30:00+01:00");
         row.put("edge", "2024-07-01T00:30:00+14:00");

@@ -6,7 +6,10 @@ import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.Time;
 import java.sql.Types;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -41,9 +44,9 @@ class ScalarCastMetadataTest {
           "WITH c AS (SELECT " + expression + " AS x) SELECT x FROM c")) {
         try (var result = statement.executeQuery(sql)) {
           assertEquals(Types.TIMESTAMP, result.getMetaData().getColumnType(1), sql);
-          assertEquals(java.time.LocalDateTime.class.getName(), result.getMetaData().getColumnClassName(1), sql);
+          assertEquals(LocalDateTime.class.getName(), result.getMetaData().getColumnClassName(1), sql);
           assertTrue(result.next());
-          assertInstanceOf(java.time.LocalDateTime.class, result.getObject(1), sql);
+          assertInstanceOf(LocalDateTime.class, result.getObject(1), sql);
           assertFalse(result.next());
         }
       }
@@ -122,12 +125,9 @@ class ScalarCastMetadataTest {
             assertTrue(result.next());
             assertTrue(Class.forName(className).isInstance(result.getObject(1)));
             if (jdbcType == Types.TIME_WITH_TIMEZONE) {
-              var time = result.getObject(1, java.time.OffsetTime.class);
-              var instant = time.atDate(java.time.LocalDate.ofEpochDay(0)).toInstant();
-              assertEquals(se.alipsa.jparq.engine.function.DateTimeFunctions.toTime(java.sql.Timestamp.from(instant)),
-                  result.getTime(1));
+              assertEquals(Time.valueOf("10:00:00"), result.getTime(1));
             } else {
-              var timestamp = result.getObject(1, java.time.OffsetDateTime.class);
+              var timestamp = result.getObject(1, OffsetDateTime.class);
               assertEquals(timestamp.toInstant(), result.getTimestamp(1).toInstant());
             }
             assertFalse(result.next());
@@ -151,8 +151,8 @@ class ScalarCastMetadataTest {
         var result = statement.executeQuery("SELECT CAST(DATE '2024-07-01' AS TIMESTAMP WITH TIME ZONE),"
             + "CAST(TIMESTAMP '2024-07-01 10:02:03.987' AS TIME WITH TIME ZONE),CURRENT_TIMESTAMP")) {
       assertTrue(result.next());
-      var offset = result.getObject(3, java.time.OffsetDateTime.class).getOffset();
-      assertEquals(java.time.LocalDateTime.parse("2024-07-01T00:00:00").atOffset(offset), result.getObject(1));
+      var offset = result.getObject(3, OffsetDateTime.class).getOffset();
+      assertEquals(LocalDateTime.parse("2024-07-01T00:00:00").atOffset(offset), result.getObject(1));
       assertEquals(java.time.LocalTime.parse("10:02:03").atOffset(offset), result.getObject(2));
     }
   }

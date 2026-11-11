@@ -1662,8 +1662,8 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
-   * Returns JVM-local clock fields for offset datetime instants. Offset TIME
-   * values use 1970-01-01 as their date anchor, matching JDBC TIME storage.
+   * Returns JVM-local clock fields for offset timestamps. Offset TIME values use
+   * the current SQL session displacement before conversion to JDBC TIME.
    *
    * @param columnIndex
    *          one-based column index
@@ -1678,7 +1678,7 @@ public class JParqResultSet extends ResultSetAdapter {
       return null;
     }
     if (v instanceof OffsetTime time) {
-      v = Timestamp.from(time.atDate(LocalDate.ofEpochDay(0)).toInstant());
+      v = time.withOffsetSameInstant(DateTimeFunctions.sessionOffset()).toLocalTime();
     }
     if (v instanceof OffsetDateTime timestamp) {
       v = Timestamp.from(timestamp.toInstant());

@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.Expression;
@@ -381,8 +382,9 @@ public final class ExpressionEvaluator {
       if (subqueryExecutor == null) {
         throw new IllegalStateException("IN subqueries require a subquery executor");
       }
-      List<Object> values = executeCorrelatedSubquery(subSelect, rec).singleColumnValues();
-      Schema declaration = subqueryExecutor.projectionSchema(subSelect);
+      SubqueryExecutor.SubqueryResult result = executeCorrelatedSubquery(subSelect, rec);
+      List<Object> values = result.singleColumnValues();
+      Schema declaration = result.projectionSchema();
       return inOperands(left, values, value -> new Operand(value, declaration), in.isNot());
     }
     return false;
@@ -403,8 +405,7 @@ public final class ExpressionEvaluator {
    *          whether NOT IN was requested
    * @return SQL membership truth value
    */
-  private <T> Boolean inOperands(Operand left, Iterable<T> candidates, java.util.function.Function<T, Operand> evaluate,
-      boolean negated) {
+  private <T> Boolean inOperands(Operand left, Iterable<T> candidates, Function<T, Operand> evaluate, boolean negated) {
     if (left.value == null) {
       return candidates.iterator().hasNext() ? null : negated;
     }
@@ -428,7 +429,7 @@ public final class ExpressionEvaluator {
       throw new IllegalArgumentException("EXISTS requires a subquery");
     }
     boolean hasRows = subqueryExecutor.existsCorrelated(subSelect, outerQualifiers, correlationColumns(),
-        qualifierColumnMapping, (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
+        qualifierColumnMapping, (qualifier, column) -> resolveCorrelatedOperand(qualifier, column, rec));
     return exists.isNot() != hasRows;
   }
 
@@ -447,7 +448,7 @@ public final class ExpressionEvaluator {
       throw new IllegalStateException("Predicate subqueries require a subquery executor");
     }
     return subqueryExecutor.executeCorrelated(subSelect, outerQualifiers, correlationColumns(), qualifierColumnMapping,
-        (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
+        (qualifier, column) -> resolveCorrelatedOperand(qualifier, column, rec));
   }
 
   private Boolean evalBinary(BinaryExpression be, GenericRecord rec) {
@@ -494,8 +495,8 @@ public final class ExpressionEvaluator {
             return new TemporalOperands.Operand(value, typed.declaration());
           });
     }, expression -> quantifiedArray(expression, rec), subSelect -> {
-      List<Object> values = executeCorrelatedSubquery(subSelect, rec).singleColumnValues();
-      return quantifiedCandidates(values, subqueryExecutor.projectionSchema(subSelect));
+      SubqueryExecutor.SubqueryResult result = executeCorrelatedSubquery(subSelect, rec);
+      return quantifiedCandidates(result.singleColumnValues(), result.projectionSchema());
     });
   }
 
@@ -568,9 +569,11 @@ public final class ExpressionEvaluator {
   private record Operand(Object value, Schema schemaOrNull) {
   }
 
-  private Object resolveColumnValue(String qualifier, String columnName, GenericRecord rec) {
+  private Object resolveCorrelatedOperand(String qualifier, String columnName, GenericRecord rec) {
     String canonical = canonicalFieldName(qualifier, columnName);
-    return AvroCoercions.resolveColumnValue(canonical, rec, fieldSchemas, caseInsensitiveIndex);
+    return new TemporalOperands.Operand(
+        AvroCoercions.resolveColumnValue(canonical, rec, fieldSchemas, caseInsensitiveIndex),
+        fieldSchemas.get(canonical));
   }
 
   private String canonicalFieldName(String qualifier, String columnName) {
