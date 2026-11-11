@@ -145,6 +145,11 @@
   and character forms for stored local timestamps. Grouped HAVING and scalar-subquery bindings
   retain grouped operands' declarations, including suppressed NULL keys. Correlated local timestamp
   bindings preserve stored clock fields through DST gaps before offset promotion.
+  MIN/MAX retain the selected input's declaration for grouped predicates and scalar expressions.
+  Correlated local timestamp projections, character casts, and arithmetic retain JDBC Timestamp
+  values matching their metadata. Ordinary local predicates use consistent engine values on both
+  sides, while offset promotion retains the original stored fields. Grouping sources are decoded
+  only when a group is created.
   Window ordering and MIN/MAX reject binary/nonbinary and numeric/INTERVAL mixtures with SQLState
   `42000`.
   **Behavior changes:** VALUES mixing DATE with TIMESTAMP or TIME now fails with SQLState `42000`;

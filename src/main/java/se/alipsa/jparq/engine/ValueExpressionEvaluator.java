@@ -835,6 +835,9 @@ public final class ValueExpressionEvaluator {
    */
   private Operand declaredOperand(Expression expression, GenericRecord record, boolean validateArrays) {
     Expression unwrapped = ExpressionEvaluator.unwrapParenthesis(expression);
+    if (unwrapped instanceof Function function && CorrelatedBindings.matches(function)) {
+      return CorrelatedBindings.source(function);
+    }
     if (unwrapped instanceof CaseExpression choice && numericType(choice) == null
         && intervalSchema(unwrapped) == null) {
       return temporalBranch(unwrapped,

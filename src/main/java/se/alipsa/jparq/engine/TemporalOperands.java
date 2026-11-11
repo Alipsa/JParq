@@ -214,7 +214,8 @@ public final class TemporalOperands {
    *          value and its original declaration
    * @param other
    *          comparison or subtraction partner
-   * @return source value with compatible offset semantics
+   * @return promoted offset value, or ordinary engine fields for a local
+   *         comparison
    */
   public static Object comparisonValue(Operand source, Object other) {
     if (other instanceof OffsetDateTime && (source.value() instanceof Timestamp
@@ -225,7 +226,10 @@ public final class TemporalOperands {
         || source.value() instanceof OffsetTime)) {
       return promote(source, TemporalValueType.OFFSET_TIME.schema()).engineValue();
     }
-    return source.value();
+    Schema declaration = JdbcTypeMapper.nonNullSchema(source.declaration());
+    return source.value() instanceof LocalDateTime && declaration != null && AvroCoercions.isLocalTimestamp(declaration)
+        ? source.engineValue()
+        : source.value();
   }
 
   /**

@@ -647,7 +647,8 @@ public final class ExpressionEvaluator {
     if (target.schemaOrNull != null && source.schemaOrNull == null) {
       return coerceLiteral(source.value, target.schemaOrNull);
     }
-    return source.value;
+    return TemporalOperands.comparisonValue(new TemporalOperands.Operand(source.value, source.schemaOrNull),
+        target.value);
   }
 
   /**

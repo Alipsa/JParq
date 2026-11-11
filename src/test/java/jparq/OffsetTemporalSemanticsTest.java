@@ -3,6 +3,7 @@ package jparq;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
@@ -85,6 +86,9 @@ class OffsetTemporalSemanticsTest {
           assertCorrelations(connection);
           assertGroupedCorrelations(connection);
           assertLocalFieldCorrelations(connection);
+          assertAggregateDeclarations(connection);
+          assertLocalPredicates(connection);
+          assertCorrelatedRepresentations(connection);
           assertWindowOrder(connection);
           assertTimeGetters(connection);
           assertArithmeticRepresentation(connection);
@@ -300,6 +304,98 @@ class OffsetTemporalSemanticsTest {
   }
 
   /**
+   * Aggregate comparisons retain MIN/MAX input declarations in both directions.
+   *
+   * @param connection
+   *          open connection
+   * @throws Exception
+   *           if querying fails
+   */
+  private static void assertAggregateDeclarations(Connection connection) throws Exception {
+    for (String aggregate : List.of("MIN", "MAX")) {
+      String nullable = "SELECT CAST(n AS TIMESTAMP WITH TIME ZONE) = " + aggregate
+          + "(n) FROM correlated GROUP BY id,n ORDER BY id";
+      try (var statement = connection.createStatement(); var result = statement.executeQuery(nullable)) {
+        assertTrue(result.next(), nullable);
+        assertNull(result.getObject(1), nullable);
+        assertTrue(result.next(), nullable);
+        assertTrue(result.getBoolean(1), nullable);
+        assertFalse(result.next(), nullable);
+      }
+      for (String expression : List.of("CAST(o AS TIMESTAMP WITH TIME ZONE) = " + aggregate + "(o)",
+          aggregate + "(o) = CAST(o AS TIMESTAMP WITH TIME ZONE)",
+          aggregate + "(CAST(o AS TIMESTAMP WITH TIME ZONE)) = o")) {
+        assertCount(connection,
+            "SELECT COUNT(*) FROM (SELECT o FROM correlated GROUP BY o HAVING " + expression + ") q", 2);
+        try (var statement = connection.createStatement();
+            var result = statement.executeQuery("SELECT " + expression + " FROM correlated GROUP BY o")) {
+          int rows = 0;
+          while (result.next()) {
+            assertTrue(result.getBoolean(1), expression);
+            rows++;
+          }
+          assertEquals(2, rows, expression);
+        }
+      }
+    }
+  }
+
+  /**
+   * Ordinary local comparisons use the same engine representation on both sides.
+   *
+   * @param connection
+   *          open connection
+   * @throws Exception
+   *           if querying fails
+   */
+  private static void assertLocalPredicates(Connection connection) throws Exception {
+    for (String column : List.of("l", "w")) {
+      String literal = column.equals("l") ? "2024-03-31 02:30:00" : "2024-01-02 03:04:05";
+      for (String predicate : List.of("COALESCE(" + column + "," + column + ") = " + column,
+          "COALESCE(" + column + "," + column + ") = TIMESTAMP '" + literal + "'",
+          "CASE WHEN id > 0 THEN " + column + " END BETWEEN " + column + " AND " + column,
+          "COALESCE(" + column + "," + column + ") IN (" + column + ")")) {
+        assertCount(connection, "SELECT COUNT(*) FROM t WHERE " + predicate, 2);
+      }
+    }
+  }
+
+  /**
+   * Correlations preserve JDBC values, classes, arithmetic, and character forms.
+   *
+   * @param connection
+   *          open connection
+   * @throws Exception
+   *           if querying fails
+   */
+  private static void assertCorrelatedRepresentations(Connection connection) throws Exception {
+    for (String column : List.of("l", "w")) {
+      for (String suffix : List.of("", " GROUP BY " + column)) {
+        String inner = " FROM t i WHERE i.id = 1)";
+        String query = "SELECT " + column + ",(SELECT t." + column + inner + ",CAST(" + column
+            + " AS VARCHAR(40)),(SELECT CAST(t." + column + " AS VARCHAR(40))" + inner + "," + column
+            + " + INTERVAL '1' HOUR,(SELECT t." + column + " + INTERVAL '1' HOUR" + inner + " FROM t" + suffix;
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(query)) {
+          int rows = 0;
+          while (result.next()) {
+            assertInstanceOf(Timestamp.class, result.getObject(2), query);
+            assertEquals(result.getObject(1), result.getObject(2), query);
+            if (!suffix.isEmpty()) {
+              assertEquals(result.getMetaData().getColumnClassName(1), result.getMetaData().getColumnClassName(2),
+                  query);
+            }
+            assertEquals(result.getString(3), result.getString(4), query);
+            assertInstanceOf(Timestamp.class, result.getObject(6), query);
+            assertEquals(result.getObject(5), result.getObject(6), query);
+            rows++;
+          }
+          assertEquals(suffix.isEmpty() ? 2 : 1, rows, query);
+        }
+      }
+    }
+  }
+
+  /**
    * Shares instant ordering for window ranks, peers, and extrema.
    *
    * @param connection
@@ -442,7 +538,11 @@ class OffsetTemporalSemanticsTest {
         .type(TemporalValueType.OFFSET_TIME.schema()).noDefault().name("tb")
         .type(TemporalValueType.OFFSET_TIME.schema()).noDefault().name("edge")
         .type(TemporalValueType.OFFSET_TIMESTAMP.schema()).noDefault().name("l")
-        .type(LogicalTypes.localTimestampMicros().addToSchema(Schema.create(Schema.Type.LONG))).noDefault().endRecord();
+        .type(LogicalTypes.localTimestampMicros().addToSchema(Schema.create(Schema.Type.LONG))).noDefault().name("w")
+        .type(LogicalTypes.localTimestampMicros().addToSchema(Schema.create(Schema.Type.LONG))).noDefault().name("n")
+        .type(Schema.createUnion(Schema.create(Schema.Type.NULL),
+            LogicalTypes.timestampMicros().addToSchema(Schema.create(Schema.Type.LONG))))
+        .noDefault().endRecord();
     Configuration configuration = new Configuration();
     var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve(table + ".parquet").toUri()),
         configuration);
@@ -454,6 +554,8 @@ class OffsetTemporalSemanticsTest {
         row.put("o",
             (Instant.parse("2024-07-01T10:00:00Z").getEpochSecond() + (distinct ? (id - 1) * 3600L : 0)) * 1_000_000L);
         row.put("l", LocalDateTime.parse("2024-03-31T02:30:00").toEpochSecond(ZoneOffset.UTC) * 1_000_000L);
+        row.put("n", id == 1 ? null : Instant.parse("2024-07-01T10:00:00Z").getEpochSecond() * 1_000_000L);
+        row.put("w", LocalDateTime.parse("2024-01-02T03:04:05").toEpochSecond(ZoneOffset.UTC) * 1_000_000L);
         row.put("a", "2024-07-01T10:00:00Z");
         row.put("b", id == 1 ? "2024-07-01T11:00:00+01:00" : "2024-07-01T10:30:00+01:00");
         row.put("edge", "2024-07-01T00:30:00+14:00");
