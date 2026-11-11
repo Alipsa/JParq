@@ -131,6 +131,8 @@
   Preserve temporal CAST declarations in set operations and derived MIN/MAX metadata. Promote compatible
   local timestamps using their date's zone rules and date-free times using the execution offset.
   Timestamp gaps shift forward, and overlaps choose the later offset, matching JDBC decoding.
+  Timestamp promotion and execution clocks follow the effective JVM default time zone, including
+  runtime `TimeZone.setDefault(...)` changes when `user.timezone` still names the initial zone.
   Explicit WITH TIME ZONE casts use the same
   source-aware promotion, preserving UTC-adjusted column instants. Their scalar JDBC metadata and
   values now expose TIME_WITH_TIMEZONE/OffsetTime or TIMESTAMP_WITH_TIMEZONE/OffsetDateTime;
@@ -159,7 +161,8 @@
   LAG/LEAD defaults convert to the value expression's SQL type when selected; navigation results
   retain the selected source's temporal provenance so local defaults are not read as UTC storage.
   Incompatible LAG/LEAD default types fail during preparation with SQLState `42000`, including
-  empty inputs. Numeric defaults truncate fractional digits toward zero on assignment, retaining
+  empty inputs. ARRAY errors include nested element types, and interval defaults reject year-month/day-time
+  kind mismatches. Numeric defaults truncate fractional digits toward zero on assignment, retaining
   range checks for leading-digit overflow.
   Correlated local timestamp projections, character casts, and arithmetic retain JDBC Timestamp
   values matching their metadata. Ordinary local predicates use consistent engine values on both

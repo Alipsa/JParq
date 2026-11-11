@@ -10,12 +10,79 @@ import java.sql.SQLDataException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
  * Verifies navigation defaults whose SQL type has multiple engine
  * representations.
  */
 class NavigationDefaultTypeTest {
+  /**
+   * Reports nested ARRAY element types instead of only repeating ARRAY.
+   *
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @Test
+  void describesArrayDefaultElementTypes() throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:.")) {
+      for (String function : List.of("LAG", "LEAD")) {
+        for (boolean nested : List.of(false, true)) {
+          String value = "ARRAY[TIMESTAMP '2024-07-01 10:00:00']";
+          String fallback = "ARRAY[CAST(1 AS INTEGER)]";
+          String sourceType = "ARRAY(INTEGER)";
+          String targetType = "ARRAY(TIMESTAMP)";
+          if (nested) {
+            value = "ARRAY[" + value + "]";
+            fallback = "ARRAY[" + fallback + "]";
+            sourceType = "ARRAY(" + sourceType + ")";
+            targetType = "ARRAY(" + targetType + ")";
+          }
+          String query = "SELECT " + function + "(" + value + ",1," + fallback
+              + ") OVER (ORDER BY id) FROM (VALUES (1)) t(id)";
+          var failure = assertThrows(SQLSyntaxErrorException.class, () -> connection.prepareStatement(query));
+          assertEquals("42000", failure.getSQLState());
+          assertTrue(failure.getMessage().contains(sourceType + " is not assignable to " + targetType),
+              failure.getMessage());
+        }
+      }
+    }
+  }
+
+  /**
+   * Rejects cross-kind INTERVAL defaults while accepting conversions within a
+   * kind.
+   *
+   * @throws Exception
+   *           if JDBC evaluation fails
+   */
+  @Test
+  void validatesIntervalDefaultKinds() throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:.")) {
+      for (String function : List.of("LAG", "LEAD")) {
+        for (String suffix : List.of("", " WHERE id > 5")) {
+          for (String arguments : List.of("INTERVAL '1' DAY,1,INTERVAL '1' YEAR",
+              "INTERVAL '1' YEAR,1,INTERVAL '1' DAY")) {
+            String query = "SELECT " + function + "(" + arguments + ") OVER (ORDER BY id) FROM (VALUES (1)) t(id)"
+                + suffix;
+            var failure = assertThrows(SQLSyntaxErrorException.class, () -> connection.prepareStatement(query));
+            assertEquals("42000", failure.getSQLState());
+            assertTrue(failure.getMessage().contains("INTERVAL DAY"), failure.getMessage());
+            assertTrue(failure.getMessage().contains("INTERVAL YEAR"), failure.getMessage());
+          }
+        }
+        String query = "SELECT " + function + "(INTERVAL '1' MONTH,5,INTERVAL '1' YEAR) OVER (ORDER BY id)," + function
+            + "(INTERVAL '1' HOUR,5,INTERVAL '1' DAY) OVER (ORDER BY id) FROM (VALUES (1)) t(id)";
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(query)) {
+          assertTrue(result.next());
+          assertEquals(12, ((TemporalInterval) result.getObject(1)).period().toTotalMonths());
+          assertEquals(1, ((TemporalInterval) result.getObject(2)).period().getDays());
+          assertFalse(result.next());
+        }
+      }
+    }
+  }
+
   /**
    * Rejects incompatible defaults during preparation even if the query has no
    * rows.

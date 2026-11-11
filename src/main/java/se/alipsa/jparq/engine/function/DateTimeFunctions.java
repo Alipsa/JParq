@@ -32,6 +32,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.TimeZone;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.IntervalQualifier;
@@ -90,22 +91,14 @@ public final class DateTimeFunctions {
   }
 
   /**
-   * Resolve the time zone to use for time-key evaluations. Prefers the
-   * {@code user.timezone} system property when present to honor test isolation
-   * and runtime overrides, otherwise falls back to the JVM default zone.
+   * Resolves the effective JVM zone used by JDBC Timestamp conversions, including
+   * runtime changes through {@link TimeZone#setDefault(TimeZone)}. The initial
+   * user.timezone property need not reflect the current default.
    *
    * @return the active {@link ZoneId} to use
    */
   static ZoneId defaultZone() {
-    String userZone = System.getProperty("user.timezone");
-    if (userZone != null && !userZone.isBlank()) {
-      try {
-        return ZoneId.of(userZone);
-      } catch (Exception ignored) {
-        // fall through to system default if the provided zone is invalid
-      }
-    }
-    return ZoneId.systemDefault();
+    return TimeZone.getDefault().toZoneId();
   }
 
   /**

@@ -37,6 +37,8 @@ import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.TemporalOperands.Operand;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
+import se.alipsa.jparq.helper.IntervalQualifier;
+import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.LiteralConverter;
 
@@ -110,10 +112,28 @@ public final class WindowFunctions {
     Schema target = schemas.apply(analytic.getExpression());
     Schema source = schemas.apply(analytic.getDefaultValue());
     if (!assignableDefault(target, source)) {
-      throw SqlExceptions.syntaxFailure(
-          analytic.getName() + " default type " + JDBCType.valueOf(JdbcTypeMapper.mapSchemaToJdbcType(source)).getName()
-              + " is not assignable to " + JDBCType.valueOf(JdbcTypeMapper.mapSchemaToJdbcType(target)).getName());
+      throw SqlExceptions.syntaxFailure(analytic.getName() + " default type " + navigationTypeName(source)
+          + " is not assignable to " + navigationTypeName(target));
     }
+  }
+
+  /**
+   * Describes complete navigation types, including nested ARRAY leaves and
+   * interval fields.
+   *
+   * @param schema
+   *          known source or destination declaration
+   * @return SQL type description for assignment diagnostics
+   */
+  private static String navigationTypeName(Schema schema) {
+    Schema value = JdbcTypeMapper.nonNullSchema(schema);
+    if (value.getType() == Schema.Type.ARRAY) {
+      return "ARRAY(" + navigationTypeName(value.getElementType()) + ")";
+    }
+    if (IntervalType.matches(value)) {
+      return "INTERVAL " + IntervalType.qualifier(value).name().replace('_', ' ');
+    }
+    return JDBCType.valueOf(JdbcTypeMapper.mapSchemaToJdbcType(value)).getName();
   }
 
   /**
@@ -135,6 +155,14 @@ public final class WindowFunctions {
     if (destination.getType() == Schema.Type.ARRAY || value.getType() == Schema.Type.ARRAY) {
       return destination.getType() == Schema.Type.ARRAY && value.getType() == Schema.Type.ARRAY
           && assignableDefault(destination.getElementType(), value.getElementType());
+    }
+    if (IntervalType.matches(destination) || IntervalType.matches(value)) {
+      if (!IntervalType.matches(destination) || !IntervalType.matches(value)) {
+        return false;
+      }
+      IntervalQualifier targetFields = IntervalType.qualifier(destination);
+      IntervalQualifier sourceFields = IntervalType.qualifier(value);
+      return targetFields == sourceFields || targetFields.common(sourceFields) != IntervalQualifier.MIXED;
     }
     int targetType = JdbcTypeMapper.mapSchemaToJdbcType(destination);
     int sourceType = JdbcTypeMapper.mapSchemaToJdbcType(value);

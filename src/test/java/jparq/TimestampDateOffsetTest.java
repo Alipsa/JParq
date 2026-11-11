@@ -13,6 +13,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.OffsetTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -25,6 +26,7 @@ import org.apache.avro.generic.GenericData;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.avro.AvroParquetWriter;
 import org.apache.parquet.hadoop.util.HadoopOutputFile;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Isolated;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -39,6 +41,59 @@ import se.alipsa.jparq.engine.function.StatementTime;
 class TimestampDateOffsetTest {
   @TempDir
   Path directory;
+
+  /**
+   * Uses runtime JVM zone changes even when user.timezone still names another
+   * zone.
+   *
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void runtimeDefaultOverridesStaleTimezoneProperty() throws Exception {
+    TimeZone previous = TimeZone.getDefault();
+    String property = System.getProperty("user.timezone");
+    try {
+      System.setProperty("user.timezone", "Europe/Stockholm");
+      TimeZone.setDefault(TimeZone.getTimeZone("America/New_York"));
+      List<Instant> expected = writeFixture();
+      try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+        assertComparisons(connection, expected);
+        String literal = "TIMESTAMP '2024-07-01 06:00:00'";
+        String query = "SELECT o = " + literal + ",CAST(o AS TIMESTAMP WITH TIME ZONE) = CAST(" + literal
+            + " AS TIMESTAMP WITH TIME ZONE),CAST(" + literal + " AS TIMESTAMP WITH TIME ZONE) " + "FROM t WHERE lit = "
+            + literal;
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(query)) {
+          int rows = 0;
+          while (result.next()) {
+            assertEquals(Boolean.TRUE, result.getObject(1));
+            assertEquals(Boolean.TRUE, result.getObject(2));
+            assertEquals(OffsetDateTime.parse("2024-07-01T06:00:00-04:00"), result.getObject(3));
+            rows++;
+          }
+          assertEquals(2, rows);
+        }
+        try (var statement = connection.createStatement();
+            var result = statement
+                .executeQuery("SELECT CURRENT_TIMESTAMP,CURRENT_TIME,CAST(TIME '06:00:00' AS TIME WITH TIME ZONE)")) {
+          assertTrue(result.next());
+          OffsetDateTime timestamp = result.getObject(1, OffsetDateTime.class);
+          ZoneOffset offset = ZoneId.of("America/New_York").getRules().getOffset(timestamp.toInstant());
+          assertEquals(offset, timestamp.getOffset());
+          assertEquals(offset, result.getObject(2, OffsetTime.class).getOffset());
+          assertEquals(offset, result.getObject(3, OffsetTime.class).getOffset());
+        }
+      }
+      assertEquals("Europe/Stockholm", System.getProperty("user.timezone"));
+    } finally {
+      TimeZone.setDefault(previous);
+      if (property == null) {
+        System.clearProperty("user.timezone");
+      } else {
+        System.setProperty("user.timezone", property);
+      }
+    }
+  }
 
   /**
    * Compares direct, implicit, and materialized conversions under winter and
@@ -153,7 +208,7 @@ class TimestampDateOffsetTest {
       int group = 0;
       for (String text : List.of("2024-01-15T12:00:00", "2024-07-01T12:00:00", "2024-03-31T02:30:00",
           "2024-10-27T02:30:00", "2024-03-10T02:30:00", "2024-11-03T01:30:00", "2024-10-06T02:30:00",
-          "2024-04-07T02:30:00")) {
+          "2024-04-07T02:30:00", "2024-07-01T06:00:00")) {
         LocalDateTime local = LocalDateTime.parse(text);
         Instant instant = Timestamp.valueOf(local).toInstant();
         for (int copy = 0; copy < 2; copy++) {
