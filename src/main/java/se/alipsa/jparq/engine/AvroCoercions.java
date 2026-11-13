@@ -17,6 +17,7 @@ import java.time.LocalTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.BiFunction;
 import org.apache.avro.LogicalTypes;
@@ -122,7 +123,7 @@ public final class AvroCoercions {
    *          the schema
    * @return effective schema
    */
-  static Schema effectiveSchema(Schema s) {
+  public static Schema effectiveSchema(Schema s) {
     if (s.getType() == Schema.Type.UNION) {
       for (Schema t : s.getTypes()) {
         if (t.getType() != Schema.Type.NULL) {
@@ -312,15 +313,20 @@ public final class AvroCoercions {
     if (effective.getType() == Schema.Type.ARRAY) {
       return unwrapArray(value, effective.getElementType(), true);
     }
+    if (effective.getType() == Schema.Type.MAP) {
+      return unwrapMap(value, effective.getValueType(), true);
+    }
     return unwrap(value, schema);
   }
 
   /**
    * Unwraps an Avro value to a corresponding Java type. Record values retain
    * their Avro schema and raw field values as GenericRecord objects rather than
-   * JSON text; record fields are not recursively unwrapped. TIME logical types
-   * become JDBC Time values with millisecond precision, matching typed TIME
-   * literals; sub-millisecond digits are truncated.
+   * JSON text; record fields are not recursively unwrapped. MAP values decode
+   * recursively into new maps keyed by their string keys, using the declared
+   * value schema like ARRAY elements. TIME logical types become JDBC Time values
+   * with millisecond precision, matching typed TIME literals; sub-millisecond
+   * digits are truncated.
    *
    * @param v
    *          The Avro value to unwrap.
@@ -422,6 +428,8 @@ public final class AvroCoercions {
         return v.toString();
       case ARRAY:
         return unwrapArray(v, effective.getElementType());
+      case MAP:
+        return unwrapMap(v, effective.getValueType(), false);
       case FIXED:
         if (isFloat16(effective) && v instanceof GenericData.Fixed fixed) {
           byte[] bytes = fixed.bytes();
@@ -489,6 +497,39 @@ public final class AvroCoercions {
       elements[index] = localFields ? unwrapLocalFields(item, elementSchema) : unwrap(item, elementSchema);
     }
     return elements;
+  }
+
+  /**
+   * Decodes map values before JDBC projection or correlation binding. String keys
+   * and NULL values are preserved, the input map is not modified, and nested
+   * containers decode recursively. Records remain available to structured
+   * consumers such as UNNEST. Previously decoded logical values are retained when
+   * materialized maps are read again.
+   *
+   * @param value
+   *          Avro map or decoded map
+   * @param valueSchema
+   *          schema shared by the map values
+   * @param localFields
+   *          whether to retain local timestamp fields without JDBC normalization
+   * @return a decoded map with string keys, or the original unsupported container
+   */
+  private static Object unwrapMap(Object value, Schema valueSchema, boolean localFields) {
+    if (!(value instanceof Map<?, ?> map)) {
+      return value;
+    }
+    Schema valueType = effectiveSchema(valueSchema);
+    Map<String, Object> decoded = new LinkedHashMap<>();
+    for (Map.Entry<?, ?> entry : map.entrySet()) {
+      Object item = entry.getValue();
+      if (item == null || valueType.getType() == Schema.Type.RECORD) {
+        decoded.put(SqlText.valueOf(entry.getKey()), item);
+      } else {
+        decoded.put(SqlText.valueOf(entry.getKey()),
+            localFields ? unwrapLocalFields(item, valueSchema) : unwrap(item, valueSchema));
+      }
+    }
+    return decoded;
   }
 
   /**

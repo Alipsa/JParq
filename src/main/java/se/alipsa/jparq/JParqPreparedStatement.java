@@ -31,9 +31,11 @@ import java.sql.Statement;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -1018,7 +1020,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         while (rs.next()) {
           List<Object> row = new ArrayList<>(columnCount);
           for (int col = 1; col <= columnCount; col++) {
-            row.add(rs.getObject(col));
+            row.add(materializedValue(rs, col));
           }
           componentData.add(materializeRow(row));
         }
@@ -3738,8 +3740,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       while (rs.next()) {
         GenericData.Record record = new GenericData.Record(schemaToUse);
         for (int i = 1; i <= columnCount; i++) {
-          Object raw = rs.getObject(i);
-          record.put(fieldNames.get(i - 1), toAvroValue(raw, valueSchemas.get(i - 1)));
+          record.put(fieldNames.get(i - 1), toAvroValue(materializedValue(rs, i), valueSchemas.get(i - 1)));
         }
         rows.add(record);
       }
@@ -4500,8 +4501,22 @@ public class JParqPreparedStatement implements PreparedStatement {
       return toMillisOfDay(DateTimeFunctions.toTime(value)) * 1000L;
     }
     if (logical instanceof LogicalTypes.TimestampMillis) {
-      Timestamp ts = value instanceof Timestamp t ? t : Timestamp.valueOf(value.toString());
-      return toEpochMillis(ts);
+      return toEpochUnits(value, 1_000L, false);
+    }
+    if (logical instanceof LogicalTypes.TimestampMicros) {
+      return toEpochUnits(value, 1_000_000L, false);
+    }
+    if (logical instanceof LogicalTypes.TimestampNanos) {
+      return toEpochUnits(value, 1_000_000_000L, false);
+    }
+    if (logical instanceof LogicalTypes.LocalTimestampMillis) {
+      return toEpochUnits(value, 1_000L, true);
+    }
+    if (logical instanceof LogicalTypes.LocalTimestampMicros) {
+      return toEpochUnits(value, 1_000_000L, true);
+    }
+    if (logical instanceof LogicalTypes.LocalTimestampNanos) {
+      return toEpochUnits(value, 1_000_000_000L, true);
     }
     if (logical instanceof LogicalTypes.Decimal decimal) {
       return toDecimalBytes(value, decimal);
@@ -4518,6 +4533,17 @@ public class JParqPreparedStatement implements PreparedStatement {
         List<Object> converted = new ArrayList<>(elements.size());
         for (Object element : elements) {
           converted.add(toAvroValue(element, effective.getElementType()));
+        }
+        yield converted;
+      }
+      case MAP -> {
+        if (!(value instanceof Map<?, ?> map)) {
+          yield value;
+        }
+        Map<String, Object> converted = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+          converted.put(entry.getKey() == null ? null : entry.getKey().toString(),
+              toAvroValue(entry.getValue(), effective.getValueType()));
         }
         yield converted;
       }
@@ -4650,8 +4676,72 @@ public class JParqPreparedStatement implements PreparedStatement {
     return (int) (DateTimeFunctions.toLocalTime(time).toNanoOfDay() / 1_000_000L);
   }
 
-  private long toEpochMillis(Timestamp timestamp) {
-    return timestamp.toInstant().toEpochMilli();
+  /**
+   * Encodes a temporal value as epoch units matching the target logical type's
+   * resolution. Local timestamps store their wall-clock fields against the UTC
+   * origin, mirroring {@link AvroCoercions#unwrap}; values already in a stored
+   * numeric representation pass through unchanged.
+   *
+   * @param value
+   *          temporal or already-encoded numeric value
+   * @param unitsPerSecond
+   *          stored units per second: 1000, 1000000, or 1000000000
+   * @param localFields
+   *          whether wall-clock fields use the UTC origin rather than an instant
+   * @return the stored epoch units
+   * @throws SQLException
+   *           if the value is not a valid temporal representation, carrying
+   *           SQLState 22007, or the units overflow the target range, carrying
+   *           SQLState 22008
+   */
+  private long toEpochUnits(Object value, long unitsPerSecond, boolean localFields) throws SQLException {
+    if (value instanceof Number number) {
+      return number.longValue();
+    }
+    final Instant instant;
+    try {
+      if (value instanceof Timestamp timestamp) {
+        instant = localFields ? timestamp.toLocalDateTime().toInstant(ZoneOffset.UTC) : timestamp.toInstant();
+      } else if (value instanceof LocalDateTime local) {
+        instant = local.toInstant(ZoneOffset.UTC);
+      } else if (value instanceof OffsetDateTime offset) {
+        instant = localFields ? offset.toLocalDateTime().toInstant(ZoneOffset.UTC) : offset.toInstant();
+      } else if (value instanceof Instant direct) {
+        instant = direct;
+      } else {
+        instant = temporalInstant(value.toString(), localFields);
+      }
+    } catch (java.time.DateTimeException | IllegalArgumentException e) {
+      throw new SQLException("Invalid temporal value during materialization", "22007", e);
+    }
+    try {
+      return Math.addExact(Math.multiplyExact(instant.getEpochSecond(), unitsPerSecond),
+          instant.getNano() / (1_000_000_000L / unitsPerSecond));
+    } catch (ArithmeticException e) {
+      throw new SQLException("Temporal value out of range during materialization", "22008", e);
+    }
+  }
+
+  /**
+   * Parses a textual temporal representation, treating it as wall-clock fields
+   * for local targets and as a JVM-zone timestamp otherwise.
+   *
+   * @param text
+   *          textual temporal value
+   * @param localFields
+   *          whether the text denotes wall-clock fields
+   * @return the represented instant
+   */
+  private static Instant temporalInstant(String text, boolean localFields) {
+    String trimmed = text.trim();
+    if (localFields) {
+      return LocalDateTime.parse(trimmed.replaceFirst(" ", "T")).toInstant(ZoneOffset.UTC);
+    }
+    try {
+      return Timestamp.valueOf(trimmed).toInstant();
+    } catch (IllegalArgumentException notJdbcText) {
+      return Instant.parse(trimmed);
+    }
   }
 
   /**
@@ -4824,6 +4914,23 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
+   * Reads one column from a subquery result for materialization, retaining stored
+   * wall-clock fields inside container values when the driver supports it, so
+   * logical values re-encode without host-zone normalization.
+   *
+   * @param rs
+   *          subquery result set positioned on the current row
+   * @param column
+   *          one-based column index
+   * @return the column value, or null for SQL NULL
+   * @throws SQLException
+   *           if the column cannot be read
+   */
+  private static Object materializedValue(ResultSet rs, int column) throws SQLException {
+    return rs instanceof JParqResultSet jparq ? jparq.getObjectRetainingLocalFields(column) : rs.getObject(column);
+  }
+
+  /**
    * Converts a subquery result to records, retaining declared temporal precision
    * the JDBC metadata drops.
    *
@@ -4856,7 +4963,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     while (rs.next()) {
       List<Object> values = new ArrayList<>(meta.getColumnCount());
       for (int i = 1; i <= meta.getColumnCount(); i++) {
-        values.add(rs.getObject(i));
+        values.add(materializedValue(rs, i));
       }
       if (inferTypes) {
         rawRows.add(values);

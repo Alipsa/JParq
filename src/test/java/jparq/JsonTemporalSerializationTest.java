@@ -131,10 +131,6 @@ class JsonTemporalSerializationTest {
               String field = sample[0].startsWith("ARRAY") ? "v" : sample[0];
               for (String input : List.of("t" + index, "(SELECT " + field + " FROM t" + index + ") d",
                   "(WITH c AS (SELECT " + field + " FROM t" + index + ") SELECT * FROM c) d")) {
-                if ("a".equals(field) && index >= 3 && input.startsWith("(")) {
-                  // Physical timestamp ARRAY re-encoding fails before JSON (#517).
-                  continue;
-                }
                 if ("v".equals(field) && (index == 3 || index == 4) && input.startsWith("(")) {
                   // UTC physical scalar materialization loses precision (#373).
                   continue;

@@ -219,7 +219,9 @@ public final class JsonFunctions {
 
   /**
    * Converts a constructor argument while retaining its temporal declaration.
-   * Direct character arguments retain the JSON-text parsing heuristic.
+   * Direct character arguments retain the JSON-text parsing heuristic. Maps
+   * decode through the schema-aware path like arrays, after
+   * {@link AvroCoercions#unwrap} has decoded their logical values.
    *
    * @param value
    *          evaluated argument or raw Avro column value
@@ -234,10 +236,6 @@ public final class JsonFunctions {
       return toNode(value);
     }
     Schema effective = JdbcTypeMapper.nonNullSchema(schema);
-    if (effective != null && effective.getType() == Schema.Type.MAP) {
-      // Direct MAP decoding is tracked separately in issue #313.
-      return toNode(value);
-    }
     if (effective != null && effective.getType() == Schema.Type.STRING
         && TemporalValueType.fromSchema(effective) == null) {
       return toNode(value == null ? null : value.toString());
@@ -856,7 +854,12 @@ public final class JsonFunctions {
           effective.getElementType());
       case MAP -> mapNode((Map<?, ?>) value, effective.getValueType());
       case STRING, ENUM -> MAPPER.getNodeFactory().textNode(SqlText.valueOf(value));
-      case BYTES -> toNode(effective.getLogicalType() == null ? value : AvroCoercions.unwrap(value, effective));
+      case BYTES -> {
+        Object decoded = effective.getLogicalType() == null ? value : AvroCoercions.unwrap(value, effective);
+        // Decoded binary values are data, not JSON text: skip the parsing
+        // heuristic so binary content cannot inject JSON structure.
+        yield decoded instanceof String text ? MAPPER.getNodeFactory().textNode(text) : toNode(decoded);
+      }
       default -> toNode(AvroCoercions.unwrap(value, effective));
     };
   }

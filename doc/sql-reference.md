@@ -361,9 +361,11 @@ SQL:2016–2023.
   materialization, `CAST`, or arithmetic can still be shifted before reaching JSON; this is tracked in
   [#446](https://github.com/Alipsa/JParq/issues/446).
 - Struct fields use their declared Avro logical types, including numeric decimals and date/timestamp strings. This
-  includes maps nested within struct fields. Top-level map columns and maps inside stored arrays currently keep raw
-  Avro logical values, such as epoch-day integers for dates
-  ([#313](https://github.com/Alipsa/JParq/issues/313)).
+  includes maps nested within struct fields. Top-level map columns and maps inside stored arrays decode their values
+  with the declared Avro logical types as well ([#313](https://github.com/Alipsa/JParq/issues/313)). Like top-level
+  columns and stored array elements, decoded binary values render as text unless `jparq.binary` prefers binary output,
+  while struct fields expose raw values as base64; TIME values decode through JDBC `Time` with millisecond precision,
+  so sub-millisecond digits are truncated ([#521](https://github.com/Alipsa/JParq/issues/521)).
 - Raw `BYTES` fields within structs become base64 strings. Top-level columns and stored array elements pass through
   JDBC coercion first, so `BYTES` may become UTF-8 text unless `jparq.binary` prefers binary values. For example,
   the bytes of `hello` render as `"hello"` in a column or stored array and as `"aGVsbG8="` in a struct field.
@@ -967,7 +969,9 @@ with SQLState `22008` because their era cannot round-trip through JDBC.
 - Map keys and values are checked recursively for a common type, including numeric and temporal promotion across
   sibling maps. NULL values and empty maps do not constrain inferred types. Incompatible map contents raise SQLState
   `42000`.
-- Top-level map columns and maps inside stored arrays keep raw Avro logical values
+- Map columns decode their values with the declared Avro value schema, like ARRAY elements: dates become JDBC date
+  values, decimals `BigDecimal`, and timestamps JDBC timestamp values. NULL values and string keys are preserved,
+  and nested containers decode recursively
   ([#313](https://github.com/Alipsa/JParq/issues/313)).
 
 ### Structs
@@ -1104,7 +1108,6 @@ These are known gaps relative to the SQL standard or expected behavior. Each is 
 | Standard binary `SUBSTRING`, `POSITION`, `TRIM`, `OVERLAY`, and binary `LIKE` | [#461](https://github.com/Alipsa/JParq/issues/461) |
 | `CLOB`/`BLOB` support, including array elements | [#452](https://github.com/Alipsa/JParq/issues/452) |
 | Plain LOB lengths above `Integer.MAX_VALUE` | [#462](https://github.com/Alipsa/JParq/issues/462) |
-| Map values outside struct fields keep raw Avro logical values | [#313](https://github.com/Alipsa/JParq/issues/313) |
 | JSON path `[*]`, `[last]`, and ranges | [#303](https://github.com/Alipsa/JParq/issues/303) |
 | JDBC parameter scanning inside dollar-quoted strings | [#296](https://github.com/Alipsa/JParq/issues/296) |
 | Ordered-set aggregates with `WITHIN GROUP` (`PERCENTILE_CONT`, `LISTAGG`, ...) | [#473](https://github.com/Alipsa/JParq/issues/473) |
