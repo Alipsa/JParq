@@ -76,9 +76,10 @@ class MapJsonSerializationTest {
           assertJson(connection, function, "um", from, "{\"u\":\"2023-11-14T22:13:20.123456Z\"}");
           assertJson(connection, function, "un", from, "{\"n\":\"2023-11-14T22:13:20.123456789Z\"}");
           assertJson(connection, function, "lm", from, "{\"l\":\"2023-11-14T22:13:20.123456\"}");
-          // Sub-millisecond TIME digits are truncated by JDBC decoding (#521);
-          // the JSON output pads the declared precision with zeros.
-          assertJson(connection, function, "lt", from, "{\"t\":\"12:00:00.123000\"}");
+          // Sub-millisecond TIME digits are truncated by JDBC decoding; when
+          // #521 restores sub-millisecond digits this expectation gains them back.
+          assertJson(connection, function, "lt", from, "{\"t\":\"12:00:00.123000\"}",
+              "#521: update the expected digits when TIME precision is preserved");
           assertJson(connection, function, "sm", from, "{\"md\":{\"d\":\"2024-01-01\"}}");
           assertJson(connection, function, "cm", from, "{\"n\":[1,null,2]}");
           // Binary values stay data: JSON-looking content is not parsed.
@@ -151,12 +152,11 @@ class MapJsonSerializationTest {
   }
 
   /**
-   * Retains local timestamp fields of maps inside ARRAY constructors without
-   * normalizing nonexistent wall-clock times through the host zone
-   * ([#446](https://github.com/Alipsa/JParq/issues/446)). The gap value is
-   * asserted on paths that retain local fields; materialization decodes local
-   * timestamps through JDBC {@link Timestamp}, which normalizes gap values in the
-   * host zone, so derived and CTE inputs use a non-gap value.
+   * Retains local timestamp fields of maps, including maps inside arrays and
+   * every materialization shape, without normalizing nonexistent wall-clock times
+   * through the host zone ([#446](https://github.com/Alipsa/JParq/issues/446)).
+   * The stored value falls in the Europe/Stockholm daylight-saving gap, so any
+   * JVM-zone normalization would shift it by an hour.
    *
    * @param zone
    *          JVM default time zone
@@ -173,23 +173,39 @@ class MapJsonSerializationTest {
       TimeZone.setDefault(TimeZone.getTimeZone(zone));
       writeGapMaps();
       try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
-        for (String expression : List.of("gm", "ARRAY[gm, gm]")) {
-          String value = expression.startsWith("ARRAY")
-              ? "[{\"g\":\"2024-03-31T02:30:00.123456\"}," + "{\"g\":\"2024-03-31T02:30:00.123456\"}]"
-              : "{\"g\":\"2024-03-31T02:30:00.123456\"}";
-          String sql = "SELECT JSON_ARRAY(" + expression + ") FROM gapmaps";
-          try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
-            assertTrue(result.next(), zone + ": " + sql);
-            assertEquals("[" + value + "]", result.getString(1), zone + ": " + sql);
-            assertFalse(result.next(), sql);
-          }
-        }
+        String mapValue = "{\"g\":\"2024-03-31T02:30:00.123456\"}";
         for (String input : List.of("gapmaps", "(SELECT * FROM gapmaps) a",
             "(WITH c AS (SELECT * FROM gapmaps) SELECT * FROM c) a")) {
-          String sql = "SELECT JSON_ARRAY(lm) FROM " + input;
+          assertJson(connection, "JSON_ARRAY(%s)", "gm", " FROM " + input, mapValue, zone);
+          assertJson(connection, "JSON_ARRAY(%s)", "ga", " FROM " + input, "[" + mapValue + ",null]", zone);
+          assertJson(connection, "JSON_ARRAY(%s)", "ARRAY[gm, gm]", " FROM " + input,
+              "[" + mapValue + "," + mapValue + "]", zone);
+        }
+        String union = "SELECT JSON_ARRAY(gm), JSON_ARRAY(ga) FROM (SELECT gm, ga FROM gapmaps"
+            + " UNION ALL SELECT gm, ga FROM gapmaps) u";
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(union)) {
+          for (int row = 0; row < 2; row++) {
+            assertTrue(result.next(), zone + ": " + union);
+            assertEquals("[" + mapValue + "]", result.getString(1), zone + ": " + union);
+            assertEquals("[[" + mapValue + ",null]]", result.getString(2), zone + ": " + union);
+          }
+          assertFalse(result.next(), union);
+        }
+        for (String expression : List.of("COALESCE(gm, gm)", "CASE WHEN id = 1 THEN gm END")) {
+          assertJson(connection, "JSON_ARRAY(%s)", expression, " FROM gapmaps", mapValue, zone);
+        }
+        // JDBC access returns the same value type for every query shape: local
+        // timestamp leaves decode to JDBC Timestamp values, consistently
+        // normalized through the host zone (#446) whether grouped, coalesced,
+        // or selected plainly.
+        for (String sql : List.of("SELECT gm FROM gapmaps GROUP BY id, gm",
+            "SELECT COALESCE(gm, gm), CASE WHEN id = 1 THEN gm END FROM gapmaps", "SELECT gm FROM gapmaps")) {
           try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
             assertTrue(result.next(), zone + ": " + sql);
-            assertEquals("[{\"l\":\"2023-11-14T22:13:20.123456\"}]", result.getString(1), zone + ": " + sql);
+            for (int column = 1; column <= result.getMetaData().getColumnCount(); column++) {
+              Map<?, ?> value = assertInstanceOf(Map.class, result.getObject(column), zone + ": " + sql);
+              assertInstanceOf(Timestamp.class, value.get("g"), zone + ": " + sql);
+            }
             assertFalse(result.next(), sql);
           }
         }
@@ -274,17 +290,18 @@ class MapJsonSerializationTest {
   }
 
   /**
-   * Writes a table with local timestamp map values, one falling in the
-   * Europe/Stockholm daylight-saving gap and one at an ordinary wall-clock time.
+   * Writes a table with a local timestamp map value inside a map and inside an
+   * array of maps. The value falls in the Europe/Stockholm daylight-saving gap.
    *
    * @throws IOException
    *           if fixture writing fails
    */
   private void writeGapMaps() throws IOException {
     Schema localTimestampMicros = LogicalTypes.localTimestampMicros().addToSchema(Schema.create(Schema.Type.LONG));
-    Schema schema = SchemaBuilder.record("gapmaps").fields().requiredInt("id").name("gm")
-        .type(Schema.createMap(localTimestampMicros)).noDefault().name("lm")
-        .type(Schema.createMap(localTimestampMicros)).noDefault().endRecord();
+    Schema map = Schema.createMap(localTimestampMicros);
+    Schema schema = SchemaBuilder.record("gapmaps").fields().requiredInt("id").name("gm").type(map).noDefault()
+        .name("ga").type(Schema.createArray(Schema.createUnion(Schema.create(Schema.Type.NULL), map))).noDefault()
+        .endRecord();
     Configuration configuration = new Configuration(false);
     configuration.setBoolean("parquet.avro.write-old-list-structure", false);
     var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve("gapmaps.parquet").toUri()),
@@ -293,8 +310,9 @@ class MapJsonSerializationTest {
         .build()) {
       var row = new GenericData.Record(schema);
       row.put("id", 1);
-      row.put("gm", Map.of("g", toLocalMicros(LocalDateTime.parse("2024-03-31T02:30:00.123456"))));
-      row.put("lm", Map.of("l", toLocalMicros(LocalDateTime.parse("2023-11-14T22:13:20.123456"))));
+      long gapMicros = toLocalMicros(LocalDateTime.parse("2024-03-31T02:30:00.123456"));
+      row.put("gm", Map.of("g", gapMicros));
+      row.put("ga", Arrays.asList(Map.of("g", gapMicros), null));
       writer.write(row);
     }
   }
@@ -329,12 +347,37 @@ class MapJsonSerializationTest {
    */
   private static void assertJson(Connection connection, String function, String expression, String from, String value)
       throws SQLException {
+    assertJson(connection, function, expression, from, value, null);
+  }
+
+  /**
+   * Checks one constructor's serialized output, prefixing the failure message
+   * with an optional hint for expectations tied to a known issue.
+   *
+   * @param connection
+   *          open JDBC connection
+   * @param function
+   *          constructor format string
+   * @param expression
+   *          value expression
+   * @param from
+   *          optional FROM and WHERE clauses
+   * @param value
+   *          expected JSON value
+   * @param hint
+   *          optional context prepended to the assertion message
+   * @throws SQLException
+   *           if querying fails
+   */
+  private static void assertJson(Connection connection, String function, String expression, String from, String value,
+      String hint) throws SQLException {
     String sql = "SELECT " + function.formatted(expression) + from;
     String expected = function.startsWith("JSON_OBJECT") ? "{\"k\":" + value + "}" : "[" + value + "]";
+    String message = hint == null ? sql : hint + ": " + sql;
     try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
-      assertTrue(result.next(), sql);
-      assertEquals(expected, result.getString(1), sql);
-      assertFalse(result.next(), sql);
+      assertTrue(result.next(), message);
+      assertEquals(expected, result.getString(1), message);
+      assertFalse(result.next(), message);
     }
   }
 }

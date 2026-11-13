@@ -123,7 +123,7 @@ public final class AvroCoercions {
    *          the schema
    * @return effective schema
    */
-  static Schema effectiveSchema(Schema s) {
+  public static Schema effectiveSchema(Schema s) {
     if (s.getType() == Schema.Type.UNION) {
       for (Schema t : s.getTypes()) {
         if (t.getType() != Schema.Type.NULL) {

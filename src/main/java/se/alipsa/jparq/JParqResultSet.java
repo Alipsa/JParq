@@ -94,6 +94,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private final Map<String, String> unqualifiedColumnMapping;
   private WindowState windowState;
   private final boolean aggregateQuery;
+  private boolean retainContainerLocalFields;
   private final List<List<Object>> aggregateRows;
   private final AggregateResultSetMetaData aggregateInferredMetadata;
   private AggregateResultSetMetaData aggregateMetadata;
@@ -828,7 +829,7 @@ public class JParqResultSet extends ResultSetAdapter {
       }
     }
     Object rawValue = current.get(lookupName);
-    Object raw = AvroCoercions.unwrap(rawValue, field.schema());
+    Object raw = decodeColumnValue(rawValue, field.schema());
     lastWasNull = (raw == null);
     return raw;
   }
@@ -841,9 +842,54 @@ public class JParqResultSet extends ResultSetAdapter {
    * @return decoded current-row value, or null
    */
   private Object readMaterializedColumn(Schema.Field field) {
-    Object decoded = field == null ? null : AvroCoercions.unwrap(current.get(field.pos()), field.schema());
+    Object decoded = field == null ? null : decodeColumnValue(current.get(field.pos()), field.schema());
     lastWasNull = decoded == null;
     return decoded;
+  }
+
+  /**
+   * Decodes a column value for JDBC access. During materialization, container
+   * columns decode through {@link AvroCoercions#unwrapLocalFields} so local
+   * timestamp leaves retain their stored wall-clock fields for re-encoding;
+   * public access keeps the scalar JDBC decoding, where local timestamp leaves
+   * inside containers decode to JDBC {@code Timestamp} values.
+   *
+   * @param rawValue
+   *          stored field value, possibly null
+   * @param schema
+   *          declared field schema
+   * @return decoded value
+   */
+  private Object decodeColumnValue(Object rawValue, Schema schema) {
+    if (retainContainerLocalFields) {
+      Schema effective = AvroCoercions.effectiveSchema(schema);
+      if (effective.getType() == Schema.Type.ARRAY || effective.getType() == Schema.Type.MAP) {
+        return AvroCoercions.unwrapLocalFields(rawValue, schema);
+      }
+    }
+    return AvroCoercions.unwrap(rawValue, schema);
+  }
+
+  /**
+   * Reads a column retaining stored wall-clock fields inside ARRAY and MAP
+   * values, for materialization into derived tables and CTEs so logical values
+   * re-encode without host-zone normalization. Public JDBC access is unaffected
+   * and keeps returning JDBC values inside containers.
+   *
+   * @param columnIndex
+   *          one-based output column
+   * @return decoded value, or null for SQL NULL
+   * @throws SQLException
+   *           if the column cannot be read
+   */
+  Object getObjectRetainingLocalFields(int columnIndex) throws SQLException {
+    boolean previous = retainContainerLocalFields;
+    retainContainerLocalFields = true;
+    try {
+      return getObject(columnIndex);
+    } finally {
+      retainContainerLocalFields = previous;
+    }
   }
 
   private Expression projectionExpression(int idx) {
