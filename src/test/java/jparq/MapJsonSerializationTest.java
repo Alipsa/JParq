@@ -152,11 +152,14 @@ class MapJsonSerializationTest {
   }
 
   /**
-   * Retains local timestamp fields of maps, including maps inside arrays and
-   * every materialization shape, without normalizing nonexistent wall-clock times
-   * through the host zone ([#446](https://github.com/Alipsa/JParq/issues/446)).
-   * The stored value falls in the Europe/Stockholm daylight-saving gap, so any
-   * JVM-zone normalization would shift it by an hour.
+   * Retains local timestamp fields of maps, including maps inside arrays, without
+   * normalizing nonexistent wall-clock times through the host zone
+   * ([#446](https://github.com/Alipsa/JParq/issues/446)). The stored value falls
+   * in the Europe/Stockholm daylight-saving gap, so any JVM-zone normalization
+   * would shift it by an hour. Covers plain, derived table, CTE, and UNION ALL
+   * inputs and ARRAY constructors; grouped, coalesced, cased, and scalar-subquery
+   * projections still decode through the engine's JDBC value semantics,
+   * consistently returning JDBC Timestamp values, and remain tracked in #446.
    *
    * @param zone
    *          JVM default time zone

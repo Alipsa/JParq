@@ -1020,7 +1020,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         while (rs.next()) {
           List<Object> row = new ArrayList<>(columnCount);
           for (int col = 1; col <= columnCount; col++) {
-            row.add(rs instanceof JParqResultSet jparq ? jparq.getObjectRetainingLocalFields(col) : rs.getObject(col));
+            row.add(materializedValue(rs, col));
           }
           componentData.add(materializeRow(row));
         }
@@ -3740,8 +3740,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       while (rs.next()) {
         GenericData.Record record = new GenericData.Record(schemaToUse);
         for (int i = 1; i <= columnCount; i++) {
-          Object raw = rs instanceof JParqResultSet jparq ? jparq.getObjectRetainingLocalFields(i) : rs.getObject(i);
-          record.put(fieldNames.get(i - 1), toAvroValue(raw, valueSchemas.get(i - 1)));
+          record.put(fieldNames.get(i - 1), toAvroValue(materializedValue(rs, i), valueSchemas.get(i - 1)));
         }
         rows.add(record);
       }
@@ -4915,6 +4914,23 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
+   * Reads one column from a subquery result for materialization, retaining stored
+   * wall-clock fields inside container values when the driver supports it, so
+   * logical values re-encode without host-zone normalization.
+   *
+   * @param rs
+   *          subquery result set positioned on the current row
+   * @param column
+   *          one-based column index
+   * @return the column value, or null for SQL NULL
+   * @throws SQLException
+   *           if the column cannot be read
+   */
+  private static Object materializedValue(ResultSet rs, int column) throws SQLException {
+    return rs instanceof JParqResultSet jparq ? jparq.getObjectRetainingLocalFields(column) : rs.getObject(column);
+  }
+
+  /**
    * Converts a subquery result to records, retaining declared temporal precision
    * the JDBC metadata drops.
    *
@@ -4947,7 +4963,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     while (rs.next()) {
       List<Object> values = new ArrayList<>(meta.getColumnCount());
       for (int i = 1; i <= meta.getColumnCount(); i++) {
-        values.add(rs instanceof JParqResultSet jparq ? jparq.getObjectRetainingLocalFields(i) : rs.getObject(i));
+        values.add(materializedValue(rs, i));
       }
       if (inferTypes) {
         rawRows.add(values);

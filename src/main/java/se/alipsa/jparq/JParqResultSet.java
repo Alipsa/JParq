@@ -24,6 +24,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BiFunction;
 import javax.sql.rowset.serial.SerialBlob;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
@@ -94,7 +95,17 @@ public class JParqResultSet extends ResultSetAdapter {
   private final Map<String, String> unqualifiedColumnMapping;
   private WindowState windowState;
   private final boolean aggregateQuery;
-  private boolean retainContainerLocalFields;
+  /**
+   * Materialization decoder retaining stored wall-clock fields inside container
+   * columns; scalar columns keep their JDBC decoding.
+   */
+  private static final BiFunction<Object, Schema, Object> RETAINING_DECODER = (rawValue, schema) -> {
+    Schema effective = AvroCoercions.effectiveSchema(schema);
+    if (effective.getType() == Schema.Type.ARRAY || effective.getType() == Schema.Type.MAP) {
+      return AvroCoercions.unwrapLocalFields(rawValue, schema);
+    }
+    return AvroCoercions.unwrap(rawValue, schema);
+  };
   private final List<List<Object>> aggregateRows;
   private final AggregateResultSetMetaData aggregateInferredMetadata;
   private AggregateResultSetMetaData aggregateMetadata;
@@ -717,7 +728,8 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
-   * Reads a value while preserving classified data errors at the JDBC boundary.
+   * Reads a value while preserving classified data errors at the JDBC boundary,
+   * decoding stored fields with the scalar JDBC semantics.
    *
    * @param idx
    *          one-based column index
@@ -726,9 +738,26 @@ public class JParqResultSet extends ResultSetAdapter {
    *           if reading or decoding fails
    */
   private Object value(int idx) throws SQLException {
+    return value(idx, AvroCoercions::unwrap);
+  }
+
+  /**
+   * Reads a value while preserving classified data errors at the JDBC boundary,
+   * decoding stored fields with the supplied schema-aware decoder.
+   *
+   * @param idx
+   *          one-based column index
+   * @param decoder
+   *          stored-field decoder applied to raw column values; evaluated
+   *          projection expressions keep their engine evaluation semantics
+   * @return the projected value
+   * @throws SQLException
+   *           if reading or decoding fails
+   */
+  private Object value(int idx, BiFunction<Object, Schema, Object> decoder) throws SQLException {
     StatementTime.Scope timeScope = cancellation == null ? null : cancellation.statementTime().open();
     try (timeScope) {
-      Object value = readValue(idx);
+      Object value = readValue(idx, decoder);
       if (value instanceof TemporalInterval interval) {
         Optional<Schema> cached = intervalOutputSchemas.get(idx);
         if (cached == null) {
@@ -753,11 +782,13 @@ public class JParqResultSet extends ResultSetAdapter {
    *
    * @param idx
    *          one-based column index
+   * @param decoder
+   *          stored-field decoder applied to raw column values
    * @return the projected value
    * @throws SQLException
    *           if the column cannot be read
    */
-  private Object readValue(int idx) throws SQLException {
+  private Object readValue(int idx, BiFunction<Object, Schema, Object> decoder) throws SQLException {
     if (aggregateQuery) {
       if (!aggregateOnRow || aggregateRowIndex < 0) {
         throw new SQLException("Call next() before getting values");
@@ -790,7 +821,7 @@ public class JParqResultSet extends ResultSetAdapter {
 
     Optional<Schema.Field> binding = materializedColumnBindings.get(idx);
     if (binding != null) {
-      return readMaterializedColumn(binding.orElse(null));
+      return readMaterializedColumn(binding.orElse(null), decoder);
     }
 
     // projection name (may be an alias/label)
@@ -822,14 +853,14 @@ public class JParqResultSet extends ResultSetAdapter {
         String resolved = projectionEvaluator.resolveColumnName((Column) projectionExpr);
         Schema.Field bound = resolved == null ? null : current.getSchema().getField(resolved);
         materializedColumnBindings.put(idx, Optional.ofNullable(bound));
-        return readMaterializedColumn(bound);
+        return readMaterializedColumn(bound, decoder);
       } catch (RuntimeException exception) {
         throw SqlExceptions.wrap("Failed to bind projection " + projectionExpr + ": " + exception.getMessage(),
             exception);
       }
     }
     Object rawValue = current.get(lookupName);
-    Object raw = decodeColumnValue(rawValue, field.schema());
+    Object raw = decoder.apply(rawValue, field.schema());
     lastWasNull = (raw == null);
     return raw;
   }
@@ -839,35 +870,14 @@ public class JParqResultSet extends ResultSetAdapter {
    *
    * @param field
    *          bound field, or null for a hidden or unknown reference
+   * @param decoder
+   *          stored-field decoder applied to the raw field value
    * @return decoded current-row value, or null
    */
-  private Object readMaterializedColumn(Schema.Field field) {
-    Object decoded = field == null ? null : decodeColumnValue(current.get(field.pos()), field.schema());
+  private Object readMaterializedColumn(Schema.Field field, BiFunction<Object, Schema, Object> decoder) {
+    Object decoded = field == null ? null : decoder.apply(current.get(field.pos()), field.schema());
     lastWasNull = decoded == null;
     return decoded;
-  }
-
-  /**
-   * Decodes a column value for JDBC access. During materialization, container
-   * columns decode through {@link AvroCoercions#unwrapLocalFields} so local
-   * timestamp leaves retain their stored wall-clock fields for re-encoding;
-   * public access keeps the scalar JDBC decoding, where local timestamp leaves
-   * inside containers decode to JDBC {@code Timestamp} values.
-   *
-   * @param rawValue
-   *          stored field value, possibly null
-   * @param schema
-   *          declared field schema
-   * @return decoded value
-   */
-  private Object decodeColumnValue(Object rawValue, Schema schema) {
-    if (retainContainerLocalFields) {
-      Schema effective = AvroCoercions.effectiveSchema(schema);
-      if (effective.getType() == Schema.Type.ARRAY || effective.getType() == Schema.Type.MAP) {
-        return AvroCoercions.unwrapLocalFields(rawValue, schema);
-      }
-    }
-    return AvroCoercions.unwrap(rawValue, schema);
   }
 
   /**
@@ -883,13 +893,8 @@ public class JParqResultSet extends ResultSetAdapter {
    *           if the column cannot be read
    */
   Object getObjectRetainingLocalFields(int columnIndex) throws SQLException {
-    boolean previous = retainContainerLocalFields;
-    retainContainerLocalFields = true;
-    try {
-      return getObject(columnIndex);
-    } finally {
-      retainContainerLocalFields = previous;
-    }
+    Object value = value(columnIndex, RETAINING_DECODER);
+    return value instanceof List<?> ? JParqUtil.normalizeArrayValue(value) : value;
   }
 
   private Expression projectionExpression(int idx) {
