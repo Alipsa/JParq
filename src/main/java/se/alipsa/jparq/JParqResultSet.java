@@ -74,6 +74,18 @@ import se.alipsa.jparq.model.ResultSetAdapter;
 /** An implementation of the java.sql.ResultSet interface. */
 @SuppressWarnings("checkstyle:AbbreviationAsWordInName")
 public class JParqResultSet extends ResultSetAdapter {
+  /**
+   * Materialization decoder retaining stored wall-clock fields inside container
+   * columns; scalar columns keep their JDBC decoding.
+   */
+  private static final BiFunction<Object, Schema, Object> RETAINING_DECODER = (rawValue, schema) -> {
+    Schema effective = AvroCoercions.effectiveSchema(schema);
+    if (effective.getType() == Schema.Type.ARRAY || effective.getType() == Schema.Type.MAP) {
+      return AvroCoercions.unwrapLocalFields(rawValue, schema);
+    }
+    return AvroCoercions.unwrap(rawValue, schema);
+  };
+
   private final List<String> physicalColumnOrder; // may be null
   private final QueryProcessor qp;
   private GenericRecord current;
@@ -95,17 +107,6 @@ public class JParqResultSet extends ResultSetAdapter {
   private final Map<String, String> unqualifiedColumnMapping;
   private WindowState windowState;
   private final boolean aggregateQuery;
-  /**
-   * Materialization decoder retaining stored wall-clock fields inside container
-   * columns; scalar columns keep their JDBC decoding.
-   */
-  private static final BiFunction<Object, Schema, Object> RETAINING_DECODER = (rawValue, schema) -> {
-    Schema effective = AvroCoercions.effectiveSchema(schema);
-    if (effective.getType() == Schema.Type.ARRAY || effective.getType() == Schema.Type.MAP) {
-      return AvroCoercions.unwrapLocalFields(rawValue, schema);
-    }
-    return AvroCoercions.unwrap(rawValue, schema);
-  };
   private final List<List<Object>> aggregateRows;
   private final AggregateResultSetMetaData aggregateInferredMetadata;
   private AggregateResultSetMetaData aggregateMetadata;
@@ -893,7 +894,23 @@ public class JParqResultSet extends ResultSetAdapter {
    *           if the column cannot be read
    */
   Object getObjectRetainingLocalFields(int columnIndex) throws SQLException {
-    Object value = value(columnIndex, RETAINING_DECODER);
+    return getObject(columnIndex, RETAINING_DECODER);
+  }
+
+  /**
+   * Reads a column with the supplied stored-field decoder, normalizing list
+   * values the same way for every decoder.
+   *
+   * @param columnIndex
+   *          one-based output column
+   * @param decoder
+   *          stored-field decoder applied to raw column values
+   * @return decoded value, or null for SQL NULL
+   * @throws SQLException
+   *           if the column cannot be read
+   */
+  private Object getObject(int columnIndex, BiFunction<Object, Schema, Object> decoder) throws SQLException {
+    Object value = value(columnIndex, decoder);
     return value instanceof List<?> ? JParqUtil.normalizeArrayValue(value) : value;
   }
 
@@ -1773,8 +1790,7 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public Object getObject(int columnIndex) throws SQLException {
-    Object value = value(columnIndex);
-    return value instanceof List<?> ? JParqUtil.normalizeArrayValue(value) : value;
+    return getObject(columnIndex, AvroCoercions::unwrap);
   }
 
   @Override
