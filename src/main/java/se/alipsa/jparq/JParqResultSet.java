@@ -894,7 +894,7 @@ public class JParqResultSet extends ResultSetAdapter {
    *           if the column cannot be read
    */
   Object getObjectRetainingLocalFields(int columnIndex) throws SQLException {
-    return getObject(columnIndex, RETAINING_DECODER);
+    return readObject(columnIndex, RETAINING_DECODER);
   }
 
   /**
@@ -909,7 +909,7 @@ public class JParqResultSet extends ResultSetAdapter {
    * @throws SQLException
    *           if the column cannot be read
    */
-  private Object getObject(int columnIndex, BiFunction<Object, Schema, Object> decoder) throws SQLException {
+  private Object readObject(int columnIndex, BiFunction<Object, Schema, Object> decoder) throws SQLException {
     Object value = value(columnIndex, decoder);
     return value instanceof List<?> ? JParqUtil.normalizeArrayValue(value) : value;
   }
@@ -1790,7 +1790,7 @@ public class JParqResultSet extends ResultSetAdapter {
 
   @Override
   public Object getObject(int columnIndex) throws SQLException {
-    return getObject(columnIndex, AvroCoercions::unwrap);
+    return readObject(columnIndex, AvroCoercions::unwrap);
   }
 
   @Override
