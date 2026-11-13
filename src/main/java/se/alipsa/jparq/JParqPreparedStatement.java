@@ -31,9 +31,11 @@ import java.sql.Statement;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -4503,6 +4505,21 @@ public class JParqPreparedStatement implements PreparedStatement {
       Timestamp ts = value instanceof Timestamp t ? t : Timestamp.valueOf(value.toString());
       return toEpochMillis(ts);
     }
+    if (logical instanceof LogicalTypes.TimestampMicros) {
+      return toEpochUnits(value, 1_000_000L, false);
+    }
+    if (logical instanceof LogicalTypes.TimestampNanos) {
+      return toEpochUnits(value, 1_000_000_000L, false);
+    }
+    if (logical instanceof LogicalTypes.LocalTimestampMillis) {
+      return toEpochUnits(value, 1_000L, true);
+    }
+    if (logical instanceof LogicalTypes.LocalTimestampMicros) {
+      return toEpochUnits(value, 1_000_000L, true);
+    }
+    if (logical instanceof LogicalTypes.LocalTimestampNanos) {
+      return toEpochUnits(value, 1_000_000_000L, true);
+    }
     if (logical instanceof LogicalTypes.Decimal decimal) {
       return toDecimalBytes(value, decimal);
     }
@@ -4663,6 +4680,40 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   private long toEpochMillis(Timestamp timestamp) {
     return timestamp.toInstant().toEpochMilli();
+  }
+
+  /**
+   * Encodes a temporal value as epoch units matching the target logical type's
+   * resolution. Local timestamps store their wall-clock fields against the UTC
+   * origin, mirroring {@link AvroCoercions#unwrap}; values already in a stored
+   * numeric representation pass through unchanged.
+   *
+   * @param value
+   *          temporal or already-encoded numeric value
+   * @param unitsPerSecond
+   *          stored units per second: 1000, 1000000, or 1000000000
+   * @param localFields
+   *          whether wall-clock fields use the UTC origin rather than an instant
+   * @return the stored epoch units
+   */
+  private long toEpochUnits(Object value, long unitsPerSecond, boolean localFields) {
+    if (value instanceof Number number) {
+      return number.longValue();
+    }
+    Instant instant;
+    if (value instanceof Timestamp timestamp) {
+      instant = localFields ? timestamp.toLocalDateTime().toInstant(ZoneOffset.UTC) : timestamp.toInstant();
+    } else if (value instanceof LocalDateTime local) {
+      instant = local.toInstant(ZoneOffset.UTC);
+    } else if (value instanceof OffsetDateTime offset) {
+      instant = offset.toInstant();
+    } else if (value instanceof Instant direct) {
+      instant = direct;
+    } else {
+      instant = Timestamp.valueOf(value.toString()).toInstant();
+    }
+    return Math.addExact(Math.multiplyExact(instant.getEpochSecond(), unitsPerSecond),
+        instant.getNano() / (1_000_000_000L / unitsPerSecond));
   }
 
   /**

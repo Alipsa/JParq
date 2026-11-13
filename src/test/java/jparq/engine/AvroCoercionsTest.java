@@ -9,6 +9,7 @@ import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -283,23 +284,23 @@ class AvroCoercionsTest {
 
     ByteBuffer bytes = ByteBuffer.wrap(new BigDecimal("12.34").unscaledValue().toByteArray());
     Map<?, ?> decimalMap = assertInstanceOf(Map.class,
-        AvroCoercions.unwrap(java.util.Map.of("p", bytes), Schema.createMap(decimal)));
+        AvroCoercions.unwrap(Map.of("p", bytes), Schema.createMap(decimal)));
     assertEquals(new BigDecimal("12.34"), decimalMap.get("p"));
     assertEquals(0, bytes.position());
 
     Map<?, ?> recordMap = assertInstanceOf(Map.class,
-        AvroCoercions.unwrap(java.util.Map.of("r", entry), Schema.createMap(recordSchema)));
+        AvroCoercions.unwrap(Map.of("r", entry), Schema.createMap(recordSchema)));
     assertSame(entry, recordMap.get("r"));
 
     Schema array = Schema.createArray(Schema.createUnion(Schema.create(Schema.Type.NULL), integer));
     Map<?, ?> arrayMap = assertInstanceOf(Map.class,
-        AvroCoercions.unwrap(java.util.Map.of("a", java.util.Arrays.asList(1, null, 2)), Schema.createMap(array)));
+        AvroCoercions.unwrap(Map.of("a", Arrays.asList(1, null, 2)), Schema.createMap(array)));
     assertArrayEquals(new Object[]{
         1, null, 2
     }, assertInstanceOf(Object[].class, arrayMap.get("a")));
 
-    Map<?, ?> nested = assertInstanceOf(Map.class, AvroCoercions.unwrap(java.util.Map.of("n", java.util.Map.of("x", 2)),
-        Schema.createMap(Schema.createMap(date))));
+    Map<?, ?> nested = assertInstanceOf(Map.class,
+        AvroCoercions.unwrap(Map.of("n", Map.of("x", 2)), Schema.createMap(Schema.createMap(date))));
     Object inner = nested.get("n");
     assertInstanceOf(Map.class, inner);
     assertEquals(Date.valueOf("1970-01-03"), ((Map<?, ?>) inner).get("x"));

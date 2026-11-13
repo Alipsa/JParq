@@ -854,7 +854,12 @@ public final class JsonFunctions {
           effective.getElementType());
       case MAP -> mapNode((Map<?, ?>) value, effective.getValueType());
       case STRING, ENUM -> MAPPER.getNodeFactory().textNode(SqlText.valueOf(value));
-      case BYTES -> toNode(effective.getLogicalType() == null ? value : AvroCoercions.unwrap(value, effective));
+      case BYTES -> {
+        Object decoded = effective.getLogicalType() == null ? value : AvroCoercions.unwrap(value, effective);
+        // Decoded binary values are data, not JSON text: skip the parsing
+        // heuristic so binary content cannot inject JSON structure.
+        yield decoded instanceof String text ? MAPPER.getNodeFactory().textNode(text) : toNode(decoded);
+      }
       default -> toNode(AvroCoercions.unwrap(value, effective));
     };
   }

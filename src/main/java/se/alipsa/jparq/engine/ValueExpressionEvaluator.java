@@ -963,7 +963,7 @@ public final class ValueExpressionEvaluator {
     }
     if (unwrapped instanceof ArrayConstructor array) {
       Schema declaration = valueSchema(unwrapped);
-      if (declaration != null && TemporalOperands.temporalElements(declaration)) {
+      if (declaration != null && retainedArrayDeclaration(declaration)) {
         List<Operand> values = new ArrayList<>();
         for (Expression element : array.getExpressions()) {
           values.add(declaredOperand(element, record, validateArrays));
@@ -973,7 +973,7 @@ public final class ValueExpressionEvaluator {
     }
     if (unwrapped instanceof Function function && ArrayExpressionSchemas.isArrayConstructor(function)) {
       Schema declaration = valueSchema(unwrapped);
-      if (declaration != null && TemporalOperands.temporalElements(declaration)) {
+      if (declaration != null && retainedArrayDeclaration(declaration)) {
         List<Operand> values = new ArrayList<>();
         for (Expression element : function.getParameters()) {
           values.add(declaredOperand(element, record, validateArrays));
@@ -1001,12 +1001,24 @@ public final class ValueExpressionEvaluator {
   }
 
   /**
-   * Recognizes declarations whose array leaves are maps, so JSON constructors
-   * retain the schema needed to decode logical map values.
+   * Recognizes ARRAY declarations retained for JSON constructors: datetime
+   * leaves, or map leaves whose values need their schema for logical decoding.
+   *
+   * @param declaration
+   *          evaluated ARRAY declaration
+   * @return whether the constructor elements keep their declaration
+   */
+  private static boolean retainedArrayDeclaration(Schema declaration) {
+    return TemporalOperands.temporalElements(declaration) || containsMap(declaration);
+  }
+
+  /**
+   * Recognizes a MAP declaration or an ARRAY whose innermost element is a MAP, so
+   * JSON constructors retain the schema needed to decode logical map values.
    *
    * @param declaration
    *          evaluated value declaration, possibly null
-   * @return whether the declaration is or contains a MAP schema
+   * @return whether the declaration is a MAP or an ARRAY of MAPs
    */
   private static boolean containsMap(Schema declaration) {
     Schema leaf = JdbcTypeMapper.innermostElementType(declaration);

@@ -362,8 +362,10 @@ SQL:2016–2023.
   [#446](https://github.com/Alipsa/JParq/issues/446).
 - Struct fields use their declared Avro logical types, including numeric decimals and date/timestamp strings. This
   includes maps nested within struct fields. Top-level map columns and maps inside stored arrays decode their values
-  with the declared Avro logical types as well, matching struct field output
-  ([#313](https://github.com/Alipsa/JParq/issues/313)).
+  with the declared Avro logical types as well ([#313](https://github.com/Alipsa/JParq/issues/313)). Like top-level
+  columns and stored array elements, decoded binary values render as text unless `jparq.binary` prefers binary output,
+  while struct fields expose raw values as base64; TIME values decode through JDBC `Time` with millisecond precision,
+  so sub-millisecond digits are truncated ([#521](https://github.com/Alipsa/JParq/issues/521)).
 - Raw `BYTES` fields within structs become base64 strings. Top-level columns and stored array elements pass through
   JDBC coercion first, so `BYTES` may become UTF-8 text unless `jparq.binary` prefers binary values. For example,
   the bytes of `hello` render as `"hello"` in a column or stored array and as `"aGVsbG8="` in a struct field.
