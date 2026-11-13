@@ -7,9 +7,9 @@ import java.sql.Date;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLDataException;
 import java.sql.SQLException;
-import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -1817,6 +1817,9 @@ public class JParqResultSet extends ResultSetAdapter {
     if (type == String.class) {
       return type.cast(getString(columnIndex));
     }
+    if (type != null && Array.class.isAssignableFrom(type)) {
+      return type.cast(getArray(columnIndex));
+    }
     StatementTime.Scope timeScope = cancellation == null ? null : cancellation.statementTime().open();
     try (timeScope) {
       return JdbcConversions.convert(getObject(columnIndex), type);
@@ -1830,37 +1833,51 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
-   * Type map conversions are not supported; the driver exposes plain JDBC and
-   * java.time values directly.
+   * Returns the value using the standard mapping; the type map only governs
+   * custom STRUCT mappings, which are not supported.
    *
    * @param columnIndex
    *          one-based output column
    * @param map
-   *          SQL type name to Java class mappings (ignored)
-   * @return nothing; always throws
-   * @throws SQLFeatureNotSupportedException
-   *           always, since type map conversions are not supported
+   *          SQL type name to Java class mappings, or null for the standard
+   *          mapping
+   * @return the column value using the standard mapping
+   * @throws SQLException
+   *           if the column cannot be read or the map names the STRUCT type of
+   *           the column
    */
   @Override
   public Object getObject(int columnIndex, Map<String, Class<?>> map) throws SQLException {
-    throw new SQLFeatureNotSupportedException("Type map conversions are not supported");
+    Object value = getObject(columnIndex);
+    if (map != null) {
+      ResultSetMetaData metaData = getMetaData();
+      if (metaData.getColumnType(columnIndex) == Types.STRUCT) {
+        Schema declaration = metaData instanceof AvroColumnMetadata metadata
+            ? JdbcTypeMapper.nonNullSchema(metadata.columnValueSchema(columnIndex))
+            : null;
+        JParqArray.rejectUnsupportedTypeMap(map, Types.STRUCT, metaData.getColumnTypeName(columnIndex), declaration);
+      }
+    }
+    return value;
   }
 
   /**
-   * Type map conversions are not supported; the driver exposes plain JDBC and
-   * java.time values directly.
+   * Returns the value using the standard mapping; the type map only governs
+   * custom STRUCT mappings, which are not supported.
    *
    * @param columnLabel
    *          output column label
    * @param map
-   *          SQL type name to Java class mappings (ignored)
-   * @return nothing; always throws
-   * @throws SQLFeatureNotSupportedException
-   *           always, since type map conversions are not supported
+   *          SQL type name to Java class mappings, or null for the standard
+   *          mapping
+   * @return the column value using the standard mapping
+   * @throws SQLException
+   *           if the column cannot be read or the map names the STRUCT type of
+   *           the column
    */
   @Override
   public Object getObject(String columnLabel, Map<String, Class<?>> map) throws SQLException {
-    throw new SQLFeatureNotSupportedException("Type map conversions are not supported");
+    return getObject(findColumn(columnLabel), map);
   }
 
   /**
