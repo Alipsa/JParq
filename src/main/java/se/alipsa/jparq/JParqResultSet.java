@@ -7,6 +7,7 @@ import java.sql.Date;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLDataException;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.LocalDate;
@@ -1826,6 +1827,40 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public <T> T getObject(String columnLabel, Class<T> type) throws SQLException {
     return getObject(findColumn(columnLabel), type);
+  }
+
+  /**
+   * Type map conversions are not supported; the driver exposes plain JDBC and
+   * java.time values directly.
+   *
+   * @param columnIndex
+   *          one-based output column
+   * @param map
+   *          SQL type name to Java class mappings (ignored)
+   * @return nothing; always throws
+   * @throws SQLFeatureNotSupportedException
+   *           always, since type map conversions are not supported
+   */
+  @Override
+  public Object getObject(int columnIndex, Map<String, Class<?>> map) throws SQLException {
+    throw new SQLFeatureNotSupportedException("Type map conversions are not supported");
+  }
+
+  /**
+   * Type map conversions are not supported; the driver exposes plain JDBC and
+   * java.time values directly.
+   *
+   * @param columnLabel
+   *          output column label
+   * @param map
+   *          SQL type name to Java class mappings (ignored)
+   * @return nothing; always throws
+   * @throws SQLFeatureNotSupportedException
+   *           always, since type map conversions are not supported
+   */
+  @Override
+  public Object getObject(String columnLabel, Map<String, Class<?>> map) throws SQLException {
+    throw new SQLFeatureNotSupportedException("Type map conversions are not supported");
   }
 
   /**
