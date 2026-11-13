@@ -2,6 +2,7 @@ package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
@@ -71,6 +72,34 @@ class ArrayConstructorTest {
       Object result = evaluator.eval(expression, record);
       assertInstanceOf(List.class, result);
       assertEquals(List.of(10, 20, 30), result);
+    }
+  }
+
+  /**
+   * Retains ARRAY character representations when materialization uses Object[].
+   *
+   * @param tempDir
+   *          database directory
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void castsMaterializedArraysAsElementText(@TempDir Path tempDir) throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + tempDir)) {
+      for (String expression : List.of("ARRAY[1,2]", "ARRAY[ARRAY[1,2],ARRAY[3,4]]")) {
+        String expected = null;
+        for (String sql : List.of("SELECT CAST(" + expression + " AS VARCHAR(100))",
+            "SELECT CAST(x AS VARCHAR(100)) FROM (SELECT " + expression + " AS x) d",
+            "WITH c AS (SELECT " + expression + " AS x) SELECT CAST(x AS VARCHAR(100)) FROM c")) {
+          try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+            assertTrue(result.next());
+            if (expected == null) {
+              expected = expression.contains("ARRAY[ARRAY") ? "[[1, 2], [3, 4]]" : "[1, 2]";
+            }
+            assertEquals(expected, result.getString(1), sql);
+          }
+        }
+      }
     }
   }
 

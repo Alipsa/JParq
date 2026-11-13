@@ -9,6 +9,7 @@ import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.*;
 import java.util.List;
+import java.util.TimeZone;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
@@ -16,6 +17,7 @@ import net.sf.jsqlparser.statement.create.table.ColDataType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Isolated;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -23,19 +25,27 @@ import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.helper.TemporalInterval;
 
+/** Verifies datetime helpers against a controlled JVM default time zone. */
+@Isolated("Changes the JVM default time zone")
 public class DateTimeFunctionsTest {
 
   private String previousTimeZone;
+  private TimeZone previousDefault;
 
+  /** Installs a consistent UTC zone for each helper test. */
   @BeforeEach
   public void setUp() {
     previousTimeZone = System.getProperty("user.timezone");
+    previousDefault = TimeZone.getDefault();
     // Set a fixed zone for consistent test results
     System.setProperty("user.timezone", "UTC");
+    TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
   }
 
+  /** Restores the caller's JVM zone and initialization property. */
   @AfterEach
   public void tearDown() {
+    TimeZone.setDefault(previousDefault);
     if (previousTimeZone == null) {
       System.clearProperty("user.timezone");
     } else {
@@ -509,8 +519,8 @@ public class DateTimeFunctionsTest {
       "UTC", "America/New_York", "Asia/Kathmandu"
   })
   void normalizesTimeDates(String zoneId) {
-    var previous = java.util.TimeZone.getDefault();
-    java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone(zoneId));
+    var previous = TimeZone.getDefault();
+    TimeZone.setDefault(TimeZone.getTimeZone(zoneId));
     try {
       Time expected = Time.valueOf("10:00:00");
       expected.setTime(expected.getTime() + 500);
@@ -524,7 +534,7 @@ public class DateTimeFunctionsTest {
       assertSame(expected, DateTimeFunctions.toTime(expected));
       assertEquals(timestamp.getTime(), dated.getTime());
     } finally {
-      java.util.TimeZone.setDefault(previous);
+      TimeZone.setDefault(previous);
     }
   }
 

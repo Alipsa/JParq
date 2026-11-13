@@ -101,4 +101,14 @@ public enum IntervalQualifier {
   public int trailing() {
     return trailing;
   }
+
+  /**
+   * Reports whether the declaration includes HOUR, MINUTE, or SECOND fields, even
+   * when their current value is zero or a whole number of days.
+   *
+   * @return whether the interval has declared time fields
+   */
+  public boolean includesTimeFields() {
+    return trailing >= HOUR.trailing;
+  }
 }

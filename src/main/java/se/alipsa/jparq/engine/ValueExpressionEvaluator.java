@@ -2,9 +2,19 @@ package se.alipsa.jparq.engine;
 
 import static se.alipsa.jparq.engine.SqlExceptions.syntaxFailure;
 
+import java.math.RoundingMode;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.sql.Date;
+import java.sql.JDBCType;
 import java.sql.SQLException;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.sql.Types;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
@@ -14,8 +24,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiFunction;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
+import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.CollateExpression;
@@ -41,10 +53,15 @@ import net.sf.jsqlparser.expression.operators.arithmetic.Multiplication;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.statement.create.table.ColDataType;
+import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.NumericType;
+import se.alipsa.jparq.engine.TemporalOperands.Elements;
+import se.alipsa.jparq.engine.TemporalOperands.Operand;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
+import se.alipsa.jparq.engine.function.ArrayFunctions;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.engine.function.FunctionSupport;
 import se.alipsa.jparq.engine.function.JsonFunctions;
@@ -53,6 +70,7 @@ import se.alipsa.jparq.engine.window.WindowState;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.TemporalInterval;
+import se.alipsa.jparq.helper.TemporalValueType;
 
 /**
  * Evaluates SELECT-list expressions (e.g. computed columns, {@code CASE}
@@ -64,6 +82,7 @@ public final class ValueExpressionEvaluator {
   private final Map<String, Schema> fieldSchemas;
   private final Map<Expression, NumericType> numericTypes = new IdentityHashMap<>();
   private final Map<Expression, Optional<Schema>> intervalTypes = new IdentityHashMap<>();
+  private final Map<Expression, Optional<Schema>> valueSchemas = new IdentityHashMap<>();
   private final Map<CastExpression, Optional<DateTimeFunctions.BinaryCast>> binaryCasts = new IdentityHashMap<>();
   private final Map<TranscodingFunction, CastExpression> convertCasts = new IdentityHashMap<>();
   private final Map<String, String> caseInsensitiveIndex;
@@ -77,6 +96,12 @@ public final class ValueExpressionEvaluator {
   private final WindowState windowState;
   private final FunctionSupport functionSupport;
   private ExpressionEvaluator conditionEvaluator;
+  /** Branch decoder retained across rows so JSON validation stays enabled. */
+  private final BiFunction<Expression, GenericRecord, Object> jsonBranchOperand = (branch,
+      row) -> declaredOperand(branch, row, true);
+  /** Branch decoder retained across rows for engine-value evaluation. */
+  private final BiFunction<Expression, GenericRecord, Object> engineBranchOperand = (branch,
+      row) -> declaredOperand(branch, row, false);
 
   /**
    * Create an evaluator bound to the supplied Avro {@link Schema}.
@@ -163,7 +188,7 @@ public final class ValueExpressionEvaluator {
     this.effectiveQualifierMapping = mergeQualifierMappings(this.qualifierColumnMapping, this.correlationContext);
     this.windowState = windowState == null ? WindowState.empty() : windowState;
     this.functionSupport = new FunctionSupport(subqueryExecutor, correlationQualifiers(), correlationColumns(),
-        this.correlationContext, this::resolveCorrelatedValue, this::evalInternal);
+        this.correlationContext, this::resolveCorrelatedValue, this::evalInternal, this::evalOperand);
   }
 
   /**
@@ -226,6 +251,153 @@ public final class ValueExpressionEvaluator {
   }
 
   /**
+   * Evaluates a value while retaining temporal source metadata for predicates.
+   *
+   * @param expression
+   *          value expression
+   * @param record
+   *          current row
+   * @return engine value and its temporal declaration
+   * @throws IllegalArgumentException
+   *           if evaluation or temporal conversion fails
+   */
+  public Operand evalOperand(Expression expression, GenericRecord record) {
+    Operand source = declaredOperand(expression, record, false);
+    if (ExpressionEvaluator.unwrapParenthesis(expression) instanceof TimeKeyExpression
+        && source.value() instanceof LocalDateTime) {
+      return new Operand(source.value(), TemporalValueType.LOCAL_TIMESTAMP.schema());
+    }
+    return new Operand(source.engineValue(), source.declaration());
+  }
+
+  /**
+   * Retains original local fields when a predicate will promote them to an
+   * offset.
+   *
+   * @param expression
+   *          predicate operand
+   * @param record
+   *          current row
+   * @return value and declaration suitable for source-aware comparisons
+   */
+  public Operand evalPredicateOperand(Expression expression, GenericRecord record) {
+    Operand source = declaredOperand(expression, record, false);
+    Schema declaration = JdbcTypeMapper.nonNullSchema(source.declaration());
+    if (source.value() instanceof LocalDateTime && declaration != null && AvroCoercions.isLocalTimestamp(declaration)) {
+      return source;
+    }
+    if (ExpressionEvaluator.unwrapParenthesis(expression) instanceof TimeKeyExpression
+        && source.value() instanceof LocalDateTime) {
+      return new Operand(source.value(), TemporalValueType.LOCAL_TIMESTAMP.schema());
+    }
+    return new Operand(source.engineValue(), source.declaration());
+  }
+
+  /**
+   * Attaches source metadata to an already evaluated grouping operand. Physical
+   * column bindings retain decoded local fields without reevaluating expressions.
+   *
+   * @param expression
+   *          evaluated expression
+   * @param value
+   *          ordinary engine value
+   * @param record
+   *          source row
+   * @return original source fields and declaration
+   */
+  public Operand sourceOperand(Expression expression, Object value, GenericRecord record) {
+    Expression shape = ExpressionEvaluator.unwrapParenthesis(expression);
+    Schema declaration = valueSchema(shape);
+    Schema leaf = JdbcTypeMapper.innermostElementType(declaration);
+    if (shape instanceof Column column && SqlExpressionNormalizer.timeKeyword(column) == null && leaf != null
+        && AvroCoercions.isLocalTimestamp(leaf)) {
+      return correlatedOperand(resolveColumnName(column), record);
+    }
+    return new Operand(value, declaration);
+  }
+
+  /**
+   * Evaluates an aggregate input once, retaining original column fields and its
+   * declaration. Computed expressions keep their ordinary engine semantics.
+   *
+   * @param expression
+   *          aggregate input expression
+   * @param record
+   *          source row
+   * @return evaluated source fields and declaration
+   * @throws IllegalArgumentException
+   *           if expression evaluation or column resolution fails
+   */
+  public Operand sourceOperand(Expression expression, GenericRecord record) {
+    Expression shape = ExpressionEvaluator.unwrapParenthesis(expression);
+    if (shape instanceof Column column && SqlExpressionNormalizer.timeKeyword(column) == null) {
+      return correlatedOperand(resolveColumnName(column), record);
+    }
+    return new Operand(eval(shape, record), valueSchema(shape));
+  }
+
+  /**
+   * Evaluates a selected LAG/LEAD default in the value expression's SQL type.
+   * Timestamp sources retain their storage provenance when they already have that
+   * SQL type, so local defaults are not mistaken for stored UTC instants.
+   *
+   * @param valueExpression
+   *          window value expression
+   * @param defaultExpression
+   *          selected default, or null for the implicit NULL
+   * @param record
+   *          current row
+   * @return converted default with its source declaration
+   * @throws IllegalArgumentException
+   *           if the default cannot be converted
+   */
+  public Operand navigationDefault(Expression valueExpression, Expression defaultExpression, GenericRecord record) {
+    Schema target = valueSchema(valueExpression);
+    if (defaultExpression == null) {
+      return new Operand(null, target);
+    }
+    Operand source = sourceOperand(defaultExpression, record);
+    if (target == null || source.value() == null) {
+      return source;
+    }
+    int type = JdbcTypeMapper.mapSchemaToJdbcType(target);
+    NumericType numeric = numericType(valueExpression);
+    if (numeric != null) {
+      try {
+        Object value = source.engineValue();
+        if (numeric.jdbcType() != Types.DECIMAL) {
+          NumericCastTarget numericTarget = NumericCastTarget.fromJdbcType(numeric.jdbcType());
+          return new Operand(NumericCasts.convert(value, numericTarget, numericTarget.name()), target);
+        }
+        return new Operand(
+            numeric.convert(NumericCasts.toBigDecimal(value).setScale(numeric.scale(), RoundingMode.DOWN)), target);
+      } catch (SQLException failure) {
+        throw new IllegalArgumentException("Cannot convert navigation default", failure);
+      }
+    }
+    TemporalValueType temporal = TemporalValueType.fromSchema(target);
+    if (temporal == TemporalValueType.OFFSET_TIMESTAMP || temporal == TemporalValueType.OFFSET_TIME) {
+      return TemporalOperands.promote(source, target);
+    }
+    Object value = source.engineValue();
+    if (type == JdbcTypeMapper.mapSchemaToJdbcType(source.declaration())
+        && (temporal == null || value.getClass().getName().equals(temporal.className()))) {
+      return source;
+    }
+    var cast = new CastExpression();
+    var dataType = new ColDataType();
+    dataType.setDataType(JDBCType.valueOf(type).getName());
+    cast.setColDataType(dataType);
+    Object converted = DateTimeFunctions.castLiteral(cast, value);
+    if (temporal == TemporalValueType.LOCAL_TIMESTAMP || temporal == TemporalValueType.LOCAL_TIME) {
+      converted = temporal.normalize(converted);
+    }
+    Schema declaration = type == Types.TIMESTAMP && AvroCoercions.utcTimestamp(target)
+        && !(value instanceof OffsetDateTime) ? TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema() : target;
+    return new Operand(converted, declaration);
+  }
+
+  /**
    * Applies the expression's common interval declaration after lazy evaluation.
    *
    * @param expression
@@ -238,18 +410,29 @@ public final class ValueExpressionEvaluator {
     Expression unwrapped = ExpressionEvaluator.unwrapParenthesis(expression);
     Object value = evalUnconverted(unwrapped, record);
     if (value instanceof TemporalInterval interval) {
-      Schema declaration = intervalTypes
-          .computeIfAbsent(unwrapped, shape -> Optional.ofNullable(IntervalExpressionTypes.resolve(shape, column -> {
-            try {
-              String name = resolveColumnName(column);
-              return name == null ? null : fieldSchemas.get(name);
-            } catch (IllegalArgumentException unresolved) {
-              return null;
-            }
-          }, select -> subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select)))).orElse(null);
+      Schema declaration = intervalSchema(unwrapped);
       return declaration == null ? interval : se.alipsa.jparq.helper.IntervalType.project(interval, declaration);
     }
     return value;
+  }
+
+  /**
+   * Resolves a common interval declaration once for an expression.
+   *
+   * @param expression
+   *          interval expression
+   * @return declaration, or null when unknown
+   */
+  private Schema intervalSchema(Expression expression) {
+    return intervalTypes
+        .computeIfAbsent(expression, shape -> Optional.ofNullable(IntervalExpressionTypes.resolve(shape, column -> {
+          try {
+            String name = resolveColumnName(column);
+            return name == null ? null : fieldSchemas.get(name);
+          } catch (IllegalArgumentException unresolved) {
+            return null;
+          }
+        }, select -> subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select)))).orElse(null);
   }
 
   private Object evalUnconverted(Expression expression, GenericRecord record) {
@@ -269,6 +452,10 @@ public final class ValueExpressionEvaluator {
     }
 
     if (expression instanceof CaseExpression caseExpr) {
+      Schema declaration = valueSchema(caseExpr);
+      if (declaration != null && TemporalOperands.timestampResult(declaration)) {
+        return declaredOperand(caseExpr, record, false).engineValue();
+      }
       Object value = evaluateCase(caseExpr, record);
       NumericType type = numericType(caseExpr);
       if (type == null || value == null) {
@@ -285,8 +472,7 @@ public final class ValueExpressionEvaluator {
       return DateTimeFunctions.evaluateTimeKey(tk);
     }
     if (expression instanceof CastExpression cast) {
-      Object inner = evalInternal(cast.getLeftExpression(), record);
-      return evaluateCast(cast, inner);
+      return evaluateCastOperand(cast, record);
     }
     if (expression instanceof SignedExpression se) {
       return LiteralConverter.applySign(evalInternal(se.getExpression(), record), se);
@@ -332,6 +518,10 @@ public final class ValueExpressionEvaluator {
       return evalInternal(collate.getLeftExpression(), record);
     }
     if (expression instanceof ArrayConstructor array) {
+      Schema declaration = valueSchema(array);
+      if (declaration != null && TemporalOperands.offsetArray(declaration)) {
+        return declaredOperand(array, record, false).engineValue();
+      }
       return functionSupport.evaluate(array, record);
     }
     if (BooleanExpressions.isPredicate(expression)) {
@@ -344,12 +534,24 @@ public final class ValueExpressionEvaluator {
       return evaluateConvert(convert, record);
     }
     if (expression instanceof Function func) {
+      if (ExpressionBranches.isCoalesce(func)) {
+        Schema declaration = valueSchema(func);
+        if (declaration != null && TemporalOperands.timestampResult(declaration)) {
+          return declaredOperand(func, record, false).engineValue();
+        }
+      }
+      if (ArrayExpressionSchemas.isArrayConstructor(func)) {
+        Schema declaration = valueSchema(func);
+        if (declaration != null && TemporalOperands.offsetArray(declaration)) {
+          return declaredOperand(func, record, false).engineValue();
+        }
+      }
       return functionSupport.evaluate(func, record);
     }
     if (expression instanceof AnalyticExpression analytic) {
       return evaluateAnalytic(analytic, record);
     }
-    if (expression instanceof net.sf.jsqlparser.statement.select.Select subSelect) {
+    if (expression instanceof Select subSelect) {
       return evaluateScalarSubquery(subSelect, record);
     }
     if (LiteralConverter.isLiteral(expression)) {
@@ -364,8 +566,49 @@ public final class ValueExpressionEvaluator {
       return StringFunctions.convertCharset(value, convert.getTranscodingName());
     }
     CastExpression cast = convertCasts.computeIfAbsent(convert, this::convertCast);
-    Object value = evalInternal(cast.getLeftExpression(), record);
-    return cast.getColDataType() == null ? value : evaluateCast(cast, value);
+    return evaluateCastOperand(cast, record);
+  }
+
+  /**
+   * Applies source-aware promotion for casts to offset datetime types.
+   *
+   * @param cast
+   *          target cast expression
+   * @param record
+   *          current input row
+   * @return converted value, possibly null
+   * @throws IllegalArgumentException
+   *           if the source cannot be converted to the target type
+   */
+  private Object evaluateCastOperand(CastExpression cast, GenericRecord record) {
+    Schema target = valueSchema(cast);
+    TemporalValueType temporal = TemporalValueType.fromSchema(target);
+    if (temporal == TemporalValueType.OFFSET_TIMESTAMP || temporal == TemporalValueType.OFFSET_TIME) {
+      Operand source = declaredOperand(cast.getLeftExpression(), record, false);
+      if (temporal == TemporalValueType.OFFSET_TIME && (source.value() instanceof Timestamp
+          || source.value() instanceof LocalDateTime || source.value() instanceof OffsetDateTime)) {
+        OffsetDateTime timestamp = (OffsetDateTime) TemporalOperands
+            .promote(source, TemporalValueType.OFFSET_TIMESTAMP.schema()).engineValue();
+        source = new Operand(timestamp.toOffsetTime(), TemporalValueType.OFFSET_TIME.schema());
+      }
+      boolean compatible = temporal == TemporalValueType.OFFSET_TIMESTAMP
+          ? source.value() instanceof Timestamp || source.value() instanceof LocalDateTime
+              || source.value() instanceof OffsetDateTime
+          : source.value() instanceof Time || source.value() instanceof LocalTime
+              || source.value() instanceof OffsetTime;
+      if (source.value() != null && !compatible) {
+        source = new Operand(evaluateCast(cast, source.value()), null);
+      }
+      Object promoted = TemporalOperands.promote(source, target).engineValue();
+      if (promoted instanceof OffsetDateTime timestamp) {
+        return timestamp.withNano(DateTimeFunctions.castFractionalNanos(cast, timestamp.getNano(), 6));
+      }
+      if (promoted instanceof OffsetTime time) {
+        return time.withNano(DateTimeFunctions.castFractionalNanos(cast, time.getNano(), 0));
+      }
+      return promoted;
+    }
+    return evaluateCast(cast, evalInternal(cast.getLeftExpression(), record));
   }
 
   /**
@@ -466,7 +709,7 @@ public final class ValueExpressionEvaluator {
     throw new IllegalArgumentException("Unsupported analytic function: " + analytic);
   }
 
-  private Object evaluateScalarSubquery(net.sf.jsqlparser.statement.select.Select subSelect, GenericRecord record) {
+  private Object evaluateScalarSubquery(Select subSelect, GenericRecord record) {
     if (subqueryExecutor == null) {
       throw new IllegalStateException("Scalar subqueries require a subquery executor");
     }
@@ -476,20 +719,46 @@ public final class ValueExpressionEvaluator {
     return result.scalarValue();
   }
 
+  /**
+   * Evaluates the selected CASE result using ordinary SQL value decoding.
+   *
+   * @param caseExpr
+   *          CASE expression
+   * @param record
+   *          current input row
+   * @return selected value, or null without a matching branch
+   */
   private Object evaluateCase(CaseExpression caseExpr, GenericRecord record) {
+    return evaluateCase(caseExpr, record, this::evalInternal);
+  }
+
+  /**
+   * Selects a CASE branch once and evaluates it with the requested value decoder.
+   * Conditions and switch operands keep their ordinary SQL evaluation.
+   *
+   * @param caseExpr
+   *          CASE expression
+   * @param record
+   *          current input row
+   * @param resultEvaluator
+   *          selected result evaluator
+   * @return selected value, or null without a matching branch
+   */
+  private Object evaluateCase(CaseExpression caseExpr, GenericRecord record,
+      BiFunction<Expression, GenericRecord, Object> resultEvaluator) {
     boolean isSimpleCase = caseExpr.getSwitchExpression() != null;
-    Object switchValue = isSimpleCase ? evalInternal(caseExpr.getSwitchExpression(), record) : null;
+    Operand switchValue = isSimpleCase ? evalOperand(caseExpr.getSwitchExpression(), record) : null;
 
     List<WhenClause> whenClauses = caseExpr.getWhenClauses();
     if (whenClauses != null) {
       for (WhenClause clause : whenClauses) {
         if (isSimpleCase) {
-          Object whenValue = evalInternal(clause.getWhenExpression(), record);
+          Operand whenValue = evalOperand(clause.getWhenExpression(), record);
           if (valuesEqual(switchValue, whenValue)) {
-            return evalInternal(clause.getThenExpression(), record);
+            return resultEvaluator.apply(clause.getThenExpression(), record);
           }
         } else if (evaluateCondition(clause.getWhenExpression(), record)) {
-          return evalInternal(clause.getThenExpression(), record);
+          return resultEvaluator.apply(clause.getThenExpression(), record);
         }
       }
     }
@@ -498,7 +767,7 @@ public final class ValueExpressionEvaluator {
     if (elseExpr == null) {
       return null;
     }
-    return evalInternal(elseExpr, record);
+    return resultEvaluator.apply(elseExpr, record);
   }
 
   /**
@@ -534,17 +803,26 @@ public final class ValueExpressionEvaluator {
     return conditionEvaluator;
   }
 
-  private static boolean valuesEqual(Object left, Object right) {
-    if (left == null || right == null) {
+  /**
+   * Matches simple CASE operands after source-aware datetime promotion.
+   *
+   * @param left
+   *          switch operand
+   * @param right
+   *          WHEN operand
+   * @return whether both values are non-null and compare as equal
+   */
+  private static boolean valuesEqual(Operand left, Operand right) {
+    if (left.value() == null || right.value() == null) {
       return false;
     }
     try {
-      return ExpressionEvaluator.typedCompare(left, right) == 0;
+      return Integer.valueOf(0).equals(TemporalOperands.compare(left, right));
     } catch (RuntimeException e) {
       if (SqlExceptions.findSqlStateFailure(e) != null) {
         throw e;
       }
-      return left.equals(right);
+      return left.value().equals(right.value());
     }
   }
 
@@ -582,7 +860,7 @@ public final class ValueExpressionEvaluator {
         Object valueObj = pair.getValue();
         Object value;
         if (valueObj instanceof Expression valueExpr) {
-          value = evalInternal(valueExpr, record);
+          value = evaluateJsonValue(valueExpr, record);
         } else {
           value = valueObj;
         }
@@ -594,11 +872,241 @@ public final class ValueExpressionEvaluator {
     if (type == JsonFunctionType.ARRAY) {
       List<Object> values = new ArrayList<>();
       for (JsonFunctionExpression expr : json.getExpressions()) {
-        values.add(evalInternal(expr.getExpression(), record));
+        values.add(evaluateJsonValue(expr.getExpression(), record));
       }
       return JsonFunctions.jsonArray(values);
     }
     throw syntaxFailure("Unsupported JSON function: " + SqlExceptions.describe(json));
+  }
+
+  /**
+   * Retains source schemas for temporal constructor values and nested containers.
+   *
+   * @param expression
+   *          constructor value expression
+   * @param record
+   *          current input row
+   * @return JSON value with its declared temporal semantics
+   */
+  private Object evaluateJsonValue(Expression expression, GenericRecord record) {
+    return declaredOperand(expression, record).node();
+  }
+
+  /**
+   * Evaluates temporal ARRAY and JSON arguments once, keeping selected branches'
+   * declarations before any required offset promotion.
+   *
+   * @param expression
+   *          value expression
+   * @param record
+   *          current input row
+   * @return evaluated value and source declaration
+   */
+  private Operand declaredOperand(Expression expression, GenericRecord record) {
+    return declaredOperand(expression, record, true);
+  }
+
+  /**
+   * Retains source declarations, leaving engine ARRAY validation to its
+   * normalizer.
+   *
+   * @param expression
+   *          value expression
+   * @param record
+   *          current row
+   * @param validateArrays
+   *          whether JSON must perform the shared runtime checks
+   * @return evaluated operand with its source declaration
+   */
+  private Operand declaredOperand(Expression expression, GenericRecord record, boolean validateArrays) {
+    Expression unwrapped = ExpressionEvaluator.unwrapParenthesis(expression);
+    if (unwrapped instanceof AnalyticExpression analytic && windowState != null && !windowState.isEmpty()
+        && ("LAG".equalsIgnoreCase(analytic.getName()) || "LEAD".equalsIgnoreCase(analytic.getName()))) {
+      return windowState.navigationSource(analytic, record);
+    }
+    if (unwrapped instanceof Function function && CorrelatedBindings.matches(function)) {
+      return CorrelatedBindings.source(function);
+    }
+    if (unwrapped instanceof CaseExpression choice && numericType(choice) == null
+        && intervalSchema(unwrapped) == null) {
+      return temporalBranch(unwrapped,
+          (Operand) evaluateCase(choice, record, validateArrays ? jsonBranchOperand : engineBranchOperand),
+          validateArrays);
+    }
+    if (unwrapped instanceof Function function && ExpressionBranches.isCoalesce(function)
+        && function.getParameters() != null && numericType(function) == null && intervalSchema(unwrapped) == null) {
+      for (Expression argument : function.getParameters()) {
+        Operand operand = declaredOperand(argument, record, validateArrays);
+        if (operand.value() != null) {
+          return temporalBranch(unwrapped, operand, validateArrays);
+        }
+      }
+      return new Operand(null, null);
+    }
+    if ((unwrapped instanceof Addition || unwrapped instanceof Subtraction) && numericType(unwrapped) == null
+        && intervalSchema(unwrapped) == null) {
+      var binary = (BinaryExpression) unwrapped;
+      Operand left = declaredOperand(binary.getLeftExpression(), record, validateArrays);
+      Operand right = declaredOperand(binary.getRightExpression(), record, validateArrays);
+      Operation operation = unwrapped instanceof Addition ? Operation.ADD : Operation.SUB;
+      Object result = arithmetic(binary.getLeftExpression(), binary.getRightExpression(), left.value(), right.value(),
+          operation);
+      Schema declaration = valueSchema(unwrapped);
+      if (declaration == null && DateTimeFunctions.isTemporal(result)) {
+        Operand datetime = DateTimeFunctions.isTemporal(left.value()) ? left : right;
+        declaration = datetime.declaration();
+        if (result instanceof Timestamp && datetime.value() instanceof Date) {
+          declaration = TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema();
+        }
+      }
+      return new Operand(result, declaration);
+    }
+    if (unwrapped instanceof ArrayConstructor array) {
+      Schema declaration = valueSchema(unwrapped);
+      if (declaration != null && TemporalOperands.temporalElements(declaration)) {
+        List<Operand> values = new ArrayList<>();
+        for (Expression element : array.getExpressions()) {
+          values.add(declaredOperand(element, record, validateArrays));
+        }
+        return temporalArray(values, declaration, validateArrays);
+      }
+    }
+    if (unwrapped instanceof Function function && ArrayExpressionSchemas.isArrayConstructor(function)) {
+      Schema declaration = valueSchema(unwrapped);
+      if (declaration != null && TemporalOperands.temporalElements(declaration)) {
+        List<Operand> values = new ArrayList<>();
+        for (Expression element : function.getParameters()) {
+          values.add(declaredOperand(element, record, validateArrays));
+        }
+        return temporalArray(values, declaration, validateArrays);
+      }
+    }
+    Object value;
+    if (unwrapped instanceof Column column && SqlExpressionNormalizer.timeKeyword(column) == null) {
+      String name = resolveColumnName(column);
+      value = AvroCoercions.resolveColumnValue(name, record, fieldSchemas, caseInsensitiveIndex,
+          AvroCoercions::unwrapLocalFields);
+    } else {
+      value = evalInternal(unwrapped, record);
+    }
+    Schema declaration = null;
+    if (DateTimeFunctions.isTemporal(value) || value instanceof Object[] || value instanceof List<?>
+        || value == null && unwrapped instanceof Column) {
+      declaration = valueSchema(unwrapped);
+      if (declaration != null && !TemporalOperands.temporalElements(declaration)) {
+        declaration = null;
+      }
+    }
+    return new Operand(value, declaration);
+  }
+
+  /**
+   * Applies a conditional expression's required promotion without losing UTC
+   * provenance or local fields.
+   *
+   * @param expression
+   *          CASE or COALESCE expression
+   * @param selected
+   *          selected branch, or null when CASE had no matching branch
+   * @param validateArrays
+   *          whether JSON validates before promoting ARRAY values
+   * @return promoted operand
+   */
+  private Operand temporalBranch(Expression expression, Operand selected, boolean validateArrays) {
+    if (selected == null || selected.value() == null) {
+      return new Operand(null, null);
+    }
+    if (DateTimeFunctions.isTemporal(selected.value())
+        || selected.declaration() != null && TemporalOperands.temporalElements(selected.declaration())) {
+      Schema declaration = valueSchema(expression);
+      if (!validateArrays && selected.value() instanceof Elements) {
+        return new Operand(selected.value(), declaration == null ? selected.declaration() : declaration);
+      }
+      return TemporalOperands.promote(selected, declaration);
+    }
+    return selected;
+  }
+
+  /**
+   * Resolves a constructor declaration once for this evaluator's input schema.
+   *
+   * @param expression
+   *          argument expression
+   * @return known declaration, or null
+   */
+  private Schema valueSchema(Expression expression) {
+    return valueSchemas.computeIfAbsent(expression, shape -> {
+      try {
+        if (shape instanceof CaseExpression
+            || shape instanceof Function function && ExpressionBranches.isCoalesce(function)) {
+          Schema nativeTimestamp = ScalarExpressionSchemas.resolve(shape);
+          if (TemporalValueType.fromSchema(nativeTimestamp) == TemporalValueType.LOCAL_TIMESTAMP) {
+            return Optional.of(nativeTimestamp);
+          }
+        }
+        return Optional.ofNullable(ArrayExpressionSchemas.resolve(shape, this::valueColumnSchema,
+            select -> subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select)));
+      } catch (IllegalArgumentException incompatible) {
+        boolean arrayConstructor = shape instanceof Function function
+            && ArrayExpressionSchemas.isArrayConstructor(function);
+        if (!(shape instanceof ArrayConstructor) && !arrayConstructor) {
+          // Drop the wrapper's optional declaration when a nested conditional
+          // has incompatible declarations (#431). Evaluation retains selected
+          // branch provenance through datetime arithmetic.
+          return Optional.empty();
+        }
+        throw incompatible;
+      }
+    }).orElse(null);
+  }
+
+  /**
+   * Validates datetime ARRAY values using the ordinary runtime type rules, then
+   * promotes decoded leaves before serialization.
+   *
+   * @param values
+   *          evaluated elements
+   * @param declaration
+   *          ARRAY declaration
+   * @param validate
+   *          whether JSON requires runtime validation here
+   * @return validated ARRAY operand with one temporal representation
+   */
+  private Operand temporalArray(List<Operand> values, Schema declaration, boolean validate) {
+    if (validate) {
+      ArrayFunctions.validateArrayValues(values.stream().map(Operand::decoded).toList());
+    }
+    Schema target = TemporalOperands.arrayTarget(declaration, values);
+    Operand array = new Operand(new Elements(values), declaration);
+    return validate ? TemporalOperands.promote(array, target) : new Operand(array.value(), target);
+  }
+
+  /**
+   * Resolves an actual field using the same case-insensitive index as evaluation.
+   * Datetime keywords parsed as columns do not name input fields.
+   *
+   * @param column
+   *          possible field reference
+   * @return field schema, or null for a keyword or unresolved name
+   */
+  private Schema valueColumnSchema(Column column) {
+    if (SqlExpressionNormalizer.timeKeyword(column) != null) {
+      return null;
+    }
+    String name;
+    try {
+      name = resolveColumnName(column);
+    } catch (IllegalArgumentException unresolved) {
+      // CONVERT probes type names as possible fields during declaration lookup.
+      // Required column references remain validated by ordinary evaluation.
+      return null;
+    }
+    if (name == null) {
+      return null;
+    }
+    Schema declaration = fieldSchemas.get(name);
+    String canonical = declaration == null ? caseInsensitiveIndex.get(Identifier.lookupKey(name)) : null;
+    return canonical == null ? declaration : fieldSchemas.get(canonical);
   }
 
   private String toStringValue(Object value) {
@@ -654,9 +1162,39 @@ public final class ValueExpressionEvaluator {
     throw new IllegalArgumentException("Unsupported binary value: " + value);
   }
 
+  /**
+   * Evaluates arithmetic operands using their ordinary engine representations.
+   *
+   * @param left
+   *          left operand expression
+   * @param right
+   *          right operand expression
+   * @param record
+   *          current row
+   * @param op
+   *          arithmetic operation
+   * @return computed result, or null for SQL NULL
+   */
   private Object arithmetic(Expression left, Expression right, GenericRecord record, Operation op) {
-    Object leftVal = evalInternal(left, record);
-    Object rightVal = evalInternal(right, record);
+    return arithmetic(left, right, evalInternal(left, record), evalInternal(right, record), op);
+  }
+
+  /**
+   * Applies shared arithmetic to operands already evaluated with source metadata.
+   *
+   * @param left
+   *          left expression
+   * @param right
+   *          right expression
+   * @param leftVal
+   *          evaluated left value
+   * @param rightVal
+   *          evaluated right value
+   * @param op
+   *          arithmetic operation
+   * @return arithmetic result
+   */
+  private Object arithmetic(Expression left, Expression right, Object leftVal, Object rightVal, Operation op) {
     if (leftVal == null || rightVal == null) {
       return null;
     }
@@ -667,7 +1205,14 @@ public final class ValueExpressionEvaluator {
       }
     }
     if (op == Operation.SUB) {
-      Object temporal = DateTimeFunctions.minus(leftVal, rightVal);
+      Object first = leftVal;
+      Object second = rightVal;
+      if (leftVal instanceof OffsetDateTime || rightVal instanceof OffsetDateTime || leftVal instanceof OffsetTime
+          || rightVal instanceof OffsetTime) {
+        first = TemporalOperands.comparisonValue(new Operand(leftVal, valueSchema(left)), rightVal);
+        second = TemporalOperands.comparisonValue(new Operand(rightVal, valueSchema(right)), leftVal);
+      }
+      Object temporal = DateTimeFunctions.minus(first, second);
       if (temporal != null) {
         return temporal;
       }
@@ -728,13 +1273,13 @@ public final class ValueExpressionEvaluator {
     if (value instanceof java.time.LocalDate) {
       return "DATE";
     }
-    if (value instanceof java.time.LocalDateTime || value instanceof java.time.OffsetDateTime) {
+    if (value instanceof LocalDateTime || value instanceof OffsetDateTime) {
       return "TIMESTAMP";
     }
-    if (value instanceof java.time.LocalTime || value instanceof java.time.OffsetTime) {
+    if (value instanceof LocalTime || value instanceof OffsetTime) {
       return "TIME";
     }
-    return java.sql.JDBCType.valueOf(JdbcTypeMapper.mapJavaClassNameToJdbcType(value.getClass().getName())).getName();
+    return JDBCType.valueOf(JdbcTypeMapper.mapJavaClassNameToJdbcType(value.getClass().getName())).getName();
   }
 
   private Object columnValue(Column column, GenericRecord record) {
@@ -758,7 +1303,7 @@ public final class ValueExpressionEvaluator {
    *          outer column name
    * @param record
    *          current outer row
-   * @return the bound value, possibly null
+   * @return the bound value and its source declaration, including SQL NULL
    * @throws IllegalStateException
    *           if a correlation mapping names a missing field
    * @throws IllegalArgumentException
@@ -773,12 +1318,26 @@ public final class ValueExpressionEvaluator {
         String canonical = mapping.get(normalizedColumn);
         if (canonical != null) {
           assertCorrelatedFieldPresent(normalizedQualifier, normalizedColumn, canonical);
-          return AvroCoercions.resolveColumnValue(canonical, record, fieldSchemas, caseInsensitiveIndex);
+          return correlatedOperand(canonical, record);
         }
       }
     }
     // NULL is a resolved SQL value, not a signal to retry without the qualifier.
-    return resolveColumnValue(qualifier, columnName, record);
+    return correlatedOperand(canonicalFieldName(qualifier, columnName), record);
+  }
+
+  /**
+   * Retains a resolved outer column's value and original temporal semantics.
+   *
+   * @param canonical
+   *          canonical outer field name
+   * @param record
+   *          current outer row
+   * @return typed correlated binding
+   */
+  private Operand correlatedOperand(String canonical, GenericRecord record) {
+    return new Operand(AvroCoercions.resolveColumnValue(canonical, record, fieldSchemas, caseInsensitiveIndex,
+        AvroCoercions::unwrapLocalFields), fieldSchemas.get(canonical));
   }
 
   /**

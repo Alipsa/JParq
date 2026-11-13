@@ -2,10 +2,8 @@ package se.alipsa.jparq.engine.window;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
-import java.nio.ByteBuffer;
-import java.sql.Date;
-import java.sql.Time;
-import java.sql.Timestamp;
+import java.sql.JDBCType;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -15,6 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.AnalyticType;
 import net.sf.jsqlparser.expression.Expression;
@@ -28,17 +27,20 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import se.alipsa.jparq.NumericType;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlExceptions;
-import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.engine.SubqueryExecutor;
+import se.alipsa.jparq.engine.TemporalOperands.Operand;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
+import se.alipsa.jparq.helper.IntervalQualifier;
+import se.alipsa.jparq.helper.IntervalType;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.LiteralConverter;
-import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
  * Utility methods for planning and evaluating SQL window functions that appear
@@ -90,6 +92,106 @@ public final class WindowFunctions {
       return null;
     }
     return collector.toWindowPlan();
+  }
+
+  /**
+   * Checks navigation default assignment types without evaluating any rows.
+   *
+   * @param analytic
+   *          window expression
+   * @param schemas
+   *          scoped expression declaration resolver
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 for incompatible types
+   */
+  public static void validateNavigationDefault(AnalyticExpression analytic, Function<Expression, Schema> schemas) {
+    if ((!"LAG".equalsIgnoreCase(analytic.getName()) && !"LEAD".equalsIgnoreCase(analytic.getName()))
+        || analytic.getDefaultValue() == null) {
+      return;
+    }
+    Schema target = schemas.apply(analytic.getExpression());
+    Schema source = schemas.apply(analytic.getDefaultValue());
+    if (!assignableDefault(target, source)) {
+      throw SqlExceptions.syntaxFailure(analytic.getName() + " default type " + navigationTypeName(source)
+          + " is not assignable to " + navigationTypeName(target));
+    }
+  }
+
+  /**
+   * Describes complete navigation types, including nested ARRAY leaves and
+   * interval fields.
+   *
+   * @param schema
+   *          known source or destination declaration
+   * @return SQL type description for assignment diagnostics
+   */
+  private static String navigationTypeName(Schema schema) {
+    Schema value = JdbcTypeMapper.nonNullSchema(schema);
+    if (value.getType() == Schema.Type.ARRAY) {
+      return "ARRAY(" + navigationTypeName(value.getElementType()) + ")";
+    }
+    if (IntervalType.matches(value)) {
+      return "INTERVAL " + IntervalType.qualifier(value).name().replace('_', ' ');
+    }
+    return JDBCType.valueOf(JdbcTypeMapper.mapSchemaToJdbcType(value)).getName();
+  }
+
+  /**
+   * Tests SQL assignment families, including nested ARRAY element types.
+   *
+   * @param target
+   *          destination declaration, possibly unknown
+   * @param source
+   *          default declaration, possibly unknown or NULL
+   * @return whether known declarations allow assignment
+   */
+  private static boolean assignableDefault(Schema target, Schema source) {
+    Schema destination = JdbcTypeMapper.nonNullSchema(target);
+    Schema value = JdbcTypeMapper.nonNullSchema(source);
+    if (destination == null || value == null || destination.getType() == Schema.Type.NULL
+        || value.getType() == Schema.Type.NULL) {
+      return true;
+    }
+    if (destination.getType() == Schema.Type.ARRAY || value.getType() == Schema.Type.ARRAY) {
+      return destination.getType() == Schema.Type.ARRAY && value.getType() == Schema.Type.ARRAY
+          && assignableDefault(destination.getElementType(), value.getElementType());
+    }
+    if (IntervalType.matches(destination) || IntervalType.matches(value)) {
+      if (!IntervalType.matches(destination) || !IntervalType.matches(value)) {
+        return false;
+      }
+      IntervalQualifier targetFields = IntervalType.qualifier(destination);
+      IntervalQualifier sourceFields = IntervalType.qualifier(value);
+      return targetFields == sourceFields || targetFields.common(sourceFields) != IntervalQualifier.MIXED;
+    }
+    int targetType = JdbcTypeMapper.mapSchemaToJdbcType(destination);
+    int sourceType = JdbcTypeMapper.mapSchemaToJdbcType(value);
+    if (NumericType.of(targetType, destination) != null) {
+      return NumericType.of(sourceType, value) != null;
+    }
+    if (JdbcTypeMapper.isCharacterType(targetType)) {
+      return JdbcTypeMapper.isCharacterType(sourceType);
+    }
+    if (JdbcTypeMapper.isBinaryType(targetType)) {
+      return JdbcTypeMapper.isBinaryType(sourceType);
+    }
+    int targetFields = withoutZone(targetType);
+    int sourceFields = withoutZone(sourceType);
+    return targetFields == sourceFields;
+  }
+
+  /**
+   * Maps a zoned temporal JDBC type to its assignment family fields.
+   *
+   * @param type
+   *          JDBC type, possibly WITH TIME ZONE
+   * @return the plain TIMESTAMP or TIME type for zoned types, otherwise the type
+   *         itself
+   */
+  private static int withoutZone(int type) {
+    return type == Types.TIMESTAMP_WITH_TIMEZONE
+        ? Types.TIMESTAMP
+        : type == Types.TIME_WITH_TIMEZONE ? Types.TIME : type;
   }
 
   /**
@@ -1540,18 +1642,15 @@ public final class WindowFunctions {
       return values;
     }
 
-    List<Object> argumentValues = new ArrayList<>(contexts.size());
+    List<Operand> argumentValues = new ArrayList<>(contexts.size());
     List<Long> offsets = new ArrayList<>(contexts.size());
-    List<Object> defaultValues = new ArrayList<>(contexts.size());
     boolean hasOffset = window.offsetExpression() != null;
-    boolean hasDefault = window.defaultExpression() != null;
 
     for (RowContext context : contexts) {
       GenericRecord record = context.record();
-      argumentValues.add(evaluator.eval(window.valueExpression(), record));
+      argumentValues.add(evaluator.sourceOperand(window.valueExpression(), record));
       Object offsetValue = hasOffset ? evaluator.eval(window.offsetExpression(), record) : null;
       offsets.add(resolvePositiveOffset(offsetValue, window.expression(), "LAG"));
-      defaultValues.add(hasDefault ? evaluator.eval(window.defaultExpression(), record) : null);
     }
 
     int index = 0;
@@ -1572,7 +1671,8 @@ public final class WindowFunctions {
         } else {
           long candidateIndex = i - offset;
           if (candidateIndex < partitionStart) {
-            result = defaultValues.get(i);
+            result = evaluator.navigationDefault(window.valueExpression(), window.defaultExpression(),
+                contexts.get(i).record());
           } else {
             result = argumentValues.get((int) candidateIndex);
           }
@@ -1596,18 +1696,15 @@ public final class WindowFunctions {
       return values;
     }
 
-    List<Object> argumentValues = new ArrayList<>(contexts.size());
+    List<Operand> argumentValues = new ArrayList<>(contexts.size());
     List<Long> offsets = new ArrayList<>(contexts.size());
-    List<Object> defaultValues = new ArrayList<>(contexts.size());
     boolean hasOffset = window.offsetExpression() != null;
-    boolean hasDefault = window.defaultExpression() != null;
 
     for (RowContext context : contexts) {
       GenericRecord record = context.record();
-      argumentValues.add(evaluator.eval(window.valueExpression(), record));
+      argumentValues.add(evaluator.sourceOperand(window.valueExpression(), record));
       Object offsetValue = hasOffset ? evaluator.eval(window.offsetExpression(), record) : null;
       offsets.add(resolvePositiveOffset(offsetValue, window.expression(), "LEAD"));
-      defaultValues.add(hasDefault ? evaluator.eval(window.defaultExpression(), record) : null);
     }
 
     int index = 0;
@@ -1628,7 +1725,8 @@ public final class WindowFunctions {
         } else {
           long candidateIndex = i + offset;
           if (candidateIndex >= partitionEnd) {
-            result = defaultValues.get(i);
+            result = evaluator.navigationDefault(window.valueExpression(), window.defaultExpression(),
+                contexts.get(i).record());
           } else {
             result = argumentValues.get((int) candidateIndex);
           }
@@ -2555,48 +2653,20 @@ public final class WindowFunctions {
   }
 
   /**
-   * Compare two values of potentially different types.
+   * Compares window values using the ordinary SQL comparison rules, including UTC
+   * semantics for offset datetime values.
    *
    * @param left
-   *          left-hand value (may be {@code null})
+   *          non-null left-hand value
    * @param right
-   *          right-hand value (may be {@code null})
+   *          non-null right-hand value
    * @return negative when {@code left < right}, zero when equal, otherwise
    *         positive
    * @throws IllegalArgumentException
-   *           if an interval is implicitly compared as text, carrying SQLState
-   *           42000
+   *           if operand types are incompatible, carrying SQLState 42000
    */
   public static int compareValues(Object left, Object right) {
-    if (left instanceof Number ln && right instanceof Number rn) {
-      return SqlComparisons.compareNumbers(ln, rn);
-    }
-    if (left instanceof Boolean && right instanceof Boolean) {
-      return Boolean.compare((Boolean) left, (Boolean) right);
-    }
-    if (left instanceof byte[] && right instanceof byte[]) {
-      return compareBinary((byte[]) left, (byte[]) right);
-    }
-    if (left instanceof ByteBuffer lb && right instanceof ByteBuffer rb) {
-      byte[] la = new byte[lb.remaining()];
-      byte[] ra = new byte[rb.remaining()];
-      lb.duplicate().get(la);
-      rb.duplicate().get(ra);
-      return compareBinary(la, ra);
-    }
-    if (left instanceof Timestamp && right instanceof Timestamp) {
-      return Long.compare(((Timestamp) left).getTime(), ((Timestamp) right).getTime());
-    }
-    if (left instanceof Time leftTime && right instanceof Time rightTime) {
-      return leftTime.compareTo(rightTime);
-    }
-    if (left instanceof Date && right instanceof Date) {
-      return Long.compare(((Date) left).getTime(), ((Date) right).getTime());
-    }
-    if (left instanceof TemporalInterval li && right instanceof TemporalInterval ri) {
-      return li.compareTo(ri);
-    }
-    return SqlText.valueOf(left).compareTo(SqlText.valueOf(right));
+    return SqlComparisons.typedCompare(left, right);
   }
 
   /**

@@ -4,6 +4,8 @@ import java.sql.Types;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Function;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
@@ -23,8 +25,11 @@ import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.select.SetOperationList;
+import org.apache.avro.LogicalType;
+import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
+import se.alipsa.jparq.engine.function.StructArrayTypes;
 import se.alipsa.jparq.helper.IntervalQualifier;
 import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
@@ -39,6 +44,12 @@ public final class IntervalExpressionTypes {
   /** Prevents utility class instantiation. */
   private IntervalExpressionTypes() {
   }
+
+  /** Matches an explicit precision declaration such as {@code TIME(6)}. */
+  private static final Pattern DECLARED_PRECISION = Pattern.compile("\\(\\s*(\\d+)\\s*\\)");
+
+  /** Matches a literal's fractional-second digits. */
+  private static final Pattern LITERAL_FRACTION = Pattern.compile("\\.(\\d+)");
 
   /**
    * Recognizes interval literals, arithmetic, and typed input columns.
@@ -218,15 +229,34 @@ public final class IntervalExpressionTypes {
    */
   public static Schema resolveTemporal(Expression expression, Function<Column, Schema> columns,
       Function<Select, Schema> subqueries) {
+    Expression value = ExpressionEvaluator.unwrapParenthesis(expression);
+    if (value instanceof net.sf.jsqlparser.expression.Function function && CorrelatedBindings.matches(function)) {
+      Schema bound = JdbcTypeMapper.nonNullSchema(CorrelatedBindings.schema(function));
+      return TemporalOperands.temporalElements(bound) ? bound : null;
+    }
     int type = temporalType(expression, columns, subqueries);
+    if (type == Types.TIME && value instanceof Column column) {
+      return JdbcTypeMapper.nonNullSchema(columns.apply(column));
+    }
+    Schema declared = type == Types.TIMESTAMP || value instanceof Addition || value instanceof Subtraction
+        ? ArrayExpressionSchemas.resolve(value, columns, subqueries)
+        : null;
+    if (declared != null && JdbcTypeMapper.mapSchemaToJdbcType(declared) == Types.TIMESTAMP) {
+      Schema schema = copyWithProps(declared);
+      if (schema.getProp("jparq.temporal.precision") == null) {
+        schema.addProp("jparq.temporal.precision",
+            Integer.toString(temporalPrecision(expression, columns, subqueries)));
+      }
+      return schema;
+    }
     if (type == Types.OTHER) {
       return null;
     }
     Schema schema = type == Types.DATE
-        ? org.apache.avro.LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT))
+        ? LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT))
         : type == Types.TIME
-            ? org.apache.avro.LogicalTypes.timeMicros().addToSchema(Schema.create(Schema.Type.LONG))
-            : org.apache.avro.LogicalTypes.timestampNanos().addToSchema(Schema.create(Schema.Type.LONG));
+            ? LogicalTypes.timeMicros().addToSchema(Schema.create(Schema.Type.LONG))
+            : LogicalTypes.timestampNanos().addToSchema(Schema.create(Schema.Type.LONG));
     schema.addProp("jparq.temporal.precision", Integer.toString(temporalPrecision(expression, columns, subqueries)));
     return schema;
   }
@@ -247,9 +277,72 @@ public final class IntervalExpressionTypes {
     if (JdbcTypeMapper.mapSchemaToJdbcType(first) != JdbcTypeMapper.mapSchemaToJdbcType(second)) {
       return null;
     }
-    int left = Integer.parseInt(first.getProp("jparq.temporal.precision"));
-    int right = Integer.parseInt(second.getProp("jparq.temporal.precision"));
-    return left >= right ? first : second;
+    Schema combined = StructArrayTypes.common(first, second);
+    Schema common = Schema.create(combined.getType());
+    combined.getObjectProps().forEach((name, value) -> {
+      if (!"jparq.temporal.precision".equals(name)) {
+        common.addProp(name, value);
+      }
+    });
+    if (combined.getLogicalType() != null) {
+      combined.getLogicalType().addToSchema(common);
+    }
+    if (first.getProp("jparq.temporal.precision") != null || second.getProp("jparq.temporal.precision") != null) {
+      common.addProp("jparq.temporal.precision",
+          Integer.toString(Math.max(declaredPrecision(first), declaredPrecision(second))));
+    }
+    return common;
+  }
+
+  /**
+   * Copies a schema's type, logical type, and properties without reparsing its
+   * text form.
+   *
+   * @param source
+   *          declaration to copy
+   * @return mutable copy carrying the same logical type and properties
+   */
+  public static Schema copyWithProps(Schema source) {
+    Schema copy = Schema.create(source.getType());
+    source.getObjectProps().forEach(copy::addProp);
+    if (source.getLogicalType() != null) {
+      source.getLogicalType().addToSchema(copy);
+    }
+    return copy;
+  }
+
+  /**
+   * Resolves the declared fractional-second digits, inferring storage precision
+   * when no explicit declaration is present.
+   *
+   * @param schema
+   *          datetime declaration
+   * @return fractional-second precision
+   */
+  private static int declaredPrecision(Schema schema) {
+    String precision = schema.getProp("jparq.temporal.precision");
+    if (precision != null) {
+      return Integer.parseInt(precision);
+    }
+    return logicalPrecision(schema.getLogicalType());
+  }
+
+  /**
+   * Maps a datetime logical type to its fractional-second precision.
+   *
+   * @param logical
+   *          declared logical type, or null
+   * @return fractional-second digits, or 0 for other declarations
+   */
+  public static int logicalPrecision(LogicalType logical) {
+    return logical instanceof LogicalTypes.TimeMicros || logical instanceof LogicalTypes.TimestampMicros
+        || logical instanceof LogicalTypes.LocalTimestampMicros
+            ? 6
+            : logical instanceof LogicalTypes.TimeMillis || logical instanceof LogicalTypes.TimestampMillis
+                || logical instanceof LogicalTypes.LocalTimestampMillis
+                    ? 3
+                    : logical instanceof LogicalTypes.TimestampNanos
+                        || logical instanceof LogicalTypes.LocalTimestampNanos ? 9 : 0;
   }
 
   /**
@@ -339,21 +432,14 @@ public final class IntervalExpressionTypes {
     if (schema != null) {
       Schema declaration = JdbcTypeMapper.nonNullSchema(schema);
       String precision = declaration.getProp("jparq.temporal.precision");
-      if (precision != null) {
-        return Integer.parseInt(precision);
-      }
-      String logical = declaration.getProp("logicalType");
-      return logical == null
-          ? 0
-          : logical.endsWith("nanos") ? 9 : logical.endsWith("micros") ? 6 : logical.endsWith("millis") ? 3 : 0;
+      return precision == null ? logicalPrecision(declaration.getLogicalType()) : Integer.parseInt(precision);
     }
     if (value instanceof CastExpression cast) {
       if (cast.getColDataType() != null && cast.getColDataType().getArgumentsStringList() != null
           && !cast.getColDataType().getArgumentsStringList().isEmpty()) {
         return Integer.parseInt(cast.getColDataType().getArgumentsStringList().getFirst());
       }
-      java.util.regex.Matcher declared = java.util.regex.Pattern.compile("\\(\\s*(\\d+)\\s*\\)")
-          .matcher(cast.getColDataType().toString());
+      Matcher declared = DECLARED_PRECISION.matcher(cast.getColDataType().toString());
       return declared.find()
           ? Integer.parseInt(declared.group(1))
           : temporalType(value, columns, subqueries) == Types.TIMESTAMP ? 6 : 0;
@@ -362,7 +448,7 @@ public final class IntervalExpressionTypes {
       return 9;
     }
     String text = value == null ? "" : value.toString();
-    java.util.regex.Matcher fraction = java.util.regex.Pattern.compile("\\.(\\d+)").matcher(text);
+    Matcher fraction = LITERAL_FRACTION.matcher(text);
     return fraction.find() ? Math.min(9, fraction.group(1).length()) : 0;
   }
 
@@ -398,7 +484,8 @@ public final class IntervalExpressionTypes {
       return Types.TIMESTAMP;
     }
     if (value instanceof net.sf.jsqlparser.expression.Function function && CorrelatedBindings.matches(function)) {
-      return JdbcTypeMapper.mapSchemaToJdbcType(CorrelatedBindings.schema(function));
+      int type = JdbcTypeMapper.mapSchemaToJdbcType(CorrelatedBindings.schema(function));
+      return type == Types.DATE || type == Types.TIME || type == Types.TIMESTAMP ? type : Types.OTHER;
     }
     String type = null;
     if (value instanceof net.sf.jsqlparser.expression.Function function) {

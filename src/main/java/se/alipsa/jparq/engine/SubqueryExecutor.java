@@ -22,6 +22,7 @@ import java.util.function.Function;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.select.*;
+import org.apache.avro.Schema;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqPreparedStatement;
 import se.alipsa.jparq.meta.InformationSchemaColumns;
@@ -34,7 +35,8 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
 public final class SubqueryExecutor implements AutoCloseable {
 
   private final Map<String, PreparedStatement> preparedStatements = new LinkedHashMap<>();
-  private final Map<String, Optional<org.apache.avro.Schema>> projectionSchemas = new LinkedHashMap<>();
+  private final Map<String, Optional<Schema>> projectionSchemas = new LinkedHashMap<>();
+  private final Map<Select, Optional<Schema>> projectionNodes = new IdentityHashMap<>();
 
   private final ExecutionPlans executionPlans;
   private final JParqConnection connection;
@@ -115,7 +117,9 @@ public final class SubqueryExecutor implements AutoCloseable {
   public SubqueryResult execute(Select subSelect) {
     Objects.requireNonNull(subSelect, "subSelect");
     String sql = normalize(subSelect.toString());
-    return cache.computeIfAbsent(sql, this::runQuery);
+    SubqueryResult result = cache.computeIfAbsent(sql, this::runQuery);
+    projectionNodes.put(subSelect, Optional.ofNullable(result.projectionSchema()));
+    return result;
   }
 
   /**
@@ -144,7 +148,8 @@ public final class SubqueryExecutor implements AutoCloseable {
    * @param context
    *          outer qualifier mappings
    * @param values
-   *          current outer value resolver
+   *          current outer values, optionally wrapped in declared temporal
+   *          operands
    * @return whether at least one row exists
    */
   public boolean existsCorrelated(Select select, Collection<String> qualifiers, Set<String> columns,
@@ -168,7 +173,8 @@ public final class SubqueryExecutor implements AutoCloseable {
    * @param context
    *          outer qualifier mappings
    * @param values
-   *          current outer value resolver
+   *          current outer values, optionally wrapped in declared temporal
+   *          operands
    * @return a fresh correlated result or cached uncorrelated result
    */
   public SubqueryResult executeCorrelated(Select select, Collection<String> qualifiers, Set<String> columns,
@@ -189,7 +195,8 @@ public final class SubqueryExecutor implements AutoCloseable {
    * @param context
    *          outer qualifier mappings
    * @param values
-   *          current outer value resolver
+   *          current outer values, optionally wrapped in declared temporal
+   *          operands
    * @param existenceOnly
    *          whether to stop after the first row without reading columns
    * @return materialized values or a zero-column row-existence result
@@ -216,13 +223,19 @@ public final class SubqueryExecutor implements AutoCloseable {
       return execute(select);
     }
     List<Object> bindings = new ArrayList<>(query.references().size());
+    List<Schema> schemas = new ArrayList<>(query.references().size());
     for (var reference : query.references()) {
-      bindings.add(values.apply(reference.qualifier(), reference.column()));
+      Object resolved = values.apply(reference.qualifier(), reference.column());
+      TemporalOperands.Operand operand = resolved instanceof TemporalOperands.Operand typed
+          ? typed
+          : new TemporalOperands.Operand(resolved, null);
+      bindings.add(operand.value());
+      schemas.add(operand.declaration());
     }
-    var frame = new CorrelatedBindings(query.key(), bindings);
+    var frame = new CorrelatedBindings(query.key(), bindings, schemas);
     try (frame) {
       var references = query.references();
-      return runQuery(normalize(query.sql()), () -> {
+      SubqueryResult result = runQuery(normalize(query.sql()), () -> {
         var namedBindings = new StringJoiner(", ");
         for (int index = 0; index < bindings.size(); index++) {
           var reference = references.get(index);
@@ -233,6 +246,10 @@ public final class SubqueryExecutor implements AutoCloseable {
         }
         return select + " [outer bindings: " + namedBindings + "]";
       }, existenceOnly);
+      if (!existenceOnly) {
+        projectionNodes.put(select, Optional.ofNullable(result.projectionSchema()));
+      }
+      return result;
     }
   }
 
@@ -277,7 +294,7 @@ public final class SubqueryExecutor implements AutoCloseable {
    * @return raw field names, or null when this is not a supported virtual table
    */
   public static Set<String> virtualColumns(Table table) {
-    org.apache.avro.Schema schema;
+    Schema schema;
     if (InformationSchemaTables.matchesQualifiedName(table.getSchemaName(), table.getName(),
         table.getFullyQualifiedName())) {
       schema = InformationSchemaTables.schema();
@@ -287,8 +304,7 @@ public final class SubqueryExecutor implements AutoCloseable {
     } else {
       return null;
     }
-    return schema.getFields().stream().map(org.apache.avro.Schema.Field::name)
-        .collect(java.util.stream.Collectors.toSet());
+    return schema.getFields().stream().map(Schema.Field::name).collect(java.util.stream.Collectors.toSet());
   }
 
   /**
@@ -441,7 +457,7 @@ public final class SubqueryExecutor implements AutoCloseable {
     try {
       var location = connection.resolveTable(table.getSchemaName(), table.getName());
       return ParquetTable.validate(location, HadoopConfigurations.create()).schema().getFields().stream()
-          .map(org.apache.avro.Schema.Field::name).collect(java.util.stream.Collectors.toSet());
+          .map(Schema.Field::name).collect(java.util.stream.Collectors.toSet());
     } catch (SQLException exception) {
       if (QueryCancellation.findCancellation(exception).isPresent()) {
         throw new IllegalStateException("Canceled while resolving subquery columns", exception);
@@ -480,7 +496,7 @@ public final class SubqueryExecutor implements AutoCloseable {
         if (existenceOnly) {
           return new SubqueryResult(List.of(), rs.next() ? List.of(List.of()) : List.of());
         }
-        return consume(rs);
+        return consume(rs, projectionSchema(sql, prepared));
       }
     } catch (SQLException | RuntimeException e) {
       throw new IllegalStateException("Failed to execute sub query: " + description.get(), e);
@@ -492,11 +508,13 @@ public final class SubqueryExecutor implements AutoCloseable {
    *
    * @param rs
    *          nested result owned by the caller
-   * @return materialized rows and labels
+   * @param projectionSchema
+   *          first projection declaration resolved in the active inner scope
+   * @return materialized rows, labels, and temporal metadata
    * @throws SQLException
    *           if metadata or iteration fails
    */
-  private SubqueryResult consume(ResultSet rs) throws SQLException {
+  private SubqueryResult consume(ResultSet rs, Schema projectionSchema) throws SQLException {
     ResultSetMetaData meta = rs.getMetaData();
     int columnCount = meta.getColumnCount();
     List<String> columnLabels = new ArrayList<>(columnCount);
@@ -516,7 +534,7 @@ public final class SubqueryExecutor implements AutoCloseable {
       }
       rows.add(row);
     }
-    return new SubqueryResult(List.copyOf(columnLabels), List.copyOf(rows));
+    return new SubqueryResult(List.copyOf(columnLabels), List.copyOf(rows), projectionSchema);
   }
 
   /**
@@ -541,6 +559,7 @@ public final class SubqueryExecutor implements AutoCloseable {
     }
     preparedStatements.clear();
     projectionSchemas.clear();
+    projectionNodes.clear();
     cache.clear();
     existenceCache.clear();
     if (failure != null) {
@@ -557,19 +576,53 @@ public final class SubqueryExecutor implements AutoCloseable {
    * @return its declared interval or datetime schema, or null if it cannot be
    *         established
    */
-  public org.apache.avro.Schema projectionSchema(Select select) {
-    String sql = select.toString();
-    return projectionSchemas.computeIfAbsent(sql, shape -> {
-      try (PreparedStatement prepared = prepareStatement(shape)) {
-        return Optional
-            .ofNullable(prepared instanceof JParqPreparedStatement nested ? nested.declaredProjectionSchema() : null);
-      } catch (SQLException exception) {
-        if (QueryCancellation.findCancellation(exception).isPresent()) {
-          throw new IllegalStateException("Canceled while resolving scalar projection metadata", exception);
+  public Schema projectionSchema(Select select) {
+    return projectionNodes.computeIfAbsent(select, node -> {
+      String sql = node.toString();
+      return projectionSchemas.computeIfAbsent(sql, shape -> {
+        try (PreparedStatement prepared = prepareStatement(shape)) {
+          return projectionDeclaration(prepared);
+        } catch (SQLException exception) {
+          if (QueryCancellation.findCancellation(exception).isPresent()) {
+            throw new IllegalStateException("Canceled while resolving scalar projection metadata", exception);
+          }
+          return Optional.empty();
         }
-        return Optional.empty();
-      }
+      });
     }).orElse(null);
+  }
+
+  /**
+   * Resolves declarations from an executing statement while outer bindings remain
+   * active.
+   *
+   * @param sql
+   *          stable executable query shape
+   * @param prepared
+   *          statement in its bound inner scope
+   * @return first projection declaration, or null when unknown
+   */
+  private Schema projectionSchema(String sql, PreparedStatement prepared) {
+    return projectionSchemas.computeIfAbsent(sql, ignored -> projectionDeclaration(prepared)).orElse(null);
+  }
+
+  /**
+   * Reads optional projection metadata without preparing another statement.
+   *
+   * @param prepared
+   *          statement whose bindings are active
+   * @return optional first projection declaration
+   */
+  private Optional<Schema> projectionDeclaration(PreparedStatement prepared) {
+    try {
+      return Optional
+          .ofNullable(prepared instanceof JParqPreparedStatement nested ? nested.declaredProjectionSchema() : null);
+    } catch (SQLException exception) {
+      if (QueryCancellation.findCancellation(exception).isPresent()) {
+        throw new IllegalStateException("Canceled while resolving scalar projection metadata", exception);
+      }
+      return Optional.empty();
+    }
   }
 
   /**
@@ -752,8 +805,22 @@ public final class SubqueryExecutor implements AutoCloseable {
    *          list of column labels
    * @param rows
    *          list of rows, each row is a list of column values
+   * @param projectionSchema
+   *          first projection declaration from the bound inner scope, or null
    */
-  public record SubqueryResult(List<String> columnLabels, List<List<Object>> rows) {
+  public record SubqueryResult(List<String> columnLabels, List<List<Object>> rows, Schema projectionSchema) {
+
+    /**
+     * Creates a result without an optional temporal declaration.
+     *
+     * @param columnLabels
+     *          column labels
+     * @param rows
+     *          materialized rows
+     */
+    public SubqueryResult(List<String> columnLabels, List<List<Object>> rows) {
+      this(columnLabels, rows, null);
+    }
 
     /**
      * Canonical constructor verifying arguments.
@@ -762,6 +829,8 @@ public final class SubqueryExecutor implements AutoCloseable {
      *          column labels
      * @param rows
      *          rows
+     * @param projectionSchema
+     *          first projection declaration, possibly null
      */
     public SubqueryResult {
       Objects.requireNonNull(columnLabels, "columnLabels");

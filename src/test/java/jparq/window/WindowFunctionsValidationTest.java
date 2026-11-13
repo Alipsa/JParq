@@ -178,6 +178,31 @@ public class WindowFunctionsValidationTest {
         "TemporalInterval comparison should defer to compareTo implementations");
   }
 
+  /**
+   * Window comparisons reject incompatible type families with SQLState 42000.
+   */
+  @Test
+  void compareValuesRejectsIncompatibleFamilies() {
+    Object[][] pairs = {
+        {
+            new byte[]{
+                1
+            }, "text"
+        }, {
+            1, TemporalInterval.of(Period.ofDays(1), Duration.ZERO)
+        }
+    };
+    for (Object[] pair : pairs) {
+      for (boolean reverse : List.of(false, true)) {
+        Object left = pair[reverse ? 1 : 0];
+        Object right = pair[reverse ? 0 : 1];
+        var failure = assertThrows(IllegalArgumentException.class, () -> compareValues(left, right));
+        var syntax = assertInstanceOf(SQLSyntaxErrorException.class, failure.getCause());
+        assertEquals("42000", syntax.getSQLState());
+      }
+    }
+  }
+
   private long callResolvePositiveOffset(Object value) {
     return resolvePositiveOffset(value, analyticExpression, "LAG");
   }

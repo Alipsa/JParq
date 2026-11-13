@@ -2,11 +2,15 @@ package se.alipsa.jparq.engine;
 
 import static se.alipsa.jparq.engine.AvroCoercions.coerceLiteral;
 
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.Expression;
@@ -27,8 +31,10 @@ import net.sf.jsqlparser.expression.operators.relational.SimilarToExpression;
 import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.engine.function.StringFunctions;
 import se.alipsa.jparq.engine.window.WindowState;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 
 /**
  * Evaluates SQL expressions (via JSqlParser) against Avro
@@ -360,12 +366,8 @@ public final class ExpressionEvaluator {
     Operand lo = operand(between.getBetweenExpressionStart(), rec);
     Operand hi = operand(between.getBetweenExpressionEnd(), rec);
 
-    Object curVal = val.value;
-    Object lowVal = coerceLiteralToColumnType(lo.value, val.schemaOrNull);
-    Object highVal = coerceLiteralToColumnType(hi.value, val.schemaOrNull);
-
-    Boolean in = SqlTruth.and(SqlComparisons.compare(">=", SqlComparisons.compareOrUnknown(curVal, lowVal)),
-        SqlComparisons.compare("<=", SqlComparisons.compareOrUnknown(curVal, highVal)));
+    Boolean in = SqlTruth.and(SqlComparisons.compare(">=", compare(val, lo)),
+        SqlComparisons.compare("<=", compare(val, hi)));
     return between.isNot() ? SqlTruth.not(in) : in;
   }
 
@@ -374,17 +376,49 @@ public final class ExpressionEvaluator {
     Expression right = in.getRightExpression();
 
     if (right instanceof ExpressionList<?> list) {
-      return SqlTruth.in(left.value, list, e -> coerceLiteralToColumnType(operand(e, rec).value, left.schemaOrNull),
-          in.isNot());
+      return inOperands(left, list, candidate -> operand(candidate, rec), in.isNot());
     }
     if (right instanceof net.sf.jsqlparser.statement.select.Select subSelect) {
       if (subqueryExecutor == null) {
         throw new IllegalStateException("IN subqueries require a subquery executor");
       }
-      List<Object> values = executeCorrelatedSubquery(subSelect, rec).singleColumnValues();
-      return SqlTruth.in(left.value, values, value -> coerceLiteralToColumnType(value, left.schemaOrNull), in.isNot());
+      SubqueryExecutor.SubqueryResult result = executeCorrelatedSubquery(subSelect, rec);
+      List<Object> values = result.singleColumnValues();
+      Schema declaration = result.projectionSchema();
+      return inOperands(left, values, value -> new Operand(value, declaration), in.isNot());
     }
     return false;
+  }
+
+  /**
+   * Evaluates membership while retaining each candidate's source declaration.
+   *
+   * @param <T>
+   *          candidate representation
+   * @param left
+   *          tested operand
+   * @param candidates
+   *          expressions or materialized values
+   * @param evaluate
+   *          lazy candidate evaluator
+   * @param negated
+   *          whether NOT IN was requested
+   * @return SQL membership truth value
+   */
+  private <T> Boolean inOperands(Operand left, Iterable<T> candidates, Function<T, Operand> evaluate, boolean negated) {
+    if (left.value == null) {
+      return candidates.iterator().hasNext() ? null : negated;
+    }
+    boolean unknown = false;
+    for (T candidate : candidates) {
+      Integer comparison = compare(left, evaluate.apply(candidate));
+      if (comparison == null) {
+        unknown = true;
+      } else if (comparison == 0) {
+        return !negated;
+      }
+    }
+    return SqlTruth.in(false, unknown, negated);
   }
 
   private boolean evalExists(ExistsExpression exists, GenericRecord rec) {
@@ -395,7 +429,7 @@ public final class ExpressionEvaluator {
       throw new IllegalArgumentException("EXISTS requires a subquery");
     }
     boolean hasRows = subqueryExecutor.existsCorrelated(subSelect, outerQualifiers, correlationColumns(),
-        qualifierColumnMapping, (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
+        qualifierColumnMapping, (qualifier, column) -> resolveCorrelatedOperand(qualifier, column, rec));
     return exists.isNot() != hasRows;
   }
 
@@ -414,7 +448,7 @@ public final class ExpressionEvaluator {
       throw new IllegalStateException("Predicate subqueries require a subquery executor");
     }
     return subqueryExecutor.executeCorrelated(subSelect, outerQualifiers, correlationColumns(), qualifierColumnMapping,
-        (qualifier, column) -> resolveColumnValue(qualifier, column, rec));
+        (qualifier, column) -> resolveCorrelatedOperand(qualifier, column, rec));
   }
 
   private Boolean evalBinary(BinaryExpression be, GenericRecord rec) {
@@ -454,10 +488,56 @@ public final class ExpressionEvaluator {
   private Boolean evalAnyComparison(BinaryExpression be, GenericRecord rec) {
     return QuantifiedComparisons.evaluate(be, expression -> {
       Operand scalar = operand(expression, rec);
-      return new QuantifiedComparisons.ScalarOperand(scalar.value,
-          candidate -> coerceLiteralToColumnType(candidate, scalar.schemaOrNull));
-    }, expression -> operand(expression, rec).value,
-        subSelect -> executeCorrelatedSubquery(subSelect, rec).singleColumnValues());
+      return new QuantifiedComparisons.ScalarOperand(new TemporalOperands.Operand(scalar.value, scalar.schemaOrNull),
+          candidate -> {
+            TemporalOperands.Operand typed = (TemporalOperands.Operand) candidate;
+            Object value = coerceToMatch(new Operand(typed.value(), typed.declaration()), scalar);
+            return new TemporalOperands.Operand(value, typed.declaration());
+          });
+    }, expression -> quantifiedArray(expression, rec), subSelect -> {
+      SubqueryExecutor.SubqueryResult result = executeCorrelatedSubquery(subSelect, rec);
+      return quantifiedCandidates(result.singleColumnValues(), result.projectionSchema());
+    });
+  }
+
+  /**
+   * Retains temporal element declarations for quantified ARRAY comparisons.
+   *
+   * @param expression
+   *          array expression
+   * @param record
+   *          current row
+   * @return declared candidates, or the original non-array value for validation
+   */
+  private Object quantifiedArray(Expression expression, GenericRecord record) {
+    Operand array = operand(expression, record);
+    Iterable<?> values = TemporalOperands.elementsOf(array.value);
+    if (values == null) {
+      return array.value;
+    }
+    Schema declaration = JdbcTypeMapper.nonNullSchema(array.schemaOrNull);
+    Schema element = declaration != null && declaration.getType() == Schema.Type.ARRAY
+        ? declaration.getElementType()
+        : null;
+    return quantifiedCandidates(values, element);
+  }
+
+  /**
+   * Wraps quantified scalar candidates with their temporal source declaration.
+   *
+   * @param values
+   *          candidates, including SQL NULLs
+   * @param declaration
+   *          scalar or element declaration, possibly null
+   * @return candidates retaining metadata without changing nested-value
+   *         validation
+   */
+  private static List<Object> quantifiedCandidates(Iterable<?> values, Schema declaration) {
+    List<Object> candidates = new ArrayList<>();
+    for (Object value : values) {
+      candidates.add(new TemporalOperands.Operand(value, DateTimeFunctions.isTemporal(value) ? declaration : null));
+    }
+    return candidates;
   }
 
   // -------------------------
@@ -489,9 +569,10 @@ public final class ExpressionEvaluator {
   private record Operand(Object value, Schema schemaOrNull) {
   }
 
-  private Object resolveColumnValue(String qualifier, String columnName, GenericRecord rec) {
+  private Object resolveCorrelatedOperand(String qualifier, String columnName, GenericRecord rec) {
     String canonical = canonicalFieldName(qualifier, columnName);
-    return AvroCoercions.resolveColumnValue(canonical, rec, fieldSchemas, caseInsensitiveIndex);
+    return new TemporalOperands.Operand(AvroCoercions.resolveColumnValue(canonical, rec, fieldSchemas,
+        caseInsensitiveIndex, AvroCoercions::unwrapLocalFields), fieldSchemas.get(canonical));
   }
 
   private String canonicalFieldName(String qualifier, String columnName) {
@@ -523,23 +604,8 @@ public final class ExpressionEvaluator {
       Object v = AvroCoercions.unwrap(rec.get(lookupName), colSchema);
       return new Operand(v, colSchema);
     }
-    Object literal = literalEvaluator.eval(expr, rec);
-    return new Operand(literal, null);
-  }
-
-  /**
-   * Coerce a literal value to the provided column schema, if present.
-   *
-   * @param value
-   *          the literal value to coerce (may be {@code null})
-   * @param columnSchemaOrNull
-   *          the schema of the comparison column, or {@code null} when comparing
-   *          two literals
-   * @return the coerced literal when a schema is supplied; otherwise the original
-   *         value
-   */
-  private static Object coerceLiteralToColumnType(Object value, Schema columnSchemaOrNull) {
-    return columnSchemaOrNull == null ? value : coerceLiteral(value, columnSchemaOrNull);
+    TemporalOperands.Operand evaluated = literalEvaluator.evalPredicateOperand(expr, rec);
+    return new Operand(evaluated.value(), evaluated.declaration());
   }
 
   /**
@@ -562,8 +628,8 @@ public final class ExpressionEvaluator {
   }
 
   /**
-   * Coerces the source operand's value to the target operand's column schema when
-   * the target is a column and the source is not.
+   * Applies source-aware offset promotion, or ordinary literal coercion when only
+   * the target supplies a column declaration.
    *
    * @param source
    *          the operand supplying the value
@@ -573,10 +639,16 @@ public final class ExpressionEvaluator {
    *         applies
    */
   private static Object coerceToMatch(Operand source, Operand target) {
+    if (source.value instanceof OffsetDateTime || source.value instanceof OffsetTime
+        || target.value instanceof OffsetDateTime || target.value instanceof OffsetTime) {
+      return TemporalOperands.comparisonValue(new TemporalOperands.Operand(source.value, source.schemaOrNull),
+          target.value);
+    }
     if (target.schemaOrNull != null && source.schemaOrNull == null) {
       return coerceLiteral(source.value, target.schemaOrNull);
     }
-    return source.value;
+    return TemporalOperands.comparisonValue(new TemporalOperands.Operand(source.value, source.schemaOrNull),
+        target.value);
   }
 
   /**

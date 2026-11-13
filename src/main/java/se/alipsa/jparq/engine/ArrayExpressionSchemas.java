@@ -3,6 +3,8 @@ package se.alipsa.jparq.engine;
 import java.sql.JDBCType;
 import java.sql.Types;
 import java.util.List;
+import java.util.Locale;
+import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.ArrayConstructor;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.BooleanValue;
@@ -17,9 +19,11 @@ import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TranscodingFunction;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.NumericType;
 import se.alipsa.jparq.engine.function.StructArrayTypes;
+import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalValueType;
 
@@ -27,6 +31,19 @@ import se.alipsa.jparq.helper.TemporalValueType;
 public final class ArrayExpressionSchemas {
   /** Prevents utility class construction. */
   private ArrayExpressionSchemas() {
+  }
+
+  /**
+   * Identifies a plain {@code ARRAY(...)} constructor call, excluding
+   * {@code ARRAY(SELECT ...)} subquery forms.
+   *
+   * @param function
+   *          parsed function expression
+   * @return whether it is an ARRAY constructor with value arguments
+   */
+  public static boolean isArrayConstructor(Function function) {
+    return function != null && "ARRAY".equalsIgnoreCase(function.getName()) && function.getParameters() != null
+        && function.getParameters().stream().noneMatch(Select.class::isInstance);
   }
 
   /**
@@ -89,12 +106,16 @@ public final class ArrayExpressionSchemas {
    *           carrying a JDBC cause for incompatible declarations
    */
   public static Schema resolve(Expression expression, java.util.function.Function<Column, Schema> columns,
-      java.util.function.Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarSchemas) {
+      java.util.function.Function<Select, Schema> scalarSchemas) {
     if (expression instanceof TranscodingFunction) {
       CastExpression cast = CastExpressions.asCast(expression, name -> columns.apply(new Column(name)) != null);
       return cast == null ? null : resolve(cast, columns, scalarSchemas);
     }
     if (expression instanceof Column column) {
+      TimeKeyExpression keyword = SqlExpressionNormalizer.timeKeyword(column);
+      if (keyword != null) {
+        return resolve(keyword, columns, scalarSchemas);
+      }
       return JdbcTypeMapper.nonNullSchema(columns.apply(column));
     }
     if (expression instanceof BooleanValue || BooleanExpressions.isPredicate(expression)) {
@@ -106,8 +127,15 @@ public final class ArrayExpressionSchemas {
     if (expression instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
       return resolve(list.getFirst(), columns, scalarSchemas);
     }
-    if (expression instanceof net.sf.jsqlparser.statement.select.Select select) {
+    if (expression instanceof Select select) {
       return scalarSchemas.apply(select);
+    }
+    if (expression instanceof AnalyticExpression analytic && analytic.getName() != null) {
+      return switch (analytic.getName().toUpperCase(Locale.ROOT)) {
+        case "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE", "LAG", "LEAD", "MIN", "MAX" ->
+          resolve(analytic.getExpression(), columns, scalarSchemas);
+        default -> null;
+      };
     }
     if (expression instanceof ArrayConstructor array) {
       Schema element = common(array.getExpressions(), columns, scalarSchemas);
@@ -121,7 +149,7 @@ public final class ArrayExpressionSchemas {
       if ("NULLIF".equalsIgnoreCase(function.getName()) && !function.getParameters().isEmpty()) {
         return resolve(function.getParameters().getFirst(), columns, scalarSchemas);
       }
-      if ("COALESCE".equalsIgnoreCase(function.getName())) {
+      if (ExpressionBranches.isCoalesce(function)) {
         return common(function.getParameters(), columns, scalarSchemas);
       }
     }
@@ -129,8 +157,21 @@ public final class ArrayExpressionSchemas {
       return common(ExpressionBranches.caseResults(choice), columns, scalarSchemas);
     }
     if (expression instanceof BinaryExpression binary && NumericExpressionTypes.operation(expression) != null) {
-      NumericType left = numeric(resolve(binary.getLeftExpression(), columns, scalarSchemas));
-      NumericType right = numeric(resolve(binary.getRightExpression(), columns, scalarSchemas));
+      Schema first = resolve(binary.getLeftExpression(), columns, scalarSchemas);
+      Schema second = resolve(binary.getRightExpression(), columns, scalarSchemas);
+      Operation operation = NumericExpressionTypes.operation(expression);
+      if (operation == Operation.ADD || operation == Operation.SUB) {
+        Schema rightInterval = IntervalExpressionTypes.resolve(binary.getRightExpression(), columns, scalarSchemas);
+        Schema leftInterval = IntervalExpressionTypes.resolve(binary.getLeftExpression(), columns, scalarSchemas);
+        if (first != null && isDatetime(first) && rightInterval != null) {
+          return intervalResult(first, rightInterval);
+        }
+        if (operation == Operation.ADD && second != null && isDatetime(second) && leftInterval != null) {
+          return intervalResult(second, leftInterval);
+        }
+      }
+      NumericType left = numeric(first);
+      NumericType right = numeric(second);
       return left == null || right == null
           ? null
           : left.arithmetic(right, NumericExpressionTypes.operation(expression)).schema();
@@ -139,18 +180,25 @@ public final class ArrayExpressionSchemas {
       return resolve(signed.getExpression(), columns, scalarSchemas);
     }
     if (expression instanceof CastExpression cast && cast.getColDataType() != null) {
+      String type = ScalarExpressionSchemas.normalizeTypeName(cast.getColDataType().getDataType());
+      if ("time".equals(type) || "timewithouttimezone".equals(type)) {
+        return IntervalExpressionTypes.resolveTemporal(cast, columns, scalarSchemas);
+      }
       Schema declared = nonnumericSchema(cast.getColDataType().getDataType());
       if (declared != null) {
         return declared;
       }
     }
     if (expression instanceof DateTimeLiteralExpression literal) {
+      if (literal.getType() == DateTimeLiteralExpression.DateTime.TIME) {
+        return IntervalExpressionTypes.resolveTemporal(literal, columns, scalarSchemas);
+      }
       return nonnumericSchema(literal.getType().name());
     }
     if (expression instanceof TimeKeyExpression time) {
-      return switch (time.getStringValue().toUpperCase(java.util.Locale.ROOT)) {
+      return switch (time.getStringValue().toUpperCase(Locale.ROOT)) {
         case "CURRENT_DATE" -> nonnumericSchema("DATE");
-        case "LOCALTIME" -> nonnumericSchema("TIME");
+        case "LOCALTIME" -> nativeTimeSchema();
         case "LOCALTIMESTAMP" -> nonnumericSchema("TIMESTAMP");
         case "CURRENT_TIME" -> TemporalValueType.OFFSET_TIME.schema();
         case "CURRENT_TIMESTAMP" -> TemporalValueType.OFFSET_TIMESTAMP.schema();
@@ -165,6 +213,47 @@ public final class ArrayExpressionSchemas {
   }
 
   /**
+   * Retains native value-function digits without changing JDBC TIME array
+   * classes.
+   *
+   * @return TIME declaration whose JSON text preserves significant native digits
+   */
+  private static Schema nativeTimeSchema() {
+    Schema schema = nonnumericSchema("TIME");
+    schema.addProp("jparq.temporal.nativePrecision", "true");
+    return schema;
+  }
+
+  /**
+   * Identifies datetime schemas whose zone semantics survive interval arithmetic.
+   *
+   * @param schema
+   *          value schema, possibly null
+   * @return whether the schema describes a scalar datetime value
+   */
+  private static boolean isDatetime(Schema schema) {
+    Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    return effective != null && effective.getType() != Schema.Type.ARRAY
+        && TemporalOperands.temporalElements(effective);
+  }
+
+  /**
+   * Promotes DATE to a local TIMESTAMP when an interval includes time fields.
+   *
+   * @param datetime
+   *          datetime operand declaration
+   * @param interval
+   *          interval operand declaration
+   * @return declaration matching the arithmetic result
+   */
+  private static Schema intervalResult(Schema datetime, Schema interval) {
+    return JdbcTypeMapper.mapSchemaToJdbcType(datetime) == Types.DATE
+        && IntervalType.qualifier(interval).includesTimeFields()
+            ? TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema()
+            : datetime;
+  }
+
+  /**
    * Maps nonnumeric SQL declarations to their decoded value schemas.
    *
    * @param typeName
@@ -172,17 +261,12 @@ public final class ArrayExpressionSchemas {
    * @return declared schema, or null for numeric or unrecognized declarations
    */
   private static Schema nonnumericSchema(String typeName) {
-    String normalized = ScalarExpressionSchemas.normalizeTypeName(typeName);
     JDBCType type = ScalarExpressionSchemas.declaredJdbcType(typeName);
     if (type == JDBCType.CLOB || type == JDBCType.NCLOB || type == JDBCType.BLOB) {
       throw SqlExceptions
           .unsupportedFeature("ARRAY elements with declared type " + type.getName() + " are not supported");
     }
-    return switch (normalized) {
-      case "timewithtimezone" -> TemporalValueType.OFFSET_TIME.schema();
-      case "timestampwithtimezone" -> TemporalValueType.OFFSET_TIMESTAMP.schema();
-      default -> ScalarExpressionSchemas.declaredSchema(typeName);
-    };
+    return ScalarExpressionSchemas.declaredSchema(typeName);
   }
 
   /**
@@ -211,8 +295,7 @@ public final class ArrayExpressionSchemas {
    *           incompatible
    */
   private static Schema common(List<? extends Expression> expressions,
-      java.util.function.Function<Column, Schema> columns,
-      java.util.function.Function<net.sf.jsqlparser.statement.select.Select, Schema> scalarSchemas) {
+      java.util.function.Function<Column, Schema> columns, java.util.function.Function<Select, Schema> scalarSchemas) {
     Schema result = null;
     for (Expression expression : expressions) {
       result = common(result, resolve(expression, columns, scalarSchemas));
@@ -262,6 +345,11 @@ public final class ArrayExpressionSchemas {
     if ((leftType == Types.TIMESTAMP || leftType == Types.TIMESTAMP_WITH_TIMEZONE)
         && (rightType == Types.TIMESTAMP || rightType == Types.TIMESTAMP_WITH_TIMEZONE) && leftType != rightType) {
       return TemporalValueType.OFFSET_TIMESTAMP.schema();
+    }
+    if (leftType == Types.TIME && rightType == Types.TIME) {
+      // Keep the widest fractional-second precision so every combined row
+      // serializes with the same width.
+      return IntervalExpressionTypes.commonTemporal(left, right);
     }
     NumericType first = NumericType.of(leftType, left);
     NumericType second = NumericType.of(rightType, right);

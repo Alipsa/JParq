@@ -6,6 +6,7 @@ import java.util.IdentityHashMap;
 import java.util.Map;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.engine.TemporalOperands.Operand;
 
 /**
  * Immutable container for precomputed window values.
@@ -339,14 +340,7 @@ public final class WindowState {
    * @return the computed lagged value (may be {@code null})
    */
   public Object lag(AnalyticExpression expression, GenericRecord record) {
-    IdentityHashMap<GenericRecord, Object> values = lagValues.get(expression);
-    if (values == null) {
-      throw new IllegalArgumentException("No LAG values available for expression: " + expression);
-    }
-    if (!values.containsKey(record)) {
-      throw new IllegalArgumentException("No LAG value computed for record: " + record);
-    }
-    return values.get(record);
+    return navigationSource(expression, record, lagValues, "LAG").engineValue();
   }
 
   /**
@@ -359,14 +353,52 @@ public final class WindowState {
    * @return the computed leading value (may be {@code null})
    */
   public Object lead(AnalyticExpression expression, GenericRecord record) {
-    IdentityHashMap<GenericRecord, Object> values = leadValues.get(expression);
+    return navigationSource(expression, record, leadValues, "LEAD").engineValue();
+  }
+
+  /**
+   * Returns a navigation value with the declaration of its selected source.
+   *
+   * @param expression
+   *          LAG or LEAD expression
+   * @param record
+   *          current row
+   * @return selected argument or converted default and its declaration
+   * @throws IllegalArgumentException
+   *           if the expression or record has no value
+   */
+  public Operand navigationSource(AnalyticExpression expression, GenericRecord record) {
+    return "LAG".equalsIgnoreCase(expression.getName())
+        ? navigationSource(expression, record, lagValues, "LAG")
+        : navigationSource(expression, record, leadValues, "LEAD");
+  }
+
+  /**
+   * Validates and unwraps a navigation result without losing source metadata.
+   *
+   * @param expression
+   *          navigation expression
+   * @param record
+   *          current row
+   * @param results
+   *          results belonging to the navigation function
+   * @param name
+   *          function name for diagnostics
+   * @return source operand, including an untyped legacy builder value
+   * @throws IllegalArgumentException
+   *           if the expression or record has no value
+   */
+  private static Operand navigationSource(AnalyticExpression expression, GenericRecord record,
+      Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> results, String name) {
+    IdentityHashMap<GenericRecord, Object> values = results.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No LEAD values available for expression: " + expression);
+      throw new IllegalArgumentException("No " + name + " values available for expression: " + expression);
     }
     if (!values.containsKey(record)) {
-      throw new IllegalArgumentException("No LEAD value computed for record: " + record);
+      throw new IllegalArgumentException("No " + name + " value computed for record: " + record);
     }
-    return values.get(record);
+    Object value = values.get(record);
+    return value instanceof Operand operand ? operand : new Operand(value, null);
   }
 
   /**

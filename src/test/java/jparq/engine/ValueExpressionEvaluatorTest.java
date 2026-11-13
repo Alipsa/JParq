@@ -11,6 +11,7 @@ import static org.mockito.Mockito.*;
 import java.nio.ByteBuffer;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.Expression;
@@ -19,6 +20,7 @@ import net.sf.jsqlparser.expression.TranscodingFunction;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.statement.create.table.ColDataType;
+import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
@@ -37,6 +39,23 @@ class ValueExpressionEvaluatorTest {
   private static Schema schema;
   private static GenericRecord nullNoteRecord;
   private static ValueExpressionEvaluator evaluator;
+
+  /**
+   * Aggregate source evaluation reads a local timestamp column once and retains
+   * its original fields and declaration.
+   */
+  @Test
+  void aggregateSourceReadsLocalColumnOnce() {
+    Schema local = LogicalTypes.localTimestampMicros().addToSchema(Schema.create(Schema.Type.LONG));
+    Schema input = SchemaBuilder.record("LocalInput").fields().name("l").type(local).noDefault().endRecord();
+    var row = spy(new GenericData.Record(input));
+    LocalDateTime expected = LocalDateTime.of(2024, 3, 31, 2, 30);
+    row.put("l", expected.toEpochSecond(ZoneOffset.UTC) * 1_000_000L);
+    var source = new ValueExpressionEvaluator(input).sourceOperand(new Column("l"), row);
+    assertEquals(expected, source.value());
+    assertEquals(local, source.declaration());
+    verify(row, times(1)).get("l");
+  }
 
   @BeforeAll
   static void setUp() {

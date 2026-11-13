@@ -342,6 +342,24 @@ SQL:2016–2023.
   returned by JSON constructors inside an SQL `ARRAY`: `JSON_ARRAY(ARRAY[JSON_OBJECT(KEY 'a' VALUE 1)])` returns
   `[["{\"a\":1}"]]`.
 - Direct constructor arguments keep the heuristic that embeds JSON-looking text as JSON.
+- Temporal values become ISO-8601 JSON strings. TIME includes seconds; explicit SQL fractional precision
+  retains trailing zeros (for example, `TIME '01:02:03.120'` becomes `"01:02:03.120"`).
+  UTC-adjusted timestamps use UTC with a `Z` suffix, and local timestamps retain their wall-clock fields without
+  a zone suffix, including literals, casts, arithmetic, subqueries, and materialized local columns.
+  For example, a UTC-adjusted timestamp of 1,700,000,000,000 epoch milliseconds becomes
+  `"2023-11-14T22:13:20Z"` in every JVM time zone. These rules also apply within arrays and structs.
+- Temporal combinations use their SQL result type consistently in JSON, JDBC, and materialization.
+  UTC-adjusted and local Parquet timestamp columns both expose JDBC `TIMESTAMP` (without time zone).
+  Combining them in `CASE`, `COALESCE`, ARRAY elements, or set operations retains `TIMESTAMP`; JSON
+  renders the common local fields without an offset. UTC source fields use their JDBC wall-clock view
+  in such combinations, which reflects the JVM time zone. UTC-only results retain their UTC instant.
+  An actual `TIMESTAMP WITH TIME ZONE` operand produces a common offset-bearing result: local values
+  acquire the SQL-session displacement, and UTC sources retain their instant. The same rule applies
+  to local and offset-bearing TIME values in ARRAY constructors. Promotion precedes JSON serialization.
+- Raw local timestamp fields are serialized without normalizing nonexistent wall-clock times through the
+  host's daylight-saving rules. Local values already decoded through JDBC `Timestamp` by correlation,
+  materialization, `CAST`, or arithmetic can still be shifted before reaching JSON; this is tracked in
+  [#446](https://github.com/Alipsa/JParq/issues/446).
 - Struct fields use their declared Avro logical types, including numeric decimals and date/timestamp strings. This
   includes maps nested within struct fields. Top-level map columns and maps inside stored arrays currently keep raw
   Avro logical values, such as epoch-day integers for dates
@@ -964,9 +982,12 @@ with SQLState `22008` because their era cannot round-trip through JDBC.
   lossless internal datetime text to preserve the full date range and nanosecond fractions:
   - UTC-only combinations keep their instants and decode as `Timestamp`, preserving the standalone JVM-zone view,
     even during daylight-saving overlaps.
-  - Combinations that include local timestamps keep wall-clock fields and decode as `LocalDateTime`.
-  - Both keep JDBC type `TIMESTAMP`. Timestamp promotion overflow in other physical encodings raises SQLState
-    `22008`.
+  - Local-only combinations keep wall-clock fields and decode as `LocalDateTime` or `Timestamp`.
+  - Mixed UTC-adjusted and local storage retains JDBC `TIMESTAMP` and the common wall-clock representation.
+    A UTC-adjusted storage declaration does not introduce SQL `WITH TIME ZONE` semantics.
+  - Actual `TIMESTAMP WITH TIME ZONE` fields promote compatible local fields to `OffsetDateTime` using the
+    SQL-session displacement. UTC source fields retain their instants during that promotion.
+  - Timestamp promotion overflow in physical encodings raises SQLState `22008`.
 
 ---
 

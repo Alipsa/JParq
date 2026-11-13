@@ -10,6 +10,9 @@ import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -84,6 +87,21 @@ class StructArrayPromotionTest {
         Timestamp.from(java.time.Instant.ofEpochSecond(2, 345678000)));
     assertFieldValues(second, first, Timestamp.from(java.time.Instant.ofEpochSecond(2, 345678000)),
         Timestamp.from(java.time.Instant.ofEpochMilli(1234)));
+  }
+
+  /**
+   * Keeps UTC instants and local gap fields when STRUCT arrays acquire offsets.
+   */
+  @Test
+  void keepsMixedTimestampFieldsWithoutTimeZone() {
+    Schema utc = LogicalTypes.timestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
+    Schema local = LogicalTypes.localTimestampMillis().addToSchema(Schema.create(Schema.Type.LONG));
+    Instant instant = Instant.parse("2024-07-01T12:00:00Z");
+    LocalDateTime gap = LocalDateTime.parse("2024-03-31T02:30:00");
+    var first = record("utcField", utc, instant.toEpochMilli());
+    var second = record("localField", local, gap.toInstant(ZoneOffset.UTC).toEpochMilli());
+    assertFieldValues(first, second, Timestamp.from(instant), Timestamp.valueOf(gap));
+    assertFieldValues(second, first, Timestamp.valueOf(gap), Timestamp.from(instant));
   }
 
   /**

@@ -105,6 +105,9 @@ public final class StructArrayTypes {
         result = Schema.createArray(common(left.getElementType(), right.getElementType(), path + "[]", visited));
       } else if (left.getType() == Schema.Type.MAP && right.getType() == Schema.Type.MAP) {
         result = Schema.createMap(common(left.getValueType(), right.getValueType(), path + "{}", visited));
+      } else if ((leftType == Types.TIMESTAMP || leftType == Types.TIMESTAMP_WITH_TIMEZONE)
+          && (rightType == Types.TIMESTAMP || rightType == Types.TIMESTAMP_WITH_TIMEZONE) && leftType != rightType) {
+        result = TemporalValueType.OFFSET_TIMESTAMP.schema();
       } else if (leftType == rightType && leftType != Types.OTHER && leftType != Types.STRUCT
           && leftType != Types.ARRAY) {
         result = switch (leftType) {
@@ -130,8 +133,9 @@ public final class StructArrayTypes {
 
   /**
    * Retains full datetime range and precision when mixing nanosecond and coarser
-   * storage. UTC-adjusted fields retain the JVM-zone view used by standalone
-   * reads; local fields retain their wall-clock fields.
+   * storage. UTC-adjusted fields retain instants; local fields retain their
+   * wall-clock fields. Both physical families expose SQL TIMESTAMP, so mixing
+   * them retains the JDBC wall-clock representation without inventing a zone.
    *
    * @param left
    *          first timestamp declaration
@@ -140,15 +144,23 @@ public final class StructArrayTypes {
    * @return lossless internal declaration, or the finer compatible physical unit
    */
   private static Schema timestampSchema(Schema left, Schema right) {
+    if (AvroCoercions.utcTimestamp(left) != AvroCoercions.utcTimestamp(right)) {
+      return TemporalValueType.fromSchema(left) == TemporalValueType.LOCAL_TIMESTAMP
+          || TemporalValueType.fromSchema(right) == TemporalValueType.LOCAL_TIMESTAMP
+              ? TemporalValueType.LOCAL_TIMESTAMP.schema()
+              : TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema();
+    }
     if (TemporalValueType.fromSchema(left) == TemporalValueType.LOCAL_TIMESTAMP
         || TemporalValueType.fromSchema(right) == TemporalValueType.LOCAL_TIMESTAMP) {
       return TemporalValueType.LOCAL_TIMESTAMP.schema();
     }
+    if (TemporalValueType.fromSchema(left) == TemporalValueType.JDBC_LOCAL_TIMESTAMP
+        || TemporalValueType.fromSchema(right) == TemporalValueType.JDBC_LOCAL_TIMESTAMP) {
+      return TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema();
+    }
     if (TemporalValueType.fromSchema(left) == TemporalValueType.UTC_TIMESTAMP
         || TemporalValueType.fromSchema(right) == TemporalValueType.UTC_TIMESTAMP) {
-      return utcTimestamp(left) && utcTimestamp(right)
-          ? TemporalValueType.UTC_TIMESTAMP.schema()
-          : TemporalValueType.LOCAL_TIMESTAMP.schema();
+      return TemporalValueType.UTC_TIMESTAMP.schema();
     }
     if (!AvroCoercions.isTimestamp(left) || !AvroCoercions.isTimestamp(right)) {
       return left;
@@ -156,23 +168,11 @@ public final class StructArrayTypes {
     long first = AvroCoercions.timestampUnits(left);
     long second = AvroCoercions.timestampUnits(right);
     if (first != second && Math.max(first, second) == 1_000_000_000L) {
-      return utcTimestamp(left) && utcTimestamp(right)
+      return AvroCoercions.utcTimestamp(left) && AvroCoercions.utcTimestamp(right)
           ? TemporalValueType.UTC_TIMESTAMP.schema()
           : TemporalValueType.LOCAL_TIMESTAMP.schema();
     }
     return first >= second ? left : right;
-  }
-
-  /**
-   * Identifies physical or internally encoded UTC-adjusted timestamps.
-   *
-   * @param schema
-   *          non-null timestamp declaration
-   * @return whether the declaration retains an instant rather than local fields
-   */
-  private static boolean utcTimestamp(Schema schema) {
-    return TemporalValueType.fromSchema(schema) == TemporalValueType.UTC_TIMESTAMP
-        || AvroCoercions.isTimestamp(schema) && !AvroCoercions.isLocalTimestamp(schema);
   }
 
   /**
@@ -349,7 +349,13 @@ public final class StructArrayTypes {
       }
       return converted;
     }
-    Object decoded = AvroCoercions.unwrap(value, from);
+    Object decoded = TemporalValueType.fromSchema(to) == TemporalValueType.OFFSET_TIMESTAMP
+        ? AvroCoercions.unwrapLocalFields(value, from)
+        : AvroCoercions.unwrap(value, from);
+    if (AvroCoercions.utcTimestamp(from) && decoded instanceof Timestamp timestamp
+        && TemporalValueType.fromSchema(to) == TemporalValueType.OFFSET_TIMESTAMP) {
+      decoded = timestamp.toInstant().atOffset(ZoneOffset.UTC);
+    }
     TemporalValueType temporal = TemporalValueType.fromSchema(to);
     if (temporal != null) {
       return temporal.encode(decoded);

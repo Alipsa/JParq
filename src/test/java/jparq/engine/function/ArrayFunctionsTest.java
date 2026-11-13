@@ -354,7 +354,7 @@ class ArrayFunctionsTest {
         Arguments.of(java.sql.Date.valueOf(date), date, java.sql.Date.valueOf(date), java.sql.Date.valueOf(date)),
         Arguments.of(local, timestamp, timestamp, timestamp),
         Arguments.of(time, sqlTime, DateTimeFunctions.toTime(time), sqlTime),
-        Arguments.of(timestamp, zoned, local.atOffset(session), zoned),
+        Arguments.of(timestamp, zoned, DateTimeFunctions.offsetTimestamp(local), zoned),
         Arguments.of(zoned.toZonedDateTime(), zoned, zoned, zoned),
         Arguments.of(zoned.toInstant(), zoned, zoned.toInstant().atOffset(session), zoned),
         Arguments.of(time, time.atOffset(offset), time.atOffset(session), time.atOffset(offset)));

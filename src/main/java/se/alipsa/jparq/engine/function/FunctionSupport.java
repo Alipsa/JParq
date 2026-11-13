@@ -19,9 +19,10 @@ import net.sf.jsqlparser.statement.select.AllColumns;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.CorrelatedBindings;
-import se.alipsa.jparq.engine.SqlComparisons;
 import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.engine.SubqueryExecutor;
+import se.alipsa.jparq.engine.TemporalOperands;
+import se.alipsa.jparq.engine.TemporalOperands.Operand;
 import se.alipsa.jparq.engine.window.WindowFunctions;
 
 /**
@@ -35,6 +36,7 @@ public final class FunctionSupport {
   private final Map<String, Map<String, String>> correlationContext;
   private final CorrelatedValueResolver correlatedValueResolver;
   private final BiFunction<Expression, GenericRecord, Object> evaluator;
+  private final BiFunction<Expression, GenericRecord, Operand> operandEvaluator;
 
   /**
    * Identifies functions whose value may change on each evaluation. Function
@@ -70,12 +72,39 @@ public final class FunctionSupport {
   public FunctionSupport(SubqueryExecutor subqueryExecutor, List<String> correlationQualifiers,
       Set<String> correlationColumns, Map<String, Map<String, String>> correlationContext,
       CorrelatedValueResolver correlatedValueResolver, BiFunction<Expression, GenericRecord, Object> evaluator) {
+    this(subqueryExecutor, correlationQualifiers, correlationColumns, correlationContext, correlatedValueResolver,
+        evaluator, (expression, record) -> new Operand(evaluator.apply(expression, record), null));
+  }
+
+  /**
+   * Creates function evaluation with source-aware temporal operands.
+   *
+   * @param subqueryExecutor
+   *          nested query executor
+   * @param correlationQualifiers
+   *          visible outer qualifiers
+   * @param correlationColumns
+   *          visible outer columns
+   * @param correlationContext
+   *          qualifier-aware outer bindings
+   * @param correlatedValueResolver
+   *          correlated value resolver
+   * @param evaluator
+   *          ordinary argument evaluator
+   * @param operandEvaluator
+   *          evaluator retaining temporal declarations
+   */
+  public FunctionSupport(SubqueryExecutor subqueryExecutor, List<String> correlationQualifiers,
+      Set<String> correlationColumns, Map<String, Map<String, String>> correlationContext,
+      CorrelatedValueResolver correlatedValueResolver, BiFunction<Expression, GenericRecord, Object> evaluator,
+      BiFunction<Expression, GenericRecord, Operand> operandEvaluator) {
     this.subqueryExecutor = subqueryExecutor;
     this.correlationQualifiers = correlationQualifiers == null ? List.of() : List.copyOf(correlationQualifiers);
     this.correlationColumns = correlationColumns == null ? Set.of() : Set.copyOf(correlationColumns);
     this.correlationContext = correlationContext == null ? Map.of() : Map.copyOf(correlationContext);
     this.correlatedValueResolver = correlatedValueResolver;
     this.evaluator = evaluator;
+    this.operandEvaluator = operandEvaluator;
   }
 
   /**
@@ -102,7 +131,7 @@ public final class FunctionSupport {
     FunctionArguments args = new FunctionArguments(func, record, evaluator);
     return switch (upper) {
       case "COALESCE" -> StringFunctions.coalesce(args);
-      case "NULLIF" -> evaluateNullIf(func, args);
+      case "NULLIF" -> evaluateNullIf(func, record, args);
       case "IFNULL" -> SystemFunctions.ifNull(args.firstValue(),
           args.positionalValues().size() > 1 ? args.positionalValues().get(1) : null);
       case "DATABASE" -> SystemFunctions.database();
@@ -229,13 +258,15 @@ public final class FunctionSupport {
    *
    * @param func
    *          the function call and its modifiers
+   * @param record
+   *          current input row
    * @param args
    *          arguments to evaluate
    * @return the first argument or NULL
    * @throws IllegalArgumentException
    *           if arguments or modifiers are invalid, with SQLState 42000
    */
-  private Object evaluateNullIf(Function func, FunctionArguments args) {
+  private Object evaluateNullIf(Function func, GenericRecord record, FunctionArguments args) {
     if (func.isDistinct() || func.isUnique() || func.isAllColumns()
         || args.positionalExpressions().stream().anyMatch(AllColumns.class::isInstance)) {
       throw syntaxFailure("NULLIF does not support DISTINCT, UNIQUE, or * modifiers");
@@ -243,10 +274,10 @@ public final class FunctionSupport {
     if (args.positionalExpressions().size() != 2) {
       throw syntaxFailure("NULLIF requires exactly two arguments");
     }
-    List<Object> values = args.positionalValues();
-    Object first = values.getFirst();
-    Integer comparison = SqlComparisons.compareOrUnknown(first, values.get(1));
-    return comparison != null && comparison == 0 ? null : first;
+    Operand first = operandEvaluator.apply(args.positionalExpressions().getFirst(), record);
+    Operand second = operandEvaluator.apply(args.positionalExpressions().get(1), record);
+    Integer comparison = TemporalOperands.compare(first, second);
+    return comparison != null && comparison == 0 ? null : first.value();
   }
 
   private Object evaluateArrayFunction(Function func, GenericRecord record, FunctionArguments args) {
@@ -520,7 +551,8 @@ public final class FunctionSupport {
      *          column name to resolve
      * @param record
      *          current record providing the values
-     * @return resolved value (may be {@code null})
+     * @return resolved value (possibly null), or an operand retaining its source
+     *         declaration
      */
     Object resolve(String qualifier, String column, GenericRecord record);
   }

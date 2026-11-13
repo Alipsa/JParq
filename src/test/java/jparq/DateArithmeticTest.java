@@ -14,9 +14,11 @@ import java.sql.Date;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
+import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
@@ -39,6 +41,43 @@ class DateArithmeticTest {
 
   @TempDir
   Path directory;
+
+  /**
+   * Returns JDBC Timestamp for DATE arithmetic with declared time fields even
+   * when the interval is zero or a whole number of days. Materialized results
+   * retain TIMESTAMP metadata independently of JSON constructors.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void timeFieldIntervalsHaveValueIndependentTimestampResults() throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      for (String[] sample : List.of(new String[]{
+          "INTERVAL '0' HOUR", "2024-01-01T00:00:00"
+      }, new String[]{
+          "INTERVAL '24' HOUR", "2024-01-02T00:00:00"
+      }, new String[]{
+          "TIMESTAMP '2024-02-01 12:00:00' - TIMESTAMP '2024-02-01 12:00:00'", "2024-01-01T00:00:00"
+      })) {
+        String expression = "DATE '2024-01-01' + (" + sample[0] + ")";
+        for (String sql : List.of("SELECT " + expression, "SELECT x FROM (SELECT " + expression + " AS x) d",
+            "WITH c AS (SELECT " + expression + " AS x) SELECT x FROM c",
+            "SELECT x FROM UNNEST(ARRAY[" + expression + "]) AS u(x)")) {
+          try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+            assertTrue(result.next(), sql);
+            Timestamp value = assertInstanceOf(Timestamp.class, result.getObject(1), sql);
+            assertEquals(LocalDateTime.parse(sample[1]), value.toLocalDateTime(), sql);
+            if (!sql.equals("SELECT " + expression)) {
+              assertEquals(Types.TIMESTAMP, result.getMetaData().getColumnType(1), sql);
+              assertEquals(Timestamp.class.getName(), result.getMetaData().getColumnClassName(1), sql);
+            }
+            assertFalse(result.next(), sql);
+          }
+        }
+      }
+    }
+  }
 
   /**
    * Writes physical DATE, decimal, and VARCHAR columns, including a NULL date.

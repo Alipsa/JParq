@@ -1,5 +1,6 @@
 package se.alipsa.jparq.engine;
 
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -90,17 +91,38 @@ public final class CorrelatedBindings implements AutoCloseable {
   }
 
   /**
-   * Reads a typed value without rendering or reparsing a SQL literal.
+   * Reads an ordinary engine value without rendering or reparsing a SQL literal.
    *
    * @param function
    *          private placeholder expression
-   * @return current outer value, possibly null
+   * @return current outer value in its JDBC or native engine representation,
+   *         possibly null
    * @throws IllegalArgumentException
    *           if the call is malformed, inactive, or has an invalid slot
    */
   public static Object value(Function function) {
+    TemporalOperands.Operand source = source(function);
+    Object value = source.value();
+    return value instanceof LocalDateTime || value instanceof List<?> || value instanceof Object[]
+        ? source.engineValue()
+        : value;
+  }
+
+  /**
+   * Reads original fields for source-aware temporal promotion without changing
+   * the ordinary engine representation returned by {@link #value(Function)}.
+   *
+   * @param function
+   *          private placeholder expression
+   * @return source fields and declaration
+   * @throws IllegalArgumentException
+   *           if the binding is invalid or inactive
+   */
+  public static TemporalOperands.Operand source(Function function) {
     Slot slot = slot(function);
-    return slot.frame().values().get(slot.index());
+    Object value = slot.frame().values().get(slot.index());
+    Schema declaration = slot.frame().schemas().isEmpty() ? null : slot.frame().schemas().get(slot.index());
+    return new TemporalOperands.Operand(value, declaration);
   }
 
   /**

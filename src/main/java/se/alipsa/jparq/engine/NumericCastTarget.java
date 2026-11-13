@@ -81,6 +81,24 @@ public enum NumericCastTarget {
   }
 
   /**
+   * Resolves the target declaring a JDBC type code.
+   *
+   * @param jdbcType
+   *          the JDBC type code
+   * @return the numeric target using that code
+   * @throws IllegalArgumentException
+   *           when no numeric target declares the code
+   */
+  public static NumericCastTarget fromJdbcType(int jdbcType) {
+    for (NumericCastTarget target : values()) {
+      if (target.numericType().jdbcType() == jdbcType) {
+        return target;
+      }
+    }
+    throw new IllegalArgumentException("No numeric cast target for JDBC type " + jdbcType);
+  }
+
+  /**
    * Returns the JDBC type shared by aliases of this target.
    *
    * @return the numeric type including integer precision

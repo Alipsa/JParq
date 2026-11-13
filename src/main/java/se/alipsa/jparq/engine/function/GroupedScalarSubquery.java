@@ -14,12 +14,14 @@ import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.select.SelectVisitor;
 import net.sf.jsqlparser.util.deparser.ExpressionDeParser;
 import net.sf.jsqlparser.util.deparser.SelectDeParser;
+import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter.QualifiedColumn;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.Identifier;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SubqueryExecutor;
+import se.alipsa.jparq.engine.TemporalOperands.Operand;
 
 /**
  * Binds scalar and predicate subquery correlations exclusively to grouped
@@ -27,6 +29,7 @@ import se.alipsa.jparq.engine.SubqueryExecutor;
  */
 final class GroupedScalarSubquery {
   private final Select select;
+  private final String resultKey;
   private final SubqueryExecutor executor;
   private final CorrelationMappings mappings;
   private final Set<String> candidates;
@@ -48,6 +51,7 @@ final class GroupedScalarSubquery {
   GroupedScalarSubquery(Select select, List<AggregateFunctions.GroupExpression> groups, SubqueryExecutor executor,
       CorrelationMappings mappings) {
     this.select = select;
+    this.resultKey = select.toString();
     this.executor = executor;
     this.mappings = mappings;
     this.candidates = columnNames(select);
@@ -125,15 +129,48 @@ final class GroupedScalarSubquery {
    * Evaluates a scalar against current values, including NULLs suppressed by
    * grouping sets.
    *
-   * @param groupValues
-   *          current group's values
+   * @param groupOperands
+   *          current group's source values and declarations
+   * @param groupResults
+   *          this group's subquery result cache
    * @return scalar value, or null for an empty scalar result
    */
-  Object evaluate(List<Object> groupValues) {
-    var result = executor.executeCorrelated(select, mappings.outerQualifiers(), candidates,
-        mappings.qualifierColumnMapping(),
-        (qualifier, column) -> groupValues.get(groupIndexes.get(new QualifiedColumn(qualifier, column))));
-    return result.scalarValue();
+  Object evaluate(List<Operand> groupOperands, Map<String, SubqueryExecutor.SubqueryResult> groupResults) {
+    return evaluateResult(groupOperands, groupResults).scalarValue();
+  }
+
+  /**
+   * Captures a scalar subquery's values and projection declaration in the group's
+   * own cache, so the result lives exactly as long as the group and is shared by
+   * every clause evaluating it, including ORDER BY. Each group's cache grows with
+   * its subquery count, like the per-group accumulators.
+   *
+   * @param groupOperands
+   *          current group's source values and declarations
+   * @param groupResults
+   *          this group's subquery result cache
+   * @return materialized result with its projection declaration
+   */
+  SubqueryExecutor.SubqueryResult evaluateResult(List<Operand> groupOperands,
+      Map<String, SubqueryExecutor.SubqueryResult> groupResults) {
+    return groupResults.computeIfAbsent(resultKey,
+        text -> executor.executeCorrelated(select, mappings.outerQualifiers(), candidates,
+            mappings.qualifierColumnMapping(),
+            (qualifier, column) -> groupOperands.get(groupIndexes.get(new QualifiedColumn(qualifier, column)))));
+  }
+
+  /**
+   * Resolves metadata without executing a skipped scalar subquery. Once
+   * evaluated, the executing scope's declaration supersedes standalone planning
+   * metadata.
+   *
+   * @param groupResults
+   *          this group's subquery result cache
+   * @return projection declaration, or null when unavailable before evaluation
+   */
+  Schema projectionSchema(Map<String, SubqueryExecutor.SubqueryResult> groupResults) {
+    SubqueryExecutor.SubqueryResult result = groupResults.get(resultKey);
+    return result == null ? executor.projectionSchema(select) : result.projectionSchema();
   }
 
   /**

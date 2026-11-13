@@ -5,6 +5,7 @@ import java.sql.Date;
 import java.sql.JDBCType;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -64,16 +65,17 @@ public final class ArrayFunctions {
    * Normalize ARRAY element types so that a single SQL ARRAY has a consistent
    * element type and nesting depth. Numeric leaves are promoted across sibling
    * arrays; datetime leaves must have the same fields (DATE, TIME, or TIMESTAMP),
-   * and zoned leaves promote compatible local values using the SQL-session time
-   * zone displacement (the active time zone's current offset). SQL and java.time
-   * representations share a family; temporal leaves are always converted to the
-   * JDBC representation of their family. NULLs and empty arrays do not constrain
-   * the inferred leaf type. Nested reference arrays, including stored Parquet
-   * array columns, are normalized to unmodifiable lists. Primitive arrays remain
-   * scalar values. MAP keys and values are recursively validated and normalized
-   * across sibling maps. STRUCT elements must have matching field names, order,
-   * and compatible SQL field types, resolved recursively with numeric promotion.
-   * Nullability, Avro names, and storage properties do not distinguish SQL types.
+   * and zoned leaves promote local timestamps using their date's zone rules.
+   * Date-free local times use the execution's current displacement. SQL and
+   * java.time representations share a family; temporal leaves are always
+   * converted to the JDBC representation of their family. NULLs and empty arrays
+   * do not constrain the inferred leaf type. Nested reference arrays, including
+   * stored Parquet array columns, are normalized to unmodifiable lists. Primitive
+   * arrays remain scalar values. MAP keys and values are recursively validated
+   * and normalized across sibling maps. STRUCT elements must have matching field
+   * names, order, and compatible SQL field types, resolved recursively with
+   * numeric promotion. Nullability, Avro names, and storage properties do not
+   * distinguish SQL types.
    *
    * @param values
    *          raw values
@@ -87,10 +89,90 @@ public final class ArrayFunctions {
     if (values == null || values.isEmpty()) {
       return List.of();
     }
-    ElementType type = new ElementType();
-    inferElementType(values, type);
+    ElementType type = arrayType(values);
     ZoneOffset offset = requiresOffset(type) ? DateTimeFunctions.sessionOffset() : null;
     return coerceArrayValues(values, type, offset);
+  }
+
+  /**
+   * Validates decoded values once and applies the declared common datetime type.
+   * Source-aware callers decode UTC timestamps to offset values before invoking
+   * this overload, retaining instants when a zoned type is required.
+   *
+   * @param values
+   *          decoded ARRAY elements
+   * @param declaration
+   *          common ARRAY declaration
+   * @return normalized elements with the declared datetime representation
+   * @throws IllegalArgumentException
+   *           if values cannot share the declared type
+   */
+  public static List<Object> homogenizeArrayValues(List<Object> values, Schema declaration) {
+    ElementType type = arrayType(values);
+    applyTemporalDeclaration(type, JdbcTypeMapper.nonNullSchema(declaration).getElementType());
+    return coerceArrayValues(values, type, requiresOffset(type) ? DateTimeFunctions.sessionOffset() : null);
+  }
+
+  /**
+   * Applies a known datetime leaf family after ordinary runtime compatibility
+   * checks.
+   *
+   * @param type
+   *          inferred element family
+   * @param schema
+   *          declared element schema
+   * @throws IllegalArgumentException
+   *           if an inferred family is incompatible
+   */
+  private static void applyTemporalDeclaration(ElementType type, Schema schema) {
+    Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    if (effective.getType() == Schema.Type.ARRAY) {
+      determineObjectTarget(type.family, List.class);
+      type.family = List.class;
+      if (type.nested == null) {
+        type.nested = new ElementType();
+      }
+      applyTemporalDeclaration(type.nested, effective.getElementType());
+      return;
+    }
+    Class<?> family = switch (JdbcTypeMapper.mapSchemaToJdbcType(effective)) {
+      case Types.DATE -> Date.class;
+      case Types.TIME -> Time.class;
+      case Types.TIMESTAMP -> Timestamp.class;
+      case Types.TIME_WITH_TIMEZONE -> OffsetTime.class;
+      case Types.TIMESTAMP_WITH_TIMEZONE -> OffsetDateTime.class;
+      default -> type.family;
+    };
+    determineObjectTarget(type.family, family);
+    type.family = family;
+  }
+
+  /**
+   * Applies the ordinary runtime ARRAY compatibility checks without converting
+   * local datetime fields to the JDBC storage representation.
+   *
+   * @param values
+   *          evaluated ARRAY elements
+   * @throws IllegalArgumentException
+   *           if values cannot share a common ARRAY type
+   */
+  public static void validateArrayValues(List<?> values) {
+    arrayType(values);
+  }
+
+  /**
+   * Resolves and validates the common runtime type used by ARRAY consumers.
+   *
+   * @param values
+   *          evaluated ARRAY elements
+   * @return common runtime type
+   */
+  private static ElementType arrayType(List<?> values) {
+    ElementType type = new ElementType();
+    if (values != null) {
+      inferElementType(values, type);
+    }
+    return type;
   }
 
   /**
@@ -210,7 +292,7 @@ public final class ArrayFunctions {
    * @param type
    *          common type
    * @param offset
-   *          session displacement for temporal promotion
+   *          execution displacement for date-free TIME and existing instants
    * @return normalized value, retaining unchanged scalar instances
    * @throws IllegalArgumentException
    *           if conversion fails
@@ -250,7 +332,7 @@ public final class ArrayFunctions {
    * @param type
    *          shared map element type
    * @param offset
-   *          session displacement for temporal promotion
+   *          execution displacement for date-free TIME and existing instants
    * @return map with normalized keys and values
    * @throws IllegalArgumentException
    *           if key promotion creates duplicate keys; the cause carries SQLState
@@ -378,8 +460,8 @@ public final class ArrayFunctions {
         case OffsetDateTime dateTime -> dateTime;
         case ZonedDateTime dateTime -> dateTime.toOffsetDateTime();
         case Instant instant -> instant.atOffset(offset);
-        case LocalDateTime dateTime -> dateTime.atOffset(offset);
-        case Timestamp timestamp -> timestamp.toLocalDateTime().atOffset(offset);
+        case LocalDateTime dateTime -> DateTimeFunctions.offsetTimestamp(dateTime);
+        case Timestamp timestamp -> timestamp.toInstant().atZone(DateTimeFunctions.defaultZone()).toOffsetDateTime();
         default ->
           throw SqlExceptions.incompatibleArrayElements(sqlTypeName(temporalFamily(value)), sqlTypeName(family));
       };

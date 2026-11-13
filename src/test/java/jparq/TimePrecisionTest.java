@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.JParqResultSet;
 import se.alipsa.jparq.helper.TemporalInterval;
 
@@ -84,7 +85,13 @@ class TimePrecisionTest {
         try (var result = statement.executeQuery(query)) {
           assertTrue(result.next(), query);
           assertEquals(expectedNanos, result.getTimestamp(1).getNanos(), query);
-          assertEquals(expectedNanos, assertInstanceOf(Timestamp.class, result.getObject(1)).getNanos(), query);
+          if (target.equals("TIMESTAMP WITH TIME ZONE")) {
+            var offset = assertInstanceOf(java.time.OffsetDateTime.class, result.getObject(1));
+            assertEquals(expectedNanos, offset.getNano(), query);
+            assertEquals(offset.toInstant(), result.getTimestamp(1).toInstant(), query);
+          } else {
+            assertEquals(expectedNanos, assertInstanceOf(Timestamp.class, result.getObject(1)).getNanos(), query);
+          }
           assertFalse(result.next(), query);
         }
         String difference = "SELECT CAST(s AS " + target
@@ -104,6 +111,42 @@ class TimePrecisionTest {
           "SELECT CAST(s AS " + target + ") - TIMESTAMP '2024-01-01 00:00:00' AS x FROM dated WHERE id > 5")) {
         assertEquals("INTERVAL", result.getMetaData().getColumnTypeName(1));
         assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Applies offset CAST precision to temporal operands without shifting instants.
+   *
+   * @param precision
+   *          declared fractional digits
+   * @throws Exception
+   *           if querying fails
+   */
+  @ParameterizedTest
+  @ValueSource(ints = {
+      0, 3, 6, 9
+  })
+  void offsetCastsApplyPrecisionToTemporalSources(int precision) throws Exception {
+    try (var connection = connection(true, true); var statement = connection.createStatement()) {
+      for (String operand : List.of("TIMESTAMP '2024-01-02 00:00:00.123456789'", "ts")) {
+        String suffix = operand.equals("ts") ? " FROM dated WHERE id = 1" : "";
+        try (var result = statement.executeQuery("SELECT CAST(" + operand + " AS TIMESTAMP(" + precision
+            + ") WITH TIME ZONE),CAST(TIME '01:02:03.987' AS TIME(" + precision + ") WITH TIME ZONE)" + suffix)) {
+          assertTrue(result.next());
+          int unit = (int) Math.pow(10, 9 - precision);
+          int sourceNanos = operand.equals("ts") ? 500999000 : 123456789;
+          var timestamp = result.getObject(1, java.time.OffsetDateTime.class);
+          assertEquals(sourceNanos / unit * unit, timestamp.getNano());
+          var time = result.getObject(2, java.time.OffsetTime.class);
+          assertEquals(987000000 / unit * unit, time.getNano());
+        }
+      }
+      try (var result = statement.executeQuery("SELECT CAST(TIMESTAMP '2024-01-02 00:00:00.123456789' "
+          + "AS TIMESTAMP WITH TIME ZONE),CAST(TIME '01:02:03.987' AS TIME WITH TIME ZONE)")) {
+        assertTrue(result.next());
+        assertEquals(123456000, result.getObject(1, java.time.OffsetDateTime.class).getNano());
+        assertEquals(0, result.getObject(2, java.time.OffsetTime.class).getNano());
       }
     }
   }
@@ -370,6 +413,148 @@ class TimePrecisionTest {
     Time result = Time.valueOf("10:00:00");
     result.setTime(result.getTime() + millis);
     return result;
+  }
+
+  /**
+   * Applies the common fractional-second precision of conditional TIME values so
+   * every JSON row pads to the same width, whichever branch was selected.
+   *
+   * @throws Exception
+   *           if a query fails
+   */
+  @Test
+  void conditionalTimePrecisionPadsJsonRows() throws Exception {
+    try (var connection = connection(true, true); var statement = connection.createStatement()) {
+      for (String[] sample : new String[][]{
+          {
+              "CASE WHEN id = 1 THEN CAST(TIME '01:02:03.123' AS TIME(3)) ELSE CAST(TIME '01:02:03' AS TIME(6)) END",
+              "01:02:03.123000"
+          }, {
+              "CASE WHEN id = 2 THEN CAST(TIME '01:02:03.123' AS TIME(3)) ELSE CAST(TIME '01:02:03' AS TIME(6)) END",
+              "01:02:03.000000"
+          }, {
+              "COALESCE(CAST(TIME '01:02:03.1' AS TIME(1)), CAST(TIME '01:02:03' AS TIME(6)))", "01:02:03.100000"
+          }
+      }) {
+        String sql = "SELECT JSON_ARRAY(" + sample[0] + ") FROM (SELECT 1 AS id) q";
+        try (var result = statement.executeQuery(sql)) {
+          assertTrue(result.next(), sql);
+          assertEquals("[\"" + sample[1] + "\"]", result.getString(1), sql);
+          assertFalse(result.next(), sql);
+        }
+      }
+      try (var result = statement.executeQuery("SELECT JSON_ARRAY(CAST(TIME '01:02:03.123' AS TIME(6)))")) {
+        assertTrue(result.next());
+        assertEquals("[\"01:02:03.123000\"]", result.getString(1));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Derived tables, CTEs, and set operations retain the declared TIME precision
+   * so JSON serialization pads every row to the common width.
+   *
+   * @throws Exception
+   *           if a query fails
+   */
+  @Test
+  void nestedTimePrecisionPadsJsonRows() throws Exception {
+    try (var connection = connection(true, true); var statement = connection.createStatement()) {
+      String[][] queries = {
+          {
+              "SELECT JSON_ARRAY(x) FROM (SELECT CAST(TIME '01:02:03' AS TIME(6)) AS x) d", "01:02:03.000000"
+          }, {
+              "WITH t AS (SELECT CAST(TIME '01:02:03' AS TIME(6)) AS x) SELECT JSON_ARRAY(x) FROM t", "01:02:03.000000"
+          }
+      };
+      for (String[] sample : queries) {
+        try (var result = statement.executeQuery(sample[0])) {
+          assertTrue(result.next(), sample[0]);
+          assertEquals("[\"" + sample[1] + "\"]", result.getString(1), sample[0]);
+          assertFalse(result.next(), sample[0]);
+        }
+      }
+      String[][] unions = {
+          {
+              "SELECT JSON_ARRAY(x) FROM (SELECT CAST(TIME '01:02:03.1' AS TIME(1)) AS x "
+                  + "UNION ALL SELECT CAST(TIME '01:02:03' AS TIME(6))) d",
+              "01:02:03.100000", "01:02:03.000000"
+          }, {
+              "WITH t AS (SELECT CAST(TIME '01:02:03.1' AS TIME(1)) AS x "
+                  + "UNION ALL SELECT CAST(TIME '01:02:03' AS TIME(6))) SELECT JSON_ARRAY(x) FROM t",
+              "01:02:03.100000", "01:02:03.000000"
+          }
+      };
+      for (String[] sample : unions) {
+        try (var result = statement.executeQuery(sample[0])) {
+          assertTrue(result.next(), sample[0]);
+          assertEquals("[\"" + sample[1] + "\"]", result.getString(1), sample[0]);
+          assertTrue(result.next(), sample[0]);
+          assertEquals("[\"" + sample[2] + "\"]", result.getString(1), sample[0]);
+          assertFalse(result.next(), sample[0]);
+        }
+      }
+    }
+  }
+
+  /**
+   * Stored TIME columns preserve significant digits without storage-based
+   * padding, directly and through nested inputs.
+   *
+   * @throws Exception
+   *           if a query fails
+   */
+  @Test
+  void storedTimePadsToSqlPrecision() throws Exception {
+    try (var connection = connection(true, true); var statement = connection.createStatement()) {
+      List<String> expected = List.of("[\"10:00:00.000\"]", "[\"10:00:00.500\"]", "[\"10:00:00.250\"]");
+      try (var result = statement.executeQuery("SELECT JSON_ARRAY(t) FROM clocks ORDER BY id")) {
+        for (String json : expected) {
+          assertTrue(result.next());
+          assertEquals(json, result.getString(1));
+        }
+        assertFalse(result.next());
+      }
+      List<String> queries = List.of("SELECT JSON_ARRAY(t) FROM (SELECT t FROM clocks) d",
+          "WITH c AS (SELECT t FROM clocks) SELECT JSON_ARRAY(t) FROM c");
+      for (String sql : queries) {
+        List<String> rows = new ArrayList<>();
+        try (var result = statement.executeQuery(sql)) {
+          while (result.next()) {
+            rows.add(result.getString(1));
+          }
+        }
+        assertEquals(expected.stream().sorted().toList(), rows.stream().sorted().toList(), sql);
+      }
+    }
+  }
+
+  /**
+   * Matches stored TIME text to equivalent explicit and conditional declarations.
+   *
+   * @throws Exception
+   *           if querying fails
+   */
+  @Test
+  void storedTimeMatchesDeclaredJsonPrecision() throws Exception {
+    try (var connection = connection(true, true); var statement = connection.createStatement()) {
+      for (String[] sample : List.of(new String[]{
+          "t", "3"
+      }, new String[]{
+          "u", "6"
+      })) {
+        String column = sample[0];
+        String type = "TIME(" + sample[1] + ")";
+        try (var result = statement.executeQuery("SELECT JSON_ARRAY(" + column + "),JSON_ARRAY(CAST(" + column + " AS "
+            + type + ")),JSON_ARRAY(COALESCE(" + column + ",CAST(NULL AS " + type + "))) FROM clocks")) {
+          while (result.next()) {
+            assertEquals(result.getString(1), result.getString(2));
+            assertEquals(result.getString(1), result.getString(3));
+          }
+        }
+      }
+    }
   }
 
   /**

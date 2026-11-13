@@ -7,14 +7,17 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
 import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.NullValue;
 import net.sf.jsqlparser.expression.StringValue;
+import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.expression.TimeValue;
 import net.sf.jsqlparser.expression.TimestampValue;
+import net.sf.jsqlparser.schema.Column;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.engine.function.DateTimeFunctions;
@@ -36,9 +39,10 @@ public final class ScalarExpressionSchemas {
   }
 
   /**
-   * Resolves nonnumeric literals and CAST declarations without evaluating rows.
-   * Unsupported scalar declarations remain unknown rather than applying ARRAY
-   * element validation or advertising an unimplemented value representation.
+   * Resolves nonnumeric literals, CAST declarations, and native timestamp
+   * conditionals without evaluating rows. Unsupported scalar declarations remain
+   * unknown rather than applying ARRAY element validation or advertising an
+   * unimplemented value representation.
    *
    * @param expression
    *          scalar projection
@@ -62,6 +66,10 @@ public final class ScalarExpressionSchemas {
     if (cast != null && cast.getColDataType() != null) {
       return declaredSchema(cast.getColDataType().getDataType());
     }
+    Schema nativeTimestamp = nativeTimestampConditional(expression);
+    if (nativeTimestamp != null) {
+      return nativeTimestamp;
+    }
     return switch (ExpressionEvaluator.unwrapParenthesis(expression)) {
       case NullValue value -> Schema.create(Schema.Type.NULL);
       case DateValue value -> declaredSchema("date");
@@ -73,6 +81,44 @@ public final class ScalarExpressionSchemas {
       case DateTimeLiteralExpression literal -> declaredSchema(literal.getType().name());
       case null, default -> null;
     };
+  }
+
+  /**
+   * Retains the native representation of conditionals containing only local
+   * timestamp value functions and NULL, independently of JDBC ARRAY coercion.
+   *
+   * @param expression
+   *          possible conditional expression
+   * @return native local timestamp declaration, or null for other branches
+   */
+  private static Schema nativeTimestampConditional(Expression expression) {
+    Expression value = ExpressionEvaluator.unwrapParenthesis(expression);
+    List<? extends Expression> branches;
+    if (value instanceof CaseExpression choice) {
+      branches = ExpressionBranches.caseResults(choice);
+    } else if (value instanceof net.sf.jsqlparser.expression.Function function
+        && ExpressionBranches.isCoalesce(function) && function.getParameters() != null) {
+      branches = function.getParameters();
+    } else {
+      return null;
+    }
+    boolean found = false;
+    for (Expression branch : branches) {
+      Expression result = ExpressionEvaluator.unwrapParenthesis(branch);
+      if (result instanceof NullValue) {
+        continue;
+      }
+      var keyword = result instanceof Column column
+          ? SqlExpressionNormalizer.timeKeyword(column)
+          : result instanceof TimeKeyExpression time ? time : null;
+      if (keyword != null && "LOCALTIMESTAMP".equalsIgnoreCase(keyword.getStringValue())
+          || nativeTimestampConditional(result) != null) {
+        found = true;
+      } else {
+        return null;
+      }
+    }
+    return found ? TemporalValueType.LOCAL_TIMESTAMP.schema() : null;
   }
 
   /**
@@ -221,9 +267,8 @@ public final class ScalarExpressionSchemas {
 
   /**
    * Maps implemented nonnumeric scalar type declarations to value schemas.
-   * Numeric declarations use the numeric expression resolver. Character LOB and
-   * time-zone CAST declarations remain unresolved until their scalar evaluation
-   * supplies the corresponding value representations.
+   * Numeric declarations use the numeric expression resolver. Character LOB
+   * declarations remain unresolved until scalar evaluation supplies their values.
    *
    * @param typeName
    *          SQL type name, including optional precision
@@ -237,7 +282,9 @@ public final class ScalarExpressionSchemas {
     return switch (normalized) {
       case "date" -> LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
       case "time", "timewithouttimezone" -> LogicalTypes.timeMillis().addToSchema(Schema.create(Schema.Type.INT));
-      case "timestamp", "timestampwithouttimezone", "datetime" -> TemporalValueType.UTC_TIMESTAMP.schema();
+      case "timestamp", "timestampwithouttimezone", "datetime" -> TemporalValueType.JDBC_LOCAL_TIMESTAMP.schema();
+      case "timewithtimezone" -> TemporalValueType.OFFSET_TIME.schema();
+      case "timestampwithtimezone" -> TemporalValueType.OFFSET_TIMESTAMP.schema();
       case "boolean", "bool" -> Schema.create(Schema.Type.BOOLEAN);
       default -> {
         JDBCType type = declaredJdbcType(typeName);

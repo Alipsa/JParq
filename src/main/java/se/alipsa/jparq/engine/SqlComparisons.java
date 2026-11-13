@@ -6,8 +6,14 @@ import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
+import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.Set;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
@@ -60,6 +66,33 @@ public final class SqlComparisons {
         throw syntaxFailure("Cannot compare binary and nonbinary operands");
       }
       return compareBinary(binaryBytes(l), binaryBytes(r));
+    }
+    Object leftTemporal = TemporalOperands.comparisonValue(new TemporalOperands.Operand(l, null), r);
+    Object rightTemporal = TemporalOperands.comparisonValue(new TemporalOperands.Operand(r, null), l);
+    if (leftTemporal instanceof OffsetDateTime left && rightTemporal instanceof OffsetDateTime right) {
+      return left.toInstant().compareTo(right.toInstant());
+    }
+    if (leftTemporal instanceof OffsetTime left && rightTemporal instanceof OffsetTime right) {
+      return left.withOffsetSameInstant(ZoneOffset.UTC).toLocalTime()
+          .compareTo(right.withOffsetSameInstant(ZoneOffset.UTC).toLocalTime());
+    }
+    if (l instanceof LocalDateTime left && r instanceof LocalDateTime right) {
+      return left.compareTo(right);
+    }
+    if (l instanceof LocalDateTime left && r instanceof Timestamp right) {
+      return left.compareTo(right.toLocalDateTime());
+    }
+    if (l instanceof Timestamp left && r instanceof LocalDateTime right) {
+      return left.toLocalDateTime().compareTo(right);
+    }
+    if (l instanceof LocalTime left && r instanceof LocalTime right) {
+      return left.compareTo(right);
+    }
+    if (l instanceof LocalTime left && r instanceof Time right) {
+      return left.compareTo(DateTimeFunctions.toLocalTime(right));
+    }
+    if (l instanceof Time left && r instanceof LocalTime right) {
+      return DateTimeFunctions.toLocalTime(left).compareTo(right);
     }
     if (l instanceof Timestamp && r instanceof Timestamp) {
       return ((Timestamp) l).compareTo((Timestamp) r);
@@ -193,7 +226,8 @@ public final class SqlComparisons {
   }
 
   /**
-   * Compare two values, mapping SQL UNKNOWN to {@code null}.
+   * Compare values or declared temporal operands, mapping SQL UNKNOWN to
+   * {@code null}.
    *
    * @param left
    *          left-hand value (may be {@code null})
@@ -206,6 +240,15 @@ public final class SqlComparisons {
    *           compared; the cause carries SQLState 42000
    */
   public static Integer compareOrUnknown(Object left, Object right) {
+    if (left instanceof TemporalOperands.Operand || right instanceof TemporalOperands.Operand) {
+      TemporalOperands.Operand first = left instanceof TemporalOperands.Operand operand
+          ? operand
+          : new TemporalOperands.Operand(left, null);
+      TemporalOperands.Operand second = right instanceof TemporalOperands.Operand operand
+          ? operand
+          : new TemporalOperands.Operand(right, null);
+      return TemporalOperands.compare(first, second);
+    }
     if (left == null || right == null) {
       return null;
     }

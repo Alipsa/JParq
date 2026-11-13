@@ -8,13 +8,17 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Types;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.stream.Stream;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
 /**
  * Verifies scalar metadata does not claim unimplemented CAST representations.
@@ -22,13 +26,41 @@ import org.junit.jupiter.params.provider.ValueSource;
 class ScalarCastMetadataTest {
 
   /**
+   * Retains the native local timestamp representation and metadata of value
+   * functions.
+   *
+   * @param expression
+   *          native timestamp conditional
+   * @throws Exception
+   *           if querying fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "COALESCE(LOCALTIMESTAMP,NULL)", "CASE WHEN TRUE THEN LOCALTIMESTAMP ELSE NULL END",
+      "COALESCE(CASE WHEN TRUE THEN LOCALTIMESTAMP END,LOCALTIMESTAMP)"
+  })
+  void preservesNativeTimestampConditionals(String expression) throws Exception {
+    try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
+      for (String sql : List.of("SELECT " + expression + " AS x", "SELECT x FROM (SELECT " + expression + " AS x) d",
+          "WITH c AS (SELECT " + expression + " AS x) SELECT x FROM c")) {
+        try (var result = statement.executeQuery(sql)) {
+          assertEquals(Types.TIMESTAMP, result.getMetaData().getColumnType(1), sql);
+          assertEquals(LocalDateTime.class.getName(), result.getMetaData().getColumnClassName(1), sql);
+          assertTrue(result.next());
+          assertInstanceOf(LocalDateTime.class, result.getObject(1), sql);
+          assertFalse(result.next());
+        }
+      }
+    }
+  }
+
+  /**
    * Supplies scalar CASTs whose declared representations are not implemented.
    *
    * @return SQL expressions and their existing evaluated values
    */
   static Stream<Arguments> unresolvedCasts() {
-    return Stream.of(Arguments.of("CAST('x' AS CLOB)", "x"),
-        Arguments.of("CAST('10:00:00' AS TIME WITH TIME ZONE)", Time.valueOf("10:00:00")));
+    return Stream.of(Arguments.of("CAST('x' AS CLOB)", "x"));
   }
 
   /**
@@ -60,6 +92,69 @@ class ScalarCastMetadataTest {
           }
         }
       }
+    }
+  }
+
+  /**
+   * Exposes offset CAST declarations before reading rows, including empty inputs.
+   *
+   * @param type
+   *          offset datetime target
+   * @param literal
+   *          local character operand
+   * @param jdbcType
+   *          expected JDBC type
+   * @param className
+   *          expected Java class
+   * @throws Exception
+   *           if querying fails
+   */
+  @ParameterizedTest
+  @CsvSource({
+      "TIME WITH TIME ZONE,10:00:00,2013,java.time.OffsetTime",
+      "TIMESTAMP WITH TIME ZONE,2024-07-01 10:00:00,2014,java.time.OffsetDateTime"
+  })
+  void retainsOffsetCastMetadata(String type, String literal, int jdbcType, String className) throws Exception {
+    try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
+      for (String suffix : List.of("", " FROM mtcars WHERE model = 'Mazda RX4'", " FROM mtcars WHERE 1 = 0")) {
+        try (var result = statement.executeQuery("SELECT CAST('" + literal + "' AS " + type + ") AS x" + suffix)) {
+          assertEquals(jdbcType, result.getMetaData().getColumnType(1));
+          assertEquals(className, result.getMetaData().getColumnClassName(1));
+          if (suffix.contains("1 = 0")) {
+            assertFalse(result.next());
+          } else {
+            assertTrue(result.next());
+            assertTrue(Class.forName(className).isInstance(result.getObject(1)));
+            if (jdbcType == Types.TIME_WITH_TIMEZONE) {
+              assertEquals(Time.valueOf("10:00:00"), result.getTime(1));
+            } else {
+              var timestamp = result.getObject(1, OffsetDateTime.class);
+              assertEquals(timestamp.toInstant(), result.getTimestamp(1).toInstant());
+            }
+            assertFalse(result.next());
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Retains ordinary field conversion when an offset CAST changes datetime
+   * fields.
+   *
+   * @throws Exception
+   *           if querying fails
+   */
+  @Test
+  void offsetCastsConvertDatetimeFields() throws Exception {
+    try (var connection = DriverManager.getConnection(url());
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT CAST(DATE '2024-07-01' AS TIMESTAMP WITH TIME ZONE),"
+            + "CAST(TIMESTAMP '2024-07-01 10:02:03.987' AS TIME WITH TIME ZONE),CURRENT_TIMESTAMP")) {
+      assertTrue(result.next());
+      assertEquals(DateTimeFunctions.offsetTimestamp(LocalDateTime.parse("2024-07-01T00:00:00")), result.getObject(1));
+      assertEquals(DateTimeFunctions.offsetTimestamp(LocalDateTime.parse("2024-07-01T10:02:03")).toOffsetTime(),
+          result.getObject(2));
     }
   }
 

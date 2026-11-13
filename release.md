@@ -2,6 +2,31 @@
 
 ### 1.4.0
 
+- Serialize JSON constructor TIME and TIMESTAMP values as ISO-8601 strings, including values inside
+  arrays and structs. Render standalone UTC-adjusted timestamps in UTC independently of the JVM zone
+  and retain local timestamp fields through literals, casts, arithmetic, subqueries, and materialization.
+  Support LOCALTIME and LOCALTIMESTAMP, case-insensitive columns, explicit TIME fractional digits,
+  direct JSON-text embedding, and cached declarations (#312). Wrapped UTC conditionals retain their
+  selected instant through interval arithmetic when the wrapper declaration is unknown (#431).
+  Raw local fields avoid DST gap normalization; values already decoded through Timestamp remain #446.
+
+- Keep UTC-adjusted and local storage families in their existing JDBC TIMESTAMP type when combining
+  them in CASE, COALESCE, ARRAY, and set operations. These combinations use the JDBC wall-clock view;
+  they do not acquire a zone merely because storage is UTC-adjusted. Conditional metadata and scalar
+  and ARRAY materialization retain the same common declaration (#525). Actual WITH TIME ZONE operands
+  promote local timestamps using their date's zone rules and preserve UTC source instants;
+  date-free TIME values use the execution displacement.
+  DATE-only and local-only ARRAY constructors use ordinary evaluation; offset-aware ARRAY evaluation
+  validates once. Stored arrays ignore nullable unions when deciding whether conversion is needed.
+
+- Share SQL character formatting between scalar and ARRAY casts and JDBC getString. Offset timestamps
+  use a space separator and include seconds even when zero (#442). Materialized reference arrays
+  render their elements instead of Java array identities.
+
+- DATE arithmetic with declared HOUR/MINUTE/SECOND interval fields returns JDBC Timestamp independently
+  of the interval value. Zero and 24-hour intervals no longer return JDBC Date. Direct JDBC results, derived
+  tables, CTEs, and UNNEST have regression coverage outside the JSON constructor suite (#312).
+
 - Resolve SELECT aliases inside ORDER BY arithmetic and scalar functions for computed projections
   and grouped aggregates as a fallback when no input column matches. Preserve input-column precedence,
   nested query scopes, and output-name ambiguity checks. Reject ungrouped ORDER BY input columns even when
@@ -70,7 +95,10 @@
   BLOB lengths support K/M/G/T/P multipliers with overflow-checked long bounds; short values do not
   allocate the declared capacity. Nonbinary CASTs no longer parse binary lengths during row evaluation.
   Character-to-binary and explicit binary-to-character CASTs use UTF-8; malformed UTF-8 raises `22021`
-  rather than inserting replacement characters. OCTET_LENGTH counts binary bytes.
+  rather than inserting replacement characters. JDBC `getString` also uses strict UTF-8 decoding for
+  scalar binary values and ARRAY elements: malformed bytes now raise `SQLDataException` (`22021`).
+  Clients displaying binary columns should use `getBytes` or `getBinaryStream` to retrieve the original
+  bytes. OCTET_LENGTH counts binary bytes.
   Character-only functions and text-column comparisons reject implicit binary operands with `42000`
   instead of Java identity text (partial #355); known incompatible length/case/CONCAT calls and
   comparisons in plain SELECTs are validated before rows are read, including IN, BETWEEN, quantified
@@ -101,8 +129,57 @@
 - Preserve CURRENT_TIMESTAMP, CURRENT_TIME, LOCALTIMESTAMP, and LOCALTIME values through derived tables
   and CTEs (#277), including their JDBC metadata, nanosecond precision, and UTC offsets.
   Preserve temporal CAST declarations in set operations and derived MIN/MAX metadata. Promote compatible
-  local and offset temporal values using the session offset.
-  **Behavior changes:** VALUES mixing DATE with TIMESTAMP or TIME now fails with SQLState `42000`;
+  local timestamps using their date's zone rules and date-free times using the execution offset.
+  Timestamp gaps shift forward, and overlaps choose the later offset, matching JDBC decoding.
+  Timestamp promotion and execution clocks follow the effective JVM default time zone, including
+  runtime `TimeZone.setDefault(...)` changes when `user.timezone` still names the initial zone.
+  Explicit WITH TIME ZONE casts use the same
+  source-aware promotion, preserving UTC-adjusted column instants. Their scalar JDBC metadata and
+  values now expose TIME_WITH_TIMEZONE/OffsetTime or TIMESTAMP_WITH_TIMEZONE/OffsetDateTime;
+  `getDate`, `getTime`, and `getTimestamp` also accept offset timestamps, converting their instants
+  to JVM-local JDBC fields. Offset TIME getters convert at the current SQL session displacement,
+  keeping CURRENT_TIME and LOCALTIME clock fields aligned even when historical DST rules differ.
+  TIMESTAMP WITH TIME ZONE comparisons, ordering, subtraction, and relational keys use UTC instants;
+  TIME WITH TIME ZONE uses UTC-normalized clock fields. Timestamp-to-TIME WITH TIME ZONE casts preserve
+  both the source instant's time and its displacement. Stored TIME JSON text retains its SQL storage
+  precision (three digits for time-millis, six for time-micros); unqualified TIME casts retain precision
+  zero, while LOCALTIME retains native fractional digits.
+  Correlated outer bindings and subquery results retain temporal source declarations for IN, ANY,
+  EXISTS, and scalar queries. Window ordering, ranks, and MIN/MAX use the same SQL comparison rules
+  as ordinary ordering. Addition and subtraction retain the same JDBC timestamp representation
+  and character forms for stored local timestamps. Grouped HAVING and scalar-subquery bindings
+  retain grouped operands' declarations, including suppressed NULL keys. Correlated local timestamp
+  bindings preserve stored clock fields through DST gaps before offset promotion.
+  MIN/MAX retain the selected input's declaration for grouped predicates and scalar expressions.
+  HAVING scalar and quantified subquery comparisons retain the executing projection's declaration.
+  FIRST_VALUE, LAST_VALUE, NTH_VALUE, LAG, LEAD, and window MIN/MAX retain their input declarations
+  when compared with offset values. Grouped MIN/MAX evaluate each input once and retain the
+  winning source operand, including its stored local fields.
+  Grouped SELECT-list comparisons retain scalar subquery projection declarations. Selected and
+  compared occurrences share one materialized result per group, while skipped branches
+  remain lazy. Each group retains its subquery results until the query finishes, so cache
+  memory grows with the group count, as the per-group accumulators already do.
+  LAG/LEAD defaults convert to the value expression's SQL type when selected; navigation results
+  retain the selected source's temporal provenance so local defaults are not read as UTC storage.
+  Incompatible LAG/LEAD default types fail during preparation with SQLState `42000`, including
+  empty inputs. ARRAY errors include nested element types, and interval defaults reject year-month/day-time
+  kind mismatches. Numeric defaults truncate fractional digits toward zero on assignment, retaining
+  range checks for leading-digit overflow.
+  Correlated LAG/LEAD defaults validate against the outer scope's column types during preparation,
+  including quoted mixed-case references, so incompatible defaults fail with SQLState `42000`
+  regardless of the data. A table alias now hides the table name at execution as well, so a join
+  whose alias equals another input's table name runs instead of failing with a duplicate-qualifier
+  error.
+  Correlated local timestamp projections, character casts, and arithmetic retain JDBC Timestamp
+  values matching their metadata. Ordinary local predicates use consistent engine values on both
+  sides, while offset promotion retains the original stored fields. Grouping sources are decoded
+  only when a group is created.
+  Window ordering and MIN/MAX reject binary/nonbinary and numeric/INTERVAL mixtures with SQLState
+  `42000`.
+  **Behavior changes:** Changing only `System.setProperty("user.timezone", ...)` at runtime no longer
+  overrides the effective JVM default zone for `CURRENT_*`/`LOCAL*` datetime values or temporal conversions;
+  use `TimeZone.setDefault(...)` to change the runtime zone. VALUES mixing DATE with TIMESTAMP or TIME
+  now fails with SQLState `42000`;
   these inputs previously widened to TIMESTAMP or fell back to VARCHAR. Set operations containing
   CAST(NULL AS DATE/TIME/TIMESTAMP), including precision with WITH/WITHOUT TIME ZONE clauses, now retain the
   declared temporal JDBC metadata instead of OTHER.

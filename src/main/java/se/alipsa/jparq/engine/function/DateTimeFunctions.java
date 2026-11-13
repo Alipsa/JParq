@@ -32,6 +32,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.TimeZone;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.IntervalQualifier;
@@ -90,34 +91,42 @@ public final class DateTimeFunctions {
   }
 
   /**
-   * Resolve the time zone to use for time-key evaluations. Prefers the
-   * {@code user.timezone} system property when present to honor test isolation
-   * and runtime overrides, otherwise falls back to the JVM default zone.
+   * Resolves the effective JVM zone used by JDBC Timestamp conversions, including
+   * runtime changes through {@link TimeZone#setDefault(TimeZone)}. The initial
+   * user.timezone property need not reflect the current default. This is
+   * equivalent to {@link ZoneId#systemDefault()}, which delegates to
+   * {@link TimeZone#getDefault()}; the method exists so call sites read as
+   * intent-revealing conversions rather than raw zone access.
    *
    * @return the active {@link ZoneId} to use
    */
-  static ZoneId defaultZone() {
-    String userZone = System.getProperty("user.timezone");
-    if (userZone != null && !userZone.isBlank()) {
-      try {
-        return ZoneId.of(userZone);
-      } catch (Exception ignored) {
-        // fall through to system default if the provided zone is invalid
-      }
-    }
-    return ZoneId.systemDefault();
+  public static ZoneId defaultZone() {
+    return TimeZone.getDefault().toZoneId();
   }
 
   /**
    * Resolve the SQL-session time zone displacement: the current offset of the
-   * active time zone at statement execution. Local TIME and TIMESTAMP values
-   * promoted to their WITH TIME ZONE counterparts receive this displacement
-   * regardless of their own date.
+   * active time zone at statement execution. Local TIME values have no date and
+   * use this displacement; local timestamps use their own date's zone rules.
    *
    * @return the current offset of the active time zone
    */
   public static ZoneOffset sessionOffset() {
     return StatementTime.current().getOffset();
+  }
+
+  /**
+   * Resolves local timestamp fields using the active zone's rules for their date.
+   * Gaps shift forward by the transition duration, and overlaps choose the later
+   * offset, matching ordinary JDBC Timestamp decoding.
+   *
+   * @param timestamp
+   *          local date and time
+   * @return timestamp with its date-specific displacement and normalized gap
+   *         fields
+   */
+  public static OffsetDateTime offsetTimestamp(LocalDateTime timestamp) {
+    return timestamp.atZone(defaultZone()).withLaterOffsetAtOverlap().toOffsetDateTime();
   }
 
   /**
@@ -481,7 +490,7 @@ public final class DateTimeFunctions {
   }
 
   /**
-   * Handle subtraction for temporal values.
+   * Handles temporal subtraction, using UTC for offset datetime differences.
    *
    * @param left
    *          the left operand
@@ -491,8 +500,7 @@ public final class DateTimeFunctions {
    *         internal interval for other temporal differences, the result of an
    *         interval offset, or {@code null} if not a supported temporal
    *         subtraction, including TIME paired with DATE or TIMESTAMP; internal
-   *         differences support comparison and extraction but cannot be returned
-   *         as JDBC column values
+   *         differences support comparison, extraction, and JDBC interval values
    */
   public static Object minus(Object left, Object right) {
     if (left instanceof TemporalInterval li && right instanceof TemporalInterval ri) {
@@ -500,6 +508,13 @@ public final class DateTimeFunctions {
     }
     if (right instanceof TemporalInterval ri) {
       return applyInterval(left, ri.negate());
+    }
+    if (left instanceof OffsetDateTime end && right instanceof OffsetDateTime start) {
+      return TemporalInterval.between(start.toInstant(), end.toInstant());
+    }
+    if (left instanceof OffsetTime end && right instanceof OffsetTime start) {
+      return TemporalInterval.between(start.withOffsetSameInstant(ZoneOffset.UTC).toLocalTime(),
+          end.withOffsetSameInstant(ZoneOffset.UTC).toLocalTime());
     }
     if (isTemporal(left) && isTemporal(right)) {
       TemporalAccessor start = toTemporalAccessor(right);
@@ -714,7 +729,7 @@ public final class DateTimeFunctions {
     }
     if (temporal instanceof Date d) {
       LocalDateTime adjusted = d.toLocalDate().atStartOfDay().plus(interval.period()).plus(interval.duration());
-      if (interval.hasTimeComponent()) {
+      if (interval.qualifier().includesTimeFields() || interval.hasTimeComponent()) {
         return Timestamp.valueOf(adjusted);
       }
       return Date.valueOf(adjusted.toLocalDate());
@@ -735,7 +750,7 @@ public final class DateTimeFunctions {
     }
     if (temporal instanceof LocalDate ld) {
       LocalDateTime adjusted = ld.atStartOfDay().plus(interval.period()).plus(interval.duration());
-      if (interval.hasTimeComponent()) {
+      if (interval.qualifier().includesTimeFields() || interval.hasTimeComponent()) {
         return adjusted;
       }
       return adjusted.toLocalDate();
@@ -924,7 +939,7 @@ public final class DateTimeFunctions {
    *           if precision is outside the supported range, carrying SQLState
    *           42000
    */
-  private static int castFractionalNanos(CastExpression cast, int nanos, int defaultPrecision) {
+  public static int castFractionalNanos(CastExpression cast, int nanos, int defaultPrecision) {
     Integer precision = firstIntegerArgument(cast);
     if (precision == null) {
       precision = defaultPrecision;

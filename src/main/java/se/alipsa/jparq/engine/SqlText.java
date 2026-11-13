@@ -5,12 +5,37 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLDataException;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
+import java.time.temporal.ChronoField;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
+import java.util.StringJoiner;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
  * Separates explicit SQL text conversion from implicit string operand coercion.
  */
 public final class SqlText {
+
+  /**
+   * SQL timestamp character form, including seconds and significant fractions.
+   * The offset follows the SQL time zone interval syntax, printing {@code +00:00}
+   * for a zero offset.
+   */
+  private static final DateTimeFormatter OFFSET_TIMESTAMP = new DateTimeFormatterBuilder()
+      .append(DateTimeFormatter.ISO_LOCAL_DATE).appendLiteral(' ').appendPattern("HH:mm:ss")
+      .appendFraction(ChronoField.NANO_OF_SECOND, 0, 9, true).appendOffset("+HH:MM", "+00:00").toFormatter(Locale.ROOT);
+
+  /**
+   * SQL time character form with an explicit offset, printing {@code +00:00} for
+   * a zero offset.
+   */
+  private static final DateTimeFormatter OFFSET_TIME = new DateTimeFormatterBuilder().appendPattern("HH:mm:ss")
+      .appendFraction(ChronoField.NANO_OF_SECOND, 0, 9, true).appendOffset("+HH:MM", "+00:00").toFormatter(Locale.ROOT);
 
   /** Prevents utility class instantiation. */
   private SqlText() {
@@ -33,7 +58,8 @@ public final class SqlText {
 
   /**
    * Converts a value for an explicit character CAST, preserving SQL NULL. Binary
-   * inputs are decoded as UTF-8.
+   * inputs are decoded as UTF-8; reference arrays retain their element text
+   * across materialization.
    *
    * @param value
    *          SQL value to convert
@@ -50,7 +76,34 @@ public final class SqlText {
     if (value instanceof ByteBuffer buffer) {
       return decodeBinary(buffer.duplicate());
     }
+    if (value instanceof Object[] array) {
+      return arrayText(Arrays.asList(array));
+    }
+    if (value instanceof List<?> list) {
+      return arrayText(list);
+    }
+    if (value instanceof OffsetDateTime timestamp) {
+      return OFFSET_TIMESTAMP.format(timestamp);
+    }
+    if (value instanceof OffsetTime time) {
+      return OFFSET_TIME.format(time);
+    }
     return value == null ? null : value.toString();
+  }
+
+  /**
+   * Renders ARRAY elements using the same explicit conversion as scalar values.
+   *
+   * @param values
+   *          array elements
+   * @return bracketed element text, including SQL NULL elements
+   */
+  private static String arrayText(List<?> values) {
+    StringJoiner text = new StringJoiner(", ", "[", "]");
+    for (Object value : values) {
+      text.add(value == null ? "null" : cast(value));
+    }
+    return text.toString();
   }
 
   /**

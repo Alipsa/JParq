@@ -1,7 +1,6 @@
 package se.alipsa.jparq;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.sql.Array;
 import java.sql.Blob;
 import java.sql.Date;
@@ -13,8 +12,9 @@ import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -54,6 +54,7 @@ import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.RelationalKeys;
 import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
+import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.engine.function.AggregateFunctions;
@@ -1393,16 +1394,22 @@ public class JParqResultSet extends ResultSetAdapter {
         return null;
       }
       case byte[] bytes -> {
-        return new String(bytes, StandardCharsets.UTF_8);
+        return sqlText(bytes);
       }
       case Object[] objects -> {
-        return Arrays.deepToString(objects);
+        return sqlText(objects);
+      }
+      case OffsetDateTime timestamp -> {
+        return SqlText.cast(timestamp);
+      }
+      case OffsetTime time -> {
+        return SqlText.cast(time);
+      }
+      case List<?> values -> {
+        return sqlText(values);
       }
       case ByteBuffer buffer -> {
-        ByteBuffer dup = buffer.duplicate();
-        byte[] bytes = new byte[dup.remaining()];
-        dup.get(bytes);
-        return new String(bytes, StandardCharsets.UTF_8);
+        return sqlText(buffer);
       }
       default -> {
       }
@@ -1413,6 +1420,27 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public String getString(String columnLabel) throws SQLException {
     return getString(findColumn(columnLabel));
+  }
+
+  /**
+   * Renders an ARRAY through the shared SQL text form, converting invalid binary
+   * elements into the SQLDataException (SQLState 22021) a JDBC getter must throw.
+   *
+   * @param value
+   *          array elements
+   * @return bracketed element text
+   * @throws SQLException
+   *           if an element is not valid UTF-8, with SQLState 22021
+   */
+  private static String sqlText(Object value) throws SQLException {
+    try {
+      return SqlText.cast(value);
+    } catch (IllegalArgumentException failure) {
+      if (failure.getCause() instanceof SQLException sql) {
+        throw sql;
+      }
+      throw failure;
+    }
   }
 
   @Override
@@ -1602,6 +1630,15 @@ public class JParqResultSet extends ResultSetAdapter {
     return (byte[]) v;
   }
 
+  /**
+   * Returns the JVM-local date, converting offset timestamp instants first.
+   *
+   * @param columnIndex
+   *          one-based column index
+   * @return JDBC date, or null for SQL NULL
+   * @throws SQLException
+   *           if the value is unavailable or cannot be converted to DATE
+   */
   @Override
   public Date getDate(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
@@ -1609,6 +1646,7 @@ public class JParqResultSet extends ResultSetAdapter {
       case null -> null;
       case Date date -> date;
       case Timestamp ts -> new Date(ts.getTime());
+      case OffsetDateTime timestamp -> new Date(timestamp.toInstant().toEpochMilli());
       case String s -> Date.valueOf(s);
       case Long l -> new Date(l);
       case Double d -> new Date(d.longValue());
@@ -1623,11 +1661,27 @@ public class JParqResultSet extends ResultSetAdapter {
     return getDate(findColumn(columnLabel));
   }
 
+  /**
+   * Returns JVM-local clock fields for offset timestamps. Offset TIME values use
+   * the current SQL session displacement before conversion to JDBC TIME.
+   *
+   * @param columnIndex
+   *          one-based column index
+   * @return JDBC time, or null for SQL NULL
+   * @throws SQLException
+   *           if the value is unavailable or cannot be converted to TIME
+   */
   @Override
   public Time getTime(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
     if (v == null) {
       return null;
+    }
+    if (v instanceof OffsetTime time) {
+      v = time.withOffsetSameInstant(DateTimeFunctions.sessionOffset()).toLocalTime();
+    }
+    if (v instanceof OffsetDateTime timestamp) {
+      v = Timestamp.from(timestamp.toInstant());
     }
     if (!(v instanceof Timestamp || v instanceof Time || v instanceof LocalTime || v instanceof String
         || v instanceof Long || v instanceof Double)) {
@@ -1651,6 +1705,7 @@ public class JParqResultSet extends ResultSetAdapter {
     return switch (v) {
       case null -> null;
       case Timestamp t -> t;
+      case OffsetDateTime timestamp -> Timestamp.from(timestamp.toInstant());
       case Date d -> new Timestamp(d.getTime());
       case String s -> Timestamp.valueOf(s);
       case Long l -> new Timestamp(l);

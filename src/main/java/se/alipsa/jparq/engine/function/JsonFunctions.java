@@ -8,12 +8,23 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
+import java.time.temporal.ChronoField;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
+import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericArray;
 import org.apache.avro.generic.GenericRecord;
@@ -23,6 +34,7 @@ import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.helper.IntervalType;
 import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.helper.TemporalInterval;
+import se.alipsa.jparq.helper.TemporalValueType;
 
 /**
  * SQL JSON_* functions using Jackson. Array access uses lax singleton wrapping.
@@ -30,11 +42,14 @@ import se.alipsa.jparq.helper.TemporalInterval;
  * intermediate items per step and 100,000 item/range evaluations over the
  * entire path. The positive integer system property
  * {@code jparq.json.maxIntermediateItems} overrides both limits when an
- * evaluation first needs an intermediate array step.
+ * evaluation first needs an intermediate array step. Temporal constructor
+ * values use ISO-8601 text; UTC-adjusted timestamps use UTC and local
+ * timestamps retain their wall-clock fields.
  */
 public final class JsonFunctions {
 
   private static final ObjectMapper MAPPER = new ObjectMapper();
+  private static final DateTimeFormatter[] TIME_FORMATTERS = timeFormatters();
 
   private static final long MAX_ARRAY_LITERAL = Integer.MAX_VALUE + 1L;
   private static final String LAST_INDEX = "last";
@@ -200,6 +215,34 @@ public final class JsonFunctions {
       }
     }
     return array.toString();
+  }
+
+  /**
+   * Converts a constructor argument while retaining its temporal declaration.
+   * Direct character arguments retain the JSON-text parsing heuristic.
+   *
+   * @param value
+   *          evaluated argument or raw Avro column value
+   * @param schema
+   *          argument declaration, or null when unknown
+   * @return corresponding JSON node
+   * @throws IllegalArgumentException
+   *           if a value is invalid for its declared logical type
+   */
+  public static JsonNode constructorValue(Object value, Schema schema) {
+    if (schema == null) {
+      return toNode(value);
+    }
+    Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    if (effective != null && effective.getType() == Schema.Type.MAP) {
+      // Direct MAP decoding is tracked separately in issue #313.
+      return toNode(value);
+    }
+    if (effective != null && effective.getType() == Schema.Type.STRING
+        && TemporalValueType.fromSchema(effective) == null) {
+      return toNode(value == null ? null : value.toString());
+    }
+    return toNode(value, schema);
   }
 
   /**
@@ -682,6 +725,24 @@ public final class JsonFunctions {
     if (value == null) {
       return MAPPER.nullNode();
     }
+    if (value instanceof Time time) {
+      return toNode(DateTimeFunctions.toLocalTime(time));
+    }
+    if (value instanceof LocalTime time) {
+      return MAPPER.getNodeFactory().textNode(DateTimeFormatter.ISO_LOCAL_TIME.format(time));
+    }
+    if (value instanceof Timestamp timestamp) {
+      return toNode(timestamp.toLocalDateTime());
+    }
+    if (value instanceof LocalDateTime timestamp) {
+      return MAPPER.getNodeFactory().textNode(DateTimeFormatter.ISO_LOCAL_DATE_TIME.format(timestamp));
+    }
+    if (value instanceof OffsetTime time) {
+      return MAPPER.getNodeFactory().textNode(DateTimeFormatter.ISO_OFFSET_TIME.format(time));
+    }
+    if (value instanceof OffsetDateTime timestamp) {
+      return MAPPER.getNodeFactory().textNode(DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(timestamp));
+    }
     if (value instanceof TemporalInterval interval) {
       return MAPPER.getNodeFactory().textNode(interval.toString());
     }
@@ -754,6 +815,39 @@ public final class JsonFunctions {
       return toNode(value);
     }
     Schema effective = JdbcTypeMapper.nonNullSchema(schema);
+    if (value instanceof Time time) {
+      return timeNode(DateTimeFunctions.toLocalTime(time), effective);
+    }
+    if (value instanceof LocalTime time) {
+      return timeNode(time, effective);
+    }
+    if (value instanceof Number number && effective.getLogicalType() instanceof LogicalTypes.TimeMillis) {
+      return timeNode(LocalTime.ofNanoOfDay(number.longValue() * 1_000_000L), effective);
+    }
+    if (value instanceof Number number && effective.getLogicalType() instanceof LogicalTypes.TimeMicros) {
+      return timeNode(LocalTime.ofNanoOfDay(number.longValue() * 1_000L), effective);
+    }
+    if (value instanceof LocalDateTime || value instanceof OffsetDateTime || value instanceof OffsetTime) {
+      return toNode(value);
+    }
+    TemporalValueType temporal = TemporalValueType.fromSchema(effective);
+    if (temporal != null) {
+      if (temporal == TemporalValueType.UTC_TIMESTAMP) {
+        return MAPPER.getNodeFactory().textNode(temporal.encode(value));
+      }
+      return toNode(temporal.normalize(value));
+    }
+    if (AvroCoercions.isLocalTimestamp(effective)) {
+      if (value instanceof Number number) {
+        return toNode(
+            LocalDateTime.ofInstant(AvroCoercions.timestampInstant(number.longValue(), effective), ZoneOffset.UTC));
+      }
+      return toNode(value instanceof Timestamp timestamp ? timestamp.toLocalDateTime() : value);
+    }
+    if (AvroCoercions.isTimestamp(effective)) {
+      Timestamp timestamp = (Timestamp) AvroCoercions.unwrap(value, effective);
+      return MAPPER.getNodeFactory().textNode(timestamp.toInstant().toString());
+    }
     if (IntervalType.matches(effective)) {
       return toNode(AvroCoercions.unwrap(value, effective));
     }
@@ -765,6 +859,46 @@ public final class JsonFunctions {
       case BYTES -> toNode(effective.getLogicalType() == null ? value : AvroCoercions.unwrap(value, effective));
       default -> toNode(AvroCoercions.unwrap(value, effective));
     };
+  }
+
+  /**
+   * Formats TIME with an explicit SQL fractional precision when available. Stored
+   * TIME values use their storage resolution as their SQL precision.
+   *
+   * @param time
+   *          decoded wall-clock time
+   * @param schema
+   *          value declaration
+   * @return ISO time text preserving the fractional digit width
+   */
+  private static JsonNode timeNode(LocalTime time, Schema schema) {
+    String declared = schema.getProp("jparq.temporal.precision");
+    int precision = declared != null
+        ? Integer.parseInt(declared)
+        : "true".equals(schema.getProp("jparq.temporal.nativePrecision"))
+            ? -1
+            : schema.getLogicalType() instanceof LogicalTypes.TimeMillis
+                ? 3
+                : schema.getLogicalType() instanceof LogicalTypes.TimeMicros ? 6 : -1;
+    DateTimeFormatter formatter = precision < 0 ? DateTimeFormatter.ISO_LOCAL_TIME : TIME_FORMATTERS[precision];
+    return MAPPER.getNodeFactory().textNode(formatter.format(time));
+  }
+
+  /**
+   * Builds immutable TIME formatters once for supported SQL precisions.
+   *
+   * @return formatters indexed by fractional-second precision
+   */
+  private static DateTimeFormatter[] timeFormatters() {
+    DateTimeFormatter[] formatters = new DateTimeFormatter[10];
+    for (int digits = 0; digits < formatters.length; digits++) {
+      var builder = new DateTimeFormatterBuilder().appendPattern("HH:mm:ss");
+      if (digits > 0) {
+        builder.appendFraction(ChronoField.NANO_OF_SECOND, digits, digits, true);
+      }
+      formatters[digits] = builder.toFormatter();
+    }
+    return formatters;
   }
 
   /**

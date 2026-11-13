@@ -2,6 +2,9 @@ package se.alipsa.jparq.engine;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -132,6 +135,12 @@ public final class RelationalKeys {
    * @return the original scalar when compatible, or a normalized content key
    */
   public static Object value(Object value, boolean normalizeWholeNumbers) {
+    if (value instanceof OffsetDateTime timestamp) {
+      return timestamp.toInstant();
+    }
+    if (value instanceof OffsetTime time) {
+      return time.withOffsetSameInstant(ZoneOffset.UTC).toLocalTime();
+    }
     if (value instanceof TemporalInterval interval) {
       return List.of(interval.period().toTotalMonths(), interval.duration().plusDays(interval.period().getDays()));
     }

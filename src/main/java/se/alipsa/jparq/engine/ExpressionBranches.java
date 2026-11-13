@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.Function;
 
 /**
  * Collects result expressions without evaluating their values or conditions.
@@ -11,6 +12,17 @@ import net.sf.jsqlparser.expression.Expression;
 public final class ExpressionBranches {
   /** Prevents utility class construction. */
   private ExpressionBranches() {
+  }
+
+  /**
+   * Identifies a COALESCE expression independently of name capitalization.
+   *
+   * @param expression
+   *          expression to inspect
+   * @return whether the expression invokes COALESCE
+   */
+  public static boolean isCoalesce(Expression expression) {
+    return expression instanceof Function function && "COALESCE".equalsIgnoreCase(function.getName());
   }
 
   /**
