@@ -4521,6 +4521,17 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
         yield converted;
       }
+      case MAP -> {
+        if (!(value instanceof Map<?, ?> map)) {
+          yield value;
+        }
+        Map<String, Object> converted = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+          converted.put(entry.getKey() == null ? null : entry.getKey().toString(),
+              toAvroValue(entry.getValue(), effective.getValueType()));
+        }
+        yield converted;
+      }
       default -> value;
     };
   }

@@ -254,4 +254,54 @@ class AvroCoercionsTest {
     record.put("x", "value");
     assertTrue(AvroCoercions.unwrap(record, recordSchema).toString().toLowerCase(Locale.ROOT).contains("value"));
   }
+
+  /**
+   * Decodes logical map values without mutating the input map, preserving string
+   * keys, NULL values, nested records, and nested containers.
+   */
+  @Test
+  void unwrapsLogicalMapValuesWithoutMutatingStorage() {
+    Schema date = LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
+    Schema decimal = LogicalTypes.decimal(4, 2).addToSchema(Schema.create(Schema.Type.BYTES));
+    Schema integer = Schema.create(Schema.Type.INT);
+    Schema recordSchema = SchemaBuilder.record("mapEntry").fields().requiredInt("n").endRecord();
+    GenericRecord entry = new GenericData.Record(recordSchema);
+    entry.put("n", 7);
+
+    Map<String, Object> dates = new HashMap<>();
+    dates.put("d", 1);
+    dates.put("z", null);
+    Object decoded = AvroCoercions.unwrap(dates, Schema.createMap(date));
+    Map<?, ?> dateMap = assertInstanceOf(Map.class, decoded);
+    assertEquals(Date.valueOf("1970-01-02"), dateMap.get("d"));
+    assertTrue(dateMap.containsKey("z"));
+    assertNull(dateMap.get("z"));
+    // The input map is unchanged and decoded values are retained when
+    // materialized maps are read again.
+    assertEquals(1, dates.get("d"));
+    assertEquals(dateMap, AvroCoercions.unwrap(dateMap, Schema.createMap(date)));
+
+    ByteBuffer bytes = ByteBuffer.wrap(new BigDecimal("12.34").unscaledValue().toByteArray());
+    Map<?, ?> decimalMap = assertInstanceOf(Map.class,
+        AvroCoercions.unwrap(java.util.Map.of("p", bytes), Schema.createMap(decimal)));
+    assertEquals(new BigDecimal("12.34"), decimalMap.get("p"));
+    assertEquals(0, bytes.position());
+
+    Map<?, ?> recordMap = assertInstanceOf(Map.class,
+        AvroCoercions.unwrap(java.util.Map.of("r", entry), Schema.createMap(recordSchema)));
+    assertSame(entry, recordMap.get("r"));
+
+    Schema array = Schema.createArray(Schema.createUnion(Schema.create(Schema.Type.NULL), integer));
+    Map<?, ?> arrayMap = assertInstanceOf(Map.class,
+        AvroCoercions.unwrap(java.util.Map.of("a", java.util.Arrays.asList(1, null, 2)), Schema.createMap(array)));
+    assertArrayEquals(new Object[]{
+        1, null, 2
+    }, assertInstanceOf(Object[].class, arrayMap.get("a")));
+
+    Map<?, ?> nested = assertInstanceOf(Map.class, AvroCoercions.unwrap(java.util.Map.of("n", java.util.Map.of("x", 2)),
+        Schema.createMap(Schema.createMap(date))));
+    Object inner = nested.get("n");
+    assertInstanceOf(Map.class, inner);
+    assertEquals(Date.valueOf("1970-01-03"), ((Map<?, ?>) inner).get("x"));
+  }
 }

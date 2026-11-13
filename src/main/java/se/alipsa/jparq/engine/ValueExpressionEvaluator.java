@@ -991,13 +991,26 @@ public final class ValueExpressionEvaluator {
     }
     Schema declaration = null;
     if (DateTimeFunctions.isTemporal(value) || value instanceof Object[] || value instanceof List<?>
-        || value == null && unwrapped instanceof Column) {
+        || value instanceof Map<?, ?> || value == null && unwrapped instanceof Column) {
       declaration = valueSchema(unwrapped);
-      if (declaration != null && !TemporalOperands.temporalElements(declaration)) {
+      if (declaration != null && !TemporalOperands.temporalElements(declaration) && !containsMap(declaration)) {
         declaration = null;
       }
     }
     return new Operand(value, declaration);
+  }
+
+  /**
+   * Recognizes declarations whose array leaves are maps, so JSON constructors
+   * retain the schema needed to decode logical map values.
+   *
+   * @param declaration
+   *          evaluated value declaration, possibly null
+   * @return whether the declaration is or contains a MAP schema
+   */
+  private static boolean containsMap(Schema declaration) {
+    Schema leaf = JdbcTypeMapper.innermostElementType(declaration);
+    return leaf != null && leaf.getType() == Schema.Type.MAP;
   }
 
   /**
