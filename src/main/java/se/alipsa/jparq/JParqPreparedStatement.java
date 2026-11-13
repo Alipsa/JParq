@@ -2774,8 +2774,13 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (index == null || table == null) {
       return;
     }
-    registerQualifierIndex(index, table.tableName(), position, false);
-    registerQualifierIndex(index, table.alias(), position, true);
+    // An alias hides the table name, so only the visible name is registered; the
+    // bare table name stays addressable for inputs without an alias.
+    if (table.alias() == null || table.alias().isBlank()) {
+      registerQualifierIndex(index, table.tableName(), position, false);
+    } else {
+      registerQualifierIndex(index, table.alias(), position, true);
+    }
     for (String qualifier : table.nestedQualifiers().keySet()) {
       registerQualifierIndex(index, qualifier, position, true);
     }

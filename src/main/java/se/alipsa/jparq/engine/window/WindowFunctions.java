@@ -175,13 +175,23 @@ public final class WindowFunctions {
     if (JdbcTypeMapper.isBinaryType(targetType)) {
       return JdbcTypeMapper.isBinaryType(sourceType);
     }
-    int targetFields = targetType == Types.TIMESTAMP_WITH_TIMEZONE
-        ? Types.TIMESTAMP
-        : targetType == Types.TIME_WITH_TIMEZONE ? Types.TIME : targetType;
-    int sourceFields = sourceType == Types.TIMESTAMP_WITH_TIMEZONE
-        ? Types.TIMESTAMP
-        : sourceType == Types.TIME_WITH_TIMEZONE ? Types.TIME : sourceType;
+    int targetFields = withoutZone(targetType);
+    int sourceFields = withoutZone(sourceType);
     return targetFields == sourceFields;
+  }
+
+  /**
+   * Maps a zoned temporal JDBC type to its assignment family fields.
+   *
+   * @param type
+   *          JDBC type, possibly WITH TIME ZONE
+   * @return the plain TIMESTAMP or TIME type for zoned types, otherwise the type
+   *         itself
+   */
+  private static int withoutZone(int type) {
+    return type == Types.TIMESTAMP_WITH_TIMEZONE
+        ? Types.TIMESTAMP
+        : type == Types.TIME_WITH_TIMEZONE ? Types.TIME : type;
   }
 
   /**

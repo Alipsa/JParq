@@ -11,6 +11,7 @@ import java.sql.DriverManager;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -81,6 +82,17 @@ class DstFallbackTemporalTest {
             secondInstant);
         assertInstants(connection, "SELECT c FROM (SELECT COALESCE(n, o) AS c FROM t2) d ORDER BY c", firstInstant,
             secondInstant);
+        assertOffsetInstants(connection, "SELECT CAST(COALESCE(n, o) AS TIMESTAMP WITH TIME ZONE) FROM t2 ORDER BY id",
+            firstInstant, secondInstant);
+        try (var statement = connection.createStatement();
+            var result = statement
+                .executeQuery("SELECT COALESCE(n, o) = CAST(o AS TIMESTAMP WITH TIME ZONE) FROM t2 ORDER BY id")) {
+          for (int row = 0; row < 2; row++) {
+            assertTrue(result.next());
+            assertTrue(result.getBoolean(1), "row " + row + " compares equal to its own instant");
+          }
+          assertFalse(result.next());
+        }
         try (var statement = connection.createStatement();
             var result = statement
                 .executeQuery("SELECT COUNT(*) FROM (SELECT COALESCE(n, o) AS c FROM t2 GROUP BY COALESCE(n, o)) g")) {
@@ -138,6 +150,28 @@ class DstFallbackTemporalTest {
       for (Instant instant : expected) {
         assertTrue(result.next(), sql);
         assertEquals(instant, assertInstanceOf(Timestamp.class, result.getObject(1), sql).toInstant(), sql);
+      }
+      assertFalse(result.next(), sql);
+    }
+  }
+
+  /**
+   * Compares the instants of two single-column timestamp-with-time-zone rows.
+   *
+   * @param connection
+   *          open test connection
+   * @param sql
+   *          query returning two timestamp-with-time-zone rows
+   * @param expected
+   *          expected instants in row order
+   * @throws Exception
+   *           if the query fails
+   */
+  private static void assertOffsetInstants(Connection connection, String sql, Instant... expected) throws Exception {
+    try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+      for (Instant instant : expected) {
+        assertTrue(result.next(), sql);
+        assertEquals(instant, assertInstanceOf(OffsetDateTime.class, result.getObject(1), sql).toInstant(), sql);
       }
       assertFalse(result.next(), sql);
     }

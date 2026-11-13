@@ -10,7 +10,15 @@ import java.sql.DriverManager;
 import java.sql.SQLDataException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.List;
+import org.apache.avro.Schema;
+import org.apache.avro.SchemaBuilder;
+import org.apache.avro.generic.GenericData;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.parquet.avro.AvroParquetWriter;
+import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import se.alipsa.jparq.helper.TemporalInterval;
 
 /**
@@ -18,6 +26,9 @@ import se.alipsa.jparq.helper.TemporalInterval;
  * representations.
  */
 class NavigationDefaultTypeTest {
+  @TempDir
+  Path directory;
+
   /**
    * Early interval and schema-bound default errors share preparation diagnostics.
    *
@@ -128,6 +139,126 @@ class NavigationDefaultTypeTest {
       String array = "SELECT LAG(ARRAY[id],1,ARRAY['x']) OVER (ORDER BY id) FROM (VALUES (1)) t(id)";
       assertEquals("42000",
           assertThrows(SQLSyntaxErrorException.class, () -> connection.prepareStatement(array)).getSQLState());
+    }
+  }
+
+  /**
+   * Rejects incompatible navigation defaults in correlated subqueries at
+   * preparation, resolving outer column types through the outer scope so the
+   * check does not depend on the data.
+   *
+   * @throws Exception
+   *           if JDBC setup fails
+   */
+  @Test
+  void rejectsCorrelatedDefaultsBeforeExecution() throws Exception {
+    Path fixtures = Path.of("src/test/resources").toAbsolutePath();
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + fixtures)) {
+      for (String function : List.of("LAG", "LEAD")) {
+        for (String suffix : List.of("", " WHERE 1=0")) {
+          String query = "SELECT (SELECT " + function + "(m.gear,1,'a') OVER (ORDER BY gear)"
+              + " FROM mtcars FETCH FIRST 1 ROW ONLY) FROM mtcars m" + suffix;
+          var failure = assertThrows(SQLSyntaxErrorException.class, () -> connection.prepareStatement(query), query);
+          assertEquals("42000", failure.getSQLState(), query);
+          assertTrue(failure.getMessage().contains(function + " default type VARCHAR is not assignable to INTEGER"),
+              failure.getMessage());
+          assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure.getMessage());
+        }
+      }
+    }
+  }
+
+  /**
+   * An input's alias hides its table name: when an earlier table's name equals a
+   * later input's alias, the alias must win so the outer column type is read from
+   * the right table.
+   *
+   * @throws Exception
+   *           if fixture writing or JDBC access fails
+   */
+  @Test
+  void aliasHidesTableNameForOuterResolution() throws Exception {
+    writeTable("first", Schema.Type.STRING);
+    writeTable("second", Schema.Type.INT);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      String select = "SELECT (SELECT LAG(first.gear,1,%s) OVER (ORDER BY gear) FROM second FETCH FIRST 1 ROW ONLY)"
+          + " FROM first AS c JOIN second AS first ON c.id = first.id";
+      var failure = assertThrows(SQLSyntaxErrorException.class,
+          () -> connection.prepareStatement(String.format(select, "'a'")));
+      assertEquals("42000", failure.getSQLState(), failure.getMessage());
+      assertTrue(failure.getMessage().contains("LAG default type VARCHAR is not assignable to INTEGER"),
+          failure.getMessage());
+      // A compatible default confirms the alias resolved to the INTEGER column:
+      // the first row's LAG has no previous row, so it returns the default.
+      try (var prepared = connection.prepareStatement(String.format(select, "7"));
+          var result = prepared.executeQuery()) {
+        assertTrue(result.next());
+        assertEquals(7, result.getInt(1));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * Writes a single-id table whose gear column uses the requested type.
+   *
+   * @param name
+   *          table name
+   * @param gearType
+   *          Avro type of the gear column
+   * @throws Exception
+   *           if fixture writing fails
+   */
+  private void writeTable(String name, Schema.Type gearType) throws Exception {
+    writeTable(name, gearType, "gear");
+  }
+
+  /**
+   * Writes a single-id table whose gear column uses the requested type and field
+   * name.
+   *
+   * @param name
+   *          table name
+   * @param gearType
+   *          Avro type of the gear column
+   * @param fieldName
+   *          name of the gear column
+   * @throws Exception
+   *           if fixture writing fails
+   */
+  private void writeTable(String name, Schema.Type gearType, String fieldName) throws Exception {
+    Schema schema = SchemaBuilder.record(name).fields().requiredInt("id").name(fieldName).type(Schema.create(gearType))
+        .noDefault().endRecord();
+    var configuration = new Configuration(false);
+    var output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve(name + ".parquet").toUri()),
+        configuration);
+    try (var writer = AvroParquetWriter.<GenericRecord>builder(output).withSchema(schema).withConf(configuration)
+        .build()) {
+      var row = new GenericData.Record(schema);
+      row.put("id", 1);
+      row.put(fieldName, gearType == Schema.Type.STRING ? "x" : 1);
+      writer.write(row);
+    }
+  }
+
+  /**
+   * Quoted mixed-case outer references match their equally named source field, so
+   * an incompatible default is rejected during preparation instead of skipping
+   * the check.
+   *
+   * @throws Exception
+   *           if fixture writing or JDBC access fails
+   */
+  @Test
+  void quotedMixedCaseOuterReferenceIsValidated() throws Exception {
+    writeTable("mixed", Schema.Type.INT, "Gear");
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      String query = "SELECT (SELECT LAG(m.\"Gear\",1,'a') OVER (ORDER BY \"Gear\")"
+          + " FROM mixed FETCH FIRST 1 ROW ONLY) FROM mixed m";
+      var failure = assertThrows(SQLSyntaxErrorException.class, () -> connection.prepareStatement(query));
+      assertEquals("42000", failure.getSQLState(), failure.getMessage());
+      assertTrue(failure.getMessage().contains("LAG default type VARCHAR is not assignable to INTEGER"),
+          failure.getMessage());
     }
   }
 

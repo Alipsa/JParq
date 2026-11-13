@@ -59,6 +59,8 @@ public final class TemporalOperands {
 
     /**
      * Returns decoded values for shared ARRAY validation and temporal promotion.
+     * Timestamps promote by their instant so values sharing one wall-clock time in
+     * a fall-back overlap stay distinct; local date-time values keep their fields.
      *
      * @return value retaining its UTC instant or local fields
      */
@@ -69,7 +71,7 @@ public final class TemporalOperands {
       if (value instanceof Timestamp timestamp) {
         return AvroCoercions.utcTimestamp(declaration)
             ? timestamp.toInstant().atOffset(ZoneOffset.UTC)
-            : timestamp.toLocalDateTime();
+            : timestamp.toInstant().atZone(DateTimeFunctions.defaultZone()).toOffsetDateTime();
       }
       return value;
     }

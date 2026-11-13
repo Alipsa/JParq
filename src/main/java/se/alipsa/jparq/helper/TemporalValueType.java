@@ -170,6 +170,11 @@ public enum TemporalValueType {
     if (this == JDBC_LOCAL_TIMESTAMP) {
       return value instanceof LocalDateTime timestamp ? Timestamp.valueOf(timestamp) : decode(value);
     }
+    if (this == OFFSET_TIMESTAMP && value instanceof Timestamp timestamp) {
+      // Promote by the retained instant, not the wall-clock fields, so the two
+      // instants sharing a fall-back overlap stay distinct.
+      return timestamp.toInstant().atZone(DateTimeFunctions.defaultZone()).toOffsetDateTime();
+    }
     Object local = switch (value) {
       case Time time -> DateTimeFunctions.toLocalTime(time);
       case Timestamp timestamp -> timestamp.toLocalDateTime();

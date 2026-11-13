@@ -297,7 +297,28 @@ class ConvertCastDeclarationTest {
   }
 
   /**
-   * Generic projection validation does not mislabel a binary comparison as ARRAY.
+   * Generic projection validation does not mislabel a binary comparison as ARRAY;
+   * alias-qualified inputs resolve during preparation, so the mismatch fails
+   * planning with a classified syntax error.
+   *
+   * @throws Exception
+   *           if connection creation fails
+   */
+  @Test
+  void rejectsBinaryComparisonDuringPreparation() throws Exception {
+    try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
+      String sql = "SELECT a.model FROM (SELECT * FROM mtcars WHERE 1=0) a JOIN mtcars b "
+          + "ON CAST(a.model AS VARBINARY) = b.model";
+      SQLException error = assertThrows(SQLException.class, () -> statement.executeQuery(sql));
+      assertEquals("42000", error.getSQLState());
+      assertTrue(error.getMessage().contains("Cannot compare binary and nonbinary operands"), error.getMessage());
+      assertFalse(error.getMessage().contains("Invalid ARRAY projection declaration"), error.getMessage());
+    }
+  }
+
+  /**
+   * Value-table inputs cannot be resolved during preparation, so the same
+   * mismatch still surfaces at execution with the neutral projection prefix.
    *
    * @throws Exception
    *           if connection creation fails
@@ -305,7 +326,7 @@ class ConvertCastDeclarationTest {
   @Test
   void usesNeutralProjectionErrorPrefix() throws Exception {
     try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
-      String sql = "SELECT a.model FROM (SELECT * FROM mtcars WHERE 1=0) a JOIN mtcars b "
+      String sql = "SELECT a.model FROM (SELECT * FROM mtcars WHERE 1=0) a JOIN (VALUES ('x')) b(model) "
           + "ON CAST(a.model AS VARBINARY) = b.model";
       SQLException error = assertThrows(SQLException.class, () -> {
         try (var result = statement.executeQuery(sql)) {

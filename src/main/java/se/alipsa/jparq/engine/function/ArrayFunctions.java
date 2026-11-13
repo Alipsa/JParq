@@ -461,7 +461,7 @@ public final class ArrayFunctions {
         case ZonedDateTime dateTime -> dateTime.toOffsetDateTime();
         case Instant instant -> instant.atOffset(offset);
         case LocalDateTime dateTime -> DateTimeFunctions.offsetTimestamp(dateTime);
-        case Timestamp timestamp -> DateTimeFunctions.offsetTimestamp(timestamp.toLocalDateTime());
+        case Timestamp timestamp -> timestamp.toInstant().atZone(DateTimeFunctions.defaultZone()).toOffsetDateTime();
         default ->
           throw SqlExceptions.incompatibleArrayElements(sqlTypeName(temporalFamily(value)), sqlTypeName(family));
       };

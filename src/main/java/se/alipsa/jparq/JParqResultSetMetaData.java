@@ -167,12 +167,78 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     for (SqlParser.TableReference input : query.tableReferences()) {
       collectJoinConditions(input, clauses);
     }
+    Map<String, Schema> qualifiedSources = qualifiedSources(query, tables);
     for (Expression expression : clauses) {
       ArrayQueryValidation.validate(expression, reference -> {
         Schema.Field field = resolveSourceField(reference);
+        if (field == null) {
+          field = qualifiedSourceField(reference, qualifiedSources);
+        }
         return field == null ? null : field.schema();
       }, tables);
     }
+  }
+
+  /**
+   * Indexes outer inputs by their visible name — the alias when present, since it
+   * hides the table name — so correlated subqueries can resolve alias-qualified
+   * outer columns through the outer scope.
+   *
+   * @param query
+   *          query whose local inputs are described by this metadata
+   * @param tables
+   *          nested source schema resolver
+   * @return input schemas keyed by normalized visible name
+   */
+  private static Map<String, Schema> qualifiedSources(SqlParser.Select query,
+      Function<net.sf.jsqlparser.schema.Table, Schema> tables) {
+    Map<String, Schema> sources = new LinkedHashMap<>();
+    for (SqlParser.TableReference input : query.tableReferences()) {
+      if (input.tableName() == null) {
+        continue;
+      }
+      Schema inputSchema = tables.apply(new net.sf.jsqlparser.schema.Table(input.tableName()));
+      if (inputSchema == null) {
+        continue;
+      }
+      String visibleName = input.tableAlias() != null ? input.tableAlias() : input.tableName();
+      sources.putIfAbsent(Identifier.lookupKey(visibleName), inputSchema);
+    }
+    return sources;
+  }
+
+  /**
+   * Resolves a qualifier-qualified outer reference against a named input when the
+   * merged schema cannot, retaining uncertain references as unknown. An exact
+   * (case- and quote-sensitive) match is tried first so quoted mixed-case
+   * references resolve against their equally named source field, followed by the
+   * case-insensitive fallback used for unquoted names.
+   *
+   * @param reference
+   *          qualified or unqualified source column
+   * @param qualifiedSources
+   *          input schemas keyed by normalized visible name
+   * @return the source field, or {@code null} when the qualifier matches no known
+   *         input
+   */
+  private static Schema.Field qualifiedSourceField(Column reference, Map<String, Schema> qualifiedSources) {
+    String qualifier = reference.getTable() == null ? null : reference.getTable().getName();
+    if (qualifier == null) {
+      return null;
+    }
+    Schema source = qualifiedSources.get(Identifier.lookupKey(qualifier));
+    if (source == null) {
+      return null;
+    }
+    Identifier column = Identifier.of(reference.getColumnName());
+    String exactName = column == null ? null : column.text();
+    String columnKey = ColumnNameLookup.normalizeKey(reference.getColumnName());
+    for (Schema.Field field : source.getFields()) {
+      if (field.name().equals(exactName) || ColumnNameLookup.normalizeKey(field.name()).equals(columnKey)) {
+        return field;
+      }
+    }
+    return null;
   }
 
   /**

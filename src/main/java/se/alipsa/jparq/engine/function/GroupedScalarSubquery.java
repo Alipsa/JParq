@@ -2,7 +2,6 @@ package se.alipsa.jparq.engine.function;
 
 import java.sql.Types;
 import java.util.HashMap;
-import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -30,11 +29,11 @@ import se.alipsa.jparq.engine.TemporalOperands.Operand;
  */
 final class GroupedScalarSubquery {
   private final Select select;
+  private final String resultKey;
   private final SubqueryExecutor executor;
   private final CorrelationMappings mappings;
   private final Set<String> candidates;
   private final Map<QualifiedColumn, Integer> groupIndexes = new HashMap<>();
-  private final Map<List<Operand>, SubqueryExecutor.SubqueryResult> results = new IdentityHashMap<>();
 
   /**
    * Validates outer references before any groups are read, including empty
@@ -52,6 +51,7 @@ final class GroupedScalarSubquery {
   GroupedScalarSubquery(Select select, List<AggregateFunctions.GroupExpression> groups, SubqueryExecutor executor,
       CorrelationMappings mappings) {
     this.select = select;
+    this.resultKey = select.toString();
     this.executor = executor;
     this.mappings = mappings;
     this.candidates = columnNames(select);
@@ -131,28 +131,32 @@ final class GroupedScalarSubquery {
    *
    * @param groupOperands
    *          current group's source values and declarations
+   * @param groupResults
+   *          this group's subquery result cache
    * @return scalar value, or null for an empty scalar result
    */
-  Object evaluate(List<Operand> groupOperands) {
-    return evaluateResult(groupOperands).scalarValue();
+  Object evaluate(List<Operand> groupOperands, Map<String, SubqueryExecutor.SubqueryResult> groupResults) {
+    return evaluateResult(groupOperands, groupResults).scalarValue();
   }
 
   /**
-   * Captures a scalar subquery's values and projection declaration for the
-   * current group. Moving to another group releases the previous cached snapshot.
+   * Captures a scalar subquery's values and projection declaration in the group's
+   * own cache, so the result lives exactly as long as the group and is shared by
+   * every clause evaluating it, including ORDER BY. Each group's cache grows with
+   * its subquery count, like the per-group accumulators.
    *
    * @param groupOperands
-   *          current group's immutable binding identity
+   *          current group's source values and declarations
+   * @param groupResults
+   *          this group's subquery result cache
    * @return materialized result with its projection declaration
    */
-  SubqueryExecutor.SubqueryResult evaluateResult(List<Operand> groupOperands) {
-    if (!results.containsKey(groupOperands)) {
-      results.clear();
-    }
-    return results.computeIfAbsent(groupOperands,
-        operands -> executor.executeCorrelated(select, mappings.outerQualifiers(), candidates,
+  SubqueryExecutor.SubqueryResult evaluateResult(List<Operand> groupOperands,
+      Map<String, SubqueryExecutor.SubqueryResult> groupResults) {
+    return groupResults.computeIfAbsent(resultKey,
+        text -> executor.executeCorrelated(select, mappings.outerQualifiers(), candidates,
             mappings.qualifierColumnMapping(),
-            (qualifier, column) -> operands.get(groupIndexes.get(new QualifiedColumn(qualifier, column)))));
+            (qualifier, column) -> groupOperands.get(groupIndexes.get(new QualifiedColumn(qualifier, column)))));
   }
 
   /**
@@ -160,12 +164,12 @@ final class GroupedScalarSubquery {
    * evaluated, the executing scope's declaration supersedes standalone planning
    * metadata.
    *
-   * @param groupOperands
-   *          current group's immutable binding identity
+   * @param groupResults
+   *          this group's subquery result cache
    * @return projection declaration, or null when unavailable before evaluation
    */
-  Schema projectionSchema(List<Operand> groupOperands) {
-    SubqueryExecutor.SubqueryResult result = results.get(groupOperands);
+  Schema projectionSchema(Map<String, SubqueryExecutor.SubqueryResult> groupResults) {
+    SubqueryExecutor.SubqueryResult result = groupResults.get(resultKey);
     return result == null ? executor.projectionSchema(select) : result.projectionSchema();
   }
 

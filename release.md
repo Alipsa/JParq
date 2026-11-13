@@ -156,14 +156,20 @@
   when compared with offset values. Grouped MIN/MAX evaluate each input once and retain the
   winning source operand, including its stored local fields.
   Grouped SELECT-list comparisons retain scalar subquery projection declarations. Selected and
-  compared occurrences share one materialized result for the current group, while skipped branches
-  remain lazy. Moving to another group releases the previous subquery snapshot.
+  compared occurrences share one materialized result per group, while skipped branches
+  remain lazy. Each group retains its subquery results until the query finishes, so cache
+  memory grows with the group count, as the per-group accumulators already do.
   LAG/LEAD defaults convert to the value expression's SQL type when selected; navigation results
   retain the selected source's temporal provenance so local defaults are not read as UTC storage.
   Incompatible LAG/LEAD default types fail during preparation with SQLState `42000`, including
   empty inputs. ARRAY errors include nested element types, and interval defaults reject year-month/day-time
   kind mismatches. Numeric defaults truncate fractional digits toward zero on assignment, retaining
   range checks for leading-digit overflow.
+  Correlated LAG/LEAD defaults validate against the outer scope's column types during preparation,
+  including quoted mixed-case references, so incompatible defaults fail with SQLState `42000`
+  regardless of the data. A table alias now hides the table name at execution as well, so a join
+  whose alias equals another input's table name runs instead of failing with a duplicate-qualifier
+  error.
   Correlated local timestamp projections, character casts, and arithmetic retain JDBC Timestamp
   values matching their metadata. Ordinary local predicates use consistent engine values on both
   sides, while offset promotion retains the original stored fields. Grouping sources are decoded

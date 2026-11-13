@@ -64,4 +64,39 @@ class GroupedScalarReuseTest {
       verify(executor, times(2)).executeCorrelated(any(), any(), any(), any(), any());
     }
   }
+
+  /**
+   * Reuses the per-group result when ORDER BY re-evaluates the grouped scalar for
+   * every row instead of re-running the subquery.
+   *
+   * @throws Exception
+   *           if planning, evaluation, or JDBC access fails
+   */
+  @Test
+  void orderByReusesGroupedScalarResult() throws Exception {
+    Schema timestamp = LogicalTypes.timestampMicros().addToSchema(Schema.create(Schema.Type.LONG));
+    Schema schema = SchemaBuilder.record("GroupedSource").fields().name("o").type(timestamp).noDefault().endRecord();
+    List<GenericRecord> records = new ArrayList<>();
+    for (int hour : List.of(11, 10)) {
+      var record = new GenericData.Record(schema);
+      record.put("o", Instant.parse("2024-07-01T" + hour + ":00:00Z").getEpochSecond() * 1_000_000L);
+      records.add(record);
+    }
+    var reader = new InMemoryRecordReader(records, schema, "t");
+    var mappings = CorrelationMappings.of(List.of("t"), reader.qualifierColumnMapping(),
+        reader.unqualifiedColumnMapping());
+    var parsed = SqlParser
+        .parseSelect("SELECT o,(SELECT t.o) FROM t GROUP BY o ORDER BY CAST((SELECT t.o) AS VARCHAR(40))");
+    var plan = AggregateFunctions.plan(parsed, schema, mappings);
+    try (var connection = (JParqConnection) DriverManager.getConnection("jdbc:jparq:.");
+        var executor = spy(new SubqueryExecutor(connection))) {
+      var result = AggregateFunctions.evaluate(reader, plan, null, null, parsed.orderBy(), executor,
+          mappings.outerQualifiers(), mappings.qualifierColumnMapping(), mappings.unqualifiedColumnMapping());
+      assertEquals(2, result.rows().size());
+      List<Instant> instants = result.rows().stream().map(row -> ((Timestamp) row.get(0)).toInstant()).sorted()
+          .toList();
+      assertEquals(List.of(Instant.parse("2024-07-01T10:00:00Z"), Instant.parse("2024-07-01T11:00:00Z")), instants);
+      verify(executor, times(2)).executeCorrelated(any(), any(), any(), any(), any());
+    }
+  }
 }

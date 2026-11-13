@@ -366,8 +366,8 @@ public final class ValueExpressionEvaluator {
       try {
         Object value = source.engineValue();
         if (numeric.jdbcType() != Types.DECIMAL) {
-          NumericCastTarget numericTarget = NumericCastTarget.fromName(JDBCType.valueOf(numeric.jdbcType()).getName());
-          return new Operand(NumericCasts.convert(value, numericTarget, "navigation default"), target);
+          NumericCastTarget numericTarget = NumericCastTarget.fromJdbcType(numeric.jdbcType());
+          return new Operand(NumericCasts.convert(value, numericTarget, numericTarget.name()), target);
         }
         return new Operand(
             numeric.convert(NumericCasts.toBigDecimal(value).setScale(numeric.scale(), RoundingMode.DOWN)), target);

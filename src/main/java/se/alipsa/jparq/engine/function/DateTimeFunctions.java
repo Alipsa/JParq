@@ -93,11 +93,14 @@ public final class DateTimeFunctions {
   /**
    * Resolves the effective JVM zone used by JDBC Timestamp conversions, including
    * runtime changes through {@link TimeZone#setDefault(TimeZone)}. The initial
-   * user.timezone property need not reflect the current default.
+   * user.timezone property need not reflect the current default. This is
+   * equivalent to {@link ZoneId#systemDefault()}, which delegates to
+   * {@link TimeZone#getDefault()}; the method exists so call sites read as
+   * intent-revealing conversions rather than raw zone access.
    *
    * @return the active {@link ZoneId} to use
    */
-  static ZoneId defaultZone() {
+  public static ZoneId defaultZone() {
     return TimeZone.getDefault().toZoneId();
   }
 
