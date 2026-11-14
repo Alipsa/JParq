@@ -28,6 +28,7 @@ import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import se.alipsa.jparq.JParqArray;
 import se.alipsa.jparq.JParqResultSet;
 import se.alipsa.jparq.engine.RecordReader;
 import se.alipsa.jparq.engine.SqlParser;
@@ -120,6 +121,7 @@ class JParqResultSetGetObjectTest {
       assertArrayEquals(new Object[]{
           1
       }, (Object[]) byLabel.getArray());
+      assertInstanceOf(JParqArray.class, result.getObject(1, JParqArray.class));
       SQLDataException failure = assertThrows(SQLDataException.class, () -> result.getObject(2, Array.class));
       assertEquals("22005", failure.getSQLState());
     }
