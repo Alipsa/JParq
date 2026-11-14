@@ -752,24 +752,79 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Resolves the first projection's declared value schema against this
-   * statement's own input columns, independently of any outer query scope.
+   * statement's own input columns, independently of any outer query scope. Set
+   * operations combine their branches, and nested scalar subqueries resolve to
+   * their own full projection schema.
    *
    * @return the first projection's schema, or null when it cannot be established
    * @throws SQLException
    *           if an input schema cannot be inspected
    */
   public Schema firstProjectionSchema() throws SQLException {
-    if (setOperationQuery || parsedSelect == null || parsedSelect.expressions().isEmpty()) {
-      return null;
-    }
-    Map<Column, Schema> columns = new HashMap<>();
-    Function<Column, Schema> columnSchemas = projectionColumnSchemas(columns);
-    Function<Select, Schema> scalarSchemas = projectionScalarSchemas(cteResults);
     try {
+      if (setOperationQuery && parsedSetQuery != null) {
+        return setOperationFirstProjectionSchema();
+      }
+      if (parsedSelect == null || parsedSelect.expressions().isEmpty()) {
+        return null;
+      }
+      Function<Column, Schema> columnSchemas = freshColumnSchemas();
+      Function<Select, Schema> scalarSchemas = projectionResultSchemas(cteResults);
       return ArrayExpressionSchemas.resolve(parsedSelect.expressions().getFirst(), columnSchemas, scalarSchemas);
     } catch (IllegalArgumentException incompatible) {
       return null;
     }
+  }
+
+  /**
+   * Combines the first projection's schema across every set operation branch so a
+   * UNION or INTERSECT subquery reports the branches' common type.
+   *
+   * @return the branches' common first-projection schema, or null when unknown
+   * @throws SQLException
+   *           if a branch cannot be prepared
+   */
+  private Schema setOperationFirstProjectionSchema() throws SQLException {
+    Schema common = null;
+    for (SqlParser.SetComponent component : parsedSetQuery.components()) {
+      try (JParqPreparedStatement branch = prepareSubqueryStatement(component.sql(), cteResults)) {
+        Schema branchSchema = branch.firstProjectionSchema();
+        if (branchSchema == null) {
+          return null;
+        }
+        common = common == null ? branchSchema : StructArrayTypes.common(common, branchSchema);
+      }
+    }
+    return common;
+  }
+
+  /**
+   * Creates a column schema resolver backed by this statement's inputs with a
+   * fresh per-call cache.
+   *
+   * @return column schema resolver
+   */
+  private Function<Column, Schema> freshColumnSchemas() {
+    return projectionColumnSchemas(new HashMap<>());
+  }
+
+  /**
+   * Resolves the full first-projection value schema of nested scalar subqueries,
+   * preparing each independently scoped subquery once.
+   *
+   * @param cteContext
+   *          CTE values visible to the scalar subqueries
+   * @return full first-projection schema resolver for nested subqueries
+   */
+  private Function<Select, Schema> projectionResultSchemas(Map<Identifier, CteResult> cteContext) {
+    Map<Select, Optional<Schema>> schemas = new HashMap<>();
+    return select -> schemas.computeIfAbsent(select, query -> {
+      try (JParqPreparedStatement nested = prepareSubqueryStatement(query.toString(), cteContext)) {
+        return Optional.ofNullable(nested.firstProjectionSchema());
+      } catch (SQLException exception) {
+        return Optional.empty();
+      }
+    }).orElse(null);
   }
 
   /**
@@ -812,8 +867,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (parsedSelect == null) {
       return List.of();
     }
-    Map<Column, Schema> columns = new HashMap<>();
-    Function<Column, Schema> columnSchemas = projectionColumnSchemas(columns);
+    Function<Column, Schema> columnSchemas = freshColumnSchemas();
     Function<Select, Schema> scalarSchemas = projectionScalarSchemas(cteResults);
     List<Schema> schemas = new ArrayList<>(parsedSelect.expressions().size());
     for (Expression expression : parsedSelect.expressions()) {

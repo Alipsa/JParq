@@ -35,10 +35,19 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
 public final class SubqueryExecutor implements AutoCloseable {
 
   private final Map<String, PreparedStatement> preparedStatements = new LinkedHashMap<>();
-  private final Map<String, Optional<Schema>> projectionSchemas = new LinkedHashMap<>();
+  private final Map<String, ProjectionDeclarations> projectionDeclarations = new LinkedHashMap<>();
   private final Map<Select, Optional<Schema>> projectionNodes = new IdentityHashMap<>();
-  private final Map<String, Optional<Schema>> projectionResultSchemas = new LinkedHashMap<>();
   private final Map<Select, Optional<Schema>> projectionResultNodes = new IdentityHashMap<>();
+
+  /**
+   * Interval/datetime declaration and full first-projection schema of one
+   * subquery.
+   */
+  private record ProjectionDeclarations(Schema temporal, Schema result) {
+    static ProjectionDeclarations absent() {
+      return new ProjectionDeclarations(null, null);
+    }
+  }
 
   private final ExecutionPlans executionPlans;
   private final JParqConnection connection;
@@ -560,9 +569,8 @@ public final class SubqueryExecutor implements AutoCloseable {
       }
     }
     preparedStatements.clear();
-    projectionSchemas.clear();
+    projectionDeclarations.clear();
     projectionNodes.clear();
-    projectionResultSchemas.clear();
     projectionResultNodes.clear();
     cache.clear();
     existenceCache.clear();
@@ -581,19 +589,13 @@ public final class SubqueryExecutor implements AutoCloseable {
    *         established
    */
   public Schema projectionSchema(Select select) {
-    return projectionNodes.computeIfAbsent(select, node -> {
-      String sql = node.toString();
-      return projectionSchemas.computeIfAbsent(sql, shape -> {
-        try (PreparedStatement prepared = prepareStatement(shape)) {
-          return projectionDeclaration(prepared);
-        } catch (SQLException exception) {
-          if (QueryCancellation.findCancellation(exception).isPresent()) {
-            throw new IllegalStateException("Canceled while resolving scalar projection metadata", exception);
-          }
-          return Optional.empty();
-        }
-      });
-    }).orElse(null);
+    Optional<Schema> cached = projectionNodes.get(select);
+    if (cached != null) {
+      return cached.orElse(null);
+    }
+    ProjectionDeclarations declarations = declarationsFor(select);
+    projectionNodes.put(select, Optional.ofNullable(declarations.temporal()));
+    return declarations.temporal();
   }
 
   /**
@@ -607,20 +609,44 @@ public final class SubqueryExecutor implements AutoCloseable {
    *         established
    */
   public Schema projectionResultSchema(Select select) {
-    return projectionResultNodes.computeIfAbsent(select, node -> {
-      String sql = node.toString();
-      return projectionResultSchemas.computeIfAbsent(sql, shape -> {
-        try (PreparedStatement prepared = prepareStatement(shape)) {
-          return Optional
-              .ofNullable(prepared instanceof JParqPreparedStatement nested ? nested.firstProjectionSchema() : null);
-        } catch (SQLException exception) {
-          if (QueryCancellation.findCancellation(exception).isPresent()) {
-            throw new IllegalStateException("Canceled while resolving scalar projection metadata", exception);
-          }
-          return Optional.empty();
-        }
-      });
-    }).orElse(null);
+    Optional<Schema> cached = projectionResultNodes.get(select);
+    if (cached != null) {
+      return cached.orElse(null);
+    }
+    ProjectionDeclarations declarations = declarationsFor(select);
+    projectionResultNodes.put(select, Optional.ofNullable(declarations.result()));
+    return declarations.result();
+  }
+
+  /**
+   * Prepares the subquery once and resolves both its interval/datetime
+   * declaration and its full first-projection schema, so metadata lookups do not
+   * prepare it twice.
+   *
+   * @param select
+   *          scalar subquery to inspect
+   * @return the combined declaration, or both-null when it cannot be established
+   */
+  private ProjectionDeclarations declarationsFor(Select select) {
+    return projectionDeclarations.computeIfAbsent(select.toString(), this::computeDeclarations);
+  }
+
+  /**
+   * Prepares the query shape and reads both declarations from the statement.
+   *
+   * @param sql
+   *          stable executable query shape
+   * @return the combined declaration
+   */
+  private ProjectionDeclarations computeDeclarations(String sql) {
+    try (PreparedStatement prepared = prepareStatement(sql)) {
+      return declarationsFrom(prepared);
+    } catch (SQLException exception) {
+      if (QueryCancellation.findCancellation(exception).isPresent()) {
+        throw new IllegalStateException("Canceled while resolving scalar projection metadata", exception);
+      }
+      return ProjectionDeclarations.absent();
+    }
   }
 
   /**
@@ -634,7 +660,35 @@ public final class SubqueryExecutor implements AutoCloseable {
    * @return first projection declaration, or null when unknown
    */
   private Schema projectionSchema(String sql, PreparedStatement prepared) {
-    return projectionSchemas.computeIfAbsent(sql, ignored -> projectionDeclaration(prepared)).orElse(null);
+    ProjectionDeclarations cached = projectionDeclarations.get(sql);
+    if (cached != null) {
+      return cached.temporal();
+    }
+    try {
+      ProjectionDeclarations declarations = declarationsFrom(prepared);
+      projectionDeclarations.put(sql, declarations);
+      return declarations.temporal();
+    } catch (SQLException exception) {
+      if (QueryCancellation.findCancellation(exception).isPresent()) {
+        throw new IllegalStateException("Canceled while resolving scalar projection metadata", exception);
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Reads both declarations from a prepared statement without preparing another.
+   *
+   * @param prepared
+   *          statement whose bindings are active
+   * @return the combined declaration
+   * @throws SQLException
+   *           if the first projection schema cannot be inspected
+   */
+  private ProjectionDeclarations declarationsFrom(PreparedStatement prepared) throws SQLException {
+    Schema temporal = projectionDeclaration(prepared).orElse(null);
+    Schema result = prepared instanceof JParqPreparedStatement nested ? nested.firstProjectionSchema() : null;
+    return new ProjectionDeclarations(temporal, result);
   }
 
   /**

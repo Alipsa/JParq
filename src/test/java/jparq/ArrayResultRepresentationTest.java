@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -16,6 +18,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.Types;
 import java.util.List;
 import java.util.Map;
+import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
@@ -576,6 +579,142 @@ class ArrayResultRepresentationTest {
     }
   }
 
+  /**
+   * Reports the declared precision and scale of a stored DECIMAL column projected
+   * through a scalar subquery, rather than a DECIMAL(0,0).
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryOverStoredDecimalReportsPrecisionAndScale(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT d FROM t2) FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(10, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Resolves an aggregate projection of a scalar subquery to its numeric type.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryCountReportsBigInt(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT COUNT(*) FROM t2) FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.BIGINT, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(1L, result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Resolves an arithmetic projection of a scalar subquery to its numeric type.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryArithmeticReportsNumericType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT b + 1 FROM t2) FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.BIGINT, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(43L, result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports the column's declared type even when the subquery matches no rows.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryWithNoRowsStillReportsColumnType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT b FROM t2 WHERE b = 999) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertNull(result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports the common type of a set-operation scalar subquery's branches.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryUnionReportsCommonBranchType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(
+            "SELECT (SELECT b FROM t2 WHERE b = 42 UNION ALL SELECT id FROM s WHERE id = 999) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports the inner subquery's type through a nested scalar subquery.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryNestedReportsInnerType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT (SELECT b FROM t2)) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
   private static void assertIds(java.sql.Statement statement, String sql, int... expected)
       throws java.sql.SQLException {
     List<Integer> ids = new java.util.ArrayList<>();
@@ -633,12 +772,15 @@ class ArrayResultRepresentationTest {
         writer.write(record);
       }
     }
-    Schema t2Schema = SchemaBuilder.record("t2_row").fields().requiredInt("b").endRecord();
+    Schema decimal = LogicalTypes.decimal(10, 2).addToSchema(Schema.create(Schema.Type.BYTES));
+    Schema t2Schema = SchemaBuilder.record("t2_row").fields().requiredInt("b").name("d").type(decimal).noDefault()
+        .endRecord();
     var t2Output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve("t2.parquet").toUri()),
         new org.apache.hadoop.conf.Configuration());
     try (var writer = AvroParquetWriter.<GenericRecord>builder(t2Output).withSchema(t2Schema).build()) {
       var record = new GenericData.Record(t2Schema);
       record.put("b", 42);
+      record.put("d", ByteBuffer.wrap(new BigDecimal("12.34").unscaledValue().toByteArray()));
       writer.write(record);
     }
   }

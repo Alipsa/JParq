@@ -554,8 +554,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   }
 
   /**
-   * Resolves the decimal logical type of an explicit cast or projected source
-   * field.
+   * Resolves the decimal logical type of an explicit cast, a declared scalar
+   * projection, or a projected source field.
    *
    * @param column
    *          the one-based output column index
@@ -568,6 +568,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     }
     if (getColumnType(column) != Types.DECIMAL && getColumnType(column) != Types.NUMERIC) {
       return null;
+    }
+    Schema declaredValue = JdbcTypeMapper.nonNullSchema(declaredProjectionSchema(column));
+    if (declaredValue != null && declaredValue.getLogicalType() instanceof LogicalTypes.Decimal decimal) {
+      return decimal;
     }
     Schema.Field field = resolveField(column);
     Schema valueSchema = field == null ? null : JdbcTypeMapper.nonNullSchema(field.schema());
