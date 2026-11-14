@@ -6,7 +6,6 @@ import java.sql.JDBCType;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
-import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -183,11 +182,8 @@ public final class JParqArray implements Array {
    */
   private void checkMapping(Map<String, Class<?>> map) throws SQLException {
     ensureOpen();
-    Schema declaration = JdbcTypeMapper.nonNullSchema(elementSchema);
-    if (baseType == Types.STRUCT && map != null
-        && (map.containsKey(getBaseTypeName()) || declaration != null && map.containsKey(declaration.getFullName()))) {
-      throw new SQLFeatureNotSupportedException("Custom ARRAY element mappings are not supported", "0A000");
-    }
+    JdbcTypeMapper.rejectUnsupportedTypeMap(map, baseType, getBaseTypeName(),
+        JdbcTypeMapper.nonNullSchema(elementSchema));
   }
 
   /**

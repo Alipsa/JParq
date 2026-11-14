@@ -3,6 +3,8 @@ package se.alipsa.jparq.helper;
 import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.JDBCType;
+import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
@@ -337,6 +339,30 @@ public final class JdbcTypeMapper {
       case "java.util.Map" -> Types.STRUCT;
       default -> Types.OTHER;
     };
+  }
+
+  /**
+   * Uses the standard mapping unless the map requests a custom STRUCT mapping,
+   * which is not supported.
+   *
+   * @param map
+   *          optional custom mappings, null means the standard mapping
+   * @param sqlType
+   *          JDBC type of the value
+   * @param typeName
+   *          SQL type name of the value
+   * @param declaration
+   *          optional Avro schema declaration of the value
+   * @throws SQLFeatureNotSupportedException
+   *           if the map names the STRUCT type being read
+   */
+  public static void rejectUnsupportedTypeMap(Map<String, Class<?>> map, int sqlType, String typeName,
+      Schema declaration) throws SQLException {
+    String fullName = declaration == null ? null : declaration.getFullName();
+    if (sqlType == Types.STRUCT && map != null
+        && (map.containsKey(typeName) || fullName != null && map.containsKey(fullName))) {
+      throw new SQLFeatureNotSupportedException("Custom type mappings are not supported", "0A000");
+    }
   }
 
   private static boolean isUtf8String(Schema schema) {

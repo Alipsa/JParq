@@ -9,6 +9,7 @@ import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -102,6 +103,7 @@ public class JParqResultSet extends ResultSetAdapter {
   private final Map<Integer, Optional<Schema.Field>> materializedColumnBindings = new HashMap<>();
   private final Map<Integer, Optional<Schema>> intervalOutputSchemas = new HashMap<>();
   private final Map<Integer, Optional<Schema>> arrayElementSchemas = new HashMap<>();
+  private final Map<Integer, ColumnTypeInfo> columnTypeInfos = new HashMap<>();
   private final CorrelationMappings metadataSourceMappings;
   private final Map<String, Map<String, String>> qualifierColumnMapping;
   private final Map<String, String> unqualifiedColumnMapping;
@@ -1816,6 +1818,9 @@ public class JParqResultSet extends ResultSetAdapter {
     if (type == String.class) {
       return type.cast(getString(columnIndex));
     }
+    if (type == Array.class || type == JParqArray.class) {
+      return type.cast(getArray(columnIndex));
+    }
     StatementTime.Scope timeScope = cancellation == null ? null : cancellation.statementTime().open();
     try (timeScope) {
       return JdbcConversions.convert(getObject(columnIndex), type);
@@ -1826,6 +1831,101 @@ public class JParqResultSet extends ResultSetAdapter {
   @Override
   public <T> T getObject(String columnLabel, Class<T> type) throws SQLException {
     return getObject(findColumn(columnLabel), type);
+  }
+
+  /**
+   * Returns the value using the standard mapping; the type map only governs
+   * custom STRUCT mappings, which are not supported.
+   *
+   * <p>
+   * Avro MAP columns are reported with the STRUCT SQL type, so a map naming
+   * STRUCT also rejects MAP columns.
+   * </p>
+   *
+   * @param columnIndex
+   *          one-based output column
+   * @param map
+   *          SQL type name to Java class mappings, or null for the standard
+   *          mapping
+   * @return the column value using the standard mapping
+   * @throws SQLException
+   *           if the column cannot be read or the map names the STRUCT type of
+   *           the column
+   */
+  @Override
+  public Object getObject(int columnIndex, Map<String, Class<?>> map) throws SQLException {
+    Object value = getObject(columnIndex);
+    if (map != null && !map.isEmpty()) {
+      ColumnTypeInfo info = columnTypeInfo(columnIndex);
+      JdbcTypeMapper.rejectUnsupportedTypeMap(map, info.sqlType(), info.typeName(), info.declaration());
+    }
+    return value;
+  }
+
+  /**
+   * Resolves and caches the metadata facts needed to evaluate a type map for a
+   * column, avoiding repeated metadata construction on every call.
+   *
+   * @param columnIndex
+   *          one-based output column
+   * @return the cached column type facts
+   * @throws SQLException
+   *           if the column is unknown or its declaration is invalid
+   */
+  private ColumnTypeInfo columnTypeInfo(int columnIndex) throws SQLException {
+    ColumnTypeInfo cached = columnTypeInfos.get(columnIndex);
+    if (cached != null) {
+      return cached;
+    }
+    ResultSetMetaData metaData = getMetaData();
+    int sqlType = metaData.getColumnType(columnIndex);
+    String typeName = null;
+    Schema declaration = null;
+    if (sqlType == Types.STRUCT) {
+      typeName = metaData.getColumnTypeName(columnIndex);
+      if (metaData instanceof AvroColumnMetadata avro) {
+        try {
+          declaration = JdbcTypeMapper.nonNullSchema(avro.columnValueSchema(columnIndex));
+        } catch (RuntimeException failure) {
+          throw SqlExceptions.wrap("Invalid STRUCT declaration for column " + columnIndex, failure);
+        }
+      }
+    }
+    cached = new ColumnTypeInfo(sqlType, typeName, declaration);
+    columnTypeInfos.put(columnIndex, cached);
+    return cached;
+  }
+
+  /**
+   * Metadata facts about one column used to evaluate type maps.
+   *
+   * @param sqlType
+   *          JDBC type of the column
+   * @param typeName
+   *          SQL type name, or null for non-STRUCT columns
+   * @param declaration
+   *          Avro declaration, or null when unavailable
+   */
+  private record ColumnTypeInfo(int sqlType, String typeName, Schema declaration) {
+  }
+
+  /**
+   * Returns the value using the standard mapping; the type map only governs
+   * custom STRUCT mappings, which are not supported.
+   *
+   * @param columnLabel
+   *          output column label
+   * @param map
+   *          SQL type name to Java class mappings, or null for the standard
+   *          mapping
+   * @return the column value using the standard mapping
+   * @throws SQLException
+   *           if the column cannot be read or the map names the STRUCT type of
+   *           the column
+   */
+  @Override
+  public Object getObject(String columnLabel, Map<String, Class<?>> map) throws SQLException {
+    return getObject(findColumn(columnLabel), map);
   }
 
   /**
