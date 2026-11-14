@@ -37,6 +37,8 @@ public final class SubqueryExecutor implements AutoCloseable {
   private final Map<String, PreparedStatement> preparedStatements = new LinkedHashMap<>();
   private final Map<String, Optional<Schema>> projectionSchemas = new LinkedHashMap<>();
   private final Map<Select, Optional<Schema>> projectionNodes = new IdentityHashMap<>();
+  private final Map<String, Optional<Schema>> projectionResultSchemas = new LinkedHashMap<>();
+  private final Map<Select, Optional<Schema>> projectionResultNodes = new IdentityHashMap<>();
 
   private final ExecutionPlans executionPlans;
   private final JParqConnection connection;
@@ -560,6 +562,8 @@ public final class SubqueryExecutor implements AutoCloseable {
     preparedStatements.clear();
     projectionSchemas.clear();
     projectionNodes.clear();
+    projectionResultSchemas.clear();
+    projectionResultNodes.clear();
     cache.clear();
     existenceCache.clear();
     if (failure != null) {
@@ -582,6 +586,33 @@ public final class SubqueryExecutor implements AutoCloseable {
       return projectionSchemas.computeIfAbsent(sql, shape -> {
         try (PreparedStatement prepared = prepareStatement(shape)) {
           return projectionDeclaration(prepared);
+        } catch (SQLException exception) {
+          if (QueryCancellation.findCancellation(exception).isPresent()) {
+            throw new IllegalStateException("Canceled while resolving scalar projection metadata", exception);
+          }
+          return Optional.empty();
+        }
+      });
+    }).orElse(null);
+  }
+
+  /**
+   * Resolves a scalar subquery's first projection value schema in the subquery's
+   * own input scope, so inner columns are never resolved against an outer query's
+   * schema.
+   *
+   * @param select
+   *          scalar subquery to inspect
+   * @return the subquery's first projection schema, or null when it cannot be
+   *         established
+   */
+  public Schema projectionResultSchema(Select select) {
+    return projectionResultNodes.computeIfAbsent(select, node -> {
+      String sql = node.toString();
+      return projectionResultSchemas.computeIfAbsent(sql, shape -> {
+        try (PreparedStatement prepared = prepareStatement(shape)) {
+          return Optional
+              .ofNullable(prepared instanceof JParqPreparedStatement nested ? nested.firstProjectionSchema() : null);
         } catch (SQLException exception) {
           if (QueryCancellation.findCancellation(exception).isPresent()) {
             throw new IllegalStateException("Canceled while resolving scalar projection metadata", exception);

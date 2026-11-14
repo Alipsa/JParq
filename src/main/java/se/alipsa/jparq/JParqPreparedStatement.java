@@ -751,6 +751,28 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
+   * Resolves the first projection's declared value schema against this
+   * statement's own input columns, independently of any outer query scope.
+   *
+   * @return the first projection's schema, or null when it cannot be established
+   * @throws SQLException
+   *           if an input schema cannot be inspected
+   */
+  public Schema firstProjectionSchema() throws SQLException {
+    if (setOperationQuery || parsedSelect == null || parsedSelect.expressions().isEmpty()) {
+      return null;
+    }
+    Map<Column, Schema> columns = new HashMap<>();
+    Function<Column, Schema> columnSchemas = projectionColumnSchemas(columns);
+    Function<Select, Schema> scalarSchemas = projectionScalarSchemas(cteResults);
+    try {
+      return ArrayExpressionSchemas.resolve(parsedSelect.expressions().getFirst(), columnSchemas, scalarSchemas);
+    } catch (IllegalArgumentException incompatible) {
+      return null;
+    }
+  }
+
+  /**
    * Resolves one projection column's interval or datetime declaration without
    * reading rows, combining set operation branches into their common type.
    * Resolves all columns at once so each set operation branch is prepared only

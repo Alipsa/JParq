@@ -1404,7 +1404,8 @@ public class JParqResultSet extends ResultSetAdapter {
     if (aggregateQuery) {
       coerceAggregateNumericValues(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
           canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
-          .withScalarProjectionSchemas(subqueryExecutor::projectionSchema));
+          .withScalarProjectionSchemas(subqueryExecutor::projectionSchema)
+          .withScalarResultSchemas(subqueryExecutor::projectionResultSchema));
       aggregateMetadata = null;
     }
     if (!aggregateQuery && columnOrder.isEmpty() && selectExpressions.isEmpty() && schema != null) {
@@ -1424,14 +1425,16 @@ public class JParqResultSet extends ResultSetAdapter {
         aggregateMetadata
             .retainExpressionTypes(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
                 canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
-                .withScalarProjectionSchemas(subqueryExecutor::projectionSchema));
+                .withScalarProjectionSchemas(subqueryExecutor::projectionSchema)
+                .withScalarResultSchemas(subqueryExecutor::projectionResultSchema));
       }
       return aggregateMetadata;
     }
     var normalized = ParquetSchemas.normalizeStringTypes(metadataSchema);
     return new JParqResultSetMetaData(normalized, columnOrder, physicalColumnOrder, canonicalColumnNames, tableName,
         tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
-        .withScalarProjectionSchemas(subqueryExecutor::projectionSchema);
+        .withScalarProjectionSchemas(subqueryExecutor::projectionSchema)
+        .withScalarResultSchemas(subqueryExecutor::projectionResultSchema);
   }
 
   @SuppressWarnings("PMD.EmptyCatchBlock")

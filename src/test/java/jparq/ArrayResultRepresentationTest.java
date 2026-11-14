@@ -545,14 +545,14 @@ class ArrayResultRepresentationTest {
   @Test
   void scalarSubqueryMetadataDoesNotResolveInnerColumnsAgainstOuterSchema(@TempDir Path directory) throws Exception {
     writeDataset(directory);
-    // s.b is BOOLEAN while t2.b is INT; the subquery type must not inherit the
-    // outer column's type
+    // s.b is BOOLEAN while t2.b is INT; the subquery type must come from the
+    // subquery's own FROM table, not the outer column's type
     try (var connection = connect(directory);
         var statement = connection.createStatement();
         var result = statement.executeQuery("SELECT (SELECT b FROM t2) AS x FROM s WHERE id = 1")) {
       var metaData = result.getMetaData();
-      assertEquals(Types.OTHER, metaData.getColumnType(1));
-      assertEquals(Object.class.getName(), metaData.getColumnClassName(1));
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertEquals(Integer.class.getName(), metaData.getColumnClassName(1));
       assertTrue(result.next());
       assertEquals(42, result.getObject(1));
       assertFalse(result.next());
@@ -560,15 +560,14 @@ class ArrayResultRepresentationTest {
   }
 
   @Test
-  void scalarSubqueryOverStoredArrayReportsOtherUntilColumnSchemasAreResolved(@TempDir Path directory)
-      throws Exception {
+  void scalarSubqueryOverStoredArrayReportsArrayMetadata(@TempDir Path directory) throws Exception {
     writeDataset(directory);
     try (var connection = connect(directory);
         var statement = connection.createStatement();
         var result = statement.executeQuery("SELECT (SELECT ints FROM s WHERE id = 1) FROM s WHERE id = 1")) {
       var metaData = result.getMetaData();
-      assertEquals(Types.OTHER, metaData.getColumnType(1));
-      assertEquals(Object.class.getName(), metaData.getColumnClassName(1));
+      assertEquals(Types.ARRAY, metaData.getColumnType(1));
+      assertEquals(Object[].class.getName(), metaData.getColumnClassName(1));
       assertTrue(result.next());
       assertArrayEquals(new Object[]{
           1, 2
