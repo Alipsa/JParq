@@ -21,6 +21,7 @@ import java.time.OffsetTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import javax.sql.rowset.serial.SerialArray;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
@@ -125,6 +126,14 @@ class JParqResultSetGetObjectTest {
   }
 
   @Test
+  void typedGetObjectRejectsOtherArrayImplementations() throws Exception {
+    try (JParqResultSet result = positionedResult()) {
+      SQLDataException failure = assertThrows(SQLDataException.class, () -> result.getObject(1, SerialArray.class));
+      assertEquals("22005", failure.getSQLState());
+    }
+  }
+
+  @Test
   void typedGetObjectReturnsNullForSqlNull() throws Exception {
     try (JParqResultSet result = positionedResult()) {
       assertNull(result.getObject(7, Integer.class));
@@ -162,9 +171,12 @@ class JParqResultSetGetObjectTest {
   void mapGetObjectRejectsMatchingStructMapping() throws Exception {
     try (JParqResultSet result = positionedResult()) {
       String typeName = result.getMetaData().getColumnTypeName(8);
-      SQLFeatureNotSupportedException failure = assertThrows(SQLFeatureNotSupportedException.class,
+      SQLFeatureNotSupportedException byName = assertThrows(SQLFeatureNotSupportedException.class,
           () -> result.getObject(8, Map.of(typeName, String.class)));
-      assertEquals("0A000", failure.getSQLState());
+      assertEquals("0A000", byName.getSQLState());
+      SQLFeatureNotSupportedException byFullName = assertThrows(SQLFeatureNotSupportedException.class,
+          () -> result.getObject(8, Map.of("example.point", String.class)));
+      assertEquals("0A000", byFullName.getSQLState());
     }
   }
 

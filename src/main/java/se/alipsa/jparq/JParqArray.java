@@ -6,7 +6,6 @@ import java.sql.JDBCType;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
-import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -183,30 +182,8 @@ public final class JParqArray implements Array {
    */
   private void checkMapping(Map<String, Class<?>> map) throws SQLException {
     ensureOpen();
-    rejectUnsupportedTypeMap(map, baseType, getBaseTypeName(), JdbcTypeMapper.nonNullSchema(elementSchema));
-  }
-
-  /**
-   * Uses the standard mapping unless the map requests a custom STRUCT mapping,
-   * which is not supported.
-   *
-   * @param map
-   *          optional custom mappings, null means the standard mapping
-   * @param sqlType
-   *          JDBC type of the value
-   * @param typeName
-   *          SQL type name of the value
-   * @param declaration
-   *          optional Avro schema declaration of the value
-   * @throws SQLFeatureNotSupportedException
-   *           if the map names the STRUCT type being read
-   */
-  static void rejectUnsupportedTypeMap(Map<String, Class<?>> map, int sqlType, String typeName, Schema declaration)
-      throws SQLException {
-    if (sqlType == Types.STRUCT && map != null
-        && (map.containsKey(typeName) || declaration != null && map.containsKey(declaration.getFullName()))) {
-      throw new SQLFeatureNotSupportedException("Custom type mappings are not supported", "0A000");
-    }
+    JdbcTypeMapper.rejectUnsupportedTypeMap(map, baseType, getBaseTypeName(),
+        JdbcTypeMapper.nonNullSchema(elementSchema));
   }
 
   /**
