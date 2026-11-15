@@ -85,6 +85,7 @@ import se.alipsa.jparq.engine.CastExpressions;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelatedBindings;
+import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
@@ -768,9 +769,15 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (parsedSelect == null || parsedSelect.expressions().isEmpty()) {
         return null;
       }
+      Expression first = parsedSelect.expressions().getFirst();
+      // A placeholder without a declared schema would downgrade common-type
+      // operands to untyped and could report a wrong type; unknown is safer.
+      if (CorrelatedBindings.hasUntypedReference(first)) {
+        return null;
+      }
       Function<Column, Schema> columnSchemas = freshColumnSchemas();
       Function<Select, Schema> scalarSchemas = projectionResultSchemas(cteResults);
-      return ArrayExpressionSchemas.resolve(parsedSelect.expressions().getFirst(), columnSchemas, scalarSchemas);
+      return ArrayExpressionSchemas.resolve(first, columnSchemas, scalarSchemas);
     } catch (IllegalArgumentException incompatible) {
       return null;
     }
@@ -998,7 +1005,71 @@ public class JParqPreparedStatement implements PreparedStatement {
   private SubqueryExecutor createSubqueryExecutor(QueryCancellation cancellation) {
     var plans = executionPlans;
     return new SubqueryExecutor(stmt.getConn(), sql -> prepareSubqueryStatement(sql, cteResults, cancellation, plans),
-        this::subqueryTableColumns, plans);
+        this::subqueryTableColumns, plans, this::resolveOuterReference);
+  }
+
+  /**
+   * Resolves one correlated outer reference against this statement's own scope,
+   * so an alias, CTE, or derived table that shadows a physical table contributes
+   * its visible schema rather than the shadowed table's.
+   *
+   * @param reference
+   *          qualified outer column, with the qualifier in lookup-key form and
+   *          the column in raw text form
+   * @return the referenced column's declared schema, or null when unknown
+   */
+  Schema resolveOuterReference(CorrelatedSubqueryRewriter.QualifiedColumn reference) {
+    Identifier qualifier = Identifier.fromLookupKey(reference.qualifier());
+    Identifier column = Identifier.of(reference.column());
+    if (column == null) {
+      return null;
+    }
+    try {
+      Schema source;
+      if (qualifier == null) {
+        // An unqualified outer reference is unambiguous only with a single input.
+        source = tableReferences != null && tableReferences.size() == 1 && !joinQuery ? fileAvroSchema : null;
+      } else {
+        source = schemaForOuterQualifier(qualifier);
+      }
+      Schema.Field field = findFieldIgnoreCase(source, column.text());
+      return field == null ? null : JdbcTypeMapper.nonNullSchema(field.schema());
+    } catch (SQLException exception) {
+      if (QueryCancellation.findCancellation(exception).isPresent()) {
+        throw new IllegalStateException("Canceled while resolving outer column declarations", exception);
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Finds the input whose visible name (alias hiding table name) matches one
+   * outer qualifier and returns its exposed schema.
+   *
+   * @param qualifier
+   *          normalized outer qualifier
+   * @return that input's schema, or null when the qualifier matches no input or
+   *         its schema cannot be established
+   * @throws SQLException
+   *           if a physical input cannot be validated
+   */
+  private Schema schemaForOuterQualifier(Identifier qualifier) throws SQLException {
+    if (tableReferences == null) {
+      return null;
+    }
+    for (SqlParser.TableReference ref : tableReferences) {
+      Identifier visible = Identifier.of(ref.tableAlias() != null ? ref.tableAlias() : ref.tableName());
+      if (visible == null || !visible.lookupKey().equals(qualifier.lookupKey())) {
+        continue;
+      }
+      if (ref.isDerivedTable()) {
+        // The materialized base input retains its output schema; derived inputs
+        // joined into this statement are not retained here.
+        return ref == tableReferences.getFirst() && baseCteResult != null ? baseCteResult.schema() : null;
+      }
+      return schemaForTableReference(ref);
+    }
+    return null;
   }
 
   private JParqPreparedStatement prepareSubqueryStatement(String sql, Map<Identifier, CteResult> cteContext)

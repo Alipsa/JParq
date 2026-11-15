@@ -111,6 +111,22 @@ class CorrelatedBindingsTest {
     }
     assertThrows(IllegalArgumentException.class, () -> LiteralConverter.toLiteral(outer));
   }
+
+  /** Typed placeholders classify as typed; unknown or inactive ones do not. */
+  @Test
+  void detectsUntypedReferences() throws Exception {
+    var schema = SchemaBuilder.array().items().intType();
+    var typed = net.sf.jsqlparser.parser.CCJSqlParserUtil.parseExpression("1 + __JPARQ_CORRELATED_VALUE('typed', 0)");
+    var plain = net.sf.jsqlparser.parser.CCJSqlParserUtil.parseExpression("1 + 2");
+    assertTrue(CorrelatedBindings.hasUntypedReference(typed));
+    assertFalse(CorrelatedBindings.hasUntypedReference(plain));
+    try (var bindings = new CorrelatedBindings("typed", List.of(1), List.of(schema))) {
+      assertFalse(CorrelatedBindings.hasUntypedReference(typed));
+    }
+    assertTrue(CorrelatedBindings.hasUntypedReference(typed));
+    assertFalse(CorrelatedBindings.hasUntypedReference(null));
+  }
+
   /** Limits bound predicate translation to the current execution scope. */
   @Test
   void predicateTranslationScopesDoNotLeak() {

@@ -10,7 +10,6 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -26,7 +25,6 @@ import net.sf.jsqlparser.statement.select.*;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqPreparedStatement;
-import se.alipsa.jparq.helper.JdbcTypeMapper;
 import se.alipsa.jparq.meta.InformationSchemaColumns;
 import se.alipsa.jparq.meta.InformationSchemaTables;
 
@@ -49,6 +47,7 @@ public final class SubqueryExecutor implements AutoCloseable {
   private final Map<String, SubqueryResult> existenceCache = new ConcurrentHashMap<>();
   private final StatementFactory statementFactory;
   private final Function<Table, Set<String>> tableColumns;
+  private final Function<CorrelatedSubqueryRewriter.QualifiedColumn, Schema> outerSchemas;
   private final Map<PlainSelect, Optional<Set<String>>> scopeColumns = new IdentityHashMap<>();
   private final Map<String, Optional<Set<String>>> sourceColumns = new ConcurrentHashMap<>();
 
@@ -106,10 +105,33 @@ public final class SubqueryExecutor implements AutoCloseable {
    */
   public SubqueryExecutor(JParqConnection connection, StatementFactory statementFactory,
       Function<Table, Set<String>> tableColumns, ExecutionPlans executionPlans) {
+    this(connection, statementFactory, tableColumns, executionPlans, null);
+  }
+
+  /**
+   * Creates an executor that resolves correlated outer references against the
+   * owning statement's own scope.
+   *
+   * @param connection
+   *          active connection
+   * @param statementFactory
+   *          factory using the same execution plans, or null
+   * @param tableColumns
+   *          source column resolver, or null
+   * @param executionPlans
+   *          shape cache belonging only to this execution
+   * @param outerSchemas
+   *          resolver mapping outer references to their declared column schemas
+   *          in the owning statement's scope, or null when unavailable
+   */
+  public SubqueryExecutor(JParqConnection connection, StatementFactory statementFactory,
+      Function<Table, Set<String>> tableColumns, ExecutionPlans executionPlans,
+      Function<CorrelatedSubqueryRewriter.QualifiedColumn, Schema> outerSchemas) {
     this.executionPlans = Objects.requireNonNull(executionPlans, "executionPlans");
     this.connection = Objects.requireNonNull(connection, "connection");
     this.statementFactory = statementFactory;
     this.tableColumns = tableColumns == null ? this::physicalColumns : tableColumns;
+    this.outerSchemas = outerSchemas;
   }
 
   /**
@@ -719,83 +741,16 @@ public final class SubqueryExecutor implements AutoCloseable {
   }
 
   /**
-   * Resolves one outer reference's declared column type from the physical table
-   * its qualifier names, or null when the qualifier is not a physical table (for
-   * example an outer CTE or derived-table alias).
+   * Resolves one outer reference's declared column type through the outer
+   * statement's own scope, or null when the owning executor has no outer scope
+   * resolver or the reference cannot be resolved there.
    *
    * @param reference
    *          qualified outer column
    * @return the referenced column's declared schema, or null when unknown
    */
   private Schema outerReferenceSchema(CorrelatedSubqueryRewriter.QualifiedColumn reference) {
-    Identifier table = identifierFromLookupKey(reference.qualifier());
-    Identifier column = identifierFromLookupKey(Identifier.lookupKey(reference.column()));
-    if (table == null || column == null) {
-      return null;
-    }
-    try {
-      var location = connection.resolveTable(null, table.text());
-      Schema source = executionPlans.table(location, HadoopConfigurations.create()).schema();
-      Schema.Field field = fieldByLookupKey(source, column);
-      return field == null ? null : JdbcTypeMapper.nonNullSchema(field.schema());
-    } catch (SQLException exception) {
-      if (QueryCancellation.findCancellation(exception).isPresent()) {
-        throw new IllegalStateException("Canceled while resolving outer column declarations", exception);
-      }
-      return null;
-    }
-  }
-
-  /**
-   * Rebuilds an identifier from its lookup key form, restoring quoting so quoted
-   * outer qualifiers keep matching their case-sensitive declarations.
-   *
-   * @param key
-   *          lookup key such as {@code U:name} or {@code Q:"Name"}
-   * @return the corresponding identifier, or null when the key is absent
-   */
-  private static Identifier identifierFromLookupKey(String key) {
-    if (key == null || key.length() < 3) {
-      return null;
-    }
-    String prefix = key.substring(0, 2).toUpperCase(Locale.ROOT);
-    String body = key.substring(2);
-    if ("U:".equals(prefix)) {
-      return Identifier.of(body);
-    }
-    if ("Q:".equals(prefix)) {
-      return Identifier.of("\"" + body.replace("\"", "\"\"") + "\"");
-    }
-    return null;
-  }
-
-  /**
-   * Finds a field by lookup key, falling back to a case-insensitive comparison
-   * for unquoted references.
-   *
-   * @param source
-   *          table declaration
-   * @param column
-   *          referenced column identifier
-   * @return the matching field, or null when absent
-   */
-  private static Schema.Field fieldByLookupKey(Schema source, Identifier column) {
-    String key = column.lookupKey();
-    for (Schema.Field field : source.getFields()) {
-      if (key.equals(Identifier.lookupKey(field.name()))) {
-        return field;
-      }
-    }
-    if (column.quoted()) {
-      return null;
-    }
-    for (Schema.Field field : source.getFields()) {
-      Identifier fieldId = Identifier.of(field.name());
-      if (fieldId != null && !fieldId.quoted() && column.normalized().equals(fieldId.normalized())) {
-        return field;
-      }
-    }
-    return null;
+    return outerSchemas == null ? null : outerSchemas.apply(reference);
   }
 
   /**

@@ -871,6 +871,95 @@ class ArrayResultRepresentationTest {
   }
 
   /**
+   * Resolves outer references through the outer statement's own scope, so an
+   * alias, CTE, or derived table that shadows a physical table contributes its
+   * visible schema, and unqualified references resolve against the single outer
+   * input.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryOuterReferencesResolveThroughOuterScope(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    // An aliased outer table resolves through its alias, not the catalog.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("SELECT (SELECT COALESCE(o.d, s.id) FROM s WHERE s.id = 1) AS x FROM t2 o")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(12, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+    // An outer alias shadowing a physical table reports the aliased table's type.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT s.b FROM t2 x WHERE x.b = 42) AS x FROM t2 AS s")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+    // An outer CTE resolves through its declared columns.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(
+            "WITH s AS (SELECT d AS id FROM t2) SELECT (SELECT COALESCE(s.id, x.b) FROM t2 x) AS x FROM s")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(12, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+    // An outer derived table resolves through its materialized output schema.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT s.id FROM t2 x) AS x FROM (SELECT d AS id FROM t2) s")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(10, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+    // An unqualified outer reference resolves against the single outer input.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT COALESCE(d, s.id) FROM s WHERE s.id = 1) AS x FROM t2")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(12, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+    // A CASE branch resolving an aliased outer table uses the outer schema.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("SELECT (SELECT CASE WHEN x.b > 0 THEN o.d ELSE x.b END FROM t2 x) AS x FROM t2 o")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(12, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
    * Reports a correlated scalar subquery's interval declaration through the
    * metadata shape rewrite.
    *

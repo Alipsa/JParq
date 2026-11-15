@@ -25,4 +25,27 @@ class IdentifierLookupTest {
     assertNull(plain.resolve(Map.of(Identifier.of("\"C\""), "upper")));
     assertNull(plain.resolve(Map.of()));
   }
+
+  /** Rebuilds identifiers from lookup keys, restoring quoting semantics. */
+  @Test
+  void rebuildsIdentifiersFromLookupKeys() {
+    assertEquals(Identifier.of("name"), Identifier.fromLookupKey("U:name"));
+    assertEquals(Identifier.of("Name"), Identifier.fromLookupKey("U:Name"));
+    assertEquals(Identifier.of("\"Name\""), Identifier.fromLookupKey("Q:Name"));
+    assertEquals(Identifier.of("\"a\"\"b\""), Identifier.fromLookupKey("Q:a\"b"));
+    assertNull(Identifier.fromLookupKey(null));
+    assertNull(Identifier.fromLookupKey("U:"));
+    assertNull(Identifier.fromLookupKey("name"));
+  }
+
+  /** Lookup keys rebuilt from their own form round-trip unchanged. */
+  @Test
+  void lookupKeyRoundTripIsStable() {
+    for (Identifier identifier : new Identifier[]{
+        Identifier.of("t2"), Identifier.of("\"T2\""), Identifier.of("\"a\"\"b\"")
+    }) {
+      assertEquals(identifier, Identifier.fromLookupKey(identifier.lookupKey()));
+      assertEquals(identifier.lookupKey(), Identifier.fromLookupKey(identifier.lookupKey()).lookupKey());
+    }
+  }
 }
