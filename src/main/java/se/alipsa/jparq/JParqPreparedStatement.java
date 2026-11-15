@@ -817,14 +817,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @return full first-projection schema resolver for nested subqueries
    */
   private Function<Select, Schema> projectionResultSchemas(Map<Identifier, CteResult> cteContext) {
-    Map<Select, Optional<Schema>> schemas = new HashMap<>();
-    return select -> schemas.computeIfAbsent(select, query -> {
-      try (JParqPreparedStatement nested = prepareSubqueryStatement(query.toString(), cteContext)) {
-        return Optional.ofNullable(nested.firstProjectionSchema());
-      } catch (SQLException exception) {
-        return Optional.empty();
-      }
-    }).orElse(null);
+    return nestedProjectionSchemas(cteContext, JParqPreparedStatement::firstProjectionSchema);
   }
 
   /**
@@ -937,14 +930,47 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @return scalar declaration resolver preparing independent nested plans
    */
   private Function<Select, Schema> projectionScalarSchemas(Map<Identifier, CteResult> cteContext) {
-    Map<Select, Optional<Schema>> declarations = new HashMap<>();
-    return select -> declarations.computeIfAbsent(select, query -> {
+    return nestedProjectionSchemas(cteContext, JParqPreparedStatement::declaredProjectionSchema);
+  }
+
+  /**
+   * Prepares each independently scoped scalar subquery once and reads the
+   * requested declaration from it.
+   *
+   * @param cteContext
+   *          CTE values visible to the scalar subqueries
+   * @param reader
+   *          projection declaration to read from each prepared subquery
+   * @return scalar subquery declaration resolver
+   */
+  private Function<Select, Schema> nestedProjectionSchemas(Map<Identifier, CteResult> cteContext,
+      ProjectionSchemaReader reader) {
+    Map<Select, Optional<Schema>> schemas = new HashMap<>();
+    return select -> schemas.computeIfAbsent(select, query -> {
       try (JParqPreparedStatement nested = prepareSubqueryStatement(query.toString(), cteContext)) {
-        return Optional.ofNullable(nested.declaredProjectionSchema());
+        return Optional.ofNullable(reader.read(nested));
       } catch (SQLException exception) {
         return Optional.empty();
       }
     }).orElse(null);
+  }
+
+  /**
+   * Reads one projection declaration from a prepared nested statement.
+   */
+  @FunctionalInterface
+  private interface ProjectionSchemaReader {
+
+    /**
+     * Reads the requested declaration.
+     *
+     * @param statement
+     *          independently scoped nested statement
+     * @return the declared schema, or null when unknown
+     * @throws SQLException
+     *           if the declaration cannot be inspected
+     */
+    Schema read(JParqPreparedStatement statement) throws SQLException;
   }
 
   @Override
@@ -4223,13 +4249,18 @@ public class JParqPreparedStatement implements PreparedStatement {
     SqlParser.TableReference match = null;
     if (normalizedQualifier != null) {
       for (SqlParser.TableReference candidate : tableRefs) {
+        // A derived input exposes its materialized output columns; resolving it
+        // by alias or inner table name would misread the inner source schema.
+        if (candidate.isDerivedTable()) {
+          continue;
+        }
         if (normalizedQualifier.equals(JParqUtil.normalizeQualifier(candidate.tableAlias()))
             || normalizedQualifier.equals(JParqUtil.normalizeQualifier(candidate.tableName()))) {
           match = candidate;
           break;
         }
       }
-    } else if (tableRefs.size() == 1) {
+    } else if (tableRefs.size() == 1 && !tableRefs.getFirst().isDerivedTable()) {
       match = tableRefs.getFirst();
     }
     if (match == null) {

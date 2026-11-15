@@ -671,7 +671,7 @@ class ArrayResultRepresentationTest {
   }
 
   /**
-   * Reports the common type of a set-operation scalar subquery's branches.
+   * Widens the common type of a set-operation scalar subquery's branches.
    *
    * @param directory
    *          dataset directory
@@ -679,14 +679,138 @@ class ArrayResultRepresentationTest {
    *           if fixture creation or querying fails
    */
   @Test
-  void scalarSubqueryUnionReportsCommonBranchType(@TempDir Path directory) throws Exception {
+  void scalarSubqueryUnionWidensBranchTypes(@TempDir Path directory) throws Exception {
     writeDataset(directory);
     try (var connection = connect(directory);
         var statement = connection.createStatement();
         var result = statement.executeQuery(
-            "SELECT (SELECT b FROM t2 WHERE b = 42 UNION ALL SELECT id FROM s WHERE id = 999) AS x FROM s WHERE id = 1")) {
+            "SELECT (SELECT b FROM t2 WHERE b = 42 UNION ALL SELECT CAST(id AS BIGINT) FROM s WHERE id = 999) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.BIGINT, metaData.getColumnType(1));
+      assertEquals(Long.class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertEquals(42L, result.getObject(1));
+      assertFalse(result.next());
+    }
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(
+            "SELECT (SELECT b FROM t2 WHERE b = 42 UNION ALL SELECT d FROM t2 WHERE b = 999) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(12, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("42.00").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports the ARRAY type of a set-operation scalar subquery whose branches
+   * project a stored array column.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryUnionReportsArrayBranchType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(
+            "SELECT (SELECT ints FROM s WHERE id = 1 UNION ALL SELECT ints FROM s WHERE id = 999) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.ARRAY, metaData.getColumnType(1));
+      assertEquals(Object[].class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertArrayEquals(new Object[]{
+          1, 2
+      }, (Object[]) result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Resolves a correlated scalar subquery's projection against its own input
+   * columns, never against the outer query's schema.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryCorrelatedReportsInnerColumnType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    // s.b is BOOLEAN while t2.b is INT; only id 1 matches t2.b = id + 41
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT b FROM t2 WHERE t2.b = s.id + 41) AS x FROM s")) {
       var metaData = result.getMetaData();
       assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertEquals(Integer.class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertTrue(result.next());
+      assertNull(result.getObject(1));
+      assertFalse(result.next());
+    }
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("SELECT (SELECT x.b FROM t2 x WHERE x.b = s.id + 41) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Resolves a scalar subquery projecting a derived table's output column.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryOverDerivedTableReportsColumnType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("SELECT (SELECT x FROM (SELECT b AS x FROM t2) d) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertEquals(Integer.class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports a scalar subquery column as nullable: the SQL standard defines the
+   * result as NULL when the subquery finds no rows.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryColumnReportsNullable(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT b FROM t2) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(ResultSetMetaData.columnNullable, metaData.isNullable(1));
       assertTrue(result.next());
       assertEquals(42, result.getObject(1));
       assertFalse(result.next());

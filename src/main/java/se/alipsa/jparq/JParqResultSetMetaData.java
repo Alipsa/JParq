@@ -633,8 +633,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * Parquet repetition is mapped to JDBC nullability using the derived Avro
    * schema: REQUIRED fields are {@link java.sql.ResultSetMetaData#columnNoNulls},
    * OPTIONAL unions and REPEATED arrays are
-   * {@link java.sql.ResultSetMetaData#columnNullable}. Computed columns or
-   * missing schema information fall back to
+   * {@link java.sql.ResultSetMetaData#columnNullable}. Scalar subquery columns
+   * are always {@link java.sql.ResultSetMetaData#columnNullable} because the SQL
+   * standard defines the result as NULL when no row is found. Other computed
+   * columns or missing schema information fall back to
    * {@link java.sql.ResultSetMetaData#columnNullableUnknown}.
    *
    * @param column
@@ -645,7 +647,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   public int isNullable(int column) {
     Schema.Field field = resolveField(column);
     if (field == null) {
-      return columnNullableUnknown;
+      // The SQL standard defines a scalar subquery's value as NULL when the
+      // subquery finds no rows, so its projection is always nullable.
+      return unwrap(expressionAtColumn(column)) instanceof Select ? columnNullable : columnNullableUnknown;
     }
     Schema fieldSchema = field.schema();
     if (JdbcTypeMapper.isNullable(fieldSchema)) {
