@@ -2,6 +2,21 @@
 
 ### 1.4.0
 
+- Report declared JDBC types, classes, decimal bounds, and alias-independent nullability for
+  COUNT, SUM, AVG, MIN, and MAX window functions (#318). Preserve mixed DATE/TIMESTAMP MIN/MAX
+  fallback behavior while DATE/TIMESTAMP promotion is tracked in #431.
+  **Behavior change:** Numeric window aggregates now participate in arithmetic and common-type
+  conversion through CASE, COALESCE, and set operations. For example, combining SUM(id) OVER ()
+  with 1.5 produces DECIMAL values consistently: a selected sum of 3 becomes BigDecimal 3.0.
+
+- **Behavior change:** COALESCE now promotes numeric arguments to their common type, matching CASE,
+  for plain expressions, grouped aggregates, and window aggregates (#524). For example,
+  COALESCE(int_col, 1.5) returns BigDecimal 1.0 when int_col is 1; casting that result to VARCHAR
+  produces '1.0', and JSON_ARRAY renders [1.0]. Mixing INTEGER and BIGINT returns Long, while mixing
+  REAL and INTEGER returns Double. Derived tables retain these promoted types and values.
+  DISTINCT and GROUP BY now combine equal numeric values selected from differently typed arguments:
+  INTEGER 1 and DECIMAL 1.0 produce one distinct value and one group with a count of 2.
+
 - Serialize JSON constructor TIME and TIMESTAMP values as ISO-8601 strings, including values inside
   arrays and structs. Render standalone UTC-adjusted timestamps in UTC independently of the JVM zone
   and retain local timestamp fields through literals, casts, arithmetic, subqueries, and materialization.

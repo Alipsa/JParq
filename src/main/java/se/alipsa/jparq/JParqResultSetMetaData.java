@@ -485,7 +485,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
 
   /**
    * Resolves literal and CAST declarations independently of returned rows, and
-   * scalar subqueries against the subquery's own source schema.
+   * scalar subqueries against the subquery's own source schema. Non-numeric
+   * window MIN/MAX retain their operand declarations.
    *
    * @param column
    *          one-based output column
@@ -495,6 +496,18 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     Expression expression = unwrap(expressionAtColumn(column));
     if (expression instanceof Select select) {
       return scalarResultSchemas.apply(select);
+    }
+    if (expression instanceof AnalyticExpression analytic
+        && ("MIN".equalsIgnoreCase(analytic.getName()) || "MAX".equalsIgnoreCase(analytic.getName()))) {
+      try {
+        return ArrayExpressionSchemas.resolve(analytic, reference -> {
+          Schema.Field source = resolveSourceField(reference);
+          return source == null ? null : source.schema();
+        }, scalarResultSchemas);
+      } catch (IllegalArgumentException incompatible) {
+        // Preserve value inference for mixed DATE/TIMESTAMP operands (#431).
+        return null;
+      }
     }
     Schema scalar = ScalarExpressionSchemas.resolve(expressionAtColumn(column),
         name -> resolveSourceField(new Column(name)) != null);
@@ -635,8 +648,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * OPTIONAL unions and REPEATED arrays are
    * {@link java.sql.ResultSetMetaData#columnNullable}. Scalar subquery columns
    * are always {@link java.sql.ResultSetMetaData#columnNullable} because the SQL
-   * standard defines the result as NULL when no row is found. Other computed
-   * columns or missing schema information fall back to
+   * standard defines the result as NULL when no row is found. Window COUNT is
+   * never nullable; SUM, AVG, MIN, and MAX are nullable because an empty frame
+   * returns NULL, independently of the output alias. Other computed columns or
+   * missing schema information fall back to
    * {@link java.sql.ResultSetMetaData#columnNullableUnknown}.
    *
    * @param column
@@ -650,6 +665,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     // its alias matches a non-null outer column.
     if (unwrap(expressionAtColumn(column)) instanceof Select) {
       return columnNullable;
+    }
+    if (unwrap(expressionAtColumn(column)) instanceof AnalyticExpression analytic
+        && NumericExpressionTypes.isAggregate(analytic.getName())) {
+      return "COUNT".equalsIgnoreCase(analytic.getName()) ? columnNoNulls : columnNullable;
     }
     Schema.Field field = resolveField(column);
     if (field == null) {
@@ -702,7 +721,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    */
   NumericType numericType(int column) {
     Expression expression = unwrap(expressionAtColumn(column));
-    if (expression instanceof Column || expression instanceof net.sf.jsqlparser.expression.Function) {
+    if (expression instanceof Column
+        || expression instanceof net.sf.jsqlparser.expression.Function && !ExpressionBranches.isCoalesce(expression)) {
       return null;
     }
     return numericExpressionType(expression);
