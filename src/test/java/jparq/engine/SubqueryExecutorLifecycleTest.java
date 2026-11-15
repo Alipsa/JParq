@@ -5,15 +5,22 @@ import static org.mockito.Mockito.*;
 
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.statement.select.Select;
+import org.apache.avro.LogicalTypes;
+import org.apache.avro.Schema;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqPreparedStatement;
+import se.alipsa.jparq.NumericType;
+import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 
 /**
@@ -139,6 +146,94 @@ class SubqueryExecutorLifecycleTest {
         assertSame(cause, failure.getCause());
         assertEquals("42000", ((SQLException) failure.getCause()).getSQLState());
       }
+    }
+  }
+
+  /**
+   * Caches known and unknown numeric declarations before rebuilding correlated
+   * shapes.
+   *
+   * @param known
+   *          whether the nested numeric declaration is known
+   * @throws Exception
+   *           if parsing or mocked JDBC setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void numericNodesCacheCorrelatedMetadata(boolean known) throws Exception {
+    var nested = mock(JParqPreparedStatement.class);
+    NumericType numeric = known ? NumericType.of(Types.INTEGER, 0, 0) : null;
+    when(nested.firstProjectionNumericType()).thenReturn(numeric);
+    var row = result(1);
+    when(nested.executeQuery()).thenReturn(row);
+    var schemas = new AtomicInteger();
+    Select select = (Select) CCJSqlParserUtil.parse("SELECT o.id");
+    try (var executor = new SubqueryExecutor(mock(JParqConnection.class), sql -> nested, table -> null,
+        new SubqueryExecutor.ExecutionPlans(), reference -> {
+          schemas.incrementAndGet();
+          return Schema.create(Schema.Type.INT);
+        })) {
+      executor.executeCorrelated(select, List.of("o"), Set.of("id"), Map.of(), (qualifier, column) -> 1);
+      assertEquals(numeric, executor.projectionNumericType(select));
+      int firstLookups = schemas.get();
+      assertTrue(firstLookups > 0);
+      for (int repeat = 0; repeat < 5; repeat++) {
+        assertEquals(numeric, executor.projectionNumericType(select));
+      }
+      assertEquals(firstLookups, schemas.get());
+      verify(nested).firstProjectionNumericType();
+      verify(nested).executeQuery();
+    }
+  }
+
+  /**
+   * Failed optional numeric lookups preserve independently resolved value and
+   * temporal schemas.
+   *
+   * @throws Exception
+   *           if parsing or mocked JDBC setup fails
+   */
+  @Test
+  void optionalNumericFailurePreservesOtherDeclarations() throws Exception {
+    for (Exception failure : List.of(new SQLException("unknown numeric type"),
+        new IllegalArgumentException("incompatible numeric declaration"))) {
+      var nested = mock(JParqPreparedStatement.class);
+      Schema temporal = LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
+      Schema value = Schema.create(Schema.Type.STRING);
+      when(nested.declaredProjectionSchema()).thenReturn(temporal);
+      when(nested.firstProjectionSchema()).thenReturn(value);
+      when(nested.firstProjectionNumericType()).thenThrow(failure);
+      Select select = (Select) CCJSqlParserUtil.parse("SELECT 1");
+      try (var executor = new SubqueryExecutor(mock(JParqConnection.class), sql -> nested)) {
+        assertNull(executor.projectionNumericType(select));
+        assertSame(temporal, executor.projectionSchema(select));
+        assertSame(value, executor.projectionResultSchema(select));
+        assertNull(executor.projectionNumericType(select));
+        verify(nested).firstProjectionNumericType();
+        verify(nested, never()).executeQuery();
+      }
+    }
+  }
+
+  /**
+   * Cancellation wrapped in an optional numeric failure still aborts declaration
+   * lookup.
+   *
+   * @throws Exception
+   *           if parsing or mocked JDBC setup fails
+   */
+  @Test
+  void optionalNumericFailurePreservesCancellation() throws Exception {
+    var nested = mock(JParqPreparedStatement.class);
+    var canceled = QueryCancellation.canceledException();
+    when(nested.firstProjectionNumericType()).thenThrow(new IllegalArgumentException("canceled", canceled));
+    Select select = (Select) CCJSqlParserUtil.parse("SELECT 1");
+    try (var executor = new SubqueryExecutor(mock(JParqConnection.class), sql -> nested)) {
+      var failure = assertThrows(IllegalStateException.class, () -> executor.projectionNumericType(select));
+      assertSame(canceled, QueryCancellation.findCancellation(failure).orElseThrow());
+      verify(nested, never()).executeQuery();
     }
   }
 

@@ -139,8 +139,8 @@ public final class ArrayExpressionSchemas {
       if (argumentSchema != null) {
         return argumentSchema;
       }
-      NumericType numeric = NumericExpressionTypes.resolve(analytic, column -> numeric(columns.apply(column)),
-          scalarSchemas);
+      NumericType numeric = NumericExpressionTypes.resolve(analytic,
+          column -> NumericExpressionTypes.numeric(columns.apply(column)), scalarSchemas);
       return numeric == null ? null : numeric.schema();
     }
     if (expression instanceof ArrayConstructor array) {
@@ -176,8 +176,8 @@ public final class ArrayExpressionSchemas {
           return intervalResult(second, leftInterval);
         }
       }
-      NumericType left = numeric(first);
-      NumericType right = numeric(second);
+      NumericType left = NumericExpressionTypes.numeric(first);
+      NumericType right = NumericExpressionTypes.numeric(second);
       return left == null || right == null
           ? null
           : left.arithmetic(right, NumericExpressionTypes.operation(expression)).schema();
@@ -211,8 +211,8 @@ public final class ArrayExpressionSchemas {
         default -> null;
       };
     }
-    NumericType numeric = NumericExpressionTypes.resolve(expression, column -> numeric(columns.apply(column)),
-        scalarSchemas);
+    NumericType numeric = NumericExpressionTypes.resolve(expression,
+        column -> NumericExpressionTypes.numeric(columns.apply(column)), scalarSchemas);
     if (numeric != null) {
       return numeric.schema();
     }
@@ -274,17 +274,6 @@ public final class ArrayExpressionSchemas {
           .unsupportedFeature("ARRAY elements with declared type " + type.getName() + " are not supported");
     }
     return ScalarExpressionSchemas.declaredSchema(typeName);
-  }
-
-  /**
-   * Describes a known numeric declaration without consulting projection metadata.
-   *
-   * @param schema
-   *          declared operand schema, or null
-   * @return its numeric descriptor, or null for unknown or nonnumeric operands
-   */
-  private static NumericType numeric(Schema schema) {
-    return schema == null ? null : NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(schema), schema);
   }
 
   /**

@@ -40,6 +40,7 @@ public final class SubqueryExecutor implements AutoCloseable {
   private final Map<String, Optional<Schema>> temporalDeclarations = new LinkedHashMap<>();
   private final Map<Select, Optional<Schema>> projectionNodes = new IdentityHashMap<>();
   private final Map<Select, Optional<Schema>> projectionResultNodes = new IdentityHashMap<>();
+  private final Map<Select, Optional<NumericType>> projectionNumericNodes = new IdentityHashMap<>();
   private final Map<Select, MetadataShape> projectionShapes = new IdentityHashMap<>();
 
   private final ExecutionPlans executionPlans;
@@ -590,6 +591,7 @@ public final class SubqueryExecutor implements AutoCloseable {
     temporalDeclarations.clear();
     projectionNodes.clear();
     projectionResultNodes.clear();
+    projectionNumericNodes.clear();
     projectionShapes.clear();
     cache.clear();
     existenceCache.clear();
@@ -646,7 +648,13 @@ public final class SubqueryExecutor implements AutoCloseable {
    * @return declared numeric type, or null for unknown or nonnumeric projections
    */
   public NumericType projectionNumericType(Select select) {
-    return declarations(metadataShape(select)).numeric();
+    Optional<NumericType> cached = projectionNumericNodes.get(select);
+    if (cached != null) {
+      return cached.orElse(null);
+    }
+    NumericType numeric = declarations(metadataShape(select)).numeric();
+    projectionNumericNodes.put(select, Optional.ofNullable(numeric));
+    return numeric;
   }
 
   /**
@@ -852,7 +860,7 @@ public final class SubqueryExecutor implements AutoCloseable {
     NumericType numeric;
     try {
       numeric = nested.firstProjectionNumericType();
-    } catch (SQLException exception) {
+    } catch (SQLException | IllegalArgumentException exception) {
       throwIfCanceled(exception);
       numeric = null;
     }
@@ -952,7 +960,7 @@ public final class SubqueryExecutor implements AutoCloseable {
    * @param exception
    *          failure to inspect for cancellation
    */
-  private static void throwIfCanceled(SQLException exception) {
+  private static void throwIfCanceled(Throwable exception) {
     if (QueryCancellation.findCancellation(exception).isPresent()) {
       throw new IllegalStateException("Canceled while resolving scalar projection metadata", exception);
     }

@@ -65,6 +65,10 @@ class CaseNumericTypeTest {
         Arguments.of("CASE WHEN id = 1 THEN (SELECT NULL) ELSE 1.00 END", Types.DECIMAL, 3, 2, Set.of(1)),
         Arguments.of("CASE WHEN id = 1 THEN (SELECT ROUND(t.id, 0)) ELSE 1.0 END", Types.DECIMAL, -1, 1, Set.of()),
         Arguments.of("CASE WHEN id = 1 THEN (SELECT 1 / 1) ELSE 1.0 END", Types.DECIMAL, -1, 1, Set.of()),
+        Arguments.of("CASE WHEN id = 1 THEN (SELECT 1 / 1 UNION ALL SELECT 1 WHERE 1 = 0) ELSE 1.0 END", Types.DECIMAL,
+            -1, 1, Set.of()),
+        Arguments.of("CASE WHEN id = 1 THEN (SELECT NULL UNION ALL SELECT 1 WHERE 1 = 0) ELSE 1.00 END", Types.DECIMAL,
+            3, 2, Set.of(1)),
         Arguments.of("CASE WHEN id = 1 THEN CEIL(id) ELSE 1.0 END", Types.DECIMAL, -1, 1, Set.of()),
         Arguments.of("CASE WHEN id = 1 THEN SQRT(id) ELSE 1.0 END", Types.DOUBLE, -1, 0, Set.of()),
         Arguments.of("CASE WHEN id = 1 THEN NULLIF(id, 99) ELSE 1.0 END", Types.DECIMAL, 11, 1, Set.of()));

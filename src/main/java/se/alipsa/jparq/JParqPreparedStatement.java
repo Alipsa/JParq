@@ -787,7 +787,9 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Resolves numeric projection declarations without evaluating any rows.
+   * Resolves numeric projection declarations without evaluating any rows. Before
+   * execution initializes its plans, declaration inspection uses an isolated
+   * cache.
    *
    * @return first projection's numeric type, or null when nonnumeric or unknown
    * @throws SQLException
@@ -796,34 +798,30 @@ public class JParqPreparedStatement implements PreparedStatement {
   public NumericType firstProjectionNumericType() throws SQLException {
     if (setOperationQuery && parsedSetQuery != null) {
       NumericType common = null;
-      boolean unbounded = false;
       for (SqlParser.SetComponent component : parsedSetQuery.components()) {
         try (JParqPreparedStatement branch = prepareSubqueryStatement(component.sql(), cteResults)) {
           NumericType type = branch.firstProjectionNumericType();
-          Schema schema = branch.firstProjectionSchema();
           if (type == null) {
+            Schema schema = branch.firstProjectionSchema();
             if (schema != null && schema.getType() == Schema.Type.NULL) {
               continue;
             }
             return null;
           }
-          unbounded |= type.jdbcType() == Types.DECIMAL && type.precision() == 0;
-          common = common == null ? type : common.common(type);
+          common = NumericExpressionTypes.common(common, type);
         }
       }
-      return common != null && common.jdbcType() == Types.DECIMAL && unbounded
-          ? new NumericType(Types.DECIMAL, 0, 0)
-          : common;
+      return common;
     }
     if (parsedSelect == null || parsedSelect.expressions().isEmpty()) {
       return null;
     }
     Function<Column, Schema> columns = freshColumnSchemas();
-    try (var executor = createSubqueryExecutor(inheritedCancellation)) {
-      return NumericExpressionTypes.resolve(parsedSelect.expressions().getFirst(), column -> {
-        Schema schema = JdbcTypeMapper.nonNullSchema(columns.apply(column));
-        return schema == null ? null : NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(schema), schema);
-      }, executor::projectionResultSchema, executor::projectionNumericType);
+    var plans = executionPlans == null ? new SubqueryExecutor.ExecutionPlans(validatedTables) : executionPlans;
+    try (var executor = createSubqueryExecutor(inheritedCancellation, plans)) {
+      return NumericExpressionTypes.resolve(parsedSelect.expressions().getFirst(),
+          column -> NumericExpressionTypes.numeric(columns.apply(column)), executor::projectionResultSchema,
+          executor::projectionNumericType);
     }
   }
 
@@ -1040,14 +1038,30 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Creates an executor that keeps its plan cache after a temporary statement
-   * wrapper is closed by Statement.executeQuery.
+   * wrapper is closed by Statement.executeQuery. This execution path requires an
+   * initialized plan cache; declaration-only inspection supplies its own cache.
    *
    * @param cancellation
    *          owning execution's cancellation state
    * @return executor owned by the result or join materialization
    */
   private SubqueryExecutor createSubqueryExecutor(QueryCancellation cancellation) {
-    var plans = executionPlans == null ? new SubqueryExecutor.ExecutionPlans() : executionPlans;
+    return createSubqueryExecutor(cancellation, executionPlans);
+  }
+
+  /**
+   * Creates an executor with the supplied execution or isolated declaration
+   * plans.
+   *
+   * @param cancellation
+   *          owning cancellation state
+   * @param plans
+   *          execution plans, or an isolated cache for declaration-only
+   *          inspection
+   * @return executor sharing the supplied plans
+   */
+  private SubqueryExecutor createSubqueryExecutor(QueryCancellation cancellation,
+      SubqueryExecutor.ExecutionPlans plans) {
     return new SubqueryExecutor(stmt.getConn(), sql -> prepareSubqueryStatement(sql, cteResults, cancellation, plans),
         this::subqueryTableColumns, plans, this::resolveOuterReference);
   }

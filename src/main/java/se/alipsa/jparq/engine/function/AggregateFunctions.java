@@ -84,6 +84,7 @@ import se.alipsa.jparq.engine.LegacyParenthesisSupport;
 import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.engine.NumericCastTarget;
 import se.alipsa.jparq.engine.NumericCasts;
+import se.alipsa.jparq.engine.NumericExpressionTypes;
 import se.alipsa.jparq.engine.Operation;
 import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.QuantifiedComparisons;
@@ -3391,19 +3392,21 @@ public final class AggregateFunctions {
         return groupOperands.get(index).declaration();
       }
       if (operand instanceof Select select) {
-        Schema declared = subqueryExecutor == null ? null : subqueryExecutor.projectionResultSchema(select);
-        if (declared != null && (declared.getType() == Schema.Type.NULL
-            || NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(declared), declared) != null)) {
-          return declared;
-        }
         GroupedScalarSubquery grouped = groupedSubqueries.get(select.toString());
-        if (grouped != null) {
-          return grouped.projectionSchema(scalarResults);
-        }
         SubqueryExecutor.SubqueryResult result = subqueryResults.get(select.toString());
-        return result != null
-            ? result.projectionSchema()
-            : subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select);
+        Schema projection = grouped != null
+            ? grouped.projectionSchema(scalarResults)
+            : result != null
+                ? result.projectionSchema()
+                : subqueryExecutor == null ? null : subqueryExecutor.projectionSchema(select);
+        if (projection != null) {
+          return projection;
+        }
+        Schema declared = subqueryExecutor == null ? null : subqueryExecutor.projectionResultSchema(select);
+        return declared != null
+            && (declared.getType() == Schema.Type.NULL || NumericExpressionTypes.numeric(declared) != null)
+                ? declared
+                : null;
       }
       return operand instanceof Function function && isAggregateName(function.getName())
           ? aggregateOperands.get(aggregateIndex(function)).declaration()

@@ -50,10 +50,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
 
   private Function<Select, Schema> scalarProjectionSchemas = select -> null;
   private Function<Select, Schema> scalarResultSchemas = select -> null;
-  private Function<Select, NumericType> scalarNumericTypes = select -> {
-    Schema value = JdbcTypeMapper.nonNullSchema(scalarResultSchemas.apply(select));
-    return value == null ? null : NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(value), value);
-  };
+  private Function<Select, NumericType> scalarNumericTypes = select -> NumericExpressionTypes
+      .numeric(scalarResultSchemas.apply(select));
   private final Schema schema; // may be null if empty file
   private final List<String> labels; // projection labels (aliases if present)
   private final List<String> physicalNames; // underlying physical column names (null for computed)
@@ -755,10 +753,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     CastExpression cast = CastExpressions.asCast(expression, name -> resolveSourceField(new Column(name)) != null);
     return NumericExpressionTypes.resolve(cast == null ? expression : cast, reference -> {
       Schema.Field field = resolveSourceField(reference);
-      return field == null
-          ? null
-          : NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(field.schema()),
-              JdbcTypeMapper.nonNullSchema(field.schema()));
+      return NumericExpressionTypes.numeric(field == null ? null : field.schema());
     }, scalarResultSchemas, scalarNumericTypes);
   }
 

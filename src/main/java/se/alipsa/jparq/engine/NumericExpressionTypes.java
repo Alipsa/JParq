@@ -249,7 +249,6 @@ public final class NumericExpressionTypes {
   private static NumericType commonBranches(List<? extends Expression> branches, Function<Column, NumericType> columns,
       Function<Select, Schema> scalarSchemas, Function<Select, NumericType> scalarNumbers) {
     NumericType common = null;
-    boolean unknownDecimal = false;
     for (Expression branch : branches) {
       if (isNull(branch, scalarSchemas)) {
         continue;
@@ -258,12 +257,9 @@ public final class NumericExpressionTypes {
       if (type == null) {
         return null;
       }
-      unknownDecimal |= type.jdbcType() == Types.DECIMAL && type.precision() == 0;
-      common = common == null ? type : common.common(type);
+      common = common(common, type);
     }
-    return common != null && common.jdbcType() == Types.DECIMAL && unknownDecimal
-        ? new NumericType(Types.DECIMAL, 0, 0)
-        : common;
+    return common;
   }
 
   /**
@@ -296,9 +292,29 @@ public final class NumericExpressionTypes {
    *          declared schema, possibly null
    * @return numeric descriptor, or null for unknown or nonnumeric schemas
    */
-  private static NumericType numeric(Schema schema) {
+  public static NumericType numeric(Schema schema) {
     Schema value = JdbcTypeMapper.nonNullSchema(schema);
     return value == null ? null : NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(value), value);
+  }
+
+  /**
+   * Combines known numeric branches while retaining unbounded decimal
+   * declarations.
+   *
+   * @param first
+   *          accumulated numeric declaration, or null for no previous branch
+   * @param second
+   *          next numeric declaration, or null for an untyped NULL branch
+   * @return common numeric declaration, or null when both arguments are null
+   */
+  public static NumericType common(NumericType first, NumericType second) {
+    if (first == null || second == null) {
+      return first == null ? second : first;
+    }
+    NumericType common = first.common(second);
+    boolean unbounded = first.jdbcType() == Types.DECIMAL && first.precision() == 0
+        || second.jdbcType() == Types.DECIMAL && second.precision() == 0;
+    return common.jdbcType() == Types.DECIMAL && unbounded ? new NumericType(Types.DECIMAL, 0, 0) : common;
   }
 
   /**
