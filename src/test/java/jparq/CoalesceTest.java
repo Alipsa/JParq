@@ -1,14 +1,21 @@
 package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.DriverManager;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Stream;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
@@ -20,17 +27,22 @@ import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.apache.parquet.io.OutputFile;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import se.alipsa.jparq.JParqSql;
 
 /** Tests for the COALESCE function. */
 public class CoalesceTest {
 
   static JParqSql jparqSql;
+  private static Path peopleDirectory;
 
   @BeforeAll
   static void setup() throws IOException {
     Path people = createPeopleParquetWithNulls();
-    jparqSql = new JParqSql("jdbc:jparq:" + people.getParent().toAbsolutePath());
+    peopleDirectory = people.getParent().toAbsolutePath();
+    jparqSql = new JParqSql("jdbc:jparq:" + peopleDirectory);
   }
 
   static Path createPeopleParquetWithNulls() throws IOException {
@@ -131,4 +143,149 @@ public class CoalesceTest {
       }
     });
   }
+  /**
+   * Supplies common numeric types and selected/fallback values for COALESCE.
+   *
+   * @return expression, input rows, JDBC type, precision, scale, and expected
+   *         values
+   */
+  static Stream<Arguments> numericCommonTypes() {
+    String integers = "(VALUES (1), (CAST(NULL AS INTEGER))) t(id)";
+    return Stream.of(
+        Arguments.of("COALESCE(id, 1.5)", integers, Types.DECIMAL, 11, 1,
+            List.of(new BigDecimal("1.0"), new BigDecimal("1.5"))),
+        Arguments.of("COALESCE(id, CAST(7 AS BIGINT))", integers, Types.BIGINT, 19, 0, List.of(1L, 7L)),
+        Arguments.of("COALESCE(CAST(id AS REAL), 1)", "(VALUES (1.25), (CAST(NULL AS DECIMAL(3,2)))) t(id)",
+            Types.DOUBLE, -1, 0, List.of(1.25, 1.0)));
+  }
+
+  /**
+   * Matches numeric CASE promotion for plain and derived-table COALESCE,
+   * including empty inputs and selection of either argument.
+   *
+   * @param expression
+   *          COALESCE expression
+   * @param input
+   *          typed input rows
+   * @param type
+   *          expected JDBC type
+   * @param precision
+   *          expected precision, or -1 for approximate types
+   * @param scale
+   *          expected scale
+   * @param values
+   *          expected selected and fallback values
+   * @throws SQLException
+   *           if query execution or metadata access fails
+   */
+  @ParameterizedTest
+  @MethodSource("numericCommonTypes")
+  void numericCommonTypesMatchCase(String expression, String input, int type, int precision, int scale,
+      List<Object> values) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + peopleDirectory);
+        var statement = connection.createStatement()) {
+      String operand = expression.startsWith("COALESCE(CAST") ? "CAST(id AS REAL)" : "id";
+      String fallback = type == Types.DECIMAL ? "1.5" : type == Types.BIGINT ? "CAST(7 AS BIGINT)" : "1";
+      String equivalentCase = "CASE WHEN " + operand + " IS NOT NULL THEN " + operand + " ELSE " + fallback + " END";
+      for (boolean empty : List.of(false, true)) {
+        String query = "SELECT " + expression + " AS v, " + equivalentCase + " AS expected FROM " + input
+            + (empty ? " WHERE 1 = 0" : "");
+        for (boolean derived : List.of(false, true)) {
+          try (var result = statement.executeQuery(derived ? "SELECT v, expected FROM (" + query + ") d" : query)) {
+            assertNumericDeclaration(result.getMetaData(), type, values.getFirst().getClass(), precision, scale);
+            int rows = 0;
+            while (result.next()) {
+              assertEquals(values.get(rows), result.getObject(1));
+              assertEquals(result.getObject(2), result.getObject(1));
+              rows++;
+            }
+            assertEquals(empty ? 0 : values.size(), rows);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Promotes grouped Parquet aggregate results to the COALESCE common type.
+   *
+   * @throws SQLException
+   *           if query execution or metadata access fails
+   */
+  @Test
+  void groupedNumericCoalesce() throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + peopleDirectory);
+        var statement = connection.createStatement()) {
+      String query = "SELECT COALESCE(MAX(age), 1.5) AS v FROM people GROUP BY name";
+      for (boolean derived : List.of(false, true)) {
+        try (var result = statement
+            .executeQuery((derived ? "SELECT v FROM (" + query + ") d" : query) + " ORDER BY v")) {
+          assertNumericDeclaration(result.getMetaData(), Types.DECIMAL, BigDecimal.class, 11, 1);
+          for (String value : List.of("1.5", "25.0", "30.0")) {
+            assertTrue(result.next());
+            assertEquals(new BigDecimal(value), result.getObject(1));
+          }
+          assertFalse(result.next());
+        }
+      }
+    }
+  }
+
+  /**
+   * Checks #524's character CAST and JSON rendering against promoted values and
+   * the equivalent CASE expression.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void promotedNumericCoalesceFormatting() throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + peopleDirectory);
+        var statement = connection.createStatement()) {
+      String query = """
+          SELECT CAST(COALESCE(id, 1.5) AS VARCHAR(20)) AS text_value,
+                 JSON_ARRAY(COALESCE(id, 1.5)) AS json_value,
+                 JSON_ARRAY(CASE WHEN id IS NOT NULL THEN id ELSE 1.5 END) AS case_value
+          FROM (VALUES (1), (CAST(NULL AS INTEGER))) t(id)
+          """;
+      for (boolean derived : List.of(false, true)) {
+        try (var result = statement.executeQuery(derived ? "SELECT * FROM (" + query + ") d" : query)) {
+          for (String value : List.of("1.0", "1.5")) {
+            assertTrue(result.next());
+            assertEquals(value, result.getString(1));
+            assertEquals("[" + value + "]", result.getString(2));
+            assertEquals(result.getString(3), result.getString(2));
+          }
+          assertFalse(result.next());
+        }
+      }
+    }
+  }
+
+  /**
+   * Checks a promoted numeric column before reading its values.
+   *
+   * @param metadata
+   *          result metadata
+   * @param type
+   *          expected JDBC type
+   * @param valueClass
+   *          expected Java class
+   * @param precision
+   *          expected precision, or -1 to omit the check
+   * @param scale
+   *          expected scale
+   * @throws SQLException
+   *           if metadata access fails
+   */
+  private static void assertNumericDeclaration(ResultSetMetaData metadata, int type, Class<?> valueClass, int precision,
+      int scale) throws SQLException {
+    assertEquals(type, metadata.getColumnType(1));
+    assertEquals(valueClass.getName(), metadata.getColumnClassName(1));
+    assertEquals(scale, metadata.getScale(1));
+    if (precision >= 0) {
+      assertEquals(precision, metadata.getPrecision(1));
+    }
+  }
+
 }
