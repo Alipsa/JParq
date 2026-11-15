@@ -5,6 +5,7 @@ import java.sql.SQLException;
 import java.sql.Types;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.function.Function;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.BinaryExpression;
@@ -26,8 +27,21 @@ import se.alipsa.jparq.NumericType;
 
 /** Resolves numeric expression types from declarations before reading rows. */
 public final class NumericExpressionTypes {
+  private static final Set<String> AGGREGATES = Set.of("COUNT", "SUM", "AVG", "MIN", "MAX");
+
   /** Prevents utility class instantiation. */
   private NumericExpressionTypes() {
+  }
+
+  /**
+   * Recognizes the aggregate functions whose numeric result rules are shared.
+   *
+   * @param name
+   *          case-insensitive function name, possibly null
+   * @return whether the function is COUNT, SUM, AVG, MIN, or MAX
+   */
+  public static boolean isAggregate(String name) {
+    return name != null && AGGREGATES.contains(name.toUpperCase(Locale.ROOT));
   }
 
   /**
@@ -144,7 +158,7 @@ public final class NumericExpressionTypes {
     if ("COUNT".equals(name)) {
       return NumericType.of(Types.BIGINT, 0, 0);
     }
-    if (!List.of("SUM", "AVG", "MIN", "MAX").contains(name) || argument == null) {
+    if (!isAggregate(name) || argument == null) {
       return null;
     }
     NumericType type = resolve(argument, columns);

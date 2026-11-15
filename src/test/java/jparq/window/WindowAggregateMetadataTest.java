@@ -124,6 +124,8 @@ class WindowAggregateMetadataTest {
       };
       for (int column = 1; column <= values.length; column++) {
         assertDeclaration(result.getMetaData(), column, types[column - 1], values[column - 1].getClass(), -1, 0);
+        assertEquals(column == 1 ? ResultSetMetaData.columnNoNulls : ResultSetMetaData.columnNullable,
+            result.getMetaData().isNullable(column));
       }
       while (result.next()) {
         for (int column = 1; column <= values.length; column++) {

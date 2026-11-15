@@ -456,16 +456,7 @@ public final class ValueExpressionEvaluator {
       if (declaration != null && TemporalOperands.timestampResult(declaration)) {
         return declaredOperand(caseExpr, record, false).engineValue();
       }
-      Object value = evaluateCase(caseExpr, record);
-      NumericType type = numericType(caseExpr);
-      if (type == null || value == null) {
-        return value;
-      }
-      try {
-        return NumericExpressionTypes.convert(type, value);
-      } catch (SQLException e) {
-        throw new IllegalArgumentException("Cannot convert CASE result to its common numeric type", e);
-      }
+      return numericBranch(caseExpr, evaluateCase(caseExpr, record), "CASE");
     }
 
     if (expression instanceof TimeKeyExpression tk) {
@@ -539,6 +530,7 @@ public final class ValueExpressionEvaluator {
         if (declaration != null && TemporalOperands.timestampResult(declaration)) {
           return declaredOperand(func, record, false).engineValue();
         }
+        return numericBranch(func, functionSupport.evaluate(func, record), "COALESCE");
       }
       if (ArrayExpressionSchemas.isArrayConstructor(func)) {
         Schema declaration = valueSchema(func);
@@ -1023,6 +1015,31 @@ public final class ValueExpressionEvaluator {
   private static boolean containsMap(Schema declaration) {
     Schema leaf = JdbcTypeMapper.innermostElementType(declaration);
     return leaf != null && leaf.getType() == Schema.Type.MAP;
+  }
+
+  /**
+   * Converts a selected conditional value to its common declared numeric type.
+   *
+   * @param expression
+   *          CASE or COALESCE expression
+   * @param value
+   *          selected value, possibly null
+   * @param name
+   *          conditional name for conversion diagnostics
+   * @return converted value, or the original value when no numeric type is known
+   * @throws IllegalArgumentException
+   *           if conversion cannot represent the value without data loss
+   */
+  private Object numericBranch(Expression expression, Object value, String name) {
+    NumericType type = numericType(expression);
+    if (type == null || value == null) {
+      return value;
+    }
+    try {
+      return NumericExpressionTypes.convert(type, value);
+    } catch (SQLException failure) {
+      throw new IllegalArgumentException("Cannot convert " + name + " result to its common numeric type", failure);
+    }
   }
 
   /**
