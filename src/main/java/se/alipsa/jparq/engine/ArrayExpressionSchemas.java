@@ -131,11 +131,16 @@ public final class ArrayExpressionSchemas {
       return scalarSchemas.apply(select);
     }
     if (expression instanceof AnalyticExpression analytic && analytic.getName() != null) {
-      return switch (analytic.getName().toUpperCase(Locale.ROOT)) {
+      Schema argumentSchema = switch (analytic.getName().toUpperCase(Locale.ROOT)) {
         case "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE", "LAG", "LEAD", "MIN", "MAX" ->
           resolve(analytic.getExpression(), columns, scalarSchemas);
         default -> null;
       };
+      if (argumentSchema != null) {
+        return argumentSchema;
+      }
+      NumericType numeric = NumericExpressionTypes.resolve(analytic, column -> numeric(columns.apply(column)));
+      return numeric == null ? null : numeric.schema();
     }
     if (expression instanceof ArrayConstructor array) {
       Schema element = common(array.getExpressions(), columns, scalarSchemas);

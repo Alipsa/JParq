@@ -6,6 +6,7 @@ import java.sql.Types;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Function;
+import net.sf.jsqlparser.expression.AnalyticExpression;
 import net.sf.jsqlparser.expression.BinaryExpression;
 import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
@@ -30,7 +31,8 @@ public final class NumericExpressionTypes {
   }
 
   /**
-   * Resolves literals, numeric casts, aggregates, CASE, and arithmetic operators.
+   * Resolves literals, numeric casts, regular and window aggregates, CASE, and
+   * arithmetic operators.
    *
    * @param expression
    *          the expression to resolve
@@ -93,30 +95,24 @@ public final class NumericExpressionTypes {
         // The requested scale may depend on a row; retain value-specific bounds.
         return new NumericType(Types.DECIMAL, 0, 0);
       }
-      if ("COUNT".equals(name)) {
-        return NumericType.of(Types.BIGINT, 0, 0);
+      Expression argument = function.getParameters() == null || function.getParameters().isEmpty()
+          ? null
+          : function.getParameters().getFirst();
+      NumericType aggregate = aggregateType(name, argument, columns);
+      if (aggregate != null) {
+        return aggregate;
       }
-      if (function.getParameters() != null && !function.getParameters().isEmpty()) {
-        NumericType argument = resolve(function.getParameters().getFirst(), columns);
-        if (argument != null) {
-          return switch (name) {
-            case "SUM" -> switch (argument.jdbcType()) {
-              case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> NumericType.of(Types.BIGINT, 0, 0);
-              case Types.REAL -> NumericType.of(Types.DOUBLE, 0, 0);
-              case Types.DECIMAL -> argument.precision() == 0
-                  ? argument
-                  : NumericType.of(Types.DECIMAL, argument.precision() + 19, argument.scale());
-              default -> argument;
-            };
-            case "AVG" -> NumericType.of(Types.DOUBLE, 0, 0);
-            case "MIN", "MAX" -> argument;
-            case "ABS" -> argument.jdbcType() == Types.REAL || argument.jdbcType() == Types.DOUBLE
+      if ("ABS".equals(name) && argument != null) {
+        NumericType type = resolve(argument, columns);
+        return type == null
+            ? null
+            : type.jdbcType() == Types.REAL || type.jdbcType() == Types.DOUBLE
                 ? new NumericType(Types.DECIMAL, 0, 0)
-                : new NumericType(Types.DECIMAL, argument.precision(), argument.scale());
-            default -> null;
-          };
-        }
+                : new NumericType(Types.DECIMAL, type.precision(), type.scale());
       }
+    }
+    if (expression instanceof AnalyticExpression analytic && analytic.getName() != null) {
+      return aggregateType(analytic.getName().toUpperCase(Locale.ROOT), analytic.getExpression(), columns);
     }
     Operation operation = operation(expression);
     if (operation != null && expression instanceof BinaryExpression binary) {
@@ -131,6 +127,41 @@ public final class NumericExpressionTypes {
       return left == null || right == null ? null : left.arithmetic(right, operation);
     }
     return null;
+  }
+
+  /**
+   * Shares numeric result declarations between regular and window aggregates.
+   *
+   * @param name
+   *          normalized function name
+   * @param argument
+   *          aggregate operand, or null for COUNT(*)
+   * @param columns
+   *          declared numeric source column types
+   * @return aggregate result type, or null for unknown or nonnumeric operands
+   */
+  private static NumericType aggregateType(String name, Expression argument, Function<Column, NumericType> columns) {
+    if ("COUNT".equals(name)) {
+      return NumericType.of(Types.BIGINT, 0, 0);
+    }
+    if (!List.of("SUM", "AVG", "MIN", "MAX").contains(name) || argument == null) {
+      return null;
+    }
+    NumericType type = resolve(argument, columns);
+    if (type == null) {
+      return null;
+    }
+    return switch (name) {
+      case "SUM" -> switch (type.jdbcType()) {
+        case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> NumericType.of(Types.BIGINT, 0, 0);
+        case Types.REAL -> NumericType.of(Types.DOUBLE, 0, 0);
+        case Types.DECIMAL ->
+          type.precision() == 0 ? type : NumericType.of(Types.DECIMAL, type.precision() + 19, type.scale());
+        default -> type;
+      };
+      case "AVG" -> NumericType.of(Types.DOUBLE, 0, 0);
+      default -> type;
+    };
   }
 
   /**

@@ -485,7 +485,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
 
   /**
    * Resolves literal and CAST declarations independently of returned rows, and
-   * scalar subqueries against the subquery's own source schema.
+   * scalar subqueries against the subquery's own source schema, and window
+   * aggregates against their operand declarations.
    *
    * @param column
    *          one-based output column
@@ -495,6 +496,13 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     Expression expression = unwrap(expressionAtColumn(column));
     if (expression instanceof Select select) {
       return scalarResultSchemas.apply(select);
+    }
+    if (expression instanceof AnalyticExpression analytic && analytic.getName() != null
+        && List.of("COUNT", "SUM", "AVG", "MIN", "MAX").contains(analytic.getName().toUpperCase(Locale.ROOT))) {
+      return ArrayExpressionSchemas.resolve(analytic, reference -> {
+        Schema.Field source = resolveSourceField(reference);
+        return source == null ? null : source.schema();
+      }, scalarResultSchemas);
     }
     Schema scalar = ScalarExpressionSchemas.resolve(expressionAtColumn(column),
         name -> resolveSourceField(new Column(name)) != null);
