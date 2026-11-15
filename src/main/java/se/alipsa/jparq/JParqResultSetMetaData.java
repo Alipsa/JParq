@@ -645,11 +645,15 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    */
   @Override
   public int isNullable(int column) {
+    // The SQL standard defines a scalar subquery's value as NULL when the
+    // subquery finds no rows, so its projection is always nullable even when
+    // its alias matches a non-null outer column.
+    if (unwrap(expressionAtColumn(column)) instanceof Select) {
+      return columnNullable;
+    }
     Schema.Field field = resolveField(column);
     if (field == null) {
-      // The SQL standard defines a scalar subquery's value as NULL when the
-      // subquery finds no rows, so its projection is always nullable.
-      return unwrap(expressionAtColumn(column)) instanceof Select ? columnNullable : columnNullableUnknown;
+      return columnNullableUnknown;
     }
     Schema fieldSchema = field.schema();
     if (JdbcTypeMapper.isNullable(fieldSchema)) {

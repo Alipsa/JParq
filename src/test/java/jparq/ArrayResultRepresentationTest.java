@@ -795,6 +795,134 @@ class ArrayResultRepresentationTest {
   }
 
   /**
+   * Reports the common type of a correlated scalar subquery's projection when an
+   * outer column is an operand of COALESCE or CASE, using the outer column's
+   * declared schema.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryCommonTypeWithOuterColumnUsesOuterSchema(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("SELECT (SELECT COALESCE(t2.d, s.id) FROM s WHERE s.id = 1) AS x FROM t2")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(12, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(
+            "SELECT (SELECT CASE WHEN s.id = 1 THEN t2.d ELSE s.id END FROM s WHERE s.id = 1) AS x FROM t2")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(12, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports a correlated scalar subquery projecting only an outer column with the
+   * outer column's declared type.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryOuterColumnProjectionReportsOuterType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT s.b FROM t2 WHERE t2.b = 42) AS x FROM s")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.BOOLEAN, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(Boolean.TRUE, result.getObject(1));
+      assertTrue(result.next());
+      assertEquals(Boolean.FALSE, result.getObject(1));
+      assertFalse(result.next());
+    }
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT s.ints FROM t2) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.ARRAY, metaData.getColumnType(1));
+      assertEquals(Object[].class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertArrayEquals(new Object[]{
+          1, 2
+      }, (Object[]) result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports a correlated scalar subquery's interval declaration through the
+   * metadata shape rewrite.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryCorrelatedIntervalReportsIntervalType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("SELECT (SELECT INTERVAL '2' DAY FROM t2 WHERE t2.b = s.id + 41) AS x FROM s")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.OTHER, metaData.getColumnType(1));
+      assertEquals("INTERVAL", metaData.getColumnTypeName(1));
+      assertEquals(se.alipsa.jparq.helper.TemporalInterval.class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertEquals(0, java.time.Duration.ofDays(2)
+          .compareTo(((se.alipsa.jparq.helper.TemporalInterval) result.getObject(1)).toDuration()));
+      assertTrue(result.next());
+      assertNull(result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports a scalar subquery as nullable even when its alias matches a non-null
+   * outer column.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryAliasMatchingOuterColumnIsNullable(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT b FROM t2 WHERE b = 999) AS id FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(ResultSetMetaData.columnNullable, metaData.isNullable(1));
+      assertTrue(result.next());
+      assertNull(result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
    * Reports a scalar subquery column as nullable: the SQL standard defines the
    * result as NULL when the subquery finds no rows.
    *
