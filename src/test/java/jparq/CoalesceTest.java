@@ -143,20 +143,28 @@ public class CoalesceTest {
       }
     });
   }
+
   /**
    * Supplies common numeric types and selected/fallback values for COALESCE.
    *
-   * @return expression, input rows, JDBC type, precision, scale, and expected
-   *         values
+   * @return COALESCE expression, equivalent CASE, input rows, JDBC type,
+   *         precision, scale, and expected values
    */
   static Stream<Arguments> numericCommonTypes() {
     String integers = "(VALUES (1), (CAST(NULL AS INTEGER))) t(id)";
     return Stream.of(
-        Arguments.of("COALESCE(id, 1.5)", integers, Types.DECIMAL, 11, 1,
-            List.of(new BigDecimal("1.0"), new BigDecimal("1.5"))),
-        Arguments.of("COALESCE(id, CAST(7 AS BIGINT))", integers, Types.BIGINT, 19, 0, List.of(1L, 7L)),
-        Arguments.of("COALESCE(CAST(id AS REAL), 1)", "(VALUES (1.25), (CAST(NULL AS DECIMAL(3,2)))) t(id)",
-            Types.DOUBLE, -1, 0, List.of(1.25, 1.0)));
+        Arguments.of("COALESCE(id, 1.5)", "CASE WHEN id IS NOT NULL THEN id ELSE 1.5 END", integers, Types.DECIMAL, 11,
+            1, List.of(new BigDecimal("1.0"), new BigDecimal("1.5"))),
+        Arguments.of("COALESCE(id, CAST(7 AS BIGINT))", "CASE WHEN id IS NOT NULL THEN id ELSE CAST(7 AS BIGINT) END",
+            integers, Types.BIGINT, 19, 0, List.of(1L, 7L)),
+        Arguments.of("COALESCE(CAST(id AS REAL), 1)",
+            "CASE WHEN CAST(id AS REAL) IS NOT NULL THEN CAST(id AS REAL) ELSE 1 END",
+            "(VALUES (1.25), (CAST(NULL AS DECIMAL(3,2)))) t(id)", Types.DOUBLE, -1, 0, List.of(1.25, 1.0)),
+        Arguments.of("COALESCE(NULL, id, 2.5)", "CASE WHEN id IS NOT NULL THEN id ELSE 2.5 END", integers,
+            Types.DECIMAL, 11, 1, List.of(new BigDecimal("1.0"), new BigDecimal("2.5"))),
+        Arguments.of("COALESCE(COALESCE(id, 1), 2.5)",
+            "CASE WHEN id IS NOT NULL THEN id WHEN 1 IS NOT NULL THEN 1 ELSE 2.5 END", integers, Types.DECIMAL, 11, 1,
+            List.of(new BigDecimal("1.0"), new BigDecimal("1.0"))));
   }
 
   /**
@@ -165,6 +173,8 @@ public class CoalesceTest {
    *
    * @param expression
    *          COALESCE expression
+   * @param equivalentCase
+   *          explicit equivalent CASE expression
    * @param input
    *          typed input rows
    * @param type
@@ -180,13 +190,10 @@ public class CoalesceTest {
    */
   @ParameterizedTest
   @MethodSource("numericCommonTypes")
-  void numericCommonTypesMatchCase(String expression, String input, int type, int precision, int scale,
-      List<Object> values) throws SQLException {
+  void numericCommonTypesMatchCase(String expression, String equivalentCase, String input, int type, int precision,
+      int scale, List<Object> values) throws SQLException {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + peopleDirectory);
         var statement = connection.createStatement()) {
-      String operand = expression.startsWith("COALESCE(CAST") ? "CAST(id AS REAL)" : "id";
-      String fallback = type == Types.DECIMAL ? "1.5" : type == Types.BIGINT ? "CAST(7 AS BIGINT)" : "1";
-      String equivalentCase = "CASE WHEN " + operand + " IS NOT NULL THEN " + operand + " ELSE " + fallback + " END";
       for (boolean empty : List.of(false, true)) {
         String query = "SELECT " + expression + " AS v, " + equivalentCase + " AS expected FROM " + input
             + (empty ? " WHERE 1 = 0" : "");
@@ -200,6 +207,40 @@ public class CoalesceTest {
               rows++;
             }
             assertEquals(empty ? 0 : values.size(), rows);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Combines equal numeric values from differently typed COALESCE arguments for
+   * DISTINCT and GROUP BY, preserving the common decimal value.
+   *
+   * @throws SQLException
+   *           if query execution or metadata access fails
+   */
+  @Test
+  void distinctAndGroupingUsePromotedNumericValues() throws SQLException {
+    String input = """
+        FROM (VALUES (CAST(1 AS INTEGER), CAST(NULL AS DECIMAL(3,1))),
+                     (CAST(NULL AS INTEGER), CAST(1.0 AS DECIMAL(3,1)))) t(x, y)
+        """;
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + peopleDirectory);
+        var statement = connection.createStatement()) {
+      for (boolean grouped : List.of(false, true)) {
+        String query = grouped
+            ? "SELECT COALESCE(x, y) AS v, COUNT(*) AS n " + input + " GROUP BY COALESCE(x, y)"
+            : "SELECT DISTINCT COALESCE(x, y) AS v " + input;
+        for (boolean derived : List.of(false, true)) {
+          try (var result = statement.executeQuery(derived ? "SELECT * FROM (" + query + ") d" : query)) {
+            assertNumericDeclaration(result.getMetaData(), Types.DECIMAL, BigDecimal.class, 11, 1);
+            assertTrue(result.next());
+            assertEquals(new BigDecimal("1.0"), result.getObject(1));
+            if (grouped) {
+              assertEquals(2L, result.getObject(2));
+            }
+            assertFalse(result.next(), "Equal promoted values must produce one result row");
           }
         }
       }
@@ -287,5 +328,4 @@ public class CoalesceTest {
       assertEquals(precision, metadata.getPrecision(1));
     }
   }
-
 }

@@ -14,6 +14,8 @@
   COALESCE(int_col, 1.5) returns BigDecimal 1.0 when int_col is 1; casting that result to VARCHAR
   produces '1.0', and JSON_ARRAY renders [1.0]. Mixing INTEGER and BIGINT returns Long, while mixing
   REAL and INTEGER returns Double. Derived tables retain these promoted types and values.
+  DISTINCT and GROUP BY now combine equal numeric values selected from differently typed arguments:
+  INTEGER 1 and DECIMAL 1.0 produce one distinct value and one group with a count of 2.
 
 - Serialize JSON constructor TIME and TIMESTAMP values as ISO-8601 strings, including values inside
   arrays and structs. Render standalone UTC-adjusted timestamps in UTC independently of the JVM zone
