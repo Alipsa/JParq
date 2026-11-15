@@ -85,6 +85,7 @@ import se.alipsa.jparq.engine.CastExpressions;
 import se.alipsa.jparq.engine.ColumnMappingUtil;
 import se.alipsa.jparq.engine.ColumnsUsed;
 import se.alipsa.jparq.engine.CorrelatedBindings;
+import se.alipsa.jparq.engine.CorrelatedSubqueryRewriter;
 import se.alipsa.jparq.engine.CorrelationMappings;
 import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.ExpressionEvaluator;
@@ -751,6 +752,82 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
+   * Resolves the first projection's declared value schema against this
+   * statement's own input columns, independently of any outer query scope. Set
+   * operations combine their branches, and nested scalar subqueries resolve to
+   * their own full projection schema.
+   *
+   * @return the first projection's schema, or null when it cannot be established
+   * @throws SQLException
+   *           if an input schema cannot be inspected
+   */
+  public Schema firstProjectionSchema() throws SQLException {
+    try {
+      if (setOperationQuery && parsedSetQuery != null) {
+        return setOperationFirstProjectionSchema();
+      }
+      if (parsedSelect == null || parsedSelect.expressions().isEmpty()) {
+        return null;
+      }
+      Expression first = parsedSelect.expressions().getFirst();
+      // A placeholder without a declared schema would downgrade common-type
+      // operands to untyped and could report a wrong type; unknown is safer.
+      if (CorrelatedBindings.hasUntypedReference(first)) {
+        return null;
+      }
+      Function<Column, Schema> columnSchemas = freshColumnSchemas();
+      Function<Select, Schema> scalarSchemas = projectionResultSchemas(cteResults);
+      return ArrayExpressionSchemas.resolve(first, columnSchemas, scalarSchemas);
+    } catch (IllegalArgumentException incompatible) {
+      return null;
+    }
+  }
+
+  /**
+   * Combines the first projection's schema across every set operation branch so a
+   * UNION or INTERSECT subquery reports the branches' common type.
+   *
+   * @return the branches' common first-projection schema, or null when unknown
+   * @throws SQLException
+   *           if a branch cannot be prepared
+   */
+  private Schema setOperationFirstProjectionSchema() throws SQLException {
+    Schema common = null;
+    for (SqlParser.SetComponent component : parsedSetQuery.components()) {
+      try (JParqPreparedStatement branch = prepareSubqueryStatement(component.sql(), cteResults)) {
+        Schema branchSchema = branch.firstProjectionSchema();
+        if (branchSchema == null) {
+          return null;
+        }
+        common = common == null ? branchSchema : StructArrayTypes.common(common, branchSchema);
+      }
+    }
+    return common;
+  }
+
+  /**
+   * Creates a column schema resolver backed by this statement's inputs with a
+   * fresh per-call cache.
+   *
+   * @return column schema resolver
+   */
+  private Function<Column, Schema> freshColumnSchemas() {
+    return projectionColumnSchemas(new HashMap<>());
+  }
+
+  /**
+   * Resolves the full first-projection value schema of nested scalar subqueries,
+   * preparing each independently scoped subquery once.
+   *
+   * @param cteContext
+   *          CTE values visible to the scalar subqueries
+   * @return full first-projection schema resolver for nested subqueries
+   */
+  private Function<Select, Schema> projectionResultSchemas(Map<Identifier, CteResult> cteContext) {
+    return nestedProjectionSchemas(cteContext, JParqPreparedStatement::firstProjectionSchema);
+  }
+
+  /**
    * Resolves one projection column's interval or datetime declaration without
    * reading rows, combining set operation branches into their common type.
    * Resolves all columns at once so each set operation branch is prepared only
@@ -790,8 +867,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (parsedSelect == null) {
       return List.of();
     }
-    Map<Column, Schema> columns = new HashMap<>();
-    Function<Column, Schema> columnSchemas = projectionColumnSchemas(columns);
+    Function<Column, Schema> columnSchemas = freshColumnSchemas();
     Function<Select, Schema> scalarSchemas = projectionScalarSchemas(cteResults);
     List<Schema> schemas = new ArrayList<>(parsedSelect.expressions().size());
     for (Expression expression : parsedSelect.expressions()) {
@@ -861,14 +937,47 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @return scalar declaration resolver preparing independent nested plans
    */
   private Function<Select, Schema> projectionScalarSchemas(Map<Identifier, CteResult> cteContext) {
-    Map<Select, Optional<Schema>> declarations = new HashMap<>();
-    return select -> declarations.computeIfAbsent(select, query -> {
+    return nestedProjectionSchemas(cteContext, JParqPreparedStatement::declaredProjectionSchema);
+  }
+
+  /**
+   * Prepares each independently scoped scalar subquery once and reads the
+   * requested declaration from it.
+   *
+   * @param cteContext
+   *          CTE values visible to the scalar subqueries
+   * @param reader
+   *          projection declaration to read from each prepared subquery
+   * @return scalar subquery declaration resolver
+   */
+  private Function<Select, Schema> nestedProjectionSchemas(Map<Identifier, CteResult> cteContext,
+      ProjectionSchemaReader reader) {
+    Map<Select, Optional<Schema>> schemas = new HashMap<>();
+    return select -> schemas.computeIfAbsent(select, query -> {
       try (JParqPreparedStatement nested = prepareSubqueryStatement(query.toString(), cteContext)) {
-        return Optional.ofNullable(nested.declaredProjectionSchema());
+        return Optional.ofNullable(reader.read(nested));
       } catch (SQLException exception) {
         return Optional.empty();
       }
     }).orElse(null);
+  }
+
+  /**
+   * Reads one projection declaration from a prepared nested statement.
+   */
+  @FunctionalInterface
+  private interface ProjectionSchemaReader {
+
+    /**
+     * Reads the requested declaration.
+     *
+     * @param statement
+     *          independently scoped nested statement
+     * @return the declared schema, or null when unknown
+     * @throws SQLException
+     *           if the declaration cannot be inspected
+     */
+    Schema read(JParqPreparedStatement statement) throws SQLException;
   }
 
   @Override
@@ -896,7 +1005,112 @@ public class JParqPreparedStatement implements PreparedStatement {
   private SubqueryExecutor createSubqueryExecutor(QueryCancellation cancellation) {
     var plans = executionPlans;
     return new SubqueryExecutor(stmt.getConn(), sql -> prepareSubqueryStatement(sql, cteResults, cancellation, plans),
-        this::subqueryTableColumns, plans);
+        this::subqueryTableColumns, plans, this::resolveOuterReference);
+  }
+
+  /**
+   * Resolves one correlated outer reference against this statement's own scope,
+   * so an alias, CTE, or derived table that shadows a physical table contributes
+   * its visible schema rather than the shadowed table's.
+   *
+   * @param reference
+   *          qualified outer column, with the qualifier in lookup-key form and
+   *          the column in raw text form
+   * @return the referenced column's declared schema, or null when unknown
+   */
+  Schema resolveOuterReference(CorrelatedSubqueryRewriter.QualifiedColumn reference) {
+    Identifier qualifier = Identifier.fromLookupKey(reference.qualifier());
+    Identifier column = Identifier.of(reference.column());
+    if (column == null) {
+      return null;
+    }
+    try {
+      Schema source;
+      if (qualifier == null) {
+        // An unqualified outer reference is unambiguous only with a single input.
+        source = tableReferences != null && tableReferences.size() == 1 && !joinQuery ? fileAvroSchema : null;
+      } else {
+        source = schemaForOuterQualifier(qualifier);
+      }
+      Schema.Field field = findFieldByIdentifier(source, column);
+      return field == null ? null : JdbcTypeMapper.nonNullSchema(field.schema());
+    } catch (SQLException exception) {
+      if (QueryCancellation.findCancellation(exception).isPresent()) {
+        throw new IllegalStateException("Canceled while resolving outer column declarations", exception);
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Finds a field by identifier semantics: lookup-key equality first, then a
+   * normalized comparison limited to unquoted names so a quoted mixed-case
+   * reference never matches a field differing only in case.
+   *
+   * @param source
+   *          table declaration
+   * @param column
+   *          referenced column identifier
+   * @return the matching field, or null when absent
+   */
+  private static Schema.Field findFieldByIdentifier(Schema source, Identifier column) {
+    if (source == null) {
+      return null;
+    }
+    String key = column.lookupKey();
+    for (Schema.Field field : source.getFields()) {
+      if (key.equals(Identifier.lookupKey(field.name()))) {
+        return field;
+      }
+    }
+    for (Schema.Field field : source.getFields()) {
+      if (field.name().equals(column.text())) {
+        return field;
+      }
+    }
+    if (column.quoted()) {
+      return null;
+    }
+    for (Schema.Field field : source.getFields()) {
+      Identifier fieldId = Identifier.of(field.name());
+      if (fieldId != null && !fieldId.quoted() && column.normalized().equals(fieldId.normalized())) {
+        return field;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Finds the input whose visible name (alias hiding table name) matches one
+   * outer qualifier and returns its exposed schema.
+   *
+   * @param qualifier
+   *          normalized outer qualifier
+   * @return that input's schema, or null when the qualifier matches no input or
+   *         its schema cannot be established
+   * @throws SQLException
+   *           if a physical input cannot be validated
+   */
+  private Schema schemaForOuterQualifier(Identifier qualifier) throws SQLException {
+    if (tableReferences == null) {
+      return null;
+    }
+    for (SqlParser.TableReference ref : tableReferences) {
+      Identifier visible = Identifier.of(ref.tableAlias() != null ? ref.tableAlias() : ref.tableName());
+      if (visible == null || !visible.lookupKey().equals(qualifier.lookupKey())) {
+        continue;
+      }
+      if (ref.isDerivedTable()) {
+        // The materialized base input retains its output schema; derived inputs
+        // joined into this statement are not retained here.
+        return ref == tableReferences.getFirst() && baseCteResult != null ? baseCteResult.schema() : null;
+      }
+      Schema declared = schemaForTableReference(ref);
+      // A column-alias list renames the exposed schema positionally, so the
+      // aliased name must be looked up in the renamed declaration.
+      return declared == null ? null : applyColumnAliases(new CteResult(declared, List.of()), ref).schema();
+    }
+    return null;
   }
 
   private JParqPreparedStatement prepareSubqueryStatement(String sql, Map<Identifier, CteResult> cteContext)
@@ -4147,13 +4361,18 @@ public class JParqPreparedStatement implements PreparedStatement {
     SqlParser.TableReference match = null;
     if (normalizedQualifier != null) {
       for (SqlParser.TableReference candidate : tableRefs) {
+        // A derived input exposes its materialized output columns; resolving it
+        // by alias or inner table name would misread the inner source schema.
+        if (candidate.isDerivedTable()) {
+          continue;
+        }
         if (normalizedQualifier.equals(JParqUtil.normalizeQualifier(candidate.tableAlias()))
             || normalizedQualifier.equals(JParqUtil.normalizeQualifier(candidate.tableName()))) {
           match = candidate;
           break;
         }
       }
-    } else if (tableRefs.size() == 1) {
+    } else if (tableRefs.size() == 1 && !tableRefs.getFirst().isDerivedTable()) {
       match = tableRefs.getFirst();
     }
     if (match == null) {

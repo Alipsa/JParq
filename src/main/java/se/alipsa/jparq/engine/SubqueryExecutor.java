@@ -35,8 +35,11 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
 public final class SubqueryExecutor implements AutoCloseable {
 
   private final Map<String, PreparedStatement> preparedStatements = new LinkedHashMap<>();
-  private final Map<String, Optional<Schema>> projectionSchemas = new LinkedHashMap<>();
+  private final Map<String, ProjectionDeclaration> declarations = new LinkedHashMap<>();
+  private final Map<String, Optional<Schema>> temporalDeclarations = new LinkedHashMap<>();
   private final Map<Select, Optional<Schema>> projectionNodes = new IdentityHashMap<>();
+  private final Map<Select, Optional<Schema>> projectionResultNodes = new IdentityHashMap<>();
+  private final Map<Select, MetadataShape> projectionShapes = new IdentityHashMap<>();
 
   private final ExecutionPlans executionPlans;
   private final JParqConnection connection;
@@ -44,6 +47,7 @@ public final class SubqueryExecutor implements AutoCloseable {
   private final Map<String, SubqueryResult> existenceCache = new ConcurrentHashMap<>();
   private final StatementFactory statementFactory;
   private final Function<Table, Set<String>> tableColumns;
+  private final Function<CorrelatedSubqueryRewriter.QualifiedColumn, Schema> outerSchemas;
   private final Map<PlainSelect, Optional<Set<String>>> scopeColumns = new IdentityHashMap<>();
   private final Map<String, Optional<Set<String>>> sourceColumns = new ConcurrentHashMap<>();
 
@@ -101,10 +105,33 @@ public final class SubqueryExecutor implements AutoCloseable {
    */
   public SubqueryExecutor(JParqConnection connection, StatementFactory statementFactory,
       Function<Table, Set<String>> tableColumns, ExecutionPlans executionPlans) {
+    this(connection, statementFactory, tableColumns, executionPlans, null);
+  }
+
+  /**
+   * Creates an executor that resolves correlated outer references against the
+   * owning statement's own scope.
+   *
+   * @param connection
+   *          active connection
+   * @param statementFactory
+   *          factory using the same execution plans, or null
+   * @param tableColumns
+   *          source column resolver, or null
+   * @param executionPlans
+   *          shape cache belonging only to this execution
+   * @param outerSchemas
+   *          resolver mapping outer references to their declared column schemas
+   *          in the owning statement's scope, or null when unavailable
+   */
+  public SubqueryExecutor(JParqConnection connection, StatementFactory statementFactory,
+      Function<Table, Set<String>> tableColumns, ExecutionPlans executionPlans,
+      Function<CorrelatedSubqueryRewriter.QualifiedColumn, Schema> outerSchemas) {
     this.executionPlans = Objects.requireNonNull(executionPlans, "executionPlans");
     this.connection = Objects.requireNonNull(connection, "connection");
     this.statementFactory = statementFactory;
     this.tableColumns = tableColumns == null ? this::physicalColumns : tableColumns;
+    this.outerSchemas = outerSchemas;
   }
 
   /**
@@ -558,8 +585,11 @@ public final class SubqueryExecutor implements AutoCloseable {
       }
     }
     preparedStatements.clear();
-    projectionSchemas.clear();
+    declarations.clear();
+    temporalDeclarations.clear();
     projectionNodes.clear();
+    projectionResultNodes.clear();
+    projectionShapes.clear();
     cache.clear();
     existenceCache.clear();
     if (failure != null) {
@@ -577,24 +607,290 @@ public final class SubqueryExecutor implements AutoCloseable {
    *         established
    */
   public Schema projectionSchema(Select select) {
-    return projectionNodes.computeIfAbsent(select, node -> {
-      String sql = node.toString();
-      return projectionSchemas.computeIfAbsent(sql, shape -> {
-        try (PreparedStatement prepared = prepareStatement(shape)) {
-          return projectionDeclaration(prepared);
-        } catch (SQLException exception) {
-          if (QueryCancellation.findCancellation(exception).isPresent()) {
-            throw new IllegalStateException("Canceled while resolving scalar projection metadata", exception);
-          }
-          return Optional.empty();
-        }
-      });
-    }).orElse(null);
+    Optional<Schema> cached = projectionNodes.get(select);
+    if (cached != null) {
+      return cached.orElse(null);
+    }
+    Schema temporal = declarations(metadataShape(select)).temporal();
+    projectionNodes.put(select, Optional.ofNullable(temporal));
+    return temporal;
   }
 
   /**
-   * Resolves declarations from an executing statement while outer bindings remain
-   * active.
+   * Resolves a scalar subquery's first projection value schema in the subquery's
+   * own input scope, so inner columns are never resolved against an outer query's
+   * schema. Both declarations share one preparation per metadata shape; executed
+   * subqueries never pay for the value schema.
+   *
+   * @param select
+   *          scalar subquery to inspect
+   * @return the subquery's first projection schema, or null when it cannot be
+   *         established
+   */
+  public Schema projectionResultSchema(Select select) {
+    Optional<Schema> cached = projectionResultNodes.get(select);
+    if (cached != null) {
+      return cached.orElse(null);
+    }
+    Schema result = declarations(metadataShape(select)).result();
+    projectionResultNodes.put(select, Optional.ofNullable(result));
+    return result;
+  }
+
+  /**
+   * Interval/datetime declaration and full first-projection value schema of one
+   * metadata shape.
+   *
+   * @param temporal
+   *          interval or datetime declaration, or null when unknown
+   * @param result
+   *          first projection value schema, or null when unknown
+   */
+  private record ProjectionDeclaration(Schema temporal, Schema result) {
+  }
+
+  /**
+   * Stable executable SQL identifying one subquery's metadata, together with the
+   * binding frame needed to prepare placeholder-rewritten correlated shapes.
+   * Binding schemas carry the outer references' declared types so common-type
+   * projections (COALESCE, CASE) resolve against them.
+   *
+   * @param sql
+   *          stable executable query shape
+   * @param bindingKey
+   *          binding frame identity, or null when the shape has no placeholders
+   * @param bindingSchemas
+   *          outer reference declarations in slot order, null when unknown
+   */
+  private record MetadataShape(String sql, String bindingKey, List<Schema> bindingSchemas) {
+
+    /**
+     * Creates a shape without correlated binding placeholders.
+     *
+     * @param sql
+     *          stable executable query shape
+     * @return plain metadata shape
+     */
+    static MetadataShape plain(String sql) {
+      return new MetadataShape(sql, null, List.of());
+    }
+  }
+
+  /**
+   * Finds the stable executable SQL identifying one subquery's metadata. A
+   * correlated subquery reuses the bound shape that execution prepared, and
+   * otherwise outer references are rewritten to binding placeholders so the
+   * subquery can be prepared without the outer scope.
+   *
+   * @param select
+   *          scalar subquery to inspect
+   * @return stable metadata shape carrying the subquery's own scope
+   */
+  private MetadataShape metadataShape(Select select) {
+    BoundQuery bound = executionPlans.correlations.get(select);
+    if (bound != null) {
+      List<Schema> schemas = new ArrayList<>(bound.references().size());
+      for (var reference : bound.references()) {
+        schemas.add(outerReferenceSchema(reference));
+      }
+      return new MetadataShape(normalize(bound.sql()), bound.key(), schemas);
+    }
+    return projectionShapes.computeIfAbsent(select, this::metadataShapeFor);
+  }
+
+  /**
+   * Rewrites references a subquery cannot bind locally to binding placeholders,
+   * keeping the raw SQL when nothing is correlated. The placeholder values are
+   * never read: the rewritten statement only supplies projection metadata.
+   *
+   * @param select
+   *          scalar subquery to prepare for metadata
+   * @return raw or placeholder-rewritten stable shape
+   */
+  private MetadataShape metadataShapeFor(Select select) {
+    String raw = normalize(select.toString());
+    Set<String> qualifiers = new LinkedHashSet<>();
+    Set<String> candidates = new LinkedHashSet<>();
+    referencedNames(select, qualifiers, candidates);
+    if (qualifiers.isEmpty() && candidates.isEmpty()) {
+      return MetadataShape.plain(raw);
+    }
+    String key = UUID.randomUUID().toString();
+    var references = new LinkedHashMap<CorrelatedSubqueryRewriter.QualifiedColumn, Integer>();
+    // The rewriter ignores candidates bound by an inner scope, so every
+    // referenced name may be offered; only genuine outer references rewrite.
+    // A sentinel qualifier activates unqualified rewriting when no qualifier
+    // is referenced at all.
+    Set<String> outer = qualifiers.isEmpty() ? Set.of("jparq_metadata_outer") : qualifiers;
+    var rewritten = CorrelatedSubqueryRewriter.rewrite(select, outer, candidates, (qualifier, column) -> {
+      var reference = new CorrelatedSubqueryRewriter.QualifiedColumn(qualifier, column);
+      int index = references.computeIfAbsent(reference, ignored -> references.size());
+      return new CorrelatedBindings.Reference(key, index);
+    }, this::localColumns);
+    if (!rewritten.correlated()) {
+      return MetadataShape.plain(raw);
+    }
+    List<Schema> schemas = new ArrayList<>(references.size());
+    for (int index = 0; index < references.size(); index++) {
+      schemas.add(null);
+    }
+    for (var entry : references.entrySet()) {
+      schemas.set(entry.getValue(), outerReferenceSchema(entry.getKey()));
+    }
+    return new MetadataShape(normalize(rewritten.sql()), key, schemas);
+  }
+
+  /**
+   * Resolves one outer reference's declared column type through the outer
+   * statement's own scope, or null when the owning executor has no outer scope
+   * resolver or the reference cannot be resolved there.
+   *
+   * @param reference
+   *          qualified outer column
+   * @return the referenced column's declared schema, or null when unknown
+   */
+  private Schema outerReferenceSchema(CorrelatedSubqueryRewriter.QualifiedColumn reference) {
+    return outerSchemas == null ? null : outerSchemas.apply(reference);
+  }
+
+  /**
+   * Collects normalized qualifier and column names referenced anywhere in a
+   * subquery, including nested scopes.
+   *
+   * @param select
+   *          subquery to inspect
+   * @param qualifiers
+   *          destination for normalized table qualifier names
+   * @param columns
+   *          destination for normalized unqualified column names
+   */
+  private static void referencedNames(Select select, Set<String> qualifiers, Set<String> columns) {
+    var visitor = new JSqlParserSupport.StatementExpressionVisitor() {
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(Column column, S context) {
+        if (!SqlParser.isTimeKeyword(column.getColumnName())) {
+          String columnKey = Identifier.lookupKey(column.getColumnName());
+          if (columnKey != null) {
+            columns.add(columnKey);
+          }
+          Table table = column.getTable();
+          String qualifier = table == null ? null : table.getName();
+          String qualifierKey = qualifier == null ? null : Identifier.lookupKey(qualifier);
+          if (qualifierKey != null) {
+            qualifiers.add(qualifierKey);
+          }
+        }
+        return null;
+      }
+    };
+    JSqlParserSupport.visitExpressions(select, visitor);
+  }
+
+  /**
+   * Resolves both declarations of one metadata shape from a single preparation,
+   * caching the outcome (including unknown) under its SQL. Executing statements
+   * read only the interval/datetime declaration through
+   * {@link #projectionSchema(String, PreparedStatement)}.
+   *
+   * @param shape
+   *          stable metadata shape
+   * @return the combined declaration
+   */
+  private ProjectionDeclaration declarations(MetadataShape shape) {
+    ProjectionDeclaration cached = declarations.get(shape.sql());
+    if (cached != null) {
+      return cached;
+    }
+    ProjectionDeclaration read = prepareForDeclaration(shape, SubqueryExecutor::projectionDeclarations);
+    if (read == null) {
+      read = new ProjectionDeclaration(null, null);
+    }
+    declarations.put(shape.sql(), read);
+    return read;
+  }
+
+  /**
+   * Reads both declarations from a prepared statement without preparing another,
+   * so a failure in either lookup cannot discard the other.
+   *
+   * @param prepared
+   *          statement whose bindings are active
+   * @return the combined declaration
+   */
+  private static ProjectionDeclaration projectionDeclarations(PreparedStatement prepared) {
+    if (!(prepared instanceof JParqPreparedStatement nested)) {
+      return new ProjectionDeclaration(null, null);
+    }
+    Schema temporal;
+    try {
+      temporal = nested.declaredProjectionSchema();
+    } catch (SQLException exception) {
+      throwIfCanceled(exception);
+      temporal = null;
+    }
+    Schema result;
+    try {
+      result = nested.firstProjectionSchema();
+    } catch (SQLException exception) {
+      throwIfCanceled(exception);
+      result = null;
+    }
+    return new ProjectionDeclaration(temporal, result);
+  }
+
+  /**
+   * Prepares a shape once and reads one declaration from it, installing the
+   * shape's binding frame while placeholder-rewritten SQL is prepared and mapping
+   * cancellation to an illegal state instead of the unknown fallback.
+   *
+   * @param shape
+   *          stable metadata shape
+   * @param reader
+   *          declaration to read from the prepared statement
+   * @param <T>
+   *          declaration type
+   * @return the declaration, or null when it cannot be established
+   */
+  @SuppressWarnings("PMD.UnusedLocalVariable")
+  private <T> T prepareForDeclaration(MetadataShape shape, StatementReader<T> reader) {
+    if (shape.bindingKey() != null) {
+      List<Object> bindings = new ArrayList<>(shape.bindingSchemas().size());
+      for (int index = 0; index < shape.bindingSchemas().size(); index++) {
+        bindings.add(null);
+      }
+      try (var frame = new CorrelatedBindings(shape.bindingKey(), bindings, shape.bindingSchemas());
+          PreparedStatement prepared = prepareStatement(shape.sql())) {
+        return reader.read(prepared);
+      } catch (SQLException exception) {
+        return declarationFailure(exception);
+      }
+    }
+    try (PreparedStatement prepared = prepareStatement(shape.sql())) {
+      return reader.read(prepared);
+    } catch (SQLException exception) {
+      return declarationFailure(exception);
+    }
+  }
+
+  /**
+   * Maps a failed declaration lookup to unknown, keeping cancellation fatal.
+   *
+   * @param exception
+   *          failure reading the declaration
+   * @param <T>
+   *          declaration type
+   * @return null, so optional declarations fall back to unknown
+   */
+  private static <T> T declarationFailure(SQLException exception) {
+    throwIfCanceled(exception);
+    return null;
+  }
+
+  /**
+   * Reads the optional interval or datetime declaration of an executing statement
+   * without preparing another, caching the outcome (including unknown) under its
+   * SQL.
    *
    * @param sql
    *          stable executable query shape
@@ -603,26 +899,64 @@ public final class SubqueryExecutor implements AutoCloseable {
    * @return first projection declaration, or null when unknown
    */
   private Schema projectionSchema(String sql, PreparedStatement prepared) {
-    return projectionSchemas.computeIfAbsent(sql, ignored -> projectionDeclaration(prepared)).orElse(null);
+    Optional<Schema> cached = temporalDeclarations.get(sql);
+    if (cached != null) {
+      return cached.orElse(null);
+    }
+    Schema temporal = projectionDeclaration(prepared);
+    temporalDeclarations.put(sql, Optional.ofNullable(temporal));
+    return temporal;
   }
 
   /**
-   * Reads optional projection metadata without preparing another statement.
+   * Reads the optional interval or datetime declaration without preparing another
+   * statement.
    *
    * @param prepared
    *          statement whose bindings are active
-   * @return optional first projection declaration
+   * @return first projection declaration, or null when unknown
    */
-  private Optional<Schema> projectionDeclaration(PreparedStatement prepared) {
+  private Schema projectionDeclaration(PreparedStatement prepared) {
     try {
-      return Optional
-          .ofNullable(prepared instanceof JParqPreparedStatement nested ? nested.declaredProjectionSchema() : null);
+      return prepared instanceof JParqPreparedStatement nested ? nested.declaredProjectionSchema() : null;
     } catch (SQLException exception) {
-      if (QueryCancellation.findCancellation(exception).isPresent()) {
-        throw new IllegalStateException("Canceled while resolving scalar projection metadata", exception);
-      }
-      return Optional.empty();
+      throwIfCanceled(exception);
+      return null;
     }
+  }
+
+  /**
+   * Re-throws cancellation as an illegal state so aborts are never swallowed by
+   * the unknown-declaration fallback.
+   *
+   * @param exception
+   *          failure to inspect for cancellation
+   */
+  private static void throwIfCanceled(SQLException exception) {
+    if (QueryCancellation.findCancellation(exception).isPresent()) {
+      throw new IllegalStateException("Canceled while resolving scalar projection metadata", exception);
+    }
+  }
+
+  /**
+   * Reads one declaration from a prepared statement.
+   *
+   * @param <T>
+   *          declaration type
+   */
+  @FunctionalInterface
+  private interface StatementReader<T> {
+
+    /**
+     * Reads the requested declaration.
+     *
+     * @param prepared
+     *          statement in its bound inner scope
+     * @return the declaration, or null when unknown
+     * @throws SQLException
+     *           if the declaration cannot be inspected
+     */
+    T read(PreparedStatement prepared) throws SQLException;
   }
 
   /**

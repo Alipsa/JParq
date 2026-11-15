@@ -145,6 +145,31 @@ public final class Identifier {
   }
 
   /**
+   * Rebuilds an identifier from its {@link #lookupKey()} form, restoring quoting
+   * so quoted names keep matching their case-sensitive declarations. This is the
+   * inverse of {@link #lookupKey(String)}.
+   *
+   * @param key
+   *          lookup key such as {@code U:name} or {@code Q:Name}
+   * @return the corresponding identifier, or {@code null} when the key is not a
+   *         well-formed lookup key
+   */
+  public static Identifier fromLookupKey(String key) {
+    if (key == null || key.length() < 3) {
+      return null;
+    }
+    String prefix = key.substring(0, 2);
+    String body = key.substring(2);
+    if ("U:".equalsIgnoreCase(prefix)) {
+      return of(body);
+    }
+    if ("Q:".equalsIgnoreCase(prefix)) {
+      return of("\"" + body.replace("\"", "\"\"") + "\"");
+    }
+    return null;
+  }
+
+  /**
    * Looks up a name, preferring its exact key before an equivalent lowercase
    * name. Quoted names containing uppercase letters never use an unquoted
    * fallback. Unlike column-key fallback, this also resolves unquoted names to

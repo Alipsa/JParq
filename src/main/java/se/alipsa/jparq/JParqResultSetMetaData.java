@@ -49,6 +49,7 @@ import se.alipsa.jparq.model.ResultSetMetaDataAdapter;
 public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements AvroColumnMetadata {
 
   private Function<Select, Schema> scalarProjectionSchemas = select -> null;
+  private Function<Select, Schema> scalarResultSchemas = select -> null;
   private final Schema schema; // may be null if empty file
   private final List<String> labels; // projection labels (aliases if present)
   private final List<String> physicalNames; // underlying physical column names (null for computed)
@@ -143,6 +144,19 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     } catch (RuntimeException failure) {
       throw SqlExceptions.wrap("Invalid projection declaration", failure);
     }
+    return this;
+  }
+
+  /**
+   * Supplies scalar-subquery result resolution so a subquery's projection is
+   * classified against the subquery's own source schema.
+   *
+   * @param resolver
+   *          independently scoped scalar result schema resolver
+   * @return this metadata instance
+   */
+  public JParqResultSetMetaData withScalarResultSchemas(Function<Select, Schema> resolver) {
+    scalarResultSchemas = resolver;
     return this;
   }
 
@@ -470,16 +484,20 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   }
 
   /**
-   * Resolves literal and CAST declarations independently of returned rows.
+   * Resolves literal and CAST declarations independently of returned rows, and
+   * scalar subqueries against the subquery's own source schema.
    *
    * @param column
    *          one-based output column
    * @return declared schema, or null for other expressions
    */
   private Schema declaredProjectionSchema(int column) {
+    Expression expression = unwrap(expressionAtColumn(column));
+    if (expression instanceof Select select) {
+      return scalarResultSchemas.apply(select);
+    }
     Schema scalar = ScalarExpressionSchemas.resolve(expressionAtColumn(column),
         name -> resolveSourceField(new Column(name)) != null);
-    Expression expression = unwrap(expressionAtColumn(column));
     if (scalar != null || !(expression instanceof CaseExpression) && !ExpressionBranches.isCoalesce(expression)) {
       return scalar;
     }
@@ -536,8 +554,8 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
   }
 
   /**
-   * Resolves the decimal logical type of an explicit cast or projected source
-   * field.
+   * Resolves the decimal logical type of an explicit cast, a declared scalar
+   * projection, or a projected source field.
    *
    * @param column
    *          the one-based output column index
@@ -550,6 +568,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
     }
     if (getColumnType(column) != Types.DECIMAL && getColumnType(column) != Types.NUMERIC) {
       return null;
+    }
+    Schema declaredValue = JdbcTypeMapper.nonNullSchema(declaredProjectionSchema(column));
+    if (declaredValue != null && declaredValue.getLogicalType() instanceof LogicalTypes.Decimal decimal) {
+      return decimal;
     }
     Schema.Field field = resolveField(column);
     Schema valueSchema = field == null ? null : JdbcTypeMapper.nonNullSchema(field.schema());
@@ -611,8 +633,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    * Parquet repetition is mapped to JDBC nullability using the derived Avro
    * schema: REQUIRED fields are {@link java.sql.ResultSetMetaData#columnNoNulls},
    * OPTIONAL unions and REPEATED arrays are
-   * {@link java.sql.ResultSetMetaData#columnNullable}. Computed columns or
-   * missing schema information fall back to
+   * {@link java.sql.ResultSetMetaData#columnNullable}. Scalar subquery columns
+   * are always {@link java.sql.ResultSetMetaData#columnNullable} because the SQL
+   * standard defines the result as NULL when no row is found. Other computed
+   * columns or missing schema information fall back to
    * {@link java.sql.ResultSetMetaData#columnNullableUnknown}.
    *
    * @param column
@@ -621,6 +645,12 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    */
   @Override
   public int isNullable(int column) {
+    // The SQL standard defines a scalar subquery's value as NULL when the
+    // subquery finds no rows, so its projection is always nullable even when
+    // its alias matches a non-null outer column.
+    if (unwrap(expressionAtColumn(column)) instanceof Select) {
+      return columnNullable;
+    }
     Schema.Field field = resolveField(column);
     if (field == null) {
       return columnNullableUnknown;

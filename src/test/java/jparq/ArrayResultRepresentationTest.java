@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -16,6 +18,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.Types;
 import java.util.List;
 import java.util.Map;
+import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
@@ -545,14 +548,14 @@ class ArrayResultRepresentationTest {
   @Test
   void scalarSubqueryMetadataDoesNotResolveInnerColumnsAgainstOuterSchema(@TempDir Path directory) throws Exception {
     writeDataset(directory);
-    // s.b is BOOLEAN while t2.b is INT; the subquery type must not inherit the
-    // outer column's type
+    // s.b is BOOLEAN while t2.b is INT; the subquery type must come from the
+    // subquery's own FROM table, not the outer column's type
     try (var connection = connect(directory);
         var statement = connection.createStatement();
         var result = statement.executeQuery("SELECT (SELECT b FROM t2) AS x FROM s WHERE id = 1")) {
       var metaData = result.getMetaData();
-      assertEquals(Types.OTHER, metaData.getColumnType(1));
-      assertEquals(Object.class.getName(), metaData.getColumnClassName(1));
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertEquals(Integer.class.getName(), metaData.getColumnClassName(1));
       assertTrue(result.next());
       assertEquals(42, result.getObject(1));
       assertFalse(result.next());
@@ -560,19 +563,544 @@ class ArrayResultRepresentationTest {
   }
 
   @Test
-  void scalarSubqueryOverStoredArrayReportsOtherUntilColumnSchemasAreResolved(@TempDir Path directory)
-      throws Exception {
+  void scalarSubqueryOverStoredArrayReportsArrayMetadata(@TempDir Path directory) throws Exception {
     writeDataset(directory);
     try (var connection = connect(directory);
         var statement = connection.createStatement();
         var result = statement.executeQuery("SELECT (SELECT ints FROM s WHERE id = 1) FROM s WHERE id = 1")) {
       var metaData = result.getMetaData();
-      assertEquals(Types.OTHER, metaData.getColumnType(1));
-      assertEquals(Object.class.getName(), metaData.getColumnClassName(1));
+      assertEquals(Types.ARRAY, metaData.getColumnType(1));
+      assertEquals(Object[].class.getName(), metaData.getColumnClassName(1));
       assertTrue(result.next());
       assertArrayEquals(new Object[]{
           1, 2
       }, (Object[]) result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports the declared precision and scale of a stored DECIMAL column projected
+   * through a scalar subquery, rather than a DECIMAL(0,0).
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryOverStoredDecimalReportsPrecisionAndScale(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT d FROM t2) FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(10, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Resolves an aggregate projection of a scalar subquery to its numeric type.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryCountReportsBigInt(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT COUNT(*) FROM t2) FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.BIGINT, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(1L, result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Resolves an arithmetic projection of a scalar subquery to its numeric type.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryArithmeticReportsNumericType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT b + 1 FROM t2) FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.BIGINT, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(43L, result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports the column's declared type even when the subquery matches no rows.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryWithNoRowsStillReportsColumnType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT b FROM t2 WHERE b = 999) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertNull(result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Widens the common type of a set-operation scalar subquery's branches.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryUnionWidensBranchTypes(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(
+            "SELECT (SELECT b FROM t2 WHERE b = 42 UNION ALL SELECT CAST(id AS BIGINT) FROM s WHERE id = 999) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.BIGINT, metaData.getColumnType(1));
+      assertEquals(Long.class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertEquals(42L, result.getObject(1));
+      assertFalse(result.next());
+    }
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(
+            "SELECT (SELECT b FROM t2 WHERE b = 42 UNION ALL SELECT d FROM t2 WHERE b = 999) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(12, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("42.00").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports the ARRAY type of a set-operation scalar subquery whose branches
+   * project a stored array column.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryUnionReportsArrayBranchType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(
+            "SELECT (SELECT ints FROM s WHERE id = 1 UNION ALL SELECT ints FROM s WHERE id = 999) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.ARRAY, metaData.getColumnType(1));
+      assertEquals(Object[].class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertArrayEquals(new Object[]{
+          1, 2
+      }, (Object[]) result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Resolves a correlated scalar subquery's projection against its own input
+   * columns, never against the outer query's schema.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryCorrelatedReportsInnerColumnType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    // s.b is BOOLEAN while t2.b is INT; only id 1 matches t2.b = id + 41
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT b FROM t2 WHERE t2.b = s.id + 41) AS x FROM s")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertEquals(Integer.class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertTrue(result.next());
+      assertNull(result.getObject(1));
+      assertFalse(result.next());
+    }
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("SELECT (SELECT x.b FROM t2 x WHERE x.b = s.id + 41) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Resolves a scalar subquery projecting a derived table's output column.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryOverDerivedTableReportsColumnType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("SELECT (SELECT x FROM (SELECT b AS x FROM t2) d) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertEquals(Integer.class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports the common type of a correlated scalar subquery's projection when an
+   * outer column is an operand of COALESCE or CASE, using the outer column's
+   * declared schema.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryCommonTypeWithOuterColumnUsesOuterSchema(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("SELECT (SELECT COALESCE(t2.d, s.id) FROM s WHERE s.id = 1) AS x FROM t2")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(12, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(
+            "SELECT (SELECT CASE WHEN s.id = 1 THEN t2.d ELSE s.id END FROM s WHERE s.id = 1) AS x FROM t2")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(12, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports a correlated scalar subquery projecting only an outer column with the
+   * outer column's declared type.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryOuterColumnProjectionReportsOuterType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT s.b FROM t2 WHERE t2.b = 42) AS x FROM s")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.BOOLEAN, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(Boolean.TRUE, result.getObject(1));
+      assertTrue(result.next());
+      assertEquals(Boolean.FALSE, result.getObject(1));
+      assertFalse(result.next());
+    }
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT s.ints FROM t2) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.ARRAY, metaData.getColumnType(1));
+      assertEquals(Object[].class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertArrayEquals(new Object[]{
+          1, 2
+      }, (Object[]) result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Resolves outer references through the outer statement's own scope, so an
+   * alias, CTE, or derived table that shadows a physical table contributes its
+   * visible schema, and unqualified references resolve against the single outer
+   * input.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryOuterReferencesResolveThroughOuterScope(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    // An aliased outer table resolves through its alias, not the catalog.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("SELECT (SELECT COALESCE(o.d, s.id) FROM s WHERE s.id = 1) AS x FROM t2 o")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(12, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+    // An outer alias shadowing a physical table reports the aliased table's type.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT s.b FROM t2 x WHERE x.b = 42) AS x FROM t2 AS s")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+    // An outer CTE resolves through its declared columns.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(
+            "WITH s AS (SELECT d AS id FROM t2) SELECT (SELECT COALESCE(s.id, x.b) FROM t2 x) AS x FROM s")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(12, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+    // An outer derived table resolves through its materialized output schema.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT s.id FROM t2 x) AS x FROM (SELECT d AS id FROM t2) s")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(10, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+    // An unqualified outer reference resolves against the single outer input.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT COALESCE(d, s.id) FROM s WHERE s.id = 1) AS x FROM t2")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(12, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+    // A CASE branch resolving an aliased outer table uses the outer schema.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("SELECT (SELECT CASE WHEN x.b > 0 THEN o.d ELSE x.b END FROM t2 x) AS x FROM t2 o")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.DECIMAL, metaData.getColumnType(1));
+      assertEquals(12, metaData.getPrecision(1));
+      assertEquals(2, metaData.getScale(1));
+      assertTrue(result.next());
+      assertEquals(0, new BigDecimal("12.34").compareTo((BigDecimal) result.getObject(1)));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Applies an outer reference's column-alias list positionally, so an aliased
+   * name resolves to the renamed column rather than a same-named physical column,
+   * for physical and CTE inputs alike.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryOuterReferencesHonorColumnAliasesAndQuoting(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    // o.d is t2.b (INT) under the alias list, not the physical DECIMAL d.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT COALESCE(o.d, x.b) FROM t2 x) AS x FROM t2 AS o(d, b)")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+    // The same positional aliasing applies to a joined outer input.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(
+            "SELECT (SELECT COALESCE(q.d, x.id) FROM s x WHERE x.id = 1) AS x FROM s y JOIN t2 AS q(d, b) ON 1 = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+    // A CTE referenced with its own alias list renames its exposed schema too.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("WITH c AS (SELECT b, d FROM t2) SELECT (SELECT k.x FROM t2 y) AS x FROM c AS k(x, y)")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports a correlated scalar subquery's interval declaration through the
+   * metadata shape rewrite.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryCorrelatedIntervalReportsIntervalType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("SELECT (SELECT INTERVAL '2' DAY FROM t2 WHERE t2.b = s.id + 41) AS x FROM s")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.OTHER, metaData.getColumnType(1));
+      assertEquals("INTERVAL", metaData.getColumnTypeName(1));
+      assertEquals(se.alipsa.jparq.helper.TemporalInterval.class.getName(), metaData.getColumnClassName(1));
+      assertTrue(result.next());
+      assertEquals(0, java.time.Duration.ofDays(2)
+          .compareTo(((se.alipsa.jparq.helper.TemporalInterval) result.getObject(1)).toDuration()));
+      assertTrue(result.next());
+      assertNull(result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports a scalar subquery as nullable even when its alias matches a non-null
+   * outer column.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryAliasMatchingOuterColumnIsNullable(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT b FROM t2 WHERE b = 999) AS id FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(ResultSetMetaData.columnNullable, metaData.isNullable(1));
+      assertTrue(result.next());
+      assertNull(result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports a scalar subquery column as nullable: the SQL standard defines the
+   * result as NULL when the subquery finds no rows.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryColumnReportsNullable(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT b FROM t2) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(ResultSetMetaData.columnNullable, metaData.isNullable(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Reports the inner subquery's type through a nested scalar subquery.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryNestedReportsInnerType(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT (SELECT b FROM t2)) AS x FROM s WHERE id = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
       assertFalse(result.next());
     }
   }
@@ -634,12 +1162,15 @@ class ArrayResultRepresentationTest {
         writer.write(record);
       }
     }
-    Schema t2Schema = SchemaBuilder.record("t2_row").fields().requiredInt("b").endRecord();
+    Schema decimal = LogicalTypes.decimal(10, 2).addToSchema(Schema.create(Schema.Type.BYTES));
+    Schema t2Schema = SchemaBuilder.record("t2_row").fields().requiredInt("b").name("d").type(decimal).noDefault()
+        .endRecord();
     var t2Output = HadoopOutputFile.fromPath(new org.apache.hadoop.fs.Path(directory.resolve("t2.parquet").toUri()),
         new org.apache.hadoop.conf.Configuration());
     try (var writer = AvroParquetWriter.<GenericRecord>builder(t2Output).withSchema(t2Schema).build()) {
       var record = new GenericData.Record(t2Schema);
       record.put("b", 42);
+      record.put("d", ByteBuffer.wrap(new BigDecimal("12.34").unscaledValue().toByteArray()));
       writer.write(record);
     }
   }

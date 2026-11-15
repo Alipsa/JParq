@@ -4,6 +4,8 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.Function;
 import net.sf.jsqlparser.expression.LongValue;
 import net.sf.jsqlparser.expression.StringValue;
@@ -77,6 +79,59 @@ public final class CorrelatedBindings implements AutoCloseable {
     var arguments = function.getParameters();
     return isReserved(function) && arguments != null && arguments.size() == 2 && arguments.get(0) instanceof StringValue
         && arguments.get(1) instanceof LongValue;
+  }
+
+  /**
+   * Reports whether an expression reads a correlated binding whose declared
+   * schema is unknown. A projection carrying such a placeholder cannot be
+   * classified reliably, because common-type resolution would treat the
+   * placeholder as an untyped NULL and could report a wrong type; metadata
+   * lookups must then report unknown instead.
+   *
+   * @param expression
+   *          projection expression to inspect
+   * @return whether the expression contains a placeholder without a declared
+   *         schema, or one whose frame is inactive
+   */
+  public static boolean hasUntypedReference(Expression expression) {
+    if (expression == null) {
+      return false;
+    }
+    AtomicBoolean untyped = new AtomicBoolean();
+    var visitor = new JSqlParserSupport.NamedArgumentVisitor() {
+      /** {@inheritDoc} */
+      @Override
+      public <S> Void visit(Function function, S context) {
+        if (matches(function)) {
+          try {
+            untyped.compareAndSet(false, schema(function) == null);
+          } catch (IllegalArgumentException inactive) {
+            untyped.set(true);
+          }
+        }
+        return super.visit(function, context);
+      }
+
+      /** Nested query scopes resolve their own placeholders independently. */
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.statement.select.Select select, S context) {
+        return null;
+      }
+
+      /** Nested query scopes resolve their own placeholders independently. */
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.statement.select.ParenthesedSelect select, S context) {
+        return null;
+      }
+
+      /** Quantified subqueries resolve their own placeholders independently. */
+      @Override
+      public <S> Void visit(net.sf.jsqlparser.expression.AnyComparisonExpression comparison, S context) {
+        return null;
+      }
+    };
+    expression.accept(visitor);
+    return untyped.get();
   }
 
   /**
