@@ -767,16 +767,17 @@ Comparisons with `NaN` and infinities are therefore TRUE or FALSE rather than UN
 
 ### CASE
 
-Numeric result branches built from literals, columns, numeric casts, arithmetic, aggregates, `COALESCE`, `ABS`, and
-`ROUND` use a common type derived before rows are read. Untyped NULL branches do not constrain it.
+Numeric result branches built from literals, columns, numeric casts, arithmetic, aggregates, scalar subqueries,
+`COALESCE`, `NULLIF`, `IFNULL`, and supported numeric scalar functions use a common type derived before rows are
+read. Numeric scalar functions include mathematical functions and numeric character and datetime functions.
+Untyped NULL branches do not constrain the result type. Scalar subqueries use their independently scoped
+projection declarations, including correlated, empty, and NULL results.
 
 - Selected values use that type consistently for JDBC metadata and `getObject()`, including grouped aggregate
   branches.
 - Decimal branches share a scale when their bounds are known; unbounded expressions keep value-specific scales.
 - Decimal equality keys ignore scale for `DISTINCT`, `GROUP BY`, and window `PARTITION BY`.
 - Unselected branches are not evaluated.
-- Scalar subqueries and other functions without numeric type derivation leave `CASE` untyped, so mixed numeric
-  values can still split keys ([#319](https://github.com/Alipsa/JParq/issues/319)).
 
 ### Character and binary types
 
@@ -1097,7 +1098,6 @@ These are known gaps relative to the SQL standard or expected behavior. Each is 
 | Aggregate `FILTER (WHERE ...)` is not supported | [#438](https://github.com/Alipsa/JParq/issues/438) |
 | Unquoted references do not resolve quoted lowercase materialized aliases | [#338](https://github.com/Alipsa/JParq/issues/338) |
 | Correlated scalar subqueries used directly as aggregate arguments lose outer bindings | [#307](https://github.com/Alipsa/JParq/issues/307) |
-| `CASE` with scalar subqueries or untyped functions does not derive a common numeric type | [#319](https://github.com/Alipsa/JParq/issues/319) |
 | Window functions outside `SELECT` lists are not validated | [#350](https://github.com/Alipsa/JParq/issues/350) |
 | Scalar function result types (and `UNNEST` type propagation through them) | [#424](https://github.com/Alipsa/JParq/issues/424) |
 | Character metadata for concatenation and `CASE` | [#460](https://github.com/Alipsa/JParq/issues/460) |

@@ -139,7 +139,8 @@ public final class ArrayExpressionSchemas {
       if (argumentSchema != null) {
         return argumentSchema;
       }
-      NumericType numeric = NumericExpressionTypes.resolve(analytic, column -> numeric(columns.apply(column)));
+      NumericType numeric = NumericExpressionTypes.resolve(analytic, column -> numeric(columns.apply(column)),
+          scalarSchemas);
       return numeric == null ? null : numeric.schema();
     }
     if (expression instanceof ArrayConstructor array) {
@@ -210,7 +211,8 @@ public final class ArrayExpressionSchemas {
         default -> null;
       };
     }
-    NumericType numeric = NumericExpressionTypes.resolve(expression, column -> numeric(columns.apply(column)));
+    NumericType numeric = NumericExpressionTypes.resolve(expression, column -> numeric(columns.apply(column)),
+        scalarSchemas);
     if (numeric != null) {
       return numeric.schema();
     }
@@ -322,6 +324,12 @@ public final class ArrayExpressionSchemas {
    *           incompatible
    */
   private static Schema common(Schema left, Schema right) {
+    if (left != null && left.getType() == Schema.Type.NULL) {
+      return right == null ? left : right;
+    }
+    if (right != null && right.getType() == Schema.Type.NULL) {
+      return left == null ? right : left;
+    }
     if (left == null || right == null || left.equals(right)) {
       return left == null ? right : left;
     }

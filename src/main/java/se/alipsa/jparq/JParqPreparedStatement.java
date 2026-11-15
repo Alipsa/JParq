@@ -770,6 +770,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         return null;
       }
       Expression first = parsedSelect.expressions().getFirst();
+      if (ExpressionEvaluator.unwrapParenthesis(first) instanceof NullValue) {
+        return Schema.create(Schema.Type.NULL);
+      }
       // A placeholder without a declared schema would downgrade common-type
       // operands to untyped and could report a wrong type; unknown is safer.
       if (CorrelatedBindings.hasUntypedReference(first)) {
@@ -780,6 +783,47 @@ public class JParqPreparedStatement implements PreparedStatement {
       return ArrayExpressionSchemas.resolve(first, columnSchemas, scalarSchemas);
     } catch (IllegalArgumentException incompatible) {
       return null;
+    }
+  }
+
+  /**
+   * Resolves numeric projection declarations without evaluating any rows.
+   *
+   * @return first projection's numeric type, or null when nonnumeric or unknown
+   * @throws SQLException
+   *           if an input declaration cannot be inspected
+   */
+  public NumericType firstProjectionNumericType() throws SQLException {
+    if (setOperationQuery && parsedSetQuery != null) {
+      NumericType common = null;
+      boolean unbounded = false;
+      for (SqlParser.SetComponent component : parsedSetQuery.components()) {
+        try (JParqPreparedStatement branch = prepareSubqueryStatement(component.sql(), cteResults)) {
+          NumericType type = branch.firstProjectionNumericType();
+          Schema schema = branch.firstProjectionSchema();
+          if (type == null) {
+            if (schema != null && schema.getType() == Schema.Type.NULL) {
+              continue;
+            }
+            return null;
+          }
+          unbounded |= type.jdbcType() == Types.DECIMAL && type.precision() == 0;
+          common = common == null ? type : common.common(type);
+        }
+      }
+      return common != null && common.jdbcType() == Types.DECIMAL && unbounded
+          ? new NumericType(Types.DECIMAL, 0, 0)
+          : common;
+    }
+    if (parsedSelect == null || parsedSelect.expressions().isEmpty()) {
+      return null;
+    }
+    Function<Column, Schema> columns = freshColumnSchemas();
+    try (var executor = createSubqueryExecutor(inheritedCancellation)) {
+      return NumericExpressionTypes.resolve(parsedSelect.expressions().getFirst(), column -> {
+        Schema schema = JdbcTypeMapper.nonNullSchema(columns.apply(column));
+        return schema == null ? null : NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(schema), schema);
+      }, executor::projectionResultSchema, executor::projectionNumericType);
     }
   }
 
@@ -1003,7 +1047,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @return executor owned by the result or join materialization
    */
   private SubqueryExecutor createSubqueryExecutor(QueryCancellation cancellation) {
-    var plans = executionPlans;
+    var plans = executionPlans == null ? new SubqueryExecutor.ExecutionPlans() : executionPlans;
     return new SubqueryExecutor(stmt.getConn(), sql -> prepareSubqueryStatement(sql, cteResults, cancellation, plans),
         this::subqueryTableColumns, plans, this::resolveOuterReference);
   }

@@ -3391,6 +3391,11 @@ public final class AggregateFunctions {
         return groupOperands.get(index).declaration();
       }
       if (operand instanceof Select select) {
+        Schema declared = subqueryExecutor == null ? null : subqueryExecutor.projectionResultSchema(select);
+        if (declared != null && (declared.getType() == Schema.Type.NULL
+            || NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(declared), declared) != null)) {
+          return declared;
+        }
         GroupedScalarSubquery grouped = groupedSubqueries.get(select.toString());
         if (grouped != null) {
           return grouped.projectionSchema(scalarResults);

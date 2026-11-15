@@ -50,6 +50,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
 
   private Function<Select, Schema> scalarProjectionSchemas = select -> null;
   private Function<Select, Schema> scalarResultSchemas = select -> null;
+  private Function<Select, NumericType> scalarNumericTypes = select -> {
+    Schema value = JdbcTypeMapper.nonNullSchema(scalarResultSchemas.apply(select));
+    return value == null ? null : NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(value), value);
+  };
   private final Schema schema; // may be null if empty file
   private final List<String> labels; // projection labels (aliases if present)
   private final List<String> physicalNames; // underlying physical column names (null for computed)
@@ -157,6 +161,18 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
    */
   public JParqResultSetMetaData withScalarResultSchemas(Function<Select, Schema> resolver) {
     scalarResultSchemas = resolver;
+    return this;
+  }
+
+  /**
+   * Supplies scalar numeric declarations, including unbounded decimal types.
+   *
+   * @param resolver
+   *          independently scoped numeric projection resolver
+   * @return this metadata instance
+   */
+  public JParqResultSetMetaData withScalarNumericTypes(Function<Select, NumericType> resolver) {
+    scalarNumericTypes = resolver;
     return this;
   }
 
@@ -743,7 +759,7 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
           ? null
           : NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(field.schema()),
               JdbcTypeMapper.nonNullSchema(field.schema()));
-    });
+    }, scalarResultSchemas, scalarNumericTypes);
   }
 
   private String canonicalName(int column) {

@@ -1295,7 +1295,8 @@ public final class ValueExpressionEvaluator {
         return field == null
             ? null
             : NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(field), JdbcTypeMapper.nonNullSchema(field));
-      });
+      }, select -> subqueryExecutor == null ? null : subqueryExecutor.projectionResultSchema(select),
+          select -> subqueryExecutor == null ? null : subqueryExecutor.projectionNumericType(select));
       numericTypes.put(expression, numeric);
     }
     return numericTypes.get(expression);

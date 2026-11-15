@@ -1405,7 +1405,8 @@ public class JParqResultSet extends ResultSetAdapter {
       coerceAggregateNumericValues(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
           canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
           .withScalarProjectionSchemas(subqueryExecutor::projectionSchema)
-          .withScalarResultSchemas(subqueryExecutor::projectionResultSchema));
+          .withScalarResultSchemas(subqueryExecutor::projectionResultSchema)
+          .withScalarNumericTypes(subqueryExecutor::projectionNumericType));
       aggregateMetadata = null;
     }
     if (!aggregateQuery && columnOrder.isEmpty() && selectExpressions.isEmpty() && schema != null) {
@@ -1426,7 +1427,8 @@ public class JParqResultSet extends ResultSetAdapter {
             .retainExpressionTypes(new JParqResultSetMetaData(metadataSchema, columnOrder, physicalColumnOrder,
                 canonicalColumnNames, tableName, tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
                 .withScalarProjectionSchemas(subqueryExecutor::projectionSchema)
-                .withScalarResultSchemas(subqueryExecutor::projectionResultSchema));
+                .withScalarResultSchemas(subqueryExecutor::projectionResultSchema)
+                .withScalarNumericTypes(subqueryExecutor::projectionNumericType));
       }
       return aggregateMetadata;
     }
@@ -1434,7 +1436,8 @@ public class JParqResultSet extends ResultSetAdapter {
     return new JParqResultSetMetaData(normalized, columnOrder, physicalColumnOrder, canonicalColumnNames, tableName,
         tableSchema, tableCatalog, selectExpressions, metadataSourceMappings)
         .withScalarProjectionSchemas(subqueryExecutor::projectionSchema)
-        .withScalarResultSchemas(subqueryExecutor::projectionResultSchema);
+        .withScalarResultSchemas(subqueryExecutor::projectionResultSchema)
+        .withScalarNumericTypes(subqueryExecutor::projectionNumericType);
   }
 
   @SuppressWarnings("PMD.EmptyCatchBlock")

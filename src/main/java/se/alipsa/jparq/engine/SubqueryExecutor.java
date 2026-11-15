@@ -25,6 +25,7 @@ import net.sf.jsqlparser.statement.select.*;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqPreparedStatement;
+import se.alipsa.jparq.NumericType;
 import se.alipsa.jparq.meta.InformationSchemaColumns;
 import se.alipsa.jparq.meta.InformationSchemaTables;
 
@@ -619,7 +620,7 @@ public final class SubqueryExecutor implements AutoCloseable {
   /**
    * Resolves a scalar subquery's first projection value schema in the subquery's
    * own input scope, so inner columns are never resolved against an outer query's
-   * schema. Both declarations share one preparation per metadata shape; executed
+   * schema. All declarations share one preparation per metadata shape; executed
    * subqueries never pay for the value schema.
    *
    * @param select
@@ -638,15 +639,27 @@ public final class SubqueryExecutor implements AutoCloseable {
   }
 
   /**
-   * Interval/datetime declaration and full first-projection value schema of one
-   * metadata shape.
+   * Resolves numeric scalar metadata, retaining decimals without fixed bounds.
+   *
+   * @param select
+   *          independently scoped scalar subquery
+   * @return declared numeric type, or null for unknown or nonnumeric projections
+   */
+  public NumericType projectionNumericType(Select select) {
+    return declarations(metadataShape(select)).numeric();
+  }
+
+  /**
+   * Temporal, value schema, and numeric declarations of one metadata shape.
    *
    * @param temporal
    *          interval or datetime declaration, or null when unknown
    * @param result
    *          first projection value schema, or null when unknown
+   * @param numeric
+   *          numeric declaration, including unbounded decimals, or null
    */
-  private record ProjectionDeclaration(Schema temporal, Schema result) {
+  private record ProjectionDeclaration(Schema temporal, Schema result, NumericType numeric) {
   }
 
   /**
@@ -788,7 +801,7 @@ public final class SubqueryExecutor implements AutoCloseable {
   }
 
   /**
-   * Resolves both declarations of one metadata shape from a single preparation,
+   * Resolves all declarations of one metadata shape from a single preparation,
    * caching the outcome (including unknown) under its SQL. Executing statements
    * read only the interval/datetime declaration through
    * {@link #projectionSchema(String, PreparedStatement)}.
@@ -804,15 +817,15 @@ public final class SubqueryExecutor implements AutoCloseable {
     }
     ProjectionDeclaration read = prepareForDeclaration(shape, SubqueryExecutor::projectionDeclarations);
     if (read == null) {
-      read = new ProjectionDeclaration(null, null);
+      read = new ProjectionDeclaration(null, null, null);
     }
     declarations.put(shape.sql(), read);
     return read;
   }
 
   /**
-   * Reads both declarations from a prepared statement without preparing another,
-   * so a failure in either lookup cannot discard the other.
+   * Reads all declarations from a prepared statement without preparing another,
+   * so a failed optional lookup cannot discard the remaining declarations.
    *
    * @param prepared
    *          statement whose bindings are active
@@ -820,7 +833,7 @@ public final class SubqueryExecutor implements AutoCloseable {
    */
   private static ProjectionDeclaration projectionDeclarations(PreparedStatement prepared) {
     if (!(prepared instanceof JParqPreparedStatement nested)) {
-      return new ProjectionDeclaration(null, null);
+      return new ProjectionDeclaration(null, null, null);
     }
     Schema temporal;
     try {
@@ -836,7 +849,14 @@ public final class SubqueryExecutor implements AutoCloseable {
       throwIfCanceled(exception);
       result = null;
     }
-    return new ProjectionDeclaration(temporal, result);
+    NumericType numeric;
+    try {
+      numeric = nested.firstProjectionNumericType();
+    } catch (SQLException exception) {
+      throwIfCanceled(exception);
+      numeric = null;
+    }
+    return new ProjectionDeclaration(temporal, result, numeric);
   }
 
   /**
