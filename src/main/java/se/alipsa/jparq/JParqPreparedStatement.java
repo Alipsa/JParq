@@ -1032,7 +1032,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       } else {
         source = schemaForOuterQualifier(qualifier);
       }
-      Schema.Field field = findFieldIgnoreCase(source, column.text());
+      Schema.Field field = findFieldByIdentifier(source, column);
       return field == null ? null : JdbcTypeMapper.nonNullSchema(field.schema());
     } catch (SQLException exception) {
       if (QueryCancellation.findCancellation(exception).isPresent()) {
@@ -1040,6 +1040,44 @@ public class JParqPreparedStatement implements PreparedStatement {
       }
       return null;
     }
+  }
+
+  /**
+   * Finds a field by identifier semantics: lookup-key equality first, then a
+   * normalized comparison limited to unquoted names so a quoted mixed-case
+   * reference never matches a field differing only in case.
+   *
+   * @param source
+   *          table declaration
+   * @param column
+   *          referenced column identifier
+   * @return the matching field, or null when absent
+   */
+  private static Schema.Field findFieldByIdentifier(Schema source, Identifier column) {
+    if (source == null) {
+      return null;
+    }
+    String key = column.lookupKey();
+    for (Schema.Field field : source.getFields()) {
+      if (key.equals(Identifier.lookupKey(field.name()))) {
+        return field;
+      }
+    }
+    for (Schema.Field field : source.getFields()) {
+      if (field.name().equals(column.text())) {
+        return field;
+      }
+    }
+    if (column.quoted()) {
+      return null;
+    }
+    for (Schema.Field field : source.getFields()) {
+      Identifier fieldId = Identifier.of(field.name());
+      if (fieldId != null && !fieldId.quoted() && column.normalized().equals(fieldId.normalized())) {
+        return field;
+      }
+    }
+    return null;
   }
 
   /**
@@ -1067,7 +1105,10 @@ public class JParqPreparedStatement implements PreparedStatement {
         // joined into this statement are not retained here.
         return ref == tableReferences.getFirst() && baseCteResult != null ? baseCteResult.schema() : null;
       }
-      return schemaForTableReference(ref);
+      Schema declared = schemaForTableReference(ref);
+      // A column-alias list renames the exposed schema positionally, so the
+      // aliased name must be looked up in the renamed declaration.
+      return declared == null ? null : applyColumnAliases(new CteResult(declared, List.of()), ref).schema();
     }
     return null;
   }

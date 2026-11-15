@@ -960,6 +960,55 @@ class ArrayResultRepresentationTest {
   }
 
   /**
+   * Applies an outer reference's column-alias list positionally, so an aliased
+   * name resolves to the renamed column rather than a same-named physical column,
+   * for physical and CTE inputs alike.
+   *
+   * @param directory
+   *          dataset directory
+   * @throws Exception
+   *           if fixture creation or querying fails
+   */
+  @Test
+  void scalarSubqueryOuterReferencesHonorColumnAliasesAndQuoting(@TempDir Path directory) throws Exception {
+    writeDataset(directory);
+    // o.d is t2.b (INT) under the alias list, not the physical DECIMAL d.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT (SELECT COALESCE(o.d, x.b) FROM t2 x) AS x FROM t2 AS o(d, b)")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+    // The same positional aliasing applies to a joined outer input.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(
+            "SELECT (SELECT COALESCE(q.d, x.id) FROM s x WHERE x.id = 1) AS x FROM s y JOIN t2 AS q(d, b) ON 1 = 1")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+    // A CTE referenced with its own alias list renames its exposed schema too.
+    try (var connection = connect(directory);
+        var statement = connection.createStatement();
+        var result = statement
+            .executeQuery("WITH c AS (SELECT b, d FROM t2) SELECT (SELECT k.x FROM t2 y) AS x FROM c AS k(x, y)")) {
+      var metaData = result.getMetaData();
+      assertEquals(Types.INTEGER, metaData.getColumnType(1));
+      assertTrue(result.next());
+      assertEquals(42, result.getObject(1));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
    * Reports a correlated scalar subquery's interval declaration through the
    * metadata shape rewrite.
    *
