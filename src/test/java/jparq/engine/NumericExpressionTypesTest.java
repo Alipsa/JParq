@@ -107,25 +107,28 @@ class NumericExpressionTypesTest {
   }
 
   /**
-   * Execution closes declaration work before replacing its plan cache.
+   * Execution retains the declaration executor so re-executed statements reuse
+   * its cached shapes; only closing the statement closes it.
    *
    * @param directory
    *          empty database directory
    * @throws Exception
-   *           if preparing or executing the statement fails
+   *           if preparing, executing, or closing the statement fails
    */
   @Test
-  void executionClosesPreviousDeclarations(@TempDir Path directory) throws Exception {
+  void executionRetainsDeclarationsUntilClose(@TempDir Path directory) throws Exception {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = (JParqPreparedStatement) connection.prepareStatement("SELECT 1")) {
       try (var executors = mockConstruction(SubqueryExecutor.class)) {
         assertNotNull(statement.firstProjectionNumericType());
         SubqueryExecutor declarations = executors.constructed().getFirst();
         try (var result = statement.executeQuery()) {
-          verify(declarations).close();
+          verify(declarations, never()).close();
           assertTrue(result.next());
           assertEquals(1, result.getInt(1));
         }
+        statement.close();
+        verify(declarations).close();
       }
     }
   }

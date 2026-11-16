@@ -633,8 +633,9 @@ SELECT n FROM r ORDER BY n
 - `LATERAL` derived tables bind outer values with their Java types intact. For example,
   `FROM arr a CROSS JOIN LATERAL (SELECT u.t FROM UNNEST(a.dates) AS u(t)) x` expands the current row's array.
 - `LATERAL` derived tables retain the decimal declaration of arithmetic and window expressions with known
-  bounds, including when the initial NULL correlation probe produces no value. Division and `ARRAY`
-  expressions still expose `VARCHAR` ([#475](https://github.com/Alipsa/JParq/issues/475),
+  bounds, including when the initial NULL correlation probe produces no value. Unbounded-decimal results
+  (division, `ROUND`, `CEIL`, `FLOOR`, `TRUNC`, and `MOD`) and `ARRAY` expressions still expose
+  `VARCHAR` ([#475](https://github.com/Alipsa/JParq/issues/475),
   [#480](https://github.com/Alipsa/JParq/issues/480)).
 
 ### UNNEST
@@ -1123,7 +1124,7 @@ These are known gaps relative to the SQL standard or expected behavior. Each is 
 | Ordered-set aggregates with `WITHIN GROUP` (`PERCENTILE_CONT`, `LISTAGG`, ...) | [#473](https://github.com/Alipsa/JParq/issues/473) |
 | Multi-field interval qualifiers (`YEAR TO MONTH`, ...) and `INTERVAL (expr) unit` | [#352](https://github.com/Alipsa/JParq/issues/352) |
 | Interval leading-field precision is not enforced | [#474](https://github.com/Alipsa/JParq/issues/474) |
-| `LATERAL` derived-table division and `ARRAY` decimal expressions expose `VARCHAR` | [#475](https://github.com/Alipsa/JParq/issues/475), [#480](https://github.com/Alipsa/JParq/issues/480) |
+| `LATERAL` derived-table unbounded-decimal results (division, `ROUND`, `CEIL`, `FLOOR`, `TRUNC`, `MOD`) and `ARRAY` decimal expressions expose `VARCHAR` | [#475](https://github.com/Alipsa/JParq/issues/475), [#480](https://github.com/Alipsa/JParq/issues/480) |
 | Tagged dollar-quoted strings fail with an unclassified error | [#476](https://github.com/Alipsa/JParq/issues/476) |
 | `GROUP BY` and `DISTINCT` treat `-0.0` and `0.0` as different values | [#477](https://github.com/Alipsa/JParq/issues/477) |
 | `WHERE` predicates are not pushed into parenthesized join groups (performance only) | [#478](https://github.com/Alipsa/JParq/issues/478) |

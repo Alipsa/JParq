@@ -206,7 +206,9 @@ class NumericDeclarationRegressionTest {
       // CTE name clashes with the physical mtcars table.
       "SELECT d.cyl FROM (VALUES (1)) q(x) JOIN (WITH mtcars AS (SELECT 1.5 AS cyl) SELECT cyl FROM mtcars) d ON 1 = 1",
       // CTE name does not clash with any table.
-      "SELECT d.cyl FROM mtcars m JOIN (SELECT * FROM (WITH c AS (SELECT 1.5 AS cyl) SELECT cyl FROM c) z) d ON 1 = 1 LIMIT 1"
+      "SELECT d.cyl FROM mtcars m JOIN (SELECT * FROM (WITH c AS (SELECT 1.5 AS cyl) SELECT cyl FROM c) z) d ON 1 = 1 LIMIT 1",
+      // CTE column aliases name the exported columns.
+      "SELECT d.cyl FROM (VALUES (1)) q(x) JOIN (WITH t(x, cyl) AS (SELECT 2, 1.5) SELECT cyl FROM t) d ON 1 = 1"
   })
   void derivedWithResolvesOwnCtes(String body) throws Exception {
     try (var connection = DriverManager.getConnection(url());
@@ -224,6 +226,89 @@ class NumericDeclarationRegressionTest {
         assertEquals(0, new BigDecimal("1.5").compareTo(result.getBigDecimal(1)), body);
         assertFalse(result.next(), body);
       }
+    }
+  }
+
+  /**
+   * A CTE body only sees siblings declared before it, so a later CTE that shadows
+   * a physical table keeps the earlier CTE bound to the table's own declaration.
+   *
+   * @throws Exception
+   *           if preparation or query execution fails
+   */
+  @Test
+  void derivedCteBodyIgnoresLaterSibling() throws Exception {
+    String scalar = "SELECT d.cyl FROM (VALUES (1)) q(x) JOIN (WITH a AS (SELECT MAX(hp) AS cyl FROM mtcars), "
+        + "mtcars AS (SELECT 1.5 AS hp) SELECT cyl FROM a) d ON 1 = 1";
+    try (var connection = DriverManager.getConnection(url());
+        var statement = connection.createStatement();
+        var prepared = (JParqPreparedStatement) connection.prepareStatement(scalar)) {
+      assertNotNull(prepared.firstProjectionSchema());
+      assertNotNull(prepared.firstProjectionNumericType());
+      assertEquals(Types.INTEGER, prepared.firstProjectionNumericType().jdbcType());
+      try (var result = statement.executeQuery(
+          "SELECT DISTINCT CASE WHEN id = 1 THEN (" + scalar + ") ELSE 1 END AS k" + INPUT + " ORDER BY k")) {
+        assertEquals(Types.INTEGER, result.getMetaData().getColumnType(1));
+        assertTrue(result.next());
+        assertEquals(Integer.valueOf(1), result.getObject(1));
+        assertTrue(result.next());
+        assertEquals(Integer.valueOf(335), result.getObject(1));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * A CTE body can use a preceding sibling CTE, directly or through a derived
+   * table of its own.
+   *
+   * @param body
+   *          the derived table body chaining sibling CTEs
+   * @throws Exception
+   *           if preparation or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT d.cyl FROM (VALUES (1)) q(x) JOIN (WITH a AS (SELECT 1.5 AS v), "
+          + "b AS (SELECT a.v + 1 AS v FROM a) SELECT v AS cyl FROM b) d ON 1 = 1",
+      "SELECT d.cyl FROM (VALUES (1)) q(x) JOIN (WITH a AS (SELECT 1.5 AS v), "
+          + "b AS (SELECT z.v + 1 AS v FROM (SELECT a.v AS v FROM a) z) SELECT v AS cyl FROM b) d ON 1 = 1"
+  })
+  void derivedWithSiblingCteChain(String body) throws Exception {
+    try (var connection = DriverManager.getConnection(url());
+        var statement = connection.createStatement();
+        var prepared = (JParqPreparedStatement) connection.prepareStatement(body)) {
+      assertNotNull(prepared.firstProjectionSchema(), body);
+      assertNotNull(prepared.firstProjectionNumericType(), body);
+      assertEquals(Types.DECIMAL, prepared.firstProjectionNumericType().jdbcType(), body);
+      try (var result = statement.executeQuery(
+          "SELECT DISTINCT CASE WHEN id = 1 THEN (" + body + ") ELSE 1 END AS k" + INPUT + " ORDER BY k")) {
+        assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1), body);
+        assertTrue(result.next(), body);
+        assertEquals(0, BigDecimal.ONE.compareTo(result.getBigDecimal(1)), body);
+        assertTrue(result.next(), body);
+        assertEquals(0, new BigDecimal("2.5").compareTo(result.getBigDecimal(1)), body);
+        assertFalse(result.next(), body);
+      }
+    }
+  }
+
+  /**
+   * A recursive CTE in a derived body leaves its declaration unknown rather than
+   * guessing from the anchor branch.
+   *
+   * @throws Exception
+   *           if preparation fails
+   */
+  @Test
+  void derivedWithRecursiveCteStaysUnknown() throws Exception {
+    String body = "SELECT d.cyl FROM (VALUES (1)) q(x) JOIN "
+        + "(WITH RECURSIVE r(cyl) AS (SELECT 1.5 AS cyl UNION ALL SELECT cyl + 1 FROM r WHERE cyl < 3) "
+        + "SELECT MIN(cyl) AS cyl FROM r) d ON 1 = 1";
+    try (var connection = DriverManager.getConnection(url());
+        var prepared = (JParqPreparedStatement) connection.prepareStatement(body)) {
+      assertNull(prepared.firstProjectionSchema(), body);
+      assertNull(prepared.firstProjectionNumericType(), body);
     }
   }
 
