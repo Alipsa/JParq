@@ -14,9 +14,10 @@
   USING columns, joined set-operation declarations, and correlated VALUES types. Derive and cache VALUES
   declarations without evaluating rows, retain numeric types in LATERAL VALUES NULL probes, and share cached
   scalar subquery declarations across metadata inspection and executions until the statement closes.
-  EXTRACT values now match their declared numeric classes in bare and scalar-subquery projections. LATERAL arithmetic and
-  window decimal declarations are a partial fix for #475; unbounded-decimal results (division, ROUND, CEIL,
-  FLOOR, TRUNC, MOD) and ARRAY expressions remain open in #475 and #480. Fixes #319. Fixes #550. Fixes #557.
+  EXTRACT values now match their declared numeric classes in bare and scalar-subquery projections.
+  LATERAL arithmetic and window decimal declarations are a partial fix for #475; unbounded-decimal results
+  (division, ROUND, CEIL, FLOOR, TRUNC, MOD) and ARRAY expressions remain open in #475 and #480.
+  Fixes #319. Fixes #550. Fixes #557.
 
 - Report declared JDBC types, classes, decimal bounds, and alias-independent nullability for
   COUNT, SUM, AVG, MIN, and MAX window functions (#318). Preserve mixed DATE/TIMESTAMP MIN/MAX

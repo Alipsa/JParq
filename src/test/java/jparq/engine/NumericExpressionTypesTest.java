@@ -155,16 +155,17 @@ class NumericExpressionTypesTest {
           when(prepared.firstProjectionSchema()).thenReturn(schema);
           when(prepared.firstProjectionNumericType()).thenReturn(NumericExpressionTypes.numeric(schema));
         })) {
-      SubqueryExecutor first = new SubqueryExecutor((JParqConnection) connection, null, null,
-          new SubqueryExecutor.ExecutionPlans(), null, shared);
-      SubqueryExecutor second = new SubqueryExecutor((JParqConnection) connection, null, null,
-          new SubqueryExecutor.ExecutionPlans(), null, shared);
-      assertEquals(schema, first.projectionResultSchema(select));
-      assertEquals(schema, second.projectionResultSchema(select));
-      assertEquals(1, nested.constructed().size());
-      first.close();
-      assertEquals(schema, second.projectionResultSchema(select));
-      second.close();
+      try (
+          var first = new SubqueryExecutor((JParqConnection) connection, null, null,
+              new SubqueryExecutor.ExecutionPlans(), null, shared);
+          var second = new SubqueryExecutor((JParqConnection) connection, null, null,
+              new SubqueryExecutor.ExecutionPlans(), null, shared)) {
+        assertEquals(schema, first.projectionResultSchema(select));
+        assertEquals(schema, second.projectionResultSchema(select));
+        assertEquals(1, nested.constructed().size());
+        first.close();
+        assertEquals(schema, second.projectionResultSchema(select));
+      }
     }
   }
 

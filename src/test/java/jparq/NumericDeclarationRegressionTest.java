@@ -206,7 +206,8 @@ class NumericDeclarationRegressionTest {
       // CTE name clashes with the physical mtcars table.
       "SELECT d.cyl FROM (VALUES (1)) q(x) JOIN (WITH mtcars AS (SELECT 1.5 AS cyl) SELECT cyl FROM mtcars) d ON 1 = 1",
       // CTE name does not clash with any table.
-      "SELECT d.cyl FROM mtcars m JOIN (SELECT * FROM (WITH c AS (SELECT 1.5 AS cyl) SELECT cyl FROM c) z) d ON 1 = 1 LIMIT 1",
+      "SELECT d.cyl FROM mtcars m JOIN (SELECT * FROM (WITH c AS (SELECT 1.5 AS cyl) SELECT cyl FROM c) z) d"
+          + " ON 1 = 1 LIMIT 1",
       // CTE column aliases name the exported columns.
       "SELECT d.cyl FROM (VALUES (1)) q(x) JOIN (WITH t(x, cyl) AS (SELECT 2, 1.5) SELECT cyl FROM t) d ON 1 = 1"
   })
