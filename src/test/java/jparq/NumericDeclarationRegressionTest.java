@@ -192,27 +192,37 @@ class NumericDeclarationRegressionTest {
   }
 
   /**
-   * A WITH inside a joined derived table shadows the physical mtcars table.
+   * A WITH inside a joined derived table resolves its own CTEs before its table
+   * references, so a CTE contributes its declared type and shadows any physical
+   * table with the same name.
    *
+   * @param body
+   *          the derived table body containing a WITH clause
    * @throws Exception
    *           if preparation or query execution fails
    */
-  @Test
-  void derivedWithShadowsPhysicalTable() throws Exception {
-    String scalar = "SELECT d.cyl FROM (VALUES (1)) q(x) JOIN "
-        + "(WITH mtcars AS (SELECT 1.5 AS cyl) SELECT cyl FROM mtcars) d ON 1 = 1";
+  @ParameterizedTest
+  @ValueSource(strings = {
+      // CTE name clashes with the physical mtcars table.
+      "SELECT d.cyl FROM (VALUES (1)) q(x) JOIN (WITH mtcars AS (SELECT 1.5 AS cyl) SELECT cyl FROM mtcars) d ON 1 = 1",
+      // CTE name does not clash with any table.
+      "SELECT d.cyl FROM mtcars m JOIN (SELECT * FROM (WITH c AS (SELECT 1.5 AS cyl) SELECT cyl FROM c) z) d ON 1 = 1 LIMIT 1"
+  })
+  void derivedWithResolvesOwnCtes(String body) throws Exception {
     try (var connection = DriverManager.getConnection(url());
         var statement = connection.createStatement();
-        var prepared = (JParqPreparedStatement) connection.prepareStatement(scalar)) {
-      assertNull(prepared.firstProjectionSchema());
-      assertNull(prepared.firstProjectionNumericType());
+        var prepared = (JParqPreparedStatement) connection.prepareStatement(body)) {
+      assertNotNull(prepared.firstProjectionSchema(), body);
+      assertNotNull(prepared.firstProjectionNumericType(), body);
+      assertEquals(Types.DECIMAL, prepared.firstProjectionNumericType().jdbcType(), body);
       try (var result = statement.executeQuery(
-          "SELECT DISTINCT CASE WHEN id = 1 THEN (" + scalar + ") ELSE 1 END AS k" + INPUT + " ORDER BY k")) {
-        assertTrue(result.next());
-        assertEquals(0, BigDecimal.ONE.compareTo(result.getBigDecimal(1)));
-        assertTrue(result.next());
-        assertEquals(0, new BigDecimal("1.5").compareTo(result.getBigDecimal(1)));
-        assertFalse(result.next());
+          "SELECT DISTINCT CASE WHEN id = 1 THEN (" + body + ") ELSE 1 END AS k" + INPUT + " ORDER BY k")) {
+        assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1), body);
+        assertTrue(result.next(), body);
+        assertEquals(0, BigDecimal.ONE.compareTo(result.getBigDecimal(1)), body);
+        assertTrue(result.next(), body);
+        assertEquals(0, new BigDecimal("1.5").compareTo(result.getBigDecimal(1)), body);
+        assertFalse(result.next(), body);
       }
     }
   }

@@ -243,6 +243,16 @@ public class JParqPreparedStatement implements PreparedStatement {
   // Metadata inspection closes each nested statement immediately. Retaining this
   // declaration-only executor shares its resolved shapes across type lookups.
   private SubqueryExecutor declarationExecutor;
+
+  // Cached VALUES declarations are keyed by the parsed definition alone. The
+  // resolving scope only matters for live correlated Column references; literals
+  // and casts resolve identically under any scope, and execution rewrites
+  // correlated references to outer-value bindings before materializing rows, so
+  // the materialization lookup (column -> null) and the metadata lookup (the
+  // enclosing or preceding scope) yield the same declarations. Whichever call
+  // site populates an entry first therefore does not change the result. The
+  // entries are plain schemas, so they outlive the declaration executor and are
+  // cleared only on close.
   private final Map<ValueTableDefinition, List<Schema>> valueDeclarations = new IdentityHashMap<>();
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
@@ -969,7 +979,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   private Function<Column, Schema> projectionColumnSchemas(Map<Column, Schema> cache) {
     return column -> cache.computeIfAbsent(column, reference -> {
       try {
-        Schema schema = inputColumnSchema(tableReferences, reference, unresolved -> null);
+        Schema schema = inputColumnSchema(tableReferences, reference, unresolved -> null, null, null);
         if (schema == null && !joinQuery) {
           Schema.Field field = findFieldByIdentifier(fileAvroSchema, Identifier.of(reference.getColumnName()));
           return field == null ? null : field.schema();
@@ -983,7 +993,10 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Resolves a column against each visible input's own declaration. LATERAL
-   * projections may also use declarations from preceding inputs.
+   * projections may also use declarations from preceding inputs. Inputs that
+   * reference a CTE from the supplied WITH list resolve against that CTE's
+   * declared output rather than any physical table or enclosing CTE with the same
+   * name.
    *
    * @param inputs
    *          inputs in SQL visibility order
@@ -991,12 +1004,16 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          qualified or unqualified reference
    * @param outer
    *          declarations visible to a lateral input
+   * @param ctes
+   *          CTEs visible to these inputs, or null outside a WITH body
+   * @param memo
+   *          shared memo for CTE output schemas, or null outside a WITH body
    * @return column schema, or null when unknown or ambiguous
    * @throws SQLException
    *           if a physical input cannot be inspected
    */
-  private Schema inputColumnSchema(List<SqlParser.TableReference> inputs, Column column, Function<Column, Schema> outer)
-      throws SQLException {
+  private Schema inputColumnSchema(List<SqlParser.TableReference> inputs, Column column, Function<Column, Schema> outer,
+      Map<Identifier, SqlParser.CommonTableExpression> ctes, CteMemo memo) throws SQLException {
     Identifier qualifier = column.getTable() == null ? null : Identifier.of(column.getTable().getName());
     Schema result = null;
     for (int index = 0; index < inputs.size(); index++) {
@@ -1009,17 +1026,23 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (input.isDerivedTable()) {
         List<SqlParser.TableReference> preceding = inputs.subList(0, index);
         Function<Column, Schema> lateral = input.lateral()
-            ? reference -> uncheckedInputColumnSchema(preceding, reference, outer)
+            ? reference -> uncheckedInputColumnSchema(preceding, reference, outer, ctes, memo)
             : reference -> null;
         schema = derivedColumnSchema(input, column.getColumnName(), lateral);
       } else if (input.valueTable() != null) {
         List<SqlParser.TableReference> preceding = inputs.subList(0, index);
         Function<Column, Schema> valuesOuter = input.lateral()
-            ? reference -> uncheckedInputColumnSchema(preceding, reference, outer)
+            ? reference -> uncheckedInputColumnSchema(preceding, reference, outer, ctes, memo)
             : outer;
         schema = valueColumnSchema(input.valueTable(), column.getColumnName(), valuesOuter);
       } else {
-        Schema source = schemaForTableReference(input);
+        Schema source;
+        SqlParser.CommonTableExpression cte = localCteReference(ctes, input);
+        if (cte != null) {
+          source = cteOutputSchema(cte, ctes, outer, memo);
+        } else {
+          source = schemaForTableReference(input);
+        }
         if (source != null) {
           source = applyColumnAliases(new CteResult(source, List.of()), input).schema();
         }
@@ -1071,12 +1094,16 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          requested column
    * @param outer
    *          enclosing lateral scope
+   * @param ctes
+   *          CTEs visible to these inputs, or null outside a WITH body
+   * @param memo
+   *          shared memo for CTE output schemas, or null outside a WITH body
    * @return column declaration, or null when inspection fails
    */
   private Schema uncheckedInputColumnSchema(List<SqlParser.TableReference> inputs, Column column,
-      Function<Column, Schema> outer) {
+      Function<Column, Schema> outer, Map<Identifier, SqlParser.CommonTableExpression> ctes, CteMemo memo) {
     try {
-      return inputColumnSchema(inputs, column, outer);
+      return inputColumnSchema(inputs, column, outer, ctes, memo);
     } catch (SQLException exception) {
       return null;
     }
@@ -1084,7 +1111,9 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Resolves a VALUES column from its expressions without evaluating any rows.
-   * All columns share one cached declaration pass for this constructor.
+   * All columns share one cached declaration pass per parsed definition. The
+   * cache is keyed by the definition alone; see the {@link #valueDeclarations}
+   * field for why the {@code columns} scope does not invalidate an entry.
    *
    * @param values
    *          row constructor and exported column names
@@ -1144,13 +1173,14 @@ public class JParqPreparedStatement implements PreparedStatement {
   private Schema derivedColumnSchema(SqlParser.TableReference input, String name, Function<Column, Schema> outer)
       throws SQLException {
     SqlParser.Query query = input.subquery() == null ? SqlParser.parseQuery(input.subquerySql()) : input.subquery();
-    return queryColumnSchema(query, name, input.columnAliases(), outer);
+    return queryColumnSchema(query, name, input.columnAliases(), outer, Map.of(), CteMemo.fresh());
   }
 
   /**
-   * Resolves a named output using a query's own projection scope. An unresolved
-   * local WITH leaves the declaration unknown rather than using a physical table
-   * with the same name.
+   * Resolves a named output using a query's own projection scope. A WITH list in
+   * the query body is resolved before its table references, so a CTE shadows any
+   * physical table or enclosing CTE with the same name. Recursive CTEs and CTE
+   * bodies that cannot be resolved statically leave the declaration unknown.
    *
    * @param query
    *          independently scoped query
@@ -1160,20 +1190,23 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          positional output aliases, empty when absent
    * @param outer
    *          enclosing LATERAL declarations
+   * @param ctes
+   *          CTEs visible to this query from an enclosing WITH list
+   * @param memo
+   *          shared memo for CTE output schemas during this resolution
    * @return output declaration, or null when unknown
    * @throws SQLException
    *           if a nested resolver cannot be closed
    */
   private Schema queryColumnSchema(SqlParser.Query query, String name, List<String> aliases,
-      Function<Column, Schema> outer) throws SQLException {
-    if (!query.commonTableExpressions().isEmpty()) {
-      return null;
-    }
+      Function<Column, Schema> outer, Map<Identifier, SqlParser.CommonTableExpression> ctes, CteMemo memo)
+      throws SQLException {
+    Map<Identifier, SqlParser.CommonTableExpression> scope = combineCteScope(ctes, query.commonTableExpressions());
     if (query instanceof SqlParser.SetQuery set) {
       Schema common = null;
       List<String> names = aliases.isEmpty() ? queryLabels(set.components().getFirst().query()) : aliases;
       for (var component : set.components()) {
-        Schema schema = queryColumnSchema(component.query(), name, names, outer);
+        Schema schema = queryColumnSchema(component.query(), name, names, outer, scope, memo);
         if (schema == null) {
           return null;
         }
@@ -1182,7 +1215,8 @@ public class JParqPreparedStatement implements PreparedStatement {
       return common;
     }
     var select = (SqlParser.Select) query;
-    Function<Column, Schema> columns = column -> uncheckedInputColumnSchema(select.tableReferences(), column, outer);
+    Function<Column, Schema> columns = column -> uncheckedInputColumnSchema(select.tableReferences(), column, outer,
+        scope, memo);
     List<String> labels = aliases.isEmpty() ? select.labels() : aliases;
     for (int index = 0; index < labels.size() && index < select.expressions().size(); index++) {
       if (Identifier.of(name).matches(Identifier.of(labels.get(index)))) {
@@ -1212,6 +1246,165 @@ public class JParqPreparedStatement implements PreparedStatement {
     return query instanceof SqlParser.Select select
         ? select.labels()
         : queryLabels(((SqlParser.SetQuery) query).components().getFirst().query());
+  }
+
+  /**
+   * Combines an enclosing WITH list with a query's own declarations. A query's
+   * own CTEs shadow enclosing declarations with the same name.
+   *
+   * @param inherited
+   *          CTEs visible from an enclosing WITH list, or null
+   * @param local
+   *          the query's own CTE declarations
+   * @return the CTEs visible to the query's body
+   */
+  private static Map<Identifier, SqlParser.CommonTableExpression> combineCteScope(
+      Map<Identifier, SqlParser.CommonTableExpression> inherited, List<SqlParser.CommonTableExpression> local) {
+    if ((inherited == null || inherited.isEmpty()) && (local == null || local.isEmpty())) {
+      return Map.of();
+    }
+    Map<Identifier, SqlParser.CommonTableExpression> combined = new LinkedHashMap<>();
+    if (inherited != null) {
+      combined.putAll(inherited);
+    }
+    if (local != null) {
+      for (SqlParser.CommonTableExpression cte : local) {
+        if (cte != null && cte.name() != null) {
+          combined.put(cte.name(), cte);
+        }
+      }
+    }
+    return combined;
+  }
+
+  /**
+   * Finds the local CTE that a table reference names, if any.
+   *
+   * @param ctes
+   *          CTEs visible to the reference, or null
+   * @param input
+   *          table reference to resolve
+   * @return the referenced CTE, or null when the input is not a local CTE
+   */
+  private static SqlParser.CommonTableExpression localCteReference(
+      Map<Identifier, SqlParser.CommonTableExpression> ctes, SqlParser.TableReference input) {
+    if (ctes == null || ctes.isEmpty() || input == null) {
+      return null;
+    }
+    if (input.commonTableExpression() != null && input.commonTableExpression().name() != null) {
+      SqlParser.CommonTableExpression linked = ctes.get(input.commonTableExpression().name());
+      if (linked != null) {
+        return linked;
+      }
+    }
+    Identifier name = Identifier.of(input.tableName());
+    return name == null ? null : name.resolve(ctes);
+  }
+
+  /**
+   * Builds a CTE's declared output schema from its body without executing it.
+   * Sibling CTE references in the body resolve against the same WITH list.
+   * Recursive CTEs and bodies with an unresolvable column leave the output
+   * unknown.
+   *
+   * @param cte
+   *          the CTE to describe
+   * @param ctes
+   *          CTEs visible to the CTE's body
+   * @param outer
+   *          enclosing LATERAL declarations
+   * @param memo
+   *          shared memo for CTE output schemas
+   * @return the CTE's output record schema, or null when unknown
+   * @throws SQLException
+   *           if the CTE's body cannot be inspected
+   */
+  private Schema cteOutputSchema(SqlParser.CommonTableExpression cte,
+      Map<Identifier, SqlParser.CommonTableExpression> ctes, Function<Column, Schema> outer, CteMemo memo)
+      throws SQLException {
+    if (cte == null || cte.name() == null || cte.query() == null) {
+      return null;
+    }
+    Optional<Schema> cached = memo.schemas().get(cte);
+    if (cached != null) {
+      return cached.orElse(null);
+    }
+    if (!memo.inProgress().add(cte)) {
+      return null;
+    }
+    try {
+      Schema output = buildCteOutputSchema(cte, ctes, outer, memo);
+      memo.schemas().put(cte, Optional.ofNullable(output));
+      return output;
+    } finally {
+      memo.inProgress().remove(cte);
+    }
+  }
+
+  /**
+   * Computes a CTE's output record schema, assuming it is not already in
+   * progress.
+   *
+   * @param cte
+   *          the CTE to describe
+   * @param ctes
+   *          CTEs visible to the CTE's body
+   * @param outer
+   *          enclosing LATERAL declarations
+   * @param memo
+   *          shared memo for CTE output schemas
+   * @return the CTE's output record schema, or null when unknown
+   * @throws SQLException
+   *           if the CTE's body cannot be inspected
+   */
+  private Schema buildCteOutputSchema(SqlParser.CommonTableExpression cte,
+      Map<Identifier, SqlParser.CommonTableExpression> ctes, Function<Column, Schema> outer, CteMemo memo)
+      throws SQLException {
+    if (queryReferencesCte(cte.query(), cte.name())) {
+      return null;
+    }
+    List<String> names = cte.columnAliases().isEmpty() ? queryLabels(cte.query()) : cte.columnAliases();
+    if (names.isEmpty()) {
+      return null;
+    }
+    List<Field> fields = new ArrayList<>(names.size());
+    Set<String> used = new LinkedHashSet<>();
+    for (String name : names) {
+      Schema column = queryColumnSchema(cte.query(), name, cte.columnAliases(), outer, ctes, memo);
+      if (column == null) {
+        return null;
+      }
+      // A declared column carries no row value here, so the field is created
+      // without a default rather than a null default an inner type rejects.
+      Field field = new Field(MaterializedNames.allocate(name, used), column, null);
+      field.addProp(MaterializedNames.SQL_LABEL, name);
+      field.addProp(MaterializedNames.LOOKUP_KEY, Identifier.lookupKey(name));
+      fields.add(field);
+    }
+    Schema record = Schema.createRecord(MaterializedNames.recordName("cte_" + cte.name().text()), null, null, false);
+    record.setFields(fields);
+    return record;
+  }
+
+  /**
+   * Memoizes CTE output schemas during one metadata resolution so sibling and
+   * nested WITH references are computed once and recursive CTEs terminate.
+   *
+   * @param schemas
+   *          CTE definitions mapped to their resolved output schema, or absent
+   * @param inProgress
+   *          CTE definitions currently being resolved
+   */
+  private record CteMemo(Map<SqlParser.CommonTableExpression, Optional<Schema>> schemas,
+      Set<SqlParser.CommonTableExpression> inProgress) {
+    /**
+     * Creates an empty memo.
+     *
+     * @return fresh memo
+     */
+    static CteMemo fresh() {
+      return new CteMemo(new IdentityHashMap<>(), Collections.newSetFromMap(new IdentityHashMap<>()));
+    }
   }
 
   /**
@@ -1260,7 +1453,9 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Closes and discards declaration work before execution resets or shutdown.
+   * Closes and discards the declaration executor before execution resets or
+   * shutdown. Cached VALUES declarations are plain schemas that no longer need
+   * the executor, so they are retained until {@link #close()}.
    *
    * @throws SQLException
    *           if the declaration executor cannot close a cached statement
@@ -1268,8 +1463,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   private void closeDeclarationExecutor() throws SQLException {
     SubqueryExecutor executor = declarationExecutor;
     declarationExecutor = null;
-    try (executor) {
-      valueDeclarations.clear();
+    if (executor != null) {
+      executor.close();
     }
   }
 
@@ -1319,7 +1514,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     }
     try {
       Column column = correlatedColumn(reference);
-      Schema schema = inputColumnSchema(tableReferences, column, unresolved -> null);
+      Schema schema = inputColumnSchema(tableReferences, column, unresolved -> null, null, null);
       if (schema == null && !joinQuery) {
         Schema.Field field = findFieldByIdentifier(fileAvroSchema, Identifier.of(reference.column()));
         schema = field == null ? null : field.schema();
