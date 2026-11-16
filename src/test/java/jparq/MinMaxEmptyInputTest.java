@@ -9,8 +9,9 @@ import java.sql.Types;
 import org.junit.jupiter.api.Test;
 
 /**
- * Verifies that MIN and MAX retain their argument's declared type for empty and
- * all-NULL input, so set operations reject incompatible branches (#320).
+ * Verifies that MIN and MAX retain their argument's declared type and decimal
+ * bounds regardless of row count, so set operations reject incompatible
+ * branches and merge stable bounds (#320).
  */
 class MinMaxEmptyInputTest {
 
@@ -131,15 +132,118 @@ class MinMaxEmptyInputTest {
   @Test
   void emptyDecimalMinimumRetainsDeclaredBounds() throws Exception {
     try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
-      try (var result = statement
-          .executeQuery("SELECT MIN(v) FROM (VALUES (CAST(1.5 AS DECIMAL(10,2)))) t(v) WHERE 1 = 0")) {
+      try (var result = statement.executeQuery("SELECT MIN(CAST(mpg AS DECIMAL(10,2))) FROM mtcars WHERE cyl = 99")) {
         var meta = result.getMetaData();
         assertEquals(Types.DECIMAL, meta.getColumnType(1));
-        assertEquals(3, meta.getPrecision(1));
+        assertEquals(10, meta.getPrecision(1));
         assertEquals(2, meta.getScale(1));
         assertTrue(result.next());
         assertNull(result.getObject(1));
       }
+    }
+  }
+
+  /**
+   * A DECIMAL MIN reports the argument's declared decimal bounds with and without
+   * rows, so the bounds do not depend on the returned values.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void decimalMinimumBoundsDoNotDependOnRows() throws Exception {
+    String sql = "SELECT MIN(CAST(mpg AS DECIMAL(10,2))) FROM mtcars";
+    try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
+      try (var result = statement.executeQuery(sql)) {
+        var meta = result.getMetaData();
+        assertEquals(Types.DECIMAL, meta.getColumnType(1));
+        assertEquals(10, meta.getPrecision(1));
+        assertEquals(2, meta.getScale(1));
+        assertTrue(result.next());
+        assertEquals(new java.math.BigDecimal("10.40"), result.getBigDecimal(1));
+      }
+      try (var result = statement.executeQuery(sql + " WHERE cyl = 99")) {
+        var meta = result.getMetaData();
+        assertEquals(Types.DECIMAL, meta.getColumnType(1));
+        assertEquals(10, meta.getPrecision(1));
+        assertEquals(2, meta.getScale(1));
+        assertTrue(result.next());
+        assertNull(result.getObject(1));
+      }
+    }
+  }
+
+  /**
+   * A set operation over a DECIMAL MIN merges the same bounds whether or not the
+   * MIN branch returns rows.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void setOperationBoundsDoNotDependOnRows() throws Exception {
+    String suffix = " UNION ALL SELECT CAST(1 AS DECIMAL(3,0))";
+    String emptyBranch = "SELECT MIN(CAST(mpg AS DECIMAL(10,2))) FROM mtcars WHERE cyl = 99" + suffix;
+    String filledBranch = "SELECT MIN(CAST(mpg AS DECIMAL(10,2))) FROM mtcars" + suffix;
+    try (var connection = DriverManager.getConnection(url())) {
+      int[] emptyBounds = setBounds(connection, emptyBranch);
+      int[] filledBounds = setBounds(connection, filledBranch);
+      assertArrayEquals(filledBounds, emptyBounds, "merged bounds must not depend on rows");
+      assertEquals(Types.DECIMAL, emptyBounds[0]);
+    }
+  }
+
+  /**
+   * An empty MIN over an unbounded decimal argument reports DECIMAL instead of
+   * OTHER, matching the argument's plain empty projection.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void emptyUnboundedDecimalMinimumReportsDecimal() throws Exception {
+    try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
+      try (var result = statement.executeQuery("SELECT MIN(cyl / 3) FROM mtcars WHERE cyl = 99")) {
+        var meta = result.getMetaData();
+        assertEquals(Types.DECIMAL, meta.getColumnType(1));
+        assertEquals(0, meta.getPrecision(1));
+        assertEquals(0, meta.getScale(1));
+        assertTrue(result.next());
+        assertNull(result.getObject(1));
+      }
+      try (var result = statement.executeQuery("SELECT MIN(ROUND(mpg, 1)) FROM mtcars WHERE cyl = 99")) {
+        assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1));
+        assertTrue(result.next());
+        assertNull(result.getObject(1));
+      }
+      try (var result = statement.executeQuery("SELECT MIN(cyl / 3) FROM mtcars")) {
+        assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1));
+        assertTrue(result.next());
+        assertNotNull(result.getBigDecimal(1));
+      }
+    }
+  }
+
+  /**
+   * Reads a set operation's first-column JDBC type, precision, and scale.
+   *
+   * @param connection
+   *          open connection
+   * @param sql
+   *          set operation to execute
+   * @return the column type, precision, and scale
+   * @throws Exception
+   *           if query execution fails
+   */
+  private static int[] setBounds(java.sql.Connection connection, String sql) throws Exception {
+    try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+      while (result.next()) {
+        result.getObject(1);
+      }
+      var meta = result.getMetaData();
+      return new int[]{
+          meta.getColumnType(1), meta.getPrecision(1), meta.getScale(1)
+      };
     }
   }
 

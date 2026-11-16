@@ -3,9 +3,11 @@
 ### 1.4.0
 
 - **Behavior change:** MIN and MAX now report the argument's declared type, class, and decimal bounds
-  for empty and all-NULL input instead of OTHER, so set operations consistently reject incompatible
-  branches (#320). For example, MIN(mpg) over a filtered-to-empty input reports DOUBLE/Double, and
-  combining that result with a character literal is rejected with SQLState 42000.
+  regardless of row count instead of OTHER or value-inferred bounds, so set operations consistently
+  reject incompatible branches and merge row-independent bounds (#320). For example, MIN(mpg) over a
+  filtered-to-empty input reports DOUBLE/Double, MIN(CAST(mpg AS DECIMAL(10,2))) reports the declared
+  decimal(10,2) bounds with and without rows, MIN(cyl / 3) over empty input reports DECIMAL, and
+  combining an empty MIN(mpg) with a character literal is rejected with SQLState 42000.
   Fixes #320.
 
 - Derive common numeric CASE types from scalar subquery declarations, including correlated, empty, and NULL

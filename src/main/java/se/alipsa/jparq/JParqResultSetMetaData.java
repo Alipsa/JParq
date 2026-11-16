@@ -524,11 +524,10 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
         return null;
       }
     }
-    if (expression instanceof net.sf.jsqlparser.expression.Function function
-        && ("MIN".equalsIgnoreCase(function.getName()) || "MAX".equalsIgnoreCase(function.getName()))
-        && function.getParameters() != null && function.getParameters().size() == 1) {
+    Expression argument = extremumArgument(expression);
+    if (argument != null) {
       try {
-        return ArrayExpressionSchemas.resolve(function.getParameters().getFirst(), reference -> {
+        return ArrayExpressionSchemas.resolve(argument, reference -> {
           Schema.Field source = resolveSourceField(reference);
           return source == null ? null : source.schema();
         }, scalarResultSchemas);
@@ -556,6 +555,22 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
       // DATE/TIMESTAMP promotion remains unresolved (#431); preserve value inference.
       return null;
     }
+  }
+
+  /**
+   * Identifies a top-level MIN or MAX with exactly one argument.
+   *
+   * @param expression
+   *          unwrapped projection expression
+   * @return the aggregate's argument, or null for other expressions
+   */
+  private static Expression extremumArgument(Expression expression) {
+    if (expression instanceof net.sf.jsqlparser.expression.Function function
+        && ("MIN".equalsIgnoreCase(function.getName()) || "MAX".equalsIgnoreCase(function.getName()))
+        && function.getParameters() != null && function.getParameters().size() == 1) {
+      return function.getParameters().getFirst();
+    }
+    return null;
   }
 
   /**
@@ -769,6 +784,27 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
       Schema.Field field = resolveSourceField(reference);
       return NumericExpressionTypes.numeric(field == null ? null : field.schema());
     }, scalarResultSchemas, scalarNumericTypes);
+  }
+
+  /**
+   * Resolves the unbounded decimal argument of a top-level MIN or MAX, which the
+   * value-schema channel cannot express because unbounded decimals carry no Avro
+   * bounds (#320).
+   *
+   * @param column
+   *          one-based output column
+   * @return the argument's unbounded decimal type, or null otherwise
+   */
+  NumericType unboundedExtremumArgumentType(int column) {
+    Expression argument = extremumArgument(unwrap(expressionAtColumn(column)));
+    if (argument == null) {
+      return null;
+    }
+    NumericType numeric = numericExpressionType(argument);
+    if (numeric == null || numeric.jdbcType() != Types.DECIMAL || numeric.precision() != 0) {
+      return null;
+    }
+    return numeric;
   }
 
   private String canonicalName(int column) {
