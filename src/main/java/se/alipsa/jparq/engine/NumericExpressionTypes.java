@@ -13,6 +13,7 @@ import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DoubleValue;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.ExtractExpression;
 import net.sf.jsqlparser.expression.LongValue;
 import net.sf.jsqlparser.expression.NullValue;
 import net.sf.jsqlparser.expression.SignedExpression;
@@ -23,7 +24,10 @@ import net.sf.jsqlparser.expression.operators.arithmetic.Multiplication;
 import net.sf.jsqlparser.expression.operators.arithmetic.Subtraction;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.statement.select.Select;
+import org.apache.avro.Schema;
 import se.alipsa.jparq.NumericType;
+import se.alipsa.jparq.helper.JdbcTypeMapper;
 
 /** Resolves numeric expression types from declarations before reading rows. */
 public final class NumericExpressionTypes {
@@ -45,8 +49,8 @@ public final class NumericExpressionTypes {
   }
 
   /**
-   * Resolves literals, numeric casts, regular and window aggregates, CASE, and
-   * arithmetic operators.
+   * Resolves literals, numeric casts, scalar and datetime functions, aggregates,
+   * ranking and navigation windows, CASE, and arithmetic operators.
    *
    * @param expression
    *          the expression to resolve
@@ -55,14 +59,58 @@ public final class NumericExpressionTypes {
    * @return the numeric type, or null when the type is unknown or nonnumeric
    */
   public static NumericType resolve(Expression expression, Function<Column, NumericType> columns) {
+    return resolve(expression, columns, select -> null);
+  }
+
+  /**
+   * Resolves numeric declarations without executing scalar subqueries or
+   * functions.
+   *
+   * @param expression
+   *          expression to resolve
+   * @param columns
+   *          declared source column types
+   * @param scalarSchemas
+   *          independently scoped scalar subquery declarations
+   * @return numeric type, or null for unknown or nonnumeric declarations
+   */
+  public static NumericType resolve(Expression expression, Function<Column, NumericType> columns,
+      Function<Select, Schema> scalarSchemas) {
+    return resolve(expression, columns, scalarSchemas, select -> numeric(scalarSchemas.apply(select)));
+  }
+
+  /**
+   * Resolves numeric types including scalar projections with unbounded decimals.
+   *
+   * @param expression
+   *          expression to resolve
+   * @param columns
+   *          declared source column types
+   * @param scalarSchemas
+   *          scalar schemas used to recognize untyped NULL
+   * @param scalarNumbers
+   *          numeric scalar declarations, including decimals without fixed bounds
+   * @return numeric type, or null when unresolved or nonnumeric
+   */
+  public static NumericType resolve(Expression expression, Function<Column, NumericType> columns,
+      Function<Select, Schema> scalarSchemas, Function<Select, NumericType> scalarNumbers) {
+    if (expression instanceof Select select) {
+      NumericType declared = scalarNumbers.apply(select);
+      return declared == null ? numeric(scalarSchemas.apply(select)) : declared;
+    }
     if (expression instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
-      return resolve(list.getFirst(), columns);
+      return resolve(list.getFirst(), columns, scalarSchemas, scalarNumbers);
     }
     if (expression instanceof Column column) {
       return columns.apply(column);
     }
     if (expression instanceof CaseExpression choice) {
-      return commonBranches(ExpressionBranches.caseResults(choice), columns);
+      return commonBranches(ExpressionBranches.caseResults(choice), columns, scalarSchemas, scalarNumbers);
+    }
+    if (expression instanceof ExtractExpression extract) {
+      return "SECOND".equalsIgnoreCase(extract.getName())
+          ? new NumericType(Types.DECIMAL, 0, 0)
+          : NumericType.of(Types.BIGINT, 0, 0);
     }
     if (expression instanceof LongValue literal) {
       var integer = literal.getBigIntegerValue();
@@ -80,7 +128,7 @@ public final class NumericExpressionTypes {
       String name = cast.getColDataType().getDataType().replace(" ", "").toUpperCase(Locale.ROOT);
       if (DecimalCasts.isDecimalType(name)) {
         var declared = DecimalCasts.declaredType(cast);
-        NumericType operand = resolve(cast.getLeftExpression(), columns);
+        NumericType operand = resolve(cast.getLeftExpression(), columns, scalarSchemas, scalarNumbers);
         return declared != null
             ? NumericType.of(Types.DECIMAL, declared.getPrecision(), declared.getScale())
             : operand == null || operand.jdbcType() == Types.DOUBLE || operand.jdbcType() == Types.REAL
@@ -95,29 +143,35 @@ public final class NumericExpressionTypes {
           && literal.getBigIntegerValue().bitLength() >= 64 && literal.getBigIntegerValue().negate().bitLength() < 64) {
         return NumericType.of(Types.BIGINT, 0, 0);
       }
-      NumericType operand = resolve(signed.getExpression(), columns);
+      NumericType operand = resolve(signed.getExpression(), columns, scalarSchemas, scalarNumbers);
       return operand == null
           ? null
           : operand.jdbcType() == Types.DECIMAL ? operand : operand.arithmetic(operand, Operation.ADD);
     }
     if (expression instanceof net.sf.jsqlparser.expression.Function function && function.getName() != null) {
-      String name = function.getName().toUpperCase(Locale.ROOT);
-      if ("COALESCE".equals(name) && function.getParameters() != null) {
-        return commonBranches(function.getParameters(), columns);
+      if (CorrelatedBindings.matches(function)) {
+        return numeric(CorrelatedBindings.schema(function));
       }
-      if ("ROUND".equals(name)) {
-        // The requested scale may depend on a row; retain value-specific bounds.
-        return new NumericType(Types.DECIMAL, 0, 0);
+      String name = function.getName().toUpperCase(Locale.ROOT);
+      NumericType declared = scalarFunctionType(name);
+      if (declared != null) {
+        return declared;
+      }
+      if (("COALESCE".equals(name) || "IFNULL".equals(name)) && function.getParameters() != null) {
+        return commonBranches(function.getParameters(), columns, scalarSchemas, scalarNumbers);
       }
       Expression argument = function.getParameters() == null || function.getParameters().isEmpty()
           ? null
           : function.getParameters().getFirst();
-      NumericType aggregate = aggregateType(name, argument, columns);
+      if ("NULLIF".equals(name)) {
+        return resolve(argument, columns, scalarSchemas, scalarNumbers);
+      }
+      NumericType aggregate = aggregateType(name, argument, columns, scalarSchemas, scalarNumbers);
       if (aggregate != null) {
         return aggregate;
       }
       if ("ABS".equals(name) && argument != null) {
-        NumericType type = resolve(argument, columns);
+        NumericType type = resolve(argument, columns, scalarSchemas, scalarNumbers);
         return type == null
             ? null
             : type.jdbcType() == Types.REAL || type.jdbcType() == Types.DOUBLE
@@ -126,16 +180,23 @@ public final class NumericExpressionTypes {
       }
     }
     if (expression instanceof AnalyticExpression analytic && analytic.getName() != null) {
-      return aggregateType(analytic.getName().toUpperCase(Locale.ROOT), analytic.getExpression(), columns);
+      String name = analytic.getName().toUpperCase(Locale.ROOT);
+      return switch (name) {
+        case "ROW_NUMBER", "RANK", "DENSE_RANK", "NTILE" -> NumericType.of(Types.BIGINT, 0, 0);
+        case "PERCENT_RANK", "CUME_DIST" -> NumericType.of(Types.DOUBLE, 0, 0);
+        case "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE" ->
+          resolve(analytic.getExpression(), columns, scalarSchemas, scalarNumbers);
+        default -> aggregateType(name, analytic.getExpression(), columns, scalarSchemas, scalarNumbers);
+      };
     }
     Operation operation = operation(expression);
     if (operation != null && expression instanceof BinaryExpression binary) {
-      NumericType left = resolve(binary.getLeftExpression(), columns);
-      NumericType right = resolve(binary.getRightExpression(), columns);
-      if (left == null && isNull(binary.getLeftExpression())) {
+      NumericType left = resolve(binary.getLeftExpression(), columns, scalarSchemas, scalarNumbers);
+      NumericType right = resolve(binary.getRightExpression(), columns, scalarSchemas, scalarNumbers);
+      if (left == null && isNull(binary.getLeftExpression(), scalarSchemas)) {
         left = right;
       }
-      if (right == null && isNull(binary.getRightExpression())) {
+      if (right == null && isNull(binary.getRightExpression(), scalarSchemas)) {
         right = left;
       }
       return left == null || right == null ? null : left.arithmetic(right, operation);
@@ -152,16 +213,21 @@ public final class NumericExpressionTypes {
    *          aggregate operand, or null for COUNT(*)
    * @param columns
    *          declared numeric source column types
+   * @param scalarSchemas
+   *          scalar subquery declarations
+   * @param scalarNumbers
+   *          numeric scalar declarations
    * @return aggregate result type, or null for unknown or nonnumeric operands
    */
-  private static NumericType aggregateType(String name, Expression argument, Function<Column, NumericType> columns) {
+  private static NumericType aggregateType(String name, Expression argument, Function<Column, NumericType> columns,
+      Function<Select, Schema> scalarSchemas, Function<Select, NumericType> scalarNumbers) {
     if ("COUNT".equals(name)) {
       return NumericType.of(Types.BIGINT, 0, 0);
     }
     if (!isAggregate(name) || argument == null) {
       return null;
     }
-    NumericType type = resolve(argument, columns);
+    NumericType type = resolve(argument, columns, scalarSchemas, scalarNumbers);
     if (type == null) {
       return null;
     }
@@ -186,26 +252,83 @@ public final class NumericExpressionTypes {
    *          CASE or COALESCE result branches
    * @param columns
    *          declared numeric source column types
+   * @param scalarSchemas
+   *          scalar subquery declarations
+   * @param scalarNumbers
+   *          numeric scalar declarations
    * @return common numeric type, or null if any non-NULL branch is unresolved
    */
-  private static NumericType commonBranches(List<? extends Expression> branches,
-      Function<Column, NumericType> columns) {
+  private static NumericType commonBranches(List<? extends Expression> branches, Function<Column, NumericType> columns,
+      Function<Select, Schema> scalarSchemas, Function<Select, NumericType> scalarNumbers) {
     NumericType common = null;
-    boolean unknownDecimal = false;
     for (Expression branch : branches) {
-      if (isNull(branch)) {
+      if (isNull(branch, scalarSchemas)) {
         continue;
       }
-      NumericType type = resolve(branch, columns);
+      NumericType type = resolve(branch, columns, scalarSchemas, scalarNumbers);
       if (type == null) {
         return null;
       }
-      unknownDecimal |= type.jdbcType() == Types.DECIMAL && type.precision() == 0;
-      common = common == null ? type : common.common(type);
+      common = common(common, type);
     }
-    return common != null && common.jdbcType() == Types.DECIMAL && unknownDecimal
-        ? new NumericType(Types.DECIMAL, 0, 0)
-        : common;
+    return common;
+  }
+
+  /**
+   * Maps fixed scalar function declarations to their evaluated numeric families.
+   *
+   * @param name
+   *          normalized function name
+   * @return declared numeric type, or null for operand-dependent or nonnumeric
+   *         functions
+   */
+  private static NumericType scalarFunctionType(String name) {
+    return switch (name) {
+      // Fixed declarations are a known deviation: the standard ties these
+      // functions' result types to their arguments (#424).
+      case "ROUND", "CEIL", "CEILING", "FLOOR", "TRUNC", "TRUNCATE", "MOD" -> new NumericType(Types.DECIMAL, 0, 0);
+      case "SQRT", "POWER", "POW", "EXP", "LOG", "LOG10", "RAND", "RANDOM", "SIN", "COS", "TAN", "COT", "ASIN", "ACOS",
+          "ATAN", "ATAN2", "DEGREES", "RADIANS", "PI" ->
+        NumericType.of(Types.DOUBLE, 0, 0);
+      case "SIGN", "ASCII", "UNICODE", "LENGTH", "CHAR_LENGTH", "CHARACTER_LENGTH", "OCTET_LENGTH", "POSITION",
+          "LOCATE", "DIFFERENCE", "DAYOFWEEK", "DAYOFMONTH", "DAYOFYEAR", "HOUR", "MINUTE", "SECOND", "MONTH", "YEAR",
+          "QUARTER", "WEEK" ->
+        NumericType.of(Types.INTEGER, 0, 0);
+      case "TIMESTAMPDIFF" -> NumericType.of(Types.BIGINT, 0, 0);
+      default -> null;
+    };
+  }
+
+  /**
+   * Reads a numeric declaration from a nullable value schema.
+   *
+   * @param schema
+   *          declared schema, possibly null
+   * @return numeric descriptor, or null for unknown or nonnumeric schemas
+   */
+  public static NumericType numeric(Schema schema) {
+    Schema value = JdbcTypeMapper.nonNullSchema(schema);
+    return value == null ? null : NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(value), value);
+  }
+
+  /**
+   * Combines known numeric branches while retaining unbounded decimal
+   * declarations.
+   *
+   * @param first
+   *          accumulated numeric declaration, or null for no previous branch
+   * @param second
+   *          next numeric declaration, or null for an untyped NULL branch
+   * @return common numeric declaration, or null when both arguments are null
+   */
+  public static NumericType common(NumericType first, NumericType second) {
+    if (first == null || second == null) {
+      return first == null ? second : first;
+    }
+    NumericType common = first.common(second);
+    boolean unbounded = first.jdbcType() == Types.DECIMAL && first.precision() == 0
+        || second.jdbcType() == Types.DECIMAL && second.precision() == 0;
+    return common.jdbcType() == Types.DECIMAL && unbounded ? new NumericType(Types.DECIMAL, 0, 0) : common;
   }
 
   /**
@@ -234,11 +357,21 @@ public final class NumericExpressionTypes {
    *
    * @param expression
    *          operand expression
+   * @param scalarSchemas
+   *          scalar subquery declarations
    * @return whether the operand is an untyped NULL
    */
-  private static boolean isNull(Expression expression) {
+  private static boolean isNull(Expression expression, Function<Select, Schema> scalarSchemas) {
     if (expression instanceof ParenthesedExpressionList<?> list && list.size() == 1) {
-      return isNull(list.getFirst());
+      return isNull(list.getFirst(), scalarSchemas);
+    }
+    if (expression instanceof Select select) {
+      Schema schema = JdbcTypeMapper.nonNullSchema(scalarSchemas.apply(select));
+      return schema != null && schema.getType() == Schema.Type.NULL;
+    }
+    if (expression instanceof net.sf.jsqlparser.expression.Function function && CorrelatedBindings.matches(function)) {
+      Schema schema = JdbcTypeMapper.nonNullSchema(CorrelatedBindings.schema(function));
+      return schema != null && schema.getType() == Schema.Type.NULL;
     }
     return expression instanceof NullValue;
   }

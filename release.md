@@ -2,6 +2,25 @@
 
 ### 1.4.0
 
+- Derive common numeric CASE types from scalar subquery declarations, including correlated, empty, and NULL
+  results, and the remaining supported numeric scalar functions (#319). Retain unbounded decimal types without
+  executing unselected branches. Keep value classes and metadata consistent through grouping, derived tables,
+  CTEs, and set operations, and combine equal numeric DISTINCT, GROUP BY, and window PARTITION BY keys.
+  Include EXTRACT, ranking and navigation windows, and scalar projections over joined derived, VALUES, and
+  LATERAL inputs. NULL subqueries do not hide unresolved branches. Share nested declaration inspection across
+  schema and numeric lookups. Top-level scalar-subquery arithmetic and COALESCE also retain their declared
+  numeric types. Resolve derived-body WITH declarations before their table references, so a CTE shadows any
+  physical table with the same name while its body only sees the CTEs declared before it, along with merged
+  USING columns, joined set-operation declarations, and correlated VALUES types. Derive and cache VALUES
+  declarations without evaluating rows, retain numeric types in LATERAL VALUES NULL probes, and share cached
+  scalar subquery declarations across metadata inspection and executions until the statement closes.
+  **Behavior change:** EXTRACT values now match their declared numeric classes in bare and
+  scalar-subquery projections, returning Long/BIGINT for all units except SECOND, which returns
+  BigDecimal/DECIMAL, instead of Integer/OTHER.
+  LATERAL arithmetic and window decimal declarations are a partial fix for #475; unbounded-decimal results
+  (division, ROUND, CEIL, FLOOR, TRUNC, MOD) and ARRAY expressions remain open in #475 and #480.
+  Fixes #319. Fixes #550. Fixes #557.
+
 - Report declared JDBC types, classes, decimal bounds, and alias-independent nullability for
   COUNT, SUM, AVG, MIN, and MAX window functions (#318). Preserve mixed DATE/TIMESTAMP MIN/MAX
   fallback behavior while DATE/TIMESTAMP promotion is tracked in #431.
@@ -309,7 +328,7 @@
 - Classify invalid temporal formats with SQLState `22007` and out-of-range date/time fields with `22008` (`SQLDataException`). Non-Boolean predicates now raise `SQLSyntaxErrorException` with `42000`. Preserve these classifications, diagnostic context, and parser causes through JDBC getters, preparation, WHERE/HAVING filters, joins, derived tables, CTEs, and nested queries (#239). Grouped expression failures also retain the original SQL expression in diagnostics instead of identifying only a private operand placeholder.
 - Preserve decimal types and values for top-level ROUND, ABS, and COALESCE branches in set operations. Resolve source column declarations and infer unbounded decimal bounds from returned values, defaulting to DECIMAL(1,0) for empty or all-NULL branches rather than treating them as untyped NULL. Retain rejection of incompatible numeric/text branches even when a numeric branch has no non-NULL values.
 
-- **Behavior change:** CASE branches built from numeric literals, columns, casts, arithmetic, aggregates, COALESCE, ABS, and ROUND derive a common result type before reading rows (#236). Coerce selected values and grouped aggregate projections to that type so JDBC metadata matches `getObject()`. Preserve declared decimal bounds through derived tables, CTEs, and set operations, including empty results. Ignore untyped NULL branches during type derivation and keep branch evaluation lazy; unbounded decimal expressions retain value-specific scales. Decimal equality keys ignore scale in DISTINCT, GROUP BY, window PARTITION BY, and set operations without changing output values. Scalar subqueries and other unresolved branch expressions remain untyped and can still split mixed numeric keys; follow-up [#319](https://github.com/Alipsa/JParq/issues/319) tracks that limitation.
+- **Behavior change:** CASE branches built from numeric literals, columns, casts, arithmetic, aggregates, COALESCE, ABS, and ROUND derive a common result type before reading rows (#236). Coerce selected values and grouped aggregate projections to that type so JDBC metadata matches `getObject()`. Preserve declared decimal bounds through derived tables, CTEs, and set operations, including empty results. Ignore untyped NULL branches during type derivation and keep branch evaluation lazy; unbounded decimal expressions retain value-specific scales. Decimal equality keys ignore scale in DISTINCT, GROUP BY, window PARTITION BY, and set operations without changing output values. Scalar subquery and remaining numeric function typing is completed in #319.
 
 - **Behavior change:** arithmetic derives JDBC types and decimal bounds from operands before rows are read (#232). Whole-number addition, subtraction, multiplication, remainder, and unary signs return BIGINT/`Long`, with overflow raising SQLState `22003`; REAL/DOUBLE operands produce DOUBLE/`Double` using double arithmetic. Exact decimal arithmetic and non-approximate division return DECIMAL/`BigDecimal`. Unsigned integer literals fitting INTEGER return `Integer`, and larger literals use `Long` or exact decimal values; unary signs promote whole-number literals to BIGINT/`Long`. Whole-number grouping and DISTINCT keys compare equally across Java integer representations. Whole-number metadata reports standard type precision, with literal-specific digit bounds retained internally for decimal arithmetic. Exact division keeps unknown bounds until materialization infers them, preserving value scales without padding. Derived tables, CTEs, and aggregate expressions retain these types even for empty results; computed aliases no longer inherit unrelated source bounds. Division or remainder by zero continues to return NULL.
 

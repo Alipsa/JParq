@@ -15,14 +15,23 @@ public final class ExpressionBranches {
   }
 
   /**
-   * Identifies a COALESCE expression independently of name capitalization.
+   * Identifies a COALESCE expression or its two-argument IFNULL equivalent,
+   * independently of name capitalization. In SQL, IFNULL(x, y) selects the first
+   * non-NULL argument exactly like COALESCE(x, y).
    *
    * @param expression
    *          expression to inspect
-   * @return whether the expression invokes COALESCE
+   * @return whether the expression invokes COALESCE or two-argument IFNULL
    */
   public static boolean isCoalesce(Expression expression) {
-    return expression instanceof Function function && "COALESCE".equalsIgnoreCase(function.getName());
+    if (!(expression instanceof Function function)) {
+      return false;
+    }
+    if ("COALESCE".equalsIgnoreCase(function.getName())) {
+      return true;
+    }
+    return "IFNULL".equalsIgnoreCase(function.getName()) && function.getParameters() != null
+        && function.getParameters().size() == 2;
   }
 
   /**

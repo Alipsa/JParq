@@ -9,9 +9,11 @@ import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -33,8 +35,8 @@ class LateralDecimalTest {
   }
 
   /**
-   * Uses a stable string schema when the NULL probe cannot determine decimal
-   * bounds.
+   * Retains the navigation operand's decimal declaration even when the initial
+   * NULL correlation probe returns no rows.
    * 
    * @param function
    *          the decimal window function
@@ -55,12 +57,12 @@ class LateralDecimalTest {
     try (var connection = DriverManager.getConnection(jdbcUrl);
         var statement = connection.createStatement();
         var result = statement.executeQuery(sql)) {
-      assertEquals(Types.VARCHAR, result.getMetaData().getColumnType(2));
+      assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(2));
       int row = 0;
       for (String value : expected) {
         assertTrue(result.next());
         assertEquals(List.of(1L, 2L, 2L, 3L, 3L, 3L).get(row++), result.getLong(1));
-        assertEquals(value, result.getObject(2));
+        assertEquals(value == null ? null : new BigDecimal(value), result.getObject(2));
         if (value == null) {
           assertNull(result.getBigDecimal(2));
         } else {
@@ -72,9 +74,42 @@ class LateralDecimalTest {
   }
 
   /**
+   * Retains the decimal declaration of a LATERAL arithmetic projection even when
+   * the initial NULL correlation probe produces no value (#475, fixed shape).
+   * Division and ARRAY projections remain open in #475 and #480.
+   *
+   * @throws Exception
+   *           if execution fails
+   */
+  @Test
+  void lateralArithmeticRetainsDecimalOnNullProbe() throws Exception {
+    String sql = "SELECT q.id, x.v FROM (VALUES (NULL), (2)) q(id)"
+        + " CROSS JOIN LATERAL (SELECT q.id * 1.5 AS v FROM (VALUES (1)) s(z)) x";
+    try (var connection = DriverManager.getConnection(jdbcUrl);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(2));
+      assertEquals(12, result.getMetaData().getPrecision(2));
+      assertEquals(1, result.getMetaData().getScale(2));
+      assertEquals(BigDecimal.class.getName(), result.getMetaData().getColumnClassName(2));
+      List<BigDecimal> values = new ArrayList<>();
+      int nulls = 0;
+      while (result.next()) {
+        if (result.getObject(2) == null) {
+          nulls++;
+        } else {
+          values.add(result.getBigDecimal(2));
+        }
+      }
+      assertEquals(1, nulls);
+      assertEquals(List.of(new BigDecimal("3.0")), values);
+    }
+  }
+
+  /**
    * Decodes the outer decimal value before substituting it into a correlated
    * CAST.
-   * 
+   *
    * @param type
    *          the target decimal type
    * @throws Exception

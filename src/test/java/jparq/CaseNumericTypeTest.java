@@ -16,7 +16,10 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
-/** Verifies common numeric CASE types and equality keys for issue #236. */
+/**
+ * Verifies common numeric CASE types and equality keys for issues #236 and
+ * #319.
+ */
 class CaseNumericTypeTest {
   @TempDir
   Path directory;
@@ -45,7 +48,30 @@ class CaseNumericTypeTest {
         Arguments.of("CASE WHEN id = 1 THEN CAST(1 AS DOUBLE) ELSE 1 END", Types.DOUBLE, -1, 0, Set.of()),
         Arguments.of("CASE WHEN id = 1 THEN COALESCE(id, 0) ELSE 1.00 END", Types.DECIMAL, -1, 2, Set.of()),
         Arguments.of("CASE WHEN id = 1 THEN ABS(id) ELSE 1.00 END", Types.DECIMAL, -1, 2, Set.of()),
-        Arguments.of("CASE WHEN id = 1 THEN ROUND(id, 1) ELSE 1.0 END", Types.DECIMAL, -1, 1, Set.of()));
+        Arguments.of("CASE WHEN id = 1 THEN ROUND(id, 1) ELSE 1.0 END", Types.DECIMAL, -1, 1, Set.of()),
+        Arguments.of("CASE WHEN id = 1 THEN (SELECT 1) ELSE 1.00 END", Types.DECIMAL, 3, 2, Set.of()),
+        Arguments.of("CASE WHEN id = 1 THEN (SELECT t.id) ELSE 1.00 END", Types.DECIMAL, 12, 2, Set.of()),
+        Arguments.of("CASE WHEN id = 1 THEN (SELECT x FROM (VALUES (1)) q(x)) ELSE 1.00 END", Types.DECIMAL, 12, 2,
+            Set.of()),
+        Arguments.of("CASE WHEN id = 1 THEN (SELECT CAST(id AS DECIMAL(8,3)) FROM (VALUES (1)) q(id)) ELSE 1.00 END",
+            Types.DECIMAL, 8, 3, Set.of()),
+        Arguments.of("CASE WHEN id = 1 THEN (SELECT COUNT(*) FROM (VALUES (1)) q(x)) ELSE 1.00 END", Types.DECIMAL, 21,
+            2, Set.of()),
+        Arguments.of("CASE WHEN id = 1 THEN (SELECT 1 UNION ALL SELECT 1.0 WHERE 1 = 0) ELSE 1.00 END", Types.DECIMAL,
+            3, 2, Set.of()),
+        Arguments.of("CASE WHEN id = 1 THEN (SELECT CAST(NULL AS INTEGER)) ELSE 1.00 END", Types.DECIMAL, 12, 2,
+            Set.of(1)),
+        Arguments.of("CASE WHEN id = 1 THEN (SELECT 1 WHERE 1 = 0) ELSE 1.00 END", Types.DECIMAL, 3, 2, Set.of(1)),
+        Arguments.of("CASE WHEN id = 1 THEN (SELECT NULL) ELSE 1.00 END", Types.DECIMAL, 3, 2, Set.of(1)),
+        Arguments.of("CASE WHEN id = 1 THEN (SELECT ROUND(t.id, 0)) ELSE 1.0 END", Types.DECIMAL, -1, 1, Set.of()),
+        Arguments.of("CASE WHEN id = 1 THEN (SELECT 1 / 1) ELSE 1.0 END", Types.DECIMAL, -1, 1, Set.of()),
+        Arguments.of("CASE WHEN id = 1 THEN (SELECT 1 / 1 UNION ALL SELECT 1 WHERE 1 = 0) ELSE 1.0 END", Types.DECIMAL,
+            -1, 1, Set.of()),
+        Arguments.of("CASE WHEN id = 1 THEN (SELECT NULL UNION ALL SELECT 1 WHERE 1 = 0) ELSE 1.00 END", Types.DECIMAL,
+            3, 2, Set.of(1)),
+        Arguments.of("CASE WHEN id = 1 THEN CEIL(id) ELSE 1.0 END", Types.DECIMAL, -1, 1, Set.of()),
+        Arguments.of("CASE WHEN id = 1 THEN SQRT(id) ELSE 1.0 END", Types.DOUBLE, -1, 0, Set.of()),
+        Arguments.of("CASE WHEN id = 1 THEN NULLIF(id, 99) ELSE 1.0 END", Types.DECIMAL, 11, 1, Set.of()));
     return cases.stream().flatMap(value -> Stream.of(true, false).map(pushdown -> {
       Object[] args = Arrays.copyOf(value.get(), value.get().length + 1);
       args[args.length - 1] = pushdown;
@@ -87,7 +113,8 @@ class CaseNumericTypeTest {
         var statement = connection.createStatement()) {
       for (boolean empty : List.of(false, true)) {
         String inner = "SELECT " + expression + " AS k, id" + INPUT + (empty ? " WHERE id = 99" : "");
-        for (String sql : boundaries(inner)) {
+        for (String sql : Stream.concat(boundaries(inner).stream(), boundaries(inner + " GROUP BY id").stream())
+            .toList()) {
           try (var result = statement.executeQuery(sql + " ORDER BY id")) {
             var metadata = result.getMetaData();
             assertEquals(type, metadata.getColumnType(1), sql);
@@ -100,7 +127,11 @@ class CaseNumericTypeTest {
               int id = result.getInt(2);
               boolean nullValue = nullIds.contains(id);
               Object actual = result.getObject(1);
-              assertEquals(nullValue ? null : one, actual, sql);
+              if (!nullValue && type == Types.DECIMAL && precision < 0) {
+                assertEquals(0, BigDecimal.ONE.compareTo(assertInstanceOf(BigDecimal.class, actual)), sql);
+              } else {
+                assertEquals(nullValue ? null : one, actual, sql);
+              }
               if (actual != null) {
                 assertEquals(actual.getClass().getName(), metadata.getColumnClassName(1), sql);
               }
@@ -133,7 +164,11 @@ class CaseNumericTypeTest {
       for (String expression : List.of("CASE WHEN id = 1 THEN 1 ELSE 1.0 END",
           "CASE id WHEN 1 THEN 1.00 WHEN 2 THEN 1.0 ELSE 1 END", "CASE WHEN id = 1 THEN 2 / 2 ELSE 1.0 END",
           "CASE WHEN id = 1 THEN COALESCE(id, 0) ELSE 1.0 END", "CASE WHEN id = 1 THEN ABS(id) ELSE 1.0 END",
-          "CASE WHEN id = 1 THEN ROUND(id, 0) ELSE 1.0 END")) {
+          "CASE WHEN id = 1 THEN ROUND(id, 0) ELSE 1.0 END", "CASE WHEN id = 1 THEN (SELECT 1) ELSE 1.0 END",
+          "CASE WHEN id = 1 THEN (SELECT t.id) ELSE 1.0 END", "CASE WHEN id = 1 THEN CEIL(id) ELSE 1.0 END",
+          "CASE WHEN id = 1 THEN (SELECT ROUND(t.id, 0)) ELSE 1.0 END",
+          "CASE WHEN id = 1 THEN (SELECT 1 / 1) ELSE 1.0 END", "CASE WHEN id = 1 THEN SQRT(id) ELSE 1.0 END",
+          "CASE WHEN id = 1 THEN NULLIF(id, 99) ELSE 1.0 END")) {
         for (String inner : List.of("SELECT DISTINCT " + expression + " AS k" + INPUT,
             "SELECT " + expression + " AS k, COUNT(*) AS n" + INPUT + " GROUP BY " + expression)) {
           for (String sql : boundaries(inner)) {
@@ -230,6 +265,21 @@ class CaseNumericTypeTest {
           assertFalse(result.next(), sql);
         }
       }
+      for (String branch : List.of("(SELECT CAST('bad' AS INTEGER))", "(SELECT x FROM (VALUES (1), (2)) q(x))",
+          "CEIL('bad')", "SQRT('bad')", "(SELECT CAST('bad' AS INTEGER) WHERE t.id = 1)")) {
+        for (String grouping : List.of("", " GROUP BY id")) {
+          for (String sql : boundaries(
+              "SELECT CASE WHEN id = 1 THEN 1.0 ELSE " + branch + " END AS k" + INPUT + " WHERE id = 1" + grouping)) {
+            try (var result = statement.executeQuery(sql)) {
+              assertEquals(branch.startsWith("SQRT") ? Types.DOUBLE : Types.DECIMAL,
+                  result.getMetaData().getColumnType(1), sql);
+              assertTrue(result.next(), sql);
+              assertEquals(0, BigDecimal.ONE.compareTo(result.getBigDecimal(1)), sql);
+              assertFalse(result.next(), sql);
+            }
+          }
+        }
+      }
       for (String sql : boundaries("SELECT CASE WHEN id = 1 THEN 1 / 3 ELSE 1 END AS k, id" + INPUT)) {
         try (var result = statement.executeQuery(sql + " ORDER BY id")) {
           assertTrue(result.next(), sql);
@@ -239,6 +289,65 @@ class CaseNumericTypeTest {
             assertEquals(0, BigDecimal.ONE.compareTo(assertInstanceOf(BigDecimal.class, result.getObject(1))), sql);
           }
           assertFalse(result.next(), sql);
+        }
+      }
+    }
+  }
+
+  /**
+   * Supplies scalar function families with independently known numeric results.
+   *
+   * @return function SQL and expected common CASE type
+   */
+  static Stream<Arguments> scalarFunctions() {
+    Stream<Arguments> exact = Stream
+        .of("CEIL(1.2)", "CEILING(1.2)", "FLOOR(1.2)", "TRUNC(1.2)", "TRUNCATE(1.2)", "MOD(3, 2)", "SIGN(1)",
+            "ASCII('a')", "UNICODE('a')", "LENGTH('a')", "CHAR_LENGTH('a')", "CHARACTER_LENGTH('a')",
+            "OCTET_LENGTH('a')", "POSITION('a' IN 'abc')", "LOCATE('a', 'abc')", "DIFFERENCE('a', 'a')",
+            "DAYOFWEEK(DATE '2026-01-01')", "DAYOFMONTH(DATE '2026-01-01')", "DAYOFYEAR(DATE '2026-01-01')",
+            "MONTH(DATE '2026-01-01')", "YEAR(DATE '2026-01-01')", "QUARTER(DATE '2026-01-01')",
+            "WEEK(DATE '2026-01-01')", "HOUR(TIME '01:02:03')", "MINUTE(TIME '01:02:03')", "SECOND(TIME '01:02:03')",
+            "TIMESTAMPDIFF('DAY', DATE '2026-01-01', DATE '2026-01-02')", "NULLIF(1, 2)", "IFNULL(NULL, 1)")
+        .map(sql -> Arguments.of(sql, Types.DECIMAL));
+    Stream<Arguments> approximate = Stream.of("SQRT(1)", "POWER(1, 2)", "POW(1, 2)", "EXP(0)", "LOG(1)", "LOG10(1)",
+        "RAND()", "RANDOM()", "SIN(0)", "COS(0)", "TAN(0)", "COT(1)", "ASIN(0)", "ACOS(0)", "ATAN(0)", "ATAN2(1, 1)",
+        "DEGREES(0)", "RADIANS(0)", "PI()").map(sql -> Arguments.of(sql, Types.DOUBLE));
+    return Stream.concat(exact, approximate);
+  }
+
+  /**
+   * Checks every fixed numeric scalar family both directly and inside subqueries.
+   *
+   * @param function
+   *          supported function invocation
+   * @param type
+   *          expected common numeric type
+   * @throws Exception
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @MethodSource("scalarFunctions")
+  void scalarFunctionBranches(String function, int type) throws Exception {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (String branch : List.of(function, "(SELECT " + function + ")")) {
+        String expression = "CASE WHEN id = 1 THEN " + branch + " ELSE 0.5 END";
+        for (String grouping : List.of("", " GROUP BY id")) {
+          for (String sql : boundaries("SELECT " + expression + " AS k, id" + INPUT + grouping)) {
+            try (var result = statement.executeQuery(sql + " ORDER BY id")) {
+              assertEquals(type, result.getMetaData().getColumnType(1), sql);
+              for (int id = 1; id <= 3; id++) {
+                assertTrue(result.next(), sql);
+                Object actual = result.getObject(1);
+                assertEquals(type == Types.DOUBLE ? Double.class : BigDecimal.class, actual.getClass(), sql);
+                assertEquals(actual.getClass().getName(), result.getMetaData().getColumnClassName(1), sql);
+                if (id != 1) {
+                  assertEquals(0, new BigDecimal("0.5").compareTo(result.getBigDecimal(1)), sql);
+                }
+              }
+              assertFalse(result.next(), sql);
+            }
+          }
         }
       }
     }

@@ -632,8 +632,11 @@ SELECT n FROM r ORDER BY n
 
 - `LATERAL` derived tables bind outer values with their Java types intact. For example,
   `FROM arr a CROSS JOIN LATERAL (SELECT u.t FROM UNNEST(a.dates) AS u(t)) x` expands the current row's array.
-- `LATERAL` derived tables currently expose decimal expressions as `VARCHAR`, even when their bounds are known,
-  to keep one stable schema across correlated executions ([#475](https://github.com/Alipsa/JParq/issues/475)).
+- `LATERAL` derived tables retain the decimal declaration of arithmetic and window expressions with known
+  bounds, including when the initial NULL correlation probe produces no value. Unbounded-decimal results
+  (division, `ROUND`, `CEIL`, `FLOOR`, `TRUNC`, and `MOD`) and `ARRAY` expressions still expose
+  `VARCHAR` ([#475](https://github.com/Alipsa/JParq/issues/475),
+  [#480](https://github.com/Alipsa/JParq/issues/480)).
 
 ### UNNEST
 
@@ -767,16 +770,25 @@ Comparisons with `NaN` and infinities are therefore TRUE or FALSE rather than UN
 
 ### CASE
 
-Numeric result branches built from literals, columns, numeric casts, arithmetic, aggregates, `COALESCE`, `ABS`, and
-`ROUND` use a common type derived before rows are read. Untyped NULL branches do not constrain it.
+Numeric result branches built from literals, columns, numeric casts, arithmetic, aggregates, scalar subqueries,
+`COALESCE`, `NULLIF`, `IFNULL`, and supported numeric scalar functions use a common type derived before rows are
+read. Numeric scalar functions include mathematical functions and numeric character and datetime functions,
+including `EXTRACT` (exact integers for fields other than `SECOND`, which has a decimal declaration).
+`ROW_NUMBER`, `RANK`, `DENSE_RANK`, and `NTILE` return BIGINT; `PERCENT_RANK` and `CUME_DIST` return DOUBLE.
+Navigation windows retain their operand's numeric declaration.
+Untyped NULL branches do not constrain the result type; combining NULL with an unresolved branch leaves that
+branch unresolved. Scalar subqueries use their independently scoped projection declarations, including
+correlated, empty, and NULL results and projections over joined derived tables, VALUES, and LATERAL inputs.
+Joined `USING` columns retain their merged declaration. VALUES declarations come from the row expressions and
+are cached without evaluating their values. A declaration that cannot be resolved safely remains unknown rather
+than using a physical table from a different scope. These declarations also apply to scalar-subquery arithmetic,
+window arithmetic, and `COALESCE` outside CASE.
 
 - Selected values use that type consistently for JDBC metadata and `getObject()`, including grouped aggregate
   branches.
 - Decimal branches share a scale when their bounds are known; unbounded expressions keep value-specific scales.
 - Decimal equality keys ignore scale for `DISTINCT`, `GROUP BY`, and window `PARTITION BY`.
 - Unselected branches are not evaluated.
-- Scalar subqueries and other functions without numeric type derivation leave `CASE` untyped, so mixed numeric
-  values can still split keys ([#319](https://github.com/Alipsa/JParq/issues/319)).
 
 ### Character and binary types
 
@@ -1097,7 +1109,6 @@ These are known gaps relative to the SQL standard or expected behavior. Each is 
 | Aggregate `FILTER (WHERE ...)` is not supported | [#438](https://github.com/Alipsa/JParq/issues/438) |
 | Unquoted references do not resolve quoted lowercase materialized aliases | [#338](https://github.com/Alipsa/JParq/issues/338) |
 | Correlated scalar subqueries used directly as aggregate arguments lose outer bindings | [#307](https://github.com/Alipsa/JParq/issues/307) |
-| `CASE` with scalar subqueries or untyped functions does not derive a common numeric type | [#319](https://github.com/Alipsa/JParq/issues/319) |
 | Window functions outside `SELECT` lists are not validated | [#350](https://github.com/Alipsa/JParq/issues/350) |
 | Scalar function result types (and `UNNEST` type propagation through them) | [#424](https://github.com/Alipsa/JParq/issues/424) |
 | Character metadata for concatenation and `CASE` | [#460](https://github.com/Alipsa/JParq/issues/460) |
@@ -1113,9 +1124,10 @@ These are known gaps relative to the SQL standard or expected behavior. Each is 
 | Ordered-set aggregates with `WITHIN GROUP` (`PERCENTILE_CONT`, `LISTAGG`, ...) | [#473](https://github.com/Alipsa/JParq/issues/473) |
 | Multi-field interval qualifiers (`YEAR TO MONTH`, ...) and `INTERVAL (expr) unit` | [#352](https://github.com/Alipsa/JParq/issues/352) |
 | Interval leading-field precision is not enforced | [#474](https://github.com/Alipsa/JParq/issues/474) |
-| `LATERAL` derived tables expose decimal expressions as `VARCHAR` | [#475](https://github.com/Alipsa/JParq/issues/475) |
+| `LATERAL` derived-table unbounded-decimal results (division, `ROUND`, `CEIL`, `FLOOR`, `TRUNC`, `MOD`) and `ARRAY` decimal expressions expose `VARCHAR` | [#475](https://github.com/Alipsa/JParq/issues/475), [#480](https://github.com/Alipsa/JParq/issues/480) |
 | Tagged dollar-quoted strings fail with an unclassified error | [#476](https://github.com/Alipsa/JParq/issues/476) |
 | `GROUP BY` and `DISTINCT` treat `-0.0` and `0.0` as different values | [#477](https://github.com/Alipsa/JParq/issues/477) |
 | `WHERE` predicates are not pushed into parenthesized join groups (performance only) | [#478](https://github.com/Alipsa/JParq/issues/478) |
 | Quoted mixed-case physical Parquet columns fail to bind | [#479](https://github.com/Alipsa/JParq/issues/479) |
 | Equivalent correlation names are not rejected throughout the FROM clause | [#482](https://github.com/Alipsa/JParq/issues/482) |
+| Recursive CTEs expose no numeric declaration, so they cannot combine in `CASE` and `DISTINCT` numeric branches | [#565](https://github.com/Alipsa/JParq/issues/565) |

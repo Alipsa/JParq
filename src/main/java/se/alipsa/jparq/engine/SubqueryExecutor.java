@@ -25,6 +25,7 @@ import net.sf.jsqlparser.statement.select.*;
 import org.apache.avro.Schema;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqPreparedStatement;
+import se.alipsa.jparq.NumericType;
 import se.alipsa.jparq.meta.InformationSchemaColumns;
 import se.alipsa.jparq.meta.InformationSchemaTables;
 
@@ -35,11 +36,14 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
 public final class SubqueryExecutor implements AutoCloseable {
 
   private final Map<String, PreparedStatement> preparedStatements = new LinkedHashMap<>();
-  private final Map<String, ProjectionDeclaration> declarations = new LinkedHashMap<>();
+  private final Map<String, ProjectionDeclaration> declarations;
   private final Map<String, Optional<Schema>> temporalDeclarations = new LinkedHashMap<>();
-  private final Map<Select, Optional<Schema>> projectionNodes = new IdentityHashMap<>();
-  private final Map<Select, Optional<Schema>> projectionResultNodes = new IdentityHashMap<>();
-  private final Map<Select, MetadataShape> projectionShapes = new IdentityHashMap<>();
+  private final Map<Select, Optional<Schema>> projectionNodes;
+  private final Map<Select, Optional<Schema>> projectionResultNodes;
+  private final Map<Select, Optional<NumericType>> projectionNumericNodes;
+  private final Map<Select, MetadataShape> projectionShapes;
+  private final boolean sharedDeclarations;
+  private final boolean reuseDeclarationStatements;
 
   private final ExecutionPlans executionPlans;
   private final JParqConnection connection;
@@ -127,11 +131,99 @@ public final class SubqueryExecutor implements AutoCloseable {
   public SubqueryExecutor(JParqConnection connection, StatementFactory statementFactory,
       Function<Table, Set<String>> tableColumns, ExecutionPlans executionPlans,
       Function<CorrelatedSubqueryRewriter.QualifiedColumn, Schema> outerSchemas) {
+    this(connection, statementFactory, tableColumns, executionPlans, outerSchemas, null);
+  }
+
+  /**
+   * Creates an executor sharing a statement's declaration caches, so subquery
+   * shapes are prepared for metadata once per statement instead of once per
+   * executor. Callers must share one instance only between executors that resolve
+   * outer references identically.
+   *
+   * @param connection
+   *          active connection
+   * @param statementFactory
+   *          factory using the same execution plans, or null
+   * @param tableColumns
+   *          source column resolver, or null
+   * @param executionPlans
+   *          shape cache belonging only to this execution
+   * @param outerSchemas
+   *          resolver mapping outer references to their declared column schemas
+   *          in the owning statement's scope, or null when unavailable
+   * @param shared
+   *          statement-level declaration caches, or null for executor-local
+   *          caches
+   */
+  public SubqueryExecutor(JParqConnection connection, StatementFactory statementFactory,
+      Function<Table, Set<String>> tableColumns, ExecutionPlans executionPlans,
+      Function<CorrelatedSubqueryRewriter.QualifiedColumn, Schema> outerSchemas, SharedDeclarations shared) {
+    this(connection, statementFactory, tableColumns, executionPlans, outerSchemas, shared, true);
+  }
+
+  /**
+   * Creates an executor sharing a statement's declaration caches and choosing
+   * whether statements prepared for metadata are kept for row execution. A
+   * declaration-only executor never executes rows, so retaining its statements
+   * would only hold their materialized inputs until it closes.
+   *
+   * @param connection
+   *          active connection
+   * @param statementFactory
+   *          factory using the same execution plans, or null
+   * @param tableColumns
+   *          source column resolver, or null
+   * @param executionPlans
+   *          shape cache belonging only to this execution
+   * @param outerSchemas
+   *          resolver mapping outer references to their declared column schemas
+   *          in the owning statement's scope, or null when unavailable
+   * @param shared
+   *          statement-level declaration caches, or null for executor-local
+   *          caches
+   * @param reuseDeclarationStatements
+   *          whether stable statements prepared for metadata are retained so this
+   *          executor's row execution reuses them; false for declaration-only
+   *          executors
+   */
+  public SubqueryExecutor(JParqConnection connection, StatementFactory statementFactory,
+      Function<Table, Set<String>> tableColumns, ExecutionPlans executionPlans,
+      Function<CorrelatedSubqueryRewriter.QualifiedColumn, Schema> outerSchemas, SharedDeclarations shared,
+      boolean reuseDeclarationStatements) {
     this.executionPlans = Objects.requireNonNull(executionPlans, "executionPlans");
     this.connection = Objects.requireNonNull(connection, "connection");
     this.statementFactory = statementFactory;
     this.tableColumns = tableColumns == null ? this::physicalColumns : tableColumns;
     this.outerSchemas = outerSchemas;
+    this.sharedDeclarations = shared != null;
+    this.reuseDeclarationStatements = reuseDeclarationStatements;
+    this.declarations = shared != null ? shared.declarations : new LinkedHashMap<>();
+    this.projectionNodes = shared != null ? shared.projectionNodes : new IdentityHashMap<>();
+    this.projectionResultNodes = shared != null ? shared.projectionResultNodes : new IdentityHashMap<>();
+    this.projectionNumericNodes = shared != null ? shared.projectionNumericNodes : new IdentityHashMap<>();
+    this.projectionShapes = shared != null ? shared.projectionShapes : new IdentityHashMap<>();
+  }
+
+  /**
+   * Declaration caches shared between the executors of one owning statement, so
+   * each subquery shape is prepared for metadata once per statement instead of
+   * once per executor. Sharing is sound only between executors that resolve outer
+   * references identically; statement results, prepared statements, and
+   * per-execution scope caches stay executor-local. Closing an executor with
+   * shared caches leaves them in place for the remaining executors; the owning
+   * statement discards the caches when it closes.
+   *
+   * <p>
+   * All caches are plain {@link LinkedHashMap}s and identity maps accessed only
+   * from the owning statement's execution thread.
+   * </p>
+   */
+  public static final class SharedDeclarations {
+    private final Map<String, ProjectionDeclaration> declarations = new LinkedHashMap<>();
+    private final Map<Select, Optional<Schema>> projectionNodes = new IdentityHashMap<>();
+    private final Map<Select, Optional<Schema>> projectionResultNodes = new IdentityHashMap<>();
+    private final Map<Select, Optional<NumericType>> projectionNumericNodes = new IdentityHashMap<>();
+    private final Map<Select, MetadataShape> projectionShapes = new IdentityHashMap<>();
   }
 
   /**
@@ -517,8 +609,16 @@ public final class SubqueryExecutor implements AutoCloseable {
           preparedStatements.put(sql, prepared);
         }
       }
-      // Cached statements are closed by this executor; all results are per-call.
-      PreparedStatement perCall = preparedStatements.containsKey(sql) ? null : prepared;
+      // Reusable statements stay cached for later executions of this executor.
+      // A statement retained only so row execution reuses its metadata
+      // preparation is removed and closed after this single run, so its
+      // materialized inputs do not outlive the subquery result.
+      boolean cachedReusable = prepared instanceof JParqPreparedStatement nested && nested.isReusableSubqueryShape()
+          && preparedStatements.containsKey(sql);
+      PreparedStatement perCall = cachedReusable ? null : prepared;
+      if (!cachedReusable) {
+        preparedStatements.remove(sql, prepared);
+      }
       try (perCall; ResultSet rs = prepared.executeQuery()) {
         if (existenceOnly) {
           return new SubqueryResult(List.of(), rs.next() ? List.of(List.of()) : List.of());
@@ -585,11 +685,14 @@ public final class SubqueryExecutor implements AutoCloseable {
       }
     }
     preparedStatements.clear();
-    declarations.clear();
+    if (!sharedDeclarations) {
+      declarations.clear();
+      projectionNodes.clear();
+      projectionResultNodes.clear();
+      projectionNumericNodes.clear();
+      projectionShapes.clear();
+    }
     temporalDeclarations.clear();
-    projectionNodes.clear();
-    projectionResultNodes.clear();
-    projectionShapes.clear();
     cache.clear();
     existenceCache.clear();
     if (failure != null) {
@@ -617,9 +720,30 @@ public final class SubqueryExecutor implements AutoCloseable {
   }
 
   /**
+   * Reads the optional interval or datetime declaration of an executing statement
+   * without preparing another, caching the outcome (including unknown) under its
+   * SQL.
+   *
+   * @param sql
+   *          stable executable query shape
+   * @param prepared
+   *          statement in its bound inner scope
+   * @return first projection declaration, or null when unknown
+   */
+  private Schema projectionSchema(String sql, PreparedStatement prepared) {
+    Optional<Schema> cached = temporalDeclarations.get(sql);
+    if (cached != null) {
+      return cached.orElse(null);
+    }
+    Schema temporal = projectionDeclaration(prepared);
+    temporalDeclarations.put(sql, Optional.ofNullable(temporal));
+    return temporal;
+  }
+
+  /**
    * Resolves a scalar subquery's first projection value schema in the subquery's
    * own input scope, so inner columns are never resolved against an outer query's
-   * schema. Both declarations share one preparation per metadata shape; executed
+   * schema. All declarations share one preparation per metadata shape; executed
    * subqueries never pay for the value schema.
    *
    * @param select
@@ -638,15 +762,33 @@ public final class SubqueryExecutor implements AutoCloseable {
   }
 
   /**
-   * Interval/datetime declaration and full first-projection value schema of one
-   * metadata shape.
+   * Resolves numeric scalar metadata, retaining decimals without fixed bounds.
+   *
+   * @param select
+   *          independently scoped scalar subquery
+   * @return declared numeric type, or null for unknown or nonnumeric projections
+   */
+  public NumericType projectionNumericType(Select select) {
+    Optional<NumericType> cached = projectionNumericNodes.get(select);
+    if (cached != null) {
+      return cached.orElse(null);
+    }
+    NumericType numeric = declarations(metadataShape(select)).numeric();
+    projectionNumericNodes.put(select, Optional.ofNullable(numeric));
+    return numeric;
+  }
+
+  /**
+   * Temporal, value schema, and numeric declarations of one metadata shape.
    *
    * @param temporal
    *          interval or datetime declaration, or null when unknown
    * @param result
    *          first projection value schema, or null when unknown
+   * @param numeric
+   *          numeric declaration, including unbounded decimals, or null
    */
-  private record ProjectionDeclaration(Schema temporal, Schema result) {
+  private record ProjectionDeclaration(Schema temporal, Schema result, NumericType numeric) {
   }
 
   /**
@@ -688,7 +830,10 @@ public final class SubqueryExecutor implements AutoCloseable {
    */
   private MetadataShape metadataShape(Select select) {
     BoundQuery bound = executionPlans.correlations.get(select);
-    if (bound != null) {
+    // An uncorrelated subquery's bound entry carries no placeholders, so its
+    // metadata always comes from the plain shared shape; only genuinely
+    // correlated subqueries use the per-execution bound shape.
+    if (bound != null && !bound.references().isEmpty()) {
       List<Schema> schemas = new ArrayList<>(bound.references().size());
       for (var reference : bound.references()) {
         schemas.add(outerReferenceSchema(reference));
@@ -788,7 +933,7 @@ public final class SubqueryExecutor implements AutoCloseable {
   }
 
   /**
-   * Resolves both declarations of one metadata shape from a single preparation,
+   * Resolves all declarations of one metadata shape from a single preparation,
    * caching the outcome (including unknown) under its SQL. Executing statements
    * read only the interval/datetime declaration through
    * {@link #projectionSchema(String, PreparedStatement)}.
@@ -804,15 +949,15 @@ public final class SubqueryExecutor implements AutoCloseable {
     }
     ProjectionDeclaration read = prepareForDeclaration(shape, SubqueryExecutor::projectionDeclarations);
     if (read == null) {
-      read = new ProjectionDeclaration(null, null);
+      read = new ProjectionDeclaration(null, null, null);
     }
     declarations.put(shape.sql(), read);
     return read;
   }
 
   /**
-   * Reads both declarations from a prepared statement without preparing another,
-   * so a failure in either lookup cannot discard the other.
+   * Reads all declarations from a prepared statement without preparing another,
+   * so a failed optional lookup cannot discard the remaining declarations.
    *
    * @param prepared
    *          statement whose bindings are active
@@ -820,7 +965,7 @@ public final class SubqueryExecutor implements AutoCloseable {
    */
   private static ProjectionDeclaration projectionDeclarations(PreparedStatement prepared) {
     if (!(prepared instanceof JParqPreparedStatement nested)) {
-      return new ProjectionDeclaration(null, null);
+      return new ProjectionDeclaration(null, null, null);
     }
     Schema temporal;
     try {
@@ -836,13 +981,22 @@ public final class SubqueryExecutor implements AutoCloseable {
       throwIfCanceled(exception);
       result = null;
     }
-    return new ProjectionDeclaration(temporal, result);
+    NumericType numeric;
+    try {
+      numeric = nested.firstProjectionNumericType();
+    } catch (SQLException | IllegalArgumentException exception) {
+      throwIfCanceled(exception);
+      numeric = null;
+    }
+    return new ProjectionDeclaration(temporal, result, numeric);
   }
 
   /**
    * Prepares a shape once and reads one declaration from it, installing the
    * shape's binding frame while placeholder-rewritten SQL is prepared and mapping
-   * cancellation to an illegal state instead of the unknown fallback.
+   * cancellation to an illegal state instead of the unknown fallback. Plain
+   * shapes with stable statements keep that statement cached so later row
+   * execution of the same shape reuses it instead of preparing a second time.
    *
    * @param shape
    *          stable metadata shape
@@ -866,10 +1020,49 @@ public final class SubqueryExecutor implements AutoCloseable {
         return declarationFailure(exception);
       }
     }
-    try (PreparedStatement prepared = prepareStatement(shape.sql())) {
-      return reader.read(prepared);
+    try {
+      PreparedStatement prepared = preparedStatements.get(shape.sql());
+      if (prepared != null) {
+        return reader.read(prepared);
+      }
+      return prepareFreshForDeclaration(shape, reader);
     } catch (SQLException exception) {
       return declarationFailure(exception);
+    }
+  }
+
+  /**
+   * Prepares a shape that no cached statement already covers. Row-executing
+   * executors retain every stable shape, not only reusable ones, so an executed
+   * non-reusable shape reuses this statement instead of preparing and
+   * materializing its inputs a second time; {@link #runQuery} removes and closes
+   * such a statement after its single run. A shape that is never executed, for
+   * example a CASE branch that is typed but never selected, keeps its statement
+   * and materialized inputs until {@link #close()}. Declaration-only executors
+   * close each statement after reading.
+   *
+   * @param shape
+   *          stable metadata shape without a cached statement
+   * @param reader
+   *          declaration to read from the prepared statement
+   * @param <T>
+   *          declaration type
+   * @return the declaration read from the prepared statement
+   * @throws SQLException
+   *           if the shape cannot be prepared
+   */
+  private <T> T prepareFreshForDeclaration(MetadataShape shape, StatementReader<T> reader) throws SQLException {
+    PreparedStatement prepared = prepareStatement(shape.sql());
+    if (reuseDeclarationStatements && prepared instanceof JParqPreparedStatement nested
+        && nested.isStableSubqueryShape()) {
+      // Retained so row execution of the same shape reuses this statement.
+      // runQuery releases a non-reusable statement after its single run; a
+      // shape that never runs is released by close().
+      preparedStatements.put(shape.sql(), prepared);
+      return reader.read(prepared);
+    }
+    try (prepared) {
+      return reader.read(prepared);
     }
   }
 
@@ -885,27 +1078,6 @@ public final class SubqueryExecutor implements AutoCloseable {
   private static <T> T declarationFailure(SQLException exception) {
     throwIfCanceled(exception);
     return null;
-  }
-
-  /**
-   * Reads the optional interval or datetime declaration of an executing statement
-   * without preparing another, caching the outcome (including unknown) under its
-   * SQL.
-   *
-   * @param sql
-   *          stable executable query shape
-   * @param prepared
-   *          statement in its bound inner scope
-   * @return first projection declaration, or null when unknown
-   */
-  private Schema projectionSchema(String sql, PreparedStatement prepared) {
-    Optional<Schema> cached = temporalDeclarations.get(sql);
-    if (cached != null) {
-      return cached.orElse(null);
-    }
-    Schema temporal = projectionDeclaration(prepared);
-    temporalDeclarations.put(sql, Optional.ofNullable(temporal));
-    return temporal;
   }
 
   /**
@@ -932,7 +1104,7 @@ public final class SubqueryExecutor implements AutoCloseable {
    * @param exception
    *          failure to inspect for cancellation
    */
-  private static void throwIfCanceled(SQLException exception) {
+  private static void throwIfCanceled(Throwable exception) {
     if (QueryCancellation.findCancellation(exception).isPresent()) {
       throw new IllegalStateException("Canceled while resolving scalar projection metadata", exception);
     }

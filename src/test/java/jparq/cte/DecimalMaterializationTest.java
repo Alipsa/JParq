@@ -185,7 +185,8 @@ class DecimalMaterializationTest {
   }
 
   /**
-   * Infers missing window decimal bounds through CTE and derived-table schemas.
+   * Preserves declared navigation-window decimal bounds through CTE and
+   * derived-table schemas, including all-NULL results.
    *
    * @param function
    *          the window function and optional offset
@@ -194,17 +195,17 @@ class DecimalMaterializationTest {
    * @param expectedValues
    *          expected decimal values or NULL in row order
    * @param precision
-   *          the inferred precision
+   *          the declared precision
    * @param scale
-   *          the inferred scale
+   *          the declared scale
    * @throws Exception
    *           if preparation or execution fails
    */
   @ParameterizedTest
   @CsvSource(delimiter = '|', value = {
-      "LAG(amount) | false | NULL 0.01 0.02 | 2 | 2", "LAG(amount) | true | NULL 0.01 0.02 | 2 | 2",
-      "LEAD(amount) | false | 0.02 0.03 NULL | 2 | 2", "LEAD(amount) | true | 0.02 0.03 NULL | 2 | 2",
-      "LAG(amount, 5) | false | NULL NULL NULL | 1 | 0", "LAG(amount, 5) | true | NULL NULL NULL | 1 | 0"
+      "LAG(amount) | false | NULL 0.01 0.02 | 12 | 2", "LAG(amount) | true | NULL 0.01 0.02 | 12 | 2",
+      "LEAD(amount) | false | 0.02 0.03 NULL | 12 | 2", "LEAD(amount) | true | 0.02 0.03 NULL | 12 | 2",
+      "LAG(amount, 5) | false | NULL NULL NULL | 12 | 2", "LAG(amount, 5) | true | NULL NULL NULL | 12 | 2"
   })
   void windowDecimalsRetainExactValues(String function, boolean derived, String expectedValues, int precision,
       int scale) throws Exception {

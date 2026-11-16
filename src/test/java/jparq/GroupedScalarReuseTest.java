@@ -2,6 +2,7 @@ package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -62,6 +63,7 @@ class GroupedScalarReuseTest {
         assertEquals(Boolean.TRUE, result.rows().get(index).get(2));
       }
       verify(executor, times(2)).executeCorrelated(any(), any(), any(), any(), any());
+      verify(executor, never()).projectionResultSchema(any());
     }
   }
 

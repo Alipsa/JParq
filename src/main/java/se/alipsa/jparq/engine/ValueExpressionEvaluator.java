@@ -497,7 +497,7 @@ public final class ValueExpressionEvaluator {
     }
     if (expression instanceof ExtractExpression extract) {
       Object value = evalInternal(extract.getExpression(), record);
-      return DateTimeFunctions.extract(extract.getName(), value);
+      return numericBranch(extract, DateTimeFunctions.extract(extract.getName(), value), "EXTRACT");
     }
     if (expression instanceof IntervalExpression interval) {
       return DateTimeFunctions.toInterval(interval);
@@ -1292,10 +1292,9 @@ public final class ValueExpressionEvaluator {
       NumericType numeric = NumericExpressionTypes.resolve(expression, column -> {
         String canonical = resolveColumnName(column);
         Schema field = canonical == null ? null : fieldSchemas.get(canonical);
-        return field == null
-            ? null
-            : NumericType.of(JdbcTypeMapper.mapSchemaToJdbcType(field), JdbcTypeMapper.nonNullSchema(field));
-      });
+        return NumericExpressionTypes.numeric(field);
+      }, select -> subqueryExecutor == null ? null : subqueryExecutor.projectionResultSchema(select),
+          select -> subqueryExecutor == null ? null : subqueryExecutor.projectionNumericType(select));
       numericTypes.put(expression, numeric);
     }
     return numericTypes.get(expression);

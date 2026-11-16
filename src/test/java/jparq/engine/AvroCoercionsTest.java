@@ -262,9 +262,9 @@ class AvroCoercionsTest {
    */
   @Test
   void unwrapsLogicalMapValuesWithoutMutatingStorage() {
-    Schema date = LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
-    Schema decimal = LogicalTypes.decimal(4, 2).addToSchema(Schema.create(Schema.Type.BYTES));
-    Schema integer = Schema.create(Schema.Type.INT);
+    final Schema date = LogicalTypes.date().addToSchema(Schema.create(Schema.Type.INT));
+    final Schema decimal = LogicalTypes.decimal(4, 2).addToSchema(Schema.create(Schema.Type.BYTES));
+    final Schema integer = Schema.create(Schema.Type.INT);
     Schema recordSchema = SchemaBuilder.record("mapEntry").fields().requiredInt("n").endRecord();
     GenericRecord entry = new GenericData.Record(recordSchema);
     entry.put("n", 7);

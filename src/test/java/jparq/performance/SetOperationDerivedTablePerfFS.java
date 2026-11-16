@@ -10,7 +10,6 @@ import java.nio.file.Files;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.apache.avro.Schema;
@@ -28,8 +27,12 @@ import se.alipsa.jparq.JParqSql;
 /**
  * Guards against declaration lookups re-preparing set operation branches per
  * column, which made derived tables and CTEs over set operations several times
- * slower. Compares a UNION ALL of derived tables against a single derived table
- * so the assertion self-normalizes to the machine's speed.
+ * slower. The regression only shows when a derived table materializes a set
+ * operation whose branches are expensive to prepare, so the guarded query wraps
+ * a UNION ALL of derived tables in a derived table. It is compared with the
+ * same query projecting a single column: both read and materialize the same
+ * inputs, so the ratio self-normalizes to the machine's speed and only grows
+ * with the per-column preparation cost the guard targets.
  */
 @SuppressWarnings("NewClassNamingConvention")
 public class SetOperationDerivedTablePerfFS {
@@ -38,34 +41,60 @@ public class SetOperationDerivedTablePerfFS {
 
   private static final int ROWS = 200_000;
   private static final int COLUMNS = 12;
+  private static final int RUNS = 5;
 
+  /**
+   * Compares the guarded query with all columns against its single-column form.
+   *
+   * @throws Exception
+   *           if the fixture cannot be written or a query fails
+   */
   @Test
   void setOperationDerivedTableDeclarationLookupStaysCheap() throws Exception {
     java.nio.file.Path directory = Files.createTempDirectory("jparq-setop-derived-");
     writeFixture(directory.resolve("wide.parquet"));
+    String jdbcUrl = "jdbc:jparq:" + directory.toAbsolutePath();
 
-    String columns = columnList();
-    String setOperationSql = "SELECT " + columns + " FROM (SELECT * FROM wide) d1 UNION ALL SELECT " + columns
-        + " FROM (SELECT * FROM wide) d2";
-    String plainSql = "SELECT " + columns + " FROM (SELECT * FROM wide) d";
+    String allColumnsSql = nestedSetOperation(columnList());
+    String singleColumnSql = nestedSetOperation("c1");
 
     for (int i = 0; i < 2; i++) {
-      timeQuery("jdbc:jparq:" + directory.toAbsolutePath(), setOperationSql);
-      timeQuery("jdbc:jparq:" + directory.toAbsolutePath(), plainSql);
+      timeQuery(jdbcUrl, allColumnsSql);
+      timeQuery(jdbcUrl, singleColumnSql);
     }
 
-    long tSetOperation = medianTime("jdbc:jparq:" + directory.toAbsolutePath(), setOperationSql, 5);
-    long tPlain = medianTime("jdbc:jparq:" + directory.toAbsolutePath(), plainSql, 5);
+    // Interleave the samples so machine-wide slowdowns affect both queries, and
+    // keep the fastest run of each to discard scheduling and GC outliers.
+    long tAllColumns = Long.MAX_VALUE;
+    long tSingleColumn = Long.MAX_VALUE;
+    for (int i = 0; i < RUNS; i++) {
+      tAllColumns = Math.min(tAllColumns, timeQuery(jdbcUrl, allColumnsSql));
+      tSingleColumn = Math.min(tSingleColumn, timeQuery(jdbcUrl, singleColumnSql));
+    }
 
-    LOG.info("Set operation derived table time: {} ms", TimeUnit.NANOSECONDS.toMillis(tSetOperation));
-    LOG.info("Plain derived table time:         {} ms", TimeUnit.NANOSECONDS.toMillis(tPlain));
+    LOG.info("Set operation derived table, {} columns: {} ms", COLUMNS, TimeUnit.NANOSECONDS.toMillis(tAllColumns));
+    LOG.info("Set operation derived table, 1 column:   {} ms", TimeUnit.NANOSECONDS.toMillis(tSingleColumn));
 
-    double ratio = BigDecimal.valueOf((double) tSetOperation / (double) tPlain).setScale(2, RoundingMode.HALF_UP)
+    double ratio = BigDecimal.valueOf((double) tAllColumns / (double) tSingleColumn).setScale(2, RoundingMode.HALF_UP)
         .doubleValue();
-    // The set operation reads twice the rows, so a ratio near 2 is expected.
-    // Per-column branch preparation pushed it to 5+; keep generous headroom.
-    assertTrue(ratio < 4.0, "Set operation derived table regressed: ratio=" + ratio + " setOperation=" + tSetOperation
-        + "ns plain=" + tPlain + "ns");
+    // Both queries materialize the same branches, so a ratio near 1.4 is
+    // expected. Preparing every branch once per column pushed it above 5.
+    assertTrue(ratio < 2.5, "Set operation derived table regressed: ratio=" + ratio + " allColumns=" + tAllColumns
+        + "ns singleColumn=" + tSingleColumn + "ns");
+  }
+
+  /**
+   * Builds a derived table over a UNION ALL whose branches are derived tables, so
+   * materializing the outer derived table must declare every projected column of
+   * an expensive set operation.
+   *
+   * @param columns
+   *          comma-separated projection
+   * @return the query text
+   */
+  private static String nestedSetOperation(String columns) {
+    return "SELECT " + columns + " FROM (SELECT " + columns + " FROM (SELECT * FROM wide) d1 UNION ALL SELECT "
+        + columns + " FROM (SELECT * FROM wide) d2) u";
   }
 
   private static long timeQuery(String jdbcUrl, String sql) {
@@ -80,15 +109,6 @@ public class SetOperationDerivedTablePerfFS {
       }
     });
     return System.nanoTime() - start;
-  }
-
-  private static long medianTime(String jdbcUrl, String sql, int runs) {
-    long[] samples = new long[runs];
-    for (int i = 0; i < runs; i++) {
-      samples[i] = timeQuery(jdbcUrl, sql);
-    }
-    Arrays.sort(samples);
-    return samples[runs / 2];
   }
 
   private static String columnList() {
