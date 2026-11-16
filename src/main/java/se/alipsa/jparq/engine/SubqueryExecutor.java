@@ -36,12 +36,13 @@ import se.alipsa.jparq.meta.InformationSchemaTables;
 public final class SubqueryExecutor implements AutoCloseable {
 
   private final Map<String, PreparedStatement> preparedStatements = new LinkedHashMap<>();
-  private final Map<String, ProjectionDeclaration> declarations = new LinkedHashMap<>();
+  private final Map<String, ProjectionDeclaration> declarations;
   private final Map<String, Optional<Schema>> temporalDeclarations = new LinkedHashMap<>();
-  private final Map<Select, Optional<Schema>> projectionNodes = new IdentityHashMap<>();
-  private final Map<Select, Optional<Schema>> projectionResultNodes = new IdentityHashMap<>();
-  private final Map<Select, Optional<NumericType>> projectionNumericNodes = new IdentityHashMap<>();
-  private final Map<Select, MetadataShape> projectionShapes = new IdentityHashMap<>();
+  private final Map<Select, Optional<Schema>> projectionNodes;
+  private final Map<Select, Optional<Schema>> projectionResultNodes;
+  private final Map<Select, Optional<NumericType>> projectionNumericNodes;
+  private final Map<Select, MetadataShape> projectionShapes;
+  private final boolean sharedDeclarations;
 
   private final ExecutionPlans executionPlans;
   private final JParqConnection connection;
@@ -129,11 +130,66 @@ public final class SubqueryExecutor implements AutoCloseable {
   public SubqueryExecutor(JParqConnection connection, StatementFactory statementFactory,
       Function<Table, Set<String>> tableColumns, ExecutionPlans executionPlans,
       Function<CorrelatedSubqueryRewriter.QualifiedColumn, Schema> outerSchemas) {
+    this(connection, statementFactory, tableColumns, executionPlans, outerSchemas, null);
+  }
+
+  /**
+   * Creates an executor sharing a statement's declaration caches, so subquery
+   * shapes are prepared for metadata once per statement instead of once per
+   * executor. Callers must share one instance only between executors that resolve
+   * outer references identically.
+   *
+   * @param connection
+   *          active connection
+   * @param statementFactory
+   *          factory using the same execution plans, or null
+   * @param tableColumns
+   *          source column resolver, or null
+   * @param executionPlans
+   *          shape cache belonging only to this execution
+   * @param outerSchemas
+   *          resolver mapping outer references to their declared column schemas
+   *          in the owning statement's scope, or null when unavailable
+   * @param shared
+   *          statement-level declaration caches, or null for executor-local
+   *          caches
+   */
+  public SubqueryExecutor(JParqConnection connection, StatementFactory statementFactory,
+      Function<Table, Set<String>> tableColumns, ExecutionPlans executionPlans,
+      Function<CorrelatedSubqueryRewriter.QualifiedColumn, Schema> outerSchemas, SharedDeclarations shared) {
     this.executionPlans = Objects.requireNonNull(executionPlans, "executionPlans");
     this.connection = Objects.requireNonNull(connection, "connection");
     this.statementFactory = statementFactory;
     this.tableColumns = tableColumns == null ? this::physicalColumns : tableColumns;
     this.outerSchemas = outerSchemas;
+    this.sharedDeclarations = shared != null;
+    this.declarations = shared != null ? shared.declarations : new LinkedHashMap<>();
+    this.projectionNodes = shared != null ? shared.projectionNodes : new IdentityHashMap<>();
+    this.projectionResultNodes = shared != null ? shared.projectionResultNodes : new IdentityHashMap<>();
+    this.projectionNumericNodes = shared != null ? shared.projectionNumericNodes : new IdentityHashMap<>();
+    this.projectionShapes = shared != null ? shared.projectionShapes : new IdentityHashMap<>();
+  }
+
+  /**
+   * Declaration caches shared between the executors of one owning statement, so
+   * each subquery shape is prepared for metadata once per statement instead of
+   * once per executor. Sharing is sound only between executors that resolve outer
+   * references identically; statement results, prepared statements, and
+   * per-execution scope caches stay executor-local. Closing an executor with
+   * shared caches leaves them in place for the remaining executors; the owning
+   * statement discards the caches when it closes.
+   *
+   * <p>
+   * All caches are plain {@link LinkedHashMap}s and identity maps accessed only
+   * from the owning statement's execution thread.
+   * </p>
+   */
+  public static final class SharedDeclarations {
+    private final Map<String, ProjectionDeclaration> declarations = new LinkedHashMap<>();
+    private final Map<Select, Optional<Schema>> projectionNodes = new IdentityHashMap<>();
+    private final Map<Select, Optional<Schema>> projectionResultNodes = new IdentityHashMap<>();
+    private final Map<Select, Optional<NumericType>> projectionNumericNodes = new IdentityHashMap<>();
+    private final Map<Select, MetadataShape> projectionShapes = new IdentityHashMap<>();
   }
 
   /**
@@ -587,12 +643,14 @@ public final class SubqueryExecutor implements AutoCloseable {
       }
     }
     preparedStatements.clear();
-    declarations.clear();
+    if (!sharedDeclarations) {
+      declarations.clear();
+      projectionNodes.clear();
+      projectionResultNodes.clear();
+      projectionNumericNodes.clear();
+      projectionShapes.clear();
+    }
     temporalDeclarations.clear();
-    projectionNodes.clear();
-    projectionResultNodes.clear();
-    projectionNumericNodes.clear();
-    projectionShapes.clear();
     cache.clear();
     existenceCache.clear();
     if (failure != null) {

@@ -241,9 +241,16 @@ public class JParqPreparedStatement implements PreparedStatement {
   private SubqueryExecutor.ExecutionPlans executionPlans;
 
   // Metadata inspection closes each nested statement immediately. Retaining this
-  // declaration-only executor across executions shares its resolved shapes and
-  // nested plans across type lookups.
+  // declaration-only executor across executions shares its resolved shapes across
+  // type lookups.
   private SubqueryExecutor declarationExecutor;
+
+  // Declaration caches shared by the statement's own executors, so each subquery
+  // shape is prepared for metadata once per statement instead of once per
+  // execution. Entries are plain schemas read before their statements close, so
+  // they stay valid for the statement's lifetime; the caches are discarded with
+  // the statement on close.
+  private final SubqueryExecutor.SharedDeclarations sharedDeclarations = new SubqueryExecutor.SharedDeclarations();
 
   // Cached VALUES declarations are keyed by the parsed definition alone. The
   // resolving scope only matters for live correlated Column references; literals
@@ -1466,16 +1473,20 @@ public class JParqPreparedStatement implements PreparedStatement {
 
   /**
    * Shares nested declaration inspection across temporal, value, and numeric
-   * lookups and across executions of this statement. The executor and its
-   * resolved shapes are retained until {@link #close()} so re-executed statements
-   * do not re-derive scalar subquery declarations.
+   * lookups and across executions of this statement. The executor is retained
+   * until {@link #close()} so re-executed statements do not re-derive scalar
+   * subquery declarations.
    *
    * @return the statement's declaration-only resolver
    */
   private SubqueryExecutor declarationExecutor() {
     if (declarationExecutor == null) {
-      var plans = executionPlans == null ? new SubqueryExecutor.ExecutionPlans(validatedTables) : executionPlans;
-      declarationExecutor = createSubqueryExecutor(inheritedCancellation, plans);
+      // The executor outlives single executions, so it keeps its own plan
+      // cache instead of adopting a per-execution cache that each executeQuery
+      // may replace. Resolved subquery declarations still land in the shared
+      // statement caches used by execution-time executors.
+      declarationExecutor = createSubqueryExecutor(inheritedCancellation,
+          new SubqueryExecutor.ExecutionPlans(validatedTables));
     }
     return declarationExecutor;
   }
@@ -1528,7 +1539,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   private SubqueryExecutor createSubqueryExecutor(QueryCancellation cancellation,
       SubqueryExecutor.ExecutionPlans plans) {
     return new SubqueryExecutor(stmt.getConn(), sql -> prepareSubqueryStatement(sql, cteResults, cancellation, plans),
-        this::subqueryTableColumns, plans, this::resolveOuterReference);
+        this::subqueryTableColumns, plans, this::resolveOuterReference, sharedDeclarations);
   }
 
   /**

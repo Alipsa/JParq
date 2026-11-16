@@ -1130,3 +1130,4 @@ These are known gaps relative to the SQL standard or expected behavior. Each is 
 | `WHERE` predicates are not pushed into parenthesized join groups (performance only) | [#478](https://github.com/Alipsa/JParq/issues/478) |
 | Quoted mixed-case physical Parquet columns fail to bind | [#479](https://github.com/Alipsa/JParq/issues/479) |
 | Equivalent correlation names are not rejected throughout the FROM clause | [#482](https://github.com/Alipsa/JParq/issues/482) |
+| Recursive CTEs expose no numeric declaration, so they cannot combine in `CASE` and `DISTINCT` numeric branches | [#565](https://github.com/Alipsa/JParq/issues/565) |

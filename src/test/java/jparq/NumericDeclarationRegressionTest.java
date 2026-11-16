@@ -294,8 +294,9 @@ class NumericDeclarationRegressionTest {
   }
 
   /**
-   * A recursive CTE in a derived body leaves its declaration unknown rather than
-   * guessing from the anchor branch.
+   * A recursive CTE in a derived body currently leaves its declaration unknown.
+   * The standard takes the type from the non-recursive part, so the anchor's type
+   * should be reported once #565 is fixed.
    *
    * @throws Exception
    *           if preparation fails
@@ -309,6 +310,32 @@ class NumericDeclarationRegressionTest {
         var prepared = (JParqPreparedStatement) connection.prepareStatement(body)) {
       assertNull(prepared.firstProjectionSchema(), body);
       assertNull(prepared.firstProjectionNumericType(), body);
+    }
+  }
+
+  /**
+   * Re-executed prepared statements keep reporting the same scalar subquery
+   * declaration on every execution instead of re-deriving it.
+   *
+   * @throws Exception
+   *           if preparation or query execution fails
+   */
+  @Test
+  void reExecutedCaseSubqueryKeepsIntegerType() throws Exception {
+    String sql = "SELECT DISTINCT CASE WHEN id = 1 THEN (SELECT MAX(v.x) FROM (VALUES (1), (2)) v(x)) ELSE 1 END AS k"
+        + INPUT + " ORDER BY k";
+    try (var connection = DriverManager.getConnection(url());
+        var prepared = (JParqPreparedStatement) connection.prepareStatement(sql)) {
+      for (int execution = 0; execution < 2; execution++) {
+        try (var result = prepared.executeQuery()) {
+          assertEquals(Types.INTEGER, result.getMetaData().getColumnType(1));
+          assertTrue(result.next());
+          assertEquals(Integer.valueOf(1), result.getObject(1));
+          assertTrue(result.next());
+          assertEquals(Integer.valueOf(2), result.getObject(1));
+          assertFalse(result.next());
+        }
+      }
     }
   }
 

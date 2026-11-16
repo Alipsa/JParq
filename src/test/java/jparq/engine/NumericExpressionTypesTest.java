@@ -14,10 +14,12 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import net.sf.jsqlparser.expression.LongValue;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqPreparedStatement;
 import se.alipsa.jparq.NumericType;
 import se.alipsa.jparq.engine.ArrayExpressionSchemas;
@@ -130,6 +132,39 @@ class NumericExpressionTypesTest {
         statement.close();
         verify(declarations).close();
       }
+    }
+  }
+
+  /**
+   * Statement-level declaration caches make re-executed statements prepare each
+   * scalar subquery's metadata once instead of once per execution, while a
+   * closing executor leaves the shared entries in place.
+   *
+   * @param directory
+   *          empty database directory
+   * @throws Exception
+   *           if preparing or inspecting a subquery fails
+   */
+  @Test
+  void executionExecutorsShareDeclarations(@TempDir Path directory) throws Exception {
+    Select select = (Select) CCJSqlParserUtil.parse("SELECT 1");
+    Schema schema = Schema.create(Schema.Type.INT);
+    var shared = new SubqueryExecutor.SharedDeclarations();
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var nested = mockConstruction(JParqPreparedStatement.class, (prepared, context) -> {
+          when(prepared.firstProjectionSchema()).thenReturn(schema);
+          when(prepared.firstProjectionNumericType()).thenReturn(NumericExpressionTypes.numeric(schema));
+        })) {
+      SubqueryExecutor first = new SubqueryExecutor((JParqConnection) connection, null, null,
+          new SubqueryExecutor.ExecutionPlans(), null, shared);
+      SubqueryExecutor second = new SubqueryExecutor((JParqConnection) connection, null, null,
+          new SubqueryExecutor.ExecutionPlans(), null, shared);
+      assertEquals(schema, first.projectionResultSchema(select));
+      assertEquals(schema, second.projectionResultSchema(select));
+      assertEquals(1, nested.constructed().size());
+      first.close();
+      assertEquals(schema, second.projectionResultSchema(select));
+      second.close();
     }
   }
 
