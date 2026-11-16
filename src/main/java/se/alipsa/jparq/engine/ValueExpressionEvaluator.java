@@ -497,7 +497,7 @@ public final class ValueExpressionEvaluator {
     }
     if (expression instanceof ExtractExpression extract) {
       Object value = evalInternal(extract.getExpression(), record);
-      return DateTimeFunctions.extract(extract.getName(), value);
+      return numericBranch(extract, DateTimeFunctions.extract(extract.getName(), value), "EXTRACT");
     }
     if (expression instanceof IntervalExpression interval) {
       return DateTimeFunctions.toInterval(interval);

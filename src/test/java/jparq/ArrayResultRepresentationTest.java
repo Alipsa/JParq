@@ -683,8 +683,8 @@ class ArrayResultRepresentationTest {
     writeDataset(directory);
     try (var connection = connect(directory);
         var statement = connection.createStatement();
-        var result = statement.executeQuery(
-            "SELECT (SELECT b FROM t2 WHERE b = 42 UNION ALL SELECT CAST(id AS BIGINT) FROM s WHERE id = 999) AS x FROM s WHERE id = 1")) {
+        var result = statement.executeQuery("SELECT (SELECT b FROM t2 WHERE b = 42 UNION ALL "
+            + "SELECT CAST(id AS BIGINT) FROM s WHERE id = 999) AS x FROM s WHERE id = 1")) {
       var metaData = result.getMetaData();
       assertEquals(Types.BIGINT, metaData.getColumnType(1));
       assertEquals(Long.class.getName(), metaData.getColumnClassName(1));
@@ -694,8 +694,8 @@ class ArrayResultRepresentationTest {
     }
     try (var connection = connect(directory);
         var statement = connection.createStatement();
-        var result = statement.executeQuery(
-            "SELECT (SELECT b FROM t2 WHERE b = 42 UNION ALL SELECT d FROM t2 WHERE b = 999) AS x FROM s WHERE id = 1")) {
+        var result = statement.executeQuery("SELECT (SELECT b FROM t2 WHERE b = 42 UNION ALL "
+            + "SELECT d FROM t2 WHERE b = 999) AS x FROM s WHERE id = 1")) {
       var metaData = result.getMetaData();
       assertEquals(Types.DECIMAL, metaData.getColumnType(1));
       assertEquals(12, metaData.getPrecision(1));
@@ -720,8 +720,8 @@ class ArrayResultRepresentationTest {
     writeDataset(directory);
     try (var connection = connect(directory);
         var statement = connection.createStatement();
-        var result = statement.executeQuery(
-            "SELECT (SELECT ints FROM s WHERE id = 1 UNION ALL SELECT ints FROM s WHERE id = 999) AS x FROM s WHERE id = 1")) {
+        var result = statement.executeQuery("SELECT (SELECT ints FROM s WHERE id = 1 UNION ALL "
+            + "SELECT ints FROM s WHERE id = 999) AS x FROM s WHERE id = 1")) {
       var metaData = result.getMetaData();
       assertEquals(Types.ARRAY, metaData.getColumnType(1));
       assertEquals(Object[].class.getName(), metaData.getColumnClassName(1));

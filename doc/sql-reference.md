@@ -769,9 +769,17 @@ Comparisons with `NaN` and infinities are therefore TRUE or FALSE rather than UN
 
 Numeric result branches built from literals, columns, numeric casts, arithmetic, aggregates, scalar subqueries,
 `COALESCE`, `NULLIF`, `IFNULL`, and supported numeric scalar functions use a common type derived before rows are
-read. Numeric scalar functions include mathematical functions and numeric character and datetime functions.
-Untyped NULL branches do not constrain the result type. Scalar subqueries use their independently scoped
-projection declarations, including correlated, empty, and NULL results.
+read. Numeric scalar functions include mathematical functions and numeric character and datetime functions,
+including `EXTRACT` (exact integers for fields other than `SECOND`, which has a decimal declaration).
+`ROW_NUMBER`, `RANK`, `DENSE_RANK`, and `NTILE` return BIGINT; `PERCENT_RANK` and `CUME_DIST` return DOUBLE.
+Navigation windows retain their operand's numeric declaration.
+Untyped NULL branches do not constrain the result type; combining NULL with an unresolved branch leaves that
+branch unresolved. Scalar subqueries use their independently scoped projection declarations, including
+correlated, empty, and NULL results and projections over joined derived tables, VALUES, and LATERAL inputs.
+Joined `USING` columns retain their merged declaration. VALUES declarations come from the row expressions and
+are cached without evaluating their values. A declaration that cannot be resolved safely remains unknown rather
+than using a physical table from a different scope. These declarations also apply to scalar-subquery arithmetic,
+window arithmetic, and `COALESCE` outside CASE.
 
 - Selected values use that type consistently for JDBC metadata and `getObject()`, including grouped aggregate
   branches.

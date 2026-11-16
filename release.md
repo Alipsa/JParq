@@ -6,6 +6,13 @@
   results, and the remaining supported numeric scalar functions (#319). Retain unbounded decimal types without
   executing unselected branches. Keep value classes and metadata consistent through grouping, derived tables,
   CTEs, and set operations, and combine equal numeric DISTINCT, GROUP BY, and window PARTITION BY keys.
+  Include EXTRACT, ranking and navigation windows, and scalar projections over joined derived, VALUES, and
+  LATERAL inputs. NULL subqueries do not hide unresolved branches. Share nested declaration inspection across
+  schema and numeric lookups. Top-level scalar-subquery arithmetic and COALESCE also retain their declared
+  numeric types. Preserve derived-body WITH shadowing, merged USING columns, joined set-operation declarations,
+  and correlated VALUES types. Derive and cache VALUES declarations without evaluating rows, retain numeric types
+  in LATERAL VALUES NULL probes, and close declaration executors on reset and shutdown. EXTRACT values now match
+  their declared numeric classes in bare and scalar-subquery projections. Fixes #319. Fixes #550. Fixes #557.
 
 - Report declared JDBC types, classes, decimal bounds, and alias-independent nullability for
   COUNT, SUM, AVG, MIN, and MAX window functions (#318). Preserve mixed DATE/TIMESTAMP MIN/MAX

@@ -620,6 +620,27 @@ public final class SubqueryExecutor implements AutoCloseable {
   }
 
   /**
+   * Reads the optional interval or datetime declaration of an executing statement
+   * without preparing another, caching the outcome (including unknown) under its
+   * SQL.
+   *
+   * @param sql
+   *          stable executable query shape
+   * @param prepared
+   *          statement in its bound inner scope
+   * @return first projection declaration, or null when unknown
+   */
+  private Schema projectionSchema(String sql, PreparedStatement prepared) {
+    Optional<Schema> cached = temporalDeclarations.get(sql);
+    if (cached != null) {
+      return cached.orElse(null);
+    }
+    Schema temporal = projectionDeclaration(prepared);
+    temporalDeclarations.put(sql, Optional.ofNullable(temporal));
+    return temporal;
+  }
+
+  /**
    * Resolves a scalar subquery's first projection value schema in the subquery's
    * own input scope, so inner columns are never resolved against an outer query's
    * schema. All declarations share one preparation per metadata shape; executed
@@ -913,27 +934,6 @@ public final class SubqueryExecutor implements AutoCloseable {
   private static <T> T declarationFailure(SQLException exception) {
     throwIfCanceled(exception);
     return null;
-  }
-
-  /**
-   * Reads the optional interval or datetime declaration of an executing statement
-   * without preparing another, caching the outcome (including unknown) under its
-   * SQL.
-   *
-   * @param sql
-   *          stable executable query shape
-   * @param prepared
-   *          statement in its bound inner scope
-   * @return first projection declaration, or null when unknown
-   */
-  private Schema projectionSchema(String sql, PreparedStatement prepared) {
-    Optional<Schema> cached = temporalDeclarations.get(sql);
-    if (cached != null) {
-      return cached.orElse(null);
-    }
-    Schema temporal = projectionDeclaration(prepared);
-    temporalDeclarations.put(sql, Optional.ofNullable(temporal));
-    return temporal;
   }
 
   /**

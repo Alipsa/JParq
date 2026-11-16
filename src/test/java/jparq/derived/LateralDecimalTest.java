@@ -33,8 +33,8 @@ class LateralDecimalTest {
   }
 
   /**
-   * Uses a stable string schema when the NULL probe cannot determine decimal
-   * bounds.
+   * Retains the navigation operand's decimal declaration even when the initial
+   * NULL correlation probe returns no rows.
    * 
    * @param function
    *          the decimal window function
@@ -55,12 +55,12 @@ class LateralDecimalTest {
     try (var connection = DriverManager.getConnection(jdbcUrl);
         var statement = connection.createStatement();
         var result = statement.executeQuery(sql)) {
-      assertEquals(Types.VARCHAR, result.getMetaData().getColumnType(2));
+      assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(2));
       int row = 0;
       for (String value : expected) {
         assertTrue(result.next());
         assertEquals(List.of(1L, 2L, 2L, 3L, 3L, 3L).get(row++), result.getLong(1));
-        assertEquals(value, result.getObject(2));
+        assertEquals(value == null ? null : new BigDecimal(value), result.getObject(2));
         if (value == null) {
           assertNull(result.getBigDecimal(2));
         } else {

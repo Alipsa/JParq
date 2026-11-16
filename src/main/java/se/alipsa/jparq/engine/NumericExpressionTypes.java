@@ -13,6 +13,7 @@ import net.sf.jsqlparser.expression.CaseExpression;
 import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DoubleValue;
 import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.ExtractExpression;
 import net.sf.jsqlparser.expression.LongValue;
 import net.sf.jsqlparser.expression.NullValue;
 import net.sf.jsqlparser.expression.SignedExpression;
@@ -48,8 +49,8 @@ public final class NumericExpressionTypes {
   }
 
   /**
-   * Resolves literals, numeric casts, regular and window aggregates, CASE, and
-   * arithmetic operators.
+   * Resolves literals, numeric casts, scalar and datetime functions, aggregates,
+   * ranking and navigation windows, CASE, and arithmetic operators.
    *
    * @param expression
    *          the expression to resolve
@@ -105,6 +106,11 @@ public final class NumericExpressionTypes {
     }
     if (expression instanceof CaseExpression choice) {
       return commonBranches(ExpressionBranches.caseResults(choice), columns, scalarSchemas, scalarNumbers);
+    }
+    if (expression instanceof ExtractExpression extract) {
+      return "SECOND".equalsIgnoreCase(extract.getName())
+          ? new NumericType(Types.DECIMAL, 0, 0)
+          : NumericType.of(Types.BIGINT, 0, 0);
     }
     if (expression instanceof LongValue literal) {
       var integer = literal.getBigIntegerValue();
@@ -174,8 +180,14 @@ public final class NumericExpressionTypes {
       }
     }
     if (expression instanceof AnalyticExpression analytic && analytic.getName() != null) {
-      return aggregateType(analytic.getName().toUpperCase(Locale.ROOT), analytic.getExpression(), columns,
-          scalarSchemas, scalarNumbers);
+      String name = analytic.getName().toUpperCase(Locale.ROOT);
+      return switch (name) {
+        case "ROW_NUMBER", "RANK", "DENSE_RANK", "NTILE" -> NumericType.of(Types.BIGINT, 0, 0);
+        case "PERCENT_RANK", "CUME_DIST" -> NumericType.of(Types.DOUBLE, 0, 0);
+        case "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE" ->
+          resolve(analytic.getExpression(), columns, scalarSchemas, scalarNumbers);
+        default -> aggregateType(name, analytic.getExpression(), columns, scalarSchemas, scalarNumbers);
+      };
     }
     Operation operation = operation(expression);
     if (operation != null && expression instanceof BinaryExpression binary) {

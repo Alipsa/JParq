@@ -45,6 +45,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HexFormat;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -238,6 +239,11 @@ public class JParqPreparedStatement implements PreparedStatement {
   private QueryCancellation inheritedCancellation;
   private final SubqueryExecutor.ExecutionPlans reusablePlan;
   private SubqueryExecutor.ExecutionPlans executionPlans;
+
+  // Metadata inspection closes each nested statement immediately. Retaining this
+  // declaration-only executor shares its resolved shapes across type lookups.
+  private SubqueryExecutor declarationExecutor;
+  private final Map<ValueTableDefinition, List<Schema>> valueDeclarations = new IdentityHashMap<>();
 
   JParqPreparedStatement(JParqStatement stmt, String sql) throws SQLException {
     this(stmt, sql, Map.of(), false);
@@ -593,6 +599,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (hasParameters || deferredTimePlanning) {
       return executeReplannedQuery();
     }
+    closeDeclarationExecutor();
     if (reusablePlan == null) {
       executionPlans = new SubqueryExecutor.ExecutionPlans(validatedTables);
     }
@@ -737,21 +744,6 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Resolves the first projection's interval or datetime declaration without
-   * reading rows.
-   *
-   * @return the declared schema, or null when its type cannot be established
-   * @throws SQLException
-   *           if an input schema cannot be inspected
-   */
-  public Schema declaredProjectionSchema() throws SQLException {
-    if (!setOperationQuery && (parsedSelect == null || parsedSelect.expressions().size() != 1)) {
-      return null;
-    }
-    return declaredProjectionSchema(1);
-  }
-
-  /**
    * Resolves the first projection's declared value schema against this
    * statement's own input columns, independently of any outer query scope. Set
    * operations combine their branches, and nested scalar subqueries resolve to
@@ -779,7 +771,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         return null;
       }
       Function<Column, Schema> columnSchemas = freshColumnSchemas();
-      Function<Select, Schema> scalarSchemas = projectionResultSchemas(cteResults);
+      Function<Select, Schema> scalarSchemas = projectionResultSchemas();
       return ArrayExpressionSchemas.resolve(first, columnSchemas, scalarSchemas);
     } catch (IllegalArgumentException incompatible) {
       return null;
@@ -796,32 +788,37 @@ public class JParqPreparedStatement implements PreparedStatement {
    *           if an input declaration cannot be inspected
    */
   public NumericType firstProjectionNumericType() throws SQLException {
-    if (setOperationQuery && parsedSetQuery != null) {
-      NumericType common = null;
-      for (SqlParser.SetComponent component : parsedSetQuery.components()) {
-        try (JParqPreparedStatement branch = prepareSubqueryStatement(component.sql(), cteResults)) {
-          NumericType type = branch.firstProjectionNumericType();
-          if (type == null) {
-            Schema schema = branch.firstProjectionSchema();
-            if (schema != null && schema.getType() == Schema.Type.NULL) {
-              continue;
+    try {
+      if (setOperationQuery && parsedSetQuery != null) {
+        NumericType common = null;
+        for (SqlParser.SetComponent component : parsedSetQuery.components()) {
+          try (JParqPreparedStatement branch = prepareSubqueryStatement(component.sql(), cteResults)) {
+            NumericType type = branch.firstProjectionNumericType();
+            if (type == null) {
+              Schema schema = branch.firstProjectionSchema();
+              if (schema != null && schema.getType() == Schema.Type.NULL) {
+                continue;
+              }
+              return null;
             }
-            return null;
+            common = NumericExpressionTypes.common(common, type);
           }
-          common = NumericExpressionTypes.common(common, type);
         }
+        return common;
       }
-      return common;
-    }
-    if (parsedSelect == null || parsedSelect.expressions().isEmpty()) {
+      if (parsedSelect == null || parsedSelect.expressions().isEmpty()) {
+        return null;
+      }
+      Expression first = parsedSelect.expressions().getFirst();
+      if (CorrelatedBindings.hasUntypedReference(first)) {
+        return null;
+      }
+      Function<Column, Schema> columns = freshColumnSchemas();
+      var executor = declarationExecutor();
+      return NumericExpressionTypes.resolve(first, column -> NumericExpressionTypes.numeric(columns.apply(column)),
+          executor::projectionResultSchema, executor::projectionNumericType);
+    } catch (IllegalArgumentException incompatible) {
       return null;
-    }
-    Function<Column, Schema> columns = freshColumnSchemas();
-    var plans = executionPlans == null ? new SubqueryExecutor.ExecutionPlans(validatedTables) : executionPlans;
-    try (var executor = createSubqueryExecutor(inheritedCancellation, plans)) {
-      return NumericExpressionTypes.resolve(parsedSelect.expressions().getFirst(),
-          column -> NumericExpressionTypes.numeric(columns.apply(column)), executor::projectionResultSchema,
-          executor::projectionNumericType);
     }
   }
 
@@ -861,12 +858,25 @@ public class JParqPreparedStatement implements PreparedStatement {
    * Resolves the full first-projection value schema of nested scalar subqueries,
    * preparing each independently scoped subquery once.
    *
-   * @param cteContext
-   *          CTE values visible to the scalar subqueries
    * @return full first-projection schema resolver for nested subqueries
    */
-  private Function<Select, Schema> projectionResultSchemas(Map<Identifier, CteResult> cteContext) {
-    return nestedProjectionSchemas(cteContext, JParqPreparedStatement::firstProjectionSchema);
+  private Function<Select, Schema> projectionResultSchemas() {
+    return declarationExecutor()::projectionResultSchema;
+  }
+
+  /**
+   * Resolves the first projection's interval or datetime declaration without
+   * reading rows.
+   *
+   * @return the declared schema, or null when its type cannot be established
+   * @throws SQLException
+   *           if an input schema cannot be inspected
+   */
+  public Schema declaredProjectionSchema() throws SQLException {
+    if (!setOperationQuery && (parsedSelect == null || parsedSelect.expressions().size() != 1)) {
+      return null;
+    }
+    return declaredProjectionSchema(1);
   }
 
   /**
@@ -910,7 +920,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       return List.of();
     }
     Function<Column, Schema> columnSchemas = freshColumnSchemas();
-    Function<Select, Schema> scalarSchemas = projectionScalarSchemas(cteResults);
+    Function<Select, Schema> scalarSchemas = projectionScalarSchemas();
     List<Schema> schemas = new ArrayList<>(parsedSelect.expressions().size());
     for (Expression expression : parsedSelect.expressions()) {
       try {
@@ -959,12 +969,12 @@ public class JParqPreparedStatement implements PreparedStatement {
   private Function<Column, Schema> projectionColumnSchemas(Map<Column, Schema> cache) {
     return column -> cache.computeIfAbsent(column, reference -> {
       try {
-        Schema source = resolveSchemaForColumn(tableReferences, reference.getTable());
-        if (source == null && !joinQuery) {
-          source = fileAvroSchema;
+        Schema schema = inputColumnSchema(tableReferences, reference, unresolved -> null);
+        if (schema == null && !joinQuery) {
+          Schema.Field field = findFieldByIdentifier(fileAvroSchema, Identifier.of(reference.getColumnName()));
+          return field == null ? null : field.schema();
         }
-        Schema.Field field = findFieldIgnoreCase(source, reference.getColumnName());
-        return field == null ? null : field.schema();
+        return schema;
       } catch (SQLException exception) {
         return null;
       }
@@ -972,68 +982,295 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
+   * Resolves a column against each visible input's own declaration. LATERAL
+   * projections may also use declarations from preceding inputs.
+   *
+   * @param inputs
+   *          inputs in SQL visibility order
+   * @param column
+   *          qualified or unqualified reference
+   * @param outer
+   *          declarations visible to a lateral input
+   * @return column schema, or null when unknown or ambiguous
+   * @throws SQLException
+   *           if a physical input cannot be inspected
+   */
+  private Schema inputColumnSchema(List<SqlParser.TableReference> inputs, Column column, Function<Column, Schema> outer)
+      throws SQLException {
+    Identifier qualifier = column.getTable() == null ? null : Identifier.of(column.getTable().getName());
+    Schema result = null;
+    for (int index = 0; index < inputs.size(); index++) {
+      var input = inputs.get(index);
+      Identifier visible = Identifier.of(input.tableAlias() == null ? input.tableName() : input.tableAlias());
+      if (qualifier != null && (visible == null || !qualifier.matches(visible))) {
+        continue;
+      }
+      Schema schema;
+      if (input.isDerivedTable()) {
+        List<SqlParser.TableReference> preceding = inputs.subList(0, index);
+        Function<Column, Schema> lateral = input.lateral()
+            ? reference -> uncheckedInputColumnSchema(preceding, reference, outer)
+            : reference -> null;
+        schema = derivedColumnSchema(input, column.getColumnName(), lateral);
+      } else if (input.valueTable() != null) {
+        List<SqlParser.TableReference> preceding = inputs.subList(0, index);
+        Function<Column, Schema> valuesOuter = input.lateral()
+            ? reference -> uncheckedInputColumnSchema(preceding, reference, outer)
+            : outer;
+        schema = valueColumnSchema(input.valueTable(), column.getColumnName(), valuesOuter);
+      } else {
+        Schema source = schemaForTableReference(input);
+        if (source != null) {
+          source = applyColumnAliases(new CteResult(source, List.of()), input).schema();
+        }
+        Schema.Field field = findFieldByIdentifier(source, Identifier.of(column.getColumnName()));
+        schema = field == null ? null : field.schema();
+      }
+      if (qualifier != null) {
+        return schema;
+      }
+      if (schema != null) {
+        if (result != null) {
+          if (input.usingColumns().stream()
+              .noneMatch(name -> Identifier.of(name).matches(Identifier.of(column.getColumnName())))) {
+            return null;
+          }
+          result = commonInputSchemas(result, schema);
+        } else {
+          result = schema;
+        }
+      }
+    }
+    return result == null ? outer.apply(column) : result;
+  }
+
+  /**
+   * Combines declared input types while treating untyped NULL as neutral.
+   *
+   * @param first
+   *          known input declaration
+   * @param second
+   *          next known input declaration
+   * @return the common declaration
+   * @throws IllegalArgumentException
+   *           if the non-NULL declarations are incompatible
+   */
+  private static Schema commonInputSchemas(Schema first, Schema second) {
+    if (first.getType() == Schema.Type.NULL) {
+      return second;
+    }
+    return second.getType() == Schema.Type.NULL ? first : StructArrayTypes.common(first, second);
+  }
+
+  /**
+   * Adapts input declaration lookup to expression resolvers.
+   *
+   * @param inputs
+   *          locally visible inputs
+   * @param column
+   *          requested column
+   * @param outer
+   *          enclosing lateral scope
+   * @return column declaration, or null when inspection fails
+   */
+  private Schema uncheckedInputColumnSchema(List<SqlParser.TableReference> inputs, Column column,
+      Function<Column, Schema> outer) {
+    try {
+      return inputColumnSchema(inputs, column, outer);
+    } catch (SQLException exception) {
+      return null;
+    }
+  }
+
+  /**
+   * Resolves a VALUES column from its expressions without evaluating any rows.
+   * All columns share one cached declaration pass for this constructor.
+   *
+   * @param values
+   *          row constructor and exported column names
+   * @param name
+   *          exported column name
+   * @param columns
+   *          enclosing declarations, including preceding LATERAL inputs
+   * @return the column declaration, or null when unknown
+   */
+  private Schema valueColumnSchema(ValueTableDefinition values, String name, Function<Column, Schema> columns) {
+    List<Schema> declarations = valueDeclarations.computeIfAbsent(values, definition -> {
+      List<Schema> schemas = new ArrayList<>(definition.columnNames().size());
+      for (int index = 0; index < definition.columnNames().size(); index++) {
+        Schema common = null;
+        boolean unknown = false;
+        try {
+          for (List<Expression> row : definition.rows()) {
+            Expression expression = row.get(index);
+            Schema schema = ArrayExpressionSchemas.resolve(expression, columns,
+                select -> declarationExecutor().projectionResultSchema(select));
+            if (schema == null && !(ExpressionEvaluator.unwrapParenthesis(expression) instanceof NullValue)) {
+              unknown = true;
+            }
+            if (schema != null) {
+              common = common == null ? schema : commonInputSchemas(common, schema);
+            }
+          }
+        } catch (IllegalArgumentException incompatible) {
+          // Declarations are optional; execution validates the actual row values.
+          unknown = true;
+        }
+        schemas.add(unknown ? null : common == null ? Schema.create(Schema.Type.NULL) : common);
+      }
+      return schemas;
+    });
+    for (int index = 0; index < values.columnNames().size(); index++) {
+      if (Identifier.of(name).matches(Identifier.of(values.columnNames().get(index)))) {
+        return declarations.get(index);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Resolves an exported derived column without evaluating its projection.
+   *
+   * @param input
+   *          derived input, including positional column aliases
+   * @param name
+   *          exported column name
+   * @param outer
+   *          preceding input declarations for LATERAL
+   * @return exported declaration, or null when unknown
+   * @throws SQLException
+   *           if a nested declaration resolver cannot be closed
+   */
+  private Schema derivedColumnSchema(SqlParser.TableReference input, String name, Function<Column, Schema> outer)
+      throws SQLException {
+    SqlParser.Query query = input.subquery() == null ? SqlParser.parseQuery(input.subquerySql()) : input.subquery();
+    return queryColumnSchema(query, name, input.columnAliases(), outer);
+  }
+
+  /**
+   * Resolves a named output using a query's own projection scope. An unresolved
+   * local WITH leaves the declaration unknown rather than using a physical table
+   * with the same name.
+   *
+   * @param query
+   *          independently scoped query
+   * @param name
+   *          exported column name
+   * @param aliases
+   *          positional output aliases, empty when absent
+   * @param outer
+   *          enclosing LATERAL declarations
+   * @return output declaration, or null when unknown
+   * @throws SQLException
+   *           if a nested resolver cannot be closed
+   */
+  private Schema queryColumnSchema(SqlParser.Query query, String name, List<String> aliases,
+      Function<Column, Schema> outer) throws SQLException {
+    if (!query.commonTableExpressions().isEmpty()) {
+      return null;
+    }
+    if (query instanceof SqlParser.SetQuery set) {
+      Schema common = null;
+      List<String> names = aliases.isEmpty() ? queryLabels(set.components().getFirst().query()) : aliases;
+      for (var component : set.components()) {
+        Schema schema = queryColumnSchema(component.query(), name, names, outer);
+        if (schema == null) {
+          return null;
+        }
+        common = common == null ? schema : commonInputSchemas(common, schema);
+      }
+      return common;
+    }
+    var select = (SqlParser.Select) query;
+    Function<Column, Schema> columns = column -> uncheckedInputColumnSchema(select.tableReferences(), column, outer);
+    List<String> labels = aliases.isEmpty() ? select.labels() : aliases;
+    for (int index = 0; index < labels.size() && index < select.expressions().size(); index++) {
+      if (Identifier.of(name).matches(Identifier.of(labels.get(index)))) {
+        Expression expression = select.expressions().get(index);
+        if (ExpressionEvaluator.unwrapParenthesis(expression) instanceof NullValue) {
+          return Schema.create(Schema.Type.NULL);
+        }
+        var plans = executionPlans == null ? new SubqueryExecutor.ExecutionPlans(validatedTables) : executionPlans;
+        try (var executor = new SubqueryExecutor(stmt.getConn(),
+            sql -> prepareSubqueryStatement(sql, cteResults, inheritedCancellation, plans), this::subqueryTableColumns,
+            plans, reference -> columns.apply(correlatedColumn(reference)))) {
+          return ArrayExpressionSchemas.resolve(expression, columns, executor::projectionResultSchema);
+        }
+      }
+    }
+    return select.columns().contains("*") ? columns.apply(new Column(name)) : null;
+  }
+
+  /**
+   * Reads the positional output names of a SELECT or set operation.
+   *
+   * @param query
+   *          query whose first branch determines its output names
+   * @return exported names in projection order
+   */
+  private static List<String> queryLabels(SqlParser.Query query) {
+    return query instanceof SqlParser.Select select
+        ? select.labels()
+        : queryLabels(((SqlParser.SetQuery) query).components().getFirst().query());
+  }
+
+  /**
    * Resolves scalar subquery declarations for projection metadata lookups.
    *
-   * @param cteContext
-   *          CTE values visible to the scalar subqueries
    * @return scalar declaration resolver preparing independent nested plans
    */
-  private Function<Select, Schema> projectionScalarSchemas(Map<Identifier, CteResult> cteContext) {
-    return nestedProjectionSchemas(cteContext, JParqPreparedStatement::declaredProjectionSchema);
+  private Function<Select, Schema> projectionScalarSchemas() {
+    return declarationExecutor()::projectionSchema;
   }
 
   /**
-   * Prepares each independently scoped scalar subquery once and reads the
-   * requested declaration from it.
+   * Shares nested declaration inspection across temporal, value, and numeric
+   * lookups. The executor belongs to this statement and closes before execution
+   * resets its plans or the statement shuts down.
    *
-   * @param cteContext
-   *          CTE values visible to the scalar subqueries
-   * @param reader
-   *          projection declaration to read from each prepared subquery
-   * @return scalar subquery declaration resolver
+   * @return the statement's declaration-only resolver
    */
-  private Function<Select, Schema> nestedProjectionSchemas(Map<Identifier, CteResult> cteContext,
-      ProjectionSchemaReader reader) {
-    Map<Select, Optional<Schema>> schemas = new HashMap<>();
-    return select -> schemas.computeIfAbsent(select, query -> {
-      try (JParqPreparedStatement nested = prepareSubqueryStatement(query.toString(), cteContext)) {
-        return Optional.ofNullable(reader.read(nested));
-      } catch (SQLException exception) {
-        return Optional.empty();
-      }
-    }).orElse(null);
+  private SubqueryExecutor declarationExecutor() {
+    if (declarationExecutor == null) {
+      var plans = executionPlans == null ? new SubqueryExecutor.ExecutionPlans(validatedTables) : executionPlans;
+      declarationExecutor = createSubqueryExecutor(inheritedCancellation, plans);
+    }
+    return declarationExecutor;
   }
 
   /**
-   * Reads one projection declaration from a prepared nested statement.
+   * Closes bound execution and declaration work owned by this statement.
+   *
+   * @throws SQLException
+   *           if a bound statement or declaration executor cannot be closed
    */
-  @FunctionalInterface
-  private interface ProjectionSchemaReader {
-
-    /**
-     * Reads the requested declaration.
-     *
-     * @param statement
-     *          independently scoped nested statement
-     * @return the declared schema, or null when unknown
-     * @throws SQLException
-     *           if the declaration cannot be inspected
-     */
-    Schema read(JParqPreparedStatement statement) throws SQLException;
+  @Override
+  public void close() throws SQLException {
+    SubqueryExecutor executor = declarationExecutor;
+    JParqPreparedStatement bound = boundStatement;
+    JParqStatement owner = ownsStatement ? stmt : null;
+    declarationExecutor = null;
+    boundStatement = null;
+    try (owner; executor; bound) {
+      valueDeclarations.clear();
+    } finally {
+      executionPlans = null;
+      closed = true;
+    }
   }
 
-  @Override
-  public void close() {
-    // Close the bound statement if it exists
-    if (boundStatement != null) {
-      boundStatement.close();
-      boundStatement = null;
+  /**
+   * Closes and discards declaration work before execution resets or shutdown.
+   *
+   * @throws SQLException
+   *           if the declaration executor cannot close a cached statement
+   */
+  private void closeDeclarationExecutor() throws SQLException {
+    SubqueryExecutor executor = declarationExecutor;
+    declarationExecutor = null;
+    try (executor) {
+      valueDeclarations.clear();
     }
-    if (ownsStatement) {
-      stmt.close();
-    }
-    executionPlans = null;
-    closed = true;
   }
 
   /**
@@ -1077,27 +1314,39 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @return the referenced column's declared schema, or null when unknown
    */
   Schema resolveOuterReference(CorrelatedSubqueryRewriter.QualifiedColumn reference) {
-    Identifier qualifier = Identifier.fromLookupKey(reference.qualifier());
-    Identifier column = Identifier.of(reference.column());
-    if (column == null) {
+    if (Identifier.of(reference.column()) == null) {
       return null;
     }
     try {
-      Schema source;
-      if (qualifier == null) {
-        // An unqualified outer reference is unambiguous only with a single input.
-        source = tableReferences != null && tableReferences.size() == 1 && !joinQuery ? fileAvroSchema : null;
-      } else {
-        source = schemaForOuterQualifier(qualifier);
+      Column column = correlatedColumn(reference);
+      Schema schema = inputColumnSchema(tableReferences, column, unresolved -> null);
+      if (schema == null && !joinQuery) {
+        Schema.Field field = findFieldByIdentifier(fileAvroSchema, Identifier.of(reference.column()));
+        schema = field == null ? null : field.schema();
       }
-      Schema.Field field = findFieldByIdentifier(source, column);
-      return field == null ? null : JdbcTypeMapper.nonNullSchema(field.schema());
+      return JdbcTypeMapper.nonNullSchema(schema);
     } catch (SQLException exception) {
       if (QueryCancellation.findCancellation(exception).isPresent()) {
         throw new IllegalStateException("Canceled while resolving outer column declarations", exception);
       }
       return null;
     }
+  }
+
+  /**
+   * Restores SQL identifier quoting on a discovered correlated reference.
+   *
+   * @param reference
+   *          reference with its qualifier encoded as a lookup key
+   * @return column usable by ordinary scoped declaration lookup
+   */
+  private static Column correlatedColumn(CorrelatedSubqueryRewriter.QualifiedColumn reference) {
+    Identifier qualifier = Identifier.fromLookupKey(reference.qualifier());
+    String name = qualifier == null ? null : qualifier.text();
+    if (qualifier != null && qualifier.quoted()) {
+      name = "\"" + name.replace("\"", "\"\"") + "\"";
+    }
+    return new Column(name == null ? null : new Table(name), reference.column());
   }
 
   /**
@@ -1134,39 +1383,6 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (fieldId != null && !fieldId.quoted() && column.normalized().equals(fieldId.normalized())) {
         return field;
       }
-    }
-    return null;
-  }
-
-  /**
-   * Finds the input whose visible name (alias hiding table name) matches one
-   * outer qualifier and returns its exposed schema.
-   *
-   * @param qualifier
-   *          normalized outer qualifier
-   * @return that input's schema, or null when the qualifier matches no input or
-   *         its schema cannot be established
-   * @throws SQLException
-   *           if a physical input cannot be validated
-   */
-  private Schema schemaForOuterQualifier(Identifier qualifier) throws SQLException {
-    if (tableReferences == null) {
-      return null;
-    }
-    for (SqlParser.TableReference ref : tableReferences) {
-      Identifier visible = Identifier.of(ref.tableAlias() != null ? ref.tableAlias() : ref.tableName());
-      if (visible == null || !visible.lookupKey().equals(qualifier.lookupKey())) {
-        continue;
-      }
-      if (ref.isDerivedTable()) {
-        // The materialized base input retains its output schema; derived inputs
-        // joined into this statement are not retained here.
-        return ref == tableReferences.getFirst() && baseCteResult != null ? baseCteResult.schema() : null;
-      }
-      Schema declared = schemaForTableReference(ref);
-      // A column-alias list renames the exposed schema positionally, so the
-      // aliased name must be looked up in the renamed declaration.
-      return declared == null ? null : applyColumnAliases(new CteResult(declared, List.of()), ref).schema();
     }
     return null;
   }
@@ -3417,8 +3633,16 @@ public class JParqPreparedStatement implements PreparedStatement {
         columnType = ValueColumnType.INTERVAL;
       }
       columnTypes.add(columnType);
-      valueSchemas
-          .add(intervalDeclaration == null ? schemaForColumnType(columnType, columnValues) : intervalDeclaration);
+      Schema valueSchema = intervalDeclaration == null
+          ? schemaForColumnType(columnType, columnValues)
+          : intervalDeclaration;
+      if (columnValues.stream().allMatch(Objects::isNull)) {
+        Schema declared = valueColumnSchema(valueTable, columnNames.get(i), column -> null);
+        if (declared != null && declared.getType() != Schema.Type.NULL) {
+          valueSchema = declared;
+        }
+      }
+      valueSchemas.add(valueSchema);
     }
 
     List<Field> fields = new ArrayList<>(columnNames.size());

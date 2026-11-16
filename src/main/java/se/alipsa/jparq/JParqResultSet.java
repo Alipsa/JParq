@@ -1869,6 +1869,25 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
+   * Returns the value using the standard mapping; the type map only governs
+   * custom STRUCT mappings, which are not supported.
+   *
+   * @param columnLabel
+   *          output column label
+   * @param map
+   *          SQL type name to Java class mappings, or null for the standard
+   *          mapping
+   * @return the column value using the standard mapping
+   * @throws SQLException
+   *           if the column cannot be read or the map names the STRUCT type of
+   *           the column
+   */
+  @Override
+  public Object getObject(String columnLabel, Map<String, Class<?>> map) throws SQLException {
+    return getObject(findColumn(columnLabel), map);
+  }
+
+  /**
    * Resolves and caches the metadata facts needed to evaluate a type map for a
    * column, avoiding repeated metadata construction on every call.
    *
@@ -1913,25 +1932,6 @@ public class JParqResultSet extends ResultSetAdapter {
    *          Avro declaration, or null when unavailable
    */
   private record ColumnTypeInfo(int sqlType, String typeName, Schema declaration) {
-  }
-
-  /**
-   * Returns the value using the standard mapping; the type map only governs
-   * custom STRUCT mappings, which are not supported.
-   *
-   * @param columnLabel
-   *          output column label
-   * @param map
-   *          SQL type name to Java class mappings, or null for the standard
-   *          mapping
-   * @return the column value using the standard mapping
-   * @throws SQLException
-   *           if the column cannot be read or the map names the STRUCT type of
-   *           the column
-   */
-  @Override
-  public Object getObject(String columnLabel, Map<String, Class<?>> map) throws SQLException {
-    return getObject(findColumn(columnLabel), map);
   }
 
   /**

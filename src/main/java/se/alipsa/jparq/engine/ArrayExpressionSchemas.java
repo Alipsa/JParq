@@ -13,6 +13,7 @@ import net.sf.jsqlparser.expression.CastExpression;
 import net.sf.jsqlparser.expression.DateTimeLiteralExpression;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.Function;
+import net.sf.jsqlparser.expression.NullValue;
 import net.sf.jsqlparser.expression.SignedExpression;
 import net.sf.jsqlparser.expression.StringValue;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
@@ -278,6 +279,7 @@ public final class ArrayExpressionSchemas {
 
   /**
    * Combines known branch declarations, retaining array and logical types.
+   * Unknown branches prevent a NULL-only declaration.
    *
    * @param expressions
    *          candidate values or branches
@@ -293,10 +295,13 @@ public final class ArrayExpressionSchemas {
   private static Schema common(List<? extends Expression> expressions,
       java.util.function.Function<Column, Schema> columns, java.util.function.Function<Select, Schema> scalarSchemas) {
     Schema result = null;
+    boolean unknown = false;
     for (Expression expression : expressions) {
-      result = common(result, resolve(expression, columns, scalarSchemas));
+      Schema schema = resolve(expression, columns, scalarSchemas);
+      unknown |= schema == null && !(ExpressionEvaluator.unwrapParenthesis(expression) instanceof NullValue);
+      result = common(result, schema);
     }
-    return result;
+    return unknown && result != null && result.getType() == Schema.Type.NULL ? null : result;
   }
 
   /**
