@@ -284,6 +284,8 @@ public final class NumericExpressionTypes {
    */
   private static NumericType scalarFunctionType(String name) {
     return switch (name) {
+      // Fixed declarations are a known deviation: the standard ties these
+      // functions' result types to their arguments (#424).
       case "ROUND", "CEIL", "CEILING", "FLOOR", "TRUNC", "TRUNCATE", "MOD" -> new NumericType(Types.DECIMAL, 0, 0);
       case "SQRT", "POWER", "POW", "EXP", "LOG", "LOG10", "RAND", "RANDOM", "SIN", "COS", "TAN", "COT", "ASIN", "ACOS",
           "ATAN", "ATAN2", "DEGREES", "RADIANS", "PI" ->

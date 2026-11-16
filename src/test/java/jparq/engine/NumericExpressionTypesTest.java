@@ -5,6 +5,7 @@ import static org.mockito.Mockito.*;
 
 import java.nio.file.Path;
 import java.sql.DriverManager;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.Collections;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import se.alipsa.jparq.JParqConnection;
 import se.alipsa.jparq.JParqPreparedStatement;
+import se.alipsa.jparq.JParqResultSet;
 import se.alipsa.jparq.NumericType;
 import se.alipsa.jparq.engine.ArrayExpressionSchemas;
 import se.alipsa.jparq.engine.CorrelatedBindings;
@@ -223,6 +225,77 @@ class NumericExpressionTypesTest {
       verify(stable).close();
     }
     verify(stable).close();
+  }
+
+  /**
+   * A row-executing executor closes a retained non-reusable metadata statement
+   * after its single run, so the statement's materialized inputs do not outlive
+   * the subquery result, while a reusable statement stays cached until the
+   * executor closes.
+   *
+   * @throws Exception
+   *           if the declaration lookup or execution fails
+   */
+  @Test
+  void executedRetainedStatementClosesWhenNotReusable() throws Exception {
+    Select select = (Select) CCJSqlParserUtil.parse("SELECT 1");
+    var connection = mock(JParqConnection.class);
+    assertRetainedStatementLifecycle(select, connection, false);
+    assertRetainedStatementLifecycle(select, connection, true);
+  }
+
+  /**
+   * Reads one shape's declaration and executes it, verifying whether a retained
+   * statement closes after the run or with the executor.
+   *
+   * @param select
+   *          subquery shape
+   * @param connection
+   *          mock connection
+   * @param reusable
+   *          whether the prepared statement is reusable
+   * @throws Exception
+   *           if the declaration lookup or execution fails
+   */
+  private void assertRetainedStatementLifecycle(Select select, JParqConnection connection, boolean reusable)
+      throws Exception {
+    var rs = emptyResultSet();
+    var prepared = mock(JParqPreparedStatement.class);
+    when(prepared.isStableSubqueryShape()).thenReturn(true);
+    when(prepared.isReusableSubqueryShape()).thenReturn(reusable);
+    when(prepared.firstProjectionNumericType()).thenReturn(new NumericType(Types.INTEGER, 10, 0));
+    when(prepared.declaredProjectionSchema()).thenReturn(Schema.create(Schema.Type.INT));
+    when(prepared.executeQuery()).thenReturn(rs);
+    try (var executor = new SubqueryExecutor(connection, sql -> prepared, null, new SubqueryExecutor.ExecutionPlans(),
+        null, null)) {
+      assertEquals(Types.INTEGER, executor.projectionNumericType(select).jdbcType());
+      verify(prepared, never()).close();
+      var result = executor.execute(select);
+      assertTrue(result.rows().isEmpty());
+      if (reusable) {
+        verify(prepared, never()).close();
+      } else {
+        verify(prepared).close();
+      }
+    }
+    verify(prepared, times(1)).close();
+  }
+
+  /**
+   * Builds an empty one-column result set for mocked subquery execution.
+   *
+   * @return empty mocked result set
+   * @throws SQLException
+   *           if the mock cannot be stubbed
+   */
+  private static JParqResultSet emptyResultSet() throws SQLException {
+    var rs = mock(JParqResultSet.class);
+    var meta = mock(ResultSetMetaData.class);
+    when(rs.getMetaData()).thenReturn(meta);
+    when(meta.getColumnCount()).thenReturn(1);
+    when(meta.getColumnLabel(1)).thenReturn("1");
+    when(rs.next()).thenReturn(false);
+    return rs;
   }
 
   /**

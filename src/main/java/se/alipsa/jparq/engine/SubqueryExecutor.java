@@ -609,8 +609,16 @@ public final class SubqueryExecutor implements AutoCloseable {
           preparedStatements.put(sql, prepared);
         }
       }
-      // Cached statements are closed by this executor; all results are per-call.
-      PreparedStatement perCall = preparedStatements.containsKey(sql) ? null : prepared;
+      // Reusable statements stay cached for later executions of this executor.
+      // A statement retained only so row execution reuses its metadata
+      // preparation is removed and closed after this single run, so its
+      // materialized inputs do not outlive the subquery result.
+      boolean cachedReusable = prepared instanceof JParqPreparedStatement nested && nested.isReusableSubqueryShape()
+          && preparedStatements.containsKey(sql);
+      PreparedStatement perCall = cachedReusable ? null : prepared;
+      if (!cachedReusable) {
+        preparedStatements.remove(sql, prepared);
+      }
       try (perCall; ResultSet rs = prepared.executeQuery()) {
         if (existenceOnly) {
           return new SubqueryResult(List.of(), rs.next() ? List.of(List.of()) : List.of());

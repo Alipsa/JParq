@@ -129,7 +129,7 @@ public final class IntervalExpressionTypes {
     if (value instanceof net.sf.jsqlparser.expression.Function function && function.getName() != null
         && function.getParameters() != null && !function.getParameters().isEmpty()) {
       String name = function.getName().toUpperCase(Locale.ROOT);
-      if ("COALESCE".equals(name) || "NULLIF".equals(name)) {
+      if (List.of("COALESCE", "IFNULL", "NULLIF").contains(name)) {
         return commonBranches(function.getParameters(), columns, subqueries);
       }
       if (List.of("MIN", "MAX").contains(name)) {
@@ -375,7 +375,7 @@ public final class IntervalExpressionTypes {
       if (List.of("MIN", "MAX").contains(name)) {
         return resolveTemporal(function.getParameters().getFirst(), columns, subqueries);
       }
-      if (List.of("COALESCE", "NULLIF").contains(name)) {
+      if (List.of("COALESCE", "IFNULL", "NULLIF").contains(name)) {
         branches = function.getParameters();
       }
     }

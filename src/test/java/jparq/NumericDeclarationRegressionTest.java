@@ -44,6 +44,51 @@ class NumericDeclarationRegressionTest {
   }
 
   /**
+   * A top-level IFNULL is typed like COALESCE, so DISTINCT collapses its common
+   * numeric values and the metadata reports the common type instead of OTHER.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void ifNullDistinctKeepsCommonNumericType() throws Exception {
+    String sql = "SELECT DISTINCT IFNULL(x, 2.0) AS k FROM (VALUES (2), (NULL)) v(x) ORDER BY k";
+    try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
+      try (var result = statement.executeQuery(sql)) {
+        assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1));
+        assertTrue(result.next());
+        assertEquals(new BigDecimal("2.0"), result.getObject(1));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
+   * A top-level IFNULL groups its values under the common numeric type, matching
+   * COALESCE.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void ifNullGroupByKeepsCommonNumericType() throws Exception {
+    String sql = "SELECT IFNULL(x, 2.0) AS k, COUNT(*) AS n FROM (VALUES (2, 1), (NULL, 1), (5, 2)) v(x, g)"
+        + " GROUP BY IFNULL(x, 2.0) ORDER BY k";
+    try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
+      try (var result = statement.executeQuery(sql)) {
+        assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1));
+        assertTrue(result.next());
+        assertEquals(new BigDecimal("2.0"), result.getObject(1));
+        assertEquals(Long.valueOf(2), result.getObject(2));
+        assertTrue(result.next());
+        assertEquals(new BigDecimal("5.0"), result.getObject(1));
+        assertEquals(Long.valueOf(1), result.getObject(2));
+        assertFalse(result.next());
+      }
+    }
+  }
+
+  /**
    * Ranking and navigation operands use a common representation before DISTINCT.
    *
    * @param function

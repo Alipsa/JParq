@@ -75,7 +75,7 @@ public final class BooleanExpressions {
     List<Expression> branches = new ArrayList<>();
     if (value instanceof CaseExpression choice) {
       branches.addAll(ExpressionBranches.caseResults(choice));
-    } else if (value instanceof Function function && "COALESCE".equalsIgnoreCase(function.getName())
+    } else if (value instanceof Function function && ExpressionBranches.isCoalesce(function)
         && function.getParameters() != null) {
       branches.addAll(function.getParameters());
     }
