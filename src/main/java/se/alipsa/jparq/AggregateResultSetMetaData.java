@@ -156,6 +156,10 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
       Schema declaration = projected.columnValueSchema(column);
       if (numeric == null && declaration != null) {
         sqlTypes.set(i, JdbcTypeMapper.mapSchemaToJdbcType(declaration));
+        if (precisions[i] == 0 && declaration.getLogicalType() instanceof Decimal decimal) {
+          precisions[i] = decimal.getPrecision();
+          scales[i] = decimal.getScale();
+        }
       }
       schemas.add(numeric != null ? numeric.schema() : declaration != null ? declaration : columnValueSchema(column));
     }

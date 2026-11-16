@@ -2,6 +2,12 @@
 
 ### 1.4.0
 
+- **Behavior change:** MIN and MAX now report the argument's declared type, class, and decimal bounds
+  for empty and all-NULL input instead of OTHER, so set operations consistently reject incompatible
+  branches (#320). For example, MIN(mpg) over a filtered-to-empty input reports DOUBLE/Double, and
+  combining that result with a character literal is rejected with SQLState 42000.
+  Fixes #320.
+
 - Derive common numeric CASE types from scalar subquery declarations, including correlated, empty, and NULL
   results, and the remaining supported numeric scalar functions (#319). Retain unbounded decimal types without
   executing unselected branches. Keep value classes and metadata consistent through grouping, derived tables,

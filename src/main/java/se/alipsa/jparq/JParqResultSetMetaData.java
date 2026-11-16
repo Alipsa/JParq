@@ -499,8 +499,9 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
 
   /**
    * Resolves literal and CAST declarations independently of returned rows, and
-   * scalar subqueries against the subquery's own source schema. Non-numeric
-   * window MIN/MAX retain their operand declarations.
+   * scalar subqueries against the subquery's own source schema. Window and
+   * aggregate MIN/MAX retain their operand declarations, so an empty input does
+   * not erase the argument's declared type (#320).
    *
    * @param column
    *          one-based output column
@@ -515,6 +516,19 @@ public class JParqResultSetMetaData extends ResultSetMetaDataAdapter implements 
         && ("MIN".equalsIgnoreCase(analytic.getName()) || "MAX".equalsIgnoreCase(analytic.getName()))) {
       try {
         return ArrayExpressionSchemas.resolve(analytic, reference -> {
+          Schema.Field source = resolveSourceField(reference);
+          return source == null ? null : source.schema();
+        }, scalarResultSchemas);
+      } catch (IllegalArgumentException incompatible) {
+        // Preserve value inference for mixed DATE/TIMESTAMP operands (#431).
+        return null;
+      }
+    }
+    if (expression instanceof net.sf.jsqlparser.expression.Function function
+        && ("MIN".equalsIgnoreCase(function.getName()) || "MAX".equalsIgnoreCase(function.getName()))
+        && function.getParameters() != null && function.getParameters().size() == 1) {
+      try {
+        return ArrayExpressionSchemas.resolve(function.getParameters().getFirst(), reference -> {
           Schema.Field source = resolveSourceField(reference);
           return source == null ? null : source.schema();
         }, scalarResultSchemas);
