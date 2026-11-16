@@ -1032,9 +1032,14 @@ public final class SubqueryExecutor implements AutoCloseable {
   }
 
   /**
-   * Prepares a shape that no cached statement already covers. Executors that run
-   * rows retain plain reusable shapes so later row execution reuses the same
-   * statement; declaration-only executors close it after reading.
+   * Prepares a shape that no cached statement already covers. Row-executing
+   * executors retain every stable shape, not only reusable ones, so an executed
+   * non-reusable shape reuses this statement instead of preparing and
+   * materializing its inputs a second time; {@link #runQuery} removes and closes
+   * such a statement after its single run. A shape that is never executed, for
+   * example a CASE branch that is typed but never selected, keeps its statement
+   * and materialized inputs until {@link #close()}. Declaration-only executors
+   * close each statement after reading.
    *
    * @param shape
    *          stable metadata shape without a cached statement
@@ -1050,8 +1055,9 @@ public final class SubqueryExecutor implements AutoCloseable {
     PreparedStatement prepared = prepareStatement(shape.sql());
     if (reuseDeclarationStatements && prepared instanceof JParqPreparedStatement nested
         && nested.isStableSubqueryShape()) {
-      // Retained so row execution of the same shape reuses this statement;
-      // close() releases it.
+      // Retained so row execution of the same shape reuses this statement.
+      // runQuery releases a non-reusable statement after its single run; a
+      // shape that never runs is released by close().
       preparedStatements.put(shape.sql(), prepared);
       return reader.read(prepared);
     }

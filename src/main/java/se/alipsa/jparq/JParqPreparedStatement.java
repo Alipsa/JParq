@@ -765,7 +765,10 @@ public class JParqPreparedStatement implements PreparedStatement {
    * execution, so a statement prepared for metadata may be retained and reused by
    * row execution of the same shape within that execution. The caller must only
    * apply this to shapes without outer references; materialized VALUES, CTE, and
-   * derived inputs then capture nothing row-specific.
+   * derived inputs then capture nothing row-specific. Unlike
+   * {@link #isReusableSubqueryShape()}, non-reusable stable shapes are retained
+   * too: row execution reuses the statement, and a retained statement whose shape
+   * is never executed stays open until the owning executor closes.
    *
    * @return whether the statement is stable for its owning execution
    */

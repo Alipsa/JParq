@@ -245,6 +245,47 @@ class NumericExpressionTypesTest {
   }
 
   /**
+   * A retained statement whose shape is never executed, for example a CASE branch
+   * that is typed but never selected, stays open until the executor closes,
+   * releasing its materialized inputs with the statement.
+   *
+   * @throws Exception
+   *           if the declaration lookup or close fails
+   */
+  @Test
+  void neverExecutedRetainedStatementClosesWithExecutor() throws Exception {
+    Select select = (Select) CCJSqlParserUtil.parse("SELECT 1");
+    var connection = mock(JParqConnection.class);
+    assertNeverExecutedStatementClosesWithExecutor(select, connection);
+  }
+
+  /**
+   * Reads one shape's declaration without executing it, verifying that a retained
+   * statement stays open until the executor closes.
+   *
+   * @param select
+   *          subquery shape
+   * @param connection
+   *          mock connection
+   * @throws Exception
+   *           if the declaration lookup or close fails
+   */
+  private void assertNeverExecutedStatementClosesWithExecutor(Select select, JParqConnection connection)
+      throws Exception {
+    var prepared = mock(JParqPreparedStatement.class);
+    when(prepared.isStableSubqueryShape()).thenReturn(true);
+    when(prepared.isReusableSubqueryShape()).thenReturn(false);
+    when(prepared.firstProjectionNumericType()).thenReturn(new NumericType(Types.INTEGER, 10, 0));
+    when(prepared.declaredProjectionSchema()).thenReturn(Schema.create(Schema.Type.INT));
+    try (var executor = new SubqueryExecutor(connection, sql -> prepared, null, new SubqueryExecutor.ExecutionPlans(),
+        null, null)) {
+      assertEquals(Types.INTEGER, executor.projectionNumericType(select).jdbcType());
+      verify(prepared, never()).close();
+    }
+    verify(prepared, times(1)).close();
+  }
+
+  /**
    * Reads one shape's declaration and executes it, verifying whether a retained
    * statement closes after the run or with the executor.
    *
