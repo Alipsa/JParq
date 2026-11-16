@@ -295,6 +295,31 @@ class NumericDeclarationRegressionTest {
   }
 
   /**
+   * Ad-hoc statements deriving a CASE type from a scalar subquery keep the
+   * correct value classes, matching re-executed prepared statements.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void adHocCaseSubqueryKeepsIntegerType() throws Exception {
+    String sql = "SELECT DISTINCT CASE WHEN id = 1 THEN (SELECT MAX(v.x) FROM (VALUES (1), (2)) v(x)) ELSE 1 END AS k"
+        + INPUT + " ORDER BY k";
+    try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
+      for (int execution = 0; execution < 2; execution++) {
+        try (var result = statement.executeQuery(sql)) {
+          assertEquals(Types.INTEGER, result.getMetaData().getColumnType(1));
+          assertTrue(result.next());
+          assertEquals(Integer.valueOf(1), result.getObject(1));
+          assertTrue(result.next());
+          assertEquals(Integer.valueOf(2), result.getObject(1));
+          assertFalse(result.next());
+        }
+      }
+    }
+  }
+
+  /**
    * A recursive CTE in a derived body currently leaves its declaration unknown.
    * The standard takes the type from the non-recursive part, so the anchor's type
    * should be reported once #565 is fixed.

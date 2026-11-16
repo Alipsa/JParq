@@ -761,6 +761,19 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
+   * Reports whether this nested statement's inputs are fixed for its owning
+   * execution, so a statement prepared for metadata may be retained and reused by
+   * row execution of the same shape within that execution. The caller must only
+   * apply this to shapes without outer references; materialized VALUES, CTE, and
+   * derived inputs then capture nothing row-specific.
+   *
+   * @return whether the statement is stable for its owning execution
+   */
+  public boolean isStableSubqueryShape() {
+    return nested && !hasParameters;
+  }
+
+  /**
    * Resolves the first projection's declared value schema against this
    * statement's own input columns, independently of any outer query scope. Set
    * operations combine their branches, and nested scalar subqueries resolve to

@@ -788,7 +788,10 @@ public final class SubqueryExecutor implements AutoCloseable {
    */
   private MetadataShape metadataShape(Select select) {
     BoundQuery bound = executionPlans.correlations.get(select);
-    if (bound != null) {
+    // An uncorrelated subquery's bound entry carries no placeholders, so its
+    // metadata always comes from the plain shared shape; only genuinely
+    // correlated subqueries use the per-execution bound shape.
+    if (bound != null && !bound.references().isEmpty()) {
       List<Schema> schemas = new ArrayList<>(bound.references().size());
       for (var reference : bound.references()) {
         schemas.add(outerReferenceSchema(reference));
@@ -949,7 +952,9 @@ public final class SubqueryExecutor implements AutoCloseable {
   /**
    * Prepares a shape once and reads one declaration from it, installing the
    * shape's binding frame while placeholder-rewritten SQL is prepared and mapping
-   * cancellation to an illegal state instead of the unknown fallback.
+   * cancellation to an illegal state instead of the unknown fallback. Plain
+   * shapes with stable statements keep that statement cached so later row
+   * execution of the same shape reuses it instead of preparing a second time.
    *
    * @param shape
    *          stable metadata shape
@@ -973,10 +978,41 @@ public final class SubqueryExecutor implements AutoCloseable {
         return declarationFailure(exception);
       }
     }
-    try (PreparedStatement prepared = prepareStatement(shape.sql())) {
-      return reader.read(prepared);
+    try {
+      PreparedStatement prepared = preparedStatements.get(shape.sql());
+      if (prepared != null) {
+        return reader.read(prepared);
+      }
+      return prepareFreshForDeclaration(shape, reader);
     } catch (SQLException exception) {
       return declarationFailure(exception);
+    }
+  }
+
+  /**
+   * Prepares a shape that no cached statement already covers, retaining plain
+   * reusable shapes so later row execution reuses the same statement.
+   *
+   * @param shape
+   *          stable metadata shape without a cached statement
+   * @param reader
+   *          declaration to read from the prepared statement
+   * @param <T>
+   *          declaration type
+   * @return the declaration read from the prepared statement
+   * @throws SQLException
+   *           if the shape cannot be prepared
+   */
+  private <T> T prepareFreshForDeclaration(MetadataShape shape, StatementReader<T> reader) throws SQLException {
+    PreparedStatement prepared = prepareStatement(shape.sql());
+    if (prepared instanceof JParqPreparedStatement nested && nested.isStableSubqueryShape()) {
+      // Retained so row execution of the same shape reuses this statement;
+      // close() releases it.
+      preparedStatements.put(shape.sql(), prepared);
+      return reader.read(prepared);
+    }
+    try (prepared) {
+      return reader.read(prepared);
     }
   }
 

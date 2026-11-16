@@ -170,6 +170,39 @@ class NumericExpressionTypesTest {
   }
 
   /**
+   * A plain shape with a stable statement keeps its metadata statement cached for
+   * row execution instead of closing it, while an unstable statement is still
+   * closed as soon as its declaration is read.
+   *
+   * @throws Exception
+   *           if the declaration lookup fails
+   */
+  @Test
+  void stableShapeRetainsMetadataStatement() throws Exception {
+    Select select = (Select) CCJSqlParserUtil.parse("SELECT 1");
+    var connection = mock(JParqConnection.class);
+    var stable = mock(JParqPreparedStatement.class);
+    when(stable.isStableSubqueryShape()).thenReturn(true);
+    when(stable.firstProjectionNumericType()).thenReturn(new NumericType(Types.INTEGER, 10, 0));
+    try (var executor = new SubqueryExecutor(connection, sql -> stable, null, new SubqueryExecutor.ExecutionPlans(),
+        null, null)) {
+      assertEquals(Types.INTEGER, executor.projectionNumericType(select).jdbcType());
+      verify(stable, never()).close();
+    }
+    verify(stable).close();
+
+    var disposable = mock(JParqPreparedStatement.class);
+    when(disposable.isStableSubqueryShape()).thenReturn(false);
+    when(disposable.firstProjectionNumericType()).thenReturn(new NumericType(Types.INTEGER, 10, 0));
+    var executor = new SubqueryExecutor(connection, sql -> disposable, null, new SubqueryExecutor.ExecutionPlans(),
+        null, null);
+    try (executor) {
+      assertEquals(Types.INTEGER, executor.projectionNumericType(select).jdbcType());
+      verify(disposable).close();
+    }
+  }
+
+  /**
    * Optional numeric inspection shields public callers from incompatible types.
    *
    * @param directory
