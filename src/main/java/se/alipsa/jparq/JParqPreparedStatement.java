@@ -1498,8 +1498,10 @@ public class JParqPreparedStatement implements PreparedStatement {
       // cache instead of adopting a per-execution cache that each executeQuery
       // may replace. Resolved subquery declarations still land in the shared
       // statement caches used by execution-time executors.
+      // It never executes rows, so it does not retain the statements it
+      // prepares for metadata.
       declarationExecutor = createSubqueryExecutor(inheritedCancellation,
-          new SubqueryExecutor.ExecutionPlans(validatedTables));
+          new SubqueryExecutor.ExecutionPlans(validatedTables), false);
     }
     return declarationExecutor;
   }
@@ -1535,7 +1537,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @return executor owned by the result or join materialization
    */
   private SubqueryExecutor createSubqueryExecutor(QueryCancellation cancellation) {
-    return createSubqueryExecutor(cancellation, executionPlans);
+    return createSubqueryExecutor(cancellation, executionPlans, true);
   }
 
   /**
@@ -1547,12 +1549,16 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @param plans
    *          execution plans, or an isolated cache for declaration-only
    *          inspection
+   * @param executesRows
+   *          whether the executor runs subquery rows and may therefore reuse
+   *          statements it prepared for metadata; false for declaration-only
+   *          inspection
    * @return executor sharing the supplied plans
    */
-  private SubqueryExecutor createSubqueryExecutor(QueryCancellation cancellation,
-      SubqueryExecutor.ExecutionPlans plans) {
+  private SubqueryExecutor createSubqueryExecutor(QueryCancellation cancellation, SubqueryExecutor.ExecutionPlans plans,
+      boolean executesRows) {
     return new SubqueryExecutor(stmt.getConn(), sql -> prepareSubqueryStatement(sql, cteResults, cancellation, plans),
-        this::subqueryTableColumns, plans, this::resolveOuterReference, sharedDeclarations);
+        this::subqueryTableColumns, plans, this::resolveOuterReference, sharedDeclarations, executesRows);
   }
 
   /**

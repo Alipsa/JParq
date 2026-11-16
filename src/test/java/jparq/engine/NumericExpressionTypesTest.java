@@ -203,6 +203,29 @@ class NumericExpressionTypesTest {
   }
 
   /**
+   * A declaration-only executor never executes rows, so it closes even a stable
+   * metadata statement as soon as its declaration is read instead of holding the
+   * statement's materialized inputs until the executor closes.
+   *
+   * @throws Exception
+   *           if the declaration lookup fails
+   */
+  @Test
+  void declarationOnlyExecutorClosesStableMetadataStatement() throws Exception {
+    Select select = (Select) CCJSqlParserUtil.parse("SELECT 1");
+    var connection = mock(JParqConnection.class);
+    var stable = mock(JParqPreparedStatement.class);
+    when(stable.isStableSubqueryShape()).thenReturn(true);
+    when(stable.firstProjectionNumericType()).thenReturn(new NumericType(Types.INTEGER, 10, 0));
+    try (var executor = new SubqueryExecutor(connection, sql -> stable, null, new SubqueryExecutor.ExecutionPlans(),
+        null, new SubqueryExecutor.SharedDeclarations(), false)) {
+      assertEquals(Types.INTEGER, executor.projectionNumericType(select).jdbcType());
+      verify(stable).close();
+    }
+    verify(stable).close();
+  }
+
+  /**
    * Optional numeric inspection shields public callers from incompatible types.
    *
    * @param directory

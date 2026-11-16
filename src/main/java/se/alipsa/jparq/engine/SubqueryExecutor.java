@@ -43,6 +43,7 @@ public final class SubqueryExecutor implements AutoCloseable {
   private final Map<Select, Optional<NumericType>> projectionNumericNodes;
   private final Map<Select, MetadataShape> projectionShapes;
   private final boolean sharedDeclarations;
+  private final boolean reuseDeclarationStatements;
 
   private final ExecutionPlans executionPlans;
   private final JParqConnection connection;
@@ -157,12 +158,45 @@ public final class SubqueryExecutor implements AutoCloseable {
   public SubqueryExecutor(JParqConnection connection, StatementFactory statementFactory,
       Function<Table, Set<String>> tableColumns, ExecutionPlans executionPlans,
       Function<CorrelatedSubqueryRewriter.QualifiedColumn, Schema> outerSchemas, SharedDeclarations shared) {
+    this(connection, statementFactory, tableColumns, executionPlans, outerSchemas, shared, true);
+  }
+
+  /**
+   * Creates an executor sharing a statement's declaration caches and choosing
+   * whether statements prepared for metadata are kept for row execution. A
+   * declaration-only executor never executes rows, so retaining its statements
+   * would only hold their materialized inputs until it closes.
+   *
+   * @param connection
+   *          active connection
+   * @param statementFactory
+   *          factory using the same execution plans, or null
+   * @param tableColumns
+   *          source column resolver, or null
+   * @param executionPlans
+   *          shape cache belonging only to this execution
+   * @param outerSchemas
+   *          resolver mapping outer references to their declared column schemas
+   *          in the owning statement's scope, or null when unavailable
+   * @param shared
+   *          statement-level declaration caches, or null for executor-local
+   *          caches
+   * @param reuseDeclarationStatements
+   *          whether stable statements prepared for metadata are retained so this
+   *          executor's row execution reuses them; false for declaration-only
+   *          executors
+   */
+  public SubqueryExecutor(JParqConnection connection, StatementFactory statementFactory,
+      Function<Table, Set<String>> tableColumns, ExecutionPlans executionPlans,
+      Function<CorrelatedSubqueryRewriter.QualifiedColumn, Schema> outerSchemas, SharedDeclarations shared,
+      boolean reuseDeclarationStatements) {
     this.executionPlans = Objects.requireNonNull(executionPlans, "executionPlans");
     this.connection = Objects.requireNonNull(connection, "connection");
     this.statementFactory = statementFactory;
     this.tableColumns = tableColumns == null ? this::physicalColumns : tableColumns;
     this.outerSchemas = outerSchemas;
     this.sharedDeclarations = shared != null;
+    this.reuseDeclarationStatements = reuseDeclarationStatements;
     this.declarations = shared != null ? shared.declarations : new LinkedHashMap<>();
     this.projectionNodes = shared != null ? shared.projectionNodes : new IdentityHashMap<>();
     this.projectionResultNodes = shared != null ? shared.projectionResultNodes : new IdentityHashMap<>();
@@ -990,8 +1024,9 @@ public final class SubqueryExecutor implements AutoCloseable {
   }
 
   /**
-   * Prepares a shape that no cached statement already covers, retaining plain
-   * reusable shapes so later row execution reuses the same statement.
+   * Prepares a shape that no cached statement already covers. Executors that run
+   * rows retain plain reusable shapes so later row execution reuses the same
+   * statement; declaration-only executors close it after reading.
    *
    * @param shape
    *          stable metadata shape without a cached statement
@@ -1005,7 +1040,8 @@ public final class SubqueryExecutor implements AutoCloseable {
    */
   private <T> T prepareFreshForDeclaration(MetadataShape shape, StatementReader<T> reader) throws SQLException {
     PreparedStatement prepared = prepareStatement(shape.sql());
-    if (prepared instanceof JParqPreparedStatement nested && nested.isStableSubqueryShape()) {
+    if (reuseDeclarationStatements && prepared instanceof JParqPreparedStatement nested
+        && nested.isStableSubqueryShape()) {
       // Retained so row execution of the same shape reuses this statement;
       // close() releases it.
       preparedStatements.put(shape.sql(), prepared);
