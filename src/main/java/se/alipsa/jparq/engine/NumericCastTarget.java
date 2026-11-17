@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import se.alipsa.jparq.NumericType;
 
 /**
@@ -16,8 +17,8 @@ public enum NumericCastTarget {
   TINYINT(new NumericType(Types.TINYINT, 3, 0), "tinyint"),
   /** Signed sixteen-bit integer. */
   SMALLINT(new NumericType(Types.SMALLINT, 5, 0), "smallint", "int2"),
-  /** Signed thirty-two-bit integer. */
-  INTEGER(NumericType.of(Types.INTEGER, 0, 0), "int", "integer", "signed", "int4"),
+  /** Signed thirty-two-bit integer, including the SIGNED INTEGER spelling. */
+  INTEGER(NumericType.of(Types.INTEGER, 0, 0), "int", "integer", "signed", "signedinteger", "int4"),
   /** Signed sixty-four-bit integer. */
   BIGINT(NumericType.of(Types.BIGINT, 0, 0), "bigint", "int8"),
   /** Single-precision floating point, including precision-qualified FLOAT. */
@@ -26,6 +27,7 @@ public enum NumericCastTarget {
   DOUBLE(NumericType.of(Types.DOUBLE, 0, 0), "double", "doubleprecision", "float8");
 
   private static final Map<String, NumericCastTarget> BY_NAME;
+  private static final Set<String> UNSUPPORTED_ALIASES = Set.of("unsigned", "unsignedinteger");
 
   static {
     Map<String, NumericCastTarget> names = new HashMap<>();
@@ -61,12 +63,32 @@ public enum NumericCastTarget {
    * @return the numeric target, or null for an unrecognized name
    */
   public static NumericCastTarget fromName(String name) {
+    return name == null ? null : fromNormalizedName(normalize(name));
+  }
+
+  /**
+   * Identifies the unsigned integer spellings that JParq does not support as cast
+   * targets, so cast-style CONVERT arguments resolve to a CAST that fails with
+   * SQLState 42000 instead of silently returning the operand. Underscores are
+   * retained so underscored column names keep their value role.
+   *
+   * @param name
+   *          the SQL target name, possibly null
+   * @return whether the name spells an unsupported unsigned integer target
+   */
+  public static boolean isUnsupportedAlias(String name) {
     if (name == null) {
-      return null;
+      return false;
     }
     int parameters = name.indexOf('(');
     String base = parameters < 0 ? name : name.substring(0, parameters);
-    return fromNormalizedName(base.toLowerCase(Locale.ROOT).trim().replace(" ", "").replace("_", ""));
+    return UNSUPPORTED_ALIASES.contains(base.toLowerCase(Locale.ROOT).trim().replace(" ", ""));
+  }
+
+  private static String normalize(String name) {
+    int parameters = name.indexOf('(');
+    String base = parameters < 0 ? name : name.substring(0, parameters);
+    return base.toLowerCase(Locale.ROOT).trim().replace(" ", "").replace("_", "");
   }
 
   /**

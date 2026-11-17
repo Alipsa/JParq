@@ -10,6 +10,14 @@
   combining an empty MIN(mpg) with a character literal is rejected with SQLState 42000.
   Fixes #320.
 
+- **Behavior change:** Support `SIGNED INTEGER` and `SIGNED_INTEGER` as synonyms of `SIGNED` in CAST and
+  CONVERT, retaining the established 32-bit INTEGER mapping rather than MySQL's 64-bit semantics, and reject
+  `UNSIGNED`, `UNSIGNED INTEGER`, and other unrecognized CAST targets with SQLState 42000 instead of returning
+  the input unchanged (#322). For example, `CAST('123' AS SIGNED INTEGER)` returns Integer 123,
+  `CAST('3000000000' AS SIGNED INTEGER)` fails with 22003 like `SIGNED`, and `CAST('1' AS JSON)` or
+  `CAST('1' AS UNSIGNED)` fail with 42000.
+  Fixes #322.
+
 - Derive common numeric CASE types from scalar subquery declarations, including correlated, empty, and NULL
   results, and the remaining supported numeric scalar functions (#319). Retain unbounded decimal types without
   executing unselected branches. Keep value classes and metadata consistent through grouping, derived tables,
