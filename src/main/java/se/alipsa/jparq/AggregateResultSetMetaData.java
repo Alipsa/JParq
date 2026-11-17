@@ -137,6 +137,9 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
 
   /**
    * Applies declared output types and numeric bounds, including for empty groups.
+   * Unbounded decimal MIN/MAX arguments use their numeric declaration, since
+   * unbounded decimals carry no value-schema bounds; bounded declarations take
+   * precedence over bounds inferred from returned rows.
    *
    * @param projected
    *          metadata resolved from the source schema and expressions
@@ -146,6 +149,9 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
     for (int i = 0; i < labels.size(); i++) {
       int column = i + 1;
       NumericType numeric = projected.numericType(column);
+      if (numeric == null) {
+        numeric = projected.unboundedExtremumArgumentType(column);
+      }
       if (numeric != null) {
         sqlTypes.set(i, numeric.jdbcType());
         if (numeric.jdbcType() != Types.DECIMAL || numeric.precision() > 0) {
@@ -156,6 +162,10 @@ public class AggregateResultSetMetaData extends ResultSetMetaDataAdapter impleme
       Schema declaration = projected.columnValueSchema(column);
       if (numeric == null && declaration != null) {
         sqlTypes.set(i, JdbcTypeMapper.mapSchemaToJdbcType(declaration));
+        if (declaration.getLogicalType() instanceof Decimal decimal) {
+          precisions[i] = decimal.getPrecision();
+          scales[i] = decimal.getScale();
+        }
       }
       schemas.add(numeric != null ? numeric.schema() : declaration != null ? declaration : columnValueSchema(column));
     }
