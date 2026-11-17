@@ -7,6 +7,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import se.alipsa.jparq.NumericType;
+import se.alipsa.jparq.engine.function.DateTimeFunctions;
 
 /**
  * Shares numeric CAST aliases and their JDBC types across parsing and
@@ -63,7 +64,7 @@ public enum NumericCastTarget {
    * @return the numeric target, or null for an unrecognized name
    */
   public static NumericCastTarget fromName(String name) {
-    return name == null ? null : fromNormalizedName(normalize(name));
+    return name == null ? null : fromNormalizedName(DateTimeFunctions.normalizeTypeName(name));
   }
 
   /**
@@ -83,12 +84,6 @@ public enum NumericCastTarget {
     int parameters = name.indexOf('(');
     String base = parameters < 0 ? name : name.substring(0, parameters);
     return UNSUPPORTED_ALIASES.contains(base.toLowerCase(Locale.ROOT).trim().replace(" ", ""));
-  }
-
-  private static String normalize(String name) {
-    int parameters = name.indexOf('(');
-    String base = parameters < 0 ? name : name.substring(0, parameters);
-    return base.toLowerCase(Locale.ROOT).trim().replace(" ", "").replace("_", "");
   }
 
   /**
