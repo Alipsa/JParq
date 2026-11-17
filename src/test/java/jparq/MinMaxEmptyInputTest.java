@@ -174,8 +174,8 @@ class MinMaxEmptyInputTest {
   }
 
   /**
-   * A set operation over a DECIMAL MIN merges the same bounds whether or not the
-   * MIN branch returns rows.
+   * A set operation over a DECIMAL MIN merges the declared decimal bounds whether
+   * or not the MIN branch returns rows.
    *
    * @throws Exception
    *           if query execution fails
@@ -185,11 +185,12 @@ class MinMaxEmptyInputTest {
     String suffix = " UNION ALL SELECT CAST(1 AS DECIMAL(3,0))";
     String emptyBranch = "SELECT MIN(CAST(mpg AS DECIMAL(10,2))) FROM mtcars WHERE cyl = 99" + suffix;
     String filledBranch = "SELECT MIN(CAST(mpg AS DECIMAL(10,2))) FROM mtcars" + suffix;
+    int[] declaredBounds = {
+        Types.DECIMAL, 10, 2
+    };
     try (var connection = DriverManager.getConnection(url())) {
-      int[] emptyBounds = setBounds(connection, emptyBranch);
-      int[] filledBounds = setBounds(connection, filledBranch);
-      assertArrayEquals(filledBounds, emptyBounds, "merged bounds must not depend on rows");
-      assertEquals(Types.DECIMAL, emptyBounds[0]);
+      assertArrayEquals(declaredBounds, setBounds(connection, emptyBranch), "merged bounds must not depend on rows");
+      assertArrayEquals(declaredBounds, setBounds(connection, filledBranch), "merged bounds must not depend on rows");
     }
   }
 
@@ -217,6 +218,37 @@ class MinMaxEmptyInputTest {
         assertNull(result.getObject(1));
       }
       try (var result = statement.executeQuery("SELECT MIN(cyl / 3) FROM mtcars")) {
+        assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1));
+        assertTrue(result.next());
+        assertNotNull(result.getBigDecimal(1));
+      }
+    }
+  }
+
+  /**
+   * An empty MAX over an unbounded decimal argument reports DECIMAL instead of
+   * OTHER, matching the argument's plain empty projection.
+   *
+   * @throws Exception
+   *           if query execution fails
+   */
+  @Test
+  void emptyUnboundedDecimalMaximumReportsDecimal() throws Exception {
+    try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
+      try (var result = statement.executeQuery("SELECT MAX(cyl / 3) FROM mtcars WHERE cyl = 99")) {
+        var meta = result.getMetaData();
+        assertEquals(Types.DECIMAL, meta.getColumnType(1));
+        assertEquals(0, meta.getPrecision(1));
+        assertEquals(0, meta.getScale(1));
+        assertTrue(result.next());
+        assertNull(result.getObject(1));
+      }
+      try (var result = statement.executeQuery("SELECT MAX(ROUND(mpg, 1)) FROM mtcars WHERE cyl = 99")) {
+        assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1));
+        assertTrue(result.next());
+        assertNull(result.getObject(1));
+      }
+      try (var result = statement.executeQuery("SELECT MAX(cyl / 3) FROM mtcars")) {
         assertEquals(Types.DECIMAL, result.getMetaData().getColumnType(1));
         assertTrue(result.next());
         assertNotNull(result.getBigDecimal(1));
