@@ -62,8 +62,12 @@ public final class SqlParser {
     if (paren > 0) {
       normalized = normalized.substring(0, paren).trim();
     }
+    // Spaces join multi-word spellings such as SIGNED INTEGER, while underscores
+    // keep names like big_int in their column role.
+    String compact = normalized.replace(" ", "");
     return CONVERT_TYPE_NAMES.contains(normalized) || ScalarExpressionSchemas.declaredJdbcType(normalized) != null
-        || NumericCastTarget.fromNormalizedName(normalized) != null || DecimalCasts.isDecimalType(normalized);
+        || NumericCastTarget.fromNormalizedName(compact) != null || NumericCastTarget.isUnsupportedAlias(normalized)
+        || DecimalCasts.isDecimalType(normalized);
   }
 
   /**

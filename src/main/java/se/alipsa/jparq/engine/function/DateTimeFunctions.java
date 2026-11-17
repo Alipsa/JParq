@@ -781,7 +781,8 @@ public final class DateTimeFunctions {
    * @return the cast result converted to the requested type when possible
    * @throws IllegalArgumentException
    *           if decimal bounds or binary lengths or source types are invalid
-   *           (SQLState 42000) or the rounded value exceeds the target's range or
+   *           (SQLState 42000) or the target is not a recognized CAST data type
+   *           (42000) or the rounded value exceeds the target's range or
    *           precision (SQLState 22003), or numeric input is invalid or
    *           non-finite (SQLState 22018), or temporal input has invalid format
    *           (22007) or out-of-range fields (22008), or a non-character interval
@@ -832,7 +833,44 @@ public final class DateTimeFunctions {
       case "text", "clob", "characterlargeobject", "nclob", "nationalcharacterlargeobject" -> SqlText.cast(value);
       case "binary", "varbinary", "binaryvarying", "blob", "binarylargeobject" ->
         compileBinaryCast(cast).convert(value);
-      default -> value;
+      default -> unsupportedCastTarget(normalized, dataType, value);
+    };
+  }
+
+  /**
+   * Retains temporal alias targets whose conversion the temporal promotion path
+   * applies, and rejects declarations that no converter recognizes.
+   *
+   * @param normalized
+   *          normalized target name
+   * @param dataType
+   *          declared type text for diagnostics
+   * @param value
+   *          evaluated operand, possibly null
+   * @return value unchanged for temporal promotion targets
+   * @throws IllegalArgumentException
+   *           carrying SQLState 42000 for an unrecognized target
+   */
+  private static Object unsupportedCastTarget(String normalized, String dataType, Object value) {
+    if (isTemporalPromotionTarget(normalized)) {
+      return value;
+    }
+    throw SqlExceptions.syntaxFailure("Invalid data type for CAST: " + dataType);
+  }
+
+  /**
+   * Identifies temporal CAST aliases converted by the temporal promotion path
+   * after literal conversion instead of by this converter.
+   *
+   * @param normalized
+   *          normalized target name
+   * @return whether temporal promotion applies the conversion
+   */
+  static boolean isTemporalPromotionTarget(String normalized) {
+    return switch (normalized) {
+      case "datetime", "timestampwithouttimezone", "timewithouttimezone", "timewithtimezone", "timestampwithtimezone" ->
+        true;
+      default -> false;
     };
   }
 
