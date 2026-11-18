@@ -2,6 +2,7 @@ package se.alipsa.jparq.engine.window;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import se.alipsa.jparq.engine.SqlExceptions;
 
 final class SumComputationState {
   private BigDecimal sum = BigDecimal.ZERO;
@@ -30,10 +31,11 @@ final class SumComputationState {
         || observedType == Long.class) {
       return sum.longValue();
     }
-    if (observedType == Float.class || observedType == Double.class) {
-      return sum.doubleValue();
+    double result = sum.doubleValue();
+    if (!Double.isFinite(result)) {
+      throw SqlExceptions.numericRangeFailure("SUM overflows the DOUBLE range");
     }
-    return sum.doubleValue();
+    return result;
   }
 
   private void trackType(Object value) {

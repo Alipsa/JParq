@@ -110,6 +110,17 @@ public final class SqlExceptions {
   }
 
   /**
+   * Creates an engine failure for numeric values outside the target range.
+   *
+   * @param message
+   *          the diagnostic message
+   * @return an engine exception carrying SQLState 22003
+   */
+  public static IllegalArgumentException numericRangeFailure(String message) {
+    return new IllegalArgumentException(message, new SQLDataException(message, "22003"));
+  }
+
+  /**
    * Creates an engine failure carrying the JDBC syntax classification.
    *
    * @param message

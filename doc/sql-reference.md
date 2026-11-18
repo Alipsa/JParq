@@ -533,7 +533,8 @@ SELECT a FROM employees e(a, b, c);                                 -- Parquet t
   even for empty inputs.
 - Unknown functions in grouped `SELECT` and `HAVING` raise `SQLSyntaxErrorException` with SQLState `42000` when
   evaluated.
-- `SUM` over `REAL` or `DOUBLE` inputs reports JDBC `DOUBLE` metadata and returns `Double`.
+- `SUM` over `REAL` or `DOUBLE` inputs reports JDBC `DOUBLE` metadata and returns `Double`. A sum of finite values
+  that is not finite raises `SQLDataException` with SQLState `22003`.
 
 ### DISTINCT and row limits on grouped results
 
@@ -722,7 +723,7 @@ JDBC types for arithmetic are derived before rows are read, including through de
 | Operands | Result |
 | --- | --- |
 | Whole numbers with `+`, `-`, `*`, `%`, unary sign | `BIGINT` (`Long`); overflow raises `22003` |
-| `REAL` or `DOUBLE` | `DOUBLE` (`Double`), using double arithmetic |
+| `REAL` or `DOUBLE` | `DOUBLE` (`Double`), using double arithmetic; finite operands whose result is not finite raise `22003` |
 | Exact decimals | `DECIMAL` (`BigDecimal`); declared bounds reserve carry and product digits |
 | Non-approximate division | `MathContext.DECIMAL64`, so `7 / 2` returns `3.5`. Precision and scale are unknown until materialization infers them from the values, keeping value scales such as `3.5`. |
 | NULL operand | NULL |
@@ -764,7 +765,9 @@ DuckDB:
 `-Infinity` < every finite value < `+Infinity` < `NaN`, where `NaN = NaN` and `-0.0 = 0.0`.
 
 Comparisons with `NaN` and infinities are therefore TRUE or FALSE rather than UNKNOWN, and `ORDER BY`, `MIN`, and
-`MAX` place `NaN` last. Arithmetic follows IEEE 754: for example, `Infinity * 0` and `NaN + 1` return `NaN`.
+`MAX` place `NaN` last. Arithmetic whose operands are non-finite follows IEEE 754: for example, `Infinity * 0` and
+`NaN + 1` return `NaN`. Arithmetic on finite operands that produces a non-finite result raises `SQLDataException`
+with SQLState `22003`, like `BIGINT` overflow and floating-point `CAST` overflow.
 `DISTINCT` and `GROUP BY` currently keep `-0.0` and `0.0` apart
 ([#477](https://github.com/Alipsa/JParq/issues/477)).
 
