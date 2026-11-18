@@ -2793,19 +2793,13 @@ public final class AggregateFunctions {
         return null;
       }
       Class<?> type = observedType;
-      if (type == null) {
-        return sum.doubleValue();
-      }
       if (type == Byte.class || type == Short.class || type == Integer.class || type == Long.class) {
         return sum.longValue();
-      }
-      if (type == Float.class || type == Double.class) {
-        return sum.doubleValue();
       }
       if (type == BigDecimal.class) {
         return sum;
       }
-      return sum.doubleValue();
+      return NumericCasts.toFiniteDouble(sum, "SUM overflows the DOUBLE range");
     }
 
     @Override
@@ -3574,7 +3568,8 @@ public final class AggregateFunctions {
    * @return the numeric result, or null for NULL operands or a zero divisor
    * @throws IllegalArgumentException
    *           if text conversion fails (22018), text exceeds the DOUBLE range
-   *           (22003), or BIGINT arithmetic overflows (22003)
+   *           (22003), BIGINT arithmetic overflows (22003), or double arithmetic
+   *           on finite operands produces a non-finite result (22003)
    */
   public static Object calculate(Object leftVal, Object rightVal, Operation op) {
     return calculate(leftVal, rightVal, op, null);
@@ -3595,7 +3590,8 @@ public final class AggregateFunctions {
    * @return the numeric result, or null for NULL operands or a zero divisor
    * @throws IllegalArgumentException
    *           if text conversion fails (22018), text exceeds the DOUBLE range
-   *           (22003), or BIGINT arithmetic overflows (22003)
+   *           (22003), BIGINT arithmetic overflows (22003), or double arithmetic
+   *           on finite operands produces a non-finite result (22003)
    */
   public static Object calculate(Object leftVal, Object rightVal, Operation op, NumericType resultType) {
     if (leftVal == null || rightVal == null) {
@@ -3607,13 +3603,20 @@ public final class AggregateFunctions {
             || rightVal instanceof Float) {
       double left = arithmeticDouble(leftVal);
       double right = arithmeticDouble(rightVal);
-      return switch (op) {
+      if (right == 0 && (op == Operation.DIV || op == Operation.MOD)) {
+        return null;
+      }
+      double result = switch (op) {
         case ADD -> left + right;
         case SUB -> left - right;
         case MUL -> left * right;
-        case DIV -> right == 0 ? null : left / right;
-        case MOD -> right == 0 ? null : left % right;
+        case DIV -> left / right;
+        case MOD -> left % right;
       };
+      if (Double.isFinite(left) && Double.isFinite(right) && !Double.isFinite(result)) {
+        throw SqlExceptions.numericRangeFailure("DOUBLE arithmetic overflow");
+      }
+      return result;
     }
     if (resultType != null
         ? resultType.jdbcType() == Types.BIGINT

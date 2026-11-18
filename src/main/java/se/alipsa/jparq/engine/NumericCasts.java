@@ -5,7 +5,8 @@ import java.math.RoundingMode;
 import java.sql.SQLDataException;
 
 /**
- * Shares numeric conversion and range validation across CAST and JDBC getters.
+ * Shares numeric conversion and range validation across CAST, aggregate
+ * results, and JDBC getters.
  */
 public final class NumericCasts {
   /** Prevents utility class instantiation. */
@@ -66,6 +67,26 @@ public final class NumericCasts {
           + ": value out of range";
       throw new IllegalArgumentException(message, new SQLDataException(message, "22003", exception));
     }
+  }
+
+  /**
+   * Converts a decimal value to a DOUBLE result, rejecting overflow.
+   *
+   * @param value
+   *          the decimal value
+   * @param overflowMessage
+   *          the diagnostic message used when the value overflows the DOUBLE
+   *          range
+   * @return the finite double value
+   * @throws IllegalArgumentException
+   *           if the value overflows the DOUBLE range (22003)
+   */
+  public static double toFiniteDouble(BigDecimal value, String overflowMessage) {
+    double result = value.doubleValue();
+    if (!Double.isFinite(result)) {
+      throw SqlExceptions.numericRangeFailure(overflowMessage);
+    }
+    return result;
   }
 
   /**
