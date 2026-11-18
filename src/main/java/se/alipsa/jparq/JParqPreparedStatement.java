@@ -3251,13 +3251,13 @@ public class JParqPreparedStatement implements PreparedStatement {
     final Schema schema = reader.schema();
     validateAmbiguousColumns(parsedSelect, schema, reader.qualifierColumnMapping());
     final Set<String> required = new LinkedHashSet<>();
-    Predicate<String> schemaColumns = MaterializedNames.visibleColumns(schema);
     List<Expression> expressions = new ArrayList<>(parsedSelect.expressions());
     expressions.add(parsedSelect.where());
     expressions.addAll(parsedSelect.groupByExpressions());
     for (SqlParser.OrderKey key : parsedSelect.orderBy()) {
       expressions.add(key.expression());
     }
+    Predicate<String> schemaColumns = MaterializedNames.visibleColumns(schema);
     for (Expression expression : expressions) {
       addColumns(required, ColumnsUsed.inScope(expression, schemaColumns));
     }
