@@ -1752,7 +1752,9 @@ public class JParqResultSet extends ResultSetAdapter {
    *          one-based column index
    * @return JDBC time, or null for SQL NULL
    * @throws SQLException
-   *           if the value is unavailable or cannot be converted to TIME
+   *           if the value is unavailable or cannot be converted to TIME, with
+   *           SQLState 22007 for an invalid format or 22008 for out-of-range
+   *           fields
    */
   @Override
   public Time getTime(int columnIndex) throws SQLException {
