@@ -1715,23 +1715,28 @@ public class JParqResultSet extends ResultSetAdapter {
    *          one-based column index
    * @return JDBC date, or null for SQL NULL
    * @throws SQLException
-   *           if the value is unavailable or cannot be converted to DATE
+   *           if the value is unavailable or cannot be converted to DATE, with
+   *           SQLState 22007 for an invalid format or 22008 for out-of-range
+   *           fields
    */
   @Override
   public Date getDate(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    return switch (v) {
-      case null -> null;
-      case Date date -> date;
-      case Timestamp ts -> new Date(ts.getTime());
-      case OffsetDateTime timestamp -> new Date(timestamp.toInstant().toEpochMilli());
-      case String s -> Date.valueOf(s);
-      case Long l -> new Date(l);
-      case Double d -> new Date(d.longValue());
-      case LocalDateTime l -> Date.valueOf(l.toLocalDate());
-      case LocalDate localDate -> Date.valueOf(localDate);
-      default -> throw new SQLException("Unsupported date type: " + v.getClass().getName());
-    };
+    if (v == null) {
+      return null;
+    }
+    if (v instanceof OffsetDateTime timestamp) {
+      v = new Date(timestamp.toInstant().toEpochMilli());
+    }
+    if (!(v instanceof Date || v instanceof Timestamp || v instanceof String || v instanceof Long || v instanceof Double
+        || v instanceof LocalDateTime || v instanceof LocalDate)) {
+      throw new SQLException("Unsupported date type: " + v.getClass().getName());
+    }
+    try {
+      return DateTimeFunctions.toDate(v);
+    } catch (RuntimeException exception) {
+      throw SqlExceptions.wrap("Failed to convert column " + columnIndex + " to DATE", exception);
+    }
   }
 
   @Override
@@ -1777,20 +1782,35 @@ public class JParqResultSet extends ResultSetAdapter {
     return getTime(findColumn(columnLabel));
   }
 
+  /**
+   * Returns the JVM-local timestamp, converting offset timestamp instants first.
+   *
+   * @param columnIndex
+   *          one-based column index
+   * @return JDBC timestamp, or null for SQL NULL
+   * @throws SQLException
+   *           if the value is unavailable or cannot be converted to TIMESTAMP,
+   *           with SQLState 22007 for an invalid format or 22008 for out-of-range
+   *           fields
+   */
   @Override
   public Timestamp getTimestamp(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    return switch (v) {
-      case null -> null;
-      case Timestamp t -> t;
-      case OffsetDateTime timestamp -> Timestamp.from(timestamp.toInstant());
-      case Date d -> new Timestamp(d.getTime());
-      case String s -> Timestamp.valueOf(s);
-      case Long l -> new Timestamp(l);
-      case Double d -> new Timestamp(d.longValue());
-      case LocalDateTime l -> Timestamp.valueOf(l);
-      default -> throw new SQLException("Unsupported timestamp type: " + v.getClass().getName());
-    };
+    if (v == null) {
+      return null;
+    }
+    if (v instanceof OffsetDateTime timestamp) {
+      v = Timestamp.from(timestamp.toInstant());
+    }
+    if (!(v instanceof Timestamp || v instanceof Date || v instanceof String || v instanceof Long || v instanceof Double
+        || v instanceof LocalDateTime)) {
+      throw new SQLException("Unsupported timestamp type: " + v.getClass().getName());
+    }
+    try {
+      return DateTimeFunctions.toTimestamp(v);
+    } catch (RuntimeException exception) {
+      throw SqlExceptions.wrap("Failed to convert column " + columnIndex + " to TIMESTAMP", exception);
+    }
   }
 
   @Override
