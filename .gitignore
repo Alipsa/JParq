@@ -3,3 +3,4 @@
 /src/test/resources/acmeh2.trace.db
 /src/test/resources/datasets.trace.db
 /.m2/
+.DS_Store
