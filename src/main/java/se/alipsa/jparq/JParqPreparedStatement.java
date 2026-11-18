@@ -55,6 +55,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
@@ -2358,6 +2359,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         labelIndexes.put(key, i);
       }
     }
+    Predicate<String> schemaColumns = MaterializedNames.lookupKeys(labelIndexes.keySet());
     List<ResolvedSetOrder> resolved = new ArrayList<>(orderBy.size());
     boolean hasExpressions = false;
     for (SqlParser.SetOrder order : orderBy) {
@@ -2375,7 +2377,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
         index = mapped;
       } else {
-        Set<String> expressionColumns = ColumnsUsed.inWhere(order.expression());
+        Set<String> expressionColumns = ColumnsUsed.inWhere(order.expression(), schemaColumns);
         for (String column : expressionColumns) {
           if (column == null) {
             continue;
@@ -3170,7 +3172,8 @@ public class JParqPreparedStatement implements PreparedStatement {
         qualified.put(JParqUtil.normalizeQualifier(qualifier), columns);
       }
       Set<String> missing = new LinkedHashSet<>();
-      for (Column column : ColumnsUsed.referencesInScope(table.joinCondition())) {
+      Predicate<String> schemaColumns = MaterializedNames.lookupKeys(available);
+      for (Column column : ColumnsUsed.referencesInScope(table.joinCondition(), schemaColumns)) {
         String referenceQualifier = column.getTable() == null ? null : column.getTable().getName();
         Set<String> visible = referenceQualifier == null || referenceQualifier.isBlank()
             ? available
@@ -3254,15 +3257,16 @@ public class JParqPreparedStatement implements PreparedStatement {
     for (SqlParser.OrderKey key : parsedSelect.orderBy()) {
       expressions.add(key.expression());
     }
+    Predicate<String> schemaColumns = MaterializedNames.visibleColumns(schema);
     for (Expression expression : expressions) {
-      addColumns(required, ColumnsUsed.inScope(expression));
+      addColumns(required, ColumnsUsed.inScope(expression, schemaColumns));
     }
     if (tableReferences.stream().anyMatch(ref -> !ref.joinGroup().isEmpty())) {
       Map<String, Map<String, String>> qualifierMapping = reader.qualifierColumnMapping();
       List<Expression> qualifiedExpressions = new ArrayList<>(expressions);
       qualifiedExpressions.add(parsedSelect.having());
       for (Expression expression : qualifiedExpressions) {
-        for (Column column : ColumnsUsed.referencesInScope(expression)) {
+        for (Column column : ColumnsUsed.referencesInScope(expression, schemaColumns)) {
           String qualifier = column.getTable() == null ? null : column.getTable().getName();
           validateGroupedQualifier(qualifierMapping, qualifier, column.getColumnName());
         }
@@ -3277,7 +3281,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         addColumn(required, key.column());
       }
     }
-    addColumns(required, ColumnsUsed.inScope(parsedSelect.having()));
+    addColumns(required, ColumnsUsed.inScope(parsedSelect.having(), schemaColumns));
     validateRequiredColumns(schema, required, null, parsedSelect.labels(), parsedSelect.columnNames(), referenced);
   }
 
@@ -3326,7 +3330,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     if (schema == null || ref == null) {
       return;
     }
-    Set<String> required = collectColumnsForTable(ref);
+    Set<String> required = collectColumnsForTable(ref, MaterializedNames.visibleColumns(schema));
     if (ref.usingColumns() != null) {
       required.addAll(ref.usingColumns());
     }
@@ -3341,9 +3345,11 @@ public class JParqPreparedStatement implements PreparedStatement {
    *
    * @param ref
    *          table reference being validated
+   * @param schemaColumns
+   *          predicate identifying visible source column names
    * @return mutable set of referenced column names (empty if none)
    */
-  private Set<String> collectColumnsForTable(SqlParser.TableReference ref) {
+  private Set<String> collectColumnsForTable(SqlParser.TableReference ref, Predicate<String> schemaColumns) {
     if (parsedSelect == null || ref == null) {
       return new LinkedHashSet<>();
     }
@@ -3354,10 +3360,12 @@ public class JParqPreparedStatement implements PreparedStatement {
     boolean singleTable = !parsedSelect.hasMultipleTables();
     List<String> primaryQualifier = singleTable ? qualifierList(ref, true) : List.of();
     Set<String> required = new LinkedHashSet<>();
-    collectColumnReferencesFromList(parsedSelect.expressions(), qualifiers, primaryQualifier, required);
-    collectColumnReferencesFromExpression(parsedSelect.where(), qualifiers, primaryQualifier, required);
+    collectColumnReferencesFromList(parsedSelect.expressions(), qualifiers, primaryQualifier, required, null,
+        schemaColumns);
+    collectColumnReferencesFromExpression(parsedSelect.where(), qualifiers, primaryQualifier, required, null,
+        schemaColumns);
     for (Expression group : parsedSelect.groupByExpressions()) {
-      collectColumnReferencesFromExpression(group, qualifiers, primaryQualifier, required);
+      collectColumnReferencesFromExpression(group, qualifiers, primaryQualifier, required, null, schemaColumns);
     }
     for (SqlParser.OrderKey key : parsedSelect.orderBy()) {
       if (shouldIncludeOrderKey(key, qualifiers, singleTable)) {
@@ -3369,7 +3377,8 @@ public class JParqPreparedStatement implements PreparedStatement {
         addColumn(required, key.column());
       }
     }
-    collectColumnReferencesFromExpression(ref.joinCondition(), qualifiers, primaryQualifier, required);
+    collectColumnReferencesFromExpression(ref.joinCondition(), qualifiers, primaryQualifier, required, null,
+        schemaColumns);
     return required;
   }
 
@@ -3386,19 +3395,19 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          ambiguous)
    * @param target
    *          set receiving the column names
+   * @param referenced
+   *          set receiving bound column names, or null
+   * @param schemaColumns
+   *          predicate identifying visible source column names
    */
   private void collectColumnReferencesFromList(List<Expression> expressions, List<String> qualifiers,
-      List<String> primaryQualifier, Set<String> target) {
-    collectColumnReferencesFromList(expressions, qualifiers, primaryQualifier, target, null);
-  }
-
-  private void collectColumnReferencesFromList(List<Expression> expressions, List<String> qualifiers,
-      List<String> primaryQualifier, Set<String> target, Set<String> referenced) {
+      List<String> primaryQualifier, Set<String> target, Set<String> referenced, Predicate<String> schemaColumns) {
     if (expressions == null || expressions.isEmpty()) {
       return;
     }
     for (Expression expression : expressions) {
-      collectColumnReferencesFromExpression(expression, qualifiers, primaryQualifier, target, referenced);
+      collectColumnReferencesFromExpression(expression, qualifiers, primaryQualifier, target, referenced,
+          schemaColumns);
     }
   }
 
@@ -3413,22 +3422,21 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          single qualifier used when unqualified columns should be included
    * @param target
    *          set receiving the column names
+   * @param referenced
+   *          set receiving bound column names, or null
+   * @param schemaColumns
+   *          predicate identifying visible source column names
    */
   private void collectColumnReferencesFromExpression(Expression expression, List<String> qualifiers,
-      List<String> primaryQualifier, Set<String> target) {
-    collectColumnReferencesFromExpression(expression, qualifiers, primaryQualifier, target, null);
-  }
-
-  private void collectColumnReferencesFromExpression(Expression expression, List<String> qualifiers,
-      List<String> primaryQualifier, Set<String> target, Set<String> referenced) {
+      List<String> primaryQualifier, Set<String> target, Set<String> referenced, Predicate<String> schemaColumns) {
     if (expression == null || target == null) {
       return;
     }
-    Set<String> collected = SqlParser.collectQualifiedColumns(expression, qualifiers, false);
+    Set<String> collected = SqlParser.collectQualifiedColumns(expression, qualifiers, false, schemaColumns);
     addColumns(target, collected);
     addColumns(referenced, collected);
     if (primaryQualifier != null && !primaryQualifier.isEmpty()) {
-      Set<String> primaryCollected = SqlParser.collectQualifiedColumns(expression, primaryQualifier);
+      Set<String> primaryCollected = SqlParser.collectQualifiedColumns(expression, primaryQualifier, schemaColumns);
       addColumns(target, primaryCollected);
       addColumns(referenced, primaryCollected);
     }
@@ -6022,7 +6030,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       AggregateFunctions.AggregatePlan aggregatePlan, Map<Identifier, CteResult> ctes, Configuration configuration)
       throws SQLException {
     validateAmbiguousColumns(select, schema, Map.of());
-    ColumnRequirement requirement = requiredColumns(select, aggregatePlan);
+    ColumnRequirement requirement = requiredColumns(select, aggregatePlan, MaterializedNames.visibleColumns(schema));
     collectSubqueryDependencies(select, schema, requirement.required(),
         new SubqueryExecutor(stmt.getConn(), null, table -> subqueryTableColumns(table, ctes, configuration)));
     SqlParser.TableReference baseRef = select.tableReferences().isEmpty() ? null : select.tableReferences().getFirst();
@@ -6048,11 +6056,12 @@ public class JParqPreparedStatement implements PreparedStatement {
       Map<String, Map<String, String>> qualifiers) {
     Map<String, String> index = MaterializedNames.lookupIndex(schema);
     Map<String, Map<String, String>> qualified = ColumnMappingUtil.normaliseQualifierMapping(qualifiers);
+    Predicate<String> schemaColumns = MaterializedNames.lookupKeys(index.keySet());
     List<Expression> expressions = new ArrayList<>(select.expressions());
     expressions.add(select.where());
     expressions.addAll(select.groupByExpressions());
     for (Expression expression : expressions) {
-      for (Column column : ColumnsUsed.referencesInScope(expression)) {
+      for (Column column : ColumnsUsed.referencesInScope(expression, schemaColumns)) {
         String qualifier = column.getTable() == null ? null : column.getTable().getName();
         validateAmbiguousColumn(column.getColumnName(), qualifier, index, qualified);
       }
@@ -6061,7 +6070,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     orders.addAll(select.preOrderBy());
     for (SqlParser.OrderKey order : orders) {
       if (order.expression() != null) {
-        for (Column column : ColumnsUsed.referencesInScope(order.expression())) {
+        for (Column column : ColumnsUsed.referencesInScope(order.expression(), schemaColumns)) {
           String qualifier = column.getTable() == null ? null : column.getTable().getName();
           validateAmbiguousColumn(column.getColumnName(), qualifier, index, qualified);
         }
@@ -6166,7 +6175,8 @@ public class JParqPreparedStatement implements PreparedStatement {
   private record ColumnRequirement(Set<String> required, Set<String> referenced) {
   }
 
-  private ColumnRequirement requiredColumns(SqlParser.Select select, AggregateFunctions.AggregatePlan aggregatePlan) {
+  private ColumnRequirement requiredColumns(SqlParser.Select select, AggregateFunctions.AggregatePlan aggregatePlan,
+      Predicate<String> schemaColumns) {
     if (select == null) {
       return new ColumnRequirement(Set.of(), Set.of());
     }
@@ -6180,7 +6190,7 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
       }
     }
-    Set<String> whereColumns = ColumnsUsed.inWhere(select.where());
+    Set<String> whereColumns = ColumnsUsed.inWhere(select.where(), schemaColumns);
     addColumns(needed, whereColumns);
     addColumns(referenced, whereColumns);
     SqlParser.TableReference baseRef = select.tableReferences() == null || select.tableReferences().isEmpty()
@@ -6188,21 +6198,25 @@ public class JParqPreparedStatement implements PreparedStatement {
         : select.tableReferences().getFirst();
     List<String> qualifiers = qualifierList(baseRef, false);
     List<String> primaryQualifier = qualifierList(baseRef, true);
-    collectColumnReferencesFromList(select.expressions(), qualifiers, primaryQualifier, needed, referenced);
-    collectColumnReferencesFromExpression(select.where(), qualifiers, primaryQualifier, needed, referenced);
-    collectColumnReferencesFromExpression(select.having(), qualifiers, primaryQualifier, needed);
+    collectColumnReferencesFromList(select.expressions(), qualifiers, primaryQualifier, needed, referenced,
+        schemaColumns);
+    collectColumnReferencesFromExpression(select.where(), qualifiers, primaryQualifier, needed, referenced,
+        schemaColumns);
+    collectColumnReferencesFromExpression(select.having(), qualifiers, primaryQualifier, needed, null, schemaColumns);
     for (SqlParser.OrderKey key : select.orderBy()) {
       if (key.expression() != null) {
-        addColumns(needed, ColumnsUsed.inWhere(key.expression()));
-        collectColumnReferencesFromExpression(key.expression(), qualifiers, primaryQualifier, needed, referenced);
+        addColumns(needed, ColumnsUsed.inWhere(key.expression(), schemaColumns));
+        collectColumnReferencesFromExpression(key.expression(), qualifiers, primaryQualifier, needed, referenced,
+            schemaColumns);
       } else if (!isOrdinalReference(key.column()) && !isGroupingFunctionReference(key.column())) {
         addColumn(needed, key.column());
       }
     }
     for (SqlParser.OrderKey key : select.preOrderBy()) {
       if (key.expression() != null) {
-        addColumns(needed, ColumnsUsed.inWhere(key.expression()));
-        collectColumnReferencesFromExpression(key.expression(), qualifiers, primaryQualifier, needed, referenced);
+        addColumns(needed, ColumnsUsed.inWhere(key.expression(), schemaColumns));
+        collectColumnReferencesFromExpression(key.expression(), qualifiers, primaryQualifier, needed, referenced,
+            schemaColumns);
       } else if (!isOrdinalReference(key.column()) && !isGroupingFunctionReference(key.column())) {
         addColumn(needed, key.column());
       }
@@ -6210,22 +6224,22 @@ public class JParqPreparedStatement implements PreparedStatement {
     WindowPlan windowPlan = WindowFunctions.plan(select.expressions());
     if (windowPlan != null) {
       for (Expression input : windowPlan.inputExpressions()) {
-        collectColumnReferencesFromExpression(input, qualifiers, primaryQualifier, needed, referenced);
-        addColumns(needed, ColumnsUsed.inWhere(input));
+        collectColumnReferencesFromExpression(input, qualifiers, primaryQualifier, needed, referenced, schemaColumns);
+        addColumns(needed, ColumnsUsed.inWhere(input, schemaColumns));
       }
     }
     if (aggregatePlan != null) {
       for (AggregateFunctions.AggregateSpec spec : aggregatePlan.specs()) {
         if (!spec.countStar()) {
           for (Expression arg : spec.arguments()) {
-            Set<String> argColumns = ColumnsUsed.inWhere(arg);
+            Set<String> argColumns = ColumnsUsed.inWhere(arg, schemaColumns);
             addColumns(needed, argColumns);
             addColumns(referenced, argColumns);
           }
         }
       }
       for (AggregateFunctions.GroupExpression groupExpr : aggregatePlan.groupExpressions()) {
-        Set<String> groupColumns = ColumnsUsed.inWhere(groupExpr.expression());
+        Set<String> groupColumns = ColumnsUsed.inWhere(groupExpr.expression(), schemaColumns);
         addColumns(needed, groupColumns);
         addColumns(referenced, groupColumns);
       }

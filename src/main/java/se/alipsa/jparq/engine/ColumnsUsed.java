@@ -5,6 +5,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.TranscodingFunction;
 import net.sf.jsqlparser.schema.Column;
@@ -42,7 +43,21 @@ public final class ColumnsUsed {
    * @return set of column names referenced by the expression (empty if none)
    */
   public static Set<String> inWhere(Expression where) {
-    return collect(where, true);
+    return inWhere(where, name -> false);
+  }
+
+  /**
+   * Extract all column names referenced in a SQL {@code WHERE} expression, using
+   * visible source column names to resolve cast-style CONVERT arguments.
+   *
+   * @param where
+   *          the expression (may be null)
+   * @param schemaColumns
+   *          predicate identifying visible source column names
+   * @return set of column names referenced by the expression (empty if none)
+   */
+  public static Set<String> inWhere(Expression where, Predicate<String> schemaColumns) {
+    return collect(where, true, schemaColumns);
   }
 
   /**
@@ -53,7 +68,21 @@ public final class ColumnsUsed {
    * @return column names belonging to the current query scope
    */
   public static Set<String> inScope(Expression expression) {
-    return collect(expression, false);
+    return inScope(expression, name -> false);
+  }
+
+  /**
+   * Collects column names in an expression without entering nested query scopes,
+   * using visible source column names to resolve cast-style CONVERT arguments.
+   *
+   * @param expression
+   *          expression to inspect, or null
+   * @param schemaColumns
+   *          predicate identifying visible source column names
+   * @return column names belonging to the current query scope
+   */
+  public static Set<String> inScope(Expression expression, Predicate<String> schemaColumns) {
+    return collect(expression, false, schemaColumns);
   }
 
   /**
@@ -64,8 +93,22 @@ public final class ColumnsUsed {
    * @return column nodes without references inside nested queries
    */
   public static List<Column> referencesInScope(Expression expression) {
+    return referencesInScope(expression, name -> false);
+  }
+
+  /**
+   * Retains table qualifiers while collecting references in the current scope,
+   * using visible source column names to resolve cast-style CONVERT arguments.
+   *
+   * @param expression
+   *          expression to inspect, or null
+   * @param schemaColumns
+   *          predicate identifying visible source column names
+   * @return column nodes without references inside nested queries
+   */
+  public static List<Column> referencesInScope(Expression expression, Predicate<String> schemaColumns) {
     List<Column> columns = new ArrayList<>();
-    walk(expression, false, columns::add);
+    walk(expression, false, schemaColumns, columns::add);
     return List.copyOf(columns);
   }
 
@@ -76,11 +119,13 @@ public final class ColumnsUsed {
    *          expression to inspect
    * @param includeSubqueries
    *          whether nested query expressions should be visited
+   * @param schemaColumns
+   *          predicate identifying visible source column names
    * @return referenced column names
    */
-  private static Set<String> collect(Expression where, boolean includeSubqueries) {
+  private static Set<String> collect(Expression where, boolean includeSubqueries, Predicate<String> schemaColumns) {
     LinkedHashSet<String> cols = new LinkedHashSet<>();
-    walk(where, includeSubqueries, column -> cols.add(column.getColumnName()));
+    walk(where, includeSubqueries, schemaColumns, column -> cols.add(column.getColumnName()));
     return cols;
   }
 
@@ -91,10 +136,13 @@ public final class ColumnsUsed {
    *          expression to inspect
    * @param includeSubqueries
    *          whether nested expressions should be visited
+   * @param schemaColumns
+   *          predicate identifying visible source column names
    * @param consumer
    *          receiver for each column reference
    */
-  private static void walk(Expression where, boolean includeSubqueries, Consumer<Column> consumer) {
+  private static void walk(Expression where, boolean includeSubqueries, Predicate<String> schemaColumns,
+      Consumer<Column> consumer) {
     if (where == null) {
       return;
     }
@@ -119,7 +167,7 @@ public final class ColumnsUsed {
 
       @Override
       public <S> Void visit(TranscodingFunction convert, S context) {
-        SqlParser.ConvertProcessingResult result = SqlParser.analyzeConvertFunction(convert);
+        SqlParser.ConvertProcessingResult result = SqlParser.analyzeConvertFunction(convert, schemaColumns);
         if (result.syntheticColumnName() != null) {
           consumer.accept(new Column(result.syntheticColumnName()));
           return null;

@@ -14,6 +14,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -89,10 +90,12 @@ public final class SqlParser {
    *
    * <p>
    * This method handles the special case where CONVERT is used with a type name
-   * as the first argument (e.g., CONVERT(VARCHAR, column_name)). In this case,
-   * JSqlParser swaps the arguments, putting the type name where the column would
-   * normally be. This method detects that pattern and returns a result indicating
-   * the actual column name to use.
+   * in place of a column name. JSqlParser assigns the first argument to
+   * {@code getColDataType()} and the second to {@code getExpression()}, so this
+   * method detects the pattern where the arguments are in the value-first order
+   * and returns a result indicating the actual column name to use. Without schema
+   * knowledge, an inner expression spelling a type name is assumed to be the
+   * target type.
    *
    * @param convert
    *          the transcoding function to analyze (may be null)
@@ -100,6 +103,28 @@ public final class SqlParser {
    *         synthetic column name
    */
   static ConvertProcessingResult analyzeConvertFunction(TranscodingFunction convert) {
+    return analyzeConvertFunction(convert, name -> false);
+  }
+
+  /**
+   * Analyzes a {@link TranscodingFunction} for column extraction using visible
+   * source column names.
+   *
+   * <p>
+   * The resolution mirrors {@link CastExpressions#asCast(Expression, Predicate)}
+   * so that column extraction agrees with evaluation: when both arguments spell
+   * type names, a {@code Column} operand naming a visible source column keeps its
+   * value role instead of being treated as the target type. When the arguments
+   * are ambiguous, the type-name heuristic without schema knowledge is retained.
+   *
+   * @param convert
+   *          the transcoding function to analyze (may be null)
+   * @param schemaColumns
+   *          predicate identifying visible source column names
+   * @return a result indicating whether to process the inner expression and/or a
+   *         synthetic column name
+   */
+  static ConvertProcessingResult analyzeConvertFunction(TranscodingFunction convert, Predicate<String> schemaColumns) {
     if (convert == null) {
       return new ConvertProcessingResult(false, null);
     }
@@ -108,8 +133,17 @@ public final class SqlParser {
     }
     Expression inner = convert.getExpression();
     String typeCandidate = convert.getColDataType() == null ? null : convert.getColDataType().getDataType();
-    if (inner != null && isConvertTypeName(inner.toString()) && typeCandidate != null
-        && (inner instanceof Column || !isConvertTypeName(typeCandidate))) {
+    if (inner == null || typeCandidate == null) {
+      return new ConvertProcessingResult(true, null);
+    }
+    CastExpression cast = CastExpressions.asCast(convert, schemaColumns);
+    if (cast != null) {
+      if (cast.getLeftExpression() != inner) {
+        return new ConvertProcessingResult(false, cast.getLeftExpression().toString());
+      }
+      return new ConvertProcessingResult(true, null);
+    }
+    if (isConvertTypeName(inner.toString()) && (inner instanceof Column || !isConvertTypeName(typeCandidate))) {
       return new ConvertProcessingResult(false, typeCandidate);
     }
     return new ConvertProcessingResult(true, null);
@@ -2768,8 +2802,9 @@ public final class SqlParser {
    */
   private static Expression resolveOrderingAliases(Expression expression, Map<String, Expression> aliases,
       Set<String> ambiguous, Set<String> inputs) {
+    Predicate<String> schemaColumns = MaterializedNames.lookupKeys(inputs);
     Map<Column, Expression> replacements = new java.util.IdentityHashMap<>();
-    for (Column column : ColumnsUsed.referencesInScope(expression)) {
+    for (Column column : ColumnsUsed.referencesInScope(expression, schemaColumns)) {
       String input = Identifier.lookupKey(column.getColumnName());
       String alternative = ColumnMappingUtil.alternativeColumnKey(input);
       if (extractQualifier(column) != null || inputs.contains(input)
@@ -3081,7 +3116,24 @@ public final class SqlParser {
    * @return a set of column names that reference one of the qualifiers
    */
   public static Set<String> collectQualifiedColumns(Expression expr, List<String> qualifiers) {
-    return collectQualifiedColumns(expr, qualifiers, true);
+    return collectQualifiedColumns(expr, qualifiers, true, name -> false);
+  }
+
+  /**
+   * Collects references to supplied qualifiers using visible source column names
+   * to resolve cast-style CONVERT arguments.
+   *
+   * @param expr
+   *          the expression to inspect
+   * @param qualifiers
+   *          table names or aliases to match
+   * @param schemaColumns
+   *          predicate identifying visible source column names
+   * @return matching column names
+   */
+  public static Set<String> collectQualifiedColumns(Expression expr, List<String> qualifiers,
+      Predicate<String> schemaColumns) {
+    return collectQualifiedColumns(expr, qualifiers, true, schemaColumns);
   }
 
   /**
@@ -3089,7 +3141,7 @@ public final class SqlParser {
    * names.
    *
    * @param expr
-   *          expression to inspect
+   *          the expression to inspect
    * @param qualifiers
    *          table names or aliases to match
    * @param includeUnqualified
@@ -3098,6 +3150,26 @@ public final class SqlParser {
    */
   public static Set<String> collectQualifiedColumns(Expression expr, List<String> qualifiers,
       boolean includeUnqualified) {
+    return collectQualifiedColumns(expr, qualifiers, includeUnqualified, name -> false);
+  }
+
+  /**
+   * Collects references to supplied qualifiers, optionally including unqualified
+   * names, using visible source column names to resolve cast-style CONVERT
+   * arguments.
+   *
+   * @param expr
+   *          the expression to inspect
+   * @param qualifiers
+   *          table names or aliases to match
+   * @param includeUnqualified
+   *          whether a single qualifier also owns unqualified references
+   * @param schemaColumns
+   *          predicate identifying visible source column names
+   * @return matching column names
+   */
+  public static Set<String> collectQualifiedColumns(Expression expr, List<String> qualifiers,
+      boolean includeUnqualified, Predicate<String> schemaColumns) {
     if (expr == null || qualifiers == null || qualifiers.isEmpty()) {
       return Set.of();
     }
@@ -3161,7 +3233,7 @@ public final class SqlParser {
 
       @Override
       public <S> Void visit(TranscodingFunction convert, S context) {
-        ConvertProcessingResult result = analyzeConvertFunction(convert);
+        ConvertProcessingResult result = analyzeConvertFunction(convert, schemaColumns);
         if (result.syntheticColumnName() != null) {
           Column synthetic = new Column(result.syntheticColumnName());
           synthetic.accept(this, context);
