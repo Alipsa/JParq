@@ -2799,11 +2799,7 @@ public final class AggregateFunctions {
       if (type == BigDecimal.class) {
         return sum;
       }
-      double result = sum.doubleValue();
-      if (!Double.isFinite(result)) {
-        throw SqlExceptions.numericRangeFailure("SUM overflows the DOUBLE range");
-      }
-      return result;
+      return NumericCasts.toFiniteDouble(sum, "SUM overflows the DOUBLE range");
     }
 
     @Override

@@ -83,22 +83,23 @@ class FloatingPointArithmeticOverflowTest {
   void sumOverflowReportsSqlState(boolean predicatePushdown, boolean projectionPushdown) throws Exception {
     String url = jdbcUrl() + "?predicatePushdown=" + predicatePushdown + "&projectionPushdown=" + projectionPushdown;
     try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
-      String sum = "SUM(CAST(1e308 AS DOUBLE))";
-      for (String sql : List.of("SELECT " + sum + " AS x FROM mtcars",
-          "SELECT x FROM (SELECT " + sum + " AS x FROM mtcars) d",
-          "WITH c AS (SELECT " + sum + " AS x FROM mtcars) SELECT x FROM c",
-          "SELECT cyl, " + sum + " AS x FROM mtcars GROUP BY cyl",
-          "SELECT cyl FROM mtcars GROUP BY cyl HAVING " + sum + " > 0",
-          "SELECT cyl, " + sum + " AS x FROM mtcars GROUP BY cyl ORDER BY x",
-          "SELECT " + sum + " OVER () AS x FROM mtcars")) {
-        SQLDataException failure = assertThrows(SQLDataException.class, () -> {
-          try (var result = statement.executeQuery(sql)) {
-            while (result.next()) {
-              result.getObject(1);
+      for (String sum : List.of("SUM(CAST(1e308 AS DOUBLE))", "SUM(CAST(-1e308 AS DOUBLE))")) {
+        for (String sql : List.of("SELECT " + sum + " AS x FROM mtcars",
+            "SELECT x FROM (SELECT " + sum + " AS x FROM mtcars) d",
+            "WITH c AS (SELECT " + sum + " AS x FROM mtcars) SELECT x FROM c",
+            "SELECT cyl, " + sum + " AS x FROM mtcars GROUP BY cyl",
+            "SELECT cyl FROM mtcars GROUP BY cyl HAVING " + sum + " > 0",
+            "SELECT cyl, " + sum + " AS x FROM mtcars GROUP BY cyl ORDER BY x",
+            "SELECT " + sum + " OVER () AS x FROM mtcars")) {
+          SQLDataException failure = assertThrows(SQLDataException.class, () -> {
+            try (var result = statement.executeQuery(sql)) {
+              while (result.next()) {
+                result.getObject(1);
+              }
             }
-          }
-        }, sql);
-        assertEquals("22003", failure.getSQLState(), sql);
+          }, sql);
+          assertEquals("22003", failure.getSQLState(), sql);
+        }
       }
     }
   }
@@ -142,13 +143,16 @@ class FloatingPointArithmeticOverflowTest {
         }
       }
       double sum = BigDecimal.valueOf(1.0E300).multiply(BigDecimal.valueOf(32L)).doubleValue();
-      for (String expression : List.of("SUM(CAST(1e300 AS DOUBLE))", "SUM(CAST(1e300 AS DOUBLE)) OVER ()")) {
-        for (String sql : List.of("SELECT " + expression + " AS x FROM mtcars",
-            "SELECT x FROM (SELECT " + expression + " AS x FROM mtcars) d",
-            "WITH c AS (SELECT " + expression + " AS x FROM mtcars) SELECT x FROM c")) {
+      for (Expectation expectation : List.of(new Expectation("SUM(CAST(1e300 AS DOUBLE))", sum),
+          new Expectation("SUM(CAST(-1e300 AS DOUBLE))", -sum),
+          new Expectation("SUM(CAST(1e300 AS DOUBLE)) OVER ()", sum),
+          new Expectation("SUM(CAST(-1e300 AS DOUBLE)) OVER ()", -sum))) {
+        for (String sql : List.of("SELECT " + expectation.expression() + " AS x FROM mtcars",
+            "SELECT x FROM (SELECT " + expectation.expression() + " AS x FROM mtcars) d",
+            "WITH c AS (SELECT " + expectation.expression() + " AS x FROM mtcars) SELECT x FROM c")) {
           try (var result = statement.executeQuery(sql)) {
             while (result.next()) {
-              assertEquals(sum, assertInstanceOf(Double.class, result.getObject(1), sql), sql);
+              assertEquals(expectation.expected(), assertInstanceOf(Double.class, result.getObject(1), sql), sql);
             }
           }
         }
