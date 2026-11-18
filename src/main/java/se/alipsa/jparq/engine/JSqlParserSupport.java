@@ -29,6 +29,7 @@ import net.sf.jsqlparser.statement.select.SelectVisitorAdapter;
 import net.sf.jsqlparser.statement.select.SetOperationList;
 import net.sf.jsqlparser.statement.select.TableFunction;
 import net.sf.jsqlparser.statement.select.Values;
+import se.alipsa.jparq.helper.TemporalEscapeValidation;
 
 /** Shares identifier-aware JSqlParser entry points across query planning. */
 public final class JSqlParserSupport {
@@ -228,15 +229,21 @@ public final class JSqlParserSupport {
   }
 
   /**
-   * Parses a statement with a bounded simple-to-complex retry.
+   * Parses a statement with a bounded simple-to-complex retry. JDBC temporal
+   * escape literals are validated with strict temporal conversion before parsing,
+   * because the parser normalizes out-of-range fields.
    *
    * @param sql
    *          statement text
    * @return the parsed statement
    * @throws JSQLParserException
    *           if parsing fails
+   * @throws IllegalArgumentException
+   *           if a temporal escape literal carries an invalid value, with a cause
+   *           carrying SQLState 22007 or 22008
    */
   public static Statement parseStatement(String sql) throws JSQLParserException {
+    TemporalEscapeValidation.validate(sql);
     Statement stmt;
     try (var executor = Executors.newSingleThreadExecutor()) {
       var parser = newParser(sql);
