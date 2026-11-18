@@ -26,6 +26,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
+import java.util.function.Predicate;
 import javax.sql.rowset.serial.SerialBlob;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
@@ -372,12 +373,13 @@ public class JParqResultSet extends ResultSetAdapter {
         this.columnOrder.addAll(proj);
       }
       Set<String> requiredColumns = new LinkedHashSet<>(proj);
-      requiredColumns.addAll(ColumnsUsed.inWhere(effectiveResidual));
-      requiredColumns.addAll(ColumnsUsed.inWhere(select.having()));
-      requiredColumns.addAll(SqlParser.collectQualifiedColumns(effectiveResidual, queryQualifiers));
-      requiredColumns.addAll(SqlParser.collectQualifiedColumns(select.having(), queryQualifiers));
+      Predicate<String> schemaColumns = MaterializedNames.visibleColumns(schema);
+      requiredColumns.addAll(ColumnsUsed.inWhere(effectiveResidual, schemaColumns));
+      requiredColumns.addAll(ColumnsUsed.inWhere(select.having(), schemaColumns));
+      requiredColumns.addAll(SqlParser.collectQualifiedColumns(effectiveResidual, queryQualifiers, schemaColumns));
+      requiredColumns.addAll(SqlParser.collectQualifiedColumns(select.having(), queryQualifiers, schemaColumns));
       for (Expression expression : selectExpressions) {
-        requiredColumns.addAll(SqlParser.collectQualifiedColumns(expression, queryQualifiers));
+        requiredColumns.addAll(SqlParser.collectQualifiedColumns(expression, queryQualifiers, schemaColumns));
       }
       if (select.orderBy() != null) {
         for (SqlParser.OrderKey orderKey : select.orderBy()) {
@@ -388,7 +390,7 @@ public class JParqResultSet extends ResultSetAdapter {
       }
       if (windowPlan != null) {
         for (Expression input : windowPlan.inputExpressions()) {
-          requiredColumns.addAll(SqlParser.collectQualifiedColumns(input, queryQualifiers));
+          requiredColumns.addAll(SqlParser.collectQualifiedColumns(input, queryQualifiers, schemaColumns));
         }
       }
       if (schema != null) {

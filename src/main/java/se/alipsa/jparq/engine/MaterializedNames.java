@@ -1,8 +1,10 @@
 package se.alipsa.jparq.engine;
 
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import org.apache.avro.Schema;
 
@@ -97,6 +99,35 @@ public final class MaterializedNames {
       }
     }
     return Map.copyOf(index);
+  }
+
+  /**
+   * Builds a predicate identifying visible SQL column names of a schema.
+   *
+   * @param schema
+   *          source schema, or null for an unavailable schema
+   * @return predicate matching visible SQL column names
+   */
+  public static Predicate<String> visibleColumns(Schema schema) {
+    return lookupKeys(lookupIndex(schema).keySet());
+  }
+
+  /**
+   * Builds a predicate matching SQL names against a collection of lookup keys.
+   *
+   * @param keys
+   *          SQL lookup keys of visible column names, or null
+   * @return predicate matching the supplied lookup keys
+   */
+  public static Predicate<String> lookupKeys(Collection<String> keys) {
+    if (keys == null || keys.isEmpty()) {
+      return name -> false;
+    }
+    Set<String> known = Set.copyOf(keys);
+    return name -> {
+      String key = Identifier.lookupKey(name);
+      return key != null && known.contains(key);
+    };
   }
 
   /**
