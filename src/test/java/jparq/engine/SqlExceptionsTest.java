@@ -241,23 +241,46 @@ class SqlExceptionsTest {
   }
 
   /**
-   * A deeper nested failure keeps its own query text and preparation framing. The
-   * generated UNNEST query wraps every inner query, so the inner query's redacted
-   * text is a strict substring of the outer one and can never collide with it;
-   * only the outer query's own occurrences are restored (issue #329).
+   * A deeper failure carrying the inner subquery keeps that subquery's text; the
+   * inner query is never rewritten to the outer UNNEST's expression. The inner
+   * subquery is a strict substring of the generated wrapper, so it has a
+   * different length and can never be mistaken for the wrapper, which the
+   * renderer only replaces as a whole (issue #329).
    */
   @Test
   void deeperSubqueryFailureRetainsItsOwnQueryText() {
-    String outer = "SELECT * FROM UNNEST((SELECT a.arr FROM a WHERE a.id = __JPARQ_CORRELATED_VALUE('outer-key', 0)))"
-        + " AS u";
-    String inner = "(SELECT a.arr FROM a WHERE a.id = __JPARQ_CORRELATED_VALUE('inner-key', 1))";
-    String redactedInner = SqlExceptions.describe(inner);
-    String detail = "Failed to execute sub query: " + redactedInner + ": Failed to prepare query: " + redactedInner
-        + ": Column not found: arr";
+    String wrapper = "SELECT * FROM UNNEST((SELECT o.id FROM orders o)) AS u (id)";
+    String inner = "SELECT o.id FROM orders o";
+    assertTrue(wrapper.contains(inner) && !wrapper.equals(inner),
+        "fixture must make the inner a strict substring of the wrapper");
+    String detail = "Failed to execute sub query: " + inner + ": Column not found: o.id";
     var original = new SQLException(detail, "42000");
-    var failure = SqlExceptions.wrap("Failed to evaluate UNNEST(a.arr)", original,
-        text -> SqlExceptions.describeSubqueryFailure(text, outer, "UNNEST(a.arr)"));
-    assertEquals("Failed to evaluate UNNEST(a.arr): " + detail, failure.getMessage());
+    var failure = SqlExceptions.wrap("Failed to evaluate UNNEST((SELECT o.id FROM orders o))", original,
+        text -> SqlExceptions.describeSubqueryFailure(text, wrapper, "UNNEST((SELECT o.id FROM orders o))"));
+    assertEquals("Failed to evaluate UNNEST((SELECT o.id FROM orders o)): " + detail, failure.getMessage());
+  }
+
+  /**
+   * Redaction can make two generated wrappers textually identical when they share
+   * a shape and differ only in the private binding key or slot. The deeper
+   * wrapper's own preparation framing is then treated as redundant and stripped
+   * too, but the user's expression and the real detail are retained, so no deeper
+   * query is misattributed to the outer expression (issue #329).
+   */
+  @Test
+  void redactionCollisionBetweenSameShapeWrappersIsBenign() {
+    String outer = "SELECT * FROM UNNEST((SELECT o.id FROM orders o WHERE o.id = __JPARQ_CORRELATED_VALUE('k1', 0)))"
+        + " AS u (id)";
+    String inner = "SELECT * FROM UNNEST((SELECT o.id FROM orders o WHERE o.id = __JPARQ_CORRELATED_VALUE('k2', 1)))"
+        + " AS u (id)";
+    assertEquals(SqlExceptions.describe(outer), SqlExceptions.describe(inner),
+        "fixture must make the two wrappers collide after redaction");
+    String expression = "UNNEST((SELECT o.id FROM orders o WHERE o.id = " + SqlExceptions.OUTER_VALUE + "))";
+    String detail = "Failed to prepare query: " + SqlExceptions.describe(inner) + ": Column not found: o.id";
+    var original = new SQLException(detail, "42000");
+    var failure = SqlExceptions.wrap("Failed to evaluate " + expression, original,
+        text -> SqlExceptions.describeSubqueryFailure(text, outer, expression));
+    assertEquals("Failed to evaluate " + expression + ": Column not found: o.id", failure.getMessage());
     assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"));
   }
 
