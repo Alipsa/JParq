@@ -236,7 +236,7 @@ public class JParqPreparedStatement implements PreparedStatement {
   private JParqPreparedStatement boundStatement;
   private boolean boundStatementStale;
   private boolean closed = false;
-  private boolean nested;
+  private final boolean nested;
   private QueryCancellation inheritedCancellation;
   private final SubqueryExecutor.ExecutionPlans reusablePlan;
   private SubqueryExecutor.ExecutionPlans executionPlans;

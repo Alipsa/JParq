@@ -19,7 +19,10 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.apache.avro.SchemaBuilder;
@@ -318,8 +321,9 @@ class SqlExceptionsTest {
 
   /**
    * Cases where a correlated LATERAL subquery fails, mapped to the expected
-   * top-level SQLState, or null when the top level loses its classification
-   * (issue #389).
+   * top-level SQLState. A null state pins a known top-level classification gap to
+   * the issue that tracks it, so fixing the gap fails the test until the pinned
+   * state is updated.
    *
    * @return failing correlated LATERAL queries with expected states
    */
@@ -337,10 +341,12 @@ class SqlExceptionsTest {
         // a predicate subquery projecting several outer columns fails at preparation
         Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.mpg FROM mtcars a WHERE a.cyl IN"
             + " (SELECT o.cyl, o.mpg)) l", "42000"),
-        // an ARRAY subquery projecting several outer columns fails at evaluation
+        // an ARRAY subquery projecting several outer columns fails at evaluation;
+        // the missing top-level classification is issue #389
         Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT ARRAY(SELECT o.cyl, o.mpg) AS x FROM"
             + " mtcars a WHERE a.cyl = o.cyl) l", null),
-        // an NTILE bucket reading an outer value below zero fails at evaluation
+        // an NTILE bucket reading an outer value below zero fails at evaluation;
+        // the missing top-level classification is issue #583
         Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT NTILE(o.cyl - 100) OVER (ORDER BY"
             + " a.mpg) AS n FROM mtcars a WHERE a.cyl = o.cyl) l", null));
   }
@@ -355,8 +361,8 @@ class SqlExceptionsTest {
    * @param sql
    *          failing correlated LATERAL query
    * @param state
-   *          expected top-level SQLState, or null when the top level loses its
-   *          classification (issue #389)
+   *          expected top-level SQLState, or null pinning a known classification
+   *          gap (issue #389 for the ARRAY case, issue #583 for the NTILE case)
    * @throws Exception
    *           if fixture lookup or connection setup fails
    */
@@ -374,9 +380,7 @@ class SqlExceptionsTest {
             }
           }
         }, sql);
-        if (state != null) {
-          assertEquals(state, failure.getSQLState(), sql + ": " + failure);
-        }
+        assertEquals(state, failure.getSQLState(), sql + ": " + failure);
         List<String> chain = failureChainMessages(failure);
         assertTrue(chain.stream().anyMatch(message -> message.contains(SqlExceptions.OUTER_VALUE)),
             () -> "outer-value marker missing from chain: " + failure);
@@ -408,30 +412,36 @@ class SqlExceptionsTest {
    */
   private static List<String> failureChainMessages(SQLException failure) {
     List<String> messages = new ArrayList<>();
-    collectFailureMessages(failure, messages);
+    collectFailureMessages(failure, messages, Collections.newSetFromMap(new IdentityHashMap<>()));
     return messages;
   }
 
   /**
-   * Appends the messages of a failure and all of its related links.
+   * Appends the messages of a failure and all of its related links, visiting each
+   * link at most once so cyclic links cannot recurse.
    *
    * @param failure
    *          failure whose links are collected
    * @param messages
    *          collector receiving each link message
+   * @param visited
+   *          links already collected, preventing cyclic recursion
    */
-  private static void collectFailureMessages(Throwable failure, List<String> messages) {
+  private static void collectFailureMessages(Throwable failure, List<String> messages, Set<Throwable> visited) {
+    if (!visited.add(failure)) {
+      return;
+    }
     messages.add(String.valueOf(failure.getMessage()));
     Throwable cause = failure.getCause();
-    if (cause != null && cause != failure) {
-      collectFailureMessages(cause, messages);
+    if (cause != null) {
+      collectFailureMessages(cause, messages, visited);
     }
     for (Throwable suppressed : failure.getSuppressed()) {
-      collectFailureMessages(suppressed, messages);
+      collectFailureMessages(suppressed, messages, visited);
     }
     if (failure instanceof SQLException sqlException) {
       for (SQLException next = sqlException.getNextException(); next != null; next = next.getNextException()) {
-        collectFailureMessages(next, messages);
+        collectFailureMessages(next, messages, visited);
       }
     }
   }

@@ -2712,7 +2712,7 @@ public final class WindowFunctions {
       decimalValue = offsetValue instanceof BigDecimal bd ? bd : new BigDecimal(offsetValue.toString());
     } catch (NumberFormatException e) {
       String message = String.format("%s offset expression produced a non-numeric value for expression %s: %s",
-          functionName, expression, offsetValue);
+          functionName, SqlExceptions.describe(expression), offsetValue);
       throw new IllegalArgumentException(message, e);
     }
     long offset;
@@ -2720,13 +2720,13 @@ public final class WindowFunctions {
       offset = decimalValue.longValueExact();
     } catch (ArithmeticException e) {
       String message = String.format("%s offset expression must resolve to an integer value for expression %s: %s",
-          functionName, expression, offsetValue);
+          functionName, SqlExceptions.describe(expression), offsetValue);
       throw new IllegalArgumentException(message, e);
     }
     if (offset <= 0L) {
       String message = String.format(
           "%s offset expression must evaluate to a strictly positive integer for expression %s: %s", functionName,
-          expression, offsetValue);
+          SqlExceptions.describe(expression), offsetValue);
       throw new IllegalArgumentException(message);
     }
     return offset;
@@ -2744,29 +2744,28 @@ public final class WindowFunctions {
    *           if the bucket count is not a strictly positive integer
    */
   public static long resolvePositiveBucketCount(Object bucketValue, AnalyticExpression expression) {
-    String described = SqlExceptions.describe(expression);
     if (bucketValue == null) {
-      throw new IllegalArgumentException("NTILE bucket expression must evaluate to a positive integer: " + described);
+      throw new IllegalArgumentException(
+          "NTILE bucket expression must evaluate to a positive integer: " + SqlExceptions.describe(expression));
     }
     BigDecimal decimalValue;
     try {
       decimalValue = bucketValue instanceof BigDecimal bd ? bd : new BigDecimal(bucketValue.toString());
     } catch (NumberFormatException e) {
-      throw new IllegalArgumentException(
-          "NTILE bucket expression produced a non-numeric value for expression " + described + ": " + bucketValue, e);
+      throw new IllegalArgumentException("NTILE bucket expression produced a non-numeric value for expression "
+          + SqlExceptions.describe(expression) + ": " + bucketValue, e);
     }
     long count;
     try {
       count = decimalValue.longValueExact();
     } catch (ArithmeticException e) {
-      throw new IllegalArgumentException(
-          "NTILE bucket expression must resolve to an integer value for expression " + described + ": " + bucketValue,
-          e);
+      throw new IllegalArgumentException("NTILE bucket expression must resolve to an integer value for expression "
+          + SqlExceptions.describe(expression) + ": " + bucketValue, e);
     }
     if (count <= 0L) {
       throw new IllegalArgumentException(
-          "NTILE bucket expression must evaluate to a strictly positive integer for expression " + described + ": "
-              + bucketValue);
+          "NTILE bucket expression must evaluate to a strictly positive integer for expression "
+              + SqlExceptions.describe(expression) + ": " + bucketValue);
     }
     return count;
   }
