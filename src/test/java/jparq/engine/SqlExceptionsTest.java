@@ -245,19 +245,27 @@ class SqlExceptionsTest {
    * inner query is never rewritten to the outer UNNEST's expression. The inner
    * subquery is a strict substring of the generated wrapper, so it has a
    * different length and can never be mistaken for the wrapper, which the
-   * renderer only replaces as a whole (issue #329).
+   * renderer only replaces as a whole. The fixture carries the wrapper's own
+   * preparation prefix so the stripping is exercised (issue #329).
    */
   @Test
   void deeperSubqueryFailureRetainsItsOwnQueryText() {
-    String wrapper = "SELECT * FROM UNNEST((SELECT o.id FROM orders o)) AS u (id)";
-    String inner = "SELECT o.id FROM orders o";
-    assertTrue(wrapper.contains(inner) && !wrapper.equals(inner),
+    String wrapper = "SELECT * FROM UNNEST((SELECT o.id FROM orders o WHERE o.id = __JPARQ_CORRELATED_VALUE('k', 0)))"
+        + " AS u (id)";
+    String redactedWrapper = SqlExceptions.describe(wrapper);
+    String inner = "SELECT o.id FROM orders o WHERE o.id = " + SqlExceptions.OUTER_VALUE;
+    assertTrue(redactedWrapper.contains(inner) && !redactedWrapper.equals(inner),
         "fixture must make the inner a strict substring of the wrapper");
-    String detail = "Failed to execute sub query: " + inner + ": Column not found: o.id";
+    String detail = "Failed to prepare query: " + redactedWrapper + ": Failed to execute sub query: " + inner
+        + ": Column not found: o.id";
     var original = new SQLException(detail, "42000");
-    var failure = SqlExceptions.wrap("Failed to evaluate UNNEST((SELECT o.id FROM orders o))", original,
-        text -> SqlExceptions.describeSubqueryFailure(text, wrapper, "UNNEST((SELECT o.id FROM orders o))"));
-    assertEquals("Failed to evaluate UNNEST((SELECT o.id FROM orders o)): " + detail, failure.getMessage());
+    String expression = "UNNEST((SELECT o.id FROM orders o WHERE o.id = " + SqlExceptions.OUTER_VALUE + "))";
+    var failure = SqlExceptions.wrap("Failed to evaluate " + expression, original,
+        text -> SqlExceptions.describeSubqueryFailure(text, wrapper, expression));
+    assertEquals(
+        "Failed to evaluate " + expression + ": Failed to execute sub query: " + inner + ": Column not found: o.id",
+        failure.getMessage());
+    assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"));
   }
 
   /**
@@ -385,6 +393,9 @@ class SqlExceptionsTest {
         // a predicate subquery projecting several outer columns fails at preparation
         Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.mpg FROM mtcars a WHERE a.cyl IN"
             + " (SELECT o.cyl, o.mpg)) l", "42000"),
+        // a nested aggregate over an outer value fails at preparation
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT SUM(SUM(o.cyl)) AS s FROM mtcars a"
+            + " WHERE a.cyl = o.cyl) l", "42000"),
         // an ARRAY subquery projecting several outer columns fails at evaluation;
         // the missing top-level classification is issue #389
         Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT ARRAY(SELECT o.cyl, o.mpg) AS x FROM"
@@ -397,7 +408,7 @@ class SqlExceptionsTest {
         // the missing top-level classification is issue #586
         Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT NTH_VALUE(a.mpg, o.cyl - 100) OVER"
             + " (ORDER BY a.mpg) AS n FROM mtcars a WHERE a.cyl = o.cyl) l", null),
-        // an LAG offset reading an outer value below zero fails at evaluation;
+        // a LAG offset reading an outer value below zero fails at evaluation;
         // the missing top-level classification is issue #590
         Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT LAG(a.mpg, o.cyl - 100) OVER (ORDER BY"
             + " a.mpg) AS n FROM mtcars a WHERE a.cyl = o.cyl) l", null));

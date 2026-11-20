@@ -86,6 +86,15 @@ class CorrelatedExecutionShapeTest {
         assertInstanceOf(IllegalArgumentException.class, root);
         assertEquals("Invalid correlated binding: reserved for internal query execution", root.getMessage());
       }
+      // The top-level preparation prefix keeps the user's own SQL verbatim; only
+      // expression-level diagnostics are redacted (the non-redacting branch).
+      var topLevel = assertThrows(java.sql.SQLException.class, () -> {
+        try (var result = statement.executeQuery("SELECT o.id FROM big o WHERE __JPARQ_CORRELATED_VALUE('x', 0) = 1")) {
+          result.next();
+        }
+      });
+      assertEquals("Failed to prepare query: SELECT o.id FROM big o WHERE __JPARQ_CORRELATED_VALUE('x', 0) = 1",
+          topLevel.getMessage());
     }
   }
 

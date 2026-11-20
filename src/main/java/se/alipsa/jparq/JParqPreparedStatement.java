@@ -578,9 +578,11 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Selects the renderer for preparation-failure diagnostics. Generated nested
-   * shapes carry private correlated bindings; their diagnostics render without
-   * exposing the tokens. Top-level user SQL is never rewritten.
+   * Selects the renderer for the preparation prefix of preparation-failure
+   * diagnostics. Generated nested shapes carry private correlated bindings; their
+   * prefix renders without exposing the tokens. Only the preparation prefix of
+   * top-level user SQL is kept verbatim; expression-level diagnostics are always
+   * redacted at their engine sites.
    *
    * @return the private-binding redactor for generated nested shapes and the
    *         identity for top-level user SQL
