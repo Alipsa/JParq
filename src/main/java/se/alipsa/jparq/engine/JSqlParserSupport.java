@@ -230,8 +230,10 @@ public final class JSqlParserSupport {
 
   /**
    * Parses a statement with a bounded simple-to-complex retry. JDBC temporal
-   * escape literals are validated with strict temporal conversion before parsing,
-   * because the parser normalizes out-of-range fields.
+   * escape literals are validated with strict temporal conversion after a
+   * successful parse, because the parser normalizes out-of-range fields. When the
+   * parser rejects a literal's text during parsing, the same strict validation
+   * classifies the failure before the syntax error would be reported.
    *
    * @param sql
    *          statement text
@@ -243,7 +245,6 @@ public final class JSqlParserSupport {
    *           carrying SQLState 22007 or 22008
    */
   public static Statement parseStatement(String sql) throws JSQLParserException {
-    TemporalEscapeValidation.validate(sql);
     Statement stmt;
     try (var executor = Executors.newSingleThreadExecutor()) {
       var parser = newParser(sql);
@@ -251,6 +252,10 @@ public final class JSqlParserSupport {
       try {
         stmt = CCJSqlParserUtil.parseStatement(parser.withAllowComplexParsing(false), executor);
       } catch (JSQLParserException e) {
+        if (isTemporalValueFailure(e)) {
+          // The parser rejected the literal's text; classify it strictly.
+          TemporalEscapeValidation.validate(sql);
+        }
         Throwable cause = e.getCause();
         if (cause instanceof InterruptedException || cause instanceof TimeoutException
             || cause instanceof CancellationException
@@ -260,7 +265,34 @@ public final class JSqlParserSupport {
         stmt = CCJSqlParserUtil.parseStatement(newParser(sql).withAllowComplexParsing(true), executor);
       }
     }
+    TemporalEscapeValidation.validate(sql);
     return stmt;
+  }
+
+  /**
+   * Reports whether a parse failure came from the lenient temporal
+   * {@code valueOf} parsers inside JSqlParser rather than from a syntax error.
+   *
+   * @param failure
+   *          the parser failure to inspect
+   * @return whether a temporal value conversion rejected the literal text
+   */
+  private static boolean isTemporalValueFailure(JSQLParserException failure) {
+    for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+      if (cause instanceof IllegalArgumentException valueError) {
+        for (StackTraceElement frame : valueError.getStackTrace()) {
+          if (!"valueOf".equals(frame.getMethodName())) {
+            continue;
+          }
+          String className = frame.getClassName();
+          if ("java.sql.Date".equals(className) || "java.sql.Time".equals(className)
+              || "java.sql.Timestamp".equals(className)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
   }
 
   /**

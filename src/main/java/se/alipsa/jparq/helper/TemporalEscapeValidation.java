@@ -12,9 +12,8 @@ import se.alipsa.jparq.engine.function.DateTimeFunctions;
  * {@code valueOf} parsers, which normalize out-of-range fields such as
  * {@code 2024-02-30} or {@code 25:00:00} instead of rejecting them. The parser
  * also discards the original text of date and time escapes, so this validator
- * re-checks the raw statement text before parsing and applies the same strict
- * rules as the typed {@code DATE}, {@code TIME}, and {@code TIMESTAMP}
- * literals.
+ * re-checks the statement text and applies the same strict rules as the typed
+ * {@code DATE}, {@code TIME}, and {@code TIMESTAMP} literals.
  */
 public final class TemporalEscapeValidation {
 
@@ -22,12 +21,13 @@ public final class TemporalEscapeValidation {
   }
 
   /**
-   * Validates every JDBC temporal escape literal outside quoted regions and
-   * comments in the statement text. List literals are descended into because
-   * their elements are expressions that may carry escape literals.
+   * Validates every JDBC temporal escape literal outside quoted regions in the
+   * statement text. List literals are descended into because their elements are
+   * expressions that may carry escape literals. The input must have SQL comments
+   * removed before scanning, matching the comment-free text the parser receives.
    *
    * @param sql
-   *          statement text to inspect
+   *          statement text without SQL comments
    * @throws IllegalArgumentException
    *           if an escape literal carries an invalid temporal value, with a
    *           cause carrying SQLState 22007 for an invalid format or 22008 for
@@ -59,15 +59,9 @@ public final class TemporalEscapeValidation {
       int end = SqlTextScanner.quotedRegionEnd(sql, index);
       return end >= 0 ? end : index + 1;
     }
-    if (sql.startsWith("--", index) || sql.startsWith("//", index)) {
-      return skipToLineEnd(sql, index);
-    }
-    if (sql.startsWith("/*", index)) {
-      return skipBlockComment(sql, index);
-    }
     if (current == '{') {
-      Integer end = validateTemporalEscape(sql, index);
-      return end == null ? index + 1 : end;
+      int end = validateTemporalEscape(sql, index);
+      return end >= 0 ? end : index + 1;
     }
     return index + 1;
   }
@@ -80,12 +74,12 @@ public final class TemporalEscapeValidation {
    *          statement text
    * @param index
    *          offset of the opening brace
-   * @return offset of the first character after the literal, or null when the
-   *         brace does not start a temporal escape
+   * @return offset of the first character after the literal, or -1 when the brace
+   *         does not start a temporal escape
    * @throws IllegalArgumentException
    *           if the literal text fails strict temporal conversion
    */
-  private static Integer validateTemporalEscape(String sql, int index) {
+  private static int validateTemporalEscape(String sql, int index) {
     int tagStart = index + 1;
     int tagEnd = tagStart;
     int length = sql.length();
@@ -94,18 +88,18 @@ public final class TemporalEscapeValidation {
     }
     String tag = sql.substring(tagStart, tagEnd).toUpperCase(Locale.ROOT);
     if (!tag.equals("D") && !tag.equals("T") && !tag.equals("TS")) {
-      return null;
+      return -1;
     }
     int literalStart = skipWhitespace(sql, tagEnd);
     if (literalStart >= length || sql.charAt(literalStart) != '\'') {
-      return null;
+      return -1;
     }
     int literalEnd = SqlTextScanner.quotedRegionEnd(sql, literalStart);
     int closing = skipWhitespace(sql, literalEnd);
     if (closing >= length || sql.charAt(closing) != '}') {
-      return null;
+      return -1;
     }
-    String text = sql.substring(literalStart + 1, literalEnd - 1);
+    String text = sql.substring(literalStart + 1, literalEnd - 1).replace("''", "'");
     if (tag.equals("D")) {
       DateTimeFunctions.toDate(text);
     } else if (tag.equals("T")) {
@@ -128,7 +122,8 @@ public final class TemporalEscapeValidation {
   }
 
   /**
-   * Skips whitespace tokens recognized by the parser.
+   * Skips Java whitespace characters between the escape tag, its literal, and the
+   * closing brace.
    *
    * @param sql
    *          statement text
@@ -139,59 +134,10 @@ public final class TemporalEscapeValidation {
   private static int skipWhitespace(String sql, int index) {
     int length = sql.length();
     int offset = index;
-    while (offset < length) {
-      char c = sql.charAt(offset);
-      if (c != ' ' && c != '\t' && c != '\r' && c != '\n') {
-        return offset;
-      }
+    while (offset < length && Character.isWhitespace(sql.charAt(offset))) {
       offset++;
     }
     return offset;
-  }
-
-  /**
-   * Advances past a line comment beginning with two characters.
-   *
-   * @param sql
-   *          statement text
-   * @param index
-   *          offset of the comment start
-   * @return offset of the line terminator or the end of the text
-   */
-  private static int skipToLineEnd(String sql, int index) {
-    int i = index + 2;
-    int length = sql.length();
-    while (i < length && sql.charAt(i) != '\n' && sql.charAt(i) != '\r') {
-      i++;
-    }
-    return i;
-  }
-
-  /**
-   * Advances past a possibly nested block comment.
-   *
-   * @param sql
-   *          statement text
-   * @param index
-   *          offset of the opening delimiter
-   * @return offset of the first character after the comment
-   */
-  private static int skipBlockComment(String sql, int index) {
-    int depth = 1;
-    int i = index + 2;
-    int length = sql.length();
-    while (i < length && depth > 0) {
-      if (sql.startsWith("/*", i)) {
-        depth++;
-        i += 2;
-      } else if (sql.startsWith("*/", i)) {
-        depth--;
-        i += 2;
-      } else {
-        i++;
-      }
-    }
-    return i;
   }
 
 }

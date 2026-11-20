@@ -2973,12 +2973,13 @@ public final class SqlParser {
    * <p>
    * The parser used by the engine does not retain comments, but unstripped
    * comments can still interfere with parsing when they appear in leading or
-   * inline positions. This helper processes the SQL text and strips both
-   * {@code --} line comments and {@code /* ... *&#47;} block comments so that
-   * {@link JSqlParserSupport} receives a clean statement. Content that appears
-   * inside single-quoted or untagged {@code $$} literals, or double-quoted and
-   * backtick identifiers, is preserved verbatim. Tagged dollar quotes are not
-   * enabled in the parser, so tagged openers remain identifier text here.
+   * inline positions. This helper processes the SQL text and strips {@code --}
+   * and {@code //} line comments as well as {@code /* ... *&#47;} block comments
+   * so that {@link JSqlParserSupport} receives a clean statement. Content that
+   * appears inside single-quoted or untagged {@code $$} literals, or
+   * double-quoted and backtick identifiers, is preserved verbatim. Tagged dollar
+   * quotes are not enabled in the parser, so tagged openers remain identifier
+   * text here.
    * </p>
    *
    * @param sql
@@ -3034,7 +3035,7 @@ public final class SqlParser {
         continue;
       }
 
-      if (c == '-' && next == '-') {
+      if ((c == '-' && next == '-') || (c == '/' && next == '/')) {
         inLineComment = true;
         i++;
         continue;

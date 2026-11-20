@@ -1,7 +1,6 @@
 package jparq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -64,7 +63,8 @@ class TemporalEscapeLiteralTest {
 
   /**
    * Retains valid escape literals, including unpadded SQL fields, uppercase tags,
-   * and tags without surrounding whitespace.
+   * tags without surrounding whitespace, and valid escapes nested in function
+   * escapes.
    *
    * @throws Exception
    *           if fixture lookup or connection setup fails
@@ -89,68 +89,100 @@ class TemporalEscapeLiteralTest {
       assertEquals(Date.valueOf("2024-02-29"), result.getDate(2));
       assertEquals(Date.valueOf("2024-02-29"), result.getDate(3));
     }
+    try (var connection = DriverManager.getConnection(url());
+        var statement = connection.createStatement();
+        var result = statement.executeQuery("SELECT {fn YEAR({d '2024-02-29'})} AS y FROM mtcars LIMIT 1")) {
+      assertTrue(result.next());
+      assertEquals(2024, result.getInt(1));
+    }
+  }
+
+  /**
+   * Supplies statements whose escape-shaped text sits in a quoted region or a
+   * comment, along with the value the statement returns.
+   *
+   * @return quoted-region and comment cases
+   */
+  static Stream<Arguments> ignoredRegions() {
+    return Stream.of(Arguments.of("SELECT '{d ''2024-02-30''}' AS x FROM mtcars LIMIT 1", "{d '2024-02-30'}"),
+        Arguments.of("SELECT 1 AS x -- {d '2024-02-30'}\nFROM mtcars LIMIT 1", "1"),
+        Arguments.of("SELECT 1 AS x /* {d '2024-02-30'} */ FROM mtcars LIMIT 1", "1"),
+        Arguments.of("SELECT 1 AS x // {d '2024-02-30'}\nFROM mtcars LIMIT 1", "1"),
+        Arguments.of("SELECT $$ {d '2024-02-30'} $$ AS x FROM mtcars LIMIT 1", " {d '2024-02-30'} "));
   }
 
   /**
    * Ignores escape-shaped text inside quoted regions and comments so valid SQL is
    * not rejected.
    *
+   * @param sql
+   *          query whose escape-shaped text is quoted or commented out
+   * @param expected
+   *          value returned by the first column
    * @throws Exception
    *           if fixture lookup or connection setup fails
    */
-  @Test
-  void escapesIgnoreQuotedRegionsAndComments() throws Exception {
+  @ParameterizedTest
+  @MethodSource("ignoredRegions")
+  void escapesIgnoreQuotedRegionsAndComments(String sql, String expected) throws Exception {
     try (var connection = DriverManager.getConnection(url());
         var statement = connection.createStatement();
-        var result = statement.executeQuery("SELECT '{d ''2024-02-30''}' AS x FROM mtcars LIMIT 1")) {
+        var result = statement.executeQuery(sql)) {
       assertTrue(result.next());
-      assertEquals("{d '2024-02-30'}", result.getString(1));
+      assertEquals(expected, result.getString(1));
     }
-    try (var connection = DriverManager.getConnection(url());
-        var statement = connection.createStatement();
-        var result = statement.executeQuery("SELECT 1 AS x -- {d '2024-02-30'}\nFROM mtcars LIMIT 1")) {
-      assertTrue(result.next());
-      assertEquals(1, result.getInt(1));
-    }
-    try (var connection = DriverManager.getConnection(url());
-        var statement = connection.createStatement();
-        var result = statement.executeQuery("SELECT 1 AS x /* {d '2024-02-30'} */ FROM mtcars LIMIT 1")) {
-      assertTrue(result.next());
-      assertEquals(1, result.getInt(1));
-    }
-    try (var connection = DriverManager.getConnection(url());
-        var statement = connection.createStatement();
-        var result = statement.executeQuery("SELECT 1 AS x // {d '2024-02-30'}\nFROM mtcars LIMIT 1")) {
-      assertTrue(result.next());
-      assertEquals(1, result.getInt(1));
-    }
-    try (var connection = DriverManager.getConnection(url());
-        var statement = connection.createStatement();
-        var result = statement.executeQuery("SELECT $$ {d '2024-02-30'} $$ AS x FROM mtcars LIMIT 1")) {
-      assertTrue(result.next());
-      assertEquals(" {d '2024-02-30'} ", result.getString(1));
-    }
-    SQLException backtick = assertThrows(SQLException.class,
-        () -> tryQuery("SELECT `a {d '2024-02-30'}` FROM mtcars LIMIT 1"));
-    assertFalse(isDataFailure(backtick),
-        () -> "unexpected data failure for backtick identifier: " + backtick.getMessage());
   }
 
   /**
-   * Rejects invalid escape literals in nested scopes and predicates.
+   * Treats escape-shaped text inside a backtick identifier as a column name
+   * rather than an escape literal, so the query fails on the missing column
+   * instead of with a temporal data error.
    *
    * @throws Exception
    *           if fixture lookup or connection setup fails
    */
   @Test
-  void escapesRejectInvalidFieldsInNestedScopes() throws Exception {
+  void backtickIdentifierIsNotAnEscape() throws Exception {
+    SQLException backtick = assertThrows(SQLException.class,
+        () -> tryQuery("SELECT `a {d '2024-02-30'}` FROM mtcars LIMIT 1"));
+    assertEquals("42000", backtick.getSQLState(),
+        () -> "expected a column-resolution failure for the backtick identifier: " + backtick.getMessage());
+    assertTrue(backtick.getMessage().contains("a {d '2024-02-30'}"),
+        () -> "backtick content should be treated as a column, not an escape: " + backtick.getMessage());
+  }
+
+  /**
+   * Supplies invalid escape literals in nested scopes, predicates, LATERAL
+   * inputs, function escapes, CTEs, and derived tables with their expected state.
+   *
+   * @return nested-scope escape cases
+   */
+  static Stream<Arguments> nestedScopeEscapes() {
+    return Stream.of(Arguments.of("SELECT (SELECT {d '2024-02-30'}) AS x FROM mtcars LIMIT 1", "22008"),
+        Arguments.of("SELECT * FROM mtcars WHERE mpg > {d 'bad'}", "22007"),
+        Arguments.of("SELECT * FROM mtcars CROSS JOIN LATERAL (SELECT {t '25:00:00'} AS x) LIMIT 1", "22008"),
+        Arguments.of("SELECT {fn YEAR({d '2024-02-30'})} FROM mtcars LIMIT 1", "22008"),
+        Arguments.of("WITH c AS (SELECT {d '2024-02-30'} AS x) SELECT x FROM c LIMIT 1", "22008"),
+        Arguments.of("SELECT x FROM (SELECT {d '2024-02-30'} AS x) AS sub LIMIT 1", "22008"));
+  }
+
+  /**
+   * Rejects invalid escape literals in nested scopes, predicates, LATERAL inputs,
+   * function escapes, CTEs, and derived tables.
+   *
+   * @param sql
+   *          query with an invalid escape literal in a nested scope
+   * @param state
+   *          expected data SQLState
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @MethodSource("nestedScopeEscapes")
+  void escapesRejectInvalidFieldsInNestedScopes(String sql, String state) throws Exception {
     try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
-      SQLDataException scalar = assertThrows(SQLDataException.class,
-          () -> statement.executeQuery("SELECT (SELECT {d '2024-02-30'}) AS x FROM mtcars LIMIT 1"));
-      assertEquals("22008", scalar.getSQLState());
-      SQLDataException predicate = assertThrows(SQLDataException.class,
-          () -> statement.executeQuery("SELECT * FROM mtcars WHERE mpg > {d 'bad'}"));
-      assertEquals("22007", predicate.getSQLState());
+      SQLDataException failure = assertThrows(SQLDataException.class, () -> statement.executeQuery(sql));
+      assertEquals(state, failure.getSQLState());
     }
   }
 
@@ -167,18 +199,6 @@ class TemporalEscapeLiteralTest {
           () -> connection.prepareStatement("SELECT {d '2024-02-30'} FROM mtcars LIMIT 1"));
       assertEquals("22008", failure.getSQLState());
     }
-  }
-
-  /**
-   * Reports the data SQLStates that identify temporal conversion failures.
-   *
-   * @param failure
-   *          the failure to classify
-   * @return whether the failure carries a temporal data SQLState
-   */
-  private static boolean isDataFailure(SQLException failure) {
-    String state = failure.getSQLState();
-    return "22007".equals(state) || "22008".equals(state);
   }
 
   /**
