@@ -278,16 +278,6 @@ public class JParqPreparedStatement implements PreparedStatement {
   }
 
   /**
-   * Selects the renderer for preparation-failure diagnostics.
-   *
-   * @return the private-binding redactor for generated nested shapes and the
-   *         identity for top-level user SQL
-   */
-  private UnaryOperator<String> preparationDiagnostics() {
-    return nested ? SqlExceptions::describe : UnaryOperator.identity();
-  }
-
-  /**
    * Instantiates a parsed shape with fresh row-dependent materializations.
    *
    * @param stmt
@@ -322,8 +312,6 @@ public class JParqPreparedStatement implements PreparedStatement {
     try {
       preparation = ownsStatement || hasParameters ? SqlParser.prepareQuery(originalSql) : null;
     } catch (RuntimeException exception) {
-      // Generated nested shapes carry private correlated bindings; their
-      // diagnostics render without exposing the tokens.
       throw SqlExceptions.wrap("Failed to prepare query: " + sql, exception, preparationDiagnostics());
     }
     this.deferredTimePlanning = ownsStatement && preparation.timeDependent();
@@ -553,8 +541,6 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
       }
     } catch (Exception e) {
-      // Generated nested shapes carry private correlated bindings; their
-      // diagnostics render without exposing the tokens.
       throw SqlExceptions.wrap("Failed to prepare query: " + sql, e, preparationDiagnostics());
     }
 
@@ -572,8 +558,6 @@ public class JParqPreparedStatement implements PreparedStatement {
     try {
       this.joinPredicates = tmpJoinQuery ? planJoinPredicates() : Map.of();
     } catch (RuntimeException exception) {
-      // Generated nested shapes carry private correlated bindings; their
-      // diagnostics render without exposing the tokens.
       throw SqlExceptions.wrap("Failed to prepare query: " + sql, exception, preparationDiagnostics());
     }
     PushdownInfo plannedPushdown = determinePushdownInfo(hasParameters || deferredTimePlanning, tmpSetOperation,
@@ -591,6 +575,18 @@ public class JParqPreparedStatement implements PreparedStatement {
     this.valueTableResults = tmpValueTables;
     this.baseCteResult = tmpBaseCteResult;
     logPushdownInfo(this.pushdownInfo);
+  }
+
+  /**
+   * Selects the renderer for preparation-failure diagnostics. Generated nested
+   * shapes carry private correlated bindings; their diagnostics render without
+   * exposing the tokens. Top-level user SQL is never rewritten.
+   *
+   * @return the private-binding redactor for generated nested shapes and the
+   *         identity for top-level user SQL
+   */
+  private UnaryOperator<String> preparationDiagnostics() {
+    return nested ? SqlExceptions::describe : UnaryOperator.identity();
   }
 
   /**

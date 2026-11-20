@@ -241,6 +241,27 @@ class SqlExceptionsTest {
   }
 
   /**
+   * A deeper nested failure keeps its own query text and preparation framing. The
+   * generated UNNEST query wraps every inner query, so the inner query's redacted
+   * text is a strict substring of the outer one and can never collide with it;
+   * only the outer query's own occurrences are restored (issue #329).
+   */
+  @Test
+  void deeperSubqueryFailureRetainsItsOwnQueryText() {
+    String outer = "SELECT * FROM UNNEST((SELECT a.arr FROM a WHERE a.id = __JPARQ_CORRELATED_VALUE('outer-key', 0)))"
+        + " AS u";
+    String inner = "(SELECT a.arr FROM a WHERE a.id = __JPARQ_CORRELATED_VALUE('inner-key', 1))";
+    String redactedInner = SqlExceptions.describe(inner);
+    String detail = "Failed to execute sub query: " + redactedInner + ": Failed to prepare query: " + redactedInner
+        + ": Column not found: arr";
+    var original = new SQLException(detail, "42000");
+    var failure = SqlExceptions.wrap("Failed to evaluate UNNEST(a.arr)", original,
+        text -> SqlExceptions.describeSubqueryFailure(text, outer, "UNNEST(a.arr)"));
+    assertEquals("Failed to evaluate UNNEST(a.arr): " + detail, failure.getMessage());
+    assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"));
+  }
+
+  /**
    * Retains unclassified failure details in joined and LATERAL derived tables.
    *
    * @param pushdown
@@ -352,7 +373,11 @@ class SqlExceptionsTest {
         // an NTH_VALUE position reading an outer value below zero fails at evaluation;
         // the missing top-level classification is issue #586
         Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT NTH_VALUE(a.mpg, o.cyl - 100) OVER"
-            + " (ORDER BY a.mpg) AS n FROM mtcars a WHERE a.cyl = o.cyl) l", null));
+            + " (ORDER BY a.mpg) AS n FROM mtcars a WHERE a.cyl = o.cyl) l", null),
+        // an LAG offset reading an outer value below zero fails at evaluation;
+        // the missing top-level classification is issue #590
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT LAG(a.mpg, o.cyl - 100) OVER (ORDER BY"
+            + " a.mpg) AS n FROM mtcars a WHERE a.cyl = o.cyl) l", null));
   }
 
   /**
@@ -367,7 +392,7 @@ class SqlExceptionsTest {
    * @param state
    *          expected top-level SQLState, or null pinning a known classification
    *          gap (issue #389 for the ARRAY case, issue #583 for the NTILE case,
-   *          issue #586 for the NTH_VALUE case)
+   *          issue #586 for the NTH_VALUE case, issue #590 for the LAG case)
    * @throws Exception
    *           if fixture lookup or connection setup fails
    */
