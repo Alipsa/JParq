@@ -53,8 +53,9 @@ class TemporalEscapeLiteralTest {
         Arguments.of("SELECT {d '2024-13-01'}, CASE WHEN mpg=1 THEN mpg=2 ELSE mpg=3 END FROM mtcars LIMIT 1", "22008"),
         Arguments.of("SELECT CASE WHEN mpg=1 THEN mpg=2 ELSE mpg=3 END, {d '2024-02-29 10:00:00'} FROM mtcars LIMIT 1",
             "22007"),
-        Arguments.of("SELECT CASE WHEN mpg=1 THEN mpg=2 ELSE mpg=3 END, {t '10:00:00.5'} FROM mtcars LIMIT 1",
-            "22007"));
+        Arguments.of("SELECT CASE WHEN mpg=1 THEN mpg=2 ELSE mpg=3 END, {t '10:00:00.5'} FROM mtcars LIMIT 1", "22007"),
+        Arguments.of("SELECT CASE WHEN mpg=1 THEN mpg=2 ELSE mpg=3 END, {d '2024-02-30'} FROM mtcars LIMIT 1",
+            "22008"));
   }
 
   /**
@@ -218,19 +219,22 @@ class TemporalEscapeLiteralTest {
   /**
    * Supplies statements that are both syntactically invalid and carry an escape
    * whose text the lenient parser rejects, along with a case where the lenient
-   * parser rolls the value over instead.
+   * parser rolls the value over instead and a case that only parses in complex
+   * mode.
    *
    * @return syntax-plus-invalid-escape cases
    */
   static Stream<String> syntaxErrorWithInvalidEscape() {
     return Stream.of("SELECT {d '2024-13-01'} FROM FROM mtcars", "SELECT {d '2024-02-30'} FROM FROM mtcars",
-        "SELECT {d 'bad'} FROM FROM mtcars");
+        "SELECT {d 'bad'} FROM FROM mtcars",
+        "SELECT CASE WHEN mpg=1 THEN mpg=2 ELSE mpg=3 END, {d '2024-13-01'} FROM FROM mtcars");
   }
 
   /**
    * Reports the syntax error before the temporal data error when a statement is
    * both syntactically invalid and carries an invalid escape, regardless of
-   * whether the lenient parser rejects or rolls the value over.
+   * whether the lenient parser rejects or rolls the value over and whether the
+   * statement only parses in complex mode.
    *
    * @param sql
    *          query with a syntax error and an invalid escape literal
