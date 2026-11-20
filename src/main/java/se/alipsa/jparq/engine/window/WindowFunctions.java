@@ -1997,7 +1997,7 @@ public final class WindowFunctions {
       decimalValue = nthValue instanceof BigDecimal bd ? bd : new BigDecimal(nthValue.toString());
     } catch (NumberFormatException e) {
       String message = String.format("NTH_VALUE position expression produced a non-numeric value for expression %s: %s",
-          expression, nthValue);
+          SqlExceptions.describe(expression), nthValue);
       throw new IllegalArgumentException(message, e);
     }
     long position;
@@ -2005,13 +2005,14 @@ public final class WindowFunctions {
       position = decimalValue.longValueExact();
     } catch (ArithmeticException e) {
       String message = String.format(
-          "NTH_VALUE position expression must resolve to an integer value for expression %s: %s", expression, nthValue);
+          "NTH_VALUE position expression must resolve to an integer value for expression %s: %s",
+          SqlExceptions.describe(expression), nthValue);
       throw new IllegalArgumentException(message, e);
     }
     if (position <= 0L) {
       String message = String.format(
           "NTH_VALUE position expression must evaluate to a strictly positive integer for expression %s: %s",
-          expression, nthValue);
+          SqlExceptions.describe(expression), nthValue);
       throw new IllegalArgumentException(message);
     }
     return position;

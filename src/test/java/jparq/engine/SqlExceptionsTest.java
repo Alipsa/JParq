@@ -348,7 +348,11 @@ class SqlExceptionsTest {
         // an NTILE bucket reading an outer value below zero fails at evaluation;
         // the missing top-level classification is issue #583
         Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT NTILE(o.cyl - 100) OVER (ORDER BY"
-            + " a.mpg) AS n FROM mtcars a WHERE a.cyl = o.cyl) l", null));
+            + " a.mpg) AS n FROM mtcars a WHERE a.cyl = o.cyl) l", null),
+        // an NTH_VALUE position reading an outer value below zero fails at evaluation;
+        // the missing top-level classification is issue #586
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT NTH_VALUE(a.mpg, o.cyl - 100) OVER"
+            + " (ORDER BY a.mpg) AS n FROM mtcars a WHERE a.cyl = o.cyl) l", null));
   }
 
   /**
@@ -362,7 +366,8 @@ class SqlExceptionsTest {
    *          failing correlated LATERAL query
    * @param state
    *          expected top-level SQLState, or null pinning a known classification
-   *          gap (issue #389 for the ARRAY case, issue #583 for the NTILE case)
+   *          gap (issue #389 for the ARRAY case, issue #583 for the NTILE case,
+   *          issue #586 for the NTH_VALUE case)
    * @throws Exception
    *           if fixture lookup or connection setup fails
    */
@@ -439,10 +444,10 @@ class SqlExceptionsTest {
     for (Throwable suppressed : failure.getSuppressed()) {
       collectFailureMessages(suppressed, messages, visited);
     }
-    if (failure instanceof SQLException sqlException) {
-      for (SQLException next = sqlException.getNextException(); next != null; next = next.getNextException()) {
-        collectFailureMessages(next, messages, visited);
-      }
+    // A single step follows the rest of the chain through recursion, and the
+    // visited set stops a cyclic next-exception chain.
+    if (failure instanceof SQLException sqlException && sqlException.getNextException() != null) {
+      collectFailureMessages(sqlException.getNextException(), messages, visited);
     }
   }
 
