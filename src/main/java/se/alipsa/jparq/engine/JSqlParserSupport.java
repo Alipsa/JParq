@@ -1,6 +1,7 @@
 package se.alipsa.jparq.engine;
 
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeoutException;
 import net.sf.jsqlparser.JSQLParserException;
@@ -29,6 +30,7 @@ import net.sf.jsqlparser.statement.select.SelectVisitorAdapter;
 import net.sf.jsqlparser.statement.select.SetOperationList;
 import net.sf.jsqlparser.statement.select.TableFunction;
 import net.sf.jsqlparser.statement.select.Values;
+import se.alipsa.jparq.helper.TemporalEscapeValidation;
 
 /** Shares identifier-aware JSqlParser entry points across query planning. */
 public final class JSqlParserSupport {
@@ -228,32 +230,142 @@ public final class JSqlParserSupport {
   }
 
   /**
-   * Parses a statement with a bounded simple-to-complex retry.
+   * Parses a statement with a bounded simple-to-complex retry. JDBC temporal
+   * escape literals are validated with the JDBC escape shape and strict temporal
+   * conversion after a successful parse, because the parser normalizes
+   * out-of-range fields and the strict helpers accept more text shapes than the
+   * lenient {@code valueOf} parsers reject. When the parser rejects a literal's
+   * text, the statement is re-parsed with valid placeholder escape values through
+   * the same retry: a successful re-parse confirms the statement syntax and
+   * reclassifies the failure as 22007 or 22008, while a failing re-parse reports
+   * the syntax error instead, so syntax errors precede temporal data errors.
    *
    * @param sql
    *          statement text
    * @return the parsed statement
    * @throws JSQLParserException
    *           if parsing fails
+   * @throws IllegalArgumentException
+   *           if a temporal escape literal carries an invalid value, with a cause
+   *           carrying SQLState 22007 or 22008
    */
   public static Statement parseStatement(String sql) throws JSQLParserException {
     Statement stmt;
     try (var executor = Executors.newSingleThreadExecutor()) {
-      var parser = newParser(sql);
-      int allowedDepth = parser.getAsInt(Feature.allowedNestingDepth);
       try {
-        stmt = CCJSqlParserUtil.parseStatement(parser.withAllowComplexParsing(false), executor);
-      } catch (JSQLParserException e) {
-        Throwable cause = e.getCause();
-        if (cause instanceof InterruptedException || cause instanceof TimeoutException
-            || cause instanceof CancellationException
-            || (allowedDepth >= 0 && CCJSqlParserUtil.getNestingDepth(sql) > allowedDepth)) {
-          throw e;
+        stmt = parseWithRetry(sql, executor);
+      } catch (JSQLParserException failure) {
+        if (isTemporalValueFailure(failure, sql)) {
+          classifyTemporalValueFailure(sql, failure, executor);
         }
-        stmt = CCJSqlParserUtil.parseStatement(newParser(sql).withAllowComplexParsing(true), executor);
+        throw failure;
       }
     }
+    TemporalEscapeValidation.validate(sql);
     return stmt;
+  }
+
+  /**
+   * Parses with the bounded simple-to-complex retry, rethrowing failures that
+   * must not be retried: interrupted, timed-out, or cancelled parses, and parses
+   * that exceed the configured nesting-depth limit.
+   *
+   * @param sql
+   *          statement text
+   * @param executor
+   *          the parse executor
+   * @return the parsed statement
+   * @throws JSQLParserException
+   *           if both parse attempts fail
+   */
+  private static Statement parseWithRetry(String sql, ExecutorService executor) throws JSQLParserException {
+    var parser = newParser(sql);
+    int allowedDepth = parser.getAsInt(Feature.allowedNestingDepth);
+    try {
+      return CCJSqlParserUtil.parseStatement(parser.withAllowComplexParsing(false), executor);
+    } catch (JSQLParserException failure) {
+      if (isRetryBlocked(failure, allowedDepth, sql)) {
+        throw failure;
+      }
+      return CCJSqlParserUtil.parseStatement(newParser(sql).withAllowComplexParsing(true), executor);
+    }
+  }
+
+  /**
+   * Reports whether a parse failure must not be retried with complex parsing.
+   *
+   * @param failure
+   *          the parser failure to inspect
+   * @param allowedDepth
+   *          the configured nesting-depth limit, negative for unlimited
+   * @param sql
+   *          the statement text that failed
+   * @return whether the retry would repeat the same bounded failure
+   */
+  private static boolean isRetryBlocked(JSQLParserException failure, int allowedDepth, String sql) {
+    Throwable cause = failure.getCause();
+    if (cause instanceof InterruptedException || cause instanceof TimeoutException
+        || cause instanceof CancellationException) {
+      return true;
+    }
+    return allowedDepth >= 0 && CCJSqlParserUtil.getNestingDepth(sql) > allowedDepth;
+  }
+
+  /**
+   * Reports whether a parse failure came from a temporal escape value rather than
+   * from the statement syntax. The failure's cause chain must carry an
+   * {@link IllegalArgumentException}, and the statement must contain a temporal
+   * escape literal. The placeholder re-parse in
+   * {@link #classifyTemporalValueFailure} then confirms the attribution without
+   * relying on the value parser's stack frames.
+   *
+   * @param failure
+   *          the parser failure to inspect
+   * @param sql
+   *          the statement text that failed
+   * @return whether a temporal escape value rejected the literal text
+   */
+  private static boolean isTemporalValueFailure(JSQLParserException failure, String sql) {
+    for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+      if (cause instanceof IllegalArgumentException) {
+        return TemporalEscapeValidation.hasTemporalEscape(sql);
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Classifies a parse failure attributed to a temporal escape value. The
+   * statement is re-parsed with valid placeholder escape values that retain every
+   * token except the literal text, through the same simple-to-complex retry as
+   * the main parse. When the re-parse succeeds, the syntax is valid and the
+   * escape's strict validation failure is rethrown with the parse failure
+   * suppressed. When the re-parse fails, a syntax error elsewhere in the
+   * statement precedes the data error, so the caller reports the parse failure
+   * instead.
+   *
+   * @param sql
+   *          the statement text that failed
+   * @param failure
+   *          the parse failure from the lenient parse
+   * @param executor
+   *          the parse executor for the re-parse
+   * @throws IllegalArgumentException
+   *           if the syntax is valid and an escape literal fails validation, with
+   *           a cause carrying SQLState 22007 or 22008
+   */
+  private static void classifyTemporalValueFailure(String sql, JSQLParserException failure, ExecutorService executor) {
+    try {
+      parseWithRetry(TemporalEscapeValidation.withPlaceholderValues(sql), executor);
+    } catch (JSQLParserException syntaxError) {
+      return;
+    }
+    try {
+      TemporalEscapeValidation.validate(sql);
+    } catch (IllegalArgumentException invalid) {
+      invalid.addSuppressed(failure);
+      throw invalid;
+    }
   }
 
   /**
