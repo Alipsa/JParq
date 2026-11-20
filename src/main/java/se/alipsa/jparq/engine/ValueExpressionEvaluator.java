@@ -644,11 +644,12 @@ public final class ValueExpressionEvaluator {
 
   private Object evaluateAnalytic(AnalyticExpression analytic, GenericRecord record) {
     if (windowState == null || windowState.isEmpty()) {
-      throw new IllegalArgumentException("Analytic functions require precomputed window state: " + analytic);
+      throw new IllegalArgumentException(
+          "Analytic functions require precomputed window state: " + SqlExceptions.describe(analytic));
     }
     String name = analytic.getName();
     if (name == null) {
-      throw new IllegalArgumentException("Analytic function is missing a name: " + analytic);
+      throw new IllegalArgumentException("Analytic function is missing a name: " + SqlExceptions.describe(analytic));
     }
     if ("ROW_NUMBER".equalsIgnoreCase(name)) {
       return windowState.rowNumber(analytic, record);
@@ -698,7 +699,7 @@ public final class ValueExpressionEvaluator {
     if ("LAST_VALUE".equalsIgnoreCase(name)) {
       return windowState.lastValue(analytic, record);
     }
-    throw new IllegalArgumentException("Unsupported analytic function: " + analytic);
+    throw new IllegalArgumentException("Unsupported analytic function: " + SqlExceptions.describe(analytic));
   }
 
   private Object evaluateScalarSubquery(Select subSelect, GenericRecord record) {

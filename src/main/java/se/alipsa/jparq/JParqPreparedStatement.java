@@ -268,22 +268,27 @@ public class JParqPreparedStatement implements PreparedStatement {
     this(stmt, sql, Map.of(), false);
   }
 
-  JParqPreparedStatement(JParqStatement stmt, String sql, Map<Identifier, CteResult> inheritedCtes)
-      throws SQLException {
-    this(stmt, sql, inheritedCtes, false);
-  }
-
   JParqPreparedStatement(JParqStatement stmt, String sql, boolean ownsStatement) throws SQLException {
     this(stmt, sql, Map.of(), ownsStatement);
   }
 
   JParqPreparedStatement(JParqStatement stmt, String sql, Map<Identifier, CteResult> inheritedCtes,
       boolean ownsStatement) throws SQLException {
-    this(stmt, sql, inheritedCtes, ownsStatement, null);
+    this(stmt, sql, inheritedCtes, ownsStatement, null, false);
   }
 
   /**
-   * Instantiates a parsed nested shape with fresh row-dependent materializations.
+   * Selects the renderer for preparation-failure diagnostics.
+   *
+   * @return the private-binding redactor for generated nested shapes and the
+   *         identity for top-level user SQL
+   */
+  private UnaryOperator<String> preparationDiagnostics() {
+    return nested ? SqlExceptions::describe : UnaryOperator.identity();
+  }
+
+  /**
+   * Instantiates a parsed shape with fresh row-dependent materializations.
    *
    * @param stmt
    *          owning statement
@@ -295,15 +300,19 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          whether closing this wrapper closes the statement
    * @param reusablePlan
    *          execution-local parsed and validated shape, or null
+   * @param nested
+   *          whether this is a generated nested shape whose SQL may carry private
+   *          correlated bindings
    * @throws SQLException
    *           if planning or materialization fails
    */
   private JParqPreparedStatement(JParqStatement stmt, String sql, Map<Identifier, CteResult> inheritedCtes,
-      boolean ownsStatement, SubqueryExecutor.ExecutionPlans reusablePlan) throws SQLException {
+      boolean ownsStatement, SubqueryExecutor.ExecutionPlans reusablePlan, boolean nested) throws SQLException {
     this.stmt = stmt;
     this.reusablePlan = reusablePlan;
     this.executionPlans = reusablePlan;
     this.ownsStatement = ownsStatement;
+    this.nested = nested;
     ParameterParseResult parseResult = parseParameters(sql);
     this.originalSql = parseResult.sql();
     this.parameterCount = parseResult.parameterCount();
@@ -313,9 +322,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     try {
       preparation = ownsStatement || hasParameters ? SqlParser.prepareQuery(originalSql) : null;
     } catch (RuntimeException exception) {
-      // The SQL may be a rewritten correlated subquery carrying private
-      // bindings; render it without exposing them.
-      throw SqlExceptions.wrap("Failed to prepare query: " + sql, exception, SqlExceptions::describe);
+      // Generated nested shapes carry private correlated bindings; their
+      // diagnostics render without exposing the tokens.
+      throw SqlExceptions.wrap("Failed to prepare query: " + sql, exception, preparationDiagnostics());
     }
     this.deferredTimePlanning = ownsStatement && preparation.timeDependent();
     this.inheritedCteContext = inheritedCtes == null ? Map.of() : Map.copyOf(inheritedCtes);
@@ -544,9 +553,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
       }
     } catch (Exception e) {
-      // The SQL may be a rewritten correlated subquery carrying private
-      // bindings; render it without exposing them.
-      throw SqlExceptions.wrap("Failed to prepare query: " + sql, e, SqlExceptions::describe);
+      // Generated nested shapes carry private correlated bindings; their
+      // diagnostics render without exposing the tokens.
+      throw SqlExceptions.wrap("Failed to prepare query: " + sql, e, preparationDiagnostics());
     }
 
     this.parsedSelect = tmpSelect;
@@ -563,9 +572,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     try {
       this.joinPredicates = tmpJoinQuery ? planJoinPredicates() : Map.of();
     } catch (RuntimeException exception) {
-      // The SQL may be a rewritten correlated subquery carrying private
-      // bindings; render it without exposing them.
-      throw SqlExceptions.wrap("Failed to prepare query: " + sql, exception, SqlExceptions::describe);
+      // Generated nested shapes carry private correlated bindings; their
+      // diagnostics render without exposing the tokens.
+      throw SqlExceptions.wrap("Failed to prepare query: " + sql, exception, preparationDiagnostics());
     }
     PushdownInfo plannedPushdown = determinePushdownInfo(hasParameters || deferredTimePlanning, tmpSetOperation,
         tmpJoinQuery, tmpBaseCteResult, tmpConf, tmpSelect, tmpPredicate, tmpResidual);
@@ -1700,8 +1709,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     try (var execution = stmt.beginExecution(cancellation)) {
       execution.cancellation().checkCanceled();
       var shape = plans == null ? null : plans.child(sql);
-      var prepared = new JParqPreparedStatement(stmt, sql, inherited, false, shape);
-      prepared.nested = true;
+      var prepared = new JParqPreparedStatement(stmt, sql, inherited, false, shape, true);
       prepared.inheritedCancellation = execution.cancellation();
       return prepared;
     }
@@ -6448,8 +6456,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       boundStatement.close();
       boundStatement = null;
     }
-    boundStatement = new JParqPreparedStatement(stmt, boundSql, inheritedCteContext);
-    boundStatement.nested = nested;
+    boundStatement = new JParqPreparedStatement(stmt, boundSql, inheritedCteContext, false, null, nested);
     boundStatement.inheritedCancellation = inheritedCancellation;
     JParqResultSet resultSet = boundStatement.executeQuery();
     boundStatementStale = false;

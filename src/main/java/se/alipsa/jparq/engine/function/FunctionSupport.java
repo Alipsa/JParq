@@ -19,6 +19,7 @@ import net.sf.jsqlparser.statement.select.AllColumns;
 import net.sf.jsqlparser.statement.select.Select;
 import org.apache.avro.generic.GenericRecord;
 import se.alipsa.jparq.engine.CorrelatedBindings;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlText;
 import se.alipsa.jparq.engine.SubqueryExecutor;
 import se.alipsa.jparq.engine.TemporalOperands;
@@ -125,7 +126,7 @@ public final class FunctionSupport {
     }
     String name = func.getName();
     if (name == null) {
-      throw syntaxFailure("Unsupported function: " + func);
+      throw syntaxFailure("Unsupported function: " + SqlExceptions.describe(func));
     }
     String upper = name.toUpperCase(Locale.ROOT);
     FunctionArguments args = new FunctionArguments(func, record, evaluator);

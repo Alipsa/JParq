@@ -56,7 +56,8 @@ public final class ArrayFunctions {
       return List.of();
     }
     if (result.columnLabels().size() > 1) {
-      throw new IllegalArgumentException("ARRAY subquery must return exactly one column: " + subSelect);
+      throw new IllegalArgumentException(
+          "ARRAY subquery must return exactly one column: " + SqlExceptions.describe(subSelect));
     }
     return homogenizeArrayValues(result.singleColumnValues());
   }

@@ -6,6 +6,7 @@ import java.util.IdentityHashMap;
 import java.util.Map;
 import net.sf.jsqlparser.expression.AnalyticExpression;
 import org.apache.avro.generic.GenericRecord;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.TemporalOperands.Operand;
 
 /**
@@ -112,7 +113,8 @@ public final class WindowState {
   public long rowNumber(AnalyticExpression expression, GenericRecord record) {
     IdentityHashMap<GenericRecord, Long> values = rowNumberValues.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No ROW_NUMBER values available for expression: " + expression);
+      throw new IllegalArgumentException(
+          "No ROW_NUMBER values available for expression: " + SqlExceptions.describe(expression));
     }
     Long value = values.get(record);
     if (value == null) {
@@ -133,7 +135,8 @@ public final class WindowState {
   public long rank(AnalyticExpression expression, GenericRecord record) {
     IdentityHashMap<GenericRecord, Long> values = rankValues.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No RANK values available for expression: " + expression);
+      throw new IllegalArgumentException(
+          "No RANK values available for expression: " + SqlExceptions.describe(expression));
     }
     Long value = values.get(record);
     if (value == null) {
@@ -155,7 +158,8 @@ public final class WindowState {
   public long denseRank(AnalyticExpression expression, GenericRecord record) {
     IdentityHashMap<GenericRecord, Long> values = denseRankValues.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No DENSE_RANK values available for expression: " + expression);
+      throw new IllegalArgumentException(
+          "No DENSE_RANK values available for expression: " + SqlExceptions.describe(expression));
     }
     Long value = values.get(record);
     if (value == null) {
@@ -177,7 +181,8 @@ public final class WindowState {
   public BigDecimal percentRank(AnalyticExpression expression, GenericRecord record) {
     IdentityHashMap<GenericRecord, BigDecimal> values = percentRankValues.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No PERCENT_RANK values available for expression: " + expression);
+      throw new IllegalArgumentException(
+          "No PERCENT_RANK values available for expression: " + SqlExceptions.describe(expression));
     }
     BigDecimal value = values.get(record);
     if (value == null) {
@@ -199,7 +204,8 @@ public final class WindowState {
   public BigDecimal cumeDist(AnalyticExpression expression, GenericRecord record) {
     IdentityHashMap<GenericRecord, BigDecimal> values = cumeDistValues.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No CUME_DIST values available for expression: " + expression);
+      throw new IllegalArgumentException(
+          "No CUME_DIST values available for expression: " + SqlExceptions.describe(expression));
     }
     BigDecimal value = values.get(record);
     if (value == null) {
@@ -220,7 +226,8 @@ public final class WindowState {
   public long ntile(AnalyticExpression expression, GenericRecord record) {
     IdentityHashMap<GenericRecord, Long> values = ntileValues.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No NTILE values available for expression: " + expression);
+      throw new IllegalArgumentException(
+          "No NTILE values available for expression: " + SqlExceptions.describe(expression));
     }
     Long value = values.get(record);
     if (value == null) {
@@ -241,7 +248,8 @@ public final class WindowState {
   public long count(AnalyticExpression expression, GenericRecord record) {
     IdentityHashMap<GenericRecord, Long> values = countValues.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No COUNT values available for expression: " + expression);
+      throw new IllegalArgumentException(
+          "No COUNT values available for expression: " + SqlExceptions.describe(expression));
     }
     Long value = values.get(record);
     if (value == null) {
@@ -262,7 +270,8 @@ public final class WindowState {
   public Object sum(AnalyticExpression expression, GenericRecord record) {
     IdentityHashMap<GenericRecord, Object> values = sumValues.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No SUM values available for expression: " + expression);
+      throw new IllegalArgumentException(
+          "No SUM values available for expression: " + SqlExceptions.describe(expression));
     }
     if (!values.containsKey(record)) {
       throw new IllegalArgumentException("No SUM value computed for record: " + record);
@@ -282,7 +291,8 @@ public final class WindowState {
   public Object avg(AnalyticExpression expression, GenericRecord record) {
     IdentityHashMap<GenericRecord, Object> values = avgValues.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No AVG values available for expression: " + expression);
+      throw new IllegalArgumentException(
+          "No AVG values available for expression: " + SqlExceptions.describe(expression));
     }
     if (!values.containsKey(record)) {
       throw new IllegalArgumentException("No AVG value computed for record: " + record);
@@ -302,7 +312,8 @@ public final class WindowState {
   public Object min(AnalyticExpression expression, GenericRecord record) {
     IdentityHashMap<GenericRecord, Object> values = minValues.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No MIN values available for expression: " + expression);
+      throw new IllegalArgumentException(
+          "No MIN values available for expression: " + SqlExceptions.describe(expression));
     }
     if (!values.containsKey(record)) {
       throw new IllegalArgumentException("No MIN value computed for record: " + record);
@@ -322,7 +333,8 @@ public final class WindowState {
   public Object max(AnalyticExpression expression, GenericRecord record) {
     IdentityHashMap<GenericRecord, Object> values = maxValues.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No MAX values available for expression: " + expression);
+      throw new IllegalArgumentException(
+          "No MAX values available for expression: " + SqlExceptions.describe(expression));
     }
     if (!values.containsKey(record)) {
       throw new IllegalArgumentException("No MAX value computed for record: " + record);
@@ -392,7 +404,8 @@ public final class WindowState {
       Map<AnalyticExpression, IdentityHashMap<GenericRecord, Object>> results, String name) {
     IdentityHashMap<GenericRecord, Object> values = results.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No " + name + " values available for expression: " + expression);
+      throw new IllegalArgumentException(
+          "No " + name + " values available for expression: " + SqlExceptions.describe(expression));
     }
     if (!values.containsKey(record)) {
       throw new IllegalArgumentException("No " + name + " value computed for record: " + record);
@@ -414,7 +427,8 @@ public final class WindowState {
   public Object nthValue(AnalyticExpression expression, GenericRecord record) {
     IdentityHashMap<GenericRecord, Object> values = nthValueValues.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No NTH_VALUE values available for expression: " + expression);
+      throw new IllegalArgumentException(
+          "No NTH_VALUE values available for expression: " + SqlExceptions.describe(expression));
     }
     if (!values.containsKey(record)) {
       throw new IllegalArgumentException("No NTH_VALUE value computed for record: " + record);
@@ -435,7 +449,8 @@ public final class WindowState {
   public Object firstValue(AnalyticExpression expression, GenericRecord record) {
     IdentityHashMap<GenericRecord, Object> values = firstValueValues.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No FIRST_VALUE values available for expression: " + expression);
+      throw new IllegalArgumentException(
+          "No FIRST_VALUE values available for expression: " + SqlExceptions.describe(expression));
     }
     if (!values.containsKey(record)) {
       throw new IllegalArgumentException("No FIRST_VALUE value computed for record: " + record);
@@ -456,7 +471,8 @@ public final class WindowState {
   public Object lastValue(AnalyticExpression expression, GenericRecord record) {
     IdentityHashMap<GenericRecord, Object> values = lastValueValues.get(expression);
     if (values == null) {
-      throw new IllegalArgumentException("No LAST_VALUE values available for expression: " + expression);
+      throw new IllegalArgumentException(
+          "No LAST_VALUE values available for expression: " + SqlExceptions.describe(expression));
     }
     if (!values.containsKey(record)) {
       throw new IllegalArgumentException("No LAST_VALUE value computed for record: " + record);

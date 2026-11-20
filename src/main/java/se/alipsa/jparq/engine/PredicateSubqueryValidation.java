@@ -179,7 +179,7 @@ public final class PredicateSubqueryValidation {
       Map<Identifier, WithItem<?>> ctes) {
     Integer count = degree(select, columns, ctes);
     if (count != null && count != 1) {
-      throw SqlExceptions.syntaxFailure("Subquery must return exactly one column: " + select);
+      throw SqlExceptions.syntaxFailure("Subquery must return exactly one column: " + SqlExceptions.describe(select));
     }
   }
 

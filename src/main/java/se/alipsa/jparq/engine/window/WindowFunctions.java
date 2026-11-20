@@ -233,10 +233,11 @@ public final class WindowFunctions {
       throw SqlExceptions.syntaxFailure("Unsupported window function: " + name);
     }
     if ((analytic.isDistinct() || analytic.isUnique()) && !"COUNT".equalsIgnoreCase(name)) {
-      throw new IllegalArgumentException(name + " does not support DISTINCT or UNIQUE modifiers: " + analytic);
+      throw new IllegalArgumentException(
+          name + " does not support DISTINCT or UNIQUE modifiers: " + SqlExceptions.describe(analytic));
     }
     if (analytic.getKeep() != null) {
-      throw new IllegalArgumentException(name + " does not support KEEP clause: " + analytic);
+      throw new IllegalArgumentException(name + " does not support KEEP clause: " + SqlExceptions.describe(analytic));
     }
     ExpressionList<?> partitionList = analytic.getPartitionExpressionList();
     List<Expression> partitions = new ArrayList<>();
@@ -249,47 +250,55 @@ public final class WindowFunctions {
     List<OrderByElement> orderElements = orderBy == null ? List.of() : List.copyOf(orderBy);
     if ("ROW_NUMBER".equalsIgnoreCase(name)) {
       if (analytic.getExpression() != null) {
-        throw new IllegalArgumentException("ROW_NUMBER must not include an argument expression: " + analytic);
+        throw new IllegalArgumentException(
+            "ROW_NUMBER must not include an argument expression: " + SqlExceptions.describe(analytic));
       }
       collector.addRowNumberWindow(new RowNumberWindow(analytic, List.copyOf(partitions), orderElements));
       return;
     }
     if ("RANK".equalsIgnoreCase(name)) {
       if (orderElements.isEmpty()) {
-        throw new IllegalArgumentException("RANK requires an ORDER BY clause: " + analytic);
+        throw new IllegalArgumentException("RANK requires an ORDER BY clause: " + SqlExceptions.describe(analytic));
       }
       if (analytic.getExpression() != null) {
-        throw new IllegalArgumentException("RANK must not include an argument expression: " + analytic);
+        throw new IllegalArgumentException(
+            "RANK must not include an argument expression: " + SqlExceptions.describe(analytic));
       }
       collector.addRankWindow(new RankWindow(analytic, List.copyOf(partitions), orderElements));
       return;
     }
     if ("DENSE_RANK".equalsIgnoreCase(name)) {
       if (orderElements.isEmpty()) {
-        throw new IllegalArgumentException("DENSE_RANK requires an ORDER BY clause: " + analytic);
+        throw new IllegalArgumentException(
+            "DENSE_RANK requires an ORDER BY clause: " + SqlExceptions.describe(analytic));
       }
       if (analytic.getExpression() != null) {
-        throw new IllegalArgumentException("DENSE_RANK must not include an argument expression: " + analytic);
+        throw new IllegalArgumentException(
+            "DENSE_RANK must not include an argument expression: " + SqlExceptions.describe(analytic));
       }
       collector.addDenseRankWindow(new DenseRankWindow(analytic, List.copyOf(partitions), orderElements));
       return;
     }
     if ("PERCENT_RANK".equalsIgnoreCase(name)) {
       if (orderElements.isEmpty()) {
-        throw new IllegalArgumentException("PERCENT_RANK requires an ORDER BY clause: " + analytic);
+        throw new IllegalArgumentException(
+            "PERCENT_RANK requires an ORDER BY clause: " + SqlExceptions.describe(analytic));
       }
       if (analytic.getExpression() != null) {
-        throw new IllegalArgumentException("PERCENT_RANK must not include an argument expression: " + analytic);
+        throw new IllegalArgumentException(
+            "PERCENT_RANK must not include an argument expression: " + SqlExceptions.describe(analytic));
       }
       collector.addPercentRankWindow(new PercentRankWindow(analytic, List.copyOf(partitions), orderElements));
       return;
     }
     if ("CUME_DIST".equalsIgnoreCase(name)) {
       if (orderElements.isEmpty()) {
-        throw new IllegalArgumentException("CUME_DIST requires an ORDER BY clause: " + analytic);
+        throw new IllegalArgumentException(
+            "CUME_DIST requires an ORDER BY clause: " + SqlExceptions.describe(analytic));
       }
       if (analytic.getExpression() != null) {
-        throw new IllegalArgumentException("CUME_DIST must not include an argument expression: " + analytic);
+        throw new IllegalArgumentException(
+            "CUME_DIST must not include an argument expression: " + SqlExceptions.describe(analytic));
       }
       collector.addCumeDistWindow(new CumeDistWindow(analytic, List.copyOf(partitions), orderElements));
       return;
@@ -297,7 +306,8 @@ public final class WindowFunctions {
     if ("NTILE".equalsIgnoreCase(name)) {
       Expression bucketExpression = analytic.getExpression();
       if (bucketExpression == null) {
-        throw new IllegalArgumentException("NTILE requires exactly one argument expression: " + analytic);
+        throw new IllegalArgumentException(
+            "NTILE requires exactly one argument expression: " + SqlExceptions.describe(analytic));
       }
       collector.addNtileWindow(new NtileWindow(analytic, List.copyOf(partitions), orderElements, bucketExpression));
       return;
@@ -307,10 +317,11 @@ public final class WindowFunctions {
       Expression argument = analytic.getExpression();
       if (!countStar && argument == null) {
         throw new IllegalArgumentException(
-            "COUNT requires an argument expression unless COUNT(*) is specified: " + analytic);
+            "COUNT requires an argument expression unless COUNT(*) is specified: " + SqlExceptions.describe(analytic));
       }
       if (analytic.isDistinct() || analytic.isUnique()) {
-        throw new IllegalArgumentException("COUNT does not support DISTINCT or UNIQUE modifiers: " + analytic);
+        throw new IllegalArgumentException(
+            "COUNT does not support DISTINCT or UNIQUE modifiers: " + SqlExceptions.describe(analytic));
       }
       collector.addCountWindow(new CountWindow(analytic, List.copyOf(partitions), orderElements, argument, countStar,
           analytic.getWindowElement()));
@@ -319,7 +330,7 @@ public final class WindowFunctions {
     if ("SUM".equalsIgnoreCase(name)) {
       Expression argument = analytic.getExpression();
       if (argument == null) {
-        throw new IllegalArgumentException("SUM requires an argument expression: " + analytic);
+        throw new IllegalArgumentException("SUM requires an argument expression: " + SqlExceptions.describe(analytic));
       }
       collector.addSumWindow(new SumWindow(analytic, List.copyOf(partitions), orderElements, argument,
           analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
@@ -328,7 +339,7 @@ public final class WindowFunctions {
     if ("AVG".equalsIgnoreCase(name)) {
       Expression argument = analytic.getExpression();
       if (argument == null) {
-        throw new IllegalArgumentException("AVG requires an argument expression: " + analytic);
+        throw new IllegalArgumentException("AVG requires an argument expression: " + SqlExceptions.describe(analytic));
       }
       collector.addAvgWindow(new AvgWindow(analytic, List.copyOf(partitions), orderElements, argument,
           analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
@@ -337,7 +348,7 @@ public final class WindowFunctions {
     if ("MIN".equalsIgnoreCase(name)) {
       Expression argument = analytic.getExpression();
       if (argument == null) {
-        throw new IllegalArgumentException("MIN requires an argument expression: " + analytic);
+        throw new IllegalArgumentException("MIN requires an argument expression: " + SqlExceptions.describe(analytic));
       }
       collector.addMinWindow(new MinWindow(analytic, List.copyOf(partitions), orderElements, argument,
           analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
@@ -346,7 +357,7 @@ public final class WindowFunctions {
     if ("MAX".equalsIgnoreCase(name)) {
       Expression argument = analytic.getExpression();
       if (argument == null) {
-        throw new IllegalArgumentException("MAX requires an argument expression: " + analytic);
+        throw new IllegalArgumentException("MAX requires an argument expression: " + SqlExceptions.describe(analytic));
       }
       collector.addMaxWindow(new MaxWindow(analytic, List.copyOf(partitions), orderElements, argument,
           analytic.isDistinct() || analytic.isUnique(), analytic.getWindowElement()));
@@ -355,10 +366,11 @@ public final class WindowFunctions {
     if ("LAG".equalsIgnoreCase(name)) {
       Expression valueExpression = analytic.getExpression();
       if (valueExpression == null) {
-        throw new IllegalArgumentException("LAG requires at least one argument expression: " + analytic);
+        throw new IllegalArgumentException(
+            "LAG requires at least one argument expression: " + SqlExceptions.describe(analytic));
       }
       if (orderElements.isEmpty()) {
-        throw new IllegalArgumentException("LAG requires an ORDER BY clause: " + analytic);
+        throw new IllegalArgumentException("LAG requires an ORDER BY clause: " + SqlExceptions.describe(analytic));
       }
       Expression offsetExpression = analytic.getOffset();
       Expression defaultExpression = analytic.getDefaultValue();
@@ -369,10 +381,11 @@ public final class WindowFunctions {
     if ("LEAD".equalsIgnoreCase(name)) {
       Expression valueExpression = analytic.getExpression();
       if (valueExpression == null) {
-        throw new IllegalArgumentException("LEAD requires at least one argument expression: " + analytic);
+        throw new IllegalArgumentException(
+            "LEAD requires at least one argument expression: " + SqlExceptions.describe(analytic));
       }
       if (orderElements.isEmpty()) {
-        throw new IllegalArgumentException("LEAD requires an ORDER BY clause: " + analytic);
+        throw new IllegalArgumentException("LEAD requires an ORDER BY clause: " + SqlExceptions.describe(analytic));
       }
       Expression offsetExpression = analytic.getOffset();
       Expression defaultExpression = analytic.getDefaultValue();
@@ -383,17 +396,21 @@ public final class WindowFunctions {
     if ("NTH_VALUE".equalsIgnoreCase(name)) {
       Expression valueExpression = analytic.getExpression();
       if (valueExpression == null) {
-        throw new IllegalArgumentException("NTH_VALUE requires an argument expression: " + analytic);
+        throw new IllegalArgumentException(
+            "NTH_VALUE requires an argument expression: " + SqlExceptions.describe(analytic));
       }
       Expression nthExpression = analytic.getOffset();
       if (nthExpression == null) {
-        throw new IllegalArgumentException("NTH_VALUE requires a position argument: " + analytic);
+        throw new IllegalArgumentException(
+            "NTH_VALUE requires a position argument: " + SqlExceptions.describe(analytic));
       }
       if (analytic.getDefaultValue() != null) {
-        throw new IllegalArgumentException("NTH_VALUE does not support a default argument: " + analytic);
+        throw new IllegalArgumentException(
+            "NTH_VALUE does not support a default argument: " + SqlExceptions.describe(analytic));
       }
       if (orderElements.isEmpty()) {
-        throw new IllegalArgumentException("NTH_VALUE requires an ORDER BY clause: " + analytic);
+        throw new IllegalArgumentException(
+            "NTH_VALUE requires an ORDER BY clause: " + SqlExceptions.describe(analytic));
       }
       collector.addNthValueWindow(new NthValueWindow(analytic, List.copyOf(partitions), orderElements, valueExpression,
           nthExpression, analytic.getWindowElement()));
@@ -402,10 +419,12 @@ public final class WindowFunctions {
     if ("FIRST_VALUE".equalsIgnoreCase(name)) {
       Expression valueExpression = analytic.getExpression();
       if (valueExpression == null) {
-        throw new IllegalArgumentException("FIRST_VALUE requires an argument expression: " + analytic);
+        throw new IllegalArgumentException(
+            "FIRST_VALUE requires an argument expression: " + SqlExceptions.describe(analytic));
       }
       if (orderElements.isEmpty()) {
-        throw new IllegalArgumentException("FIRST_VALUE requires an ORDER BY clause: " + analytic);
+        throw new IllegalArgumentException(
+            "FIRST_VALUE requires an ORDER BY clause: " + SqlExceptions.describe(analytic));
       }
       collector.addFirstValueWindow(new FirstValueWindow(analytic, List.copyOf(partitions), orderElements,
           valueExpression, analytic.getWindowElement()));
@@ -414,10 +433,12 @@ public final class WindowFunctions {
     if ("LAST_VALUE".equalsIgnoreCase(name)) {
       Expression valueExpression = analytic.getExpression();
       if (valueExpression == null) {
-        throw new IllegalArgumentException("LAST_VALUE requires an argument expression: " + analytic);
+        throw new IllegalArgumentException(
+            "LAST_VALUE requires an argument expression: " + SqlExceptions.describe(analytic));
       }
       if (orderElements.isEmpty()) {
-        throw new IllegalArgumentException("LAST_VALUE requires an ORDER BY clause: " + analytic);
+        throw new IllegalArgumentException(
+            "LAST_VALUE requires an ORDER BY clause: " + SqlExceptions.describe(analytic));
       }
       collector.addLastValueWindow(new LastValueWindow(analytic, List.copyOf(partitions), orderElements,
           valueExpression, analytic.getWindowElement()));
@@ -810,8 +831,8 @@ public final class WindowFunctions {
           }
         }
         if (tile < 1L || tile > bucketCount) {
-          throw new IllegalStateException(
-              "Computed NTILE value out of bounds: " + tile + " for expression " + window.expression());
+          throw new IllegalStateException("Computed NTILE value out of bounds: " + tile + " for expression "
+              + SqlExceptions.describe(window.expression()));
         }
         values.put(contexts.get(j).record(), tile);
       }
@@ -2723,27 +2744,28 @@ public final class WindowFunctions {
    *           if the bucket count is not a strictly positive integer
    */
   public static long resolvePositiveBucketCount(Object bucketValue, AnalyticExpression expression) {
+    String described = SqlExceptions.describe(expression);
     if (bucketValue == null) {
-      throw new IllegalArgumentException("NTILE bucket expression must evaluate to a positive integer: " + expression);
+      throw new IllegalArgumentException("NTILE bucket expression must evaluate to a positive integer: " + described);
     }
     BigDecimal decimalValue;
     try {
       decimalValue = bucketValue instanceof BigDecimal bd ? bd : new BigDecimal(bucketValue.toString());
     } catch (NumberFormatException e) {
       throw new IllegalArgumentException(
-          "NTILE bucket expression produced a non-numeric value for expression " + expression + ": " + bucketValue, e);
+          "NTILE bucket expression produced a non-numeric value for expression " + described + ": " + bucketValue, e);
     }
     long count;
     try {
       count = decimalValue.longValueExact();
     } catch (ArithmeticException e) {
       throw new IllegalArgumentException(
-          "NTILE bucket expression must resolve to an integer value for expression " + expression + ": " + bucketValue,
+          "NTILE bucket expression must resolve to an integer value for expression " + described + ": " + bucketValue,
           e);
     }
     if (count <= 0L) {
       throw new IllegalArgumentException(
-          "NTILE bucket expression must evaluate to a strictly positive integer for expression " + expression + ": "
+          "NTILE bucket expression must evaluate to a strictly positive integer for expression " + described + ": "
               + bucketValue);
     }
     return count;
