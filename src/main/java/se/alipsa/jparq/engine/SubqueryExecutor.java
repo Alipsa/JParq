@@ -626,7 +626,9 @@ public final class SubqueryExecutor implements AutoCloseable {
         return consume(rs, projectionSchema(sql, prepared));
       }
     } catch (SQLException | RuntimeException e) {
-      throw new IllegalStateException("Failed to execute sub query: " + description.get(), e);
+      // The description may be rewritten SQL carrying private correlated
+      // bindings; render it without exposing them.
+      throw new IllegalStateException("Failed to execute sub query: " + SqlExceptions.describe(description.get()), e);
     }
   }
 

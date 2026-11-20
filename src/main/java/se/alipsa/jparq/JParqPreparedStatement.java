@@ -313,7 +313,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     try {
       preparation = ownsStatement || hasParameters ? SqlParser.prepareQuery(originalSql) : null;
     } catch (RuntimeException exception) {
-      throw SqlExceptions.wrap("Failed to prepare query: " + sql, exception);
+      // The SQL may be a rewritten correlated subquery carrying private
+      // bindings; render it without exposing them.
+      throw SqlExceptions.wrap("Failed to prepare query: " + sql, exception, SqlExceptions::describe);
     }
     this.deferredTimePlanning = ownsStatement && preparation.timeDependent();
     this.inheritedCteContext = inheritedCtes == null ? Map.of() : Map.copyOf(inheritedCtes);
@@ -542,7 +544,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
       }
     } catch (Exception e) {
-      throw SqlExceptions.wrap("Failed to prepare query: " + sql, e);
+      // The SQL may be a rewritten correlated subquery carrying private
+      // bindings; render it without exposing them.
+      throw SqlExceptions.wrap("Failed to prepare query: " + sql, e, SqlExceptions::describe);
     }
 
     this.parsedSelect = tmpSelect;
@@ -559,7 +563,9 @@ public class JParqPreparedStatement implements PreparedStatement {
     try {
       this.joinPredicates = tmpJoinQuery ? planJoinPredicates() : Map.of();
     } catch (RuntimeException exception) {
-      throw SqlExceptions.wrap("Failed to prepare query: " + sql, exception);
+      // The SQL may be a rewritten correlated subquery carrying private
+      // bindings; render it without exposing them.
+      throw SqlExceptions.wrap("Failed to prepare query: " + sql, exception, SqlExceptions::describe);
     }
     PushdownInfo plannedPushdown = determinePushdownInfo(hasParameters || deferredTimePlanning, tmpSetOperation,
         tmpJoinQuery, tmpBaseCteResult, tmpConf, tmpSelect, tmpPredicate, tmpResidual);

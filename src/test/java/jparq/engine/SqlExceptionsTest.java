@@ -1,6 +1,7 @@
 package jparq.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -18,13 +19,16 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.List;
+import java.util.stream.Stream;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.JParqResultSet;
 import se.alipsa.jparq.engine.RecordReader;
@@ -222,6 +226,14 @@ class SqlExceptionsTest {
     assertEquals("Failed to evaluate UNNEST(a.values): Column not found: missing", failure.getMessage());
     assertEquals("null", SqlExceptions.describeSubqueryFailure(null, sql, "UNNEST(a.values)"));
     assertSame(original, failure.getCause());
+    // The same contract holds when the embedding source redacted the SQL
+    // before the wrapper saw it.
+    String redactedSql = SqlExceptions.describe(sql);
+    var redacted = new SQLException("Failed to prepare query: " + redactedSql + ": Column not found: missing", "42000");
+    var rendered = SqlExceptions.wrap("Failed to evaluate UNNEST(a.values)", redacted,
+        text -> SqlExceptions.describeSubqueryFailure(text, sql, "UNNEST(a.values)"));
+    assertEquals("Failed to evaluate UNNEST(a.values): Column not found: missing", rendered.getMessage());
+    assertSame(redacted, rendered.getCause());
   }
 
   /**
@@ -300,6 +312,74 @@ class SqlExceptionsTest {
           assertEquals(state, cause.getSQLState());
         }
       }
+    }
+  }
+
+  /**
+   * Cases where a correlated LATERAL subquery fails, mapped to the expected
+   * SQLState.
+   *
+   * @return failing correlated LATERAL queries with expected states
+   */
+  static Stream<Arguments> correlatedLateralFailures() {
+    return Stream.of(
+        // preparation fails on a missing column of the inner scope
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.nosuchcol FROM mtcars a WHERE a.cyl"
+            + " = o.cyl) l", "42000"),
+        // a projection reading an outer value fails on the first outer row
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT CAST(o.model AS INTEGER) AS v FROM"
+            + " mtcars a WHERE a.cyl = o.cyl) l", "22018"),
+        // a nested subquery carrying the outer binding fails while iterating
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.mpg FROM mtcars a WHERE a.mpg IN"
+            + " (SELECT CAST(o.model AS INTEGER))) l", "22018"));
+  }
+
+  /**
+   * Correlated LATERAL failures never expose the private
+   * {@code __JPARQ_CORRELATED_VALUE} binding token or its UUID in any link of the
+   * failure chain; bindings render as the neutral outer-value marker instead
+   * (issue #329).
+   *
+   * @param sql
+   *          failing correlated LATERAL query
+   * @param state
+   *          expected SQLState
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @MethodSource("correlatedLateralFailures")
+  void correlatedLateralFailuresRedactBindings(String sql, String state) throws Exception {
+    Path fixtures = Path.of(SqlExceptionsTest.class.getResource("/mtcars.parquet").toURI()).getParent();
+    for (boolean pushdown : List.of(true, false)) {
+      String url = "jdbc:jparq:" + fixtures + "?predicatePushdown=" + pushdown;
+      try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+        SQLException failure = assertThrows(SQLException.class, () -> {
+          try (var result = statement.executeQuery(sql)) {
+            while (result.next()) {
+              result.getObject(1);
+            }
+          }
+        }, sql);
+        assertEquals(state, failure.getSQLState(), sql + ": " + failure);
+        assertTrue(failure.getMessage().contains(SqlExceptions.OUTER_VALUE), failure::getMessage);
+        assertNoPrivateBindings(failure);
+      }
+    }
+  }
+
+  /**
+   * Checks every link of a failure chain for the private correlated binding
+   * token.
+   *
+   * @param failure
+   *          failure whose chain is inspected
+   */
+  private static void assertNoPrivateBindings(SQLException failure) {
+    for (Throwable current = failure; current != null; current = current.getCause()) {
+      Throwable link = current;
+      assertFalse(String.valueOf(link.getMessage()).contains("__JPARQ_CORRELATED_VALUE"),
+          () -> "private binding leaked: " + link.getMessage());
     }
   }
 

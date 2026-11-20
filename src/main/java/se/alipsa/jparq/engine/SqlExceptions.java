@@ -53,7 +53,8 @@ public final class SqlExceptions {
 
   /**
    * Removes generated preparation context while retaining the user's argument and
-   * the underlying error detail.
+   * the underlying error detail. The nested query may appear in its original form
+   * or already redacted to the outer-value marker.
    *
    * @param text
    *          nested diagnostic text, possibly null
@@ -67,7 +68,10 @@ public final class SqlExceptions {
     if (text == null) {
       return describe((String) null);
     }
-    return describe(text.replace("Failed to prepare query: " + sql + ": ", "").replace(sql, original));
+    String redactedSql = describe(sql);
+    String stripped = text.replace("Failed to prepare query: " + sql + ": ", "")
+        .replace("Failed to prepare query: " + redactedSql + ": ", "");
+    return describe(stripped.replace(sql, original).replace(redactedSql, original));
   }
 
   /** Prevents utility class instantiation. */

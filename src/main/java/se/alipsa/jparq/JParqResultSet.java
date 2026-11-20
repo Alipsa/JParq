@@ -701,8 +701,10 @@ public class JParqResultSet extends ResultSetAdapter {
     try {
       return projectionEvaluator == null ? null : projectionEvaluator.eval(expression, current);
     } catch (RuntimeException exception) {
-      throw SqlExceptions.wrap("Failed to evaluate projection " + expression + ": " + exception.getMessage(),
-          exception);
+      // Projections of correlated subqueries may carry private bindings.
+      throw SqlExceptions.wrap(
+          "Failed to evaluate projection " + SqlExceptions.describe(expression) + ": " + exception.getMessage(),
+          exception, SqlExceptions::describe);
     }
   }
 
