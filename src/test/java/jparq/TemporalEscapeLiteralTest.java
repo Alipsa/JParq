@@ -48,7 +48,13 @@ class TemporalEscapeLiteralTest {
         Arguments.of("SELECT {t '10:00:00.5'} FROM mtcars LIMIT 1", "22007"),
         Arguments.of("SELECT {ts '2024-02-29'} FROM mtcars LIMIT 1", "22007"),
         Arguments.of("SELECT {ts '2024-01-01T10:00:00'} FROM mtcars LIMIT 1", "22007"),
-        Arguments.of("SELECT [{d '2024-02-30'}] FROM mtcars LIMIT 1", "22008"));
+        Arguments.of("SELECT [{d '2024-02-30'}] FROM mtcars LIMIT 1", "22008"),
+        Arguments.of("SELECT CASE WHEN mpg=1 THEN mpg=2 ELSE mpg=3 END, {d '2024-13-01'} FROM mtcars LIMIT 1", "22008"),
+        Arguments.of("SELECT {d '2024-13-01'}, CASE WHEN mpg=1 THEN mpg=2 ELSE mpg=3 END FROM mtcars LIMIT 1", "22008"),
+        Arguments.of("SELECT CASE WHEN mpg=1 THEN mpg=2 ELSE mpg=3 END, {d '2024-02-29 10:00:00'} FROM mtcars LIMIT 1",
+            "22007"),
+        Arguments.of("SELECT CASE WHEN mpg=1 THEN mpg=2 ELSE mpg=3 END, {t '10:00:00.5'} FROM mtcars LIMIT 1",
+            "22007"));
   }
 
   /**
@@ -104,7 +110,10 @@ class TemporalEscapeLiteralTest {
 
   /**
    * Supplies statements whose escape-shaped text sits in a quoted region or a
-   * comment, along with the value the statement returns.
+   * comment, along with the value the statement returns. The {@code //} case pins
+   * current behavior only: {@code //} is not a standard SQL comment and
+   * JSqlParser's non-standard support for it is tracked in issue #580, so this
+   * case must be dropped when #580 is fixed.
    *
    * @return quoted-region and comment cases
    */
