@@ -3035,6 +3035,10 @@ public final class SqlParser {
         continue;
       }
 
+      // // is not a standard SQL comment, but JSqlParser's lexer treats it as a
+      // line comment (issue #580); strip it here too so preprocessing and the
+      // parser agree, and drop it together with the lexer support when #580 is
+      // fixed.
       if ((c == '-' && next == '-') || (c == '/' && next == '/')) {
         inLineComment = true;
         i++;

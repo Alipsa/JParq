@@ -25,7 +25,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 class TemporalEscapeLiteralTest {
 
   /**
-   * Supplies escape literals with invalid fields and their expected state.
+   * Supplies escape literals whose text fails the JDBC escape shape or strict
+   * conversion, and their expected state.
    *
    * @return invalid escape literal cases
    */
@@ -34,11 +35,19 @@ class TemporalEscapeLiteralTest {
         Arguments.of("SELECT {d '2024-13-01'} FROM mtcars LIMIT 1", "22008"),
         Arguments.of("SELECT {t '25:00:00'} FROM mtcars LIMIT 1", "22008"),
         Arguments.of("SELECT {t '12:60:00'} FROM mtcars LIMIT 1", "22008"),
+        Arguments.of("SELECT {t '23:59:60'} FROM mtcars LIMIT 1", "22008"),
         Arguments.of("SELECT {ts '2024-02-30 10:00:00'} FROM mtcars LIMIT 1", "22008"),
         Arguments.of("SELECT {ts '2024-01-01 12:60:00'} FROM mtcars LIMIT 1", "22008"),
         Arguments.of("SELECT {d 'bad'} FROM mtcars LIMIT 1", "22007"),
         Arguments.of("SELECT {t 'bad'} FROM mtcars LIMIT 1", "22007"),
         Arguments.of("SELECT {ts 'bad'} FROM mtcars LIMIT 1", "22007"),
+        Arguments.of("SELECT {d '2024-02-29 10:00:00'} FROM mtcars LIMIT 1", "22007"),
+        Arguments.of("SELECT {d '2024-02-29T10:00:00'} FROM mtcars LIMIT 1", "22007"),
+        Arguments.of("SELECT {d ' 2024-02-29'} FROM mtcars LIMIT 1", "22007"),
+        Arguments.of("SELECT {t '10:00'} FROM mtcars LIMIT 1", "22007"),
+        Arguments.of("SELECT {t '10:00:00.5'} FROM mtcars LIMIT 1", "22007"),
+        Arguments.of("SELECT {ts '2024-02-29'} FROM mtcars LIMIT 1", "22007"),
+        Arguments.of("SELECT {ts '2024-01-01T10:00:00'} FROM mtcars LIMIT 1", "22007"),
         Arguments.of("SELECT [{d '2024-02-30'}] FROM mtcars LIMIT 1", "22008"));
   }
 
@@ -71,29 +80,25 @@ class TemporalEscapeLiteralTest {
    */
   @Test
   void escapesRetainValidFields() throws Exception {
-    try (var connection = DriverManager.getConnection(url());
-        var statement = connection.createStatement();
-        var result = statement.executeQuery("SELECT {d '2024-02-29'} AS d, {t '10:20:30'} AS t, "
-            + "{ts '2024-02-29 10:20:30'} AS ts FROM mtcars LIMIT 1")) {
-      assertTrue(result.next());
-      assertEquals(Date.valueOf("2024-02-29"), result.getDate(1));
-      assertEquals(Time.valueOf("10:20:30"), result.getTime(2));
-      assertEquals(Timestamp.valueOf("2024-02-29 10:20:30"), result.getTimestamp(3));
-    }
-    try (var connection = DriverManager.getConnection(url());
-        var statement = connection.createStatement();
-        var result = statement.executeQuery(
-            "SELECT {d '2024-2-9'} AS a, {D '2024-02-29'} AS b, {d'2024-02-29'} AS c FROM mtcars LIMIT 1")) {
-      assertTrue(result.next());
-      assertEquals(Date.valueOf("2024-02-09"), result.getDate(1));
-      assertEquals(Date.valueOf("2024-02-29"), result.getDate(2));
-      assertEquals(Date.valueOf("2024-02-29"), result.getDate(3));
-    }
-    try (var connection = DriverManager.getConnection(url());
-        var statement = connection.createStatement();
-        var result = statement.executeQuery("SELECT {fn YEAR({d '2024-02-29'})} AS y FROM mtcars LIMIT 1")) {
-      assertTrue(result.next());
-      assertEquals(2024, result.getInt(1));
+    try (var connection = DriverManager.getConnection(url()); var statement = connection.createStatement()) {
+      try (var result = statement.executeQuery("SELECT {d '2024-02-29'} AS d, {t '10:20:30'} AS t, "
+          + "{ts '2024-02-29 10:20:30'} AS ts FROM mtcars LIMIT 1")) {
+        assertTrue(result.next());
+        assertEquals(Date.valueOf("2024-02-29"), result.getDate(1));
+        assertEquals(Time.valueOf("10:20:30"), result.getTime(2));
+        assertEquals(Timestamp.valueOf("2024-02-29 10:20:30"), result.getTimestamp(3));
+      }
+      try (var result = statement.executeQuery(
+          "SELECT {d '2024-2-9'} AS a, {D '2024-02-29'} AS b, {d'2024-02-29'} AS c FROM mtcars LIMIT 1")) {
+        assertTrue(result.next());
+        assertEquals(Date.valueOf("2024-02-09"), result.getDate(1));
+        assertEquals(Date.valueOf("2024-02-29"), result.getDate(2));
+        assertEquals(Date.valueOf("2024-02-29"), result.getDate(3));
+      }
+      try (var result = statement.executeQuery("SELECT {fn YEAR({d '2024-02-29'})} AS y FROM mtcars LIMIT 1")) {
+        assertTrue(result.next());
+        assertEquals(2024, result.getInt(1));
+      }
     }
   }
 
@@ -202,6 +207,35 @@ class TemporalEscapeLiteralTest {
   }
 
   /**
+   * Supplies statements that are both syntactically invalid and carry an escape
+   * whose text the lenient parser rejects, along with a case where the lenient
+   * parser rolls the value over instead.
+   *
+   * @return syntax-plus-invalid-escape cases
+   */
+  static Stream<String> syntaxErrorWithInvalidEscape() {
+    return Stream.of("SELECT {d '2024-13-01'} FROM FROM mtcars", "SELECT {d '2024-02-30'} FROM FROM mtcars",
+        "SELECT {d 'bad'} FROM FROM mtcars");
+  }
+
+  /**
+   * Reports the syntax error before the temporal data error when a statement is
+   * both syntactically invalid and carries an invalid escape, regardless of
+   * whether the lenient parser rejects or rolls the value over.
+   *
+   * @param sql
+   *          query with a syntax error and an invalid escape literal
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @MethodSource("syntaxErrorWithInvalidEscape")
+  void syntaxErrorPrecedesInvalidEscape(String sql) throws Exception {
+    SQLException failure = assertThrows(SQLException.class, () -> tryQuery(sql));
+    assertEquals("42000", failure.getSQLState(), () -> "expected a syntax error: " + failure.getMessage());
+  }
+
+  /**
    * Runs a query and rethrows its failure for assertThrows.
    *
    * @param sql
@@ -214,9 +248,10 @@ class TemporalEscapeLiteralTest {
         var statement = connection.createStatement();
         var result = statement.executeQuery(sql)) {
       result.next();
-    } catch (SQLException failure) {
-      throw failure;
     } catch (Exception failure) {
+      if (failure instanceof SQLException sqlFailure) {
+        throw sqlFailure;
+      }
       throw new IllegalStateException(failure);
     }
   }

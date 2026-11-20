@@ -1,6 +1,7 @@
 package se.alipsa.jparq.engine;
 
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeoutException;
 import net.sf.jsqlparser.JSQLParserException;
@@ -230,10 +231,14 @@ public final class JSqlParserSupport {
 
   /**
    * Parses a statement with a bounded simple-to-complex retry. JDBC temporal
-   * escape literals are validated with strict temporal conversion after a
-   * successful parse, because the parser normalizes out-of-range fields. When the
-   * parser rejects a literal's text during parsing, the same strict validation
-   * classifies the failure before the syntax error would be reported.
+   * escape literals are validated with the JDBC escape shape and strict temporal
+   * conversion after a successful parse, because the parser normalizes
+   * out-of-range fields and the strict helpers accept more text shapes than the
+   * lenient {@code valueOf} parsers reject. When the parser rejects a literal's
+   * text during parsing, the statement is re-parsed with valid placeholder escape
+   * values: a successful re-parse confirms the statement syntax and reclassifies
+   * the failure as 22007 or 22008, while a failing re-parse reports the syntax
+   * error instead, matching how typed literals order syntax and data failures.
    *
    * @param sql
    *          statement text
@@ -252,9 +257,8 @@ public final class JSqlParserSupport {
       try {
         stmt = CCJSqlParserUtil.parseStatement(parser.withAllowComplexParsing(false), executor);
       } catch (JSQLParserException e) {
-        if (isTemporalValueFailure(e)) {
-          // The parser rejected the literal's text; classify it strictly.
-          TemporalEscapeValidation.validate(sql);
+        if (isTemporalValueFailure(e, sql)) {
+          classifyTemporalValueFailure(sql, e, executor);
         }
         Throwable cause = e.getCause();
         if (cause instanceof InterruptedException || cause instanceof TimeoutException
@@ -270,29 +274,63 @@ public final class JSqlParserSupport {
   }
 
   /**
-   * Reports whether a parse failure came from the lenient temporal
-   * {@code valueOf} parsers inside JSqlParser rather than from a syntax error.
+   * Reports whether a parse failure came from a temporal escape value rather than
+   * from the statement syntax. The failure's cause chain must carry an
+   * {@link IllegalArgumentException}, and the statement must contain a temporal
+   * escape literal. The placeholder re-parse in
+   * {@link #classifyTemporalValueFailure} then confirms the attribution without
+   * relying on the value parser's stack frames.
    *
    * @param failure
    *          the parser failure to inspect
-   * @return whether a temporal value conversion rejected the literal text
+   * @param sql
+   *          the statement text that failed
+   * @return whether a temporal escape value rejected the literal text
    */
-  private static boolean isTemporalValueFailure(JSQLParserException failure) {
+  private static boolean isTemporalValueFailure(JSQLParserException failure, String sql) {
+    if (!TemporalEscapeValidation.hasTemporalEscape(sql)) {
+      return false;
+    }
     for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
-      if (cause instanceof IllegalArgumentException valueError) {
-        for (StackTraceElement frame : valueError.getStackTrace()) {
-          if (!"valueOf".equals(frame.getMethodName())) {
-            continue;
-          }
-          String className = frame.getClassName();
-          if ("java.sql.Date".equals(className) || "java.sql.Time".equals(className)
-              || "java.sql.Timestamp".equals(className)) {
-            return true;
-          }
-        }
+      if (cause instanceof IllegalArgumentException) {
+        return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Classifies a parse failure attributed to a temporal escape value. The
+   * statement is re-parsed with valid placeholder escape values that retain every
+   * token except the literal text. When the re-parse succeeds, the syntax is
+   * valid and the escape's strict validation failure is rethrown with the parse
+   * failure suppressed. When the re-parse fails, a syntax error elsewhere in the
+   * statement precedes the data error, so the caller's normal retry handling
+   * reports it.
+   *
+   * @param sql
+   *          the statement text that failed
+   * @param failure
+   *          the parse failure from the lenient parse
+   * @param executor
+   *          the parse executor for the re-parse
+   * @throws IllegalArgumentException
+   *           if the syntax is valid and an escape literal fails validation, with
+   *           a cause carrying SQLState 22007 or 22008
+   */
+  private static void classifyTemporalValueFailure(String sql, JSQLParserException failure, ExecutorService executor) {
+    String placeholders = TemporalEscapeValidation.withPlaceholderValues(sql);
+    try {
+      CCJSqlParserUtil.parseStatement(newParser(placeholders).withAllowComplexParsing(false), executor);
+    } catch (JSQLParserException syntaxError) {
+      return;
+    }
+    try {
+      TemporalEscapeValidation.validate(sql);
+    } catch (IllegalArgumentException invalid) {
+      invalid.addSuppressed(failure);
+      throw invalid;
+    }
   }
 
   /**
