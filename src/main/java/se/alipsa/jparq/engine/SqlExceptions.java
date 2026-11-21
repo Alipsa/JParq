@@ -310,8 +310,9 @@ public final class SqlExceptions {
    *          the operation that failed
    * @param failure
    *          the original failure, retained as the cause
-   * @return a classified JDBC exception, or an ordinary SQLException without a
-   *         known state
+   * @return a classified JDBC exception, or a plain SQLException that keeps the
+   *         failure's own SQLState and vendor code when the failure is an
+   *         SQLException, appending the failure detail to the context
    */
   public static SQLException wrap(String context, Throwable failure) {
     return wrap(context, failure, UnaryOperator.identity());
@@ -327,37 +328,48 @@ public final class SqlExceptions {
    *          the original failure, retained as the cause
    * @param diagnostics
    *          renderer for context and nested messages, accepting null text
-   * @return a classified JDBC exception with rendered diagnostics
+   * @return a classified JDBC exception with rendered diagnostics; without a
+   *         recognized classification a plain SQLException is returned that keeps
+   *         the failure's own SQLState and vendor code when the failure is an
+   *         SQLException, and the failure detail is appended to the rendered
+   *         context
    */
   public static SQLException wrap(String context, Throwable failure, UnaryOperator<String> diagnostics) {
     SQLException classified = findSqlStateFailure(failure);
-    if (classified == null) {
-      return new SQLException(diagnostics.apply(context), failure);
-    }
-    if (failure == classified && Objects.equals(context, classified.getMessage())
+    if (classified != null && failure == classified && Objects.equals(context, classified.getMessage())
         && Objects.equals(context, diagnostics.apply(context))) {
       return classified;
     }
-    StringBuilder message = new StringBuilder(context == null ? failure.toString() : context);
-    String detail = failure.getMessage();
+    StringBuilder message = new StringBuilder(context == null ? String.valueOf(failure) : context);
+    String detail = failure == null ? null : failure.getMessage();
     if (detail != null && !detail.isBlank() && message.indexOf(detail) < 0) {
       message.append(": ").append(detail);
     }
-    String classifiedDetail = classified.getMessage();
-    if (classifiedDetail != null && !classifiedDetail.isBlank() && message.indexOf(classifiedDetail) < 0) {
-      message.append(": ").append(classifiedDetail);
+    if (classified != null) {
+      String classifiedDetail = classified.getMessage();
+      if (classifiedDetail != null && !classifiedDetail.isBlank() && message.indexOf(classifiedDetail) < 0) {
+        message.append(": ").append(classifiedDetail);
+      }
     }
     String rendered = diagnostics.apply(message.toString());
-    if (classified.getSQLState().startsWith("42")) {
-      return new SQLSyntaxErrorException(rendered, classified.getSQLState(), classified.getErrorCode(), failure);
+    if (classified != null) {
+      if (classified.getSQLState().startsWith("42")) {
+        return new SQLSyntaxErrorException(rendered, classified.getSQLState(), classified.getErrorCode(), failure);
+      }
+      if ("0A000".equals(classified.getSQLState())) {
+        return new SQLFeatureNotSupportedException(rendered, classified.getSQLState(), classified.getErrorCode(),
+            failure);
+      }
+      if ("54000".equals(classified.getSQLState()) || "HY024".equals(classified.getSQLState())) {
+        return new SQLException(rendered, classified.getSQLState(), classified.getErrorCode(), failure);
+      }
+      return new SQLDataException(rendered, classified.getSQLState(), classified.getErrorCode(), failure);
     }
-    if ("0A000".equals(classified.getSQLState())) {
-      return new SQLFeatureNotSupportedException(rendered, classified.getSQLState(), classified.getErrorCode(),
-          failure);
+    if (failure instanceof SQLException unclassified) {
+      // Without a recognized classification, retain the direct failure's own
+      // state and vendor code rather than dropping them to null.
+      return new SQLException(rendered, unclassified.getSQLState(), unclassified.getErrorCode(), failure);
     }
-    if ("54000".equals(classified.getSQLState()) || "HY024".equals(classified.getSQLState())) {
-      return new SQLException(rendered, classified.getSQLState(), classified.getErrorCode(), failure);
-    }
-    return new SQLDataException(rendered, classified.getSQLState(), classified.getErrorCode(), failure);
+    return new SQLException(rendered, failure);
   }
 }

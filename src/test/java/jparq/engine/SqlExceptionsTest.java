@@ -324,6 +324,35 @@ class SqlExceptionsTest {
   }
 
   /**
+   * A top-level (non-join) derived table over a missing table surfaces the table
+   * lookup failure in the top-level message rather than only the cause chain
+   * (issue #330).
+   *
+   * @param pushdown
+   *          whether predicate pushdown is enabled
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      true, false
+  })
+  void topLevelDerivedTableMissingTableRetainsDetail(boolean pushdown) throws Exception {
+    Path fixtures = Path.of(SqlExceptionsTest.class.getResource("/mtcars.parquet").toURI()).getParent();
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + fixtures + "?predicatePushdown=" + pushdown);
+        var statement = connection.createStatement()) {
+      var failure = assertThrows(SQLException.class,
+          () -> statement.executeQuery("SELECT * FROM (SELECT * FROM nosuchtable) x"));
+      // The table lookup detail is no longer hidden in the cause chain: it is
+      // appended to the top-level message (issue #330).
+      assertEquals("Failed to prepare query: SELECT * FROM (SELECT * FROM nosuchtable) x: "
+          + "Failed to execute derived table 'x': Failed to prepare query: SELECT * FROM nosuchtable: "
+          + "Table not found: PUBLIC.nosuchtable", failure.getMessage());
+      assertTrue(failure.getMessage().contains("Table not found: PUBLIC.nosuchtable"), failure::getMessage);
+    }
+  }
+
+  /**
    * Preserves classified failures and derived-table context in LATERAL queries.
    *
    * @param predicate
@@ -605,19 +634,53 @@ class SqlExceptionsTest {
   }
 
   /**
-   * Preserves ordinary exceptions without claiming a syntax or numeric SQLState.
+   * Preserves the direct failure's own SQLState, vendor code, and detail for
+   * unclassified failures without claiming a syntax or numeric classification.
    */
   @Test
   void unrelatedErrorsKeepTheirOriginalClassification() {
-    var original = new SQLException("Input unavailable", "08006");
+    var original = new SQLException("Input unavailable", "08006", 42);
     assertNull(SqlExceptions.findSqlStateFailure(original));
     var failure = SqlExceptions.wrap("Failed to prepare query", original);
-    assertNull(failure.getSQLState());
+    assertEquals("08006", failure.getSQLState());
+    assertEquals(42, failure.getErrorCode());
     assertSame(original, failure.getCause());
-    assertEquals("Failed to prepare query", failure.getMessage());
+    assertEquals("Failed to prepare query: Input unavailable", failure.getMessage());
     var unexpected = new IllegalArgumentException("Unexpected engine failure");
     var wrapped = SqlExceptions.wrap("Evaluation failed", unexpected);
     assertNull(wrapped.getSQLState());
     assertSame(unexpected, wrapped.getCause());
+    assertEquals("Evaluation failed: Unexpected engine failure", wrapped.getMessage());
+  }
+
+  /**
+   * Appends the unclassified failure detail and keeps a state-less SQLException's
+   * null state rather than inventing one (issue #330).
+   */
+  @Test
+  void unclassifiedFailureAppendsDetailWithoutInventingAState() {
+    var tableNotFound = new SQLException("Table not found: PUBLIC.nosuchtable");
+    assertNull(SqlExceptions.findSqlStateFailure(tableNotFound));
+    var failure = SqlExceptions.wrap("Failed to prepare query: SELECT * FROM (SELECT * FROM nosuchtable) x",
+        tableNotFound);
+    assertNull(failure.getSQLState());
+    assertSame(tableNotFound, failure.getCause());
+    assertEquals("Failed to prepare query: SELECT * FROM (SELECT * FROM nosuchtable) x: "
+        + "Table not found: PUBLIC.nosuchtable", failure.getMessage());
+  }
+
+  /**
+   * Keeps an unclassified failure detail redacted when the diagnostics renderer
+   * hides private correlated bindings (issue #330).
+   */
+  @Test
+  void unclassifiedFailureDetailIsRenderedLikeClassifiedDetail() {
+    var original = new SQLException("Column not found: __JPARQ_CORRELATED_VALUE('private-key', 0)");
+    var failure = SqlExceptions.wrap("Failed to evaluate UNNEST(a.values)", original, SqlExceptions::describe);
+    assertNull(failure.getSQLState());
+    assertSame(original, failure.getCause());
+    assertEquals("Failed to evaluate UNNEST(a.values): Column not found: " + SqlExceptions.OUTER_VALUE,
+        failure.getMessage());
+    assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"));
   }
 }
