@@ -347,7 +347,11 @@ public final class SqlExceptions {
    *         and keeps the SQLState and vendor code of the first state-bearing
    *         SQLException in the chain; with several SQLExceptions in the chain,
    *         that state may come from a different, outer exception than the
-   *         appended innermost detail
+   *         appended innermost detail. The context the caller passes is not
+   *         redacted, including the failure's own message when the caller passes
+   *         it as the context, and when the failure is already the classified
+   *         exception with a message equal to the context, it is returned
+   *         unchanged with its own text
    */
   public static SQLException wrap(String context, Throwable failure) {
     return wrap(context, failure, UnaryOperator.identity());
@@ -367,7 +371,11 @@ public final class SqlExceptions {
    *         recognized classification a plain SQLException is returned that
    *         appends the redacted failure detail and the redacted innermost
    *         SQLException detail to the rendered context and keeps the SQLState
-   *         and vendor code of the first state-bearing SQLException in the chain
+   *         and vendor code of the first state-bearing SQLException in the chain.
+   *         The context the caller passes is not redacted, including the
+   *         failure's own message when the caller passes it as the context, and
+   *         when the failure is already the classified exception with a message
+   *         equal to the context, it is returned unchanged with its own text
    */
   public static SQLException wrap(String context, Throwable failure, UnaryOperator<String> diagnostics) {
     List<Throwable> chain = causeChain(failure);
@@ -376,7 +384,9 @@ public final class SqlExceptions {
         && Objects.equals(context, diagnostics.apply(context))) {
       return classified;
     }
-    StringBuilder message = new StringBuilder(context == null ? String.valueOf(failure) : context);
+    // The caller's context stays verbatim; when it is null, the failure's own
+    // text is a fallback and is redacted like any other detail.
+    StringBuilder message = new StringBuilder(context == null ? describe(String.valueOf(failure)) : context);
     appendDetail(message, failure == null ? null : failure.getMessage());
     if (classified != null) {
       appendDetail(message, classified.getMessage());
@@ -413,9 +423,12 @@ public final class SqlExceptions {
 
   /**
    * Appends a detail to a diagnostic message, redacted, when it is non-blank and
-   * not already present, in raw or redacted form. The caller's context stays
-   * verbatim; redacting the detail keeps a raw correlated binding out of the
-   * message even on caller paths whose diagnostics do no redaction of their own.
+   * not already carried by the message, in raw or redacted form. The caller's
+   * context stays verbatim; redacting the detail keeps a raw correlated binding
+   * out of the message even on caller paths whose diagnostics do no redaction of
+   * their own. A detail is carried when the message equals it or contains it at a
+   * segment boundary, so a coincidental substring match cannot drop a short
+   * detail.
    *
    * @param message
    *          the message being built
@@ -423,13 +436,29 @@ public final class SqlExceptions {
    *          the detail to append, possibly null
    */
   private static void appendDetail(StringBuilder message, String detail) {
-    if (detail == null || message.indexOf(detail) >= 0) {
+    if (detail == null || detail.isBlank()) {
       return;
     }
+    String text = message.toString();
     String redacted = describe(detail);
-    if (!redacted.isBlank() && message.indexOf(redacted) < 0) {
+    if (!detailPresent(text, detail) && !detailPresent(text, redacted)) {
       message.append(": ").append(redacted);
     }
+  }
+
+  /**
+   * Reports whether a message already carries a detail, as the whole message or
+   * as a ": "-separated segment.
+   *
+   * @param text
+   *          the message built so far
+   * @param detail
+   *          the detail to look for
+   * @return true when the message equals the detail or carries it at a segment
+   *         boundary
+   */
+  private static boolean detailPresent(String text, String detail) {
+    return text.equals(detail) || text.contains(": " + detail);
   }
 
   /**

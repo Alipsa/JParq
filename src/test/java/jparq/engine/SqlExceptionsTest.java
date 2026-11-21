@@ -886,6 +886,30 @@ class SqlExceptionsTest {
   }
 
   /**
+   * Redacts the failure's own text when it is used as a fallback for a null
+   * context, which comes from the failure rather than the caller (issue #330).
+   */
+  @Test
+  void wrapNullContextFallbackIsRedacted() {
+    var original = new SQLException("x __JPARQ_CORRELATED_VALUE('k', 0)");
+    var failure = SqlExceptions.wrap(null, original);
+    assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure::getMessage);
+    assertEquals("java.sql.SQLException: x " + SqlExceptions.OUTER_VALUE, failure.getMessage());
+  }
+
+  /**
+   * Does not drop a short detail by substring coincidence: a detail is skipped
+   * only when the message equals it or carries it at a segment boundary (issue
+   * #330).
+   */
+  @Test
+  void wrapDoesNotDropShortDetailBySubstringCoincidence() {
+    var original = new SQLException("__JPARQ_CORRELATED_VALUE('k', 0)");
+    var failure = SqlExceptions.wrap("ctx " + SqlExceptions.OUTER_VALUE, original);
+    assertEquals("ctx " + SqlExceptions.OUTER_VALUE + ": " + SqlExceptions.OUTER_VALUE, failure.getMessage());
+  }
+
+  /**
    * Redacts the classified detail as well, so both branches stay consistent on
    * caller paths whose diagnostics do no redaction of their own (issue #330).
    */
