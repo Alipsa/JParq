@@ -922,8 +922,7 @@ public final class WindowFunctions {
       return;
     }
 
-    throw new IllegalArgumentException(
-        "Unsupported window frame type for COUNT: " + SqlExceptions.describe(String.valueOf(element)));
+    throw new IllegalArgumentException("Unsupported window frame type for COUNT: " + SqlExceptions.describe(element));
   }
 
   private static void computeDefaultRangeCount(CountWindow window, List<RowContext> contexts,
@@ -963,7 +962,7 @@ public final class WindowFunctions {
         return;
       }
       throw new IllegalArgumentException(
-          "Unsupported RANGE frame specification for COUNT: " + SqlExceptions.describe(String.valueOf(element)));
+          "Unsupported RANGE frame specification for COUNT: " + SqlExceptions.describe(element));
     }
     if (range == null) {
       computeDefaultRangeCount(window, contexts, argumentValues, partitionStart, partitionEnd, values);
@@ -1001,7 +1000,7 @@ public final class WindowFunctions {
       return;
     }
     throw new IllegalArgumentException(
-        "Unsupported RANGE frame boundaries for COUNT: " + SqlExceptions.describe(String.valueOf(element)));
+        "Unsupported RANGE frame boundaries for COUNT: " + SqlExceptions.describe(element));
   }
 
   private static void computeRowsCount(CountWindow window, WindowElement element, List<RowContext> contexts,
@@ -1134,8 +1133,7 @@ public final class WindowFunctions {
       return;
     }
 
-    throw new IllegalArgumentException(
-        "Unsupported window frame type for SUM: " + SqlExceptions.describe(String.valueOf(element)));
+    throw new IllegalArgumentException("Unsupported window frame type for SUM: " + SqlExceptions.describe(element));
   }
 
   private static void computeDefaultRangeSum(List<RowContext> contexts, List<Object> argumentValues, int partitionStart,
@@ -1193,8 +1191,7 @@ public final class WindowFunctions {
       return;
     }
 
-    throw new IllegalArgumentException(
-        "Unsupported window frame type for AVG: " + SqlExceptions.describe(String.valueOf(element)));
+    throw new IllegalArgumentException("Unsupported window frame type for AVG: " + SqlExceptions.describe(element));
   }
 
   private static void computeDefaultRangeAvg(List<RowContext> contexts, List<Object> argumentValues, int partitionStart,
@@ -1239,7 +1236,7 @@ public final class WindowFunctions {
         return;
       }
       throw new IllegalArgumentException(
-          "Unsupported RANGE frame specification for AVG: " + SqlExceptions.describe(String.valueOf(element)));
+          "Unsupported RANGE frame specification for AVG: " + SqlExceptions.describe(element));
     }
     if (range == null) {
       computeDefaultRangeAvg(contexts, argumentValues, partitionStart, partitionEnd, values);
@@ -1281,7 +1278,7 @@ public final class WindowFunctions {
       return;
     }
     throw new IllegalArgumentException(
-        "Unsupported RANGE frame boundaries for AVG: " + SqlExceptions.describe(String.valueOf(element)));
+        "Unsupported RANGE frame boundaries for AVG: " + SqlExceptions.describe(element));
   }
 
   private static void computeRowsAvg(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
@@ -1373,8 +1370,7 @@ public final class WindowFunctions {
       return;
     }
 
-    throw new IllegalArgumentException(
-        "Unsupported window frame type for MIN: " + SqlExceptions.describe(String.valueOf(element)));
+    throw new IllegalArgumentException("Unsupported window frame type for MIN: " + SqlExceptions.describe(element));
   }
 
   private static void computeDefaultRangeMin(List<RowContext> contexts, List<Object> argumentValues, int partitionStart,
@@ -1419,7 +1415,7 @@ public final class WindowFunctions {
         return;
       }
       throw new IllegalArgumentException(
-          "Unsupported RANGE frame specification for MIN: " + SqlExceptions.describe(String.valueOf(element)));
+          "Unsupported RANGE frame specification for MIN: " + SqlExceptions.describe(element));
     }
     if (range == null) {
       computeDefaultRangeMin(contexts, argumentValues, partitionStart, partitionEnd, values);
@@ -1461,7 +1457,7 @@ public final class WindowFunctions {
       return;
     }
     throw new IllegalArgumentException(
-        "Unsupported RANGE frame boundaries for MIN: " + SqlExceptions.describe(String.valueOf(element)));
+        "Unsupported RANGE frame boundaries for MIN: " + SqlExceptions.describe(element));
   }
 
   private static void computeRowsMin(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
@@ -1553,8 +1549,7 @@ public final class WindowFunctions {
       return;
     }
 
-    throw new IllegalArgumentException(
-        "Unsupported window frame type for MAX: " + SqlExceptions.describe(String.valueOf(element)));
+    throw new IllegalArgumentException("Unsupported window frame type for MAX: " + SqlExceptions.describe(element));
   }
 
   private static void computeDefaultRangeMax(List<RowContext> contexts, List<Object> argumentValues, int partitionStart,
@@ -1599,7 +1594,7 @@ public final class WindowFunctions {
         return;
       }
       throw new IllegalArgumentException(
-          "Unsupported RANGE frame specification for MAX: " + SqlExceptions.describe(String.valueOf(element)));
+          "Unsupported RANGE frame specification for MAX: " + SqlExceptions.describe(element));
     }
     if (range == null) {
       computeDefaultRangeMax(contexts, argumentValues, partitionStart, partitionEnd, values);
@@ -1641,7 +1636,7 @@ public final class WindowFunctions {
       return;
     }
     throw new IllegalArgumentException(
-        "Unsupported RANGE frame boundaries for MAX: " + SqlExceptions.describe(String.valueOf(element)));
+        "Unsupported RANGE frame boundaries for MAX: " + SqlExceptions.describe(element));
   }
 
   private static void computeRowsMax(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
@@ -1830,7 +1825,7 @@ public final class WindowFunctions {
       return;
     }
     throw new IllegalArgumentException(
-        "Unsupported window frame type for NTH_VALUE: " + SqlExceptions.describe(String.valueOf(element)));
+        "Unsupported window frame type for NTH_VALUE: " + SqlExceptions.describe(element));
   }
 
   private static void computeDefaultRangeNthValue(List<RowContext> contexts, List<Object> argumentValues,
@@ -1889,7 +1884,7 @@ public final class WindowFunctions {
     if (offset != null) {
       if (offset.getExpression() != null) {
         throw new IllegalArgumentException(
-            "Unsupported RANGE frame specification for NTH_VALUE: " + SqlExceptions.describe(String.valueOf(element)));
+            "Unsupported RANGE frame specification for NTH_VALUE: " + SqlExceptions.describe(element));
       }
       WindowOffset.Type type = offset.getType();
       if (type == WindowOffset.Type.PRECEDING || type == WindowOffset.Type.CURRENT) {
@@ -1901,7 +1896,7 @@ public final class WindowFunctions {
         return;
       }
       throw new IllegalArgumentException(
-          "Unsupported RANGE frame specification for NTH_VALUE: " + SqlExceptions.describe(String.valueOf(element)));
+          "Unsupported RANGE frame specification for NTH_VALUE: " + SqlExceptions.describe(element));
     }
     if (range == null) {
       computeDefaultRangeNthValue(contexts, argumentValues, nthPositions, partitionStart, partitionEnd, values);
@@ -1926,7 +1921,7 @@ public final class WindowFunctions {
       return;
     }
     throw new IllegalArgumentException(
-        "Unsupported RANGE frame boundaries for NTH_VALUE: " + SqlExceptions.describe(String.valueOf(element)));
+        "Unsupported RANGE frame boundaries for NTH_VALUE: " + SqlExceptions.describe(element));
   }
 
   private static void computeRowsNthValue(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
@@ -2087,7 +2082,7 @@ public final class WindowFunctions {
       return;
     }
     throw new IllegalArgumentException(
-        "Unsupported window frame type for FIRST_VALUE: " + SqlExceptions.describe(String.valueOf(element)));
+        "Unsupported window frame type for FIRST_VALUE: " + SqlExceptions.describe(element));
   }
 
   private static void computeDefaultRangeFirstValue(List<RowContext> contexts, List<Object> argumentValues,
@@ -2105,8 +2100,8 @@ public final class WindowFunctions {
     WindowRange range = element.getRange();
     if (offset != null) {
       if (offset.getExpression() != null) {
-        throw new IllegalArgumentException("Unsupported RANGE frame specification for FIRST_VALUE: "
-            + SqlExceptions.describe(String.valueOf(element)));
+        throw new IllegalArgumentException(
+            "Unsupported RANGE frame specification for FIRST_VALUE: " + SqlExceptions.describe(element));
       }
       WindowOffset.Type type = offset.getType();
       if (type == WindowOffset.Type.PRECEDING || type == WindowOffset.Type.CURRENT) {
@@ -2121,7 +2116,7 @@ public final class WindowFunctions {
         return;
       }
       throw new IllegalArgumentException(
-          "Unsupported RANGE frame specification for FIRST_VALUE: " + SqlExceptions.describe(String.valueOf(element)));
+          "Unsupported RANGE frame specification for FIRST_VALUE: " + SqlExceptions.describe(element));
     }
     if (range == null) {
       computeDefaultRangeFirstValue(contexts, argumentValues, partitionStart, partitionEnd, values);
@@ -2146,7 +2141,7 @@ public final class WindowFunctions {
       return;
     }
     throw new IllegalArgumentException(
-        "Unsupported RANGE frame boundaries for FIRST_VALUE: " + SqlExceptions.describe(String.valueOf(element)));
+        "Unsupported RANGE frame boundaries for FIRST_VALUE: " + SqlExceptions.describe(element));
   }
 
   private static void computeCurrentRowRangeFirstValue(List<RowContext> contexts, List<Object> argumentValues,
@@ -2237,7 +2232,7 @@ public final class WindowFunctions {
       return;
     }
     throw new IllegalArgumentException(
-        "Unsupported window frame type for LAST_VALUE: " + SqlExceptions.describe(String.valueOf(element)));
+        "Unsupported window frame type for LAST_VALUE: " + SqlExceptions.describe(element));
   }
 
   private static void computeDefaultRangeLastValue(List<RowContext> contexts, List<Object> argumentValues,
@@ -2253,7 +2248,7 @@ public final class WindowFunctions {
     if (offset != null) {
       if (offset.getExpression() != null) {
         throw new IllegalArgumentException(
-            "Unsupported RANGE frame specification for LAST_VALUE: " + SqlExceptions.describe(String.valueOf(element)));
+            "Unsupported RANGE frame specification for LAST_VALUE: " + SqlExceptions.describe(element));
       }
       WindowOffset.Type type = offset.getType();
       if (type == WindowOffset.Type.PRECEDING || type == WindowOffset.Type.CURRENT) {
@@ -2268,7 +2263,7 @@ public final class WindowFunctions {
         return;
       }
       throw new IllegalArgumentException(
-          "Unsupported RANGE frame specification for LAST_VALUE: " + SqlExceptions.describe(String.valueOf(element)));
+          "Unsupported RANGE frame specification for LAST_VALUE: " + SqlExceptions.describe(element));
     }
     if (range == null) {
       computeDefaultRangeLastValue(contexts, argumentValues, partitionStart, partitionEnd, values);
@@ -2299,7 +2294,7 @@ public final class WindowFunctions {
       return;
     }
     throw new IllegalArgumentException(
-        "Unsupported RANGE frame boundaries for LAST_VALUE: " + SqlExceptions.describe(String.valueOf(element)));
+        "Unsupported RANGE frame boundaries for LAST_VALUE: " + SqlExceptions.describe(element));
   }
 
   private static void computeCurrentRowRangeLastValue(List<RowContext> contexts, List<Object> argumentValues,
@@ -2365,7 +2360,7 @@ public final class WindowFunctions {
         return;
       }
       throw new IllegalArgumentException(
-          "Unsupported RANGE frame specification for SUM: " + SqlExceptions.describe(String.valueOf(element)));
+          "Unsupported RANGE frame specification for SUM: " + SqlExceptions.describe(element));
     }
     if (range == null) {
       computeDefaultRangeSum(contexts, argumentValues, partitionStart, partitionEnd, values);
@@ -2407,7 +2402,7 @@ public final class WindowFunctions {
       return;
     }
     throw new IllegalArgumentException(
-        "Unsupported RANGE frame boundaries for SUM: " + SqlExceptions.describe(String.valueOf(element)));
+        "Unsupported RANGE frame boundaries for SUM: " + SqlExceptions.describe(element));
   }
 
   private static FrameBoundary rangeBoundary(WindowOffset offset, boolean start) {
@@ -2416,7 +2411,7 @@ public final class WindowFunctions {
     }
     if (offset.getExpression() != null) {
       throw new IllegalArgumentException(
-          "Only UNBOUNDED or CURRENT range offsets are supported: " + SqlExceptions.describe(String.valueOf(offset)));
+          "Only UNBOUNDED or CURRENT range offsets are supported: " + SqlExceptions.describe(offset));
     }
     WindowOffset.Type type = offset.getType();
     if (type == WindowOffset.Type.PRECEDING) {
@@ -2428,8 +2423,7 @@ public final class WindowFunctions {
     if (type == WindowOffset.Type.CURRENT) {
       return FrameBoundary.currentRow();
     }
-    throw new IllegalArgumentException(
-        "Unsupported RANGE frame offset: " + SqlExceptions.describe(String.valueOf(offset)));
+    throw new IllegalArgumentException("Unsupported RANGE frame offset: " + SqlExceptions.describe(offset));
   }
 
   private static void computeRowsSum(WindowElement element, List<RowContext> contexts, List<Object> argumentValues,
@@ -2516,18 +2510,16 @@ public final class WindowFunctions {
       if (type == WindowOffset.Type.CURRENT) {
         return FrameBoundary.currentRow();
       }
-      throw new IllegalArgumentException(
-          "Unsupported ROWS frame offset: " + SqlExceptions.describe(String.valueOf(offset)));
+      throw new IllegalArgumentException("Unsupported ROWS frame offset: " + SqlExceptions.describe(offset));
     }
     Object literal = LiteralConverter.toLiteral(offset.getExpression());
     if (!(literal instanceof Number number)) {
       throw new IllegalArgumentException(
-          "ROWS frame offset must evaluate to a numeric literal: " + SqlExceptions.describe(String.valueOf(offset)));
+          "ROWS frame offset must evaluate to a numeric literal: " + SqlExceptions.describe(offset));
     }
     long value = number.longValue();
     if (value < 0L) {
-      throw new IllegalArgumentException(
-          "ROWS frame offset must be non-negative: " + SqlExceptions.describe(String.valueOf(offset)));
+      throw new IllegalArgumentException("ROWS frame offset must be non-negative: " + SqlExceptions.describe(offset));
     }
     if (type == WindowOffset.Type.PRECEDING || type == WindowOffset.Type.EXPR) {
       return FrameBoundary.offsetPreceding(value);
@@ -2538,8 +2530,7 @@ public final class WindowFunctions {
     if (type == WindowOffset.Type.CURRENT) {
       return FrameBoundary.currentRow();
     }
-    throw new IllegalArgumentException(
-        "Unsupported ROWS frame offset: " + SqlExceptions.describe(String.valueOf(offset)));
+    throw new IllegalArgumentException("Unsupported ROWS frame offset: " + SqlExceptions.describe(offset));
   }
 
   private static int resolveRowsStartIndex(FrameBoundary boundary, int position, int partitionSize) {

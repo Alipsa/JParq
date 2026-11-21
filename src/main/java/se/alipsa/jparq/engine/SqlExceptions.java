@@ -52,6 +52,20 @@ public final class SqlExceptions {
   }
 
   /**
+   * Redacts private correlated bindings from the rendered text of diagnostic
+   * objects whose {@code toString()} embeds expressions, such as window frame
+   * elements and offsets.
+   *
+   * @param text
+   *          the diagnostic object, possibly null
+   * @return text with each private binding replaced by a neutral outer-value
+   *         token, or "null" for null input
+   */
+  public static String describe(Object text) {
+    return describe(String.valueOf(text));
+  }
+
+  /**
    * Removes generated preparation context while retaining the user's argument and
    * the underlying error detail. The nested query may appear in its original form
    * or already redacted to the outer-value marker.

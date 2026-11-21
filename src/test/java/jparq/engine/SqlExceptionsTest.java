@@ -421,6 +421,11 @@ class SqlExceptionsTest {
         // an ungrouped SELECT expression combining an outer value fails at preparation
         Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.mpg + o.cyl AS z FROM mtcars a GROUP"
             + " BY a.cyl) l", "42803"),
+        // an EXISTS subquery whose table-less LATERAL body references a preceding
+        // FROM item fails while preparing the rewritten subquery; the missing
+        // top-level classification is issue #416
+        Arguments.of("SELECT o.cyl FROM mtcars o WHERE EXISTS (SELECT 1 FROM mtcars y CROSS JOIN LATERAL (SELECT"
+            + " y.cyl AS k WHERE y.cyl = o.cyl) l WHERE l.k = o.cyl)", null),
         // a ROWS frame offset reading an outer value fails at evaluation;
         // the missing top-level classification is issue #591
         Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT COUNT(*) OVER (ORDER BY a.mpg ROWS"
@@ -442,9 +447,10 @@ class SqlExceptionsTest {
    *          failing correlated LATERAL query
    * @param state
    *          expected top-level SQLState, or null pinning a known classification
-   *          gap (issue #389 for the ARRAY case, issue #583 for the NTILE case,
-   *          issue #586 for the NTH_VALUE case, issue #590 for the LAG case,
-   *          issue #591 for the ROWS and RANGE frame offset cases)
+   *          gap (issue #389 for the ARRAY case, issue #416 for the
+   *          EXISTS-with-LATERAL case, issue #583 for the NTILE case, issue #586
+   *          for the NTH_VALUE case, issue #590 for the LAG case, issue #591 for
+   *          the ROWS and RANGE frame offset cases)
    * @throws Exception
    *           if fixture lookup or connection setup fails
    */

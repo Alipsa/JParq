@@ -4532,12 +4532,13 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (e.getMessage() != null && e.getMessage().contains(context)) {
         throw e;
       }
-      String message = context + derivedRecordName(ref) + "': " + e.getMessage();
+      // Nested derived-table failures may carry private bindings in their
+      // diagnostics; render the message on both branches so the reported
+      // message stays redacted while the cause chain keeps its original text.
+      String message = SqlExceptions.describe(context + derivedRecordName(ref) + "': " + e.getMessage());
       if (SqlExceptions.findSqlStateFailure(e) == null) {
         throw new SQLException(message, e.getSQLState(), e.getErrorCode(), e);
       }
-      // Nested derived-table failures may carry private bindings in their
-      // diagnostics; the renderer keeps them out of the reported message.
       throw SqlExceptions.wrap(message, e, SqlExceptions::describe);
     }
   }
