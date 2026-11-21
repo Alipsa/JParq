@@ -296,7 +296,18 @@ public final class SqlExceptions {
    *         or null without a recognized state
    */
   public static SQLException findSqlStateFailure(Throwable failure) {
-    for (Throwable current : causeChain(failure)) {
+    return findSqlStateFailure(causeChain(failure));
+  }
+
+  /**
+   * Finds a classified failure among the given cause chain links.
+   *
+   * @param chain
+   *          the cause chain links to inspect
+   * @return the classified exception, or null without a recognized state
+   */
+  private static SQLException findSqlStateFailure(List<Throwable> chain) {
+    for (Throwable current : chain) {
       if (current instanceof SQLException sql && sql.getSQLState() != null
           && CLASSIFIED_STATES.contains(sql.getSQLState())) {
         return sql;
@@ -331,11 +342,12 @@ public final class SqlExceptions {
    * @param failure
    *          the original failure, retained as the cause
    * @return a classified JDBC exception, or a plain SQLException that appends the
-   *         failure detail (and, without a recognized classification, the
-   *         innermost SQLException detail) to the context and keeps the SQLState
-   *         and vendor code of the first state-bearing SQLException in the chain;
-   *         with several SQLExceptions in the chain, that state may come from a
-   *         different, outer exception than the appended innermost detail
+   *         redacted failure detail (and, without a recognized classification,
+   *         the redacted innermost SQLException detail) to the verbatim context
+   *         and keeps the SQLState and vendor code of the first state-bearing
+   *         SQLException in the chain; with several SQLExceptions in the chain,
+   *         that state may come from a different, outer exception than the
+   *         appended innermost detail
    */
   public static SQLException wrap(String context, Throwable failure) {
     return wrap(context, failure, UnaryOperator.identity());
@@ -353,12 +365,13 @@ public final class SqlExceptions {
    *          renderer for context and nested messages, accepting null text
    * @return a classified JDBC exception with rendered diagnostics; without a
    *         recognized classification a plain SQLException is returned that
-   *         appends the failure detail and the innermost SQLException detail to
-   *         the rendered context and keeps the SQLState and vendor code of the
-   *         first state-bearing SQLException in the chain
+   *         appends the redacted failure detail and the redacted innermost
+   *         SQLException detail to the rendered context and keeps the SQLState
+   *         and vendor code of the first state-bearing SQLException in the chain
    */
   public static SQLException wrap(String context, Throwable failure, UnaryOperator<String> diagnostics) {
-    SQLException classified = findSqlStateFailure(failure);
+    List<Throwable> chain = causeChain(failure);
+    SQLException classified = findSqlStateFailure(chain);
     if (classified != null && failure == classified && Objects.equals(context, classified.getMessage())
         && Objects.equals(context, diagnostics.apply(context))) {
       return classified;
@@ -371,7 +384,8 @@ public final class SqlExceptions {
       // Without a recognized classification the direct failure may be a wrapper
       // that carries context but not the reason; also surface the innermost
       // SQLException's message so the root cause is not hidden in the chain.
-      appendInnermostDetail(message, innermostSqlException(failure));
+      SQLException innermost = innermostSqlException(chain);
+      appendDetail(message, innermost == null ? null : innermost.getMessage());
     }
     String rendered = diagnostics.apply(message.toString());
     if (classified != null) {
@@ -390,7 +404,7 @@ public final class SqlExceptions {
     // Without a recognized classification, retain the state and vendor code of
     // the first state-bearing SQLException in the chain rather than dropping
     // them, even when the direct failure is an ordinary runtime wrapper.
-    SQLException stateful = firstStatefulSqlException(failure);
+    SQLException stateful = firstStatefulSqlException(chain);
     if (stateful != null) {
       return new SQLException(rendered, stateful.getSQLState(), stateful.getErrorCode(), failure);
     }
@@ -398,8 +412,10 @@ public final class SqlExceptions {
   }
 
   /**
-   * Appends a detail to a diagnostic message when it is non-blank and not already
-   * present.
+   * Appends a detail to a diagnostic message, redacted, when it is non-blank and
+   * not already present, in raw or redacted form. The caller's context stays
+   * verbatim; redacting the detail keeps a raw correlated binding out of the
+   * message even on caller paths whose diagnostics do no redaction of their own.
    *
    * @param message
    *          the message being built
@@ -407,40 +423,24 @@ public final class SqlExceptions {
    *          the detail to append, possibly null
    */
   private static void appendDetail(StringBuilder message, String detail) {
-    if (detail != null && !detail.isBlank() && message.indexOf(detail) < 0) {
-      message.append(": ").append(detail);
-    }
-  }
-
-  /**
-   * Appends the innermost SQLException's detail, redacted, so a raw correlated
-   * binding never reaches the message even on caller paths whose diagnostics do
-   * no redaction of their own. Skips the detail when the message already carries
-   * it, in raw or redacted form.
-   *
-   * @param message
-   *          the message being built
-   * @param innermost
-   *          the innermost SQLException, possibly null
-   */
-  private static void appendInnermostDetail(StringBuilder message, SQLException innermost) {
-    String detail = innermost == null ? null : innermost.getMessage();
     if (detail == null || message.indexOf(detail) >= 0) {
       return;
     }
-    appendDetail(message, describe(detail));
+    String redacted = describe(detail);
+    if (!redacted.isBlank() && message.indexOf(redacted) < 0) {
+      message.append(": ").append(redacted);
+    }
   }
 
   /**
-   * Finds the deepest {@code SQLException} in a failure's cause chain, the link
-   * that usually carries the actual reason.
+   * Finds the deepest {@code SQLException} in a cause chain, the link that
+   * usually carries the actual reason.
    *
-   * @param failure
-   *          the exception to inspect, possibly null
+   * @param chain
+   *          the cause chain links to inspect
    * @return the innermost SQLException, or null when none
    */
-  private static SQLException innermostSqlException(Throwable failure) {
-    List<Throwable> chain = causeChain(failure);
+  private static SQLException innermostSqlException(List<Throwable> chain) {
     for (int index = chain.size() - 1; index >= 0; index--) {
       if (chain.get(index) instanceof SQLException sql) {
         return sql;
@@ -450,15 +450,14 @@ public final class SqlExceptions {
   }
 
   /**
-   * Finds the first state-bearing {@code SQLException} in a failure's cause
-   * chain.
+   * Finds the first state-bearing {@code SQLException} in a cause chain.
    *
-   * @param failure
-   *          the exception to inspect, possibly null
+   * @param chain
+   *          the cause chain links to inspect
    * @return the first SQLException with a non-null SQLState, or null when none
    */
-  private static SQLException firstStatefulSqlException(Throwable failure) {
-    for (Throwable current : causeChain(failure)) {
+  private static SQLException firstStatefulSqlException(List<Throwable> chain) {
+    for (Throwable current : chain) {
       if (current instanceof SQLException sql && sql.getSQLState() != null) {
         return sql;
       }

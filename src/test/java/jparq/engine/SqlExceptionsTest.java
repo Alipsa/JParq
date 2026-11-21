@@ -399,18 +399,22 @@ class SqlExceptionsTest {
    * binding reaches the top-level message (issue #330). The two cases wrapped in
    * a derived table fail in top-level preparation, so their top-level failure
    * starts with {@code Failed to prepare query: <sql>}, which is exactly the path
-   * that wraps without redacting.
+   * that wraps without redacting; the test asserts that prefix so a routing
+   * change cannot silently drop the preparation-path coverage.
    *
    * @param sql
    *          a correlated query with an unclassified nested failure
    * @param pushdown
    *          whether predicate pushdown is enabled
+   * @param topLevelPreparation
+   *          whether the query fails in top-level preparation
    * @throws Exception
    *           if fixture lookup or connection setup fails
    */
   @ParameterizedTest
   @MethodSource("unclassifiedCorrelatedLeakCases")
-  void correlatedUnclassifiedFailuresDoNotLeakBindingsOnTopLevel(String sql, boolean pushdown) throws Exception {
+  void correlatedUnclassifiedFailuresDoNotLeakBindingsOnTopLevel(String sql, boolean pushdown,
+      boolean topLevelPreparation) throws Exception {
     Path fixtures = Path.of(SqlExceptionsTest.class.getResource("/mtcars.parquet").toURI()).getParent();
     String url = "jdbc:jparq:" + fixtures + "?predicatePushdown=" + pushdown;
     try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
@@ -421,6 +425,9 @@ class SqlExceptionsTest {
           }
         }
       }, sql);
+      if (topLevelPreparation) {
+        assertTrue(failure.getMessage().startsWith("Failed to prepare query: " + sql), failure::getMessage);
+      }
       assertNoPrivateBindings(failure);
     }
   }
@@ -428,17 +435,33 @@ class SqlExceptionsTest {
   /**
    * The correlated queries with unclassified nested failures used by
    * {@code correlatedUnclassifiedFailuresDoNotLeakBindingsOnTopLevel}, in both
-   * pushdown modes.
+   * pushdown modes, flagging which fail in top-level preparation.
    *
-   * @return the (query, pushdown) test cases
+   * @return the (query, pushdown, topLevelPreparation) test cases
    */
   static Stream<Arguments> unclassifiedCorrelatedLeakCases() {
-    List<String> queries = List.of("SELECT (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl) FROM mtcars m",
-        "SELECT m.cyl FROM mtcars m WHERE m.cyl IN (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl)",
-        "SELECT m.cyl FROM mtcars m, LATERAL (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl) l",
-        "SELECT * FROM (SELECT (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl) c FROM mtcars m) x",
-        "SELECT * FROM (SELECT m.cyl FROM mtcars m WHERE EXISTS (SELECT 1 FROM nosuchtable n WHERE n.cyl = m.cyl)) x");
-    return queries.stream().flatMap(query -> Stream.of(Arguments.of(query, true), Arguments.of(query, false)));
+    return Stream.concat(
+        leakCases(List.of("SELECT (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl) FROM mtcars m",
+            "SELECT m.cyl FROM mtcars m WHERE m.cyl IN (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl)",
+            "SELECT m.cyl FROM mtcars m, LATERAL (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl) l"), false),
+        leakCases(List.of(
+            "SELECT * FROM (SELECT (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl) c FROM mtcars m) x",
+            "SELECT * FROM (SELECT m.cyl FROM mtcars m WHERE EXISTS (SELECT 1 FROM nosuchtable n WHERE n.cyl = m.cyl)) x"),
+            true));
+  }
+
+  /**
+   * Pairs each correlated query with both pushdown modes.
+   *
+   * @param queries
+   *          the correlated queries with unclassified nested failures
+   * @param topLevelPreparation
+   *          whether these queries fail in top-level preparation
+   * @return the (query, pushdown, topLevelPreparation) test cases
+   */
+  private static Stream<Arguments> leakCases(List<String> queries, boolean topLevelPreparation) {
+    return queries.stream().flatMap(query -> Stream.of(Arguments.of(query, true, topLevelPreparation),
+        Arguments.of(query, false, topLevelPreparation)));
   }
 
   /**
@@ -843,6 +866,38 @@ class SqlExceptionsTest {
     assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure::getMessage);
     assertEquals("Failed reading first parquet record: Failed to execute sub query: (SELECT 1 FROM x): "
         + "Column not found: " + SqlExceptions.OUTER_VALUE, failure.getMessage());
+  }
+
+  /**
+   * Redacts the direct failure's detail as well, so the redaction guarantee does
+   * not depend on where in the chain the binding text sits (issue #330).
+   */
+  @Test
+  void unclassifiedDirectDetailIsRedactedOnIdentityPath() {
+    var original = new SQLException("Column not found: __JPARQ_CORRELATED_VALUE('private-key', 0)");
+    var failure = SqlExceptions.wrap("ctx", original);
+    assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure::getMessage);
+    assertEquals("ctx: Column not found: " + SqlExceptions.OUTER_VALUE, failure.getMessage());
+    var wrapper = new IllegalStateException("sub __JPARQ_CORRELATED_VALUE('private-key', 0)",
+        new SQLException("reason"));
+    var wrappedFailure = SqlExceptions.wrap("ctx", wrapper);
+    assertFalse(wrappedFailure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), wrappedFailure::getMessage);
+    assertEquals("ctx: sub " + SqlExceptions.OUTER_VALUE + ": reason", wrappedFailure.getMessage());
+  }
+
+  /**
+   * Redacts the classified detail as well, so both branches stay consistent on
+   * caller paths whose diagnostics do no redaction of their own (issue #330).
+   */
+  @Test
+  void classifiedDetailIsRedactedOnIdentityPath() {
+    var classified = new SQLSyntaxErrorException("Bad __JPARQ_CORRELATED_VALUE('private-key', 0)", "42000");
+    var wrapper = new IllegalArgumentException("Bad __JPARQ_CORRELATED_VALUE('private-key', 0)", classified);
+    var failure = SqlExceptions.wrap("ctx", wrapper);
+    assertInstanceOf(SQLSyntaxErrorException.class, failure);
+    assertEquals("42000", failure.getSQLState());
+    assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure::getMessage);
+    assertEquals("ctx: Bad " + SqlExceptions.OUTER_VALUE, failure.getMessage());
   }
 
   /**
