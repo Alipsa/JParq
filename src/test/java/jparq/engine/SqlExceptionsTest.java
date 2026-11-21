@@ -910,6 +910,19 @@ class SqlExceptionsTest {
   }
 
   /**
+   * De-duplicates a detail only when it forms a complete segment: a detail that
+   * is only a prefix of a longer segment is still appended, and a context that
+   * starts with the detail as a complete segment is not repeated (issue #330).
+   */
+  @Test
+  void wrapDeDuplicatesOnlyCompleteSegments() {
+    var prefix = SqlExceptions.wrap("ctx: boomerang", new SQLException("boom"));
+    assertEquals("ctx: boomerang: boom", prefix.getMessage());
+    var segment = SqlExceptions.wrap("boom: more", new SQLException("boom"));
+    assertEquals("boom: more", segment.getMessage());
+  }
+
+  /**
    * Redacts the classified detail as well, so both branches stay consistent on
    * caller paths whose diagnostics do no redaction of their own (issue #330).
    */

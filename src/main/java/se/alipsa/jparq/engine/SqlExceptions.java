@@ -426,9 +426,9 @@ public final class SqlExceptions {
    * not already carried by the message, in raw or redacted form. The caller's
    * context stays verbatim; redacting the detail keeps a raw correlated binding
    * out of the message even on caller paths whose diagnostics do no redaction of
-   * their own. A detail is carried when the message equals it or contains it at a
-   * segment boundary, so a coincidental substring match cannot drop a short
-   * detail.
+   * their own. A detail is carried when the message equals it or carries it as a
+   * complete ": "-separated segment, so a coincidental substring match cannot
+   * drop a short detail.
    *
    * @param message
    *          the message being built
@@ -448,17 +448,27 @@ public final class SqlExceptions {
 
   /**
    * Reports whether a message already carries a detail, as the whole message or
-   * as a ": "-separated segment.
+   * as a complete ": "-separated segment.
    *
    * @param text
    *          the message built so far
    * @param detail
    *          the detail to look for
-   * @return true when the message equals the detail or carries it at a segment
-   *         boundary
+   * @return true when the message equals the detail or the detail forms a whole
+   *         segment, bounded by ": " or the ends of the message
    */
   private static boolean detailPresent(String text, String detail) {
-    return text.equals(detail) || text.contains(": " + detail);
+    if (text.equals(detail)) {
+      return true;
+    }
+    for (int index = text.indexOf(detail); index >= 0; index = text.indexOf(detail, index + 1)) {
+      boolean startsSegment = index == 0 || text.startsWith(": ", index - 2);
+      int end = index + detail.length();
+      if (startsSegment && (end == text.length() || text.startsWith(": ", end))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
