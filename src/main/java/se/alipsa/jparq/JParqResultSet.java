@@ -306,7 +306,9 @@ public class JParqResultSet extends ResultSetAdapter {
             tableSchema, tableCatalog, distinctRows);
         this.aggregateRows = sliceAggregateRows(distinctRows, select);
       } catch (Exception e) {
-        throw SqlExceptions.wrap("Failed to compute aggregate query", e);
+        // Aggregate plans of nested shapes may carry private bindings; the
+        // diagnostics renderer keeps them out of the reported message.
+        throw SqlExceptions.wrap("Failed to compute aggregate query", e, SqlExceptions::describe);
       }
       this.columnOrder = labels;
       this.physicalColumnOrder = physical;

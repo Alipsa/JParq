@@ -57,7 +57,7 @@ final class GroupedExpression {
       expression = JSqlParserSupport.parseExpression(sql.toString());
       rejectUnboundOperands(expression);
     } catch (net.sf.jsqlparser.JSQLParserException e) {
-      throw new IllegalArgumentException("Cannot compile grouped expression: " + source, e);
+      throw new IllegalArgumentException("Cannot compile grouped expression: " + sourceDescription, e);
     }
   }
 

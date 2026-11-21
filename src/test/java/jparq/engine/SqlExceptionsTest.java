@@ -411,7 +411,24 @@ class SqlExceptionsTest {
         // a LAG offset reading an outer value below zero fails at evaluation;
         // the missing top-level classification is issue #590
         Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT LAG(a.mpg, o.cyl - 100) OVER (ORDER BY"
-            + " a.mpg) AS n FROM mtcars a WHERE a.cyl = o.cyl) l", null));
+            + " a.mpg) AS n FROM mtcars a WHERE a.cyl = o.cyl) l", null),
+        // a GROUPING argument reading an outer value fails at preparation
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.cyl, GROUPING(o.cyl) AS g FROM"
+            + " mtcars a GROUP BY a.cyl) l", "42000"),
+        // a GROUPING argument in HAVING reading an outer value fails at evaluation
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.cyl, COUNT(*) AS c FROM mtcars a"
+            + " GROUP BY ROLLUP(a.cyl) HAVING GROUPING(o.cyl) = 0) l", "42000"),
+        // an ungrouped SELECT expression combining an outer value fails at preparation
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.mpg + o.cyl AS z FROM mtcars a GROUP"
+            + " BY a.cyl) l", "42803"),
+        // a ROWS frame offset reading an outer value fails at evaluation;
+        // the missing top-level classification is issue #591
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT COUNT(*) OVER (ORDER BY a.mpg ROWS"
+            + " BETWEEN o.cyl - 100 PRECEDING AND CURRENT ROW) AS c FROM mtcars a) l", null),
+        // a RANGE frame offset reading an outer value fails at evaluation;
+        // the missing top-level classification is issue #591
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT SUM(a.mpg) OVER (ORDER BY a.mpg RANGE"
+            + " BETWEEN o.cyl PRECEDING AND CURRENT ROW) AS c FROM mtcars a) l", null));
   }
 
   /**
@@ -426,7 +443,8 @@ class SqlExceptionsTest {
    * @param state
    *          expected top-level SQLState, or null pinning a known classification
    *          gap (issue #389 for the ARRAY case, issue #583 for the NTILE case,
-   *          issue #586 for the NTH_VALUE case, issue #590 for the LAG case)
+   *          issue #586 for the NTH_VALUE case, issue #590 for the LAG case,
+   *          issue #591 for the ROWS and RANGE frame offset cases)
    * @throws Exception
    *           if fixture lookup or connection setup fails
    */

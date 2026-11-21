@@ -4536,7 +4536,9 @@ public class JParqPreparedStatement implements PreparedStatement {
       if (SqlExceptions.findSqlStateFailure(e) == null) {
         throw new SQLException(message, e.getSQLState(), e.getErrorCode(), e);
       }
-      throw SqlExceptions.wrap(message, e);
+      // Nested derived-table failures may carry private bindings in their
+      // diagnostics; the renderer keeps them out of the reported message.
+      throw SqlExceptions.wrap(message, e, SqlExceptions::describe);
     }
   }
 

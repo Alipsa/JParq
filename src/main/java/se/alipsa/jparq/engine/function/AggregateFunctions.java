@@ -687,7 +687,7 @@ public final class AggregateFunctions {
         GroupedExpression.validate(expr, operand -> {
           if (operand instanceof Column column
               && findGroupIndex(operand, groupIndexByText, groupExpressions, inputBinding) == null) {
-            String message = "SELECT expression '" + expr
+            String message = "SELECT expression '" + SqlExceptions.describe(expr)
                 + "' must appear in the GROUP BY clause when aggregates are present";
             if (inputBinding != null && inputBinding.resolve(column) == null) {
               throw syntaxFailure(message);
@@ -1067,7 +1067,8 @@ public final class AggregateFunctions {
         }
       }
       if (match == null) {
-        String message = "GROUPING argument '" + argument + "' must appear in the GROUP BY clause";
+        String message = "GROUPING argument '" + SqlExceptions.describe(argument)
+            + "' must appear in the GROUP BY clause";
         if (unwrap(argument) instanceof Column column && columnBinding != null
             && columnBinding.resolve(column) != null) {
           throw groupingFailure(message);
