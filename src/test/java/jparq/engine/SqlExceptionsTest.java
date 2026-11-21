@@ -396,34 +396,49 @@ class SqlExceptionsTest {
    * The top-level preparation path renders its own context without redacting, so
    * an unclassified correlated failure whose nested diagnostics carry a private
    * binding must rely on the nested sites redacting it; this pins that no raw
-   * binding reaches the top-level message (issue #330).
+   * binding reaches the top-level message (issue #330). The two cases wrapped in
+   * a derived table fail in top-level preparation, so their top-level failure
+   * starts with {@code Failed to prepare query: <sql>}, which is exactly the path
+   * that wraps without redacting.
    *
    * @param sql
    *          a correlated query with an unclassified nested failure
+   * @param pushdown
+   *          whether predicate pushdown is enabled
    * @throws Exception
    *           if fixture lookup or connection setup fails
    */
   @ParameterizedTest
-  @ValueSource(strings = {
-      "SELECT (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl) FROM mtcars m",
-      "SELECT m.cyl FROM mtcars m WHERE m.cyl IN (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl)",
-      "SELECT m.cyl FROM mtcars m, LATERAL (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl) l"
-  })
-  void correlatedUnclassifiedFailuresDoNotLeakBindingsOnTopLevel(String sql) throws Exception {
+  @MethodSource("unclassifiedCorrelatedLeakCases")
+  void correlatedUnclassifiedFailuresDoNotLeakBindingsOnTopLevel(String sql, boolean pushdown) throws Exception {
     Path fixtures = Path.of(SqlExceptionsTest.class.getResource("/mtcars.parquet").toURI()).getParent();
-    for (boolean pushdown : List.of(true, false)) {
-      String url = "jdbc:jparq:" + fixtures + "?predicatePushdown=" + pushdown;
-      try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
-        var failure = assertThrows(SQLException.class, () -> {
-          try (var result = statement.executeQuery(sql)) {
-            while (result.next()) {
-              result.getObject(1);
-            }
+    String url = "jdbc:jparq:" + fixtures + "?predicatePushdown=" + pushdown;
+    try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+      var failure = assertThrows(SQLException.class, () -> {
+        try (var result = statement.executeQuery(sql)) {
+          while (result.next()) {
+            result.getObject(1);
           }
-        }, sql);
-        assertNoPrivateBindings(failure);
-      }
+        }
+      }, sql);
+      assertNoPrivateBindings(failure);
     }
+  }
+
+  /**
+   * The correlated queries with unclassified nested failures used by
+   * {@code correlatedUnclassifiedFailuresDoNotLeakBindingsOnTopLevel}, in both
+   * pushdown modes.
+   *
+   * @return the (query, pushdown) test cases
+   */
+  static Stream<Arguments> unclassifiedCorrelatedLeakCases() {
+    List<String> queries = List.of("SELECT (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl) FROM mtcars m",
+        "SELECT m.cyl FROM mtcars m WHERE m.cyl IN (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl)",
+        "SELECT m.cyl FROM mtcars m, LATERAL (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl) l",
+        "SELECT * FROM (SELECT (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl) c FROM mtcars m) x",
+        "SELECT * FROM (SELECT m.cyl FROM mtcars m WHERE EXISTS (SELECT 1 FROM nosuchtable n WHERE n.cyl = m.cyl)) x");
+    return queries.stream().flatMap(query -> Stream.of(Arguments.of(query, true), Arguments.of(query, false)));
   }
 
   /**
@@ -813,5 +828,51 @@ class SqlExceptionsTest {
     assertEquals("boom", deduplicated.getMessage());
     assertEquals("08006", deduplicated.getSQLState());
     assertEquals(3, deduplicated.getErrorCode());
+  }
+
+  /**
+   * Redacts the innermost SQLException detail before appending it, so a raw
+   * correlated binding never reaches the message even when the caller's
+   * diagnostics do no redaction of their own (issue #330).
+   */
+  @Test
+  void unclassifiedInnermostDetailIsRedactedOnIdentityPath() {
+    var reason = new SQLException("Column not found: __JPARQ_CORRELATED_VALUE('private-key', 0)");
+    var wrapper = new IllegalStateException("Failed to execute sub query: (SELECT 1 FROM x)", reason);
+    var failure = SqlExceptions.wrap("Failed reading first parquet record", wrapper);
+    assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"), failure::getMessage);
+    assertEquals("Failed reading first parquet record: Failed to execute sub query: (SELECT 1 FROM x): "
+        + "Column not found: " + SqlExceptions.OUTER_VALUE, failure.getMessage());
+  }
+
+  /**
+   * A cyclic cause chain (which {@code initCause} allows) terminates the chain
+   * walk instead of looping forever (issue #330).
+   */
+  @Test
+  void wrapToleratesCyclicCauseChain() {
+    var outer = new SQLException("outer boom");
+    var inner = new SQLException("inner boom", outer);
+    outer.initCause(inner);
+    var failure = SqlExceptions.wrap("operation failed", outer);
+    assertSame(outer, failure.getCause());
+    assertNull(failure.getSQLState());
+    assertEquals("operation failed: outer boom: inner boom", failure.getMessage());
+  }
+
+  /**
+   * When the chain holds several SQLExceptions, the reported state and vendor
+   * code come from the first (outermost) state-bearing one while the appended
+   * detail comes from the innermost one (issue #330).
+   */
+  @Test
+  void wrapStateAndDetailMayComeFromDifferentChainLinks() {
+    var innermost = new SQLException("inner detail", "08006", 7);
+    var outermost = new SQLException("outer detail", "08000", 1, innermost);
+    var failure = SqlExceptions.wrap("operation failed", outermost);
+    assertSame(outermost, failure.getCause());
+    assertEquals("08000", failure.getSQLState());
+    assertEquals(1, failure.getErrorCode());
+    assertEquals("operation failed: outer detail: inner detail", failure.getMessage());
   }
 }
