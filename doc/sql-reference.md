@@ -1042,6 +1042,17 @@ with SQLState `22008` because their era cannot round-trip through JDBC.
   getters.
 - `BOOLEAN` values convert to 1 for TRUE and 0 for FALSE.
 
+**`getBigDecimal`, `getBoolean`, `getBytes`**
+
+- `getBigDecimal` converts numbers, `BOOLEAN` (1 for TRUE, 0 for FALSE), and numeric text by column index and
+  label, using the numeric `CAST` rules, and returns null for SQL NULL.
+- `getBoolean` returns true for TRUE, '1', 'true', and non-zero numbers, and false for FALSE, '0', 'false', zero
+  numbers, and SQL NULL, with `wasNull()` returning true. Text matching ignores surrounding whitespace and the case
+  of `true` and `false`; other text, such as '2', is not converted.
+- `getBytes` returns binary values unchanged, converts `VARCHAR` values to UTF-8 bytes, and returns null for SQL
+  NULL.
+- Values that cannot be converted raise `SQLDataException` with SQLState `22018`.
+
 **Typed `getObject(column, Class)`**
 
 - Supports numeric conversions, `BigDecimal`, `LocalDate`, `LocalTime`, `LocalDateTime`, `OffsetTime`, and
@@ -1092,7 +1103,7 @@ and after a result has been returned.
 | `22005` | Incompatible source type for typed `getObject` |
 | `22007` | Invalid datetime or interval format |
 | `22008` | Datetime field out of range |
-| `22018` | Invalid character value for a numeric conversion |
+| `22018` | Invalid character value for a numeric, boolean, or binary conversion |
 | `22021` | Malformed UTF-8 in a character/binary conversion |
 | `2201W` | Invalid `LIMIT`/`FETCH` row count |
 | `2201X` | Invalid `OFFSET` row count |
