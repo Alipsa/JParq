@@ -348,7 +348,81 @@ class SqlExceptionsTest {
       assertEquals("Failed to prepare query: SELECT * FROM (SELECT * FROM nosuchtable) x: "
           + "Failed to execute derived table 'x': Failed to prepare query: SELECT * FROM nosuchtable: "
           + "Table not found: PUBLIC.nosuchtable", failure.getMessage());
+      // The missing-table failure is not yet classified (it should be 42S02/42000,
+      // tracked by issue #594); pin the current null state so that fix is visible.
+      assertNull(failure.getSQLState(), failure::getMessage);
+      var cause = assertInstanceOf(SQLException.class, failure.getCause());
+      assertEquals("Failed to execute derived table 'x': Failed to prepare query: SELECT * FROM nosuchtable: "
+          + "Table not found: PUBLIC.nosuchtable", cause.getMessage());
+    }
+  }
+
+  /**
+   * A scalar subquery and an EXISTS predicate over a missing table both surface
+   * the table lookup failure in the top-level message, even though the direct
+   * failure is a stateless runtime wrapper that carries only the subquery context
+   * (issue #330).
+   *
+   * @param sql
+   *          the failing query with a nested reference to a missing table
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl) FROM mtcars m",
+      "SELECT * FROM mtcars m WHERE EXISTS (SELECT 1 FROM nosuchtable n WHERE n.cyl = m.cyl)"
+  })
+  void nestedSubqueryMissingTableRetainsDetail(String sql) throws Exception {
+    Path fixtures = Path.of(SqlExceptionsTest.class.getResource("/mtcars.parquet").toURI()).getParent();
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + fixtures);
+        var statement = connection.createStatement()) {
+      var failure = assertThrows(SQLException.class, () -> {
+        try (var result = statement.executeQuery(sql)) {
+          while (result.next()) {
+            result.getObject(1);
+          }
+        }
+      }, sql);
+      assertTrue(failure.getMessage().contains("Failed to execute sub query:"), failure::getMessage);
       assertTrue(failure.getMessage().contains("Table not found: PUBLIC.nosuchtable"), failure::getMessage);
+      // The wrapper in between is not an SQLException; the reason still surfaces
+      // through the innermost SQLException.
+      assertInstanceOf(IllegalStateException.class, failure.getCause(), sql);
+    }
+  }
+
+  /**
+   * The top-level preparation path renders its own context without redacting, so
+   * an unclassified correlated failure whose nested diagnostics carry a private
+   * binding must rely on the nested sites redacting it; this pins that no raw
+   * binding reaches the top-level message (issue #330).
+   *
+   * @param sql
+   *          a correlated query with an unclassified nested failure
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "SELECT (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl) FROM mtcars m",
+      "SELECT m.cyl FROM mtcars m WHERE m.cyl IN (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl)",
+      "SELECT m.cyl FROM mtcars m, LATERAL (SELECT n.cyl FROM nosuchtable n WHERE n.cyl = m.cyl) l"
+  })
+  void correlatedUnclassifiedFailuresDoNotLeakBindingsOnTopLevel(String sql) throws Exception {
+    Path fixtures = Path.of(SqlExceptionsTest.class.getResource("/mtcars.parquet").toURI()).getParent();
+    for (boolean pushdown : List.of(true, false)) {
+      String url = "jdbc:jparq:" + fixtures + "?predicatePushdown=" + pushdown;
+      try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+        var failure = assertThrows(SQLException.class, () -> {
+          try (var result = statement.executeQuery(sql)) {
+            while (result.next()) {
+              result.getObject(1);
+            }
+          }
+        }, sql);
+        assertNoPrivateBindings(failure);
+      }
     }
   }
 
@@ -654,19 +728,18 @@ class SqlExceptionsTest {
   }
 
   /**
-   * Appends the unclassified failure detail and keeps a state-less SQLException's
-   * null state rather than inventing one (issue #330).
+   * Appends the unclassified failure detail without inventing a SQLState; a
+   * state-less SQLException simply keeps its null state (issue #330). The message
+   * is neutral so the test does not endorse any SQLState for a specific failure.
    */
   @Test
   void unclassifiedFailureAppendsDetailWithoutInventingAState() {
-    var tableNotFound = new SQLException("Table not found: PUBLIC.nosuchtable");
-    assertNull(SqlExceptions.findSqlStateFailure(tableNotFound));
-    var failure = SqlExceptions.wrap("Failed to prepare query: SELECT * FROM (SELECT * FROM nosuchtable) x",
-        tableNotFound);
+    var original = new SQLException("boom");
+    assertNull(SqlExceptions.findSqlStateFailure(original));
+    var failure = SqlExceptions.wrap("Operation failed", original);
     assertNull(failure.getSQLState());
-    assertSame(tableNotFound, failure.getCause());
-    assertEquals("Failed to prepare query: SELECT * FROM (SELECT * FROM nosuchtable) x: "
-        + "Table not found: PUBLIC.nosuchtable", failure.getMessage());
+    assertSame(original, failure.getCause());
+    assertEquals("Operation failed: boom", failure.getMessage());
   }
 
   /**
@@ -682,5 +755,63 @@ class SqlExceptionsTest {
     assertEquals("Failed to evaluate UNNEST(a.values): Column not found: " + SqlExceptions.OUTER_VALUE,
         failure.getMessage());
     assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"));
+  }
+
+  /**
+   * When the direct failure is a stateless runtime wrapper that carries only the
+   * subquery context, the reason from the innermost SQLException is still
+   * surfaced in the top-level message (issue #330).
+   */
+  @Test
+  void unclassifiedWrapperSurfacesInnermostSqlExceptionDetail() {
+    var reason = new SQLException("Table not found: PUBLIC.nosuchtable");
+    var wrapper = new IllegalStateException("Failed to execute sub query: (SELECT 1 FROM x) [outer bindings: m.cyl=6]",
+        reason);
+    var failure = SqlExceptions.wrap("Failed to evaluate projection (SELECT ...)", wrapper);
+    assertEquals("Failed to evaluate projection (SELECT ...): "
+        + "Failed to execute sub query: (SELECT 1 FROM x) [outer bindings: m.cyl=6]: "
+        + "Table not found: PUBLIC.nosuchtable", failure.getMessage());
+    assertSame(wrapper, failure.getCause());
+  }
+
+  /**
+   * Keeps the SQLState and vendor code of the first state-bearing SQLException in
+   * the chain even when the direct failure is an ordinary runtime wrapper (issue
+   * #330).
+   */
+  @Test
+  void unclassifiedWrapperRetainsStatefulCauseStateAndCode() {
+    var stateful = new SQLException("stateful cause", "08006", 7);
+    var wrapper = new IllegalStateException("wrapper failed", stateful);
+    var failure = SqlExceptions.wrap("operation failed", wrapper);
+    assertEquals("08006", failure.getSQLState());
+    assertEquals(7, failure.getErrorCode());
+    assertSame(wrapper, failure.getCause());
+    assertEquals("operation failed: wrapper failed: stateful cause", failure.getMessage());
+  }
+
+  /** Tolerates a null failure without raising (issue #330). */
+  @Test
+  void wrapToleratesNullFailure() {
+    var failure = SqlExceptions.wrap("Evaluation failed", null);
+    assertNull(failure.getSQLState());
+    assertNull(failure.getCause());
+    assertEquals("Evaluation failed", failure.getMessage());
+  }
+
+  /**
+   * Does not repeat a detail the context already carries, as when a caller passes
+   * the failure message as the context (issue #330).
+   */
+  @Test
+  void wrapDeduplicatesDetailAlreadyInContext() {
+    var original = new SQLException("boom");
+    var failure = SqlExceptions.wrap("boom", original);
+    assertEquals("boom", failure.getMessage());
+    var nested = new SQLException("boom", "08006", 3);
+    var deduplicated = SqlExceptions.wrap("boom", nested);
+    assertEquals("boom", deduplicated.getMessage());
+    assertEquals("08006", deduplicated.getSQLState());
+    assertEquals(3, deduplicated.getErrorCode());
   }
 }
