@@ -11,6 +11,7 @@ import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.window.WindowState;
 
 /**
@@ -119,6 +120,33 @@ class WindowStateBuilderTest {
     Assertions.assertEquals(1500.0, state.firstValue(expression, record));
     Assertions.assertThrows(IllegalArgumentException.class, () -> state.lag(expression, record),
         "LAG lookup should fail when no values are present");
+  }
+
+  /**
+   * Missing-value diagnostics render an analytic expression without exposing
+   * private correlated bindings, even though the branch is only reachable through
+   * a lookup miss rather than a parsed query.
+   *
+   * @throws JSQLParserException
+   *           if the analytic expression cannot be parsed
+   */
+  @Test
+  void missingValueDiagnosticsRedactPrivateBindings() throws JSQLParserException {
+    AnalyticExpression expression = (AnalyticExpression) CCJSqlParserUtil
+        .parseExpression("NTILE(__JPARQ_CORRELATED_VALUE('private-key', 0)) OVER (ORDER BY salary)");
+    Assertions.assertTrue(expression.toString().contains("private-key"),
+        "fixture must carry a private binding before redaction");
+
+    Schema schema = SchemaBuilder.record("Employee").fields().requiredDouble("salary").endRecord();
+    GenericRecord record = new GenericData.Record(schema);
+    record.put("salary", 1000.0);
+
+    WindowState state = WindowState.builder().build();
+    IllegalArgumentException failure = Assertions.assertThrows(IllegalArgumentException.class,
+        () -> state.ntile(expression, record));
+    Assertions.assertEquals(
+        "No NTILE values available for expression: NTILE(" + SqlExceptions.OUTER_VALUE + ") OVER (ORDER BY salary)",
+        failure.getMessage());
   }
 
   /**

@@ -57,7 +57,7 @@ final class GroupedExpression {
       expression = JSqlParserSupport.parseExpression(sql.toString());
       rejectUnboundOperands(expression);
     } catch (net.sf.jsqlparser.JSQLParserException e) {
-      throw new IllegalArgumentException("Cannot compile grouped expression: " + source, e);
+      throw new IllegalArgumentException("Cannot compile grouped expression: " + sourceDescription, e);
     }
   }
 
@@ -74,13 +74,13 @@ final class GroupedExpression {
     compiled.accept(new JSqlParserSupport.NamedArgumentVisitor() {
       @Override
       public <S> Void visit(Column column, S context) {
-        throw syntaxFailure("Unbound column in grouped expression: " + column);
+        throw syntaxFailure("Unbound column in grouped expression: " + SqlExceptions.describe(column));
       }
 
       @Override
       public <S> Void visit(net.sf.jsqlparser.expression.Function function, S context) {
         if (AggregateFunctions.isAggregateName(function.getName())) {
-          throw syntaxFailure("Unbound aggregate in grouped expression: " + function);
+          throw syntaxFailure("Unbound aggregate in grouped expression: " + SqlExceptions.describe(function));
         }
         return super.visit(function, context);
       }
@@ -92,7 +92,7 @@ final class GroupedExpression {
 
       @Override
       public <S> Void visit(Select select, S context) {
-        throw syntaxFailure("Unbound subquery in grouped expression: " + select);
+        throw syntaxFailure("Unbound subquery in grouped expression: " + SqlExceptions.describe(select));
       }
 
       @Override

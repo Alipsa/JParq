@@ -30,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.ScalarExpressionSchemas;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.ValueExpressionEvaluator;
 import se.alipsa.jparq.helper.LiteralConverter;
 import se.alipsa.jparq.helper.TemporalInterval;
@@ -83,6 +84,27 @@ class ValueExpressionEvaluatorTest {
         () -> evaluator.eval(convert, nullNoteRecord));
     assertEquals("42000", assertInstanceOf(java.sql.SQLException.class, error.getCause()).getSQLState());
     assertTrue(error.getMessage().contains("Ambiguous CONVERT arguments"));
+  }
+
+  /**
+   * Evaluating an analytic without precomputed window state renders the
+   * expression without exposing private correlated bindings, even though the
+   * branch is only reachable through a missing state rather than a parsed query.
+   *
+   * @throws Exception
+   *           if the analytic expression cannot be parsed
+   */
+  @Test
+  void missingWindowStateDiagnosticsRedactPrivateBindings() throws Exception {
+    Expression analytic = CCJSqlParserUtil
+        .parseExpression("LAG(__JPARQ_CORRELATED_VALUE('private-key', 0)) OVER (ORDER BY salary)");
+    Schema input = SchemaBuilder.record("Employee").fields().requiredDouble("salary").endRecord();
+    GenericRecord row = new GenericData.Record(input);
+    row.put("salary", 1000.0);
+    ValueExpressionEvaluator local = new ValueExpressionEvaluator(input);
+    IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> local.eval(analytic, row));
+    assertEquals("Analytic functions require precomputed window state: LAG(" + SqlExceptions.OUTER_VALUE
+        + ") OVER (ORDER BY salary)", error.getMessage());
   }
 
   /**

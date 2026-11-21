@@ -678,7 +678,8 @@ public final class SqlParser {
     if (query instanceof Select sel) {
       return sel;
     }
-    throw new IllegalArgumentException("SQL statement does not represent a single SELECT query: " + sql);
+    throw new IllegalArgumentException(
+        "SQL statement does not represent a single SELECT query: " + SqlExceptions.describe(sql));
   }
 
   /**
@@ -698,7 +699,8 @@ public final class SqlParser {
     if (query instanceof Select sel) {
       return sel;
     }
-    throw new IllegalArgumentException("SQL statement does not represent a single SELECT query: " + sql);
+    throw new IllegalArgumentException(
+        "SQL statement does not represent a single SELECT query: " + SqlExceptions.describe(sql));
   }
 
   /**
@@ -743,7 +745,9 @@ public final class SqlParser {
       } catch (JSQLParserException ignored) {
         // Report the original syntax error after the compacted retry also fails.
       }
-      String message = "Failed to parse SQL: " + sql;
+      // The top-level preparation prefix stays verbatim; it comes from the
+      // preparing statement, not from this engine diagnostic.
+      String message = "Failed to parse SQL: " + SqlExceptions.describe(sql);
       throw new IllegalArgumentException(message, new SQLSyntaxErrorException(message, "42000", e));
     } catch (IllegalArgumentException e) {
       if (SqlExceptions.findSqlStateFailure(e) != null) {
@@ -751,9 +755,9 @@ public final class SqlParser {
         // Preserve the same classified diagnostic as later preparation checks.
         throw e;
       }
-      throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
+      throw new IllegalArgumentException("Failed to parse SQL: " + SqlExceptions.describe(sql), e);
     } catch (Exception e) {
-      throw new IllegalArgumentException("Failed to parse SQL: " + sql, e);
+      throw new IllegalArgumentException("Failed to parse SQL: " + SqlExceptions.describe(sql), e);
     }
   }
 

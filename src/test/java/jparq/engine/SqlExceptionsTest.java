@@ -1,6 +1,7 @@
 package jparq.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -17,14 +18,21 @@ import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLSyntaxErrorException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Stream;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.JParqResultSet;
 import se.alipsa.jparq.engine.RecordReader;
@@ -222,6 +230,66 @@ class SqlExceptionsTest {
     assertEquals("Failed to evaluate UNNEST(a.values): Column not found: missing", failure.getMessage());
     assertEquals("null", SqlExceptions.describeSubqueryFailure(null, sql, "UNNEST(a.values)"));
     assertSame(original, failure.getCause());
+    // The same contract holds when the embedding source redacted the SQL
+    // before the wrapper saw it.
+    String redactedSql = SqlExceptions.describe(sql);
+    var redacted = new SQLException("Failed to prepare query: " + redactedSql + ": Column not found: missing", "42000");
+    var rendered = SqlExceptions.wrap("Failed to evaluate UNNEST(a.values)", redacted,
+        text -> SqlExceptions.describeSubqueryFailure(text, sql, "UNNEST(a.values)"));
+    assertEquals("Failed to evaluate UNNEST(a.values): Column not found: missing", rendered.getMessage());
+    assertSame(redacted, rendered.getCause());
+  }
+
+  /**
+   * A deeper failure carrying the inner subquery keeps that subquery's text; the
+   * inner query is never rewritten to the outer UNNEST's expression. The inner
+   * subquery is a strict substring of the generated wrapper, so it has a
+   * different length and can never be mistaken for the wrapper, which the
+   * renderer only replaces as a whole. The fixture carries the wrapper's own
+   * preparation prefix so the stripping is exercised (issue #329).
+   */
+  @Test
+  void deeperSubqueryFailureRetainsItsOwnQueryText() {
+    String wrapper = "SELECT * FROM UNNEST((SELECT o.id FROM orders o WHERE o.id = __JPARQ_CORRELATED_VALUE('k', 0)))"
+        + " AS u (id)";
+    String redactedWrapper = SqlExceptions.describe(wrapper);
+    String inner = "SELECT o.id FROM orders o WHERE o.id = " + SqlExceptions.OUTER_VALUE;
+    assertTrue(redactedWrapper.contains(inner) && !redactedWrapper.equals(inner),
+        "fixture must make the inner a strict substring of the wrapper");
+    String detail = "Failed to prepare query: " + redactedWrapper + ": Failed to execute sub query: " + inner
+        + ": Column not found: o.id";
+    var original = new SQLException(detail, "42000");
+    String expression = "UNNEST((SELECT o.id FROM orders o WHERE o.id = " + SqlExceptions.OUTER_VALUE + "))";
+    var failure = SqlExceptions.wrap("Failed to evaluate " + expression, original,
+        text -> SqlExceptions.describeSubqueryFailure(text, wrapper, expression));
+    assertEquals(
+        "Failed to evaluate " + expression + ": Failed to execute sub query: " + inner + ": Column not found: o.id",
+        failure.getMessage());
+    assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"));
+  }
+
+  /**
+   * Redaction can make two generated wrappers textually identical when they share
+   * a shape and differ only in the private binding key or slot. The deeper
+   * wrapper's own preparation framing is then treated as redundant and stripped
+   * too, but the user's expression and the real detail are retained, so no deeper
+   * query is misattributed to the outer expression (issue #329).
+   */
+  @Test
+  void redactionCollisionBetweenSameShapeWrappersIsBenign() {
+    String outer = "SELECT * FROM UNNEST((SELECT o.id FROM orders o WHERE o.id = __JPARQ_CORRELATED_VALUE('k1', 0)))"
+        + " AS u (id)";
+    String inner = "SELECT * FROM UNNEST((SELECT o.id FROM orders o WHERE o.id = __JPARQ_CORRELATED_VALUE('k2', 1)))"
+        + " AS u (id)";
+    assertEquals(SqlExceptions.describe(outer), SqlExceptions.describe(inner),
+        "fixture must make the two wrappers collide after redaction");
+    String expression = "UNNEST((SELECT o.id FROM orders o WHERE o.id = " + SqlExceptions.OUTER_VALUE + "))";
+    String detail = "Failed to prepare query: " + SqlExceptions.describe(inner) + ": Column not found: o.id";
+    var original = new SQLException(detail, "42000");
+    var failure = SqlExceptions.wrap("Failed to evaluate " + expression, original,
+        text -> SqlExceptions.describeSubqueryFailure(text, outer, expression));
+    assertEquals("Failed to evaluate " + expression + ": Column not found: o.id", failure.getMessage());
+    assertFalse(failure.getMessage().contains("__JPARQ_CORRELATED_VALUE"));
   }
 
   /**
@@ -300,6 +368,169 @@ class SqlExceptionsTest {
           assertEquals(state, cause.getSQLState());
         }
       }
+    }
+  }
+
+  /**
+   * Cases where a correlated LATERAL subquery fails, mapped to the expected
+   * top-level SQLState. A null state pins a known top-level classification gap to
+   * the issue that tracks it, so fixing the gap fails the test until the pinned
+   * state is updated.
+   *
+   * @return failing correlated LATERAL queries with expected states
+   */
+  static Stream<Arguments> correlatedLateralFailures() {
+    return Stream.of(
+        // preparation fails on a missing column of the inner scope
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.nosuchcol FROM mtcars a WHERE a.cyl"
+            + " = o.cyl) l", "42000"),
+        // a projection reading an outer value fails on the first outer row
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT CAST(o.model AS INTEGER) AS v FROM"
+            + " mtcars a WHERE a.cyl = o.cyl) l", "22018"),
+        // a nested subquery carrying the outer binding fails while iterating
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.mpg FROM mtcars a WHERE a.mpg IN"
+            + " (SELECT CAST(o.model AS INTEGER))) l", "22018"),
+        // a predicate subquery projecting several outer columns fails at preparation
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.mpg FROM mtcars a WHERE a.cyl IN"
+            + " (SELECT o.cyl, o.mpg)) l", "42000"),
+        // a nested aggregate over an outer value fails at preparation
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT SUM(SUM(o.cyl)) AS s FROM mtcars a"
+            + " WHERE a.cyl = o.cyl) l", "42000"),
+        // an ARRAY subquery projecting several outer columns fails at evaluation;
+        // the missing top-level classification is issue #389
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT ARRAY(SELECT o.cyl, o.mpg) AS x FROM"
+            + " mtcars a WHERE a.cyl = o.cyl) l", null),
+        // an NTILE bucket reading an outer value below zero fails at evaluation;
+        // the missing top-level classification is issue #583
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT NTILE(o.cyl - 100) OVER (ORDER BY"
+            + " a.mpg) AS n FROM mtcars a WHERE a.cyl = o.cyl) l", null),
+        // an NTH_VALUE position reading an outer value below zero fails at evaluation;
+        // the missing top-level classification is issue #586
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT NTH_VALUE(a.mpg, o.cyl - 100) OVER"
+            + " (ORDER BY a.mpg) AS n FROM mtcars a WHERE a.cyl = o.cyl) l", null),
+        // a LAG offset reading an outer value below zero fails at evaluation;
+        // the missing top-level classification is issue #590
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT LAG(a.mpg, o.cyl - 100) OVER (ORDER BY"
+            + " a.mpg) AS n FROM mtcars a WHERE a.cyl = o.cyl) l", null),
+        // a GROUPING argument reading an outer value fails at preparation
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.cyl, GROUPING(o.cyl) AS g FROM"
+            + " mtcars a GROUP BY a.cyl) l", "42000"),
+        // a GROUPING argument in HAVING reading an outer value fails at evaluation
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.cyl, COUNT(*) AS c FROM mtcars a"
+            + " GROUP BY ROLLUP(a.cyl) HAVING GROUPING(o.cyl) = 0) l", "42000"),
+        // an ungrouped SELECT expression combining an outer value fails at preparation
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT a.mpg + o.cyl AS z FROM mtcars a GROUP"
+            + " BY a.cyl) l", "42803"),
+        // an EXISTS subquery whose table-less LATERAL body references a preceding
+        // FROM item fails while preparing the rewritten subquery; the missing
+        // top-level classification is issue #416
+        Arguments.of("SELECT o.cyl FROM mtcars o WHERE EXISTS (SELECT 1 FROM mtcars y CROSS JOIN LATERAL (SELECT"
+            + " y.cyl AS k WHERE y.cyl = o.cyl) l WHERE l.k = o.cyl)", null),
+        // a ROWS frame offset reading an outer value fails at evaluation;
+        // the missing top-level classification is issue #591
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT COUNT(*) OVER (ORDER BY a.mpg ROWS"
+            + " BETWEEN o.cyl - 100 PRECEDING AND CURRENT ROW) AS c FROM mtcars a) l", null),
+        // a RANGE frame offset reading an outer value fails at evaluation;
+        // the missing top-level classification is issue #591
+        Arguments.of("SELECT o.cyl FROM mtcars o CROSS JOIN LATERAL (SELECT SUM(a.mpg) OVER (ORDER BY a.mpg RANGE"
+            + " BETWEEN o.cyl PRECEDING AND CURRENT ROW) AS c FROM mtcars a) l", null));
+  }
+
+  /**
+   * Correlated LATERAL failures never expose the private
+   * {@code __JPARQ_CORRELATED_VALUE} binding token or its UUID in any link of the
+   * failure chain (causes, suppressed exceptions, and next-exception links);
+   * bindings render as the neutral outer-value marker somewhere in the reported
+   * chain instead (issue #329).
+   *
+   * @param sql
+   *          failing correlated LATERAL query
+   * @param state
+   *          expected top-level SQLState, or null pinning a known classification
+   *          gap (issue #389 for the ARRAY case, issue #416 for the
+   *          EXISTS-with-LATERAL case, issue #583 for the NTILE case, issue #586
+   *          for the NTH_VALUE case, issue #590 for the LAG case, issue #591 for
+   *          the ROWS and RANGE frame offset cases)
+   * @throws Exception
+   *           if fixture lookup or connection setup fails
+   */
+  @ParameterizedTest
+  @MethodSource("correlatedLateralFailures")
+  void correlatedLateralFailuresRedactBindings(String sql, String state) throws Exception {
+    Path fixtures = Path.of(SqlExceptionsTest.class.getResource("/mtcars.parquet").toURI()).getParent();
+    for (boolean pushdown : List.of(true, false)) {
+      String url = "jdbc:jparq:" + fixtures + "?predicatePushdown=" + pushdown;
+      try (var connection = DriverManager.getConnection(url); var statement = connection.createStatement()) {
+        SQLException failure = assertThrows(SQLException.class, () -> {
+          try (var result = statement.executeQuery(sql)) {
+            while (result.next()) {
+              result.getObject(1);
+            }
+          }
+        }, sql);
+        assertEquals(state, failure.getSQLState(), sql + ": " + failure);
+        List<String> chain = failureChainMessages(failure);
+        assertTrue(chain.stream().anyMatch(message -> message.contains(SqlExceptions.OUTER_VALUE)),
+            () -> "outer-value marker missing from chain: " + failure);
+        assertNoPrivateBindings(failure);
+      }
+    }
+  }
+
+  /**
+   * Checks every link of a failure chain for the private correlated binding
+   * token.
+   *
+   * @param failure
+   *          failure whose chain is inspected
+   */
+  private static void assertNoPrivateBindings(SQLException failure) {
+    for (String message : failureChainMessages(failure)) {
+      assertFalse(message.contains("__JPARQ_CORRELATED_VALUE"), () -> "private binding leaked: " + message);
+    }
+  }
+
+  /**
+   * Collects the messages of every link in a failure chain, following causes,
+   * suppressed exceptions, and {@code SQLException} next-exception links.
+   *
+   * @param failure
+   *          failure whose chain is inspected
+   * @return every link message, starting with the top-level failure
+   */
+  private static List<String> failureChainMessages(SQLException failure) {
+    List<String> messages = new ArrayList<>();
+    collectFailureMessages(failure, messages, Collections.newSetFromMap(new IdentityHashMap<>()));
+    return messages;
+  }
+
+  /**
+   * Appends the messages of a failure and all of its related links, visiting each
+   * link at most once so cyclic links cannot recurse.
+   *
+   * @param failure
+   *          failure whose links are collected
+   * @param messages
+   *          collector receiving each link message
+   * @param visited
+   *          links already collected, preventing cyclic recursion
+   */
+  private static void collectFailureMessages(Throwable failure, List<String> messages, Set<Throwable> visited) {
+    if (!visited.add(failure)) {
+      return;
+    }
+    messages.add(String.valueOf(failure.getMessage()));
+    Throwable cause = failure.getCause();
+    if (cause != null) {
+      collectFailureMessages(cause, messages, visited);
+    }
+    for (Throwable suppressed : failure.getSuppressed()) {
+      collectFailureMessages(suppressed, messages, visited);
+    }
+    // A single step follows the rest of the chain through recursion, and the
+    // visited set stops a cyclic next-exception chain.
+    if (failure instanceof SQLException sqlException && sqlException.getNextException() != null) {
+      collectFailureMessages(sqlException.getNextException(), messages, visited);
     }
   }
 

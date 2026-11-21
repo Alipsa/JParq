@@ -687,7 +687,7 @@ public final class AggregateFunctions {
         GroupedExpression.validate(expr, operand -> {
           if (operand instanceof Column column
               && findGroupIndex(operand, groupIndexByText, groupExpressions, inputBinding) == null) {
-            String message = "SELECT expression '" + expr
+            String message = "SELECT expression '" + SqlExceptions.describe(expr)
                 + "' must appear in the GROUP BY clause when aggregates are present";
             if (inputBinding != null && inputBinding.resolve(column) == null) {
               throw syntaxFailure(message);
@@ -938,7 +938,8 @@ public final class AggregateFunctions {
     } else {
       args = parameters(func);
       if (args.isEmpty()) {
-        throw new IllegalArgumentException("Aggregate function " + func + " requires an argument");
+        throw new IllegalArgumentException(
+            "Aggregate function " + SqlExceptions.describe(func) + " requires an argument");
       }
       if (type == AggregateType.STRING_AGG) {
         if (args.size() != 2) {
@@ -950,7 +951,7 @@ public final class AggregateFunctions {
     }
 
     if (args.stream().anyMatch(argument -> !aggregateFunctions(argument).isEmpty())) {
-      throw syntaxFailure("Nested aggregate functions are not supported: " + func);
+      throw syntaxFailure("Nested aggregate functions are not supported: " + SqlExceptions.describe(func));
     }
     return new AggregateSpec(type, args, label, countStar);
   }
@@ -1066,7 +1067,8 @@ public final class AggregateFunctions {
         }
       }
       if (match == null) {
-        String message = "GROUPING argument '" + argument + "' must appear in the GROUP BY clause";
+        String message = "GROUPING argument '" + SqlExceptions.describe(argument)
+            + "' must appear in the GROUP BY clause";
         if (unwrap(argument) instanceof Column column && columnBinding != null
             && columnBinding.resolve(column) != null) {
           throw groupingFailure(message);
@@ -3474,7 +3476,8 @@ public final class AggregateFunctions {
         }
         return i;
       }
-      throw new IllegalArgumentException("HAVING references aggregate not present in SELECT: " + func);
+      throw new IllegalArgumentException(
+          "HAVING references aggregate not present in SELECT: " + SqlExceptions.describe(func));
     }
 
     private Object grouping(Function func) {
