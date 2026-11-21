@@ -29,6 +29,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import se.alipsa.jparq.engine.JSqlParserSupport;
 import se.alipsa.jparq.engine.ParquetTable;
+import se.alipsa.jparq.engine.SqlExceptions;
 import se.alipsa.jparq.engine.SqlParser;
 
 /** Exercises execution-local correlation shapes without timing assertions. */
@@ -86,14 +87,17 @@ class CorrelatedExecutionShapeTest {
         assertInstanceOf(IllegalArgumentException.class, root);
         assertEquals("Invalid correlated binding: reserved for internal query execution", root.getMessage());
       }
-      // The top-level preparation prefix keeps the user's own SQL verbatim; only
-      // expression-level diagnostics are redacted (the non-redacting branch).
+      // The top-level preparation prefix keeps the user's own SQL verbatim (the
+      // non-redacting branch); the appended parse detail is redacted at its own
+      // creation site (issue #330).
       var topLevel = assertThrows(java.sql.SQLException.class, () -> {
         try (var result = statement.executeQuery("SELECT o.id FROM big o WHERE __JPARQ_CORRELATED_VALUE('x', 0) = 1")) {
           result.next();
         }
       });
-      assertEquals("Failed to prepare query: SELECT o.id FROM big o WHERE __JPARQ_CORRELATED_VALUE('x', 0) = 1",
+      assertEquals(
+          "Failed to prepare query: SELECT o.id FROM big o WHERE __JPARQ_CORRELATED_VALUE('x', 0) = 1: "
+              + "Failed to parse SQL: SELECT o.id FROM big o WHERE " + SqlExceptions.OUTER_VALUE + " = 1",
           topLevel.getMessage());
     }
   }
