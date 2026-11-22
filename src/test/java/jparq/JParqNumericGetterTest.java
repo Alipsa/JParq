@@ -419,8 +419,10 @@ class JParqNumericGetterTest {
   void appliesRangeChecksToStoredDoubles() throws Exception {
     List<DoubleRow> rows = List.of(DoubleRow.nonFinite(Double.NaN), DoubleRow.nonFinite(Double.POSITIVE_INFINITY),
         DoubleRow.nonFinite(Double.NEGATIVE_INFINITY), DoubleRow.finite(2.9d), DoubleRow.finite(-2.9d),
-        DoubleRow.finite(127.9d), DoubleRow.finite(9223372036854774784.0d), DoubleRow.finite(1234567890123456768.0d),
-        DoubleRow.unbounded(1e40d), DoubleRow.unbounded(1e308d));
+        DoubleRow.finite(127.9d), DoubleRow.finite(-128.5d), DoubleRow.finite(-32768.5d),
+        DoubleRow.finite(-2147483648.0d), DoubleRow.finite(-9223372036854775808.0d),
+        DoubleRow.finite(9223372036854774784.0d), DoubleRow.finite(1234567890123456768.0d),
+        DoubleRow.unbounded(-9223372036854778880.0d), DoubleRow.unbounded(1e40d), DoubleRow.unbounded(1e308d));
     writeNumericFixture("doubles", Schema.Type.DOUBLE, rows);
     checkNumericFixture("doubles", rows);
   }
@@ -471,7 +473,7 @@ class JParqNumericGetterTest {
   }
 
   /**
-   * Reads every fixture row through the double, float, integer, and typed Long
+   * Reads every fixture row through the double, float, integer, and typed numeric
    * getters by index and by label, comparing with the row's expectations.
    *
    * @param table
@@ -509,16 +511,63 @@ class JParqNumericGetterTest {
                 assertEquals(expected, read(result, target, byLabel).longValue(), context);
               }
             }
-            Long typed = row.integerValue(NumericCastTarget.BIGINT);
-            if (typed == null) {
-              var failure = assertThrows(SQLDataException.class, () -> result.getObject(1, Long.class), context);
-              assertEquals(row.integerState(), failure.getSQLState(), context);
-            } else {
-              assertEquals(typed, result.getObject(1, Long.class), context);
-            }
+            assertTypedNumber(result, Long.class, row.integerValue(NumericCastTarget.BIGINT), row.integerState(),
+                context);
+            assertTypedNumber(result, Byte.class, row.integerValue(NumericCastTarget.TINYINT), row.integerState(),
+                context);
+            assertTypedNumber(result, Short.class, row.integerValue(NumericCastTarget.SMALLINT), row.integerState(),
+                context);
+            assertTypedFloat(result, row.floatValue(), context);
           }
         }
       }
+    }
+  }
+
+  /**
+   * Asserts a typed numeric getObject result against the row's expectation.
+   *
+   * @param result
+   *          the positioned result set
+   * @param type
+   *          the requested numeric Java type
+   * @param expected
+   *          the expected value, or null for a failure
+   * @param state
+   *          the SQLState to expect when the conversion fails
+   * @param context
+   *          the failure message context
+   * @throws SQLException
+   *           if retrieval fails unexpectedly
+   */
+  private static void assertTypedNumber(ResultSet result, Class<?> type, Long expected, String state, String context)
+      throws SQLException {
+    if (expected == null) {
+      var failure = assertThrows(SQLDataException.class, () -> result.getObject(1, type), context);
+      assertEquals(state, failure.getSQLState(), context);
+    } else {
+      assertEquals(expected, ((Number) result.getObject(1, type)).longValue(), context);
+    }
+  }
+
+  /**
+   * Asserts the typed Float getObject result against the row's expectation.
+   *
+   * @param result
+   *          the positioned result set
+   * @param expected
+   *          the expected float, or null when 22003 must be raised
+   * @param context
+   *          the failure message context
+   * @throws SQLException
+   *           if retrieval fails unexpectedly
+   */
+  private static void assertTypedFloat(ResultSet result, Float expected, String context) throws SQLException {
+    if (expected == null) {
+      var failure = assertThrows(SQLDataException.class, () -> result.getObject(1, Float.class), context);
+      assertEquals("22003", failure.getSQLState(), context);
+    } else {
+      assertEquals(expected, result.getObject(1, Float.class), context);
     }
   }
 
@@ -534,19 +583,48 @@ class JParqNumericGetterTest {
    *          null
    */
   private record DoubleRow(double value, Long boundedInteger, String failureState) {
-    /** Creates a row for a finite value within the BIGINT range. */
+    /**
+     * Creates a row for a finite value within the BIGINT range.
+     *
+     * @param value
+     *          the stored value
+     * @return the row with the truncated value as its integer expectation
+     */
     static DoubleRow finite(double value) {
       return new DoubleRow(value, (long) value, null);
     }
 
-    /** Creates a row for NaN or an infinity. */
+    /**
+     * Creates a row for NaN or an infinity.
+     *
+     * @param value
+     *          the stored non-finite value
+     * @return the row expecting 22018 from the integer getters
+     */
     static DoubleRow nonFinite(double value) {
       return new DoubleRow(value, null, "22018");
     }
 
-    /** Creates a row for a finite value beyond the BIGINT range. */
+    /**
+     * Creates a row for a finite value beyond the BIGINT range.
+     *
+     * @param value
+     *          the stored value
+     * @return the row expecting 22003 from the integer getters
+     */
     static DoubleRow unbounded(double value) {
       return new DoubleRow(value, null, "22003");
+    }
+
+    /**
+     * Returns the expected float value, or null when the float target must raise
+     * 22003.
+     *
+     * @return the expected value, or null for a failure
+     */
+    Float floatValue() {
+      float result = (float) value;
+      return !Float.isFinite(result) && Double.isFinite(value) ? null : result;
     }
 
     /**

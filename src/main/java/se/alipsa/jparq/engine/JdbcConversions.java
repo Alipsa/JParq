@@ -154,7 +154,10 @@ public final class JdbcConversions {
 
   /**
    * Compares a finite value with the target's bounds before truncation, so in
-   * range values never build a decimal expansion.
+   * range values never build a decimal expansion. Truncation is toward zero, so
+   * the open lower bound is the first value whose truncation does not fit; for
+   * INTEGER and BIGINT no double lies strictly between that bound and the type
+   * minimum, so the closed form is exact there.
    *
    * @param value
    *          the finite value
@@ -164,8 +167,8 @@ public final class JdbcConversions {
    */
   private static boolean fitsInTarget(double value, NumericCastTarget target) {
     return switch (target) {
-      case TINYINT -> value >= -128.0 && value < 128.0;
-      case SMALLINT -> value >= -32768.0 && value < 32768.0;
+      case TINYINT -> value > -129.0 && value < 128.0;
+      case SMALLINT -> value > -32769.0 && value < 32768.0;
       case INTEGER -> value >= -2147483648.0 && value < 2147483648.0;
       case BIGINT -> value >= -0x1p63 && value < 0x1p63;
       case REAL -> Float.isFinite((float) value);
@@ -186,15 +189,20 @@ public final class JdbcConversions {
    *          the requested numeric type
    * @return the converted value
    * @throws IllegalArgumentException
-   *           if the value exceeds the target range (22003)
+   *           if the value exceeds the target range (22003), retaining the
+   *           SQLState of the shared failure
    */
   private static Number convertWithOriginalDiagnostic(Number number, BigDecimal exact, NumericCastTarget target) {
     try {
       return NumericCasts.convert(exact, target, target.name());
     } catch (IllegalArgumentException overflow) {
-      String message = "Cannot cast numeric value '" + SqlExceptions.diagnosticValue(number) + "' to " + target
-          + ": value out of range";
-      throw new IllegalArgumentException(message, new SQLDataException(message, "22003", overflow.getCause()));
+      if (overflow.getCause() instanceof SQLException failure) {
+        String message = "Cannot cast numeric value '" + SqlExceptions.diagnosticValue(number) + "' to " + target
+            + ": value out of range";
+        SQLException reclassified = new SQLDataException(message, failure.getSQLState(), failure.getCause());
+        throw new IllegalArgumentException(message, reclassified);
+      }
+      throw overflow;
     }
   }
 

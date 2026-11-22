@@ -1063,6 +1063,8 @@ with SQLState `22008` because their era cannot round-trip through JDBC.
 
 - Supports numeric conversions, `BigDecimal`, `Boolean`, `byte[]`, `LocalDate`, `LocalTime`, `LocalDateTime`,
   `OffsetTime`, and `OffsetDateTime`.
+- Numeric targets follow the numeric getter rules, including the range checks and the NaN and infinity handling for
+  `Float` and `Double`, so `getObject(column, Long.class)` and `getLong` agree on the same value.
 - `Boolean` sources convert with the same rules as `getBoolean`, and `byte[]` sources convert with the same rules as
   `getBytes`, so character sources become UTF-8 bytes.
 - `TIME` conversions keep milliseconds; `TIMESTAMP` conversions keep nanoseconds.
