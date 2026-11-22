@@ -420,9 +420,10 @@ class JParqNumericGetterTest {
     List<DoubleRow> rows = List.of(DoubleRow.nonFinite(Double.NaN), DoubleRow.nonFinite(Double.POSITIVE_INFINITY),
         DoubleRow.nonFinite(Double.NEGATIVE_INFINITY), DoubleRow.finite(2.9d), DoubleRow.finite(-2.9d),
         DoubleRow.finite(127.9d), DoubleRow.finite(-128.5d), DoubleRow.finite(-32768.5d),
-        DoubleRow.finite(-2147483648.0d), DoubleRow.finite(-9223372036854775808.0d),
+        DoubleRow.finite(-2147483648.0d), DoubleRow.finite(-2147483648.5d), DoubleRow.finite(-9223372036854775808.0d),
         DoubleRow.finite(9223372036854774784.0d), DoubleRow.finite(1234567890123456768.0d),
-        DoubleRow.unbounded(-9223372036854778880.0d), DoubleRow.unbounded(1e40d), DoubleRow.unbounded(1e308d));
+        DoubleRow.unbounded(-9223372036854777856.0d), // Math.nextDown(-0x1p63)
+        DoubleRow.unbounded(1e40d), DoubleRow.unbounded(1e308d));
     writeNumericFixture("doubles", Schema.Type.DOUBLE, rows);
     checkNumericFixture("doubles", rows);
   }
@@ -516,6 +517,8 @@ class JParqNumericGetterTest {
             assertTypedNumber(result, Byte.class, row.integerValue(NumericCastTarget.TINYINT), row.integerState(),
                 context);
             assertTypedNumber(result, Short.class, row.integerValue(NumericCastTarget.SMALLINT), row.integerState(),
+                context);
+            assertTypedNumber(result, Integer.class, row.integerValue(NumericCastTarget.INTEGER), row.integerState(),
                 context);
             assertTypedFloat(result, row.floatValue(), context);
           }

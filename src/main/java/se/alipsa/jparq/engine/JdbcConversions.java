@@ -154,10 +154,11 @@ public final class JdbcConversions {
 
   /**
    * Compares a finite value with the target's bounds before truncation, so in
-   * range values never build a decimal expansion. Truncation is toward zero, so
-   * the open lower bound is the first value whose truncation does not fit; for
-   * INTEGER and BIGINT no double lies strictly between that bound and the type
-   * minimum, so the closed form is exact there.
+   * range values never build a decimal expansion. Truncation is toward zero, so a
+   * fractional value just above the type minimum still fits: the lower bound is
+   * open for TINYINT, SMALLINT, and INTEGER, where such doubles exist. For BIGINT
+   * the first non-fitting double is 2^11 below the minimum with nothing between,
+   * so the closed minimum is exact.
    *
    * @param value
    *          the finite value
@@ -169,7 +170,7 @@ public final class JdbcConversions {
     return switch (target) {
       case TINYINT -> value > -129.0 && value < 128.0;
       case SMALLINT -> value > -32769.0 && value < 32768.0;
-      case INTEGER -> value >= -2147483648.0 && value < 2147483648.0;
+      case INTEGER -> value > -2147483649.0 && value < 2147483648.0;
       case BIGINT -> value >= -0x1p63 && value < 0x1p63;
       case REAL -> Float.isFinite((float) value);
       case DOUBLE -> true;
@@ -197,6 +198,9 @@ public final class JdbcConversions {
       return NumericCasts.convert(exact, target, target.name());
     } catch (IllegalArgumentException overflow) {
       if (overflow.getCause() instanceof SQLException failure) {
+        // A BigDecimal input can only fail the shared conversion with a range
+        // error (22003), so the state copied from the failure matches the
+        // out-of-range message.
         String message = "Cannot cast numeric value '" + SqlExceptions.diagnosticValue(number) + "' to " + target
             + ": value out of range";
         SQLException reclassified = new SQLDataException(message, failure.getSQLState(), failure.getCause());
