@@ -18,7 +18,15 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLDataException;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.List;
+import org.apache.avro.Schema;
+import org.apache.avro.SchemaBuilder;
+import org.apache.avro.generic.GenericData;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.parquet.avro.AvroParquetWriter;
+import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -367,6 +375,230 @@ class JParqNumericGetterTest {
         }
       }
       assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Range-checks native numbers instead of wrapping integers or saturating
+   * floating-point results, matching the text conversion rules.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void rejectsNativeNumberOverflow() throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (boolean byLabel : List.of(false, true)) {
+        assertRange(statement, "CAST(3000000000 AS BIGINT)", NumericCastTarget.INTEGER, byLabel);
+        assertRange(statement, "'3000000000'", NumericCastTarget.INTEGER, byLabel);
+        assertRange(statement, "CAST(300 AS INTEGER)", NumericCastTarget.TINYINT, byLabel);
+        assertRange(statement, "CAST(-129 AS BIGINT)", NumericCastTarget.TINYINT, byLabel);
+        assertRange(statement, "CAST(2147483648 AS BIGINT)", NumericCastTarget.INTEGER, byLabel);
+        assertRange(statement, "CAST(1e20 AS DOUBLE)", NumericCastTarget.BIGINT, byLabel);
+        assertRange(statement, "CAST(1e308 AS DOUBLE)", NumericCastTarget.BIGINT, byLabel);
+        assertRange(statement, "CAST(9223372036854775807 AS DOUBLE)", NumericCastTarget.BIGINT, byLabel);
+        assertRange(statement, "CAST('1e390' AS DECIMAL(400,0))", NumericCastTarget.DOUBLE, byLabel);
+        assertRange(statement, "CAST('1e390' AS DECIMAL(400,0))", NumericCastTarget.BIGINT, byLabel);
+        assertRange(statement, "CAST('1e40' AS DECIMAL(40,0))", NumericCastTarget.REAL, byLabel);
+        assertRange(statement, "CAST(1e40 AS DOUBLE)", NumericCastTarget.REAL, byLabel);
+      }
+    }
+  }
+
+  /**
+   * Keeps NaN and infinity in the floating-point getters while rejecting them
+   * from integer targets, converts in-range values without representation loss,
+   * and raises 22003 for finite values beyond the target range, so the primitive
+   * getters and the typed Long target agree.
+   *
+   * @throws Exception
+   *           if the fixture or a query fails
+   */
+  @Test
+  void appliesRangeChecksToStoredDoubles() throws Exception {
+    List<DoubleRow> rows = List.of(DoubleRow.nonFinite(Double.NaN), DoubleRow.nonFinite(Double.POSITIVE_INFINITY),
+        DoubleRow.nonFinite(Double.NEGATIVE_INFINITY), DoubleRow.finite(2.9d), DoubleRow.finite(-2.9d),
+        DoubleRow.finite(127.9d), DoubleRow.finite(9223372036854774784.0d), DoubleRow.finite(1234567890123456768.0d),
+        DoubleRow.unbounded(1e40d), DoubleRow.unbounded(1e308d));
+    writeNumericFixture("doubles", Schema.Type.DOUBLE, rows);
+    checkNumericFixture("doubles", rows);
+  }
+
+  /**
+   * Applies the same range checks to stored REAL values, covering the float
+   * source paths through the integer and double getters.
+   *
+   * @throws Exception
+   *           if the fixture or a query fails
+   */
+  @Test
+  void appliesRangeChecksToStoredFloats() throws Exception {
+    List<DoubleRow> rows = List.of(DoubleRow.nonFinite(Double.NaN), DoubleRow.nonFinite(Double.POSITIVE_INFINITY),
+        DoubleRow.nonFinite(Double.NEGATIVE_INFINITY), DoubleRow.finite(2.5f), DoubleRow.finite(127.9f),
+        DoubleRow.unbounded(Float.MAX_VALUE));
+    writeNumericFixture("floats", Schema.Type.FLOAT, rows);
+    checkNumericFixture("floats", rows);
+  }
+
+  /**
+   * Writes a fixture with an id column and a floating-point column.
+   *
+   * @param name
+   *          the fixture file name and table name
+   * @param type
+   *          the floating-point schema type
+   * @param rows
+   *          the values to write, in id order
+   * @throws Exception
+   *           if the fixture cannot be written
+   */
+  private void writeNumericFixture(String name, Schema.Type type, List<DoubleRow> rows) throws Exception {
+    Schema schema = SchemaBuilder.record(name).fields().requiredInt("id").name("d").type(Schema.create(type))
+        .noDefault().endRecord();
+    var file = new org.apache.hadoop.fs.Path(directory.resolve(name + ".parquet").toUri());
+    try (
+        var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(file, new Configuration(false)))
+            .withSchema(schema).withConf(new Configuration(false)).build()) {
+      for (int id = 1; id <= rows.size(); id++) {
+        var row = new GenericData.Record(schema);
+        row.put("id", id);
+        double value = rows.get(id - 1).value();
+        row.put("d", type == Schema.Type.FLOAT ? (float) value : value);
+        writer.write(row);
+      }
+    }
+  }
+
+  /**
+   * Reads every fixture row through the double, float, integer, and typed Long
+   * getters by index and by label, comparing with the row's expectations.
+   *
+   * @param table
+   *          the fixture table name
+   * @param rows
+   *          the expected values, in id order
+   * @throws SQLException
+   *           if query execution fails
+   */
+  private void checkNumericFixture(String table, List<DoubleRow> rows) throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (int id = 1; id <= rows.size(); id++) {
+        DoubleRow row = rows.get(id - 1);
+        for (boolean byLabel : List.of(false, true)) {
+          try (var result = statement.executeQuery("SELECT d AS v FROM " + table + " WHERE id = " + id)) {
+            String context = table + " id " + id;
+            assertTrue(result.next(), context);
+            assertEquals(row.value(), result.getDouble(1), context);
+            float floatValue = (float) row.value();
+            if (!Float.isFinite(floatValue) && Double.isFinite(row.value())) {
+              var failure = assertThrows(SQLDataException.class, () -> read(result, NumericCastTarget.REAL, byLabel),
+                  context);
+              assertEquals("22003", failure.getSQLState(), context);
+            } else {
+              assertEquals(floatValue, read(result, NumericCastTarget.REAL, byLabel).floatValue(), context);
+            }
+            for (NumericCastTarget target : List.of(NumericCastTarget.TINYINT, NumericCastTarget.SMALLINT,
+                NumericCastTarget.INTEGER, NumericCastTarget.BIGINT)) {
+              Long expected = row.integerValue(target);
+              if (expected == null) {
+                var failure = assertThrows(SQLDataException.class, () -> read(result, target, byLabel), context);
+                assertEquals(row.integerState(), failure.getSQLState(), context);
+              } else {
+                assertEquals(expected, read(result, target, byLabel).longValue(), context);
+              }
+            }
+            Long typed = row.integerValue(NumericCastTarget.BIGINT);
+            if (typed == null) {
+              var failure = assertThrows(SQLDataException.class, () -> result.getObject(1, Long.class), context);
+              assertEquals(row.integerState(), failure.getSQLState(), context);
+            } else {
+              assertEquals(typed, result.getObject(1, Long.class), context);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * A stored floating-point row with its expected integer-getter results.
+   *
+   * @param value
+   *          the stored value
+   * @param boundedInteger
+   *          the truncated value when finite and within the BIGINT range
+   * @param failureState
+   *          the SQLState the integer getters must raise when boundedInteger is
+   *          null
+   */
+  private record DoubleRow(double value, Long boundedInteger, String failureState) {
+    /** Creates a row for a finite value within the BIGINT range. */
+    static DoubleRow finite(double value) {
+      return new DoubleRow(value, (long) value, null);
+    }
+
+    /** Creates a row for NaN or an infinity. */
+    static DoubleRow nonFinite(double value) {
+      return new DoubleRow(value, null, "22018");
+    }
+
+    /** Creates a row for a finite value beyond the BIGINT range. */
+    static DoubleRow unbounded(double value) {
+      return new DoubleRow(value, null, "22003");
+    }
+
+    /**
+     * Returns the expected integer value, or null when the target must raise.
+     *
+     * @param target
+     *          the integer getter's target
+     * @return the expected value, or null for a failure
+     */
+    Long integerValue(NumericCastTarget target) {
+      if (boundedInteger == null) {
+        return null;
+      }
+      long maximum = switch (target) {
+        case TINYINT -> Byte.MAX_VALUE;
+        case SMALLINT -> Short.MAX_VALUE;
+        case INTEGER -> Integer.MAX_VALUE;
+        default -> Long.MAX_VALUE;
+      };
+      return boundedInteger >= -maximum - 1 && boundedInteger <= maximum ? boundedInteger : null;
+    }
+
+    /**
+     * Returns the SQLState the integer getters must raise.
+     *
+     * @return 22018 for non-finite values, 22003 otherwise
+     */
+    String integerState() {
+      return failureState != null ? failureState : "22003";
+    }
+  }
+
+  /**
+   * Asserts that reading an expression through a getter raises 22003.
+   *
+   * @param statement
+   *          the active statement
+   * @param expression
+   *          the value expression to select
+   * @param target
+   *          the getter's numeric target
+   * @param byLabel
+   *          whether to use the column label instead of its index
+   * @throws SQLException
+   *           if query execution fails
+   */
+  private static void assertRange(Statement statement, String expression, NumericCastTarget target, boolean byLabel)
+      throws SQLException {
+    try (var result = statement.executeQuery("SELECT " + expression + " AS v")) {
+      assertTrue(result.next(), expression);
+      var failure = assertThrows(SQLDataException.class, () -> read(result, target, byLabel), expression);
+      assertEquals("22003", failure.getSQLState(), expression);
     }
   }
 

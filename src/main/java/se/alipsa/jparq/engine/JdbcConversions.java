@@ -97,6 +97,131 @@ public final class JdbcConversions {
   }
 
   /**
+   * Converts a native number for a JDBC numeric getter, applying the shared CAST
+   * range checks unless the source type is already guaranteed to fit the target.
+   * Floating-point sources keep NaN and infinity for the floating-point targets,
+   * and finite values beyond the target range raise 22003.
+   *
+   * @param number
+   *          the input, non-null
+   * @param target
+   *          the requested numeric type
+   * @return the number, validated to represent the same value within the target
+   *         range
+   * @throws IllegalArgumentException
+   *           if the value is not finite for an integer target (22018) or exceeds
+   *           the target range (22003)
+   */
+  public static Number jdbcNumeric(Number number, NumericCastTarget target) {
+    if (guaranteedToFit(number, target)) {
+      return number;
+    }
+    if (number instanceof Float || number instanceof Double) {
+      return rangeCheckFloatingPoint(number, target);
+    }
+    return NumericCasts.convert(number, target, target.name());
+  }
+
+  /**
+   * Range-checks a floating-point source with primitive comparisons, falling back
+   * to the shared checks by exact decimal value only for values beyond the target
+   * range, because the shortest text form can misreport the digit count at large
+   * magnitudes.
+   *
+   * @param number
+   *          a floating-point value not covered by the guaranteed-fit fast path
+   * @param target
+   *          the requested numeric type
+   * @return the source, whose narrowing to the target is exact
+   * @throws IllegalArgumentException
+   *           if the value is not finite for an integer target (22018) or exceeds
+   *           the target range (22003)
+   */
+  private static Number rangeCheckFloatingPoint(Number number, NumericCastTarget target) {
+    double value = number.doubleValue();
+    if (!Double.isFinite(value)) {
+      if (target == NumericCastTarget.REAL) {
+        return (float) value;
+      }
+      String message = "Cannot cast value '" + SqlExceptions.diagnosticValue(number) + "' to a numeric value";
+      throw new IllegalArgumentException(message, new SQLDataException(message, "22018"));
+    }
+    if (fitsInTarget(value, target)) {
+      return number;
+    }
+    return convertWithOriginalDiagnostic(number, new BigDecimal(value), target);
+  }
+
+  /**
+   * Compares a finite value with the target's bounds before truncation, so in
+   * range values never build a decimal expansion.
+   *
+   * @param value
+   *          the finite value
+   * @param target
+   *          the requested numeric type
+   * @return whether truncation toward zero stays within the target range
+   */
+  private static boolean fitsInTarget(double value, NumericCastTarget target) {
+    return switch (target) {
+      case TINYINT -> value >= -128.0 && value < 128.0;
+      case SMALLINT -> value >= -32768.0 && value < 32768.0;
+      case INTEGER -> value >= -2147483648.0 && value < 2147483648.0;
+      case BIGINT -> value >= -0x1p63 && value < 0x1p63;
+      case REAL -> Float.isFinite((float) value);
+      case DOUBLE -> true;
+    };
+  }
+
+  /**
+   * Applies the shared range checks with the original value in the diagnostic,
+   * because the exact decimal expansion of a large magnitude is not useful to a
+   * reader.
+   *
+   * @param number
+   *          the original value for diagnostics
+   * @param exact
+   *          the value's exact decimal form
+   * @param target
+   *          the requested numeric type
+   * @return the converted value
+   * @throws IllegalArgumentException
+   *           if the value exceeds the target range (22003)
+   */
+  private static Number convertWithOriginalDiagnostic(Number number, BigDecimal exact, NumericCastTarget target) {
+    try {
+      return NumericCasts.convert(exact, target, target.name());
+    } catch (IllegalArgumentException overflow) {
+      String message = "Cannot cast numeric value '" + SqlExceptions.diagnosticValue(number) + "' to " + target
+          + ": value out of range";
+      throw new IllegalArgumentException(message, new SQLDataException(message, "22003", overflow.getCause()));
+    }
+  }
+
+  /**
+   * Identifies sources whose range is already contained in the target, making the
+   * shared range checks unnecessary.
+   *
+   * @param number
+   *          the input, non-null
+   * @param target
+   *          the requested numeric type
+   * @return whether the source type cannot overflow the target
+   */
+  private static boolean guaranteedToFit(Number number, NumericCastTarget target) {
+    boolean integral = number instanceof Byte || number instanceof Short || number instanceof Integer
+        || number instanceof Long;
+    return switch (target) {
+      case TINYINT -> number instanceof Byte;
+      case SMALLINT -> number instanceof Byte || number instanceof Short;
+      case INTEGER -> number instanceof Byte || number instanceof Short || number instanceof Integer;
+      case BIGINT -> integral;
+      case REAL -> integral || number instanceof Float;
+      case DOUBLE -> integral || number instanceof Float || number instanceof Double;
+    };
+  }
+
+  /**
    * Converts a JDBC value to its binary bytes.
    *
    * @param value
@@ -135,6 +260,20 @@ public final class JdbcConversions {
     }
     NumericCastTarget numeric = NUMBERS.get(type);
     if (numeric != null) {
+      if (value instanceof Number number) {
+        Number checked = jdbcNumeric(number, numeric);
+        if (type.isInstance(checked)) {
+          return checked;
+        }
+        return switch (numeric) {
+          case TINYINT -> checked.byteValue();
+          case SMALLINT -> checked.shortValue();
+          case INTEGER -> checked.intValue();
+          case BIGINT -> checked.longValue();
+          case REAL -> checked.floatValue();
+          case DOUBLE -> checked.doubleValue();
+        };
+      }
       return NumericCasts.convert(value, numeric, type.getSimpleName());
     }
     if (type == BigDecimal.class) {
