@@ -4,15 +4,18 @@ import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.Deque;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import net.sf.jsqlparser.expression.Alias;
 import net.sf.jsqlparser.expression.BooleanValue;
 import net.sf.jsqlparser.expression.DateValue;
 import net.sf.jsqlparser.expression.DoubleValue;
@@ -24,13 +27,18 @@ import net.sf.jsqlparser.expression.TimeValue;
 import net.sf.jsqlparser.expression.TimestampValue;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.schema.Table;
+import net.sf.jsqlparser.statement.Statement;
 import net.sf.jsqlparser.statement.select.FromItem;
+import net.sf.jsqlparser.statement.select.Join;
 import net.sf.jsqlparser.statement.select.ParenthesedFromItem;
 import net.sf.jsqlparser.statement.select.ParenthesedSelect;
 import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
+import net.sf.jsqlparser.statement.select.SelectItem;
 import net.sf.jsqlparser.statement.select.SelectVisitor;
+import net.sf.jsqlparser.statement.select.SetOperationList;
 import net.sf.jsqlparser.statement.select.TableFunction;
+import net.sf.jsqlparser.statement.select.WithItem;
 import net.sf.jsqlparser.util.deparser.ExpressionDeParser;
 import net.sf.jsqlparser.util.deparser.SelectDeParser;
 
@@ -179,6 +187,8 @@ public final class CorrelatedSubqueryRewriter {
 
     StringBuilder buffer = new StringBuilder();
     AtomicBoolean correlated = new AtomicBoolean(false);
+    AtomicInteger bindingCount = new AtomicInteger();
+    AtomicBoolean unaliasedBindingItem = new AtomicBoolean(false);
     Set<String> correlatedColumnRefs = new LinkedHashSet<>();
     Set<QualifiedColumn> correlatedRefs = new LinkedHashSet<>();
 
@@ -259,6 +269,7 @@ public final class CorrelatedSubqueryRewriter {
       private void appendCorrelatedLiteral(String qualifier, String columnName, Object resolvedValue) {
         final String literal = toSqlLiteral(resolvedValue);
         correlated.set(true);
+        bindingCount.incrementAndGet();
         correlatedColumnRefs.add(columnName);
         correlatedRefs.add(new QualifiedColumn(qualifier, columnName));
         getBuilder().append(literal);
@@ -266,6 +277,22 @@ public final class CorrelatedSubqueryRewriter {
     };
 
     SelectDeParser selectDeParser = new SelectDeParser(expressionDeParser, buffer) {
+      /** Flags unaliased projections whose text gains a correlated placeholder. */
+      @Override
+      public <S> StringBuilder visit(SelectItem<?> item, S context) {
+        // Inlines SelectDeParser's visit body; its mixed SelectItem wildcard
+        // signatures make a super.visit call unresolvable from a subclass.
+        int before = item.getAlias() == null ? bindingCount.get() : -1;
+        item.getExpression().accept(expressionDeParser, context);
+        if (before >= 0 && bindingCount.get() > before) {
+          unaliasedBindingItem.set(true);
+        }
+        if (item.getAlias() != null) {
+          getBuilder().append(item.getAlias().toString());
+        }
+        return getBuilder();
+      }
+
       /** Visits function arguments instead of appending their unmodified SQL. */
       @Override
       public <S> StringBuilder visit(TableFunction function, S context) {
@@ -345,12 +372,186 @@ public final class CorrelatedSubqueryRewriter {
       FallbackResult fallback = inlineCorrelatedLiterals(sqlText, fallbackQualifiers, valueResolver);
       if (fallback.correlated()) {
         correlated.set(true);
+        // Text substitution cannot attribute placeholders to projections.
+        unaliasedBindingItem.set(true);
         correlatedColumnRefs.addAll(fallback.columns());
         correlatedRefs.addAll(fallback.references());
         sqlText = fallback.sql();
       }
     }
+    if (correlated.get() && sqlText.contains(CorrelatedBindings.FUNCTION_NAME) && unaliasedBindingItem.get()) {
+      sqlText = restoreProjectionAliases(sqlText, List.copyOf(correlatedRefs));
+    }
     return new Result(sqlText, correlated.get(), Set.copyOf(correlatedColumnRefs), Set.copyOf(correlatedRefs));
+  }
+
+  /**
+   * Restores user-visible labels for projections rewritten with private binding
+   * placeholders. An unaliased projection carrying a placeholder would otherwise
+   * expose the placeholder text in the executed query's column label; aliasing it
+   * with the original expression keeps the label stable across executions and
+   * free of private tokens.
+   *
+   * @param sql
+   *          rewritten SQL containing binding placeholders
+   * @param references
+   *          outer references in binding-slot order
+   * @return SQL with restored projection aliases, or the input when no alias can
+   *         be added
+   */
+  private static String restoreProjectionAliases(String sql, List<QualifiedColumn> references) {
+    Statement statement;
+    try {
+      statement = JSqlParserSupport.parseStatement(sql);
+    } catch (Exception exception) {
+      return sql;
+    }
+    if (!(statement instanceof Select select)) {
+      return sql;
+    }
+    return aliasProjections(select, references) ? select.toString() : sql;
+  }
+
+  /**
+   * Aliases unaliased projections carrying private bindings in one select body
+   * and its nested inputs.
+   *
+   * @param select
+   *          select body to inspect
+   * @param references
+   *          outer references in binding-slot order
+   * @return whether any projection alias was added
+   */
+  private static boolean aliasProjections(Select select, List<QualifiedColumn> references) {
+    if (select instanceof ParenthesedSelect parenthesized) {
+      return aliasProjections(parenthesized.getSelect(), references);
+    }
+    if (select instanceof SetOperationList operations) {
+      boolean changed = false;
+      for (Select component : operations.getSelects()) {
+        changed |= aliasProjections(component, references);
+      }
+      return changed;
+    }
+    if (!(select instanceof PlainSelect plain)) {
+      return false;
+    }
+    boolean changed = false;
+    for (SelectItem<?> item : plain.getSelectItems()) {
+      // The unaliased label is the expression's text, so text detection covers
+      // placeholders nested in scalar subqueries as well.
+      if (item.getAlias() == null && item.getExpression().toString().contains(CorrelatedBindings.FUNCTION_NAME)) {
+        item.setAlias(new Alias(quotedIdentifier(originalExpression(item.getExpression(), references))));
+        changed = true;
+      }
+    }
+    if (plain.getWithItemsList() != null) {
+      for (WithItem<?> cte : plain.getWithItemsList()) {
+        changed |= aliasProjections(cte.getSelect(), references);
+      }
+    }
+    changed |= aliasFromItem(plain.getFromItem(), references);
+    if (plain.getJoins() != null) {
+      for (Join join : plain.getJoins()) {
+        changed |= aliasFromItem(join.getRightItem(), references);
+      }
+    }
+    return changed;
+  }
+
+  /**
+   * Walks the nested selects of a FROM input.
+   *
+   * @param item
+   *          FROM input to inspect
+   * @param references
+   *          outer references in binding-slot order
+   * @return whether any projection alias was added
+   */
+  private static boolean aliasFromItem(FromItem item, List<QualifiedColumn> references) {
+    if (item instanceof ParenthesedSelect subquery) {
+      return aliasProjections(subquery, references);
+    }
+    if (item instanceof ParenthesedFromItem group) {
+      boolean changed = aliasFromItem(group.getFromItem(), references);
+      if (group.getJoins() != null) {
+        for (Join join : group.getJoins()) {
+          changed |= aliasFromItem(join.getRightItem(), references);
+        }
+      }
+      return changed;
+    }
+    return false;
+  }
+
+  /**
+   * Renders an expression with each private binding placeholder replaced by the
+   * outer reference it substitutes, recovering the original expression text.
+   * Nested scalar subqueries deparse through a connected select deparser so
+   * placeholders inside them are restored too.
+   *
+   * @param expression
+   *          rewritten expression containing binding placeholders
+   * @param references
+   *          outer references in binding-slot order
+   * @return original expression text
+   */
+  private static String originalExpression(Expression expression, List<QualifiedColumn> references) {
+    StringBuilder buffer = new StringBuilder();
+    var renderer = new ExpressionDeParser() {
+      /** {@inheritDoc} */
+      @Override
+      public <S> StringBuilder visit(net.sf.jsqlparser.expression.Function function, S context) {
+        if (CorrelatedBindings.matches(function)) {
+          return getBuilder().append(originalReference(function, references));
+        }
+        return super.visit(function, context);
+      }
+    };
+    renderer.setBuilder(buffer);
+    renderer.setSelectVisitor(new SelectDeParser(renderer, buffer));
+    expression.accept(renderer, null);
+    return buffer.toString();
+  }
+
+  /**
+   * Renders the outer reference occupying a binding slot.
+   *
+   * @param function
+   *          private binding placeholder
+   * @param references
+   *          outer references in binding-slot order
+   * @return the substituted outer column reference
+   */
+  private static String originalReference(net.sf.jsqlparser.expression.Function function,
+      List<QualifiedColumn> references) {
+    var parameters = function.getParameters();
+    int slot = ((LongValue) parameters.get(1)).getBigIntegerValue().intValue();
+    var reference = references.get(slot);
+    String qualifier = reference.qualifier();
+    if (qualifier == null) {
+      return reference.column();
+    }
+    String prefix;
+    if (qualifier.startsWith("Q:")) {
+      prefix = "\"" + qualifier.substring(2).replace("\"", "\"\"") + "\"";
+    } else if (qualifier.startsWith("U:")) {
+      prefix = qualifier.substring(2);
+    } else {
+      prefix = qualifier;
+    }
+    return prefix + "." + reference.column();
+  }
+
+  /**
+   * Delimits an arbitrary expression text as a single SQL identifier.
+   *
+   * @param text
+   *          original expression text
+   * @return quoted identifier containing the text
+   */
+  private static String quotedIdentifier(String text) {
+    return "\"" + text.replace("\"", "\"\"") + "\"";
   }
 
   /**

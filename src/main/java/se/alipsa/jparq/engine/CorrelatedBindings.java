@@ -14,7 +14,12 @@ import org.apache.avro.Schema;
 
 /** Supplies typed outer values while an eagerly consumed nested query runs. */
 public final class CorrelatedBindings implements AutoCloseable {
-  private static final String FUNCTION_NAME = "__JPARQ_CORRELATED_VALUE";
+  /**
+   * Reserved function name emitted for private correlated value bindings.
+   * Rewritten SQL containing this name carries execution-only placeholders that
+   * must never surface in user-visible column labels or diagnostics.
+   */
+  public static final String FUNCTION_NAME = "__JPARQ_CORRELATED_VALUE";
   private static final ThreadLocal<Map<String, Frame>> ACTIVE = new ThreadLocal<>();
   private final String key;
   private final Frame previous;
