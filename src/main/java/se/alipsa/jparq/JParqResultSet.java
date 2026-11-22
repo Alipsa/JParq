@@ -1628,7 +1628,8 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
-   * Converts numeric text using CAST rules while preserving native numbers.
+   * Converts numbers, booleans, and numeric text using CAST rules, applying the
+   * shared range checks to native numbers as well as to text.
    *
    * @param columnIndex
    *          the one-based column index
@@ -1644,10 +1645,10 @@ public class JParqResultSet extends ResultSetAdapter {
     if (input == null) {
       return null;
     }
-    if (input instanceof Number number) {
-      return number;
-    }
     try {
+      if (input instanceof Number number) {
+        return JdbcConversions.jdbcNumeric(number, target);
+      }
       return NumericCasts.convert(input, target, target.name());
     } catch (IllegalArgumentException exception) {
       throw SqlExceptions.wrap(

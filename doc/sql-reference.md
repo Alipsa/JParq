@@ -1038,8 +1038,12 @@ with SQLState `22008` because their era cannot round-trip through JDBC.
 - Return zero for SQL NULL, with `wasNull()` returning true.
 - For text, follow numeric `CAST` rules: truncate integer fractions toward zero, reject invalid or non-finite text
   with SQLState `22018`, and reject range overflow with `22003`.
-- Native numeric values keep Java numeric conversion behavior, including NaN and infinity for floating-point
-  getters.
+- Native numeric values use the same range checks as text: integer getters raise SQLState `22003` when a value
+  does not fit the target instead of wrapping or saturating, and non-finite floating-point values are rejected
+  from integer getters with SQLState `22018`.
+- Floating-point getters keep NaN and infinity for stored `REAL` and `DOUBLE` values. Finite values beyond the
+  target range raise SQLState `22003` instead of saturating: a `DECIMAL` beyond the floating-point range, or a
+  finite `DOUBLE` beyond the `float` range through `getFloat`.
 - `BOOLEAN` values convert to 1 for TRUE and 0 for FALSE.
 
 **`getBigDecimal`, `getBoolean`, `getBytes`**
@@ -1059,6 +1063,8 @@ with SQLState `22008` because their era cannot round-trip through JDBC.
 
 - Supports numeric conversions, `BigDecimal`, `Boolean`, `byte[]`, `LocalDate`, `LocalTime`, `LocalDateTime`,
   `OffsetTime`, and `OffsetDateTime`.
+- Numeric targets follow the numeric getter rules, including the range checks and the NaN and infinity handling for
+  `Float` and `Double`, so `getObject(column, Long.class)` and `getLong` agree on the same value.
 - `Boolean` sources convert with the same rules as `getBoolean`, and `byte[]` sources convert with the same rules as
   `getBytes`, so character sources become UTF-8 bytes.
 - `TIME` conversions keep milliseconds; `TIMESTAMP` conversions keep nanoseconds.
