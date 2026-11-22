@@ -1046,17 +1046,20 @@ with SQLState `22008` because their era cannot round-trip through JDBC.
 
 - `getBigDecimal` converts numbers, `BOOLEAN` (1 for TRUE, 0 for FALSE), and numeric text by column index and
   label, using the numeric `CAST` rules, and returns null for SQL NULL.
-- `getBoolean` returns true for TRUE, '1', 'true', and non-zero numbers, and false for FALSE, '0', 'false', zero
-  numbers, and SQL NULL, with `wasNull()` returning true. Text matching ignores surrounding whitespace and the case
-  of `true` and `false`; other text, such as '2', is not converted.
+- `getBoolean` returns true for TRUE, '1', 't', 'yes', 'y', 'true', and non-zero numbers, and false for FALSE, '0',
+  'f', 'no', 'n', 'false', blank text, zero numbers, and SQL NULL, with `wasNull()` returning true. Text matching
+  uses the same rules as `CAST ... AS BOOLEAN`: it ignores the case of the words and leading or trailing characters
+  with code point `U+0020` or below. Other text, such as '2', is not converted.
 - `getBytes` returns binary values unchanged, converts `VARCHAR` values to UTF-8 bytes, and returns null for SQL
   NULL.
 - Values that cannot be converted raise `SQLDataException` with SQLState `22018`.
 
 **Typed `getObject(column, Class)`**
 
-- Supports numeric conversions, `BigDecimal`, `LocalDate`, `LocalTime`, `LocalDateTime`, `OffsetTime`, and
-  `OffsetDateTime`.
+- Supports numeric conversions, `BigDecimal`, `Boolean`, `byte[]`, `LocalDate`, `LocalTime`, `LocalDateTime`,
+  `OffsetTime`, and `OffsetDateTime`.
+- `Boolean` sources convert with the same rules as `getBoolean`, and `byte[]` sources convert with the same rules as
+  `getBytes`, so character sources become UTF-8 bytes.
 - `TIME` conversions keep milliseconds; `TIMESTAMP` conversions keep nanoseconds.
 - Datetime targets accept datetime and character sources. Numeric and Boolean sources raise `22005`.
 - `OffsetTime` applies the JVM's current time zone offset before normalizing to UTC. `OffsetDateTime` converts the

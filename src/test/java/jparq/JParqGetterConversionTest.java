@@ -24,7 +24,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Verifies that getBigDecimal, getBoolean, and getBytes convert compatible
- * values and classify invalid ones.
+ * values and classify invalid ones, and that the Boolean and byte[] typed
+ * getObject targets use the same conversion rules.
  */
 class JParqGetterConversionTest {
   @TempDir
@@ -63,26 +64,20 @@ class JParqGetterConversionTest {
    *
    * @param expression
    *          the expression producing the column value
+   * @param expected
+   *          the expected decimal digits, or null for SQL NULL
    * @throws SQLException
    *           if query execution fails
    */
   @ParameterizedTest
-  @ValueSource(strings = {
-      "42", "CAST(42 AS BIGINT)", "CAST(42 AS REAL)", "CAST(42 AS DOUBLE)", "CAST(42 AS DECIMAL(5,2))", "TRUE", "FALSE",
-      "CAST(NULL AS VARCHAR)", "CAST(NULL AS DECIMAL(5,2))"
-  })
-  void convertsNativeValuesToBigDecimal(String expression) throws SQLException {
-    BigDecimal expected;
-    if (expression.contains("NULL")) {
-      expected = null;
-    } else if (expression.contains("FALSE")) {
-      expected = BigDecimal.ZERO;
-    } else if (expression.contains("TRUE")) {
-      expected = BigDecimal.ONE;
-    } else {
-      expected = BigDecimal.valueOf(42);
-    }
-    boolean isNull = expected == null;
+  @CsvSource(value = {
+      "42 | 42", "CAST(42 AS BIGINT) | 42", "CAST(42 AS REAL) | 42", "CAST(42 AS DOUBLE) | 42",
+      "CAST(42 AS DECIMAL(5,2)) | 42", "TRUE | 1", "FALSE | 0", "CAST(NULL AS VARCHAR) | ",
+      "CAST(NULL AS DECIMAL(5,2)) | "
+  }, delimiter = '|')
+  void convertsNativeValuesToBigDecimal(String expression, String expected) throws SQLException {
+    BigDecimal expectedValue = expected == null ? null : new BigDecimal(expected);
+    boolean isNull = expectedValue == null;
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement();
         var result = statement.executeQuery("SELECT " + expression + " AS v")) {
@@ -92,7 +87,7 @@ class JParqGetterConversionTest {
         if (isNull) {
           assertNull(actual, expression);
         } else {
-          assertEquals(0, actual.compareTo(expected), expression);
+          assertEquals(0, actual.compareTo(expectedValue), expression);
         }
         assertEquals(isNull, result.wasNull(), expression);
       }
@@ -128,7 +123,8 @@ class JParqGetterConversionTest {
   }
 
   /**
-   * Converts booleans, boolean text, and numbers by their decimal sign.
+   * Converts booleans, boolean text using the shared CAST text forms plus the
+   * JDBC '1' and '0' forms, and numbers by their decimal sign.
    *
    * @param expression
    *          the expression producing the column value
@@ -141,12 +137,15 @@ class JParqGetterConversionTest {
    */
   @ParameterizedTest
   @CsvSource(value = {
-      "TRUE | true | false", "FALSE | false | false", "'true' | true | false", "'false' | false | false",
-      "'True' | true | false", "'FALSE' | false | false", "' true ' | true | false", "'1' | true | false",
-      "'0' | false | false", "1 | true | false", "0 | false | false", "42 | true | false", "-1 | true | false",
+      "TRUE | true | false", "FALSE | false | false", "1 | true | false", "0 | false | false", "42 | true | false",
+      "-1 | true | false", "\"'true'\" | true | false", "\"'false'\" | false | false", "\"'True'\" | true | false",
+      "\"'FALSE'\" | false | false", "\"' true '\" | true | false", "\"'1'\" | true | false", "\"'0'\" | false | false",
+      "\"'t'\" | true | false", "\"'T'\" | true | false", "\"'yes'\" | true | false", "\"'y'\" | true | false",
+      "\"'f'\" | false | false", "\"'no'\" | false | false", "\"'n'\" | false | false", "\"''\" | false | false",
+      "\"'   '\" | false | false", "CAST(42 AS BIGINT) | true | false", "CAST(0 AS BIGINT) | false | false",
       "CAST(0.5 AS DOUBLE) | true | false", "CAST(0 AS DECIMAL(5,2)) | false | false",
       "CAST(NULL AS VARCHAR) | false | true", "CAST(NULL AS BOOLEAN) | false | true"
-  }, delimiter = '|')
+  }, delimiter = '|', quoteCharacter = '"')
   void convertsBooleanValues(String expression, boolean expected, boolean isNull) throws SQLException {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
         var statement = connection.createStatement();
@@ -170,7 +169,7 @@ class JParqGetterConversionTest {
    */
   @ParameterizedTest
   @ValueSource(strings = {
-      "'abc'", "''", "'   '", "'2'", "'1.5'", "'NaN'", "DATE '2024-01-01'", "X'7879'"
+      "'abc'", "'2'", "'1.5'", "'NaN'", "DATE '2024-01-01'", "X'7879'"
   })
   void rejectsInvalidBooleanValues(String expression) throws SQLException {
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
@@ -263,7 +262,7 @@ class JParqGetterConversionTest {
       for (boolean byLabel : List.of(false, true)) {
         assertNull(byLabel ? result.getBytes("v") : result.getBytes(1), expression);
         assertNull(byLabel ? result.getBigDecimal("v") : result.getBigDecimal(1), expression);
-        assertEquals(false, byLabel ? result.getBoolean("v") : result.getBoolean(1), expression);
+        assertFalse(byLabel ? result.getBoolean("v") : result.getBoolean(1), expression);
         assertTrue(result.wasNull(), expression);
       }
     }
@@ -291,6 +290,15 @@ class JParqGetterConversionTest {
               (byLabel ? result.getBigDecimal("v") : result.getBigDecimal(1)).compareTo(BigDecimal.valueOf(expected)));
           if (expected == 1) {
             assertTrue(byLabel ? result.getBoolean("v") : result.getBoolean(1));
+          } else {
+            // #475: the LATERAL table materializes the DECIMAL quotient as the VARCHAR text
+            // '2',
+            // which is not a JDBC boolean form; the same expression outside LATERAL is
+            // DECIMAL
+            // and converts to true.
+            var failure = assertThrows(SQLDataException.class, () -> readBoolean(result, byLabel));
+            assertEquals("22018", failure.getSQLState());
+            assertTrue(failure.getMessage().contains("as BOOLEAN"), failure::getMessage);
           }
           assertFalse(result.wasNull());
         }
@@ -307,6 +315,88 @@ class JParqGetterConversionTest {
         var failure = assertThrows(SQLDataException.class, () -> read(result, byLabel));
         assertEquals("22018", failure.getSQLState());
         assertTrue(failure.getMessage().contains("as DECIMAL"), failure::getMessage);
+      }
+    }
+  }
+
+  /**
+   * Pins the bytes getBytes returns for an outer binary value that a LATERAL
+   * derived table stringifies to its Java identity text. The binary-to-VARCHAR
+   * materialization is the defect tracked by issue 599; until it is fixed this
+   * test keeps the corrupted result from changing.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void pinsLateralStringifiedBinaryBytes() throws SQLException {
+    String sql = "SELECT x.v FROM (VALUES (X'FF00')) AS a(n) "
+        + "CROSS JOIN LATERAL (SELECT a.n AS v FROM (VALUES (1)) AS seed(z)) x";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      assertTrue(result.next());
+      // #599: the outer binary value is stringified to its Java identity
+      // instead of being decoded to VARCHAR.
+      String identity = assertInstanceOf(String.class, result.getObject(1));
+      assertTrue(identity.startsWith("[B@"), identity);
+      for (boolean byLabel : List.of(false, true)) {
+        assertArrayEquals(identity.getBytes(StandardCharsets.UTF_8),
+            byLabel ? result.getBytes("v") : result.getBytes(1),
+            "#599: the identity text's UTF-8 bytes, not the original binary");
+      }
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Converts Boolean and byte[] typed getObject targets with the same rules as
+   * getBoolean and getBytes, and classifies invalid values with SQLState 22018.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void convertsTypedObjectBooleanAndBinary() throws SQLException {
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      try (var result = statement.executeQuery("SELECT '1' AS v")) {
+        assertTrue(result.next());
+        assertEquals(true, result.getObject(1, Boolean.class));
+        assertFalse(result.wasNull());
+      }
+      try (var result = statement.executeQuery("SELECT 42 AS v")) {
+        assertTrue(result.next());
+        assertEquals(true, result.getObject(1, Boolean.class));
+        assertFalse(result.wasNull());
+      }
+      try (var result = statement.executeQuery("SELECT 'abc' AS v")) {
+        assertTrue(result.next());
+        assertArrayEquals("abc".getBytes(StandardCharsets.UTF_8), result.getObject(1, byte[].class));
+        assertFalse(result.wasNull());
+      }
+      try (var result = statement.executeQuery("SELECT X'7879' AS v")) {
+        assertTrue(result.next());
+        assertArrayEquals(new byte[]{
+            (byte) 0x78, (byte) 0x79
+        }, result.getObject(1, byte[].class));
+        assertFalse(result.wasNull());
+      }
+      try (var result = statement.executeQuery("SELECT 'abc' AS v")) {
+        assertTrue(result.next());
+        var failure = assertThrows(SQLDataException.class, () -> result.getObject(1, Boolean.class));
+        assertEquals("22018", failure.getSQLState());
+      }
+      try (var result = statement.executeQuery("SELECT 42 AS v")) {
+        assertTrue(result.next());
+        var failure = assertThrows(SQLDataException.class, () -> result.getObject(1, byte[].class));
+        assertEquals("22018", failure.getSQLState());
+      }
+      try (var result = statement.executeQuery("SELECT CAST(NULL AS VARCHAR) AS v")) {
+        assertTrue(result.next());
+        assertNull(result.getObject(1, Boolean.class));
+        assertNull(result.getObject(1, byte[].class));
+        assertTrue(result.wasNull());
       }
     }
   }

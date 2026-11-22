@@ -1,7 +1,6 @@
 package se.alipsa.jparq;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.sql.Array;
 import java.sql.Blob;
 import java.sql.Date;
@@ -1527,14 +1526,17 @@ public class JParqResultSet extends ResultSetAdapter {
   }
 
   /**
-   * Returns the column value as a boolean, converting numbers and boolean text
-   * where JDBC allows it.
+   * Returns the column value as a boolean, converting booleans, numbers, and
+   * boolean text using the shared CAST rules plus the JDBC '1' and '0' forms.
    *
    * @param columnIndex
    *          one-based column index
-   * @return true for TRUE, non-zero numbers, '1', and 'true'; false for FALSE,
-   *         zero numbers, '0', 'false', and SQL NULL, with {@code wasNull()}
-   *         returning true
+   * @return true for TRUE, non-zero numbers, and the true text forms ('t', 'yes',
+   *         'y', '1', 'true' ignoring case and leading or trailing characters
+   *         with code point U+0020 or below); false for FALSE, zero numbers,
+   *         blank text, the false text forms ('f', 'no', 'n', '0', 'false'
+   *         ignoring case and the same characters), and SQL NULL, with
+   *         {@code wasNull()} returning true
    * @throws SQLException
    *           if column access fails or the value cannot be converted, with
    *           SQLState 22018
@@ -1545,11 +1547,8 @@ public class JParqResultSet extends ResultSetAdapter {
     if (v == null) {
       return false;
     }
-    if (v instanceof Boolean bool) {
-      return bool;
-    }
     try {
-      return booleanValue(v);
+      return JdbcConversions.jdbcBoolean(v);
     } catch (IllegalArgumentException exception) {
       throw SqlExceptions.wrap(
           "Cannot read column " + columnIndex + " ('" + conversionColumnLabel(columnIndex) + "') as BOOLEAN",
@@ -1772,63 +1771,11 @@ public class JParqResultSet extends ResultSetAdapter {
       return bytes;
     }
     try {
-      return binaryValue(v);
+      return JdbcConversions.toBytes(v);
     } catch (IllegalArgumentException exception) {
       throw SqlExceptions.wrap(
           "Cannot read column " + columnIndex + " ('" + conversionColumnLabel(columnIndex) + "') as BINARY", exception);
     }
-  }
-
-  /**
-   * Converts a non-boolean value to a boolean using JDBC-compatible forms.
-   *
-   * @param value
-   *          the input, non-null; numbers convert by their decimal sign, and text
-   *          accepts '0', '1', 'true', and 'false' ignoring surrounding
-   *          whitespace and the case of the words
-   * @return the converted boolean
-   * @throws IllegalArgumentException
-   *           if the input cannot be converted, carrying SQLState 22018
-   */
-  private static boolean booleanValue(Object value) {
-    if (value instanceof Number number) {
-      return NumericCasts.toBigDecimal(number).signum() != 0;
-    }
-    if (value instanceof String text) {
-      String trimmed = text.trim();
-      if ("1".equals(trimmed) || "true".equalsIgnoreCase(trimmed)) {
-        return true;
-      }
-      if ("0".equals(trimmed) || "false".equalsIgnoreCase(trimmed)) {
-        return false;
-      }
-    }
-    String message = "Cannot cast value '" + SqlExceptions.diagnosticValue(value) + "' to a boolean value";
-    throw new IllegalArgumentException(message, new SQLDataException(message, "22018"));
-  }
-
-  /**
-   * Converts a non-binary value to its byte representation.
-   *
-   * @param value
-   *          the input, non-null; text converts to UTF-8 bytes and byte buffers
-   *          contribute their remaining bytes
-   * @return the byte array
-   * @throws IllegalArgumentException
-   *           if the input cannot be converted, carrying SQLState 22018
-   */
-  private static byte[] binaryValue(Object value) {
-    if (value instanceof ByteBuffer buffer) {
-      ByteBuffer duplicate = buffer.duplicate();
-      byte[] bytes = new byte[duplicate.remaining()];
-      duplicate.get(bytes);
-      return bytes;
-    }
-    if (value instanceof String text) {
-      return text.getBytes(StandardCharsets.UTF_8);
-    }
-    String message = "Cannot cast value '" + SqlExceptions.diagnosticValue(value) + "' to a binary value";
-    throw new IllegalArgumentException(message, new SQLDataException(message, "22018"));
   }
 
   /**
