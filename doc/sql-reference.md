@@ -1049,7 +1049,8 @@ with SQLState `22008` because their era cannot round-trip through JDBC.
 - `getBoolean` returns true for TRUE, '1', 't', 'yes', 'y', 'true', and non-zero numbers, and false for FALSE, '0',
   'f', 'no', 'n', 'false', blank text, zero numbers, and SQL NULL, with `wasNull()` returning true. Text matching
   uses the same rules as `CAST ... AS BOOLEAN`: it ignores the case of the words and leading or trailing characters
-  with code point `U+0020` or below. Other text, such as '2', is not converted.
+  with code point `U+0020` or below. Other text, such as '2', is not converted. Non-finite floating-point values
+  (NaN and infinities) are rejected with SQLState `22018`.
 - `getBytes` returns binary values unchanged, converts `VARCHAR` values to UTF-8 bytes, and returns null for SQL
   NULL.
 - Values that cannot be converted raise `SQLDataException` with SQLState `22018`.

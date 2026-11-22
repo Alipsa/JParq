@@ -92,7 +92,7 @@ public final class JdbcConversions {
       }
       return BooleanCasts.toBoolean(value);
     }
-    String message = "Cannot cast value '" + SqlExceptions.diagnosticValue(value) + "' to a boolean value";
+    String message = "Cannot cast value '" + SqlExceptions.diagnosticValue(value) + "' to BOOLEAN";
     throw new IllegalArgumentException(message, new SQLDataException(message, "22018"));
   }
 

@@ -16,6 +16,13 @@ import java.sql.ResultSet;
 import java.sql.SQLDataException;
 import java.sql.SQLException;
 import java.util.List;
+import org.apache.avro.Schema;
+import org.apache.avro.SchemaBuilder;
+import org.apache.avro.generic.GenericData;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.parquet.avro.AvroParquetWriter;
+import org.apache.parquet.hadoop.util.HadoopOutputFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -291,11 +298,9 @@ class JParqGetterConversionTest {
           if (expected == 1) {
             assertTrue(byLabel ? result.getBoolean("v") : result.getBoolean(1));
           } else {
-            // #475: the LATERAL table materializes the DECIMAL quotient as the VARCHAR text
-            // '2',
-            // which is not a JDBC boolean form; the same expression outside LATERAL is
-            // DECIMAL
-            // and converts to true.
+            // #475: the LATERAL table materializes the DECIMAL quotient as
+            // VARCHAR text '2', which is not a JDBC boolean form; the same
+            // expression outside LATERAL is DECIMAL and converts to true.
             var failure = assertThrows(SQLDataException.class, () -> readBoolean(result, byLabel));
             assertEquals("22018", failure.getSQLState());
             assertTrue(failure.getMessage().contains("as BOOLEAN"), failure::getMessage);
@@ -397,6 +402,57 @@ class JParqGetterConversionTest {
         assertNull(result.getObject(1, Boolean.class));
         assertNull(result.getObject(1, byte[].class));
         assertTrue(result.wasNull());
+      }
+    }
+  }
+
+  /**
+   * Rejects non-finite stored doubles from getBoolean, the typed Boolean
+   * getObject target, and CAST AS BOOLEAN with SQLState 22018, while finite
+   * doubles keep their sign.
+   *
+   * @throws Exception
+   *           if the fixture or a query fails
+   */
+  @Test
+  void rejectsNonFiniteStoredDoublesAsBoolean() throws Exception {
+    Schema schema = SchemaBuilder.record("doubles").fields().requiredInt("id").name("d")
+        .type(Schema.create(Schema.Type.DOUBLE)).noDefault().endRecord();
+    var file = new org.apache.hadoop.fs.Path(directory.resolve("doubles.parquet").toUri());
+    try (
+        var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(file, new Configuration(false)))
+            .withSchema(schema).withConf(new Configuration(false)).build()) {
+      int id = 1;
+      for (double value : List.of(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, 0.0d, 42.0d)) {
+        var row = new GenericData.Record(schema);
+        row.put("id", id++);
+        row.put("d", value);
+        writer.write(row);
+      }
+    }
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement()) {
+      for (int id = 1; id <= 3; id++) {
+        try (var result = statement.executeQuery("SELECT d FROM doubles WHERE id = " + id)) {
+          assertTrue(result.next(), "id " + id);
+          var failure = assertThrows(SQLDataException.class, () -> result.getBoolean(1), "getBoolean id " + id);
+          assertEquals("22018", failure.getSQLState(), "getBoolean id " + id);
+          var typed = assertThrows(SQLDataException.class, () -> result.getObject(1, Boolean.class), "typed id " + id);
+          assertEquals("22018", typed.getSQLState(), "typed id " + id);
+        }
+        try (var result = statement.executeQuery("SELECT CAST(d AS BOOLEAN) AS v FROM doubles WHERE id = " + id)) {
+          assertTrue(result.next(), "cast id " + id);
+          var failure = assertThrows(SQLDataException.class, () -> result.getObject(1), "cast id " + id);
+          assertEquals("22018", failure.getSQLState(), "cast id " + id);
+        }
+      }
+      try (var result = statement.executeQuery("SELECT d FROM doubles WHERE id = 4")) {
+        assertTrue(result.next());
+        assertFalse(result.getBoolean(1));
+      }
+      try (var result = statement.executeQuery("SELECT d FROM doubles WHERE id = 5")) {
+        assertTrue(result.next());
+        assertTrue(result.getBoolean(1));
       }
     }
   }

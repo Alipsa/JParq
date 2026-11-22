@@ -15,16 +15,17 @@ public final class BooleanCasts {
 
   /**
    * Converts a value to a boolean using the engine's CAST AS BOOLEAN rules:
-   * booleans pass through, numbers convert by their sign, and text accepts
-   * 'true', 't', 'yes', 'y', '1', 'false', 'f', 'no', 'n', and '0' ignoring case
-   * and leading or trailing characters with code point U+0020 or below; blank
-   * text is false.
+   * booleans pass through, numbers convert by their sign (non-finite
+   * floating-point values are rejected), and text accepts 'true', 't', 'yes',
+   * 'y', '1', 'false', 'f', 'no', 'n', and '0' ignoring case and leading or
+   * trailing characters with code point U+0020 or below; blank text is false.
    *
    * @param value
    *          the input, possibly null
    * @return the converted boolean, or null for a null input
    * @throws IllegalArgumentException
-   *           if the input cannot be converted, carrying SQLState 22018
+   *           if the input cannot be converted or is a non-finite floating-point
+   *           value, carrying SQLState 22018
    */
   public static Boolean toBoolean(Object value) {
     if (value == null) {
@@ -40,7 +41,12 @@ public final class BooleanCasts {
       if (number instanceof Byte || number instanceof Short || number instanceof Integer || number instanceof Long) {
         return number.longValue() != 0L;
       }
-      return number.doubleValue() != 0d;
+      double result = number.doubleValue();
+      if ((number instanceof Float || number instanceof Double) && !Double.isFinite(result)) {
+        String message = "Cannot cast value '" + SqlExceptions.diagnosticValue(value) + "' to BOOLEAN";
+        throw new IllegalArgumentException(message, new SQLDataException(message, "22018"));
+      }
+      return result != 0d;
     }
     String text = SqlText.valueOf(value).trim();
     if (text.isEmpty()) {
