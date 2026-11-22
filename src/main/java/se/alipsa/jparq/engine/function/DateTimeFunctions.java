@@ -38,6 +38,7 @@ import net.sf.jsqlparser.expression.IntervalExpression;
 import net.sf.jsqlparser.expression.IntervalQualifier;
 import net.sf.jsqlparser.expression.TimeKeyExpression;
 import net.sf.jsqlparser.statement.create.table.ColDataType;
+import se.alipsa.jparq.engine.BooleanCasts;
 import se.alipsa.jparq.engine.DecimalCasts;
 import se.alipsa.jparq.engine.NumericCastTarget;
 import se.alipsa.jparq.engine.NumericCasts;
@@ -826,7 +827,7 @@ public final class DateTimeFunctions {
       return NumericCasts.convert(value, target, colType.toString());
     }
     return switch (normalized) {
-      case "boolean", "bool" -> toBoolean(value);
+      case "boolean", "bool" -> BooleanCasts.toBoolean(value);
       case "char", "character", "nchar", "nationalcharacter", "nationalchar", "varchar", "charactervarying", "nvarchar",
           "nationalcharactervarying", "string" ->
         castToString(cast, value);
@@ -1041,32 +1042,6 @@ public final class DateTimeFunctions {
       return null;
     }
     return args.get(index);
-  }
-
-  private static Boolean toBoolean(Object value) {
-    if (value instanceof Boolean bool) {
-      return bool;
-    }
-    if (value instanceof Number num) {
-      if (value instanceof BigDecimal bd) {
-        return bd.compareTo(BigDecimal.ZERO) != 0;
-      }
-      return num.doubleValue() != 0d;
-    }
-    String text = SqlText.valueOf(value).trim();
-    if (text.isEmpty()) {
-      return Boolean.FALSE;
-    }
-    String normalized = text.toLowerCase(Locale.ROOT);
-    if ("true".equals(normalized) || "t".equals(normalized) || "yes".equals(normalized) || "y".equals(normalized)
-        || "1".equals(normalized)) {
-      return Boolean.TRUE;
-    }
-    if ("false".equals(normalized) || "f".equals(normalized) || "no".equals(normalized) || "n".equals(normalized)
-        || "0".equals(normalized)) {
-      return Boolean.FALSE;
-    }
-    throw new IllegalArgumentException("Cannot cast value '" + SqlExceptions.diagnosticValue(value) + "' to BOOLEAN");
   }
 
   /**

@@ -1525,10 +1525,35 @@ public class JParqResultSet extends ResultSetAdapter {
     }
   }
 
+  /**
+   * Returns the column value as a boolean, converting booleans, numbers, and
+   * boolean text using the shared CAST rules plus the JDBC '1' and '0' forms.
+   *
+   * @param columnIndex
+   *          one-based column index
+   * @return true for TRUE, non-zero numbers, and the true text forms ('t', 'yes',
+   *         'y', '1', 'true' ignoring case and leading or trailing characters
+   *         with code point U+0020 or below); false for FALSE, zero numbers,
+   *         blank text, the false text forms ('f', 'no', 'n', '0', 'false'
+   *         ignoring case and the same characters), and SQL NULL, with
+   *         {@code wasNull()} returning true
+   * @throws SQLException
+   *           if column access fails or the value cannot be converted, with
+   *           SQLState 22018
+   */
   @Override
   public boolean getBoolean(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    return v != null && ((Boolean) v);
+    if (v == null) {
+      return false;
+    }
+    try {
+      return JdbcConversions.jdbcBoolean(v);
+    } catch (IllegalArgumentException exception) {
+      throw SqlExceptions.wrap(
+          "Cannot read column " + columnIndex + " ('" + conversionColumnLabel(columnIndex) + "') as BOOLEAN",
+          exception);
+    }
   }
 
   @Override
@@ -1626,7 +1651,8 @@ public class JParqResultSet extends ResultSetAdapter {
       return NumericCasts.convert(input, target, target.name());
     } catch (IllegalArgumentException exception) {
       throw SqlExceptions.wrap(
-          "Cannot read column " + columnIndex + " ('" + numericColumnLabel(columnIndex) + "') as " + target, exception);
+          "Cannot read column " + columnIndex + " ('" + conversionColumnLabel(columnIndex) + "') as " + target,
+          exception);
     }
   }
 
@@ -1638,7 +1664,7 @@ public class JParqResultSet extends ResultSetAdapter {
    *          the one-based column index
    * @return the diagnostic label, or "?" if metadata cannot supply one
    */
-  private String numericColumnLabel(int columnIndex) {
+  private String conversionColumnLabel(int columnIndex) {
     try {
       ResultSetMetaData metadata = getMetaData();
       String label = columnIndex > 0 && columnIndex <= metadata.getColumnCount()
@@ -1650,15 +1676,34 @@ public class JParqResultSet extends ResultSetAdapter {
     }
   }
 
+  /**
+   * Returns the column value as a decimal, converting numbers, booleans, and
+   * numeric text using the shared CAST rules.
+   *
+   * @param columnIndex
+   *          one-based column index
+   * @return the decimal value, with booleans represented as zero or one, or null
+   *         for SQL NULL
+   * @throws SQLException
+   *           if column access fails or the value is not numeric, with SQLState
+   *           22018
+   */
   @Override
   public BigDecimal getBigDecimal(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    return switch (v) {
-      case null -> null;
-      case BigDecimal bd -> bd;
-      case Number n -> new BigDecimal(n.toString());
-      default -> new BigDecimal(v.toString());
-    };
+    if (v == null) {
+      return null;
+    }
+    if (v instanceof BigDecimal decimal) {
+      return decimal;
+    }
+    try {
+      return NumericCasts.toBigDecimal(v);
+    } catch (IllegalArgumentException exception) {
+      throw SqlExceptions.wrap(
+          "Cannot read column " + columnIndex + " ('" + conversionColumnLabel(columnIndex) + "') as DECIMAL",
+          exception);
+    }
   }
 
   @Override
@@ -1706,10 +1751,31 @@ public class JParqResultSet extends ResultSetAdapter {
     return getBytes(findColumn(columnLabel));
   }
 
+  /**
+   * Returns the column's binary bytes, converting text to UTF-8 bytes.
+   *
+   * @param columnIndex
+   *          one-based column index
+   * @return the binary bytes, or null for SQL NULL
+   * @throws SQLException
+   *           if column access fails or the value cannot be converted to binary,
+   *           with SQLState 22018
+   */
   @Override
   public byte[] getBytes(int columnIndex) throws SQLException {
     Object v = value(columnIndex);
-    return (byte[]) v;
+    if (v == null) {
+      return null;
+    }
+    if (v instanceof byte[] bytes) {
+      return bytes;
+    }
+    try {
+      return JdbcConversions.toBytes(v);
+    } catch (IllegalArgumentException exception) {
+      throw SqlExceptions.wrap(
+          "Cannot read column " + columnIndex + " ('" + conversionColumnLabel(columnIndex) + "') as BINARY", exception);
+    }
   }
 
   /**

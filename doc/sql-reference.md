@@ -1042,10 +1042,25 @@ with SQLState `22008` because their era cannot round-trip through JDBC.
   getters.
 - `BOOLEAN` values convert to 1 for TRUE and 0 for FALSE.
 
+**`getBigDecimal`, `getBoolean`, `getBytes`**
+
+- `getBigDecimal` converts numbers, `BOOLEAN` (1 for TRUE, 0 for FALSE), and numeric text by column index and
+  label, using the numeric `CAST` rules, and returns null for SQL NULL.
+- `getBoolean` returns true for TRUE, '1', 't', 'yes', 'y', 'true', and non-zero numbers, and false for FALSE, '0',
+  'f', 'no', 'n', 'false', blank text, zero numbers, and SQL NULL, with `wasNull()` returning true. Text matching
+  uses the same rules as `CAST ... AS BOOLEAN`: it ignores the case of the words and leading or trailing characters
+  with code point `U+0020` or below. Other text, such as '2', is not converted. Non-finite floating-point values
+  (NaN and infinities) are rejected with SQLState `22018`.
+- `getBytes` returns binary values unchanged, converts `VARCHAR` values to UTF-8 bytes, and returns null for SQL
+  NULL.
+- Values that cannot be converted raise `SQLDataException` with SQLState `22018`.
+
 **Typed `getObject(column, Class)`**
 
-- Supports numeric conversions, `BigDecimal`, `LocalDate`, `LocalTime`, `LocalDateTime`, `OffsetTime`, and
-  `OffsetDateTime`.
+- Supports numeric conversions, `BigDecimal`, `Boolean`, `byte[]`, `LocalDate`, `LocalTime`, `LocalDateTime`,
+  `OffsetTime`, and `OffsetDateTime`.
+- `Boolean` sources convert with the same rules as `getBoolean`, and `byte[]` sources convert with the same rules as
+  `getBytes`, so character sources become UTF-8 bytes.
 - `TIME` conversions keep milliseconds; `TIMESTAMP` conversions keep nanoseconds.
 - Datetime targets accept datetime and character sources. Numeric and Boolean sources raise `22005`.
 - `OffsetTime` applies the JVM's current time zone offset before normalizing to UTC. `OffsetDateTime` converts the
@@ -1092,7 +1107,7 @@ and after a result has been returned.
 | `22005` | Incompatible source type for typed `getObject` |
 | `22007` | Invalid datetime or interval format |
 | `22008` | Datetime field out of range |
-| `22018` | Invalid character value for a numeric conversion |
+| `22018` | Invalid character value for a numeric, boolean, or binary conversion |
 | `22021` | Malformed UTF-8 in a character/binary conversion |
 | `2201W` | Invalid `LIMIT`/`FETCH` row count |
 | `2201X` | Invalid `OFFSET` row count |
