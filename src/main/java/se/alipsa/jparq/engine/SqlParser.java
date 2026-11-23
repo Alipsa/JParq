@@ -2293,7 +2293,9 @@ public final class SqlParser {
         String label = columnInfo.label();
         String physicalName = columnInfo.physicalName();
         Column column = new Column();
-        column.setColumnName(label);
+        // Labels can be arbitrary expression text; keep them intact instead of
+        // letting the parser treat embedded dots as multipart name separators.
+        column.setName(label, false);
         if (qualifier != null && !qualifier.isBlank()) {
           Table table = new Table();
           table.setName(expressionQualifier, false);
