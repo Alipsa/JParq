@@ -2358,6 +2358,9 @@ public class JParqPreparedStatement implements PreparedStatement {
    * @return ordered rows (or the original rows when no ordering is requested)
    * @throws SQLException
    *           if an ORDER BY column cannot be resolved
+   * @throws IllegalArgumentException
+   *           if a positional reference is outside the set result, with SQLState
+   *           42000
    */
   private List<List<Object>> applySetOrdering(List<List<Object>> rows, List<String> labels, List<Integer> sqlTypes,
       List<Schema> valueSchemas, List<SqlParser.SetOrder> orderBy) throws SQLException {
@@ -2377,7 +2380,7 @@ public class JParqPreparedStatement implements PreparedStatement {
     for (SqlParser.SetOrder order : orderBy) {
       int index;
       if (order.columnIndex() != null) {
-        index = order.columnIndex() - 1;
+        index = OrderingUtil.position(order.columnIndex(), labels.size()) - 1;
       } else if (order.expression() == null) {
         if (order.columnLabel() == null) {
           throw new SQLException("Set operation ORDER BY requires column index, label, or expression");
@@ -2401,9 +2404,6 @@ public class JParqPreparedStatement implements PreparedStatement {
         }
         index = -1;
         hasExpressions = true;
-      }
-      if ((index < 0 && order.expression() == null) || index >= labels.size()) {
-        throw new SQLException("Set operation ORDER BY column index out of range: " + (index + 1));
       }
       resolved.add(new ResolvedSetOrder(index, order.asc(), order.expression(), order.nullOrdering()));
     }

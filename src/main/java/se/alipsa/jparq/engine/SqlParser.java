@@ -1492,6 +1492,10 @@ public final class SqlParser {
    * @param orderByElements
    *          raw ORDER BY elements from the parser
    * @return normalized {@link SetOrder} definitions
+   * @throws IllegalArgumentException
+   *           if a positional reference cannot be represented or is zero, with
+   *           SQLState 42000; range checks against the set result are deferred to
+   *           execution
    */
   private static List<SetOrder> parseSetOrderBy(List<OrderByElement> orderByElements) {
     if (orderByElements == null || orderByElements.isEmpty()) {
@@ -1504,7 +1508,7 @@ public final class SqlParser {
       String columnLabel = null;
       Expression orderExpression = null;
       if (expression instanceof LongValue value) {
-        columnIndex = value.getBigIntegerValue().intValue();
+        columnIndex = OrderingUtil.position(value.getStringValue(), Integer.MAX_VALUE);
       } else if (expression instanceof Column column) {
         columnLabel = column.getColumnName();
       } else {
@@ -2592,7 +2596,8 @@ public final class SqlParser {
    * @return a list of {@link OrderKey} objects representing the resolved ORDER BY
    *         keys; an empty list if the query has no ORDER BY clause
    * @throws IllegalArgumentException
-   *           if a referenced output label is ambiguous or an ordinal is invalid
+   *           if a referenced output label is ambiguous, with SQLState 42702, or
+   *           an ordinal is invalid, with SQLState 42000
    */
   private static List<OrderKey> computeOrderKeys(PlainSelect ps, List<String> labels, List<Expression> expressions,
       List<TableReference> tableRefs) {
@@ -2643,7 +2648,8 @@ public final class SqlParser {
    *          canonical column resolver for joins, or null for a single input
    * @return query with bound ordering keys
    * @throws IllegalArgumentException
-   *           if an ordering alias is ambiguous or cannot be safely expanded
+   *           if an ordering alias is ambiguous, with SQLState 42702, cannot be
+   *           safely expanded, or an ordinal is invalid, with SQLState 42000
    */
   public static Select resolveInputOrdering(Select select, Schema inputSchema,
       java.util.function.Function<Column, String> columnBinding) {
@@ -2674,7 +2680,8 @@ public final class SqlParser {
    *          canonical column resolver for joins, or null for a single input
    * @return ordering keys bound to the selected expressions
    * @throws IllegalArgumentException
-   *           if a label is ambiguous or a position is invalid
+   *           if a label is ambiguous, with SQLState 42702, or a position is
+   *           invalid, with SQLState 42000
    */
   private static List<OrderKey> resolveOrderKeys(List<OrderKey> keys, List<String> labels, List<Expression> expressions,
       java.util.function.Function<Column, String> columnBinding) {
@@ -2697,7 +2704,8 @@ public final class SqlParser {
    *          normalized input names, or null to defer expression aliases
    * @return ordering keys preserving input precedence inside expressions
    * @throws IllegalArgumentException
-   *           if an alias is ambiguous or unsafe to expand
+   *           if an alias is ambiguous, with SQLState 42702, or unsafe to expand
+   *           or a position is invalid, with SQLState 42000
    */
   private static List<OrderKey> resolveOrderKeys(List<OrderKey> keys, List<String> labels, List<Expression> expressions,
       java.util.function.Function<Column, String> columnBinding, Set<String> inputs) {
@@ -2725,10 +2733,9 @@ public final class SqlParser {
       Expression selected = null;
       if (evaluation == null && qualifier == null && projectionIndex < 0) {
         if (column != null && column.matches("[0-9]+")) {
-          int position = Integer.parseInt(column);
-          if (position < 1 || !labels.isEmpty() && position > labels.size()) {
-            throw new IllegalArgumentException("ORDER BY position is outside the select list: " + position);
-          }
+          // With an unknown output width the upper bound is deferred to
+          // execution, which revalidates the original literal.
+          int position = OrderingUtil.position(column, labels.isEmpty() ? -1 : labels.size());
           if (!labels.isEmpty()) {
             selected = expressions.get(position - 1);
             projectionIndex = position - 1;

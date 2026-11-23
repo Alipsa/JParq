@@ -603,10 +603,7 @@ public final class QueryProcessor implements AutoCloseable {
       }
     }
     if (key.column() != null && key.column().matches("[0-9]+")) {
-      int ordinal = Integer.parseInt(key.column());
-      if (ordinal < 1 || ordinal > schema.getFields().size()) {
-        throw new IllegalArgumentException("ORDER BY position is outside the select list: " + ordinal);
-      }
+      int ordinal = OrderingUtil.position(key.column(), schema.getFields().size());
       Schema.Field field = schema.getFields().get(ordinal - 1);
       return AvroCoercions.unwrap(record.get(field.name()), field.schema());
     }
