@@ -338,9 +338,10 @@ public final class SqlParser {
    * ORDER BY key for set operation queries supporting either column positions or
    * labels or full expressions.
    *
-   * @param columnIndex
-   *          1-based column index when ORDER BY uses positional syntax,
-   *          {@code null} otherwise
+   * @param ordinal
+   *          the ordinal literal exactly as written when ORDER BY uses positional
+   *          syntax, validated at parse time and range-checked against the set
+   *          result at execution, {@code null} otherwise
    * @param columnLabel
    *          column label when ORDER BY references a column name, {@code null}
    *          otherwise
@@ -352,23 +353,8 @@ public final class SqlParser {
    * @param nullOrdering
    *          explicit NULL placement, or {@code null} for the default
    */
-  public record SetOrder(Integer columnIndex, String columnLabel, boolean asc, Expression expression,
+  public record SetOrder(String ordinal, String columnLabel, boolean asc, Expression expression,
       OrderByElement.NullOrdering nullOrdering) {
-    /**
-     * Creates an order directive using default NULL placement.
-     *
-     * @param columnIndex
-     *          1-based position, or {@code null}
-     * @param columnLabel
-     *          output label, or {@code null}
-     * @param asc
-     *          whether to sort ascending
-     * @param expression
-     *          computed sort expression, or {@code null}
-     */
-    public SetOrder(Integer columnIndex, String columnLabel, boolean asc, Expression expression) {
-      this(columnIndex, columnLabel, asc, expression, null);
-    }
   }
 
   /**
@@ -1504,18 +1490,22 @@ public final class SqlParser {
     List<SetOrder> orders = new ArrayList<>(orderByElements.size());
     for (OrderByElement element : orderByElements) {
       Expression expression = element.getExpression();
-      Integer columnIndex = null;
+      String ordinal = null;
       String columnLabel = null;
       Expression orderExpression = null;
       if (expression instanceof LongValue value) {
-        columnIndex = OrderingUtil.position(value.getStringValue(), Integer.MAX_VALUE);
+        // The literal stays as written so the execution-time range check can
+        // name it verbatim; the parse rejects zero and unrepresentable values
+        // at preparation.
+        ordinal = value.getStringValue();
+        OrderingUtil.position(ordinal);
       } else if (expression instanceof Column column) {
         columnLabel = column.getColumnName();
       } else {
         orderExpression = expression;
       }
       boolean asc = !element.isAscDescPresent() || element.isAsc();
-      orders.add(new SetOrder(columnIndex, columnLabel, asc, orderExpression, element.getNullOrdering()));
+      orders.add(new SetOrder(ordinal, columnLabel, asc, orderExpression, element.getNullOrdering()));
     }
     return List.copyOf(orders);
   }
@@ -2735,7 +2725,9 @@ public final class SqlParser {
         if (column != null && column.matches("[0-9]+")) {
           // With an unknown output width the upper bound is deferred to
           // execution, which validates the literal against the actual width.
-          int position = OrderingUtil.position(column, labels.isEmpty() ? -1 : labels.size());
+          int position = labels.isEmpty()
+              ? OrderingUtil.position(column)
+              : OrderingUtil.position(column, labels.size());
           if (!labels.isEmpty()) {
             selected = expressions.get(position - 1);
             projectionIndex = position - 1;

@@ -24,6 +24,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
+import jparq.support.QueryTestSupport;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import org.apache.avro.SchemaBuilder;
 import org.apache.avro.generic.GenericData;
@@ -160,6 +161,34 @@ class SqlExceptionsTest {
       assertEquals("42000", failure.getSQLState());
       assertTrue(failure.getMessage().contains("Failed to prepare query: SELEC 1"));
       assertTrue(failure.getMessage().contains("Failed to parse SQL: SELEC 1"));
+    }
+  }
+
+  /**
+   * Routes a classified failure that is not an ORDER BY position, such as the
+   * scalar subquery cardinality check, through the execution boundary with the
+   * execution context instead of the read-failure context.
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void executionBoundaryClassifiesNonOrderFailures(boolean prepared) throws Exception {
+    QueryTestSupport.writeIntegerFixture(directory);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      for (String sql : List.of("SELECT n FROM o WHERE n = (SELECT n FROM o)",
+          "SELECT * FROM o WHERE n = (SELECT n FROM o) ORDER BY n")) {
+        SQLException failure = assertThrows(SQLDataException.class,
+            () -> QueryTestSupport.rows(connection, sql, prepared), sql);
+        assertEquals("21000", failure.getSQLState(), sql);
+        assertTrue(failure.getMessage().contains("Failed to execute query"), failure.getMessage());
+        assertFalse(failure.getMessage().contains("Failed reading first parquet record"), failure.getMessage());
+      }
     }
   }
 
@@ -826,6 +855,27 @@ class SqlExceptionsTest {
     assertEquals(7, failure.getErrorCode());
     assertSame(wrapper, failure.getCause());
     assertEquals("operation failed: wrapper failed: stateful cause", failure.getMessage());
+  }
+
+  /**
+   * Selects the classified context when the cause chain carries a recognized
+   * SQLState and the fallback context otherwise, without altering the wrapped
+   * classification.
+   */
+  @Test
+  void dualContextWrapSelectsContextByClassification() {
+    var classified = SqlExceptions.syntaxFailure("ORDER BY position is outside the select list: 99");
+    var failure = SqlExceptions.wrap("Failed to execute query", "Failed to open query data source", classified);
+    assertInstanceOf(SQLSyntaxErrorException.class, failure);
+    assertEquals("42000", failure.getSQLState());
+    assertSame(classified, failure.getCause());
+    assertEquals("Failed to execute query: ORDER BY position is outside the select list: 99", failure.getMessage());
+    var plain = new IllegalStateException("disk gone");
+    var fallback = SqlExceptions.wrap("Failed to execute query", "Failed to open query data source", plain);
+    assertEquals(SQLException.class, fallback.getClass());
+    assertNull(fallback.getSQLState());
+    assertSame(plain, fallback.getCause());
+    assertEquals("Failed to open query data source: disk gone", fallback.getMessage());
   }
 
   /** Tolerates a null failure without raising (issue #330). */

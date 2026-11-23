@@ -104,9 +104,73 @@ class OrderPositionErrorClassificationTest {
   }
 
   /**
+   * Classifies invalid positional references on {@code SELECT DISTINCT *} with
+   * SQLState 42000 for multi-row, single-row, and empty inputs: the ordinal
+   * literal must not enter the DISTINCT key list before the position is
+   * validated.
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @param directory
+   *          fixture directory
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void classifiesDistinctWildcardOrderPositions(boolean prepared, @TempDir Path directory) throws Exception {
+    writeIntegerFixture(directory);
+    writeEmptyIntegerFixture(directory);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      String[] queries = {
+          "SELECT DISTINCT * FROM o ORDER BY 99", "SELECT DISTINCT * FROM o WHERE n = 2 ORDER BY 99",
+          "SELECT DISTINCT * FROM o WHERE 1 = 0 ORDER BY 99", "SELECT DISTINCT * FROM e ORDER BY 99",
+      };
+      for (String sql : queries) {
+        SQLException failure = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, sql, prepared), sql);
+        assertEquals("42000", failure.getSQLState(), sql);
+        assertTrue(failure.getMessage().contains("outside the select list: 99"), failure.getMessage());
+        assertFalse(isNumericFailure(failure), failure.getMessage());
+      }
+    }
+  }
+
+  /**
+   * Keeps positional references on {@code SELECT DISTINCT *} sorting as well as
+   * deduplicating (issue #610: the ordinal used to be treated as a DISTINCT key
+   * column and failed with an unclassified error).
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @param directory
+   *          fixture directory
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void sortsDistinctWildcardByPosition(boolean prepared, @TempDir Path directory) throws Exception {
+    writeIntegerFixture(directory);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      assertEquals(List.of(List.of(1), List.of(2), List.of(3), Arrays.asList((Object) null)),
+          rows(connection, "SELECT DISTINCT * FROM o ORDER BY 1", prepared));
+      assertEquals(List.of(List.of(3), List.of(2), List.of(1), Arrays.asList((Object) null)),
+          rows(connection, "SELECT DISTINCT * FROM o ORDER BY 1 DESC NULLS LAST", prepared));
+    }
+  }
+
+  /**
    * Until #609 is fixed, the top-level {@code SELECT *, expr} projection drops
    * the expression column, so the runtime sort width is the input width and the
-   * valid output position is rejected as out of range instead of sorting.
+   * valid output position is rejected as out of range instead of sorting. The
+   * window-function variant fails the same way, so both shapes are pinned here
+   * for the #609 fix. Several rows with a descending position keep the check
+   * honest once the drop is fixed: the rows must come back sorted by column 2,
+   * not merely accepted.
    *
    * @param directory
    *          fixture directory
@@ -118,8 +182,14 @@ class OrderPositionErrorClassificationTest {
   void sortsWildcardPlusExpressionByOutputPosition(@TempDir Path directory) throws Exception {
     writeIntegerFixture(directory);
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
-      assertEquals(List.of(List.of(2, 3L)),
-          rows(connection, "SELECT *, n + 1 AS m FROM o WHERE n = 2 ORDER BY 2", false));
+      assertEquals(
+          List.of(List.of(3, 4L), List.of(2, 3L), List.of(1, 2L), List.of(1, 2L),
+              Arrays.asList((Object) null, (Object) null)),
+          rows(connection, "SELECT *, n + 1 AS m FROM o ORDER BY 2 DESC NULLS LAST", false));
+      assertEquals(List.of(List.of(1, 4L), List.of(1, 3L), List.of(2, 2L), List.of(3, 1L)),
+          rows(connection,
+              "SELECT *, ROW_NUMBER() OVER (ORDER BY n DESC) AS rn FROM o WHERE n IS NOT NULL " + "ORDER BY 2 DESC",
+              false));
     }
   }
 
@@ -181,7 +251,8 @@ class OrderPositionErrorClassificationTest {
 
   /**
    * Classifies invalid positional references on set operations with SQLState
-   * 42000 without silently truncating large literals.
+   * 42000 without silently truncating large literals, naming each literal exactly
+   * as written.
    *
    * @param prepared
    *          whether to use a prepared statement
@@ -197,7 +268,8 @@ class OrderPositionErrorClassificationTest {
   void classifiesSetOperationOrderPositions(boolean prepared, @TempDir Path directory) throws Exception {
     writeIntegerFixture(directory);
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
-      for (String literal : List.of("0", "99", "99999999999", "99999999999999999999")) {
+      // 099 pins the literal-as-written diagnostic: the parsed value is 99.
+      for (String literal : List.of("0", "99", "099", "99999999999", "99999999999999999999")) {
         String sql = "SELECT n FROM o UNION ALL SELECT n FROM o ORDER BY " + literal;
         SQLException failure = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, sql, prepared), sql);
         assertEquals("42000", failure.getSQLState(), sql);
@@ -221,7 +293,9 @@ class OrderPositionErrorClassificationTest {
           derived);
       assertEquals("42000", failure.getSQLState(), derived);
       assertTrue(failure.getMessage().contains("outside the select list: 99"), failure.getMessage());
-      // Unknown labels fail on an empty result too.
+      // Unknown labels fail on an empty result too. #385: the failure is still
+      // an unclassified SQLException; when that issue is fixed, update this
+      // assertion to SQLSyntaxErrorException with SQLState 42000.
       String unknown = "SELECT n FROM o WHERE 1 = 0 UNION ALL SELECT n FROM o WHERE 1 = 0 ORDER BY nosuch";
       failure = assertThrows(SQLException.class, () -> rows(connection, unknown, prepared), unknown);
       assertTrue(failure.getMessage().contains("Unknown set operation ORDER BY column: nosuch"), failure.getMessage());

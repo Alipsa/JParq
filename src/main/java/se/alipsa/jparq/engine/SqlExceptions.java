@@ -358,6 +358,26 @@ public final class SqlExceptions {
   }
 
   /**
+   * Wraps an engine failure with the context that matches its classification: the
+   * classified context when the cause chain carries a recognized SQLState, the
+   * fallback context otherwise.
+   *
+   * @param classifiedContext
+   *          the operation context for a failure carrying a recognized
+   *          classification
+   * @param fallbackContext
+   *          the operation context for a failure without a recognized
+   *          classification
+   * @param failure
+   *          the original failure, retained as the cause
+   * @return the failure wrapped with the matching context, with the same
+   *         classification and detail rules as the two-argument wrap
+   */
+  public static SQLException wrap(String classifiedContext, String fallbackContext, Throwable failure) {
+    return wrap(findSqlStateFailure(failure) == null ? fallbackContext : classifiedContext, failure);
+  }
+
+  /**
    * Preserves JDBC classifications while rendering all diagnostic text for the
    * caller.
    *

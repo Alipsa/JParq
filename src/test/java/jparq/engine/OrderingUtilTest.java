@@ -11,43 +11,68 @@ import se.alipsa.jparq.engine.OrderingUtil;
 
 class OrderingUtilTest {
 
+  /**
+   * Accepts every representable position at or above 1, with and without an upper
+   * bound, including the boundary values 1 and {@link Integer#MAX_VALUE}.
+   */
   @Test
   void parsesOrdinalBoundaries() {
     assertEquals(1, OrderingUtil.position("1", 1));
-    assertEquals(5, OrderingUtil.position("5", -1));
-    assertEquals(Integer.MAX_VALUE, OrderingUtil.position(Integer.MAX_VALUE, Integer.MAX_VALUE));
-    assertEquals(5, OrderingUtil.position(5, 5));
-    assertEquals(1, OrderingUtil.position(1, 1));
+    assertEquals(5, OrderingUtil.position("5"));
+    assertEquals(Integer.MAX_VALUE, OrderingUtil.position("2147483647"));
+    assertEquals(5, OrderingUtil.position("5", 5));
   }
 
+  /**
+   * Rejects zero and positions above the select list with the syntax
+   * classification naming the invalid position.
+   */
   @Test
   void rejectsPositionsOutsideTheSelectList() {
     assertOrdinalFailure("2", 1, "2");
     assertOrdinalFailure("0", 1, "0");
     assertOrdinalFailure("99", 5, "99");
-    assertOrdinalFailure("0", -1, "0");
-    IllegalArgumentException zero = assertThrows(IllegalArgumentException.class, () -> OrderingUtil.position(0, 5));
-    assertEquals("ORDER BY position is outside the select list: 0", zero.getMessage());
-    assertEquals("42000", stateOf(zero));
+    assertOrdinalFailure("0", "0");
   }
 
+  /**
+   * Rejects values beyond the representable range, with and without an upper
+   * bound; a deferred bound never defers representability.
+   */
   @Test
   void rejectsLiteralsBeyondTheRepresentableRange() {
-    // A negative maximum defers the upper bound but never the representability.
-    assertOrdinalFailure("2147483648", -1, "2147483648");
+    assertOrdinalFailure("2147483648", "2147483648");
     assertOrdinalFailure("99999999999999999999", 5, "99999999999999999999");
   }
 
+  /**
+   * Names non-canonical integer literals exactly as written in the query, with
+   * and without an upper bound.
+   */
   @Test
   void reportsLiteralsExactlyAsWritten() {
+    assertOrdinalFailure("099", 5, "099");
+    assertOrdinalFailure("00", "00");
+  }
+
+  /**
+   * Asserts that an unbounded positional reference fails with the syntax
+   * classification naming the literal as written.
+   *
+   * @param literal
+   *          the positional reference to parse
+   * @param expected
+   *          literal expected in the message
+   */
+  private static void assertOrdinalFailure(String literal, String expected) {
     IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
-        () -> OrderingUtil.position("099", 5));
-    assertEquals("ORDER BY position is outside the select list: 099", failure.getMessage());
+        () -> OrderingUtil.position(literal));
+    assertEquals("ORDER BY position is outside the select list: " + expected, failure.getMessage());
     assertEquals("42000", stateOf(failure));
   }
 
   /**
-   * Asserts that a string-based positional reference fails with the syntax
+   * Asserts that a bounded positional reference fails with the syntax
    * classification naming the literal as written.
    *
    * @param literal

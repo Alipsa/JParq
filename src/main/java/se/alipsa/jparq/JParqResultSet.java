@@ -472,10 +472,7 @@ public class JParqResultSet extends ResultSetAdapter {
     } catch (Exception e) {
       // A classified failure in the chain is a query-execution problem, such
       // as an invalid ORDER BY position, not a read failure.
-      if (SqlExceptions.findSqlStateFailure(e) != null) {
-        throw SqlExceptions.wrap("Failed to execute query", e);
-      }
-      throw SqlExceptions.wrap("Failed reading first parquet record", e);
+      throw SqlExceptions.wrap("Failed to execute query", "Failed reading first parquet record", e);
     }
   }
 

@@ -690,10 +690,7 @@ public class JParqPreparedStatement implements PreparedStatement {
       } catch (Exception e) {
         // A classified failure in the chain is a query-execution problem, not
         // an I/O problem opening the source.
-        if (SqlExceptions.findSqlStateFailure(e) != null) {
-          throw SqlExceptions.wrap("Failed to execute query", e);
-        }
-        throw new SQLException("Failed to open query data source", e);
+        throw SqlExceptions.wrap("Failed to execute query", "Failed to open query data source", e);
       }
 
       // Derive label/physical lists from the parsed SELECT
@@ -2387,8 +2384,10 @@ public class JParqPreparedStatement implements PreparedStatement {
     boolean hasExpressions = false;
     for (SqlParser.SetOrder order : orderBy) {
       int index;
-      if (order.columnIndex() != null) {
-        index = OrderingUtil.position(order.columnIndex(), labels.size()) - 1;
+      if (order.ordinal() != null) {
+        // The literal is range-checked as written, so diagnostics preserve
+        // non-canonical forms such as 099.
+        index = OrderingUtil.position(order.ordinal(), labels.size()) - 1;
       } else if (order.expression() == null) {
         if (order.columnLabel() == null) {
           throw new SQLException("Set operation ORDER BY requires column index, label, or expression");

@@ -471,8 +471,10 @@ public final class QueryProcessor implements AutoCloseable {
         rec = reader.read();
       }
 
-      // An empty input leaves no record to take the schema from; the reader
-      // reports the width of the rows it would have produced.
+      // An empty input leaves no record to take the schema from. The reader
+      // schema is the full input schema, which equals the output width for the
+      // wildcard projections that reach this point; a narrower read schema
+      // would validate positions against the wrong width.
       if (sortSchema == null) {
         sortSchema = reader.schema();
       }
@@ -950,7 +952,10 @@ public final class QueryProcessor implements AutoCloseable {
         continue;
       }
       String col = key.column();
-      if (col != null && existing.add(col)) {
+      // Positional references are not columns: they are resolved against the
+      // buffered records at sort time, and must never enter a DISTINCT key list
+      // derived from the projection.
+      if (col != null && !col.matches("[0-9]+") && existing.add(col)) {
         target.add(col);
       }
     }
