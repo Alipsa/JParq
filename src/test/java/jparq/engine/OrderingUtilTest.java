@@ -1,6 +1,7 @@
 package jparq.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -53,6 +54,24 @@ class OrderingUtilTest {
   void reportsLiteralsExactlyAsWritten() {
     assertOrdinalFailure("099", 5, "099");
     assertOrdinalFailure("00", "00");
+  }
+
+  /**
+   * Recognizes unquoted digit runs as positional references and treats null,
+   * empty, mixed, signed, and quoted values as column names.
+   */
+  @Test
+  void detectsPositionalReferences() {
+    assertTrue(OrderingUtil.isPosition("1"));
+    assertTrue(OrderingUtil.isPosition("99"));
+    assertTrue(OrderingUtil.isPosition("0"));
+    assertTrue(OrderingUtil.isPosition("099"));
+    assertFalse(OrderingUtil.isPosition(null));
+    assertFalse(OrderingUtil.isPosition(""));
+    assertFalse(OrderingUtil.isPosition("12a"));
+    assertFalse(OrderingUtil.isPosition("a1"));
+    assertFalse(OrderingUtil.isPosition("-1"));
+    assertFalse(OrderingUtil.isPosition("\"1\""));
   }
 
   /**

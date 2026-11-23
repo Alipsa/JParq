@@ -50,6 +50,7 @@ import se.alipsa.jparq.engine.MaterializedNames;
 import se.alipsa.jparq.engine.NumericCastTarget;
 import se.alipsa.jparq.engine.NumericCasts;
 import se.alipsa.jparq.engine.NumericExpressionTypes;
+import se.alipsa.jparq.engine.OrderingUtil;
 import se.alipsa.jparq.engine.ParquetSchemas;
 import se.alipsa.jparq.engine.QueryCancellation;
 import se.alipsa.jparq.engine.QueryProcessor;
@@ -388,7 +389,7 @@ public class JParqResultSet extends ResultSetAdapter {
       }
       if (select.orderBy() != null) {
         for (SqlParser.OrderKey orderKey : select.orderBy()) {
-          if (orderKey != null && orderKey.column() != null && !orderKey.column().matches("[0-9]+")) {
+          if (orderKey != null && !OrderingUtil.isPosition(orderKey.column())) {
             requiredColumns.add(orderKey.column());
           }
         }

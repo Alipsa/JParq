@@ -2722,7 +2722,7 @@ public final class SqlParser {
       int projectionIndex = key.projectionIndex();
       Expression selected = null;
       if (evaluation == null && qualifier == null && projectionIndex < 0) {
-        if (column != null && column.matches("[0-9]+")) {
+        if (OrderingUtil.isPosition(column)) {
           // With an unknown output width the upper bound is deferred to
           // execution, which validates the literal against the actual width.
           int position = labels.isEmpty()

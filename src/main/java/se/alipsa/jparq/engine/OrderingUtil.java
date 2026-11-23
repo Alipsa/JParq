@@ -1,5 +1,7 @@
 package se.alipsa.jparq.engine;
 
+import java.util.regex.Pattern;
+
 import net.sf.jsqlparser.statement.select.OrderByElement;
 
 /**
@@ -7,7 +9,25 @@ import net.sf.jsqlparser.statement.select.OrderByElement;
  */
 public final class OrderingUtil {
 
+  /**
+   * An unquoted run of digits: the textual form of an ORDER BY positional
+   * reference. Quoted values such as {@code "1"} are identifiers, not positions.
+   */
+  private static final Pattern POSITIONAL_REFERENCE = Pattern.compile("[0-9]+");
+
   private OrderingUtil() {
+  }
+
+  /**
+   * Determines whether an ORDER BY key names a positional reference rather than a
+   * column.
+   *
+   * @param column
+   *          the ORDER BY key text to test, may be {@code null}
+   * @return {@code true} when the key is an unquoted run of digits
+   */
+  public static boolean isPosition(String column) {
+    return column != null && POSITIONAL_REFERENCE.matcher(column).matches();
   }
 
   /**

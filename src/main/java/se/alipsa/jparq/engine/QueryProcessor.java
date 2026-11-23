@@ -372,9 +372,7 @@ public final class QueryProcessor implements AutoCloseable {
    */
   public QueryProcessor(RecordReader reader, List<String> projection, Expression where, int limit, Options options) {
     this.reader = Objects.requireNonNull(reader);
-    List<String> augmentedProjection = augmentProjectionWithOrderColumns(projection, options.orderBy,
-        options.preOrderBy);
-    this.projection = Collections.unmodifiableList(new ArrayList<>(augmentedProjection));
+    this.projection = Collections.unmodifiableList(new ArrayList<>(projection == null ? List.of() : projection));
     this.where = where;
     this.limit = limit;
     Options opts = Objects.requireNonNull(options, "options");
@@ -392,7 +390,9 @@ public final class QueryProcessor implements AutoCloseable {
     this.windowState = WindowState.empty();
     this.preOrderBy = canonicalizeOrderKeys(opts.preOrderBy);
     this.hasPreStage = (this.preLimit >= 0) || !this.preOrderBy.isEmpty() || (this.preOffset > 0);
-    List<String> distinctCols = opts.distinctColumns == null ? this.projection : opts.distinctColumns;
+    List<String> distinctCols = opts.distinctColumns == null
+        ? defaultDistinctColumns(opts.schema, this.projection)
+        : opts.distinctColumns;
     this.distinctColumns = distinctCols;
     this.distinctExpressions = opts.distinctExpressions;
     this.mixedDistinctTypes = new boolean[distinctExpressions.size()];
@@ -619,7 +619,7 @@ public final class QueryProcessor implements AutoCloseable {
    */
   private Function<GenericRecord, Object> buildColumnOrderValueExtractor(Schema schema, SqlParser.OrderKey key) {
     String column = key.column();
-    if (column != null && column.matches("[0-9]+")) {
+    if (OrderingUtil.isPosition(column)) {
       // The bound is the record width, which equals the output width for the
       // wildcard queries that reach this point; when #609 is fixed, a
       // projection wider than the input must be validated against the
@@ -934,30 +934,19 @@ public final class QueryProcessor implements AutoCloseable {
     return RelationalKeys.row(key, false);
   }
 
-  private static List<String> augmentProjectionWithOrderColumns(List<String> projection, List<SqlParser.OrderKey> order,
-      List<SqlParser.OrderKey> preOrder) {
-    List<String> merged = new ArrayList<>(projection == null ? List.of() : projection);
-    addOrderColumns(merged, order);
-    addOrderColumns(merged, preOrder);
-    return merged;
-  }
-
-  private static void addOrderColumns(List<String> target, List<SqlParser.OrderKey> keys) {
-    if (keys == null) {
-      return;
-    }
-    Set<String> existing = new LinkedHashSet<>(target);
-    for (SqlParser.OrderKey key : keys) {
-      if (key == null) {
-        continue;
-      }
-      String col = key.column();
-      // Positional references are not columns: they are resolved against the
-      // buffered records at sort time, and must never enter a DISTINCT key list
-      // derived from the projection.
-      if (col != null && !col.matches("[0-9]+") && existing.add(col)) {
-        target.add(col);
-      }
-    }
+  /**
+   * Derives the DISTINCT key list for a wildcard select. The keys are the input
+   * fields, never the ORDER BY references: an ordering key is not a select-list
+   * column, whatever its textual form (position, quoted, or case-variant), and
+   * must not participate in deduplication (#611).
+   *
+   * @param schema
+   *          input schema of the records, may be {@code null} when unknown
+   * @param fallback
+   *          the projected columns, used only when the schema is unknown
+   * @return the physical fields a {@code SELECT DISTINCT *} deduplicates on
+   */
+  private static List<String> defaultDistinctColumns(Schema schema, List<String> fallback) {
+    return schema == null ? fallback : List.copyOf(computeProjection(List.of("*"), schema));
   }
 }

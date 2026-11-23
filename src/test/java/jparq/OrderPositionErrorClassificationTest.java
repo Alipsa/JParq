@@ -164,6 +164,38 @@ class OrderPositionErrorClassificationTest {
   }
 
   /**
+   * Keeps ORDER BY references out of the {@code SELECT DISTINCT *} key list in
+   * every textual form (#611): a case-variant or quoted reference must not be
+   * treated as a DISTINCT key column. The case-variant and derived-alias
+   * references also sort as written; for the quoted base-table name the
+   * deduplicated set is asserted without order, because the quoted reference does
+   * not sort yet (#611).
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @param directory
+   *          fixture directory
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void keepsOrderNamesOutOfDistinctWildcardKeys(boolean prepared, @TempDir Path directory) throws Exception {
+    writeIntegerFixture(directory);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      assertEquals(List.of(Arrays.asList((Object) null), List.of(3), List.of(2), List.of(1)),
+          rows(connection, "SELECT DISTINCT * FROM o ORDER BY N DESC", prepared));
+      assertEquals(List.of(Arrays.asList((Object) null), List.of(3), List.of(2), List.of(1)),
+          rows(connection, "SELECT DISTINCT * FROM (SELECT n AS \"x2\" FROM o) d ORDER BY \"x2\" DESC", prepared));
+      List<List<Object>> quoted = rows(connection, "SELECT DISTINCT * FROM o ORDER BY \"n\" DESC", prepared);
+      List<String> values = quoted.stream().flatMap(List::stream).map(String::valueOf).sorted().toList();
+      assertEquals(List.of("1", "2", "3", "null"), values);
+    }
+  }
+
+  /**
    * Until #609 is fixed, the top-level {@code SELECT *, expr} projection drops
    * the expression column, so the runtime sort width is the input width and the
    * valid output position is rejected as out of range instead of sorting. The
