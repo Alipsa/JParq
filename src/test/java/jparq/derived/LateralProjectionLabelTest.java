@@ -197,8 +197,65 @@ class LateralProjectionLabelTest {
       assertFalse(metadata.getColumnLabel(1).contains(CorrelatedBindings.FUNCTION_NAME));
       assertFalse(metadata.getColumnLabel(2).contains(CorrelatedBindings.FUNCTION_NAME));
       assertTrue(result.next());
-      assertEquals("1", String.valueOf(result.getObject(1)));
-      assertEquals("3", String.valueOf(result.getObject(2)));
+      assertEquals("1", result.getObject(1));
+      assertEquals(3L, result.getObject(2));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Restores the outer labels when a LATERAL body's unaliased projections mix an
+   * outer correlated reference with a nested subquery that introduces its own
+   * bindings.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void unaliasedItemsWithNestedSubqueryKeepOuterLabels() throws SQLException {
+    String sql = "SELECT x.* FROM (VALUES (1, 2)) a(n, m) CROSS JOIN LATERAL (SELECT a.n, "
+        + "(SELECT a.m + s.z FROM (VALUES (1)) v(x)) FROM (VALUES (1)) s(z)) x";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      var metadata = result.getMetaData();
+      assertEquals("n", metadata.getColumnLabel(1));
+      assertEquals("(SELECT a.m + s.z FROM (VALUES (1)) v(x))", metadata.getColumnLabel(2));
+      assertFalse(metadata.getColumnLabel(1).contains(CorrelatedBindings.FUNCTION_NAME));
+      assertFalse(metadata.getColumnLabel(2).contains(CorrelatedBindings.FUNCTION_NAME));
+      assertTrue(result.next());
+      assertEquals("1", result.getObject(1));
+      assertEquals(3L, result.getObject(2));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Keeps the local projection label when a correlated reference appears in a
+   * subquery nested in the {@code WHERE} clause, across the binding shapes.
+   *
+   * @param whereClause
+   *          correlated predicate containing a nested subquery
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "a.n = 1 AND EXISTS (SELECT a.m + s.z FROM (VALUES (1)) v(x))",
+      "a.n = 1 AND 3 IN (SELECT a.m + s.z FROM (VALUES (1)) v(x))",
+      "a.n = 1 AND 3 = (SELECT a.m + s.z FROM (VALUES (1)) v(x))"
+  })
+  void predicateSubqueryShapesKeepLocalLabel(String whereClause) throws SQLException {
+    String sql = "SELECT x.* FROM (VALUES (1, 2)) a(n, m) CROSS JOIN LATERAL (SELECT s.z "
+        + "FROM (VALUES (1)) s(z) WHERE " + whereClause + ") x";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      String label = result.getMetaData().getColumnLabel(1);
+      assertEquals("z", label);
+      assertFalse(label.contains(CorrelatedBindings.FUNCTION_NAME), label);
+      assertTrue(result.next());
+      assertEquals(1, result.getObject(1));
       assertFalse(result.next());
     }
   }
@@ -220,7 +277,7 @@ class LateralProjectionLabelTest {
       assertEquals("n", label);
       assertFalse(label.contains(CorrelatedBindings.FUNCTION_NAME), label);
       assertTrue(result.next());
-      assertEquals("1", String.valueOf(result.getObject(1)));
+      assertEquals("1", result.getObject(1));
     }
   }
 
@@ -238,7 +295,7 @@ class LateralProjectionLabelTest {
         var result = statement.executeQuery(sql)) {
       assertEquals(1, result.findColumn("n"));
       assertTrue(result.next());
-      assertEquals("1", String.valueOf(result.getObject(1)));
+      assertEquals("1", result.getObject(1));
     }
   }
 
@@ -261,9 +318,9 @@ class LateralProjectionLabelTest {
       assertEquals("a.n + 1", label);
       assertFalse(label.contains(CorrelatedBindings.FUNCTION_NAME), label);
       assertTrue(result.next());
-      assertEquals("2", String.valueOf(result.getObject(1)));
+      assertEquals(2L, result.getObject(1));
       assertTrue(result.next());
-      assertEquals("5", String.valueOf(result.getObject(1)));
+      assertEquals(5L, result.getObject(1));
       assertFalse(result.next());
     }
   }
@@ -303,7 +360,7 @@ class LateralProjectionLabelTest {
         var result = statement.executeQuery(sql)) {
       assertEquals("labeled", result.getMetaData().getColumnLabel(1));
       assertTrue(result.next());
-      assertEquals("2", String.valueOf(result.getObject(1)));
+      assertEquals(2L, result.getObject(1));
     }
   }
 }
