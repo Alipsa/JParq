@@ -197,7 +197,7 @@ class LateralProjectionLabelTest {
       assertFalse(metadata.getColumnLabel(1).contains(CorrelatedBindings.FUNCTION_NAME));
       assertFalse(metadata.getColumnLabel(2).contains(CorrelatedBindings.FUNCTION_NAME));
       assertTrue(result.next());
-      assertEquals("1", result.getObject(1));
+      assertEquals(1, result.getInt(1)); // type-neutral; outer-column type tracked in #606
       assertEquals(3L, result.getObject(2));
       assertFalse(result.next());
     }
@@ -224,7 +224,7 @@ class LateralProjectionLabelTest {
       assertFalse(metadata.getColumnLabel(1).contains(CorrelatedBindings.FUNCTION_NAME));
       assertFalse(metadata.getColumnLabel(2).contains(CorrelatedBindings.FUNCTION_NAME));
       assertTrue(result.next());
-      assertEquals("1", result.getObject(1));
+      assertEquals(1, result.getInt(1)); // type-neutral; outer-column type tracked in #606
       assertEquals(3L, result.getObject(2));
       assertFalse(result.next());
     }
@@ -277,7 +277,7 @@ class LateralProjectionLabelTest {
       assertEquals("n", label);
       assertFalse(label.contains(CorrelatedBindings.FUNCTION_NAME), label);
       assertTrue(result.next());
-      assertEquals("1", result.getObject(1));
+      assertEquals(1, result.getInt(1)); // type-neutral; outer-column type tracked in #606
     }
   }
 
@@ -295,7 +295,7 @@ class LateralProjectionLabelTest {
         var result = statement.executeQuery(sql)) {
       assertEquals(1, result.findColumn("n"));
       assertTrue(result.next());
-      assertEquals("1", result.getObject(1));
+      assertEquals(1, result.getInt(1)); // type-neutral; outer-column type tracked in #606
     }
   }
 
