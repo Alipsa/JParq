@@ -49,17 +49,7 @@ public final class QueryTestSupport {
    *           if fixture creation fails
    */
   public static void writeIntegerFixture(Path directory) throws IOException {
-    Schema schema = SchemaBuilder.record("Row").fields().optionalInt("n").endRecord();
-    var configuration = new Configuration(false);
-    var file = new org.apache.hadoop.fs.Path(directory.resolve("o.parquet").toUri());
-    try (var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(file, configuration))
-        .withSchema(schema).withConf(configuration).build()) {
-      for (Integer value : Arrays.asList(1, 1, 2, 3, null)) {
-        var row = new GenericData.Record(schema);
-        row.put("n", value);
-        writer.write(row);
-      }
-    }
+    writeIntegerTable(directory, "o", Arrays.asList(1, 1, 2, 3, null));
   }
 
   /**
@@ -72,12 +62,32 @@ public final class QueryTestSupport {
    *           if fixture creation fails
    */
   public static void writeEmptyIntegerFixture(Path directory) throws IOException {
+    writeIntegerTable(directory, "e", List.of());
+  }
+
+  /**
+   * Writes a single-column nullable INTEGER table to the given directory.
+   *
+   * @param directory
+   *          existing directory in which to create {@code <table>.parquet}
+   * @param table
+   *          table name, which also names the parquet file
+   * @param values
+   *          row values, possibly containing {@code null}
+   * @throws IOException
+   *           if fixture creation fails
+   */
+  private static void writeIntegerTable(Path directory, String table, List<Integer> values) throws IOException {
     Schema schema = SchemaBuilder.record("Row").fields().optionalInt("n").endRecord();
     var configuration = new Configuration(false);
-    var file = new org.apache.hadoop.fs.Path(directory.resolve("e.parquet").toUri());
+    var file = new org.apache.hadoop.fs.Path(directory.resolve(table + ".parquet").toUri());
     try (var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(file, configuration))
         .withSchema(schema).withConf(configuration).build()) {
-      // The schema-only file is the fixture; no rows are written.
+      for (Integer value : values) {
+        var row = new GenericData.Record(schema);
+        row.put("n", value);
+        writer.write(row);
+      }
     }
   }
 

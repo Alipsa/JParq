@@ -92,6 +92,14 @@ class OrderPositionErrorClassificationTest {
         assertTrue(failure.getMessage().contains("outside the select list: 99"), failure.getMessage());
         assertFalse(isNumericFailure(failure), failure.getMessage());
       }
+      // A valid ordinal is accepted on a zero-row file, and the out-of-range
+      // successor pins the deferred width to the single fixture column.
+      assertEquals(List.of(), rows(connection, "SELECT * FROM e ORDER BY 1", prepared));
+      String outOfRange = "SELECT * FROM e ORDER BY 2";
+      SQLException failure = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, outOfRange, prepared),
+          outOfRange);
+      assertEquals("42000", failure.getSQLState(), outOfRange);
+      assertTrue(failure.getMessage().contains("outside the select list: 2"), failure.getMessage());
     }
   }
 
