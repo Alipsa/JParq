@@ -1494,8 +1494,8 @@ public final class SqlParser {
    * @return normalized {@link SetOrder} definitions
    * @throws IllegalArgumentException
    *           if a positional reference cannot be represented or is zero, with
-   *           SQLState 42000; range checks against the set result are deferred to
-   *           execution
+   *           SQLState 42000; range checks against the set result run at
+   *           execution, also for an empty result
    */
   private static List<SetOrder> parseSetOrderBy(List<OrderByElement> orderByElements) {
     if (orderByElements == null || orderByElements.isEmpty()) {
@@ -2734,7 +2734,7 @@ public final class SqlParser {
       if (evaluation == null && qualifier == null && projectionIndex < 0) {
         if (column != null && column.matches("[0-9]+")) {
           // With an unknown output width the upper bound is deferred to
-          // execution, which revalidates the original literal.
+          // execution, which validates the literal against the actual width.
           int position = OrderingUtil.position(column, labels.isEmpty() ? -1 : labels.size());
           if (!labels.isEmpty()) {
             selected = expressions.get(position - 1);

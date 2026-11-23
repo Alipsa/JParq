@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
 import net.sf.jsqlparser.schema.Column;
@@ -479,8 +480,13 @@ public final class QueryProcessor implements AutoCloseable {
           buf = applyDistinct(buf);
           distinctApplied = true;
         }
-        if (!preOrderBy.isEmpty() && sortSchema != null && buf.size() > 1) {
-          buf.sort(buildComparator(sortSchema, preOrderBy));
+        if (!preOrderBy.isEmpty() && sortSchema != null) {
+          // Building the comparator resolves each key once, so invalid
+          // positional references fail even without a row to compare.
+          Comparator<GenericRecord> comparator = buildComparator(sortSchema, preOrderBy);
+          if (buf.size() > 1) {
+            buf.sort(comparator);
+          }
         }
         if (preOffset > 0 && !buf.isEmpty()) {
           int before = buf.size();
@@ -511,9 +517,13 @@ public final class QueryProcessor implements AutoCloseable {
         buf = applyDistinct(buf);
       }
 
-      // sort by ORDER BY keys if we have schema and >1 row
-      if (!orderBy.isEmpty() && buf.size() > 1 && sortSchema != null) {
-        buf.sort(buildComparator(sortSchema, orderBy));
+      // Building the comparator resolves each key once, so invalid positional
+      // references fail even when there is nothing to sort.
+      if (!orderBy.isEmpty() && sortSchema != null) {
+        Comparator<GenericRecord> comparator = buildComparator(sortSchema, orderBy);
+        if (buf.size() > 1) {
+          buf.sort(comparator);
+        }
       }
 
       this.sorted = buf;
@@ -531,13 +541,20 @@ public final class QueryProcessor implements AutoCloseable {
   }
 
   private Comparator<GenericRecord> buildComparator(Schema schema, List<SqlParser.OrderKey> keys) {
+    // Resolve every key up front so ordinal references are validated against
+    // the schema once, instead of being re-parsed on each comparison.
+    List<Function<GenericRecord, Object>> extractors = new ArrayList<>(keys.size());
+    for (SqlParser.OrderKey key : keys) {
+      extractors.add(buildOrderValueExtractor(schema, key));
+    }
     return (a, b) -> {
-      for (SqlParser.OrderKey k : keys) {
-        Object va = resolveOrderValue(a, schema, k);
-        Object vb = resolveOrderValue(b, schema, k);
+      for (int i = 0; i < keys.size(); i++) {
+        Object va = extractors.get(i).apply(a);
+        Object vb = extractors.get(i).apply(b);
+        SqlParser.OrderKey key = keys.get(i);
 
         boolean hasNull = va == null || vb == null;
-        int nullCmp = OrderingUtil.compareNulls(va, vb, k.asc(), k.nullOrdering());
+        int nullCmp = OrderingUtil.compareNulls(va, vb, key.asc(), key.nullOrdering());
         if (nullCmp != 0) {
           return nullCmp;
         }
@@ -547,11 +564,117 @@ public final class QueryProcessor implements AutoCloseable {
 
         int c = ExpressionEvaluator.typedCompare(va, vb);
         if (c != 0) {
-          return k.asc() ? c : -c;
+          return key.asc() ? c : -c;
         }
       }
       return 0;
     };
+  }
+
+  /**
+   * Builds the value extractor for one ordering key, resolving positional
+   * references and column lookups against the schema once. Keys bound to an
+   * expression keep the original per-record fallback, so the decorative
+   * positional literal of a bound key is not validated against the input schema.
+   *
+   * @param schema
+   *          sort schema of the buffered rows
+   * @param key
+   *          the ordering key
+   * @return the extractor producing the key value for a record
+   * @throws IllegalArgumentException
+   *           if a positional reference is outside the schema, with SQLState
+   *           42000
+   */
+  private Function<GenericRecord, Object> buildOrderValueExtractor(Schema schema, SqlParser.OrderKey key) {
+    if (key.expression() == null) {
+      return buildColumnOrderValueExtractor(schema, key);
+    }
+    Expression expression = key.expression();
+    return record -> {
+      ensureValueEvaluator(schema);
+      if (valueEvaluator != null) {
+        return valueEvaluator.eval(expression, record);
+      }
+      return columnOrderValue(record, schema, key);
+    };
+  }
+
+  /**
+   * Builds the value extractor for the column reference of an ordering key.
+   *
+   * @param schema
+   *          sort schema of the buffered rows
+   * @param key
+   *          the ordering key
+   * @return the extractor producing the column value for a record
+   * @throws IllegalArgumentException
+   *           if a positional reference is outside the schema, with SQLState
+   *           42000
+   */
+  private Function<GenericRecord, Object> buildColumnOrderValueExtractor(Schema schema, SqlParser.OrderKey key) {
+    String column = key.column();
+    if (column != null && column.matches("[0-9]+")) {
+      int ordinal = OrderingUtil.position(column, schema.getFields().size());
+      Schema.Field field = schema.getFields().get(ordinal - 1);
+      return record -> AvroCoercions.unwrap(record.get(field.name()), field.schema());
+    }
+    Schema.Field field = schema.getField(column);
+    Schema.Field caseInsensitive = field == null ? findFieldIgnoreCase(schema, column) : null;
+    Schema.Field resolved = field != null ? field : caseInsensitive;
+    // The record lookup needs the physical name when only a case-insensitive
+    // match found the field.
+    String lookupName = caseInsensitive != null ? caseInsensitive.name() : column;
+    if (resolved != null) {
+      return record -> AvroCoercions.unwrap(record.get(lookupName), resolved.schema());
+    }
+    Expression expression = orderExpressionFor(column);
+    if (expression != null) {
+      return record -> {
+        ensureValueEvaluator(schema);
+        return valueEvaluator.eval(expression, record);
+      };
+    }
+    return record -> null;
+  }
+
+  /**
+   * Resolves the column reference of an ordering key for a single record, used by
+   * expression-bound keys when no value evaluator is available.
+   *
+   * @param record
+   *          the row to read
+   * @param schema
+   *          sort schema of the buffered rows
+   * @param key
+   *          the ordering key
+   * @return the column value for the record, or {@code null} when the reference
+   *         cannot be resolved
+   */
+  private Object columnOrderValue(GenericRecord record, Schema schema, SqlParser.OrderKey key) {
+    String column = key.column();
+    if (column != null && column.matches("[0-9]+")) {
+      int ordinal = OrderingUtil.position(column, schema.getFields().size());
+      Schema.Field field = schema.getFields().get(ordinal - 1);
+      return AvroCoercions.unwrap(record.get(field.name()), field.schema());
+    }
+    Schema.Field field = schema.getField(column);
+    String lookupName = column;
+    if (field == null) {
+      field = findFieldIgnoreCase(schema, column);
+      if (field != null) {
+        lookupName = field.name();
+      }
+    }
+    if (field != null) {
+      return AvroCoercions.unwrap(record.get(lookupName), field.schema());
+    }
+    Expression expression = orderExpressionFor(column);
+    if (expression != null) {
+      ensureValueEvaluator(schema);
+      return valueEvaluator.eval(expression, record);
+    }
+    return null;
   }
 
   private Map<String, Expression> normalizeOrderByExpressions(Map<String, Expression> expressions) {
@@ -593,37 +716,6 @@ public final class QueryProcessor implements AutoCloseable {
           unqualifiedColumnMapping, qualifierColumnMapping);
       valueEvaluator = new ValueExpressionEvaluator(schema, subqueryExecutor, mappings, windowState());
     }
-  }
-
-  private Object resolveOrderValue(GenericRecord record, Schema schema, SqlParser.OrderKey key) {
-    if (key.expression() != null) {
-      ensureValueEvaluator(schema);
-      if (valueEvaluator != null) {
-        return valueEvaluator.eval(key.expression(), record);
-      }
-    }
-    if (key.column() != null && key.column().matches("[0-9]+")) {
-      int ordinal = OrderingUtil.position(key.column(), schema.getFields().size());
-      Schema.Field field = schema.getFields().get(ordinal - 1);
-      return AvroCoercions.unwrap(record.get(field.name()), field.schema());
-    }
-    Schema.Field field = schema.getField(key.column());
-    String lookupName = key.column();
-    if (field == null) {
-      field = findFieldIgnoreCase(schema, key.column());
-      if (field != null) {
-        lookupName = field.name();
-      }
-    }
-    if (field != null) {
-      return AvroCoercions.unwrap(record.get(lookupName), field.schema());
-    }
-    Expression expression = orderExpressionFor(key.column());
-    if (expression != null) {
-      ensureValueEvaluator(schema);
-      return valueEvaluator.eval(expression, record);
-    }
-    return null;
   }
 
   private Schema.Field findFieldIgnoreCase(Schema schema, String name) {

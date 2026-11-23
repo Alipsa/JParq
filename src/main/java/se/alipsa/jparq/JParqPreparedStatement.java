@@ -688,6 +688,11 @@ public class JParqPreparedStatement implements PreparedStatement {
       } catch (SQLException e) {
         throw e;
       } catch (Exception e) {
+        // A classified failure in the chain is a query-execution problem, not
+        // an I/O problem opening the source.
+        if (SqlExceptions.findSqlStateFailure(e) != null) {
+          throw SqlExceptions.wrap("Failed to execute query", e);
+        }
         throw new SQLException("Failed to open query data source", e);
       }
 
@@ -2357,16 +2362,19 @@ public class JParqPreparedStatement implements PreparedStatement {
    *          order specification parsed from the set operation query
    * @return ordered rows (or the original rows when no ordering is requested)
    * @throws SQLException
-   *           if an ORDER BY column cannot be resolved
+   *           if an ORDER BY column cannot be resolved, even when the result is
+   *           empty
    * @throws IllegalArgumentException
    *           if a positional reference is outside the set result, with SQLState
    *           42000
    */
   private List<List<Object>> applySetOrdering(List<List<Object>> rows, List<String> labels, List<Integer> sqlTypes,
       List<Schema> valueSchemas, List<SqlParser.SetOrder> orderBy) throws SQLException {
-    if (orderBy == null || orderBy.isEmpty() || rows.isEmpty()) {
+    if (orderBy == null || orderBy.isEmpty()) {
       return rows;
     }
+    // Resolve every key before the empty-result shortcut so invalid
+    // positional references and unknown labels still fail on an empty result.
     Map<String, Integer> labelIndexes = new HashMap<>();
     for (int i = 0; i < labels.size(); i++) {
       String key = Identifier.lookupKey(labels.get(i));
@@ -2406,6 +2414,9 @@ public class JParqPreparedStatement implements PreparedStatement {
         hasExpressions = true;
       }
       resolved.add(new ResolvedSetOrder(index, order.asc(), order.expression(), order.nullOrdering()));
+    }
+    if (rows.isEmpty()) {
+      return rows;
     }
     ValueExpressionEvaluator evaluator = null;
     Schema setOrderSchema = null;

@@ -19,11 +19,12 @@ public final class OrderingUtil {
    *          the positional reference to parse
    * @param maximum
    *          the largest acceptable position, or a negative value when the output
-   *          width is not known yet and the upper bound is deferred to execution
+   *          width is not known yet; positions above {@link Integer#MAX_VALUE}
+   *          are rejected either way, because no select list can be that wide
    * @return the parsed position
    * @throws IllegalArgumentException
    *           if the reference does not name a position within 1 through the
-   *           maximum, with SQLState 42000 naming the invalid position
+   *           maximum, with SQLState 42000 naming the position as written
    */
   public static int position(String literal, int maximum) {
     long value;
@@ -32,8 +33,9 @@ public final class OrderingUtil {
     } catch (NumberFormatException overflow) {
       throw invalidPosition(literal);
     }
-    if (value < 1 || maximum >= 0 && value > maximum) {
-      throw invalidPosition(value);
+    int upperBound = maximum < 0 ? Integer.MAX_VALUE : maximum;
+    if (value < 1 || value > upperBound) {
+      throw invalidPosition(literal);
     }
     return (int) value;
   }
@@ -62,7 +64,8 @@ public final class OrderingUtil {
    * Creates the syntax classification for an invalid ORDER BY position.
    *
    * @param position
-   *          the invalid position, as written or as parsed
+   *          the invalid position to name in the message, as written when the
+   *          original literal is available and as parsed otherwise
    * @return an engine exception carrying SQLState 42000
    */
   private static IllegalArgumentException invalidPosition(Object position) {
