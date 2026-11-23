@@ -471,6 +471,12 @@ public final class QueryProcessor implements AutoCloseable {
         rec = reader.read();
       }
 
+      // An empty input leaves no record to take the schema from; the reader
+      // reports the width of the rows it would have produced.
+      if (sortSchema == null) {
+        sortSchema = reader.schema();
+      }
+
       // ensure evaluator exists if WHERE is used
       ensureEvaluator(sortSchema);
 
@@ -574,7 +580,7 @@ public final class QueryProcessor implements AutoCloseable {
   /**
    * Builds the value extractor for one ordering key, resolving positional
    * references and column lookups against the schema once. Keys bound to an
-   * expression keep the original per-record fallback, so the decorative
+   * expression keep the original per-record evaluation, so the decorative
    * positional literal of a bound key is not validated against the input schema.
    *
    * @param schema
@@ -593,10 +599,7 @@ public final class QueryProcessor implements AutoCloseable {
     Expression expression = key.expression();
     return record -> {
       ensureValueEvaluator(schema);
-      if (valueEvaluator != null) {
-        return valueEvaluator.eval(expression, record);
-      }
-      return columnOrderValue(record, schema, key);
+      return valueEvaluator.eval(expression, record);
     };
   }
 
@@ -615,6 +618,10 @@ public final class QueryProcessor implements AutoCloseable {
   private Function<GenericRecord, Object> buildColumnOrderValueExtractor(Schema schema, SqlParser.OrderKey key) {
     String column = key.column();
     if (column != null && column.matches("[0-9]+")) {
+      // The bound is the record width, which equals the output width for the
+      // wildcard queries that reach this point; when #609 is fixed, a
+      // projection wider than the input must be validated against the
+      // restored projection width instead.
       int ordinal = OrderingUtil.position(column, schema.getFields().size());
       Schema.Field field = schema.getFields().get(ordinal - 1);
       return record -> AvroCoercions.unwrap(record.get(field.name()), field.schema());
@@ -636,45 +643,6 @@ public final class QueryProcessor implements AutoCloseable {
       };
     }
     return record -> null;
-  }
-
-  /**
-   * Resolves the column reference of an ordering key for a single record, used by
-   * expression-bound keys when no value evaluator is available.
-   *
-   * @param record
-   *          the row to read
-   * @param schema
-   *          sort schema of the buffered rows
-   * @param key
-   *          the ordering key
-   * @return the column value for the record, or {@code null} when the reference
-   *         cannot be resolved
-   */
-  private Object columnOrderValue(GenericRecord record, Schema schema, SqlParser.OrderKey key) {
-    String column = key.column();
-    if (column != null && column.matches("[0-9]+")) {
-      int ordinal = OrderingUtil.position(column, schema.getFields().size());
-      Schema.Field field = schema.getFields().get(ordinal - 1);
-      return AvroCoercions.unwrap(record.get(field.name()), field.schema());
-    }
-    Schema.Field field = schema.getField(column);
-    String lookupName = column;
-    if (field == null) {
-      field = findFieldIgnoreCase(schema, column);
-      if (field != null) {
-        lookupName = field.name();
-      }
-    }
-    if (field != null) {
-      return AvroCoercions.unwrap(record.get(lookupName), field.schema());
-    }
-    Expression expression = orderExpressionFor(column);
-    if (expression != null) {
-      ensureValueEvaluator(schema);
-      return valueEvaluator.eval(expression, record);
-    }
-    return null;
   }
 
   private Map<String, Expression> normalizeOrderByExpressions(Map<String, Expression> expressions) {

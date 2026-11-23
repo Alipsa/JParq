@@ -339,7 +339,10 @@ public class JParqResultSet extends ResultSetAdapter {
     try {
       GenericRecord first = reader.read();
       if (first == null) {
-        // No rows emitted after pushdown; still build metadata if explicit projection
+        // No rows emitted after pushdown; still build metadata if explicit
+        // projection. The ordering keys are kept so invalid positional
+        // references are validated against the reader schema even though no
+        // record exists to sort.
         List<String> req = select.columns(); // e.g., ["id","value"] or ["*"]
         if (this.columnOrder.isEmpty() && !req.isEmpty() && !req.contains("*")) {
           this.columnOrder.addAll(req); // mutable, safe
@@ -349,9 +352,9 @@ public class JParqResultSet extends ResultSetAdapter {
         this.qualifierColumnMapping = CorrelationContextBuilder.build(queryQualifiers, correlationColumns,
             correlationColumns, qualifierMapping);
         List<String> distinctProjection = resolveDistinctColumns(select);
-        QueryProcessor.Options options = QueryProcessor.Options.builder().distinct(select.distinct())
-            .distinctColumns(distinctProjection).distinctExpressions(select.expressions())
-            .subqueryExecutor(subqueryExecutor).outerQualifiers(queryQualifiers)
+        QueryProcessor.Options options = QueryProcessor.Options.builder().schema(reader.schema())
+            .distinct(select.distinct()).distinctColumns(distinctProjection).distinctExpressions(select.expressions())
+            .orderBy(select.orderBy()).subqueryExecutor(subqueryExecutor).outerQualifiers(queryQualifiers)
             .qualifierColumnMapping(this.qualifierColumnMapping).unqualifiedColumnMapping(this.unqualifiedColumnMapping)
             .offset(select.offset()).windowPlan(windowPlan).orderByExpressions(orderByExpressions);
         List<String> projectionColumns = requestedColumns;

@@ -1,6 +1,7 @@
 package jparq;
 
 import static jparq.support.QueryTestSupport.rows;
+import static jparq.support.QueryTestSupport.writeEmptyIntegerFixture;
 import static jparq.support.QueryTestSupport.writeIntegerFixture;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -13,6 +14,7 @@ import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
 import java.util.Arrays;
 import java.util.List;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -74,12 +76,15 @@ class OrderPositionErrorClassificationTest {
   void classifiesDeferredOrderPositionsForDegenerateResults(boolean prepared, @TempDir Path directory)
       throws Exception {
     writeIntegerFixture(directory);
+    writeEmptyIntegerFixture(directory);
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
       String[] queries = {
           "SELECT * FROM o WHERE 1 = 0 ORDER BY 99", "SELECT * FROM o WHERE n = 2 ORDER BY 99",
           "SELECT * FROM o WHERE n > 1 ORDER BY 1, 99", "WITH c AS (SELECT n FROM o) SELECT * FROM c ORDER BY 99",
           "WITH c AS (SELECT n FROM o) SELECT * FROM c WHERE 1 = 0 ORDER BY 99",
           "SELECT * FROM o WHERE n >= 1 ORDER BY 1, 99",
+          // A zero-row file has no record to take the schema from.
+          "SELECT * FROM e ORDER BY 99", "SELECT * FROM e WHERE 1 = 0 ORDER BY 99",
       };
       for (String sql : queries) {
         SQLException failure = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, sql, prepared), sql);
@@ -87,6 +92,26 @@ class OrderPositionErrorClassificationTest {
         assertTrue(failure.getMessage().contains("outside the select list: 99"), failure.getMessage());
         assertFalse(isNumericFailure(failure), failure.getMessage());
       }
+    }
+  }
+
+  /**
+   * Until #609 is fixed, the top-level {@code SELECT *, expr} projection drops
+   * the expression column, so the runtime sort width is the input width and the
+   * valid output position is rejected as out of range instead of sorting.
+   *
+   * @param directory
+   *          fixture directory
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @Disabled("#609: SELECT *, expr drops the extra column; the runtime bound must be the projection width")
+  @Test
+  void sortsWildcardPlusExpressionByOutputPosition(@TempDir Path directory) throws Exception {
+    writeIntegerFixture(directory);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      assertEquals(List.of(List.of(2, 3L)),
+          rows(connection, "SELECT *, n + 1 AS m FROM o WHERE n = 2 ORDER BY 2", false));
     }
   }
 

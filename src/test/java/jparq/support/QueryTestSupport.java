@@ -63,6 +63,25 @@ public final class QueryTestSupport {
   }
 
   /**
+   * Writes table {@code e(n)} with the integer fixture schema and zero rows, so
+   * readers can discover the schema only from the file metadata.
+   *
+   * @param directory
+   *          existing directory in which to create {@code e.parquet}
+   * @throws IOException
+   *           if fixture creation fails
+   */
+  public static void writeEmptyIntegerFixture(Path directory) throws IOException {
+    Schema schema = SchemaBuilder.record("Row").fields().optionalInt("n").endRecord();
+    var configuration = new Configuration(false);
+    var file = new org.apache.hadoop.fs.Path(directory.resolve("e.parquet").toUri());
+    try (var writer = AvroParquetWriter.<GenericRecord>builder(HadoopOutputFile.fromPath(file, configuration))
+        .withSchema(schema).withConf(configuration).build()) {
+      // The schema-only file is the fixture; no rows are written.
+    }
+  }
+
+  /**
    * Collects projected values through either JDBC statement API without value
    * conversion, preserving NULLs and duplicate column positions.
    *
