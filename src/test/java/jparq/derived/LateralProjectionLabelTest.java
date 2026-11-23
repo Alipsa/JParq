@@ -176,4 +176,134 @@ class LateralProjectionLabelTest {
       assertEquals(12L, result.getObject(2));
     }
   }
+
+  /**
+   * Restores the outer labels when a LATERAL body mixes outer correlated
+   * references with a nested subquery that introduces its own bindings.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void nestedSubqueryMixingOuterAndInnerReferencesKeepsOuterLabels() throws SQLException {
+    String sql = "SELECT x.* FROM (VALUES (1, 2)) a(n, m) CROSS JOIN LATERAL (SELECT a.n AS k, "
+        + "(SELECT a.m + s.z FROM (VALUES (1)) v(x)) AS q FROM (VALUES (1)) s(z)) x";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      var metadata = result.getMetaData();
+      assertEquals("k", metadata.getColumnLabel(1));
+      assertEquals("q", metadata.getColumnLabel(2));
+      assertFalse(metadata.getColumnLabel(1).contains(CorrelatedBindings.FUNCTION_NAME));
+      assertFalse(metadata.getColumnLabel(2).contains(CorrelatedBindings.FUNCTION_NAME));
+      assertTrue(result.next());
+      assertEquals("1", String.valueOf(result.getObject(1)));
+      assertEquals("3", String.valueOf(result.getObject(2)));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Labels a bare correlated column with the column's own name, matching how the
+   * engine labels an unaliased column reference.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void bareCorrelatedColumnUsesColumnNameLabel() throws SQLException {
+    String sql = "SELECT x.* FROM (VALUES (1)) a(n) CROSS JOIN LATERAL (SELECT a.n FROM (VALUES (1)) s(z)) x";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      String label = result.getMetaData().getColumnLabel(1);
+      assertEquals("n", label);
+      assertFalse(label.contains(CorrelatedBindings.FUNCTION_NAME), label);
+      assertTrue(result.next());
+      assertEquals("1", String.valueOf(result.getObject(1)));
+    }
+  }
+
+  /**
+   * Resolves a reference to a bare correlated column by the column's name.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void bareCorrelatedColumnResolvesByColumnName() throws SQLException {
+    String sql = "SELECT x.n FROM (VALUES (1)) a(n) CROSS JOIN LATERAL (SELECT a.n FROM (VALUES (1)) s(z)) x";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      assertEquals(1, result.findColumn("n"));
+      assertTrue(result.next());
+      assertEquals("1", String.valueOf(result.getObject(1)));
+    }
+  }
+
+  /**
+   * Labels a correlated projection inside a {@code WITH} item of a LATERAL body
+   * that is a set operation, where the WITH attaches to the set operation rather
+   * than a plain select.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void withOnSetOperationBodyUsesOriginalExpressionLabel() throws SQLException {
+    String sql = "SELECT x.* FROM (VALUES (1)) a(n) CROSS JOIN LATERAL (WITH c AS (SELECT a.n + 1 "
+        + "FROM (VALUES (1)) s(z)) SELECT c.* FROM c UNION ALL SELECT 5) x";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      String label = result.getMetaData().getColumnLabel(1);
+      assertEquals("a.n + 1", label);
+      assertFalse(label.contains(CorrelatedBindings.FUNCTION_NAME), label);
+      assertTrue(result.next());
+      assertEquals("2", String.valueOf(result.getObject(1)));
+      assertTrue(result.next());
+      assertEquals("5", String.valueOf(result.getObject(1)));
+      assertFalse(result.next());
+    }
+  }
+
+  /**
+   * Keeps the original spelling of a correlated qualifier in the restored label.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void uppercaseCorrelatedQualifierKeepsOriginalCase() throws SQLException {
+    String sql = "SELECT x.* FROM (VALUES (1)) a(n) CROSS JOIN LATERAL (SELECT CONCAT('z', A.N) "
+        + "FROM (VALUES (1)) s(z)) x";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      assertEquals("CONCAT('z', A.N)", result.getMetaData().getColumnLabel(1));
+      assertTrue(result.next());
+      assertEquals("z1", result.getObject(1));
+    }
+  }
+
+  /**
+   * Keeps an explicit alias on a LATERAL projection even when a correlated
+   * reference also appears in a subquery nested in the {@code WHERE} clause.
+   *
+   * @throws SQLException
+   *           if query execution fails
+   */
+  @Test
+  void correlatedWhereSubqueryKeepsExplicitAlias() throws SQLException {
+    String sql = "SELECT x.* FROM (VALUES (1)) a(n) CROSS JOIN LATERAL (SELECT a.n + 1 AS labeled "
+        + "FROM (VALUES (1)) s(z) WHERE a.n = (SELECT a.n FROM (VALUES (1)) w)) x";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory);
+        var statement = connection.createStatement();
+        var result = statement.executeQuery(sql)) {
+      assertEquals("labeled", result.getMetaData().getColumnLabel(1));
+      assertTrue(result.next());
+      assertEquals("2", String.valueOf(result.getObject(1)));
+    }
+  }
 }
