@@ -472,9 +472,10 @@ public final class QueryProcessor implements AutoCloseable {
       }
 
       // An empty input leaves no record to take the schema from. The reader
-      // schema is the full input schema, which equals the output width for the
-      // wildcard projections that reach this point; a narrower read schema
-      // would validate positions against the wrong width.
+      // schema is the full input schema; ordinal bounds derived from it use
+      // only the fields a wildcard projection exposes, so the columns a USING
+      // join keeps hidden do not widen the bound. A narrower read schema would
+      // validate positions against the wrong width.
       if (sortSchema == null) {
         sortSchema = reader.schema();
       }
@@ -591,8 +592,8 @@ public final class QueryProcessor implements AutoCloseable {
    *          the ordering key
    * @return the extractor producing the key value for a record
    * @throws IllegalArgumentException
-   *           if a positional reference is outside the schema, with SQLState
-   *           42000
+   *           if a positional reference is outside the visible select-list width
+   *           or a column reference resolves to no field, with SQLState 42000
    */
   private Function<GenericRecord, Object> buildOrderValueExtractor(Schema schema, SqlParser.OrderKey key) {
     if (key.expression() == null) {
@@ -614,28 +615,25 @@ public final class QueryProcessor implements AutoCloseable {
    *          the ordering key
    * @return the extractor producing the column value for a record
    * @throws IllegalArgumentException
-   *           if a positional reference is outside the schema, with SQLState
-   *           42000
+   *           if a positional reference is outside the visible select-list width
+   *           or the column reference resolves to no field, with SQLState 42000
    */
   private Function<GenericRecord, Object> buildColumnOrderValueExtractor(Schema schema, SqlParser.OrderKey key) {
     String column = key.column();
     if (OrderingUtil.isPosition(column)) {
-      // The bound is the record width, which equals the output width for the
-      // wildcard queries that reach this point; when #609 is fixed, a
-      // projection wider than the input must be validated against the
-      // restored projection width instead.
-      int ordinal = OrderingUtil.position(column, schema.getFields().size());
-      Schema.Field field = schema.getFields().get(ordinal - 1);
+      // The bound is the wildcard projection of the input, not the record
+      // width: a USING join keeps its peer copies of the join columns in the
+      // record but hides them from the select list. When #609 is fixed, a
+      // projection wider than the input must be validated against the restored
+      // projection width instead.
+      List<String> visible = computeProjection(List.of("*"), schema);
+      int ordinal = OrderingUtil.position(column, visible.size());
+      Schema.Field field = schema.getField(visible.get(ordinal - 1));
       return record -> AvroCoercions.unwrap(record.get(field.name()), field.schema());
     }
-    Schema.Field field = schema.getField(column);
-    Schema.Field caseInsensitive = field == null ? findFieldIgnoreCase(schema, column) : null;
-    Schema.Field resolved = field != null ? field : caseInsensitive;
-    // The record lookup needs the physical name when only a case-insensitive
-    // match found the field.
-    String lookupName = caseInsensitive != null ? caseInsensitive.name() : column;
-    if (resolved != null) {
-      return record -> AvroCoercions.unwrap(record.get(lookupName), resolved.schema());
+    Schema.Field field = resolveOrderField(schema, column);
+    if (field != null) {
+      return record -> AvroCoercions.unwrap(record.get(field.name()), field.schema());
     }
     Expression expression = orderExpressionFor(column);
     if (expression != null) {
@@ -644,7 +642,39 @@ public final class QueryProcessor implements AutoCloseable {
         return valueEvaluator.eval(expression, record);
       };
     }
-    return record -> null;
+    // Resolving every key up front means an unresolvable reference fails here
+    // instead of degrading to a no-op sort that compares every key equal.
+    throw SqlExceptions.syntaxFailure("Unknown column for ORDER BY: " + column);
+  }
+
+  /**
+   * Resolves an ordering column to a field of the sort schema. An exact
+   * physical-name match wins, and a quoted identifier then falls back to its
+   * unquoted text without case folding, while an unquoted identifier falls back
+   * to a case-insensitive match.
+   *
+   * @param schema
+   *          sort schema of the buffered rows
+   * @param column
+   *          the ordering column text, as written
+   * @return the matching field, or {@code null} when the reference resolves to no
+   *         field
+   */
+  private Schema.Field resolveOrderField(Schema schema, String column) {
+    if (column == null) {
+      return null;
+    }
+    Schema.Field field = schema.getField(column);
+    if (field != null) {
+      return field;
+    }
+    Identifier identifier = Identifier.of(column);
+    if (identifier != null && identifier.quoted()) {
+      // A quoted identifier keeps its declared case, so there is no
+      // case-insensitive fallback.
+      return schema.getField(identifier.text());
+    }
+    return findFieldIgnoreCase(schema, column);
   }
 
   private Map<String, Expression> normalizeOrderByExpressions(Map<String, Expression> expressions) {
@@ -793,10 +823,6 @@ public final class QueryProcessor implements AutoCloseable {
       rec = nextRawRecord();
     }
     return null;
-  }
-
-  List<String> projection() {
-    return projection;
   }
 
   /**

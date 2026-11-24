@@ -57,6 +57,25 @@ class OrderingUtilTest {
   }
 
   /**
+   * Validates positional references in place: representable positions pass and
+   * invalid ones fail with the same classification and message as the parsing
+   * overloads, without returning a value.
+   */
+  @Test
+  void validatesPositionsInPlace() {
+    OrderingUtil.validatePosition("1");
+    OrderingUtil.validatePosition("2147483647");
+    IllegalArgumentException zero = assertThrows(IllegalArgumentException.class,
+        () -> OrderingUtil.validatePosition("0"));
+    assertEquals("ORDER BY position is outside the select list: 0", zero.getMessage());
+    assertEquals("42000", stateOf(zero));
+    IllegalArgumentException overflow = assertThrows(IllegalArgumentException.class,
+        () -> OrderingUtil.validatePosition("2147483648"));
+    assertEquals("ORDER BY position is outside the select list: 2147483648", overflow.getMessage());
+    assertEquals("42000", stateOf(overflow));
+  }
+
+  /**
    * Recognizes unquoted digit runs as positional references and treats null,
    * empty, mixed, signed, and quoted values as column names.
    */

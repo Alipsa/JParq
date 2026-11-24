@@ -374,7 +374,11 @@ public final class SqlExceptions {
    *         classification and detail rules as the two-argument wrap
    */
   public static SQLException wrap(String classifiedContext, String fallbackContext, Throwable failure) {
-    return wrap(findSqlStateFailure(failure) == null ? fallbackContext : classifiedContext, failure);
+    // The chain is walked once and reused by the wrapped call through the
+    // precomputed links.
+    List<Throwable> chain = causeChain(failure);
+    return wrap(findSqlStateFailure(chain) == null ? fallbackContext : classifiedContext, failure,
+        UnaryOperator.identity(), chain);
   }
 
   /**
@@ -398,7 +402,26 @@ public final class SqlExceptions {
    *         equal to the context, it is returned unchanged with its own text
    */
   public static SQLException wrap(String context, Throwable failure, UnaryOperator<String> diagnostics) {
-    List<Throwable> chain = causeChain(failure);
+    return wrap(context, failure, diagnostics, causeChain(failure));
+  }
+
+  /**
+   * Wraps an engine failure using cause chain links computed by the caller.
+   *
+   * @param context
+   *          the failed operation
+   * @param failure
+   *          the original failure, retained as the cause
+   * @param diagnostics
+   *          renderer for context and nested messages, accepting null text
+   * @param chain
+   *          the failure's cause chain links, as computed by
+   *          {@link #causeChain(Throwable)}
+   * @return the wrapped failure, exactly as the public overload without
+   *         precomputed links would wrap it
+   */
+  private static SQLException wrap(String context, Throwable failure, UnaryOperator<String> diagnostics,
+      List<Throwable> chain) {
     SQLException classified = findSqlStateFailure(chain);
     if (classified != null && failure == classified && Objects.equals(context, classified.getMessage())
         && Objects.equals(context, diagnostics.apply(context))) {

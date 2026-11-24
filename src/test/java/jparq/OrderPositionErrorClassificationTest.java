@@ -165,11 +165,8 @@ class OrderPositionErrorClassificationTest {
 
   /**
    * Keeps ORDER BY references out of the {@code SELECT DISTINCT *} key list in
-   * every textual form (#611): a case-variant or quoted reference must not be
-   * treated as a DISTINCT key column. The case-variant and derived-alias
-   * references also sort as written; for the quoted base-table name the
-   * deduplicated set is asserted without order, because the quoted reference does
-   * not sort yet (#611).
+   * every textual form (#611): a case-variant, quoted, or derived-alias reference
+   * must not be treated as a DISTINCT key column, and each sorts as written.
    *
    * @param prepared
    *          whether to use a prepared statement
@@ -185,13 +182,11 @@ class OrderPositionErrorClassificationTest {
   void keepsOrderNamesOutOfDistinctWildcardKeys(boolean prepared, @TempDir Path directory) throws Exception {
     writeIntegerFixture(directory);
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
-      assertEquals(List.of(Arrays.asList((Object) null), List.of(3), List.of(2), List.of(1)),
-          rows(connection, "SELECT DISTINCT * FROM o ORDER BY N DESC", prepared));
-      assertEquals(List.of(Arrays.asList((Object) null), List.of(3), List.of(2), List.of(1)),
+      List<List<Object>> expected = List.of(Arrays.asList((Object) null), List.of(3), List.of(2), List.of(1));
+      assertEquals(expected, rows(connection, "SELECT DISTINCT * FROM o ORDER BY N DESC", prepared));
+      assertEquals(expected, rows(connection, "SELECT DISTINCT * FROM o ORDER BY \"n\" DESC", prepared));
+      assertEquals(expected,
           rows(connection, "SELECT DISTINCT * FROM (SELECT n AS \"x2\" FROM o) d ORDER BY \"x2\" DESC", prepared));
-      List<List<Object>> quoted = rows(connection, "SELECT DISTINCT * FROM o ORDER BY \"n\" DESC", prepared);
-      List<String> values = quoted.stream().flatMap(List::stream).map(String::valueOf).sorted().toList();
-      assertEquals(List.of("1", "2", "3", "null"), values);
     }
   }
 
@@ -277,6 +272,80 @@ class OrderPositionErrorClassificationTest {
         SQLException failure = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, sql, prepared), sql);
         assertEquals("42000", failure.getSQLState(), sql);
         assertTrue(failure.getMessage().contains("outside the select list: " + literal), failure.getMessage());
+      }
+    }
+  }
+
+  /**
+   * Validates positional references on a {@code USING} join against the visible
+   * select list, not the record: the peer copy of the join column that the join
+   * keeps in the record but hides from {@code SELECT *} takes no ordinal
+   * position.
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @param directory
+   *          fixture directory
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void classifiesUsingJoinOrderPositions(boolean prepared, @TempDir Path directory) throws Exception {
+    String from = " FROM (VALUES (1, 30), (2, 10), (3, 20)) a(id, v) "
+        + "JOIN (VALUES (1, 5), (2, 6), (3, 4)) b(id, v) USING (id)";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      assertEquals(List.of(List.of(2, 10, 6), List.of(3, 20, 4), List.of(1, 30, 5)),
+          rows(connection, "SELECT *" + from + " ORDER BY 2", prepared));
+      assertEquals(List.of(List.of(3, 20, 4), List.of(1, 30, 5), List.of(2, 10, 6)),
+          rows(connection, "SELECT *" + from + " ORDER BY 3", prepared));
+      for (String sql : List.of("SELECT *" + from + " ORDER BY 4", "SELECT *" + from + " WHERE 1 = 0 ORDER BY 4")) {
+        SQLException failure = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, sql, prepared), sql);
+        assertEquals("42000", failure.getSQLState(), sql);
+        assertTrue(failure.getMessage().contains("outside the select list: 4"), failure.getMessage());
+        assertFalse(isNumericFailure(failure), failure.getMessage());
+      }
+    }
+  }
+
+  /**
+   * Keeps unknown ORDER BY references failing with SQLState 42000 instead of
+   * degrading to a no-op sort that compares every key equal: an unresolvable name
+   * fails for non-empty and empty inputs alike, across base, distinct, join, and
+   * derived shapes, naming the reference exactly as written.
+   *
+   * @param prepared
+   *          whether to use a prepared statement
+   * @param directory
+   *          fixture directory
+   * @throws Exception
+   *           if fixture creation or query execution fails
+   */
+  @ParameterizedTest
+  @ValueSource(booleans = {
+      false, true
+  })
+  void classifiesUnknownOrderColumns(boolean prepared, @TempDir Path directory) throws Exception {
+    writeIntegerFixture(directory);
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      String[] queries = {
+          "SELECT * FROM o ORDER BY nosuch", "SELECT * FROM o ORDER BY \"nosuch\"", "SELECT * FROM o ORDER BY \"N\"",
+          "SELECT * FROM o WHERE 1 = 0 ORDER BY nosuch", "SELECT DISTINCT * FROM o ORDER BY \"nosuch\"",
+          "SELECT * FROM o JOIN (VALUES (1)) v(x) ON TRUE ORDER BY nosuch",
+          "SELECT * FROM o JOIN (VALUES (1)) v(x) ON TRUE WHERE 1 = 0 ORDER BY nosuch",
+          "SELECT * FROM (SELECT n FROM o) d ORDER BY \"nosuch\"",
+      };
+      String[] references = {
+          "nosuch", "\"nosuch\"", "\"N\"", "nosuch", "\"nosuch\"", "nosuch", "nosuch", "\"nosuch\"",
+      };
+      for (int query = 0; query < queries.length; query++) {
+        String sql = queries[query];
+        SQLException failure = assertThrows(SQLSyntaxErrorException.class, () -> rows(connection, sql, prepared), sql);
+        assertEquals("42000", failure.getSQLState(), sql);
+        assertTrue(failure.getMessage().contains(references[query]), failure.getMessage());
+        assertFalse(isNumericFailure(failure), failure.getMessage());
       }
     }
   }

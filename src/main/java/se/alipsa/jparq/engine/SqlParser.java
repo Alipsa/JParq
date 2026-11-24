@@ -1498,7 +1498,7 @@ public final class SqlParser {
         // name it verbatim; the parse rejects zero and unrepresentable values
         // at preparation.
         ordinal = value.getStringValue();
-        OrderingUtil.position(ordinal);
+        OrderingUtil.validatePosition(ordinal);
       } else if (expression instanceof Column column) {
         columnLabel = column.getColumnName();
       } else {
