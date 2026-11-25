@@ -2768,9 +2768,12 @@ public final class SqlParser {
 
   /**
    * Binds ordering labels and positions after the complete output is known.
-   * Repeated labels are usable when they denote the same expression. Exact
-   * aliases take precedence over quoted lowercase fallback aliases; ambiguity is
-   * checked against the alias that resolves the reference.
+   * Repeated labels are usable when they denote the same expression. Labels
+   * declared in both quoting forms, such as {@code c} and {@code "c"}, name the
+   * same output under lowercase folding and are ambiguous when they denote
+   * different expressions. Exact aliases take precedence over quoted lowercase
+   * fallback aliases; ambiguity is checked against the alias that resolves the
+   * reference.
    *
    * @param keys
    *          the original ordering references
@@ -2824,6 +2827,14 @@ public final class SqlParser {
       projectionIndexes.putIfAbsent(label, i);
       if (previous != null && !sameOrderingExpression(previous, selected, columnBinding)) {
         ambiguous.add(label);
+      }
+      // Labels declared in both quoting forms, such as x and "x", name the same
+      // output under lowercase folding and are ambiguous when they differ.
+      String alternative = label == null ? null : ColumnMappingUtil.alternativeColumnKey(label);
+      Expression equivalent = alternative == null ? null : aliases.get(alternative);
+      if (equivalent != null && !sameOrderingExpression(equivalent, selected, columnBinding)) {
+        ambiguous.add(label);
+        ambiguous.add(alternative);
       }
     }
     List<OrderKey> resolved = new ArrayList<>(keys.size());
@@ -2923,9 +2934,7 @@ public final class SqlParser {
     Map<Column, Expression> replacements = new java.util.IdentityHashMap<>();
     for (Column column : ColumnsUsed.referencesInScope(expression, schemaColumns)) {
       String input = Identifier.lookupKey(column.getColumnName());
-      String alternative = ColumnMappingUtil.alternativeColumnKey(input);
-      if (extractQualifier(column) != null || inputs.contains(input)
-          || alternative != null && inputs.contains(alternative)) {
+      if (extractQualifier(column) != null || ColumnMappingUtil.containsEquivalentKey(inputs, input)) {
         continue;
       }
       String label = orderingAliasLabel(column.getColumnName(), aliases, ambiguous);

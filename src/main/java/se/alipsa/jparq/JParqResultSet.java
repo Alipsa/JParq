@@ -297,7 +297,7 @@ public class JParqResultSet extends ResultSetAdapter {
       Map<String, String> enrichedUnqualifiedMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping,
           correlationCanonical);
       Map<String, Map<String, String>> correlationContext = CorrelationContextBuilder.build(queryQualifiers,
-          correlationColumns, correlationCanonical, qualifierMapping);
+          correlationColumns, correlationCanonical, qualifierMapping, reader.schema());
       try {
         AggregateFunctions.AggregateResult result = AggregateFunctions.evaluate(reader, aggregatePlan,
             effectiveResidual, select.having(), select.orderBy(), subqueryExecutor, queryQualifiers, qualifierMapping,
@@ -351,7 +351,7 @@ public class JParqResultSet extends ResultSetAdapter {
         List<String> correlationColumns = this.columnOrder.isEmpty() ? List.of() : List.copyOf(this.columnOrder);
         this.unqualifiedColumnMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping, correlationColumns);
         this.qualifierColumnMapping = CorrelationContextBuilder.build(queryQualifiers, correlationColumns,
-            correlationColumns, qualifierMapping);
+            correlationColumns, qualifierMapping, reader.schema());
         List<String> distinctProjection = resolveDistinctColumns(select);
         QueryProcessor.Options options = QueryProcessor.Options.builder().schema(reader.schema())
             .distinct(select.distinct()).distinctColumns(distinctProjection).distinctExpressions(select.expressions())
@@ -436,7 +436,7 @@ public class JParqResultSet extends ResultSetAdapter {
       List<String> correlationColumns = buildCorrelationColumns(this.canonicalColumnNames, correlationLabels, proj);
       this.unqualifiedColumnMapping = enrichUnqualifiedMapping(normalizedUnqualifiedMapping, correlationColumns);
       this.qualifierColumnMapping = CorrelationContextBuilder.build(queryQualifiers, correlationLabels,
-          correlationColumns, qualifierMapping);
+          correlationColumns, qualifierMapping, schema);
 
       var evaluator = new se.alipsa.jparq.engine.ExpressionEvaluator(schema, subqueryExecutor, queryQualifiers,
           this.qualifierColumnMapping, this.unqualifiedColumnMapping);

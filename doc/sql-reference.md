@@ -383,8 +383,10 @@ SQL:2016–2023.
   `SELECT "id" + 0 FROM optimized WHERE "id" = 1`. This also applies to `GROUP BY`, derived tables, CTEs, `VALUES`
   inputs, and computed join expressions with qualified duplicate column names.
 - Unquoted references resolve explicitly quoted lowercase materialized aliases, mirroring the reverse direction:
-  `SELECT x FROM (SELECT 1 AS "x") t`. This also applies to CTEs, `VALUES` inputs, joins, grouped queries, and set
-  operation `ORDER BY` labels.
+  `SELECT x FROM (SELECT 1 AS "x") t`. This also applies to CTEs, `VALUES` inputs, joins, grouped queries, and
+  `ORDER BY` references to quoted lowercase `SELECT` aliases such as `SELECT id AS "k" FROM optimized ORDER BY k`.
+- Declaring the same lowercase output name in both quoting forms (`AS x` and `AS "x"`) makes references to that
+  name ambiguous; they raise SQLState `42702` unless both denote the same expression.
 - Quoted mixed-case names require an exact case match.
 - Lowercase CTE names can be declared or referenced with quotes, including in correlated subqueries:
   `WITH "c" AS (SELECT 1 AS x) SELECT x FROM c`.
@@ -1132,7 +1134,6 @@ These are known gaps relative to the SQL standard or expected behavior. Each is 
 | Area | Issue |
 | --- | --- |
 | Aggregate `FILTER (WHERE ...)` is not supported | [#438](https://github.com/Alipsa/JParq/issues/438) |
-| Unquoted references do not resolve quoted lowercase materialized aliases | [#338](https://github.com/Alipsa/JParq/issues/338) |
 | Correlated scalar subqueries used directly as aggregate arguments lose outer bindings | [#307](https://github.com/Alipsa/JParq/issues/307) |
 | Window functions outside `SELECT` lists are not validated | [#350](https://github.com/Alipsa/JParq/issues/350) |
 | Scalar function result types (and `UNNEST` type propagation through them) | [#424](https://github.com/Alipsa/JParq/issues/424) |

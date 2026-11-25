@@ -106,9 +106,11 @@ public final class ColumnMappingUtil {
     // Correlation mappings can contain SQL references instead of physical fields.
     // Rebind a lowercase delimited target through its unquoted source key before
     // reading values when that name exists in the source schema. This includes
-    // qualified joins and aggregate input expressions.
+    // qualified joins and aggregate input expressions. Only quoted targets are
+    // rebound: an unquoted target is a physical field name whose case must be
+    // preserved.
     Identifier target = Identifier.of(canonical);
-    String sourceKey = target == null ? null : alternativeColumnKey(target.lookupKey());
+    String sourceKey = target == null || !target.quoted() ? null : alternativeColumnKey(target.lookupKey());
     if (sourceKey != null && caseInsensitiveIndex.containsKey(sourceKey)) {
       canonical = resolveCanonicalFieldName(qualifier, target.text(), qualifierColumnMapping, unqualifiedColumnMapping,
           caseInsensitiveIndex);
@@ -506,8 +508,9 @@ public final class ColumnMappingUtil {
   }
 
   /**
-   * Finds the equivalent qualifier key with the opposite quoting form. Exact
-   * mappings take precedence; quoted mixed-case names have no fallback.
+   * Alias for {@link #alternativeColumnKey(String)} kept for qualifier lookup
+   * call sites. Exact mappings take precedence; quoted mixed-case names have no
+   * fallback.
    *
    * @param key
    *          normalized qualifier lookup key
@@ -568,5 +571,25 @@ public final class ColumnMappingUtil {
     }
     String alternative = alternativeColumnKey(normalizedColumn);
     return alternative == null ? null : mapping.get(alternative);
+  }
+
+  /**
+   * Tests whether a key set contains a lookup key or its quoting-equivalent form.
+   *
+   * @param keys
+   *          normalized lookup keys, or null
+   * @param key
+   *          normalized lookup key, or null
+   * @return true when the key or its opposite quoting form is present
+   */
+  public static boolean containsEquivalentKey(Set<String> keys, String key) {
+    if (keys == null || key == null) {
+      return false;
+    }
+    if (keys.contains(key)) {
+      return true;
+    }
+    String alternative = alternativeColumnKey(key);
+    return alternative != null && keys.contains(alternative);
   }
 }

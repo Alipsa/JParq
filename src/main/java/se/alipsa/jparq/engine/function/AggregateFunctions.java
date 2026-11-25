@@ -629,9 +629,7 @@ public final class AggregateFunctions {
         : new ValueExpressionEvaluator(inputSchema, null, mappings, WindowState.empty());
     final ColumnBinding inputBinding = bindingEvaluator == null ? null : column -> {
       String key = Identifier.lookupKey(column.getColumnName());
-      String alternative = ColumnMappingUtil.alternativeColumnKey(key);
-      if (!isQualified(column) && !groupByAliases.availableColumns().contains(key)
-          && (alternative == null || !groupByAliases.availableColumns().contains(alternative))) {
+      if (!isQualified(column) && !ColumnMappingUtil.containsEquivalentKey(groupByAliases.availableColumns(), key)) {
         return null;
       }
       String field = bindingEvaluator.resolveColumnName(column);
@@ -762,7 +760,7 @@ public final class AggregateFunctions {
     GroupedExpression.validate(expression, operand -> {
       if (operand instanceof Column column && findGroupIndex(column, groupIndexByText, groups, columnBinding) == null) {
         boolean outputAlias = column.getTable() == null
-            && containsEquivalentKey(aliases, Identifier.lookupKey(column.getColumnName()));
+            && ColumnMappingUtil.containsEquivalentKey(aliases, Identifier.lookupKey(column.getColumnName()));
         if ((inputPrecedence || !outputAlias) && columnBinding != null && columnBinding.resolve(column) != null) {
           throw groupingFailure("Ungrouped input column in " + clause + ": " + column
               + "; columns must appear in the GROUP BY clause or be used in an aggregate");
@@ -774,26 +772,6 @@ public final class AggregateFunctions {
       }
       return isGroupOperand(operand, groupIndexByText, groups, columnBinding);
     });
-  }
-
-  /**
-   * Tests whether a key set contains a lookup key or its quoting-equivalent form.
-   *
-   * @param keys
-   *          normalized lookup keys
-   * @param key
-   *          normalized lookup key of the reference, or null
-   * @return true when the key or its opposite quoting form is present
-   */
-  private static boolean containsEquivalentKey(Set<String> keys, String key) {
-    if (key == null) {
-      return false;
-    }
-    if (keys.contains(key)) {
-      return true;
-    }
-    String alternative = ColumnMappingUtil.alternativeColumnKey(key);
-    return alternative != null && keys.contains(alternative);
   }
 
   /**
@@ -1619,9 +1597,7 @@ public final class AggregateFunctions {
     if (key == null || !aliasContext.schemaKnown()) {
       return expression;
     }
-    String alternative = ColumnMappingUtil.alternativeColumnKey(key);
-    if (aliasContext.availableColumns().contains(key)
-        || alternative != null && aliasContext.availableColumns().contains(alternative)) {
+    if (ColumnMappingUtil.containsEquivalentKey(aliasContext.availableColumns(), key)) {
       return expression;
     }
     if (aliasContext.ambiguous().contains(key)) {
@@ -3572,15 +3548,11 @@ public final class AggregateFunctions {
         return null;
       }
       String key = Identifier.lookupKey(name);
-      if (key == null) {
+      if (!ColumnMappingUtil.containsEquivalentKey(labelLookup.keySet(), key)) {
         throw syntaxFailure("Unknown or ungrouped column in grouped expression: " + name);
       }
       if (!labelLookup.containsKey(key)) {
-        String alternative = ColumnMappingUtil.alternativeColumnKey(key);
-        if (alternative == null || !labelLookup.containsKey(alternative)) {
-          throw syntaxFailure("Unknown or ungrouped column in grouped expression: " + name);
-        }
-        key = alternative;
+        key = ColumnMappingUtil.alternativeColumnKey(key);
       }
       return resolveScalarValue(labelLookup.get(key));
     }
