@@ -2,6 +2,7 @@ package jparq.cte;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Path;
 import java.sql.DriverManager;
@@ -60,8 +61,8 @@ class NestedCteShadowingTest {
   }
 
   /**
-   * Verifies the same shadowing resolution when the projection uses a wildcard,
-   * which exercises metadata resolution of the nested CTE.
+   * Verifies that a wildcard projection over a derived table reads the shadowed
+   * outer CTE through the nested declaration.
    *
    * @throws SQLException
    *           if the query cannot be prepared or executed
@@ -115,7 +116,9 @@ class NestedCteShadowingTest {
 
   /**
    * Verifies that a non-recursive CTE referencing its own name without an
-   * enclosing declaration of that name is rejected as an unknown table.
+   * enclosing declaration of that name is rejected with an error explaining that
+   * self-reference requires WITH RECURSIVE. SQLState assertions are pending
+   * (#594).
    *
    * @throws SQLException
    *           if the test connection cannot be opened
@@ -124,7 +127,42 @@ class NestedCteShadowingTest {
   void nonRecursiveSelfReferenceWithoutOuterDeclarationFails() throws SQLException {
     String sql = "WITH c AS (SELECT x + 1 AS x FROM c) SELECT x FROM c";
     try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
-      assertThrows(SQLException.class, () -> connection.prepareStatement(sql).executeQuery());
+      SQLException failure = assertThrows(SQLException.class, () -> connection.prepareStatement(sql).executeQuery());
+      assertTrue(failure.getMessage().contains("WITH RECURSIVE"), failure::getMessage);
+    }
+  }
+
+  /**
+   * Verifies that a self-referencing UNION body in a nested non-recursive CTE
+   * reads the outer CTE of the same name in every set component instead of
+   * iterating recursively.
+   *
+   * @throws SQLException
+   *           if the query cannot be prepared or executed
+   */
+  @Test
+  void nestedCteWithUnionBodyReadsOuterCteInEveryComponent() throws SQLException {
+    String sql = """
+        WITH r AS (SELECT 1 AS n)
+        SELECT n FROM (WITH r AS (SELECT n FROM r UNION ALL SELECT n + 1 FROM r) SELECT n FROM r) t ORDER BY n
+        """;
+    assertEquals(List.of(1, 2), queryFirstColumn(sql));
+  }
+
+  /**
+   * Verifies that a self-referencing UNION body without the RECURSIVE keyword is
+   * rejected: before the fix this query iterated recursively even though the
+   * standard reserves that behavior for WITH RECURSIVE.
+   *
+   * @throws SQLException
+   *           if the test connection cannot be opened
+   */
+  @Test
+  void unionSelfReferenceWithoutRecursiveKeywordFails() throws SQLException {
+    String sql = "WITH r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT * FROM r";
+    try (var connection = DriverManager.getConnection("jdbc:jparq:" + directory)) {
+      SQLException failure = assertThrows(SQLException.class, () -> connection.prepareStatement(sql).executeQuery());
+      assertTrue(failure.getMessage().contains("WITH RECURSIVE"), failure::getMessage);
     }
   }
 

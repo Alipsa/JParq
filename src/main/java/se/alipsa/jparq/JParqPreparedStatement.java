@@ -1457,7 +1457,7 @@ public class JParqPreparedStatement implements PreparedStatement {
    */
   private Schema buildCteOutputSchema(SqlParser.CommonTableExpression cte, List<SqlParser.CommonTableExpression> ctes,
       Function<Column, Schema> outer, CteMemo memo) throws SQLException {
-    if (cte.recursive() && queryReferencesCte(cte.query(), cte.name())) {
+    if (queryReferencesCte(cte.query(), cte.name())) {
       return null;
     }
     List<String> names = cte.columnAliases().isEmpty() ? queryLabels(cte.query()) : cte.columnAliases();
@@ -5598,11 +5598,40 @@ public class JParqPreparedStatement implements PreparedStatement {
       throw new SQLException("CTE definition cannot be null");
     }
     // Only a WITH RECURSIVE declaration may self-reference; without the keyword
-    // a matching name inside the body resolves to an enclosing CTE instead.
-    if (cte.recursive() && queryReferencesCte(cte.query(), cte.name())) {
-      return evaluateRecursiveCte(cte, available);
+    // a matching name inside the body resolves to an enclosing CTE or table.
+    if (queryReferencesCte(cte.query(), cte.name())) {
+      if (cte.recursive()) {
+        return evaluateRecursiveCte(cte, available);
+      }
+      requireSelfReferenceTarget(cte, available);
     }
     return executeCteQuery(cte.sql(), available, cte.name(), cte.columnAliases());
+  }
+
+  /**
+   * Rejects a non-recursive CTE whose body references its own name when neither
+   * an enclosing CTE nor a physical table resolves that name, so the failure
+   * explains that self-reference requires the RECURSIVE keyword instead of
+   * surfacing as an unknown table inside the CTE body.
+   *
+   * @param cte
+   *          non-recursive CTE whose body references its own name
+   * @param available
+   *          CTE results visible to the body, including enclosing declarations
+   * @throws SQLException
+   *           if the self-reference resolves to nothing outside the CTE
+   */
+  private void requireSelfReferenceTarget(SqlParser.CommonTableExpression cte, Map<Identifier, CteResult> available)
+      throws SQLException {
+    if (cte.name().resolve(available) != null) {
+      return;
+    }
+    try {
+      stmt.getConn().resolveTable(null, cte.name().text());
+    } catch (SQLException notATable) {
+      throw new SQLException("CTE '" + cte.name().text() + "' references itself, but a CTE's own name is only visible"
+          + " inside its body when the WITH clause is declared WITH RECURSIVE", notATable);
+    }
   }
 
   private CteResult evaluateRecursiveCte(SqlParser.CommonTableExpression cte, Map<Identifier, CteResult> available)

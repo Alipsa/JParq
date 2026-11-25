@@ -614,6 +614,10 @@ WITH c AS (SELECT 1 AS x)
 SELECT x FROM (WITH c AS (SELECT x + 1 AS x FROM c) SELECT x FROM c) t  -- returns 2
 ```
 
+A CTE body that references its own name without the keyword and without an enclosing CTE or table of that name is
+rejected with an error stating that self-reference requires `WITH RECURSIVE`. In particular, writing a recursive
+query with plain `WITH` is an error; earlier versions iterated it anyway.
+
 Recursive CTEs keep the anchor's numeric types, decimal precision, and scale; recursive schemas are not widened
 across iterations. Recursive values that need fractional truncation or decimal rounding, or that exceed integer
 ranges or decimal precision, fail with `SQLException` (SQLState `22003`).
