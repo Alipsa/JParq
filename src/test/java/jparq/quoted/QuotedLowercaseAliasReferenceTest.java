@@ -50,6 +50,7 @@ class QuotedLowercaseAliasReferenceTest {
           "SELECT x FROM (SELECT id AS \"x\" FROM optimized WHERE id = 1) t",
           "SELECT x + 0 FROM (SELECT id AS \"x\" FROM optimized WHERE id = 1) t WHERE x = 1",
           "SELECT id FROM optimized WHERE id = (SELECT x FROM (SELECT 1 AS \"x\") t)",
+          "SELECT x FROM (SELECT 1 AS \"x\") t WHERE EXISTS (SELECT 1 FROM (SELECT 1 AS z) u WHERE u.z = x)",
           "SELECT id AS \"k\" FROM optimized WHERE id = 1 ORDER BY k",
           "SELECT id AS \"k\", COUNT(*) FROM optimized WHERE id = 1 GROUP BY id ORDER BY k DESC")) {
         try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
@@ -132,7 +133,16 @@ class QuotedLowercaseAliasReferenceTest {
           Map.entry("SELECT x FROM (SELECT 1 AS \"X\") a JOIN (SELECT 2 AS \"x\") b ON 1 = 1", "2"),
           Map.entry("SELECT a.\"X\", b.\"x\" FROM (SELECT 1 AS \"X\") a JOIN (SELECT 2 AS \"x\") b ON 1 = 1", "1,2"),
           Map.entry("SELECT b.x, a.\"X\" FROM (SELECT 1 AS \"X\") a JOIN (SELECT 2 AS \"x\") b ON 1 = 1", "2,1"),
-          Map.entry("SELECT a.\"X\", b.x FROM (SELECT 1 AS \"X\") a JOIN (SELECT 2 AS \"x\") b ON 1 = 1", "1,2"))) {
+          Map.entry("SELECT a.\"X\", b.x FROM (SELECT 1 AS \"X\") a JOIN (SELECT 2 AS \"x\") b ON 1 = 1", "1,2"),
+          Map.entry("SELECT a.\"X\", x FROM (SELECT 1 AS \"X\") a JOIN (SELECT 2 AS \"x\") b ON 1 = 1", "1,2"),
+          Map.entry("SELECT \"X\", x FROM (SELECT 1 AS \"X\", 2 AS \"x\") t", "1,2"),
+          Map.entry("SELECT \"X\" AS a, x AS b FROM (SELECT 1 AS \"X\", 2 AS \"x\") t", "1,2"),
+          Map.entry("SELECT \"X\", x FROM (SELECT 1 AS \"X\", 2 AS \"x\") t WHERE \"X\" = 1 AND x = 2", "1,2"),
+          Map.entry("SELECT \"X\", x + 0 FROM (SELECT 1 AS \"X\", 2 AS \"x\") t", "1,2"),
+          Map.entry("SELECT \"X\", SUM(x) FROM (SELECT 1 AS \"X\", 2 AS \"x\") t GROUP BY \"X\"", "1,2"),
+          Map.entry("SELECT \"X\", x FROM (SELECT 1 AS \"X\", 2 AS \"x\") t GROUP BY \"X\", x", "1,2"),
+          Map.entry("SELECT \"X\", ROW_NUMBER() OVER (ORDER BY x), x FROM (SELECT 1 AS \"X\", 2 AS \"x\") t", "1,1,2"),
+          Map.entry("SELECT \"X\", (SELECT x) FROM (SELECT 1 AS \"X\", 2 AS \"x\") t", "1,2"))) {
         try (var statement = connection.createStatement(); var result = statement.executeQuery(query.getKey())) {
           assertTrue(result.next(), query.getKey());
           StringBuilder actual = new StringBuilder();
@@ -145,6 +155,43 @@ class QuotedLowercaseAliasReferenceTest {
           assertEquals(query.getValue(), actual.toString(), query.getKey());
           assertFalse(result.next(), query.getKey());
         }
+      }
+      String filtered = "SELECT \"X\" FROM (SELECT 1 AS \"X\", 2 AS \"x\") t WHERE x = 2";
+      try (var statement = connection.createStatement(); var result = statement.executeQuery(filtered)) {
+        assertTrue(result.next(), filtered);
+        assertEquals(1, result.getInt(1), filtered);
+        assertFalse(result.next(), filtered);
+      }
+      String conditional = "SELECT \"X\", CASE WHEN x = 2 THEN 'ok' ELSE 'bad' END "
+          + "FROM (SELECT 1 AS \"X\", 2 AS \"x\") t";
+      try (var statement = connection.createStatement(); var result = statement.executeQuery(conditional)) {
+        assertTrue(result.next(), conditional);
+        assertEquals(1, result.getInt(1), conditional);
+        assertEquals("ok", result.getString(2), conditional);
+        assertFalse(result.next(), conditional);
+      }
+      String distinct = "SELECT DISTINCT \"X\", x FROM (SELECT 1 AS \"X\", 2 AS \"x\" UNION ALL SELECT 1, 3) t "
+          + "ORDER BY 2";
+      try (var statement = connection.createStatement(); var result = statement.executeQuery(distinct)) {
+        for (int expected = 2; expected <= 3; expected++) {
+          assertTrue(result.next(), distinct);
+          assertEquals(1, result.getInt(1), distinct);
+          assertEquals(expected, result.getInt(2), distinct);
+        }
+        assertFalse(result.next(), distinct);
+      }
+      String ordered = "SELECT \"X\", x FROM (SELECT 1 AS \"X\", 2 AS \"x\" UNION ALL SELECT 3, 0) t ORDER BY x";
+      try (var statement = connection.createStatement(); var result = statement.executeQuery(ordered)) {
+        for (int[] expected : List.of(new int[]{
+            3, 0
+        }, new int[]{
+            1, 2
+        })) {
+          assertTrue(result.next(), ordered);
+          assertEquals(expected[0], result.getInt(1), ordered);
+          assertEquals(expected[1], result.getInt(2), ordered);
+        }
+        assertFalse(result.next(), ordered);
       }
     }
   }

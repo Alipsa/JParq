@@ -93,13 +93,13 @@ public final class CorrelationContextBuilder {
         canonical = label;
       }
       if (label != null && !label.isBlank()) {
-        String normalizedLabel = lookupKey(schema, label);
+        String normalizedLabel = MaterializedNames.lookupKey(schema, label);
         if (normalizedLabel != null) {
           projectionMapping.put(normalizedLabel, canonical);
         }
       }
       if (canonical != null && !canonical.isBlank()) {
-        String normalizedCanonical = lookupKey(schema, canonical);
+        String normalizedCanonical = MaterializedNames.lookupKey(schema, canonical);
         if (normalizedCanonical != null) {
           projectionMapping.putIfAbsent(normalizedCanonical, canonical);
         }
@@ -119,26 +119,5 @@ public final class CorrelationContextBuilder {
       merged.put(normalizedQualifier, Map.copyOf(updated));
     }
     return Map.copyOf(merged);
-  }
-
-  /**
-   * Resolves the lookup key of a projected name, preferring the declared key of a
-   * matching schema field over plain identifier folding.
-   *
-   * @param schema
-   *          source schema, or {@code null} when unavailable
-   * @param name
-   *          projected label or canonical column name
-   * @return the declared field lookup key when the name matches a schema field,
-   *         otherwise the identifier lookup key
-   */
-  private static String lookupKey(Schema schema, String name) {
-    if (schema != null) {
-      Schema.Field field = schema.getField(name);
-      if (field != null) {
-        return MaterializedNames.lookupKey(field);
-      }
-    }
-    return Identifier.lookupKey(name);
   }
 }
